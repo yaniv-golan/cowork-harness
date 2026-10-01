@@ -1024,6 +1024,22 @@
         "promptAssetsHash": {
           "type": "string",
           "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. Since Desktop 1.46388.3 it ALSO covers the sub-agent prompt text the harness GENERATES rather than reads from an asset (the host-loop folder manifest and the trailing skills sentence, src/prompt/subagent-manifest.ts): that text reaches the model exactly as an asset's does, so it must stale a recording the same way. Absent on a run recorded before this field existed \u2192 informational note, never a finding."
+        },
+        "workspaceFixtureSig": {
+          "type": "string",
+          "description": "the `workspace_fixture` content signature: sha256 over the staged fixture's sorted (path, sha256, owner-exec bit) triples. Absent when the scenario declares no fixture (or on a --resume turn, which stages nothing)."
+        },
+        "workspaceFixtureFileSigs": {
+          "type": "array",
+          "description": "per-file [path, sig] behind workspaceFixtureSig (fixture-relative paths; the sig is the content sha256, suffixed `+x` for an executable file).",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
         }
       }
     },
@@ -1061,9 +1077,18 @@
           },
           "bytes": {
             "type": "number"
+          },
+          "preRun": {
+            "type": "boolean",
+            "const": true,
+            "description": "present (true) when the file existed before the run with the same content \u2014 inherited (from a `workspace_fixture`, or already in a connected folder), not produced by this run. Absent when the run created or rewrote it, or when there is no pre-run manifest to tell. `scaffold` skips these."
           }
         }
       }
+    },
+    "workspaceFixture": {
+      "type": "string",
+      "description": "the scenario's `workspace_fixture` ref exactly as the scenario file wrote it (relative to that file), on live runs and on replay (derived there from the cassette's ref and its recorded `scenarioSource`) — not the resolved absolute path (a ref written absolute stays as written). Absent when the scenario declares none, or when it was not loaded from a file (an in-memory scenario, a cassette with no `scenarioSource`)."
     },
     "workspaceFiles": {
       "type": "array",
@@ -1294,7 +1319,7 @@
     },
     "staleness": {
       "type": "array",
-      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Drift classes are non-failing by default (a stale but passing replay stays ok:true); `unverifiable-skill` FAILS the default verdict since 2.0.0 \u2014 \"could not be checked\" is not \"checked and unchanged\". --strict fails on every class; --fail-on-skill-drift adds skill/shared-root. See SPEC \u00a711 for per-class semantics.",
+      "description": "Replay only: class-tagged cassette-staleness findings, surfaced for a token-free JSON gate. Drift classes are non-failing by default (a stale but passing replay stays ok:true); `unverifiable-skill` FAILS the default verdict since 2.0.0 \u2014 \"could not be checked\" is not \"checked and unchanged\" \u2014 and so does `unverifiable-fixture`. --strict fails on every class; --fail-on-skill-drift adds skill/shared-root and `fixture` (a changed workspace_fixture). See SPEC \u00a711 for per-class semantics.",
       "items": {
         "type": "object",
         "required": ["class", "message"],
@@ -1311,7 +1336,9 @@
               "resolved-tier",
               "unverifiable-tier",
               "prompt-assets",
-              "unverifiable-prompt-assets"
+              "unverifiable-prompt-assets",
+              "fixture",
+              "unverifiable-fixture"
             ]
           },
           "message": {

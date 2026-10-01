@@ -492,9 +492,9 @@ describe.skipIf(!can)("replay — per-result verdict in the JSON envelope", () =
 // stale, omitting `fidelity`/`requires_capabilities`). Derived from the single exported `RECORDING_SHAPING_FIELDS`
 // list so the enumeration can't drift a fourth time.
 describe("P6 — recording-shaping drift enumeration derives from RECORDING_SHAPING_FIELDS", () => {
-  it("RECORDING_SHAPING_FIELDS includes `lane` alongside the other six authored fields", () => {
+  it("RECORDING_SHAPING_FIELDS includes `lane` and `workspace_fixture` alongside the other six authored fields", () => {
     expect([...RECORDING_SHAPING_FIELDS].sort()).toEqual(
-      ["prompt", "baseline", "fidelity", "lane", "answers", "skills", "requires_capabilities"].sort(),
+      ["prompt", "baseline", "fidelity", "lane", "answers", "skills", "requires_capabilities", "workspace_fixture"].sort(),
     );
   });
 

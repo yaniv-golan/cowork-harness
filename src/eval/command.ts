@@ -566,7 +566,11 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
         // semantic_pairwise references: the same gate executeScenario applies before a run dir exists, run here
         // once per arm × scenario so a missing or damaged reference refuses the eval (exit 2) instead of failing
         // every job. Mount roots come from the SUBSTITUTED session the jobs will run.
-        const pw = pairwiseRefsRefusal(s.scenario, scenarioPairwiseSetup(s.scenario), sessionOriginSources(sub, "(inline)"));
+        const pw = pairwiseRefsRefusal(
+          s.scenario,
+          scenarioPairwiseSetup(s.scenario),
+          sessionOriginSources(sub, "(inline)", s.scenario.workspace_fixture),
+        );
         if (pw) throw new UsageError(pw);
       } catch (e) {
         if (e instanceof BoundaryError)

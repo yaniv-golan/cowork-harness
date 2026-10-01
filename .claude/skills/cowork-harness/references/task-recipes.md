@@ -63,11 +63,11 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v14.json`](htt
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
 | `effectiveFidelity` | The tier the live record actually resolved to (the drift-audit key above) |
-| `artifacts` | Output-file manifest (paths + hashes + small inlined bodies) — unlocks `file_exists`/`artifact_json` on replay. Each entry carries `truncationReason` (`"size"`\|`"readonly"`\|`"unreadable"`, v8+) naming WHY a body is absent, and — v10+ — `linkKind` (`"symlink"`\|`"hardlink"`) for a body-less link entry, never dereferenced. |
+| `artifacts` | Output-file manifest (paths + hashes + small inlined bodies) — unlocks `file_exists`/`artifact_json` on replay. Each entry carries `truncationReason` (`"size"`\|`"readonly"`\|`"unreadable"`\|`"input"`\|`"fixture"`, v8+; `"fixture"` v14 — an untouched binary `workspace_fixture` file, recorded hash-only) naming WHY a body is absent, and — v10+ — `linkKind` (`"symlink"`\|`"hardlink"`) for a body-less link entry, never dereferenced. |
 | `fingerprint` | Skill/baseline staleness tripwire |
 | `userVisibleRoots` | The user-visible mount roots captured at record time |
 | `preRunPaths` | Pre-run file-path baseline for `no_unexpected_files` (workRoot-relative; co-present with `userVisibleRoots`) |
-| `preRunHashes` | Pre-run per-path sha256 baseline for `input_unmodified` (added 0.27.0, no cassetteVersion bump); a `null` value marks a path whose recorded artifact body was secret-scrubbed (evidence-unavailable, never a false "modified") |
+| `preRunHashes` | Pre-run per-path sha256 baseline for `input_unmodified` (added 0.27.0, no cassetteVersion bump); a `null` value marks a path whose recorded artifact body was secret-scrubbed (evidence-unavailable, never a false "modified"); an untouched file whose body the redaction policy rewrote carries the redacted body's sha, so it still reads as unchanged |
 | `preRunOrigin` | How that pre-run baseline was obtained — `local-walk` (real), `remote-unavailable` or `local-unreadable`. Only `local-walk` supports a verdict: replay fails `no_unexpected_files` as evidence-unavailable on the other two rather than passing vacuously |
 | `scenarioSource` | Relative path to the authored YAML this was recorded from |
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |

@@ -13,6 +13,8 @@ import { gitModeEnabled, gitFilterFromSet, gitStageStats, gitCpFilter } from "./
 import { BoundaryError, UsageError, compactSchemaError } from "./errors.js";
 import { readSkillDescription, type PluginSkillRoot } from "./run/skill-metadata.js";
 import { pluginRootsWithRunnableHooks } from "./run/hook-events.js";
+import { scanWorkspaceFixture, type ScannedWorkspaceFixture } from "./fixture/workspace.js";
+import { pathsInsideMounts } from "./hillclimb/answer-key.js";
 
 /** Expand a leading `~` the way a shell would for THE CURRENT user only, then resolve whatever's left
  *  against `base`. `~` and `~/x` become `homedir()` / `join(homedir(), "x")`; a bare absolute path is
@@ -402,6 +404,10 @@ export interface LaunchPlan {
    *  scenario asserts the key (the walk has a real cost on big connected folders) or the run is a
    *  recording (cassettes always carry the baseline so a later assert-add replays without re-record). */
   capturePreRun?: boolean;
+  /** The scenario's `workspace_fixture`, scanned at load. Each tier's staging copies it into the session's
+   *  outputs/ on a fresh run only (never on resume), after the mounts and before the pre-run manifest — so an
+   *  untouched fixture file is pre-run, not authored. Absent when the scenario declares none. */
+  workspaceFixture?: ScannedWorkspaceFixture;
 }
 
 /** The user-visible roots derived from a plan: `outputs` + each connected folder's RESOLVED mount name.
@@ -663,6 +669,8 @@ export interface LaunchSources {
   mounts: Mount[];
   /** See `LaunchPlan.hostOnlyFolders`. */
   hostOnlyFolders: Mount[];
+  /** The scenario's `workspace_fixture`, scanned and validated (absent on resume — nothing is re-staged). */
+  workspaceFixture?: ScannedWorkspaceFixture;
 }
 
 export function resolveLaunchSources(
@@ -676,7 +684,13 @@ export function resolveLaunchSources(
    *  for a caller that only needs the input checks — a `--dry-run` preview — and will not stage.
    *  `quiet: true` prints none of the resolution's warnings — for a pre-check whose run resolves again
    *  and would otherwise print each warning twice. */
-  opts: { stageFilters?: boolean; quiet?: boolean } = {},
+  opts: {
+    stageFilters?: boolean;
+    quiet?: boolean;
+    /** The scenario's `workspace_fixture` directory (absolute). Scanned and refused here, with the other
+     *  declared sources, before any run dir exists. Skipped on resume: a fixture is turn-1 state. */
+    workspaceFixture?: string;
+  } = {},
 ): LaunchSources {
   const warn = opts.quiet ? () => {} : warnToStderr;
   // Fail loud before any staging side effect: an `effort:` the resolved model doesn't offer (or an
@@ -1086,7 +1100,24 @@ export function resolveLaunchSources(
     seenDest.add(m.mountPath);
   }
 
-  return { pinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders };
+  // The fixture is COPIED into outputs/, so it must not also be readable as a mount (it would be staged twice and
+  // edited in place) nor sit inside a staged plugin/skill tree — fixtures live outside the plugin. Checked both
+  // ways by real path (pathsInsideMounts): a fixture inside a mount, and a mount inside the fixture.
+  let workspaceFixture: ScannedWorkspaceFixture | undefined;
+  if (opts.workspaceFixture !== undefined && !resume) {
+    const hits = pathsInsideMounts(
+      [opts.workspaceFixture],
+      [...presentMounts.map((m) => m.hostPath), ...skills.map((sk) => sk.src), ...(pinnedConfigDir ? [pinnedConfigDir] : [])],
+    );
+    if (hits.length)
+      throw new UsageError(
+        `workspace_fixture ${opts.workspaceFixture} overlaps a staged source (${hits[0]!.mount}) — a fixture is copied into outputs/, ` +
+          `so it must live outside every mounted folder, upload, plugin and skill dir`,
+      );
+    workspaceFixture = scanWorkspaceFixture(opts.workspaceFixture);
+  }
+
+  return { pinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders, ...(workspaceFixture ? { workspaceFixture } : {}) };
 }
 
 export function buildLaunchPlan(
@@ -1174,6 +1205,7 @@ export function buildLaunchPlan(
     hostOnlyFolders,
     pluginDirs,
     egressAllow,
+    ...(sources.workspaceFixture ? { workspaceFixture: sources.workspaceFixture } : {}),
   };
 }
 

@@ -20,7 +20,9 @@ All notable changes to this project are documented here. The format is based on
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
   `tool_called` / `tool_not_called`), so no re-record or re-stamp is needed. v14 is one bump shared with the
   other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
-  schema; `schema/cassette.v13.json` is retained.
+  schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
+  assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
+  `artifact_text` / `artifact_json`, also stamps v14.
 
 ### Added
 
@@ -98,6 +100,39 @@ All notable changes to this project are documented here. The format is based on
   `judgedDoc.sections[].kind` gains `skill_result`. With the key unset, the judged document and its
   fingerprint are byte-identical to before.
 
+- **`workspace_fixture: <dir>` — start a run from a saved outputs tree, to test one late step of a long
+  pipeline.** The directory (relative to the scenario file) is copied into a fresh session's `outputs/` before
+  turn 1, on every tier, so the prompt asks for the late step alone and the run pays only for it. A fixture
+  run equals re-invoking the skill in the same Cowork session after it stopped mid-work or finished; the only
+  difference is that it starts with a fresh conversation context. Regular files only, permission bits kept,
+  fresh modification times, nothing added to the prompt; never re-staged on a `--resume` turn. Refused at load
+  (exit 2, before anything is spawned), each problem named: a symlink, a hard-linked file, an agent or
+  configuration path (`.claude/`, `.git/`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md`), a file git does not
+  track (in git mode), a fixture that overlaps a mounted folder, upload, plugin or skill dir or a
+  `semantic_pairwise` reference store, an empty one, and
+  more than 64 MiB (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`), or one file over the pre-run hash cap. An untouched fixture file is pre-run, not
+  authored: `semantic_matches` and `semantic_pairwise` judge only what the step created or rewrote, and `RunResult.artifacts[]`
+  marks an untouched one `preRun: true`. Deleting a fixture file fails the run by default (the harness's
+  outputs-delete policy; `allow_outputs_delete` opts out). `RunResult.workspaceFixture` is the ref as the
+  scenario file wrote it, and `scaffold` re-emits it verbatim, asserting only what the step produced. The fixture's content signature is part of
+  the cassette staleness check: a changed fixture is a `fixture` finding (a warning by default; `--strict`,
+  `--fail-on-skill-drift` and an explicit `--session` fail it), and one that cannot be found or scanned is
+  `unverifiable-fixture`, which fails the replay and makes `verify-cassettes` exit 3. A cassette stores the
+  path relative to itself (`record` refuses a fixture outside the cassette's repository); text fixture files are inlined and redacted like any outputs file, while an
+  untouched binary one is recorded hash-only (`truncationReason: "fixture"`). `fixture export` writes one.
+- **`authored: true|false` on `file_exists`, `user_visible_artifact`, `artifact_text` and `artifact_json`.**
+  Those keys prove a file is there (or what it says), not who wrote it. `authored: true` also requires that
+  this run created or rewrote the file — an untouched pre-run file fails, and so does a run with no pre-run
+  manifest to tell (evidence-unavailable); on replay the cassette's manifest hashes decide, and a hash that
+  record-time scrubbing or redaction rewrote is evidence-unavailable, never authored. `file_exists` and
+  `user_visible_artifact` take it through a new object form, `{path, authored}`; the string form is
+  unchanged. `authored: true` applies to a regular file: a directory fails, and a symlink or a hard-linked file is
+  never authored evidence. It is decided per invocation, so on a `--resume` turn it fails evidence-unavailable
+  rather than credit the turn with an earlier turn's writes. On a `workspace_fixture` scenario, one of these keys on a file (or directory) the fixture provides
+  (matched case- and Unicode-normalization-insensitively) is refused unless it states `authored:` — by `lint`
+  (two new ERROR rules, `workspace-fixture-invalid` and `workspace-fixture-vacuous-assert`, and a WARN
+  `workspace-fixture-not-relative` for an absolute or `~/` fixture path), and before evaluating anything by `run`, `record`, `eval`, a `--resume`
+  turn, `verify-run` and `replay --assert-from`. `authored: false` says inheriting it is fine.
 - **`fixture export <run-dir> --out <dir>` copies a kept run's outputs tree into a directory** a later scenario
   can start from, byte-for-byte and keeping permission bits. It refuses, naming the files and writing nothing,
   when any file's bytes or name hold a secret — the credentials in `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
@@ -182,6 +217,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`scaffold` no longer asserts on a file that existed before the run unchanged** (marked
+  `artifacts[].preRun: true` — a `workspace_fixture` file, or one already in a connected folder): such a
+  `file_exists` passes before the run does anything. The scaffold names the skipped files in a comment.
 - **Verdict change: a top-level `Skill` result is now captured up to 32,768 characters, up from 10,240.**
   This closes a false green. A `tool_result_not_contains` / `tool_result_not_matches` used to pass over the
   part of a long `Skill` result past 10,240 characters, which it never saw. On a result between 10,240 and
@@ -199,6 +237,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A record redaction policy that rewrites an untouched file's body no longer blocks the recording.** The
+  cassette kept the file's raw pre-run hash next to the redacted body's hash, so `input_unmodified` on it read
+  "modified in place" and the record-time verdict check refused to write the cassette. Its pre-run hash is now
+  recorded as the redacted body's hash (the raw bytes did not change, so neither do the redacted ones), and the
+  file reads as unchanged on replay. A file the run did change keeps its raw hash. Applies to cassettes recorded
+  from now on.
+- **A fresh `--session-id` re-run at `microvm` no longer starts with the previous run's outputs.** The tier
+  stages into the VM work tree, which a fresh same-project re-run did not clear; its `outputs/` is now cleared
+  first.
 - **An `eval` `report.md` row whose text holds a backslash before a pipe no longer splits the table.**
   A row's assertion or claim text (and its note) escaped `|` but not `\`, so a claim containing `\|`
   rendered as `\\|`: the backslash escaped the backslash and the pipe became a live column separator,
