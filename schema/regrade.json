@@ -68,8 +68,8 @@
             "hint": { "type": "string" },
             "code": {
               "type": "string",
-              "enum": ["doc_drift", "unchecked_content"],
-              "description": "On an evidence refusal: `doc_drift` when any run dir's kept evidence differs from what the live judge read, else `unchecked_content`."
+              "enum": ["doc_drift", "unchecked_content", "no_semantic_asserts"],
+              "description": "On an evidence refusal: `doc_drift` when any run dir's kept evidence differs from what the live judge read, else `unchecked_content`. `no_semantic_asserts` (category usage): the scenario has no semantic_matches or semantic_pairwise assert, so there is nothing to re-grade."
             }
           }
         }
@@ -129,6 +129,24 @@
       "properties": {
         "runDir": { "type": "string" },
         "turn": { "type": "integer", "minimum": 1 },
+        "metrics": {
+          "type": "array",
+          "description": "The scenario's declared metrics, re-read from the kept work dir as it is now, in the RunResult.metrics shape (one entry per declared id, in order; exactly one of value / unavailable). A file whose bytes no longer match the run's own recorded post-run hash (RunResult.workspaceFiles) is `pruned`. Absent when the scenario declares none.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string" },
+              "value": { "type": "number" },
+              "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run"] }
+            },
+            "oneOf": [
+              { "required": ["value"], "properties": { "value": {} }, "not": { "required": ["unavailable"], "properties": { "unavailable": {} } } },
+              { "required": ["unavailable"], "properties": { "unavailable": {} }, "not": { "required": ["value"], "properties": { "value": {} } } }
+            ]
+          }
+        },
         "scenarioSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
         "regradeFile": {
           "type": "string",

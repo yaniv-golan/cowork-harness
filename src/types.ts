@@ -1207,6 +1207,104 @@ export const FIDELITY_TIERS = ["protocol", "container", "microvm", "hostloop", "
 
 export type FidelityTier = (typeof FIDELITY_TIERS)[number];
 
+/** Why a declared metric has no value (`RunResult.metrics[].unavailable`). ONE list: the type derives from it, and the two
+ *  hand-maintained JSON Schemas (run-result.json, regrade.json) are pinned to it by tests. See docs/scenario.md "Numeric metrics" for what each one means. */
+export const METRIC_UNAVAILABLE = [
+  "missing_artifact",
+  "missing_path",
+  "not_json",
+  "not_a_number",
+  "readonly",
+  "size",
+  "remote",
+  "pruned",
+  "pre_run",
+] as const;
+export type MetricUnavailable = (typeof METRIC_UNAVAILABLE)[number];
+
+/** Ids a scenario metric may not take: each would collide with a key the hillclimb runner generates (its grade
+ *  keys, per-index keys, `_present` companions and pairwise keys). */
+export const RESERVED_METRIC_ID_PATTERNS = [
+  "^(pass|claims|win|both_bad)$",
+  "^a\\d+(_|$)",
+  "_present$",
+  "(^|_)(win|both_bad)(_|$)",
+] as const;
+/** Compared case-insensitively: `Pass` or `A1` would collide with `pass` / `a1` wherever keys are folded. The
+ *  published JSON Schema carries the same patterns with each letter spelled as a two-case class. */
+export function reservedMetricId(id: string): boolean {
+  const lower = id.toLowerCase();
+  return RESERVED_METRIC_ID_PATTERNS.some((p) => new RegExp(p).test(lower));
+}
+
+/** A metric id is path-safe: word characters, dots and hyphens, at most 129 characters, not all dots — the rule
+ *  the hillclimb scaffold applies to an id it uses as a path. */
+export const METRIC_ID_PATTERN = "^[\\w.-]+$";
+export const METRIC_ID_MAX = 129;
+export function isMetricIdSafe(id: string): boolean {
+  return new RegExp(METRIC_ID_PATTERN).test(id) && id.length <= METRIC_ID_MAX && !/^\.+$/.test(id);
+}
+
+/** What a metric's `artifact` path may not be — ONE list: the loader tests it and the published JSON Schema emits it
+ *  (`artifact.not.anyOf`), pinned by a parity test. Each is an unanchored-flag-free ECMAScript pattern. A backslash
+ *  is refused anywhere: on POSIX it is part of a file name, so `outputs\m.json` would never name the file the author
+ *  meant. A colon alone is legal (`a:b.json` is a POSIX name); a drive root (`c:/…`, bare `c:`) is not. */
+export const METRIC_ARTIFACT_REFUSED_PATTERNS = [
+  "^\\s*$", // blank
+  "\\\\", // a backslash anywhere
+  "^/", // absolute
+  "^[A-Za-z]:(/|$)", // a drive root
+  "(^|/)\\.\\.(/|$)", // a `..` segment
+  "\\u0000", // NUL
+] as const;
+function isContainedRelPath(p: string): boolean {
+  return !METRIC_ARTIFACT_REFUSED_PATTERNS.some((r) => new RegExp(r, "u").test(p));
+}
+
+export const ScenarioMetric = z
+  .strictObject({
+    id: z
+      .string()
+      .regex(new RegExp(METRIC_ID_PATTERN), { message: "a metric id is word characters, dots and hyphens only" })
+      .max(METRIC_ID_MAX)
+      .describe(
+        "the metric's name — the key it is reported under (RunResult.metrics[].id, and a hillclimb grade key). Word characters, dots and hyphens, at most 129 characters, not all dots, and not a key the hillclimb runner generates (pass, claims, a<N>…, *_present, *win*, *both_bad*). A duplicate id (compared case-insensitively) is refused at load",
+      ),
+    artifact: z
+      .string()
+      .refine(isContainedRelPath, {
+        message:
+          "a metric artifact is a path relative to the work root, with forward slashes: not blank, not starting with `/` or a drive root (`c:/`), no `..` segment, no backslash, no NUL",
+      })
+      .describe(
+        "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder",
+      ),
+    path: z.string().min(1).describe("dotted path to the number inside the JSON (e.g. totals.words; array items by index, items.0.score)"),
+    better: z.enum(["higher", "lower"]).describe("which direction is an improvement"),
+    scale: z
+      .number()
+      .positive()
+      .optional()
+      .describe(
+        "the UPPER BOUND of a bounded metric's range (the range is [min, scale], min defaulting to 0 — a range of [-1, 1] is `min: -1, scale: 1`); set exactly one of scale or unbounded",
+      ),
+    unbounded: z.literal(true).optional().describe("true for a metric with no natural ceiling; set exactly one of scale or unbounded"),
+    min: z
+      .number()
+      .optional()
+      .describe("the floor of the metric's range (default 0); with `scale`, it must be below `scale` (refused at load otherwise)"),
+  })
+  .superRefine((m, ctx) => {
+    if (m.scale !== undefined && m.min !== undefined && !(m.min < m.scale))
+      ctx.addIssue({ code: "custom", path: ["min"], message: `metric "${m.id}": \`min\` (${m.min}) must be below \`scale\` (${m.scale})` });
+    if ((m.scale === undefined) === (m.unbounded === undefined))
+      ctx.addIssue({ code: "custom", path: ["scale"], message: `metric "${m.id}": set exactly one of \`scale\` or \`unbounded\`` });
+    if (/^\.+$/.test(m.id)) ctx.addIssue({ code: "custom", path: ["id"], message: `metric id "${m.id}" is all dots` });
+    if (reservedMetricId(m.id))
+      ctx.addIssue({ code: "custom", path: ["id"], message: `metric id "${m.id}" collides with a key the hillclimb runner generates` });
+  });
+export type ScenarioMetric = z.infer<typeof ScenarioMetric>;
+
 export const ScenarioObject = z.strictObject({
   // Optional: defaults to the scenario's filename (sans extension) via parseScenarioFile —
   // the file IS the identity. An explicit `name:` is an override (keys the run dir + cassette).
@@ -1338,6 +1436,23 @@ export const ScenarioObject = z.strictObject({
     .optional()
     .describe(
       "a directory (relative to the scenario file) whose contents are copied into the session's outputs/ before turn 1 — `<dir>/report.md` lands at `outputs/report.md`. Equals re-invoking the skill in the same Cowork session after it stopped mid-work or finished, except that the run starts with a fresh conversation context. Regular files only; symlinks, hard links, agent-config paths (.claude/, .git/, .mcp.json, CLAUDE.md) and, in git mode, untracked files are refused; 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Never re-staged on --resume. Its content signature joins the cassette staleness check",
+    ),
+  // Numbers read from JSON artifacts the run wrote, reported as RunResult.metrics (they never change the verdict).
+  metrics: z
+    .array(ScenarioMetric)
+    .superRefine((ms, ctx) => {
+      const seen = new Map<string, string>();
+      for (const m of ms) {
+        const k = m.id.toLowerCase();
+        const prev = seen.get(k);
+        if (prev !== undefined)
+          ctx.addIssue({ code: "custom", message: `duplicate metric id "${m.id}" (also "${prev}"; ids are compared case-insensitively)` });
+        else seen.set(k, m.id);
+      }
+    })
+    .optional()
+    .describe(
+      "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
     ),
 });
 /** `ScenarioObject` stays a raw object on purpose — `.shape` is enumerated (cassette.ts's per-key
@@ -1947,6 +2062,8 @@ export interface RunResult {
       ref: string;
       status: "graded" | "neutral" | "missing" | "integrity" | "invalid";
       gate?: false;
+      /** A re-grade that only added comparisons kept this outcome from the live run rather than judging it again. */
+      copied?: true;
       outcome?: "win" | "tie" | "loss" | "both_bad";
       value?: number;
       order?: "candidate_first" | "ref_first" | "both";
@@ -2274,6 +2391,11 @@ export interface RunResult {
    *  absolute path, so `scaffold` can re-emit it verbatim. Absent when the scenario declares none, or was not
    *  loaded from a file. */
   workspaceFixture?: string;
+  /** The scenario's declared `metrics`, measured: one entry per declared id, in declaration order, each carrying
+   *  exactly one of `value` (a finite number read from the artifact) or `unavailable` (why not — see
+   *  METRIC_UNAVAILABLE). Never part of the verdict. Absent when the scenario declares none (an empty list included),
+   *  on a partial run, on chat, and on a replay that could not drive the cassette. */
+  metrics?: Array<{ id: string; value?: number; unavailable?: MetricUnavailable }>;
   /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
    *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs
    *  against. undefined = the run didn't capture it (it never armed one, or predates the seam; a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable); the

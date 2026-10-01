@@ -1277,6 +1277,138 @@
       "description": "a directory (relative to the scenario file) whose contents are copied into the session's outputs/ before turn 1 — `<dir>/report.md` lands at `outputs/report.md`. Equals re-invoking the skill in the same Cowork session after it stopped mid-work or finished, except that the run starts with a fresh conversation context. Regular files only; symlinks, hard links, agent-config paths (.claude/, .git/, .mcp.json, CLAUDE.md) and, in git mode, untracked files are refused; 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Never re-staged on --resume. Its content signature joins the cassette staleness check",
       "type": "string",
       "minLength": 1
+    },
+    "metrics": {
+      "description": "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 129,
+            "pattern": "^[\\w.-]+$",
+            "description": "the metric's name — the key it is reported under (RunResult.metrics[].id, and a hillclimb grade key). Word characters, dots and hyphens, at most 129 characters, not all dots, and not a key the hillclimb runner generates (pass, claims, a<N>…, *_present, *win*, *both_bad*). A duplicate id (compared case-insensitively) is refused at load",
+            "not": {
+              "anyOf": [
+                {
+                  "pattern": "^\\.+$"
+                },
+                {
+                  "pattern": "^([pP][aA][sS][sS]|[cC][lL][aA][iI][mM][sS]|[wW][iI][nN]|[bB][oO][tT][hH]_[bB][aA][dD])$"
+                },
+                {
+                  "pattern": "^[aA]\\d+(_|$)"
+                },
+                {
+                  "pattern": "_[pP][rR][eE][sS][eE][nN][tT]$"
+                },
+                {
+                  "pattern": "(^|_)([wW][iI][nN]|[bB][oO][tT][hH]_[bB][aA][dD])(_|$)"
+                }
+              ]
+            }
+          },
+          "artifact": {
+            "type": "string",
+            "description": "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder",
+            "not": {
+              "anyOf": [
+                {
+                  "pattern": "^\\s*$"
+                },
+                {
+                  "pattern": "\\\\"
+                },
+                {
+                  "pattern": "^/"
+                },
+                {
+                  "pattern": "^[A-Za-z]:(/|$)"
+                },
+                {
+                  "pattern": "(^|/)\\.\\.(/|$)"
+                },
+                {
+                  "pattern": "\\u0000"
+                }
+              ]
+            }
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "dotted path to the number inside the JSON (e.g. totals.words; array items by index, items.0.score)"
+          },
+          "better": {
+            "type": "string",
+            "enum": [
+              "higher",
+              "lower"
+            ],
+            "description": "which direction is an improvement"
+          },
+          "scale": {
+            "description": "the UPPER BOUND of a bounded metric's range (the range is [min, scale], min defaulting to 0 — a range of [-1, 1] is `min: -1, scale: 1`); set exactly one of scale or unbounded",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "unbounded": {
+            "description": "true for a metric with no natural ceiling; set exactly one of scale or unbounded",
+            "type": "boolean",
+            "const": true
+          },
+          "min": {
+            "description": "the floor of the metric's range (default 0); with `scale`, it must be below `scale` (refused at load otherwise)",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "artifact",
+          "path",
+          "better"
+        ],
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "scale"
+            ],
+            "properties": {
+              "scale": {}
+            },
+            "not": {
+              "type": "object",
+              "required": [
+                "unbounded"
+              ],
+              "properties": {
+                "unbounded": {}
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "unbounded"
+            ],
+            "properties": {
+              "unbounded": {}
+            },
+            "not": {
+              "type": "object",
+              "required": [
+                "scale"
+              ],
+              "properties": {
+                "scale": {}
+              }
+            }
+          }
+        ]
+      }
     }
   },
   "required": [

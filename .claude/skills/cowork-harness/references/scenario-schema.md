@@ -1,6 +1,6 @@
 # Scenario & session schema, replay class, web_fetch, authoring gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.2.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.2.1`
 (baseline `desktop-2.16120.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -122,6 +122,14 @@ workspace_fixture: fixtures/step1   # OPTIONAL — a directory (relative to this
                                     # untracked files are refused at load, as is a presence/body assertion
                                     # on a fixture file that does not state `authored: true|false`.
                                     # 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Stamps v14.
+
+metrics:                            # OPTIONAL — numbers read from JSON files the run wrote, reported in
+  - { id: words, artifact: outputs/stats.json, path: totals.words, better: higher, scale: 5000 }
+                                    # RunResult.metrics as {id, value} or {id, unavailable}; never in the
+                                    # verdict. `better` required; exactly one of scale (the range's upper
+                                    # bound; `min` is the floor, default 0) / unbounded: true.
+                                    # A file the run did not write (incl. one rewritten with identical
+                                    # bytes) is unavailable: pre_run. Arms the pre-run manifest.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files

@@ -61,7 +61,9 @@ const realOr = (p: string): string => {
  *  unselected case whose session does not parse is skipped for it, with a note. */
 export function prepareCases(
   cases: readonly HillclimbCase[],
-  opts: { modelFlag?: string; judgeModelFlag?: string; env: NodeJS.ProcessEnv },
+  /** `noAgentRun`: a caller that never runs the agent (`hillclimb regrade`) resolves no agent model and skips the
+   *  checks that only protect a new run (a protocol run's sub-agent transcripts). */
+  opts: { modelFlag?: string; judgeModelFlag?: string; env: NodeJS.ProcessEnv; noAgentRun?: boolean },
   selected: readonly HillclimbCase[] = cases,
 ): PreparedCases {
   const chosen = new Set(selected.map((c) => c.id));
@@ -97,7 +99,7 @@ export function prepareCases(
         `case ${c.id}: the session must declare exactly one plugins.local_plugins entry — the plugin the loop tunes (found ${session.plugins.local_plugins.length})`,
       );
     // A trace without its sub-agents' turns is incomplete: unmanaged protocol keeps no child transcripts.
-    if (isSel && s.fidelity === "protocol" && !managedConfigMode(opts.env))
+    if (!opts.noAgentRun && isSel && s.fidelity === "protocol" && !managedConfigMode(opts.env))
       throw new UsageError(
         `case ${c.id}: fidelity protocol without a managed config dir keeps no sub-agent transcripts, so its traces would be incomplete — set COWORK_MANAGED_CONFIG=1 or use another tier`,
       );
@@ -119,10 +121,11 @@ export function prepareCases(
   };
   let pins: ReturnType<typeof resolveAgentPins> = [];
   try {
-    pins = resolveAgentPins(
-      sel.map((c) => ({ scenario: c.scenario, sessionModel: sessions.get(c.id)!.model })),
-      opts.modelFlag,
-    );
+    if (!opts.noAgentRun)
+      pins = resolveAgentPins(
+        sel.map((c) => ({ scenario: c.scenario, sessionModel: sessions.get(c.id)!.model })),
+        opts.modelFlag,
+      );
     resolveJudgePins(
       sel.map((c) => c.scenario),
       opts.judgeModelFlag,
@@ -140,7 +143,7 @@ export function prepareCases(
       return null;
     }
   };
-  const pinOf = new Map(sel.map((c, i) => [c.id, pins[i].model]));
+  const pinOf = new Map(sel.map((c, i) => [c.id, pins[i]?.model]));
   // Every selected case has a session, so the first one is there (selectCases never returns an empty set).
   const first = sessions.get(sel[0]?.id ?? "") ?? [...sessions.values()][0];
   if (first === undefined) throw new UsageError("no case with a session file is selected");

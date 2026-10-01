@@ -83,7 +83,7 @@ skill that moved. Run both; the drift note in the "Filesystem assertions" sectio
 
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
 `baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
-`assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks` and `workspace_fixture` — every field the schema defines — are
+`assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks`, `workspace_fixture` and `metrics` — every field the schema defines — are
 all captured at record time, and a plain `replay` evaluates every one of them from that
 frozen copy — nothing in the working tree can change its verdict. Editing `scenarios/<name>.yaml` does not
 change a replay; the sibling is read only to print `::notice::` lines when it has drifted, or when it
