@@ -21,6 +21,7 @@ import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { metricUnion } from "./grade-keys.js";
+import { refuseChangedMetrics, undeclaredRowMetrics } from "./metric-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
@@ -147,6 +148,9 @@ async function run(
   if (skipped.length) say(`[${v}] skipped ${skipped.length} non-scenario file(s): ${skipped.join(", ")}`);
   // The flow's metric columns: the union over every case, refused here — before any write — when one id is declared two ways.
   const metrics = metricUnion(all.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
+  // ...and against the rows already in the flow, in every variant, before the gate can record an approval.
+  const existing = existingFlowSnapshot(flowArg, deps.cwd);
+  if (existing) refuseChangedMetrics(existing, metrics);
 
   // Writes only when this run may write: a pass, or the human's --approve-harness. A plain --dry-run
   // creates nothing.
@@ -159,6 +163,12 @@ async function run(
     all.map((c) => c.id),
   ))
     say(note);
+
+  if (existing)
+    for (const [id, vs] of undeclaredRowMetrics(existing, state.metrics))
+      say(
+        `warning: rows in ${vs.join(", ")} carry metric ${id}, which _state.json's metrics does not declare — re-run \`hillclimb state-template\` and merge its new metrics entries, or the report cannot show it`,
+      );
 
   const cases = selectCases(all, args.cases);
   const sigOf = (c: HillclimbCase) => deps.expectedContentSig?.(c);
@@ -435,6 +445,13 @@ async function run(
   } finally {
     release();
   }
+}
+
+/** The flow's files as they stand, read without following a link (undefined when there is no flow dir yet). The
+ *  root goes through the same hygiene every flow reader applies, so a planted link there is refused, not entered. */
+export function existingFlowSnapshot(flowArg: string, cwd: string): ReturnType<typeof loadFlowSnapshot> | undefined {
+  if (!lexists(resolve(cwd, flowArg))) return undefined;
+  return loadFlowSnapshot(NoFollowRoot.existing(flowArg, { cwd }).root);
 }
 
 function readStateIfPresent(flowArg: string, cwd: string): Record<string, unknown> {

@@ -595,6 +595,24 @@ describe("runHillclimbCommand", () => {
     expect(existsSync(join(cwd, "flow"))).toBe(false);
   });
 
+  it("a metric re-declared since the flow's rows were written refuses before the next variant's snapshot is taken", async () => {
+    const metric = (better: string) =>
+      `metrics:\n  - id: words\n    artifact: outputs/stats.json\n    path: words\n    better: ${better}\n    unbounded: true\n`;
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + metric("lower"));
+    expect((await runHillclimbCommand(args("--approve-harness"), deps())).exitCode).toBe(0);
+    // Snapshots sit at <root>/<flow hash>/<variant>/: the baseline's was taken.
+    const snapped = () => readdirSync(snaps).flatMap((h) => readdirSync(join(snaps, h)));
+    expect(snapped()).toEqual(["baseline"]);
+    calls = [];
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + metric("higher"));
+    const r = await runHillclimbCommand(args("--variant", "v1", "--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/refusing to run: metric "words" .*baseline.*declaration changed/);
+    expect(calls).toEqual([]);
+    expect(snapped()).toEqual(["baseline"]);
+    expect(existsSync(join(cwd, "flow", "v1"))).toBe(false);
+  });
+
   it("a lock left by a runner that was killed (its pid gone) does not block the next pass", async () => {
     await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
     const dead = spawnSync(process.execPath, ["-e", ""]).pid; // a real process that has exited

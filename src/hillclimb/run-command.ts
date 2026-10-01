@@ -27,11 +27,12 @@ import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
 import { metricUnion } from "./grade-keys.js";
+import { refuseChangedMetrics } from "./metric-keys.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
 import { makeHillclimbJobRunner } from "./job.js";
-import { readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
+import { existingFlowSnapshot, readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
 import { SNAPSHOT_ROOT_ENV, variantSnapshot } from "./snapshot.js";
 
 /** Where variant snapshots live: outside every git work tree, or the stager would mount them empty. */
@@ -128,7 +129,10 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   const v = args.variant;
   const { cases } = loadCases(resolve(deps.cwd, args.target));
   // One metric id declared two ways is refused before the snapshot below is taken (the runner recomputes the union).
-  metricUnion(cases.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
+  const union = metricUnion(cases.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
+  // ...and a metric re-declared since the flow's rows were written (the runner repeats this too).
+  const existing = existingFlowSnapshot(normalizeRootArg(args.flow), deps.cwd);
+  if (existing) refuseChangedMetrics(existing, union);
   const prep = prepareCases(cases, {
     ...(args.model !== undefined ? { modelFlag: args.model } : {}),
     ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
