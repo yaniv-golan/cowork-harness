@@ -1100,6 +1100,25 @@ describe.skipIf(!havePython)("lint-skill — per-rule suppression", () => {
       expect(unused(r)).toEqual([]);
     });
 
+    it("a file reached by two arguments matches its relative name from either, in either order", () => {
+      const d = namedSkill(["# S", ""]);
+      mkdirSync(join(d, "hooks"));
+      const cmd = { type: "command", command: "export X=1" };
+      const hp = join(d, "hooks", "hooks.json");
+      writeFileSync(hp, JSON.stringify({ hooks: { SessionStart: [{ hooks: [cmd] }] } }, null, 2));
+      const f = supFile([{ rule: "hook-host-side-write", file: "sk/hooks/hooks.json", reason: "r" }]);
+      // Passed directly, the hooks file's own base is `sk`, so only the skill-dir argument yields `sk/hooks/hooks.json`.
+      for (const args of [
+        [d, hp],
+        [hp, d],
+      ]) {
+        const r = run([...args, "--json", "--strict", "--strict-ignores", "--suppressions", f]);
+        expect(r.status, args.join(" ")).toBe(0);
+        expect(r.findings.find((x) => x.rule === "hook-host-side-write")?.suppressed).toMatchObject({ by: "file" });
+        expect(unused(r)).toEqual([]);
+      }
+    });
+
     it("a UTF-8 BOM is accepted", () => {
       const d = namedSkill(["# S", "", ...fence(OTHER)]);
       const f = join(mkdtempSync(join(tmpdir(), "cwh-sup-bom-")), "s.json");

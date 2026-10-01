@@ -3437,27 +3437,26 @@ def _lint_skill_markers(path, raw_lines):
     return ranges, diags
 
 
-def _glob_matches(glob, file, base):
+def _glob_matches(glob, file, bases):
     """`--ignore-rule <id>=<glob>`: fnmatch (a `*` also crosses `/`) against the finding's `file` as printed,
     or against that path relative to the PARENT of the skill directory it came from, so the relative form
     always starts with the skill's own directory name (`deck-review/SKILL.md`). A bare `SKILL.md` therefore
     cannot silently cover every skill in a run that passes one directory per skill."""
-    cand = [Path(file).as_posix()]
-    try:
-        cand.append(Path(os.path.relpath(Path(file).resolve(), base)).as_posix())
-    except ValueError:
-        pass
-    return any(fnmatch.fnmatchcase(c, glob) for c in cand)
+    return any(fnmatch.fnmatchcase(c, glob) for c in _file_candidates(file, bases))
 
 
-def _file_candidates(file, base):
+def _file_candidates(file, bases):
     """The forms a finding's `file` can be named by: as printed, and relative to the PARENT of the skill
-    directory it came from (so it starts with the skill's own directory name, `deck-review/SKILL.md`)."""
+    directory of each argument that reached the file (so it starts with the skill's own directory name,
+    `deck-review/SKILL.md`). Every such argument counts, so the verdict never depends on argument order."""
     cand = [Path(file).as_posix()]
-    try:
-        cand.append(Path(os.path.relpath(Path(file).resolve(), base)).as_posix())
-    except ValueError:
-        pass
+    for base in bases:
+        try:
+            rel = Path(os.path.relpath(Path(file).resolve(), base)).as_posix()
+        except ValueError:
+            continue
+        if rel not in cand:
+            cand.append(rel)
     return cand
 
 
@@ -3475,8 +3474,8 @@ def _apply_suppressions(tagged, ranges, specs, files=(), lines_by_file=None):
             return None
         return lines[f.line - 1].strip()
 
-    suppressible = [(f, root) for f, root in tagged if LINT_SKILL_RULES.get(f.rule, ("", False))[1]]
-    for f, _root in suppressible:
+    suppressible = [(f, roots) for f, roots in tagged if LINT_SKILL_RULES.get(f.rule, ("", False))[1]]
+    for f, _roots in suppressible:
         for rg in ranges:
             if (rg["file"] == f.file and f.rule in rg["rules"] and f.line is not None
                     and rg["start"] <= f.line <= rg["end"]):
@@ -3494,8 +3493,8 @@ def _apply_suppressions(tagged, ranges, specs, files=(), lines_by_file=None):
             (pair for pair in suppressible if pair[0].suppressed is None),
             key=lambda p: (str(p[0].file), p[0].line is None, p[0].line or 0, p[0].rule),
         )
-        for f, root in order:
-            cand = _file_candidates(f.file, root)
+        for f, roots in order:
+            cand = _file_candidates(f.file, roots)
             text = line_text(f)
             fitting = [e for e in entries if not e["used"] and e["rule"] == f.rule and e["file"] in cand]
             pick = next((e for e in fitting if e["match"] is not None and e["match"] == text), None)
@@ -3504,20 +3503,20 @@ def _apply_suppressions(tagged, ranges, specs, files=(), lines_by_file=None):
             if pick is not None:
                 pick["used"] = True
                 f.suppressed = {"by": "file", "marker_line": None, "reason": pick["reason"], "source": pick["source"]}
-    for f, root in suppressible:
+    for f, roots in suppressible:
         for sp in specs:
-            if sp["rule"] == f.rule and (sp["glob"] is None or _glob_matches(sp["glob"], f.file, root)):
+            if sp["rule"] == f.rule and (sp["glob"] is None or _glob_matches(sp["glob"], f.file, roots)):
                 sp["used"] = True
                 if f.suppressed is None:
                     f.suppressed = {"by": "flag", "marker_line": None, "reason": None}
     if entries:
         # A class with more findings than entries reds on one of them, which need not be the newly added site:
         # name every line of the class on each unsuppressed one.
-        for f, root in suppressible:
+        for f, roots in suppressible:
             text = line_text(f)
             if f.suppressed is not None or text is None:
                 continue
-            cand = _file_candidates(f.file, root)
+            cand = _file_candidates(f.file, roots)
             n_entries = sum(1 for e in entries if e["rule"] == f.rule and e["file"] in cand and e["match"] == text)
             if n_entries == 0:
                 continue
@@ -3540,7 +3539,7 @@ def _apply_suppressions(tagged, ranges, specs, files=(), lines_by_file=None):
                 ))
     for e in entries:
         if not e["used"]:
-            what = f"`{e['rule']}` in {e['file']}" + (f" matching {json.dumps(e['match'])}" if e["match"] is not None else "")
+            what = f"`{e['rule']}` in {e['file']}" + (f" matching {json.dumps(e['match'], ensure_ascii=False)}" if e["match"] is not None else "")
             unused.append(Finding(
                 "INFO", "lint-skill-ignore-unused",
                 f"suppressions entry #{e['index']} ({what}) suppressed nothing.",
@@ -3564,15 +3563,27 @@ def _apply_suppressions(tagged, ranges, specs, files=(), lines_by_file=None):
 
 def cmd_lint_skill(args):
     all_findings = []
-    # (finding, the parent of the argument's skill dir) — the base an --ignore-rule glob is also tried against
+    # (finding, the parents of the skill dirs of every argument that reached its file) — the bases a relative
+    # `file` or --ignore-rule glob is also tried against
     tagged = []
     ranges = []
     # The exact lines each finding was computed from, so a suppressions-file `match` compares against the same
     # text the linter saw (never a re-read that could differ).
     lines_by_file = {}
     # A file reached through two arguments (`sk` and `$PWD/sk`, a symlinked alias) is linted once, so its findings,
-    # markers and suppressions are never doubled.
-    linted = set()
+    # markers and suppressions are never doubled. Each later argument still adds its base, shared by reference with
+    # the findings already tagged, so a relative name matches whichever argument came first.
+    roots_by_file = {}
+
+    def first_visit(target, root):
+        key = str(Path(target).resolve())
+        roots = roots_by_file.get(key)
+        if roots is not None:
+            if root not in roots:
+                roots.append(root)
+            return None
+        roots_by_file[key] = [root]
+        return roots_by_file[key]
     n_files = 0
     for arg in args.paths:
         start = len(all_findings)
@@ -3589,11 +3600,9 @@ def cmd_lint_skill(args):
                 )
             )
             continue  # an ERROR, never suppressible, so it needs no tag
-        if md is not None and str(Path(md).resolve()) in linted:
-            md = None
-        hooks = [hp for hp in hooks if str(Path(hp).resolve()) not in linted]
-        if md is not None:
-            linted.add(str(Path(md).resolve()))
+        md_roots = first_visit(md, root) if md is not None else None
+        hooks = [(hp, r) for hp in hooks if (r := first_visit(hp, root)) is not None]
+        if md_roots is not None:
             n_files += 1
             md_lines = Path(md).read_text(encoding="utf-8").splitlines()
             lines_by_file.setdefault(md, md_lines)
@@ -3604,14 +3613,15 @@ def cmd_lint_skill(args):
             all_findings.extend(_lint_subagent_types(md, md_lines))
             all_findings.extend(_lint_skill_corpus_size(md))
             all_findings.extend(_lint_skill_sizes(md))
-        for hp in hooks:
-            linted.add(str(Path(hp).resolve()))
+            tagged.extend((f, md_roots) for f in all_findings[start:])
+        for hp, hp_roots in hooks:
+            start = len(all_findings)
             n_files += 1
             hp_lines = Path(hp).read_text(encoding="utf-8").splitlines()
             lines_by_file.setdefault(hp, hp_lines)
             all_findings.extend(_lint_skill_text(hp, hp_lines, force_json=True))
             all_findings.extend(_lint_hook_events(hp))
-        tagged.extend((f, root) for f in all_findings[start:])
+            tagged.extend((f, hp_roots) for f in all_findings[start:])
     # The same suppressions file named twice must not double its entries (a repeated CI glob would then absorb a
     # new paste): each file counts once.
     files, seen_files = [], set()
