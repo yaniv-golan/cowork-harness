@@ -92,7 +92,9 @@ describe("computeStaleness — the fixture signature", () => {
     const { cassetteDir, fixture, cassette } = recorded();
     expect(classes(cassette, undefined)).toEqual([expect.objectContaining({ class: "unverifiable-fixture" })]);
     rmSync(fixture, { recursive: true });
-    expect(classes(cassette, cassetteDir)).toEqual([expect.objectContaining({ class: "unverifiable-fixture" })]);
+    const gone = classes(cassette, cassetteDir);
+    expect(gone).toEqual([expect.objectContaining({ class: "unverifiable-fixture" })]);
+    expect(gone[0]!.message).toMatch(/^workspace_fixture fixtures\/step1: no such directory/);
   });
 
   it("a fixture the scan now refuses (a planted symlink) is `unverifiable-fixture`, not a crash", () => {

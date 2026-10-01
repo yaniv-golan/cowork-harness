@@ -849,7 +849,10 @@ export function workspaceFixtureStaleness(cassette: Cassette, cassetteDir: strin
   try {
     live = scanWorkspaceFixture(dir);
   } catch (e) {
-    return unverifiable(String((e as Error)?.message ?? e).split("\n")[0]!);
+    // The scan's refusal already names the fixture; keep only its reason.
+    const msg = String((e as Error)?.message ?? e).split("\n")[0]!;
+    const own = `workspace_fixture ${dir}: `;
+    return unverifiable(msg.startsWith(own) ? msg.slice(own.length) : msg);
   }
   if (live.sig === recorded) return null;
   const files = cassette.fingerprint?.workspaceFixtureFileSigs;

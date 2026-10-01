@@ -405,6 +405,25 @@ describe("authorship — an untouched fixture file is pre-run, a rewritten one i
     expect(r.every((x) => x.pass)).toBe(true);
   });
 
+  it("no_unexpected_files never trips on fixture files (they are pre-run); a new file still counts", () => {
+    const { mnt, preRunHashes, preRunPaths } = liveRun();
+    const c = actx({ workRoot: mnt, preRunHashes, preRunPaths, preRunLinkAware: true });
+    const [allowsNew, allowsNothing] = evaluate([{ no_unexpected_files: ["outputs/step2.md"] }, { no_unexpected_files: [] }], c);
+    expect(allowsNew!.pass).toBe(true);
+    expect(allowsNothing!.pass).toBe(false);
+    expect(allowsNothing!.message).toMatch(/outputs\/step2\.md/);
+    expect(allowsNothing!.message).not.toMatch(/deck\.json|run\.sh/);
+  });
+
+  it("input_unmodified guards a fixture file: untouched passes, rewritten fails", () => {
+    const { mnt, preRunHashes, preRunPaths } = liveRun();
+    const c = actx({ workRoot: mnt, preRunHashes, preRunPaths });
+    const [untouched, rewritten] = evaluate([{ input_unmodified: "outputs/scores/**" }, { input_unmodified: "outputs/report.md" }], c);
+    expect(untouched!.pass).toBe(true);
+    expect(rewritten!.pass).toBe(false);
+    expect(rewritten!.message).toMatch(/modified in place: outputs\/report\.md/);
+  });
+
   it("no pre-run manifest ⇒ evidence-unavailable (never read as authored)", () => {
     const { mnt } = liveRun();
     const [r] = evaluate([{ file_exists: { path: "outputs/step2.md", authored: true } }], actx({ workRoot: mnt }));

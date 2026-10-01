@@ -1100,7 +1100,9 @@ opts out.
 **A presence assertion on a fixture file must say what it means.** `file_exists`, `user_visible_artifact`,
 `artifact_text` and `artifact_json` check that a file is there (or what it says), not who wrote it — on a file
 the fixture provides they pass before the step does anything. So a scenario that asserts one of them on a
-fixture path is **refused at load** unless it states `authored:` — `authored: true` (this run must have created
+fixture path is **refused at load** — by `run`, `record` (and its `--dry-run`), `eval` and
+`replay --assert-from`, before anything is spawned; `cowork-harness lint` does not read the fixture directory,
+so it does not report it — unless it states `authored:` — `authored: true` (this run must have created
 or rewritten the file; an untouched pre-run file fails, and so does a run with no pre-run manifest to tell) or
 `authored: false` (inheriting it is fine). `file_exists` and `user_visible_artifact` take an object form for
 it, `{path, authored}`; `artifact_text` / `artifact_json` take `authored` as a field. `authored: true` works on
