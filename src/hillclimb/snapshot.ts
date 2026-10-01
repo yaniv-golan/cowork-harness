@@ -14,6 +14,9 @@ import { tildeify } from "../io.js";
 import { isInsideGitWorkTree, snapshotDirArm } from "../eval/snapshot.js";
 import { gitModeEnabled, gitStageStats } from "../run/skill-files.js";
 
+/** Relocates the snapshot root (default `~/.cowork-harness/hillclimb-snapshots`); an absolute path. */
+export const SNAPSHOT_ROOT_ENV = "COWORK_HARNESS_HILLCLIMB_SNAPSHOTS";
+
 export interface VariantSnapshot {
   dir: string;
   created: boolean;
@@ -64,7 +67,7 @@ export function variantSnapshot(
 ): VariantSnapshot {
   if (isInsideGitWorkTree(opts.snapshotRoot))
     throw new UsageError(
-      `the snapshot dir ${tildeify(opts.snapshotRoot)} is inside a git work tree: the stager delivers a mount's git-tracked files only, so the variant's plugin would mount EMPTY`,
+      `the snapshot dir ${tildeify(opts.snapshotRoot)} is inside a git work tree: the stager delivers a mount's git-tracked files only, so the variant's plugin would mount EMPTY; set ${SNAPSHOT_ROOT_ENV} to an absolute directory outside any git work tree`,
     );
   const dir = join(opts.snapshotRoot, opts.flowHash, opts.variant, basename(live));
   const marker = `${dir}.complete`;

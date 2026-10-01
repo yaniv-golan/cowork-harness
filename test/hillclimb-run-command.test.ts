@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { runHillclimbCommand, type RunCommandDeps } from "../src/hillclimb/run-command.js";
+import { defaultSnapshotRoot, runHillclimbCommand, snapshotRootFrom, type RunCommandDeps } from "../src/hillclimb/run-command.js";
 import { parseHillclimbRunArgs } from "../src/hillclimb/args.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
 import { buildFingerprint } from "../src/run/cassette.js";
@@ -395,5 +395,58 @@ describe("runHillclimbCommand", () => {
     const r = await runHillclimbCommand(args("--approve-harness"), deps({ runsRoot }));
     expect(r.exitCode).toBe(2);
     expect(err.join("\n")).toMatch(/could read .*runs/);
+  });
+
+  describe("COWORK_HARNESS_HILLCLIMB_SNAPSHOTS", () => {
+    const ENV = "COWORK_HARNESS_HILLCLIMB_SNAPSHOTS";
+    const noRoot = (env: NodeJS.ProcessEnv): RunCommandDeps => {
+      const d = deps({ env });
+      delete (d as { snapshotRoot?: string }).snapshotRoot;
+      return d;
+    };
+
+    it("unset: the default root under the home dir", () => {
+      expect(snapshotRootFrom({})).toBe(defaultSnapshotRoot());
+    });
+
+    it("an absolute override is honoured", async () => {
+      const over = realpathSync(mkdtempSync(join(tmpdir(), "hc-snap-over-")));
+      try {
+        await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+        expect((await runHillclimbCommand(args(), noRoot({ [ENV]: over }))).exitCode).toBe(0);
+        const session = calls[0].extra.session as { plugins: { local_plugins: string[] } };
+        expect(session.plugins.local_plugins[0].startsWith(over + "/")).toBe(true);
+      } finally {
+        rmSync(over, { recursive: true, force: true });
+      }
+    });
+
+    it("a relative override is refused (it would depend on the cwd)", async () => {
+      const r = await runHillclimbCommand(args("--approve-harness"), noRoot({ [ENV]: "snaps" }));
+      expect(r.exitCode).toBe(2);
+      expect(err.join("\n")).toContain(`${ENV} must be an absolute path (got "snaps")`);
+    });
+
+    it("an override inside a git work tree is refused, naming the variable", async () => {
+      const r = await runHillclimbCommand(args("--approve-harness"), noRoot({ [ENV]: join(import.meta.dirname, "..", ".snap-test") }));
+      expect(r.exitCode).toBe(2);
+      expect(err.join("\n")).toMatch(/git work tree/);
+      expect(err.join("\n")).toContain(ENV);
+    });
+
+    it("an override inside the plugin, the flow or the runs root is refused", async () => {
+      for (const [where, extra] of [
+        [join(plugin, "snaps"), {}],
+        [join(cwd, "flow", "snaps"), {}],
+        [join(cwd, "runs", "snaps"), { runsRoot: join(cwd, "runs") }],
+      ] as const) {
+        err = [];
+        const d = { ...noRoot({ [ENV]: where }), ...extra };
+        const r = await runHillclimbCommand(args("--approve-harness"), d);
+        expect(r.exitCode, where).toBe(2);
+        expect(err.join("\n"), where).toMatch(/snapshot root .* inside/);
+      }
+      expect(calls).toEqual([]);
+    });
   });
 });

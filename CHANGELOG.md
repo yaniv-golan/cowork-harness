@@ -90,7 +90,9 @@ All notable changes to this project are documented here. The format is based on
   remaining runs from this machine's history at `plan.cost`, counting the flow's own prior runs (flows sharing a
   directory basename share cost history). `hillclimb check` checks a flow dir against our reading of the published
   schema and warns on a baseline case with no headroom; `hillclimb state-template` prints a `_state.json` skeleton
-  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy). See SPEC §11/§12.
+  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy).
+  `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
+  home directory that is itself a git work tree. See SPEC §11/§12.
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text

@@ -15,7 +15,7 @@ import { headroom, stateMetricFindings } from "./check.js";
 import { prepareCases } from "./command.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
-import { defaultSnapshotRoot, runHillclimbCommand } from "./run-command.js";
+import { runHillclimbCommand } from "./run-command.js";
 import { termSafe } from "./runner.js";
 import { checkFlowDir, loadFlowSnapshot, type SchemaCheckReport } from "./schema-check.js";
 import { stateTemplate, type StateTemplate } from "./state-template.js";
@@ -113,7 +113,6 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       outcome = await runHillclimbCommand(a, {
         cwd: process.cwd(),
         env: process.env,
-        snapshotRoot: defaultSnapshotRoot(),
         secrets,
         // Through process.stderr.write, so the terminal scrub applies to model-influenced text.
         stderr: (line) => err(line, secrets),

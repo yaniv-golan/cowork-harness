@@ -5,7 +5,8 @@
 // Everything refusable here runs before any spend and exits 2, the runner's code for a refusal. A plain
 // --dry-run takes no snapshot: it checks the live plugin the pass would snapshot.
 
-import { basename, join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
@@ -26,18 +27,48 @@ import type { HillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
-import { normalizeRootArg } from "./fs.js";
+import { NoFollowRoot, normalizeRootArg } from "./fs.js";
 import { makeHillclimbJobRunner } from "./job.js";
 import { readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
-import { variantSnapshot } from "./snapshot.js";
+import { SNAPSHOT_ROOT_ENV, variantSnapshot } from "./snapshot.js";
 
 /** Where variant snapshots live: outside every git work tree, or the stager would mount them empty. */
 export const defaultSnapshotRoot = (): string => join(homedir(), ".cowork-harness", "hillclimb-snapshots");
 
+/** The snapshot root: `$COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` when set (absolute only — a relative value would move
+ *  with the cwd, and a variant's snapshot must be found again on every later run), else the default. */
+export function snapshotRootFrom(env: NodeJS.ProcessEnv): string {
+  const v = env[SNAPSHOT_ROOT_ENV];
+  if (v === undefined || v === "") return defaultSnapshotRoot();
+  if (!isAbsolute(v)) throw new UsageError(`${SNAPSHOT_ROOT_ENV} must be an absolute path (got "${v}")`);
+  return resolve(v);
+}
+
+/** `p`'s real path, or its nearest existing ancestor's real path joined with the rest. */
+function realNearest(p: string): string {
+  let cur = resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(cur), ...tail.reverse());
+    } catch {
+      if (dirname(cur) === cur) return resolve(p);
+      tail.push(basename(cur));
+      cur = dirname(cur);
+    }
+  }
+}
+const inside = (child: string, parent: string): boolean => {
+  const c = realNearest(child);
+  const p = realNearest(parent);
+  return c === p || c.startsWith(p + sep);
+};
+
 export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolean } = { label?: string; ablateSkill?: boolean }> {
   cwd: string;
   env: NodeJS.ProcessEnv;
-  snapshotRoot: string;
+  /** Default: `snapshotRootFrom(env)`. */
+  snapshotRoot?: string;
   secrets: readonly string[];
   stderr: (line: string) => void;
   flags: F;
@@ -98,6 +129,19 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   const live = prep.lever;
   const flowArg = normalizeRootArg(args.flow);
   const flowHash = flowHashOf(resolve(deps.cwd, flowArg));
+  const runsRoot = deps.runsRoot ?? runsWriteRoot();
+
+  // The snapshot root, default or override, must sit apart from what it copies and what judges it.
+  const snapshotRoot = deps.snapshotRoot ?? snapshotRootFrom(deps.env);
+  for (const [what, dir] of [
+    ["the plugin the loop edits", live],
+    ["the flow dir", resolve(deps.cwd, flowArg)],
+    ["the runs root", runsRoot],
+  ] as const)
+    if (inside(snapshotRoot, dir))
+      throw new UsageError(
+        `the snapshot root ${tildeify(snapshotRoot)} is inside ${what} (${tildeify(dir)}); set ${SNAPSHOT_ROOT_ENV} to a directory apart from it`,
+      );
 
   // The plugin the variant runs. A variant with rows keeps the snapshot of its first run.
   let pluginDir = live;
@@ -106,7 +150,8 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     // A live runner of this variant may be mounting its snapshot: never re-take it under that runner.
     const holder = liveLockHolder(flowArg, v, deps.cwd);
     if (holder !== undefined) throw new UsageError(lockHeldMessage(holder, join(flowArg, v, ".lock")));
-    const snap = variantSnapshot(live, { snapshotRoot: deps.snapshotRoot, flowHash, variant: v, variantRan });
+    NoFollowRoot.open(snapshotRoot); // created no-follow: a planted link on its path is refused
+    const snap = variantSnapshot(live, { snapshotRoot, flowHash, variant: v, variantRan });
     pluginDir = snap.dir;
     if (snap.created) say(`[${v}] plugin snapshot: ${tildeify(live)} → ${tildeify(snap.dir)}`);
     if (snap.untrackedExcluded)
@@ -217,7 +262,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     pin: prep.pin,
     inputs: (c) => prep.session(c).uploads.map((u) => resolve(expandHome(u))),
     derivedPaths: prep.derivedPaths,
-    hiddenPaths: (cs) => [...prep.hiddenPaths(cs), deps.runsRoot ?? runsWriteRoot()],
+    hiddenPaths: (cs) => [...prep.hiddenPaths(cs), runsRoot],
     // The declared mounts (the live plugin among them) and the snapshot the runs actually mount.
     mountRoots: (cs) => [...new Set([...prep.mountRoots(cs), pluginDir])],
     lever: live,

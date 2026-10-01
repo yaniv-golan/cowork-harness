@@ -1280,7 +1280,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   keys, the `out/` copies and sidecars, the `metrics.md` wording and `hillclimb check`'s findings text — and the
   experimental keys of the `--dry-run` `plan.cost` object (`budgetGateWorstUsd`, `judgeMeanUsd`, `judgeP50Usd`, `items`).
   The command name, its flags and defaults, its exit codes (§11), the run envelope's fields and the covered
-  `plan.cost` keys are covered. A trace marks each sub-agent dispatch with a `system` turn saying what that
+  `plan.cost` keys are covered, and so is `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` (an absolute snapshot root; a
+  relative value is refused). A trace marks each sub-agent dispatch with a `system` turn saying what that
   child received, from its own transcript only: the harness's sub-agent append (when the child's prompt ends
   with exactly the append the session sent; Anthropic's built-in sub-agent prompt is withheld), "none received",
   or "not recorded in its transcript" when the transcript holds no prompt snapshot. The marker wording is not
