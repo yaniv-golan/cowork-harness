@@ -361,6 +361,10 @@ export interface CompleteResult {
    *  provenance, the usage value dropped, making true four-workload cost untallyable). A test double
    *  may omit it. */
   usage?: Record<string, unknown>;
+  /** A `--json-schema` call's validated answer (the envelope's `structured_output`), and the envelope's result
+   *  `subtype`. Present only on the structured transport (`claudeCliCompleteStructured`); deciders ignore them. */
+  structured?: unknown;
+  subtype?: string;
 }
 export type Complete = (prompt: string, model: string) => Promise<CompleteResult>;
 
