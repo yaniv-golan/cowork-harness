@@ -9,7 +9,7 @@ import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
-import { applySessionOverrides, type SessionConfig } from "../session.js";
+import { applySessionOverrides, expandHome, type SessionConfig } from "../session.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { effectiveTier, runOutDir, scenarioInputFindings } from "../run/execute.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
@@ -202,7 +202,9 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       return rep;
     },
     pin: prep.pin,
+    inputs: (c) => prep.session(c).uploads.map((u) => resolve(expandHome(u))),
     derivedPaths: prep.derivedPaths,
+    hiddenPaths: prep.hiddenPaths,
     // The declared mounts (the live plugin among them) and the snapshot the runs actually mount.
     mountRoots: (cs) => [...new Set([...prep.mountRoots(cs), pluginDir])],
     lever: live,

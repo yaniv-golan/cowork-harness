@@ -6,8 +6,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { runHillclimbCommand, type RunCommandDeps } from "../src/hillclimb/run-command.js";
 import { parseHillclimbRunArgs } from "../src/hillclimb/args.js";
+import { checkFlowDir } from "../src/hillclimb/schema-check.js";
 import { buildFingerprint } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { SessionConfig } from "../src/session.js";
@@ -54,7 +56,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
     cwd,
     env: {},
     snapshotRoot: snaps,
-    secrets: [],
+    secrets: ["sk-test-SECRET-9"],
     stderr: (l) => err.push(l),
     flags: {},
     runScenario: async (a) => {
@@ -222,5 +224,61 @@ describe("runHillclimbCommand", () => {
     const meta = rows()[0].meta as Record<string, unknown>;
     expect(meta.skill_hash).toMatch(/^[0-9a-f]{8,}/);
     expect(meta.content_sig).toBeDefined();
+  });
+
+  describe("input attachments", () => {
+    const withUpload = (body: string) => {
+      writeFileSync(join(cwd, "evals", "input.csv"), body);
+      writeFileSync(
+        join(cwd, "evals", "_session.yaml"),
+        `model: ${MODEL}\nuploads:\n  - ./input.csv\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+      );
+    };
+    const pass = async (...extra: string[]) => {
+      await runHillclimbCommand(args("--approve-harness", "--dry-run", ...extra), deps({ indexRows: () => [] }));
+      return runHillclimbCommand(args(...extra), deps());
+    };
+
+    it("a session upload is copied content-addressed under inputs/ and attached to the row", async () => {
+      withUpload("a,b\n1,2\n");
+      expect((await pass()).exitCode).toBe(0);
+      const sha16 = createHash("sha256").update("a,b\n1,2\n").digest("hex").slice(0, 16);
+      expect(rows()[0].attachments).toEqual([{ kind: "text", ref: `inputs/${sha16}-input.csv` }]);
+      expect(readFileSync(join(cwd, "flow", "inputs", `${sha16}-input.csv`), "utf8")).toBe("a,b\n1,2\n");
+      // The ref resolves to a regular file in the flow, by our schema reading.
+      expect(checkFlowDir(join(cwd, "flow"), { profile: "harness" }).findings.filter((f) => f.rule.startsWith("attachments"))).toEqual([]);
+    });
+
+    it("--no-copy-inputs attaches nothing, copies nothing, and says so on the row", async () => {
+      withUpload("a,b\n");
+      expect((await pass("--no-copy-inputs")).exitCode).toBe(0);
+      expect(rows()[0]).not.toHaveProperty("attachments");
+      expect((rows()[0].meta as Record<string, unknown>).inputs_not_copied).toBe(true);
+      expect(existsSync(join(cwd, "flow", "inputs"))).toBe(false);
+    });
+
+    it("a secret in a text upload never reaches the flow", async () => {
+      withUpload("key,sk-test-SECRET-9\n");
+      expect((await pass()).exitCode).toBe(0);
+      const ref = (rows()[0].attachments as Array<{ ref: string }>)[0].ref;
+      expect(readFileSync(join(cwd, "flow", ref), "utf8")).not.toContain("sk-test-SECRET-9");
+    });
+
+    it("an upload that is the scenario itself is still refused: the agent would read the rubric", async () => {
+      writeFileSync(
+        join(cwd, "evals", "_session.yaml"),
+        `model: ${MODEL}\nuploads:\n  - ./alpha.yaml\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+      );
+      const r = await runHillclimbCommand(args("--approve-harness"), deps());
+      expect(r.exitCode).toBe(2);
+      expect(calls).toEqual([]);
+      expect(err.join("\n")).toMatch(/could read .*alpha\.yaml/);
+    });
+
+    it("a case with no uploads carries no attachments and no flag", async () => {
+      expect((await pass()).exitCode).toBe(0);
+      expect(rows()[0]).not.toHaveProperty("attachments");
+      expect(rows()[0].meta as Record<string, unknown>).not.toHaveProperty("inputs_not_copied");
+    });
   });
 });

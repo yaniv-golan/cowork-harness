@@ -22,7 +22,7 @@ import { gateDecision, harnessDigest, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
-import { attachmentKind, authoredOutputs, planOutputCopy } from "./outputs.js";
+import { attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
 import { headroom } from "./check.js";
 import { loadFlowSnapshot } from "./schema-check.js";
 
@@ -61,8 +61,13 @@ export interface RunnerDeps {
   pin: (c: HillclimbCase) => string | undefined;
   /** Every file that defines the measurement (scenario, session, answers, uploads) — the gate's derived set. */
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
+  /** The files the agent must not read (scenarios, session files); `derivedPaths` when absent. Uploads are in the
+   *  gate's set but are inputs: an upload is a mount by design. */
+  hiddenPaths?: (cases: readonly HillclimbCase[]) => string[];
   /** Host roots the agent can read through a mount (folders, projects, uploads, plugins, skills). */
   mountRoots: (cases: readonly HillclimbCase[]) => string[];
+  /** A case's session uploads (absolute host paths), copied under `<flow>/inputs/` and attached to its rows. */
+  inputs?: (c: HillclimbCase) => string[];
   /** The live plugin dir the loop edits; a `harness_paths` entry inside it is refused. */
   lever?: string;
   /** The variant snapshot's content signature for a case (each scenario's session fingerprints apart). */
@@ -162,7 +167,7 @@ async function run(
       `${statePathShown} harness_paths lists ${inLever.join(", ")}, inside the plugin the loop edits (${deps.lever}) — every round would change the harness sha; list only files that define the measurement`,
     );
   const listed = listedRaw.map((p) => resolve(deps.cwd, p));
-  const exposed = pathsInsideMounts([flowAbs, ...deps.derivedPaths(cases), ...listed], deps.mountRoots(cases));
+  const exposed = pathsInsideMounts([flowAbs, ...(deps.hiddenPaths ?? deps.derivedPaths)(cases), ...listed], deps.mountRoots(cases));
   if (exposed.length)
     throw new UsageError(
       `refusing to run: the agent could read ${exposed.map((x) => `${x.path} (through the mount ${x.mount})`).join("; ")} — prior rounds' grades, judge rationales and the rubric must stay outside every folder the session mounts`,
@@ -340,6 +345,15 @@ async function run(
         say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(out.row.error)}`);
         return;
       }
+      // The session's uploads: attached to the row now, copied after it (unless --no-copy-inputs).
+      const uploads = deps.inputs?.(c) ?? [];
+      let inputs: ReturnType<typeof planInputCopy> | undefined;
+      if (uploads.length && args.noCopyInputs) (out.row.meta as Record<string, unknown>).inputs_not_copied = true;
+      else if (uploads.length) {
+        inputs = planInputCopy(uploads, OUTPUT_CAPS);
+        if (inputs.copy.length) out.row.attachments = inputs.copy.map((i) => ({ kind: attachmentKind(i.name), ref: `inputs/${i.name}` }));
+        if (inputs.skipped.length) (out.row.meta as Record<string, unknown>).inputs_skipped = inputs.skipped;
+      }
       // The trace is built (pure) BEFORE the row, so the row can say how complete it is; only the writes
       // come after the row (runner-scaffold.mjs l.529-547).
       const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
@@ -375,6 +389,8 @@ async function run(
       try {
         if (traceError !== undefined) throw traceError;
         for (const s of trace!.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
+        for (const i of inputs?.copy ?? [])
+          writer.writeUnderFlow(`inputs/${i.name}`, TEXT_KINDS.has(attachmentKind(i.name)) ? i.data.toString("utf8") : i.data);
         // Text is redacted like every other byte in the flow; a binary is copied as it is.
         for (const o of outputs?.copy ?? [])
           writer.writeUnderFlow(

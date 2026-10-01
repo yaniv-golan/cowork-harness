@@ -24,6 +24,9 @@ export interface PreparedCases {
   pin: (c: HillclimbCase) => string;
   /** Every file that defines the measurement — the harness gate's derived set. */
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
+  /** The files that define the answer and must stay unreadable: each scenario and its session file. Uploads and
+   *  fixtures are in the gate's set but are the agent's inputs, meant to be read. */
+  hiddenPaths: (cases: readonly HillclimbCase[]) => string[];
   /** Every host root the agent can read through a mount: folders, projects, uploads, plugins, local skills. */
   mountRoots: (cases: readonly HillclimbCase[]) => string[];
 }
@@ -133,6 +136,7 @@ export function prepareCases(
         }),
       ),
     ],
+    hiddenPaths: (cs) => [...new Set(cs.flatMap((c) => [resolve(c.file), sessions.get(c.id)!.file]))],
     mountRoots: (cs) => [
       ...new Set(
         cs.flatMap((c) => {

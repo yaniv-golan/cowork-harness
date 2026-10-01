@@ -5,7 +5,7 @@
 // path that is absolute or climbs out is refused before anything is read.
 
 import { createHash } from "node:crypto";
-import { extname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import type { RunResult } from "../types.js";
 import { FsRefusal, lstatOrNull, NoFollowRoot } from "./fs.js";
 
@@ -118,4 +118,44 @@ const KINDS: Record<string, string> = {
 /** The SCHEMA.md Attachment kind for a file name; `file` (a download chip) when nothing better fits. */
 export function attachmentKind(name: string): string {
   return KINDS[extname(name).toLowerCase()] ?? "file";
+}
+
+export interface InputCopyPlan {
+  /** `name` is the content-addressed file name under `<flow>/inputs/`: `<sha16>-<basename>`. */
+  copy: Array<{ path: string; name: string; data: Buffer }>;
+  skipped: Array<{ path: string; reason: string }>;
+}
+
+/** A case's session uploads, prepared for `<flow>/inputs/` (the row's `attachments`). They are host files the
+ *  user declared, read without following a final link; a directory or anything else is listed, not copied.
+ *  Content-addressed, so every rep of every variant refers to one copy of the same bytes. */
+export function planInputCopy(paths: readonly string[], caps: { perFileBytes: number; totalBytes: number }): InputCopyPlan {
+  const plan: InputCopyPlan = { copy: [], skipped: [] };
+  let total = 0;
+  for (const path of paths) {
+    const st = lstatOrNull(path);
+    if (!st || !st.isFile()) {
+      plan.skipped.push({ path, reason: st?.isDirectory() ? "a directory upload is not attached" : "not a plain file" });
+      continue;
+    }
+    if (st.size > caps.perFileBytes) {
+      plan.skipped.push({ path, reason: "over the per-file cap" });
+      continue;
+    }
+    if (total + st.size > caps.totalBytes) {
+      plan.skipped.push({ path, reason: "over the total cap" });
+      continue;
+    }
+    try {
+      const data = NoFollowRoot.existing(dirname(path)).readBytes(path);
+      total += data.length;
+      const sha16 = createHash("sha256").update(data).digest("hex").slice(0, 16);
+      plan.copy.push({ path, name: `${sha16}-${basename(path)}`, data });
+    } catch (e) {
+      if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT")
+        plan.skipped.push({ path, reason: "not a plain file" });
+      else throw e;
+    }
+  }
+  return plan;
 }
