@@ -54,6 +54,20 @@ describe("metrics: what is refused at load", () => {
     for (const id of ["pass", "claims", "a1", "a0_c2", "x_present", "foo_win", "both_bad"])
       expect(issues([metric({ id })]), id).toContain("collides with a key the hillclimb runner generates");
   });
+  it("reserved ids in any letter case", () => {
+    for (const id of ["Pass", "CLAIMS", "A1_x", "foo_PRESENT", "Both_Bad", "x_WIN"])
+      expect(issues([metric({ id })]), id).toContain("collides with a key the hillclimb runner generates");
+  });
+  it("min not below scale, naming both", () => {
+    const msg = issues([metric({ scale: 1, min: 5 })]);
+    expect(msg).toContain("`min` (5) must be below `scale` (1)");
+    expect(parse([metric({ scale: 1, min: 1 })]).success).toBe(false);
+    expect(parse([metric({ scale: 1, min: -1 })]).success).toBe(true);
+    expect(parse([metric({ scale: undefined, unbounded: true, min: 50 })]).success).toBe(true);
+  });
+  it("a backslash in the artifact path", () => {
+    expect(parse([metric({ artifact: "outputs\\m.json" })]).success).toBe(false);
+  });
   it("ids that are not path-safe", () => {
     for (const id of ["a/b", "..", "a b", "", "x".repeat(130), "wörds"]) expect(parse([metric({ id })]).success, id).toBe(false);
   });
@@ -76,6 +90,91 @@ describe("the published JSON Schema mirrors exactly-one-of scale/unbounded", () 
     expect(validate({ ...base, metrics: [metric({ scale: undefined })] })).toBe(false);
     expect(validate({ ...base, metrics: [metric({ unbounded: true })] })).toBe(false);
   });
+});
+
+describe("the published schema's id rules agree with the loader", () => {
+  const schema = JSON.parse(readFileSync(join(SCHEMA_DIR, "scenario.schema.json"), "utf8"));
+  const validate = new Ajv({ strict: true }).compile(schema);
+  it("reserved and all-dots ids: the JSON Schema refuses exactly what reservedMetricId / the dots rule refuse", () => {
+    const corpus = [
+      "pass",
+      "Pass",
+      "PASS",
+      "claims",
+      "Claims",
+      "win",
+      "both_bad",
+      "a0",
+      "A1",
+      "a12_c3",
+      "A1_x",
+      "a1x",
+      "ab1",
+      "x_present",
+      "foo_PRESENT",
+      "present",
+      "a0_win",
+      "x_WIN",
+      "winner",
+      "twin",
+      "both_bad_v2",
+      "x_both_bad",
+      "words",
+      "cost_ratio",
+      "alpha",
+      "...",
+      ".",
+      "a.b",
+    ];
+    for (const id of corpus) {
+      const loader = !reservedMetricId(id) && isMetricIdSafe(id);
+      expect(validate({ ...base, metrics: [metric({ id })] }), id).toBe(loader);
+    }
+  });
+  it("artifact paths: the JSON Schema refuses exactly what the loader refuses", () => {
+    const corpus = [
+      "outputs/m.json",
+      "outputs\\m.json",
+      "c:x.json",
+      "a:b.json",
+      "c:/x.json",
+      "C:/x.json",
+      "c:",
+      "/etc/x.json",
+      "../x.json",
+      "outputs/../x.json",
+      "outputs/..x.json",
+      "outputs/x..json",
+      "  ",
+      "",
+      "outputs/a\0b",
+      "./outputs/m.json",
+      "outputs/",
+      "\\\\host\\x",
+    ];
+    for (const artifact of corpus) {
+      const loader = Scenario.safeParse({ ...base, metrics: [metric({ artifact })] }).success;
+      expect(validate({ ...base, metrics: [metric({ artifact })] }), JSON.stringify(artifact)).toBe(loader);
+    }
+  });
+  it("a POSIX name with a colon is legal; a drive root is not", () => {
+    expect(parse([metric({ artifact: "outputs/a:b.json" })]).success).toBe(true);
+    expect(parse([metric({ artifact: "a:b.json" })]).success).toBe(true);
+    expect(parse([metric({ artifact: "c:/x.json" })]).success).toBe(false);
+    expect(parse([metric({ artifact: "c:" })]).success).toBe(false);
+  });
+  it("min: 5, scale: 1 is refused by the loader and accepted by the schema (loader-only, named as such)", () => {
+    expect(parse([metric({ scale: 1, min: 5 })]).success).toBe(false);
+    expect(validate({ ...base, metrics: [metric({ scale: 1, min: 5 })] })).toBe(true);
+  });
+  it("the loader-only rules are named identically in the schema description and the CHANGELOG", () => {
+    const LOADER_ONLY =
+      "Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`.";
+    expect(schema.properties.metrics.description).toContain(LOADER_ONLY);
+    expect(readFileSync("CHANGELOG.md", "utf8")).toContain(LOADER_ONLY);
+  });
+  it("min below scale is loader-only and the schema description says so", () =>
+    expect(JSON.stringify(schema.properties.metrics)).toContain("`min` below `scale`"));
 });
 
 describe("one definition of the reserved-id rule and the id rule", () => {

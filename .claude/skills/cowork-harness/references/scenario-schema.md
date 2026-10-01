@@ -1,6 +1,6 @@
 # Scenario & session schema, replay class, web_fetch, authoring gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.2.0`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.2.1`
 (baseline `desktop-2.16120.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -126,7 +126,8 @@ workspace_fixture: fixtures/step1   # OPTIONAL — a directory (relative to this
 metrics:                            # OPTIONAL — numbers read from JSON files the run wrote, reported in
   - { id: words, artifact: outputs/stats.json, path: totals.words, better: higher, scale: 5000 }
                                     # RunResult.metrics as {id, value} or {id, unavailable}; never in the
-                                    # verdict. `better` required; exactly one of scale / unbounded: true.
+                                    # verdict. `better` required; exactly one of scale (the range's upper
+                                    # bound; `min` is the floor, default 0) / unbounded: true.
                                     # A file the run did not write (incl. one rewritten with identical
                                     # bytes) is unavailable: pre_run. Arms the pre-run manifest.
 ```
@@ -356,7 +357,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
-**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `question_context`, `questions_count_max`,
+**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`,
 `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
 `path_denied`, `no_path_denied` (the latter three are also `fidelity: hostloop`-only — see
 [`assertion-catalog.md`](./assertion-catalog.md)). With `controlOut` present they evaluate; on an old
@@ -461,7 +462,7 @@ debugging a run's behavior. The two are **numbered independently**: a bare "gotc
    concern per item; run the linter. (`LIVE_ONLY_KEYS`/`MANIFEST_KEYS` in `src/run/cassette.ts`.)
 
 2. **Gate keys need a `controlOut` cassette.** `question_asked`, `question_options`, `question_context`,
-   `questions_count_max`,
+   `question_option_count`, `questions_count_max`,
    `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked` only evaluate on
    replay with `controlOut`; on an old cassette they warn and are excluded (not passed).
    `gate_answers_delivered` **fails on

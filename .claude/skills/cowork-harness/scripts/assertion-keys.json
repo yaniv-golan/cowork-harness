@@ -47,6 +47,7 @@
     "present_files_called",
     "question_asked",
     "question_context",
+    "question_option_count",
     "question_options",
     "questions_count_max",
     "reference_read",

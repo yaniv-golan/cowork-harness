@@ -13,7 +13,13 @@ import { tildeify } from "../io.js";
 import { applySessionOverrides, expandHome, type SessionConfig } from "../session.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { effectiveTier, runOutDir, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
-import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
+import { pairwiseRefsRefusal } from "../refs/preflight.js";
+import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
+import { freezeCaseRef } from "./freeze-ref.js";
+import { readRefDoc, readRefEntry } from "../refs/store.js";
+import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
+import { createHash } from "node:crypto";
+import { flowHasPairwise, metricUnion } from "./grade-keys.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { loadCostHistory } from "../eval/plan-history.js";
@@ -25,8 +31,7 @@ import type { ScenarioRunner } from "../eval/job-runner.js";
 import { gradedSkillNameFor, resolveCritiquedSkillDir } from "../critique/command.js";
 import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
-import { loadCases } from "./cases.js";
-import { metricUnion } from "./grade-keys.js";
+import { loadCases, type HillclimbCase } from "./cases.js";
 import { refuseChangedMetrics } from "./metric-keys.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
@@ -121,6 +126,8 @@ interface Prepared {
   price: (remaining: Record<string, number>) => ReturnType<typeof estimateScheduleCost>;
 }
 
+const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
+
 function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   args: HillclimbRunArgs,
   deps: RunCommandDeps<F>,
@@ -202,6 +209,36 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
         `. To fix: ${[...new Set(findings.map((f) => ANSWER_KEY_ADVICE[f.reason]))].join("; ")}.`,
     );
 
+  // semantic_pairwise: the flow's own references, found once per pass. Every pairwise assert is judged against all
+  // of them (the scenario's `refs:` is ignored here); the baseline's decides the verdict, a later variant's is a
+  // metric. The pre-spend check below and every run of the pass use this one setup.
+  const flowPairwise = flowHasPairwise(cases.map((c) => ({ assertions: c.scenario.assert ?? [] })));
+  const refs = flowPairwise ? discoverFlowRefs(resolve(deps.cwd, flowArg)) : [];
+  if (flowPairwise) {
+    const ignored = cases.filter((c) => (c.scenario.assert ?? []).some((a) => a.semantic_pairwise?.refs?.length)).map((c) => c.id);
+    say(
+      `[${v}] pairwise refs: ${refs.map((r) => r.name).join(", ")} (stores: ${refs.map((r) => tildeify(r.store)).join(", ")})` +
+        (ignored.length ? `; the scenario \`refs:\` of ${ignored.join(", ")} is ignored under hillclimb` : ""),
+    );
+  }
+  const pairwiseFor = (c: HillclimbCase) => flowPairwiseOptions(c.id, v, refs);
+  if (flowPairwise && args.dryRun) {
+    // The judge's spend is not in plan.cost (agent spend only): say how many calls a rep makes, at most.
+    const judged = refs.filter((r) => r.name !== v).length;
+    const calls = cases.reduce(
+      (n, c) =>
+        n +
+        (c.scenario.assert ?? []).reduce(
+          (k, a) => k + (a.semantic_pairwise ? judged * (a.semantic_pairwise.order === "both" ? 2 : 1) : 0),
+          0,
+        ),
+      0,
+    );
+    say(
+      `[${v}] pairwise judging (experimental; not in the estimate, which covers agent spend only): up to ${calls} judge call(s) per rep over the cases, plus a retry each when a reply is invalid — unpriced`,
+    );
+  }
+
   // Per case: the session pointed at the variant's plugin, its signature from the same fingerprint call a run
   // makes, and the input checks a run makes before its run dir exists — over the SUBSTITUTED session.
   const sessions = new Map<string, SessionConfig>();
@@ -222,10 +259,37 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     const f = scenarioInputFindings(c.scenario, undefined, { quiet: true, session: sub, unloadableBaseline: "report" });
     const refusal = f.session ?? f.vacuity ?? f.inputs;
     if (refusal) throw new UsageError(`case ${c.id}: ${refusal.message}`);
-    // semantic_pairwise references: the gate a run applies before its run dir exists (eval's call), once per case,
-    // over the substituted session — a missing or damaged reference, or one a mount exposes, refuses up front.
-    const pw = pairwiseRefsRefusal(c.scenario, scenarioPairwiseSetup(c.scenario), sessionOriginSources(sub, "(inline)"));
-    if (pw) throw new UsageError(`case ${c.id}: ${pw}`);
+    // semantic_pairwise references: the gate a run applies before its run dir exists, once per case, over the
+    // substituted session and with the flow's setup — a missing or damaged baseline reference, or a store a mount
+    // exposes, refuses up front. A later variant's reference is a metric: unreadable, it blanks its own column.
+    if (flowPairwise) {
+      const o = pairwiseFor(c);
+      const pw = pairwiseRefsRefusal(
+        c.scenario,
+        { caseId: o.caseId, refsFor: () => o.refs, neutralRefs: new Set(o.neutralRefs), gateRefs: new Set(o.gateRefs) },
+        sessionOriginSources(sub, "(inline)"),
+      );
+      if (pw) {
+        // The repair depends on WHY: an absent entry, or a sound one for this prompt that lacks a compose key, can be
+        // frozen; a damaged entry or document, or one frozen for another prompt, never is — the flow restarts. Any
+        // other refusal (a store a mount exposes) names its own fix.
+        const store = join(resolve(deps.cwd, flowArg), BASELINE_REF, "ref");
+        const e = readRefEntry(store, c.id);
+        const keys = (c.scenario.assert ?? []).filter((a) => a.semantic_pairwise !== undefined).map(pairwiseComposeKey);
+        const docs = e.status === "ok" ? keys.map((k) => readRefDoc(store, c.id, k).status) : [];
+        const samePrompt = e.status === "ok" && e.taskSha256 === sha256(c.scenario.prompt);
+        // Only a refusal about the baseline reference itself gets a reference repair.
+        const aboutRef = pw.includes(`reference "${BASELINE_REF}"`);
+        const hint = !aboutRef
+          ? undefined
+          : e.status === "missing" || (samePrompt && docs.includes("missing") && !docs.includes("integrity"))
+            ? `the baseline reference is frozen by a baseline pass from its lowest-rep good row, or now with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``
+            : e.status === "integrity" || (e.status === "ok" && (!samePrompt || docs.includes("integrity")))
+              ? `a frozen reference is never repaired in place: start a fresh flow dir`
+              : undefined;
+        throw new UsageError(`case ${c.id}: ${pw}${hint ? `\n  ${hint}` : ""}`);
+      }
+    }
   }
 
   // Which skill's invocation the rows record (the `skill_invoked` column): one per plugin, or none.
@@ -246,6 +310,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     extra: (spec) => ({
       session: sessions.get(spec.c.id)!,
       ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
+      ...(flowPairwise ? { pairwise: pairwiseFor(spec.c) } : {}),
     }),
     ...(deps.now ? { now: deps.now } : {}),
   });
@@ -308,10 +373,48 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     pin: prep.pin,
     inputs: (c) => prep.session(c).uploads.map((u) => resolve(expandHome(u))),
     derivedPaths: prep.derivedPaths,
+    derivedValues: prep.derivedValues,
     hiddenPaths: (cs) => [...prep.hiddenPaths(cs), runsRoot],
     // The declared mounts (the live plugin among them) and the snapshot the runs actually mount.
     mountRoots: (cs) => [...new Set([...prep.mountRoots(cs), pluginDir])],
     lever: live,
+    ...(flowPairwise ? { pairwise: { metricRefs: metricRefNames(refs) } } : {}),
+    // A baseline pass freezes the flow's baseline reference for every selected pairwise case that has none, from the
+    // case's LOWEST-REP good row — the rule `hillclimb freeze-ref` applies. A resumed pass with no new rows repairs
+    // a missing one the same way. Only "no good row" (or a refused freeze) is a failure.
+    ...(flowPairwise && v === BASELINE_REF
+      ? {
+          afterPass: ({ flowAbs, cases: selected, results }) => {
+            const lines: string[] = [];
+            let failures = 0;
+            for (const c of selected) {
+              if (!(c.scenario.assert ?? []).some((a) => a.semantic_pairwise !== undefined)) continue;
+              const o = freezeCaseRef({
+                flowAbs,
+                variant: BASELINE_REF,
+                caseId: c.id,
+                scenarioFile: c.file,
+                assertions: c.scenario.assert,
+                prompt: c.scenario.prompt,
+                results,
+                secrets: [...deps.secrets],
+                command: "hillclimb run",
+              });
+              if (o.status === "exists") continue;
+              if (o.status === "refused") {
+                failures++;
+                lines.push(
+                  `  [${v}] ${c.id}: the baseline reference was not frozen — ${o.message}` +
+                    (o.restart
+                      ? ""
+                      : `; repair with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``),
+                );
+              } else lines.push(`  [${v}] ${c.id}: froze the baseline reference from rep ${o.rep}`);
+            }
+            return { lines, failures };
+          },
+        }
+      : {}),
     expectedContentSig: (c) => sigs.get(c.id),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),

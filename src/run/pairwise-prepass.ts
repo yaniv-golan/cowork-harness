@@ -32,6 +32,17 @@ export interface PairwisePrepassOpts {
   refsFor: (a: Assertion) => PairwiseRef[];
   /** References frozen from this very run's variant: no judge call, a neutral 0.5. */
   neutralRefs?: ReadonlySet<string>;
+  /** The references that decide the verdict. Unset = every reference (a scenario run, an eval). A reference outside
+   *  the set is a metric only: its outcome is recorded with `gate: false`, and one that cannot be compared (missing,
+   *  integrity, a judge reply that stayed invalid) degrades that outcome alone instead of the assert. */
+  gateRefs?: ReadonlySet<string>;
+  /** Fill mode (a re-grade that only adds comparisons): judge only these references; every other outcome is the
+   *  live run's, from `copyOutcome`, recorded `copied: true` — no judge call, so it cannot move. */
+  onlyRefs?: ReadonlySet<string>;
+  copyOutcome?: (assertIndex: number, ref: string) => Outcome | undefined;
+  /** Epoch ms after which no judge call may start. A comparison not started by then is not made, and
+   *  `deadlinePassed` is set on the context, so the caller ends the run as a timeout. */
+  deadline?: number;
   /** A judge for a resolved model id. Called lazily, only when a comparison actually runs. */
   judgeFor: (model: string) => PairwiseJudge;
   modelFor: (a: Assertion) => string;
@@ -80,6 +91,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
   ctx.judgedDocs ??= new Map();
   ctx.judgePromptHashes ??= new Map();
   ctx.judgeInvalid ??= new Set();
+  ctx.judgeAttempts ??= new Map();
   ctx.semanticDocInfo ??= new Map();
   ctx.semanticRefused ??= new Map();
   const secrets = ctx.secrets ?? [];
@@ -101,6 +113,9 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
       ctx.semanticRefused.set(a, refusal);
       continue;
     }
+    // Recorded whether or not a judge reads it: a run whose every comparison is neutral (the reference's own
+    // variant) still has to prove, when frozen later, that the recomposed document is the one it produced.
+    (ctx.composedDocs ??= new Map()).set(a, built.fingerprint);
     if (!p.rubric?.length)
       warn(
         `::warning:: [semantic_pairwise] assert ${i} has no rubric — the judge weighs overall quality for the task; concrete criteria grade more reliably\n`,
@@ -121,19 +136,43 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
     let usage: TokenUsage | undefined;
     let model: string | undefined;
     let judged = false;
+    let retries = 0;
     for (const ref of opts.refsFor(a)) {
+      const gate = opts.gateRefs === undefined || opts.gateRefs.has(ref.name);
+      const tag = gate ? {} : { gate: false as const };
+      if (opts.onlyRefs) {
+        // A fill never re-judges an outcome the live run has: only a missing one is compared.
+        const kept = opts.copyOutcome?.(i, ref.name);
+        if (kept) {
+          outcomes.push({ ...kept, copied: true });
+          continue;
+        }
+        if (!opts.onlyRefs.has(ref.name)) {
+          outcomes.push({ ref: ref.name, ...tag, status: "missing", why: "the live run recorded no outcome to keep" });
+          continue;
+        }
+      }
       if (opts.neutralRefs?.has(ref.name)) {
-        outcomes.push({ ref: ref.name, status: "neutral", value: 0.5 });
+        outcomes.push({ ref: ref.name, ...tag, status: "neutral", value: 0.5 });
         continue;
       }
       const got = readRefDoc(ref.store, opts.caseId, key);
       if (got.status !== "ok") {
-        outcomes.push({ ref: ref.name, status: got.status, why: got.why });
+        outcomes.push({ ref: ref.name, ...tag, status: got.status, why: got.why });
         continue;
       }
       if (got.taskSha256 !== taskSha256) {
-        outcomes.push({ ref: ref.name, status: "missing", why: "frozen for a different task (the scenario's prompt changed)" });
+        outcomes.push({ ref: ref.name, ...tag, status: "missing", why: "frozen for a different task (the scenario's prompt changed)" });
         continue;
+      }
+      if (opts.deadline !== undefined && Date.now() >= opts.deadline) {
+        // A metric-only comparison cannot change the verdict: losing it costs that column, not the attempt.
+        if (!gate) {
+          outcomes.push({ ref: ref.name, ...tag, status: "invalid", why: "the deadline passed before this comparison" });
+          continue;
+        }
+        ctx.deadlinePassed = true;
+        break;
       }
       const resolved = opts.modelFor(a);
       if (!warnedSelfJudge && opts.mainModels?.some((m) => sameModelKey(m) === sameModelKey(resolved))) {
@@ -155,12 +194,14 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
           order: p.order ?? "random",
         });
         judged = true;
+        retries += r.retries ?? 0;
         cost = addCost(cost, r.costUsd);
         usage = addTokenUsage(usage, r.usage);
         model = r.model;
         const rationale = r.rationale !== undefined ? finalizeRationale(r.rationale, secrets) : undefined;
         outcomes.push({
           ref: ref.name,
+          ...tag,
           status: "graded",
           outcome: r.outcome,
           value: r.value,
@@ -173,16 +214,38 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
       } catch (e) {
         if (!(e instanceof PairwiseJudgeInvalid)) throw e;
         judged = true;
+        retries += e.retries;
         cost = addCost(cost, e.costUsd);
         usage = addTokenUsage(usage, e.usage);
         model = e.model ?? model;
+        const why = e.message.split("\n")[0]!;
+        if (!gate) {
+          // A metric-only reference: this comparison is lost, the verdict is not.
+          outcomes.push({ ref: ref.name, ...tag, status: "invalid", why });
+          warn(
+            `::warning:: semantic_pairwise grade vs ${ref.name} invalid after retry (a metric-only reference; the verdict stands): ${why}\n`,
+          );
+          continue;
+        }
         ctx.judgeInvalid.add(a);
-        warn(`::warning:: semantic_pairwise grade invalid after retry (rep counts as invalid, not passed): ${e.message.split("\n")[0]}\n`);
+        warn(`::warning:: semantic_pairwise grade invalid after retry (rep counts as invalid, not passed): ${why}\n`);
         break;
       }
     }
+    // Past the deadline the assert has no result at all ("judge not run"), never a partial set of comparisons — but
+    // what the comparisons already made spent is still recorded.
+    if (ctx.deadlinePassed) {
+      if (judged) {
+        if (cost !== undefined) ctx.judgeCosts.set(a, cost);
+        if (usage !== undefined) ctx.judgeUsages.set(a, usage);
+        ctx.judgeModels.set(a, model ?? "unknown");
+        ctx.judgeAttempts.set(a, 1 + retries);
+      }
+      break;
+    }
     ctx.pairwiseResults.set(a, outcomes);
     if (!judged) continue;
+    ctx.judgeAttempts.set(a, 1 + retries);
     ctx.judgedDocs.set(a, built.fingerprint);
     ctx.judgePromptHashes.set(a, PAIRWISE_PROMPT_HASH);
     ctx.judgeModels.set(a, model ?? "unknown");

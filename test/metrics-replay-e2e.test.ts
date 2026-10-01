@@ -78,7 +78,9 @@ describe.runIf(can)("metrics over a recorded cassette (record → replay, stub a
       ]);
       const warnings = rep.stderr.split("\n").filter((l) => l.includes("[replay] metrics:"));
       expect(warnings, rep.stderr).toHaveLength(1);
-      expect(warnings[0]).toMatch(/1\/3 not measurable from this cassette \(big: size/);
+      expect(warnings[0]).toMatch(
+        /1\/3 not measurable from this cassette \(big: size — larger than the recorded artifact-body cap; re-record with a larger --max-artifact-bytes\)/,
+      );
       expect(warnings[0]).not.toMatch(/kept|words/);
 
       // --assert-from: the on-disk declaration is measured, not the frozen one.
@@ -86,6 +88,36 @@ describe.runIf(can)("metrics over a recorded cassette (record → replay, stub a
       const re = await cli(f, ["replay", cass, "--assert-from", onDisk, "--output-format", "json"]);
       expect(re.code, re.stderr).toBe(0);
       expect(JSON.parse(re.stdout).results[0].metrics).toEqual([{ id: "words_again", value: 1200 }]);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("replay notices a metrics: drift; --assert-from --write persists a metrics-only change", async () => {
+    const f = makeStubFixture(STUB, DUMMY);
+    try {
+      const sc = scenario(f, "mr.yaml", [metric("words", "outputs/m.json", "words")]);
+      const cass = join(f.cwd, "mr.cassette.json");
+      const rec = await cli(f, ["record", sc, "--out", cass, "--output-format", "json"]);
+      expect(rec.code, rec.stdout).toBe(0);
+      // Edit ONLY metrics on disk (the asserts are unchanged).
+      const edited = scenario(f, "mr.yaml", [metric("words", "outputs/m.json", "words"), metric("again", "outputs/m.json", "words")]);
+      const plain = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(plain.stderr).toMatch(/has a different `metrics:` block; replay measured the metrics frozen in the cassette/);
+      expect(JSON.parse(plain.stdout).results[0].metrics).toEqual([{ id: "words", value: 1200 }]);
+      const w = await cli(f, ["replay", cass, "--assert-from", edited, "--write", "--output-format", "json"]);
+      expect(w.code, w.stderr).toBe(0);
+      expect(w.stderr).not.toMatch(/already match/);
+      expect(JSON.parse(readFileSync(cass, "utf8")).scenario.metrics.map((m: { id: string }) => m.id)).toEqual(["words", "again"]);
+      // A second --write has nothing to do, and says what it compared.
+      const again = await cli(f, ["replay", cass, "--assert-from", edited, "--write", "--output-format", "json"]);
+      expect(again.stderr).toMatch(/assert, expect_denied and metrics already match the on-disk scenario — no write/);
+      const after = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(JSON.parse(after.stdout).results[0].metrics).toEqual([
+        { id: "words", value: 1200 },
+        { id: "again", value: 1200 },
+      ]);
+      expect(after.stderr).not.toMatch(/different `metrics:`/);
     } finally {
       f.cleanup();
     }
@@ -109,6 +141,8 @@ describe.runIf(can)("metrics over a recorded cassette (record → replay, stub a
       expect(rep.stderr).toMatch(
         /\[replay\] metrics: 1\/1 not measurable from this cassette \(inherited: pre_run — its pre-run hash is unavailable/,
       );
+      // The live run could not hash it either, so a re-record would not measure it: no such remedy is offered.
+      expect(rep.stderr.split("\n").find((l) => l.includes("[replay] metrics:"))).not.toMatch(/re-record/);
     } finally {
       f.cleanup();
     }

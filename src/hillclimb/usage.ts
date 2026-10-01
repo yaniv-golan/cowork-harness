@@ -18,6 +18,8 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--run-dir",
 ] as const;
 export const HILLCLIMB_RUN_REPEATED_FLAGS = ["--case"] as const;
+/** `hillclimb regrade`'s own booleans (its value flags are a subset of run's). */
+export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = ["--approve-harness", "--fill-refs", "--allow-doc-drift", "--allow-unchecked"] as const;
 
 export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--reps N]
        [--concurrency N] [--timeout-s N (0 = no ceiling)] [--approve-harness] [flags]
@@ -50,11 +52,32 @@ export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <
        (an existing copy that differs is kept; the new legend goes to metrics.md.new). json: the envelope
        also carries it as metrics_md.`;
 
+export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR] [--case ID]... [--output-format text|json]
+       Freezes each selected semantic_pairwise case's reference into <flow>/<variant>/ref from the variant's
+       lowest-rep good row (status ok, not an agent failure, verdict and pairwise evidence measured), under the
+       variant's lock. A baseline pass freezes the baseline's itself; freeze a later variant's to compare the next
+       ones with it (win_<vN>). An entry already complete is reported, never rewritten. Exit 0 nothing refused,
+       1 a case refused, 2 usage.`;
+
+export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml | dir/> [--flow DIR] [--variant all|baseline|vN] [--case ID]...
+       [--judge-model ID] [--fill-refs] [--approve-harness] [--allow-doc-drift] [--allow-unchecked] [--output-format text|json]
+       [--dotenv FILE] [--run-dir DIR]
+       Re-grades a flow's scored rows from their kept run dirs (no agent run) and rewrites results.jsonl atomically,
+       keeping the prior file as regrade-<sha>.bak.jsonl and a before/after in <variant>/regrade.md. Default: every
+       judged assert is graded again with the flow's references now (a judge or rubric change). --fill-refs: only the
+       pairwise comparisons a row lacks are judged (a reference frozen after it), so pass cannot move and every row
+       carries every win column. Gated like run. Exit 0 rewritten or nothing to do, 1 some rows listed (not
+       re-graded) or a failure after the first judge call, 2 refused before any judge call.`;
+
 /** The whole family: `hillclimb --help`, and the usage guard's text (every flag of every subcommand). */
-export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template> ...
+export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template | freeze-ref | regrade> ...
 
 ${HILLCLIMB_RUN_USAGE}
 
 ${HILLCLIMB_CHECK_USAGE}
 
-${HILLCLIMB_STATE_TEMPLATE_USAGE}`;
+${HILLCLIMB_STATE_TEMPLATE_USAGE}
+
+${HILLCLIMB_FREEZE_REF_USAGE}
+
+${HILLCLIMB_REGRADE_USAGE}`;

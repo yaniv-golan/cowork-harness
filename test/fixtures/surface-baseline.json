@@ -4447,6 +4447,30 @@
       ".assert[].question_context.when_question": {
         "type": "string"
       },
+      ".assert[].question_option_count": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].question_option_count.case_sensitive": {
+        "type": "boolean",
+        "const": true
+      },
+      ".assert[].question_option_count.exactly": {
+        "type": "integer"
+      },
+      ".assert[].question_option_count.matches": {
+        "type": "string",
+        "required": true
+      },
+      ".assert[].question_option_count.max": {
+        "type": "integer"
+      },
+      ".assert[].question_option_count.min": {
+        "type": "integer"
+      },
+      ".assert[].question_option_count.when_question": {
+        "type": "string"
+      },
       ".assert[].question_options": {
         "type": "object",
         "closed": true

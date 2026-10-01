@@ -347,7 +347,9 @@ export function assertContextFromRunDir(
   // asserting option order with no scripted answers (`on_unanswered: first`, an LLM-decided gate, a
   // post-hoc check on a kept run) would silently reach the evaluator with no evidence at all. Parsed only
   // when the key is asserted — a full events.jsonl read is not free on a long run.
-  const wantsGateOptions = scenario.assert.some((a) => a.question_options !== undefined || a.question_context !== undefined);
+  const wantsGateOptions = scenario.assert.some(
+    (a) => a.question_options !== undefined || a.question_context !== undefined || a.question_option_count !== undefined,
+  );
   const parsedGates = wantsGateOptions ? parseGatesFromEvents(join(runDir, "events.jsonl")) : undefined;
   // Absent file OR any unparseable frame ⇒ evidence-missing, never a partial set graded as complete:
   // a present-but-corrupt events.jsonl is otherwise indistinguishable from "these were all the gates".

@@ -367,6 +367,24 @@ const toolCallObjectFields = {
     ),
 };
 
+/** A control character in a regex is almost always a YAML double-quoted escape (`"\b"` is a backspace, not a word
+ *  boundary), which would silently match nothing — refused at load. Tab, newline and carriage return are allowed. */
+const CONTROL_CHAR = /[\x00-\x08\x0b\x0c\x0e-\x1f]/;
+const CONTROL_CHAR_MESSAGE =
+  "contains a control character — in a double-quoted YAML string `\\b` is a backspace, not a word boundary; single-quote the regex";
+
+/** Why a `question_option_count` bound is unusable, or undefined when it is fine. Shared by the load-time refine
+ *  and the evaluator, so a hand-built context gets the same answer as a parsed scenario. */
+export function questionOptionCountBoundError(v: { exactly?: number; min?: number; max?: number }): string | undefined {
+  if (v.exactly !== undefined && (v.min !== undefined || v.max !== undefined))
+    return "question_option_count: set `exactly`, or `min`/`max`, not both";
+  if (v.exactly === undefined && v.min === undefined && v.max === undefined)
+    return "question_option_count: set `exactly`, `min` or `max` — with no bound it checks nothing";
+  if (v.min !== undefined && v.max !== undefined && v.min > v.max)
+    return `question_option_count: \`min\` (${v.min}) is greater than \`max\` (${v.max}), so no count satisfies it`;
+  return undefined;
+}
+
 const subagentTypeNeedsSubagentScope = (o: { scope?: string; subagent_type?: string }) =>
   o.subagent_type === undefined || o.scope === "subagent";
 const subagentTypeScopeMessage = { message: "`subagent_type` applies only with `scope: subagent`", path: ["subagent_type"] };
@@ -896,6 +914,42 @@ export const Assertion = z.strictObject({
     .describe(
       "a regex matched against everything a gate put in front of the user: the question label, every option LABEL, and every option DESCRIPTION. Use this when the skill's own wording may land in any of those fields — question_asked sees only the question text and question_options compares only labels, so a sentence delivered in an option's `description` is invisible to both. Evidence is the ask-time AskUserQuestion payload (never a producer's tool_result, which would grade true whether or not the model surfaced anything). Zero gates recorded FAILS; a lane that cannot read the gate payload fails evidence-unavailable, never vacuously. This text is model-composed and is reworded run to run — pin a producer-authored constant, not model prose",
     ),
+  question_option_count: z
+    .strictObject({
+      when_question: z
+        .string()
+        .optional()
+        .describe(
+          "regex narrowing to sub-questions whose label matches (the same string question_asked matches); omit to check EVERY sub-question that was asked",
+        )
+        .refine((v) => v === undefined || !CONTROL_CHAR.test(v), CONTROL_CHAR_MESSAGE),
+      matches: z
+        .string()
+        .min(1)
+        .describe(
+          "regex counted against each option LABEL of a sub-question (descriptions are not searched). Case-insensitive unless `case_sensitive: true`. NON-EMPTY: an empty pattern matches every label. Single-quote it in YAML: in a double-quoted string `\\b` becomes a backspace character, which is refused",
+        )
+        .refine((v) => !CONTROL_CHAR.test(v), CONTROL_CHAR_MESSAGE),
+      case_sensitive: z
+        .literal(true, { error: "case_sensitive takes only `true` — omit it for the case-insensitive default" })
+        .optional()
+        .describe(
+          "match `matches` case-sensitively (default: case-insensitive, like every other regex key). It applies to the WHOLE pattern: on an `exactly: 0` rule it makes `add` miss `Add`, a false pass — keep such a rule case-insensitive, or spell both cases (`[Aa]dd`)",
+        ),
+      exactly: z.number().int().nonnegative().optional().describe("every selected sub-question has exactly N matching options"),
+      min: z.number().int().nonnegative().optional().describe("every selected sub-question has at least N matching options"),
+      max: z.number().int().nonnegative().optional().describe("every selected sub-question has at most N matching options"),
+    })
+    // Load-time, so a bound that checks nothing or contradicts itself is refused BEFORE the spawn. `evaluate()`
+    // repeats it because hand-built contexts (tests, library callers) never pass through parse.
+    .superRefine((v, c) => {
+      const message = questionOptionCountBoundError(v);
+      if (message !== undefined) c.addIssue({ code: "custom", message });
+    })
+    .optional()
+    .describe(
+      'count the options whose LABEL matches a regex, per sub-question, and require the count to satisfy `exactly` (or `min`/`max`) on EVERY selected sub-question — a bundled AskUserQuestion with K sub-questions is K, as in questions_count_max. For a rule over gates the run composes, such as "exactly one option per gate carries the reserved no-change prefix". A sub-question with no options counts 0; a duplicated label counts twice. Zero sub-questions asked (or none matching `when_question`) FAILS, so `exactly: 0` alone is satisfied by any unrelated gate: pair it with a positive rule or a `when_question`. Evidence is the ask-time AskUserQuestion payload; a lane that cannot read it fails evidence-unavailable, never vacuously, and so does a count that a label or question rewritten by a redaction policy could change (text reading `[REDACTED…]` counts as rewritten). This text is model-composed and is reworded run to run — pin a producer-authored constant, not model prose',
+    ),
   questions_count_max: z
     .number()
     .int()
@@ -1153,8 +1207,8 @@ export const FIDELITY_TIERS = ["protocol", "container", "microvm", "hostloop", "
 
 export type FidelityTier = (typeof FIDELITY_TIERS)[number];
 
-/** Why a declared metric has no value (`RunResult.metrics[].unavailable`). ONE list: the type, the zod enum and the
- *  published JSON Schemas derive from it. See docs/scenario.md "Numeric metrics" for what each one means. */
+/** Why a declared metric has no value (`RunResult.metrics[].unavailable`). ONE list: the type derives from it, and the two
+ *  hand-maintained JSON Schemas (run-result.json, regrade.json) are pinned to it by tests. See docs/scenario.md "Numeric metrics" for what each one means. */
 export const METRIC_UNAVAILABLE = [
   "missing_artifact",
   "missing_path",
@@ -1170,8 +1224,17 @@ export type MetricUnavailable = (typeof METRIC_UNAVAILABLE)[number];
 
 /** Ids a scenario metric may not take: each would collide with a key the hillclimb runner generates (its grade
  *  keys, per-index keys, `_present` companions and pairwise keys). */
+export const RESERVED_METRIC_ID_PATTERNS = [
+  "^(pass|claims|win|both_bad)$",
+  "^a\\d+(_|$)",
+  "_present$",
+  "(^|_)(win|both_bad)(_|$)",
+] as const;
+/** Compared case-insensitively: `Pass` or `A1` would collide with `pass` / `a1` wherever keys are folded. The
+ *  published JSON Schema carries the same patterns with each letter spelled as a two-case class. */
 export function reservedMetricId(id: string): boolean {
-  return /^(pass|claims|win|both_bad)$/.test(id) || /^a\d+(_|$)/.test(id) || /_present$/.test(id) || /(^|_)(win|both_bad)(_|$)/.test(id);
+  const lower = id.toLowerCase();
+  return RESERVED_METRIC_ID_PATTERNS.some((p) => new RegExp(p).test(lower));
 }
 
 /** A metric id is path-safe: word characters, dots and hyphens, at most 129 characters, not all dots — the rule
@@ -1182,10 +1245,20 @@ export function isMetricIdSafe(id: string): boolean {
   return new RegExp(METRIC_ID_PATTERN).test(id) && id.length <= METRIC_ID_MAX && !/^\.+$/.test(id);
 }
 
-/** A relative path under the work root: not blank, not absolute, no `..` segment, no NUL. */
+/** What a metric's `artifact` path may not be — ONE list: the loader tests it and the published JSON Schema emits it
+ *  (`artifact.not.anyOf`), pinned by a parity test. Each is an unanchored-flag-free ECMAScript pattern. A backslash
+ *  is refused anywhere: on POSIX it is part of a file name, so `outputs\m.json` would never name the file the author
+ *  meant. A colon alone is legal (`a:b.json` is a POSIX name); a drive root (`c:/…`, bare `c:`) is not. */
+export const METRIC_ARTIFACT_REFUSED_PATTERNS = [
+  "^\\s*$", // blank
+  "\\\\", // a backslash anywhere
+  "^/", // absolute
+  "^[A-Za-z]:(/|$)", // a drive root
+  "(^|/)\\.\\.(/|$)", // a `..` segment
+  "\\u0000", // NUL
+] as const;
 function isContainedRelPath(p: string): boolean {
-  if (p.trim().length === 0 || p.includes("\0") || p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\")) return false;
-  return !p.split(/[\\/]/).includes("..");
+  return !METRIC_ARTIFACT_REFUSED_PATTERNS.some((r) => new RegExp(r, "u").test(p));
 }
 
 export const ScenarioMetric = z
@@ -1200,18 +1273,30 @@ export const ScenarioMetric = z
     artifact: z
       .string()
       .refine(isContainedRelPath, {
-        message: "a metric artifact is a path relative to the work root (no absolute path, no `..`, not blank)",
+        message:
+          "a metric artifact is a path relative to the work root, with forward slashes: not blank, not starting with `/` or a drive root (`c:/`), no `..` segment, no backslash, no NUL",
       })
       .describe(
         "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder",
       ),
     path: z.string().min(1).describe("dotted path to the number inside the JSON (e.g. totals.words; array items by index, items.0.score)"),
     better: z.enum(["higher", "lower"]).describe("which direction is an improvement"),
-    scale: z.number().positive().optional().describe("the metric's full range (a bounded metric); set exactly one of scale or unbounded"),
+    scale: z
+      .number()
+      .positive()
+      .optional()
+      .describe(
+        "the UPPER BOUND of a bounded metric's range (the range is [min, scale], min defaulting to 0 — a range of [-1, 1] is `min: -1, scale: 1`); set exactly one of scale or unbounded",
+      ),
     unbounded: z.literal(true).optional().describe("true for a metric with no natural ceiling; set exactly one of scale or unbounded"),
-    min: z.number().optional().describe("the floor of the metric's range, when it is not 0"),
+    min: z
+      .number()
+      .optional()
+      .describe("the floor of the metric's range (default 0); with `scale`, it must be below `scale` (refused at load otherwise)"),
   })
   .superRefine((m, ctx) => {
+    if (m.scale !== undefined && m.min !== undefined && !(m.min < m.scale))
+      ctx.addIssue({ code: "custom", path: ["min"], message: `metric "${m.id}": \`min\` (${m.min}) must be below \`scale\` (${m.scale})` });
     if ((m.scale === undefined) === (m.unbounded === undefined))
       ctx.addIssue({ code: "custom", path: ["scale"], message: `metric "${m.id}": set exactly one of \`scale\` or \`unbounded\`` });
     if (/^\.+$/.test(m.id)) ctx.addIssue({ code: "custom", path: ["id"], message: `metric id "${m.id}" is all dots` });
@@ -1367,7 +1452,7 @@ export const ScenarioObject = z.strictObject({
     })
     .optional()
     .describe(
-      "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. See docs/scenario.md",
+      "numbers this scenario measures: each reads one number from a JSON file the run wrote and reports it in RunResult.metrics as {id, value} or {id, unavailable: <reason>} — never in the verdict. A file the run did not write (an untouched pre-run file, including one the run rewrote with identical bytes) reports unavailable: pre_run. Declaring a metric arms the pre-run manifest. Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`. See docs/scenario.md",
     ),
 });
 /** `ScenarioObject` stays a raw object on purpose — `.shape` is enumerated (cassette.ts's per-key
@@ -1943,9 +2028,16 @@ export interface RunResult {
     /** How the judge's call was made: `isolation` (the level of isolation from the operator's own Claude Code setup —
      *  no tools, safe mode, user settings only) and the host CLI's version. Absent for an injected judge. Live lane only. */
     judgeTransport?: { isolation: string; cliVersion?: string; strictMcp?: false };
-    /** How many calls the `semantic_matches` judge took for this assert: 1, or 2 when its one retry ran (a
-     *  malformed first grade). Absent where the judge never ran, and for `semantic_pairwise` (not yet counted). Live lane only. */
+    /** How many calls the judge took for this assert: 1 plus every retry it ran. For
+     *  `semantic_matches`, 1 or 2 (a malformed first grade is retried once). For `semantic_pairwise`, 1 plus the
+     *  retries summed over every comparison and order, so `judgeAttempts - 1` is the number of retries. Absent
+     *  where the judge never ran. Live lane only. */
     judgeAttempts?: number;
+    /** A `semantic_pairwise` assert's composed candidate document, fingerprinted the same way as `judgedDoc` —
+     *  recorded on every assert whose evidence was not refused, including one where every comparison was neutral
+     *  (a run of the reference's own variant) and so no judge read it. A later freeze of this run as a reference
+     *  checks its recomposition against it. Live lane only. */
+    composedDoc?: JudgedDocFingerprint;
     /** Identity (16 hex) of the grading-prompt TEMPLATE the judge used. A before/after comparison must
      *  refuse to mix hashes: a prompt change can shift every pass rate. Live lane only. */
     judgePromptHash?: string;
@@ -1961,10 +2053,17 @@ export interface RunResult {
      *  so no judge was called and the value is 0.5. `missing` / `integrity`: the reference could not be read (absent,
      *  or failing its recorded sha256), and the assert is evidence-unavailable. `rationale` is the judge's reason
      *  restated from the run's side (untrusted model text). `refDocSha256` is the frozen document's sha256 — constant
-     *  across every run judged against that reference. Live lane only. */
+     *  across every run judged against that reference. `gate: false` marks a reference that is a metric only: it
+     *  never decides `pass_if` or refuses the verdict, and a comparison against it that could not be made is recorded
+     *  (`missing` / `integrity`, or `invalid` when its judge reply stayed malformed) without making the assert
+     *  evidence-unavailable. Only a caller that names gate references sets it (a hillclimb flow gates on its
+     *  baseline). Live lane only. */
     pairwise?: Array<{
       ref: string;
-      status: "graded" | "neutral" | "missing" | "integrity";
+      status: "graded" | "neutral" | "missing" | "integrity" | "invalid";
+      gate?: false;
+      /** A re-grade that only added comparisons kept this outcome from the live run rather than judging it again. */
+      copied?: true;
       outcome?: "win" | "tie" | "loss" | "both_bad";
       value?: number;
       order?: "candidate_first" | "ref_first" | "both";

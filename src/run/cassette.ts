@@ -5,6 +5,7 @@ import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fi
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
 import {
   HILLCLIMB_RUN_BOOLEAN_FLAGS,
+  HILLCLIMB_REGRADE_BOOLEAN_FLAGS,
   HILLCLIMB_RUN_REPEATED_FLAGS,
   HILLCLIMB_RUN_VALUE_FLAGS,
   HILLCLIMB_USAGE,
@@ -475,7 +476,8 @@ export interface Cassette {
 //  the object form — the reason replay now refuses a future cassette before evaluating anything.) Every other
 //  scenario still stamps v12. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
 // v14: ONE interpretation bump shared by the keys of this release that an older reader cannot read. Today:
-//  `semantic_matches.include_fork_results` (V14_ASSERT_FEATURES below). Later keys of this release stamp the
+//  `semantic_matches.include_fork_results`, `semantic_pairwise`, the `authored` forms and `question_option_count`
+//  (V14_ASSERT_FEATURES below), and `workspace_fixture`. Later keys of this release stamp the
 //  same version with no further bump: a top-level key adds its own KEY_REQUIRED_VERSION entry returning 14,
 //  an assert-level one appends a predicate to V14_ASSERT_FEATURES. A cassette using any of them stamps v14, so
 //  a v13 reader refuses it as "too new; upgrade" instead of rejecting the frozen assertion as unrecognized
@@ -582,6 +584,8 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
     const flagged = [o.artifact_text, o.artifact_json].some((v) => !!v && typeof v === "object" && "authored" in (v as object));
     return objectForm || flagged;
   },
+  // `question_option_count` — the key itself, as for `semantic_pairwise`.
+  (a) => !!a && typeof a === "object" && "question_option_count" in (a as object),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -3293,8 +3297,8 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["
   if (limited.length)
     warn(
       `::warning:: [replay] metrics: ${limited.length}/${measured.length} not measurable from this cassette (` +
-        limited.map((x) => `${x.id}: ${x.unavailable} — ${x.why}`).join("; ") +
-        `) — re-record to measure them\n`,
+        limited.map((x) => `${x.id}: ${x.unavailable} — ${x.why}${x.remedy ? `; ${x.remedy}` : ""}`).join("; ") +
+        `)\n`,
     );
   return measured.map((x) => (x.value !== undefined ? { id: x.id, value: x.value } : { id: x.id, unavailable: x.unavailable! }));
 }
@@ -6231,6 +6235,9 @@ async function writeReassertedAssertBlock(
   const policy = loadRedactionPolicy([process.cwd(), dirname(srcPath), dirname(cassetteFile)]);
   let nextAssert: unknown[] = onDisk.assert ?? [];
   let nextExpectDenied: unknown[] = onDisk.expect_denied ?? [];
+  // `metrics` is grading-time like `assert` (replay --assert-from measures the on-disk declaration), so --write
+  // freezes it too; absent on disk ⇒ absent in the cassette.
+  let nextMetrics: unknown[] | undefined = onDisk.metrics;
   if (policy.patterns.length || policy.keyNames.length) {
     const redactedAssert = redactStructural(onDisk.assert ?? [], policy) as unknown[];
     const redactedExpectDenied = redactStructural(onDisk.expect_denied ?? [], policy) as unknown[];
@@ -6247,20 +6254,24 @@ async function writeReassertedAssertBlock(
     await assertRedactionVerdictPreserved(base, redacted, dirname(cassetteFile));
     nextAssert = redactedAssert;
     nextExpectDenied = redactedExpectDenied;
+    if (nextMetrics !== undefined) nextMetrics = redactStructural(nextMetrics, policy) as unknown[];
   }
   // Write only if the (post-redaction) block differs from the frozen copy. Idempotent because we always
   // redact from the PLAINTEXT on-disk source (deterministic) — a second --write yields the same block.
-  const scn = rawCassette.scenario as { assert?: unknown[]; expect_denied?: unknown[] };
+  const scn = rawCassette.scenario as { assert?: unknown[]; expect_denied?: unknown[]; metrics?: unknown[] };
   const assertSame = JSON.stringify(scn.assert ?? []) === JSON.stringify(nextAssert);
   const expectSame = JSON.stringify(scn.expect_denied ?? []) === JSON.stringify(nextExpectDenied);
-  if (assertSame && expectSame) {
-    warn(`::notice:: [replay --write] ${cassetteFile}: assert block already matches the on-disk block — no write\n`);
+  const metricsSame = JSON.stringify(scn.metrics ?? null) === JSON.stringify(nextMetrics ?? null);
+  if (assertSame && expectSame && metricsSame) {
+    warn(`::notice:: [replay --write] ${cassetteFile}: assert, expect_denied and metrics already match the on-disk scenario — no write\n`);
     return;
   }
   scn.assert = nextAssert;
   // Only manage expect_denied when it's meaningful — avoid gratuitously adding an empty field to a cassette
   // that never had one (keep the diff to what actually changed).
   if (nextExpectDenied.length || scn.expect_denied !== undefined) scn.expect_denied = nextExpectDenied;
+  if (nextMetrics !== undefined) scn.metrics = nextMetrics;
+  else delete scn.metrics;
   // A new assert block can need a newer READER (the object form of tool_called → v13): restamp exactly as
   // record does, or an older CLI meets a v12-stamped cassette carrying v13 semantics and says "re-record"
   // instead of "too new". Never LOWER the stamp: the rest of the cassette was written for the old one.
@@ -6675,6 +6686,11 @@ export async function cmdReplay(args: string[]) {
                   `::notice:: [replay] ${src.path} has a different \`assert:\` block; replay used the assertions frozen in the cassette. ` +
                     `Re-record, or \`replay --assert-from ${src.path}\` to re-check against the on-disk block.\n`,
                 );
+              if (norm(onDisk.metrics) !== norm(rc.cassette.scenario.metrics))
+                warn(
+                  `::notice:: [replay] ${src.path} has a different \`metrics:\` block; replay measured the metrics frozen in the cassette. ` +
+                    `\`replay --assert-from ${src.path}\` measures the on-disk block (add --write to freeze it).\n`,
+                );
               // Prompt drift is invisible to the fingerprint (see scenarioContentDrift). Surface it as a
               // non-failing notice here too — the default lane never changes the verdict.
               if ((onDisk.prompt ?? "") !== (rc.cassette.scenario.prompt ?? ""))
@@ -6923,7 +6939,7 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     // One entry for the family: `check` and `state-template` take a subset of `run`'s flags (--flow,
     // --output-format and the command globals), and HILLCLIMB_USAGE documents every subcommand.
     command: "hillclimb",
-    booleanFlags: HILLCLIMB_RUN_BOOLEAN_FLAGS,
+    booleanFlags: [...new Set([...HILLCLIMB_RUN_BOOLEAN_FLAGS, ...HILLCLIMB_REGRADE_BOOLEAN_FLAGS])],
     valueFlags: HILLCLIMB_RUN_VALUE_FLAGS,
     repeatedFlags: HILLCLIMB_RUN_REPEATED_FLAGS,
     aliases: {},
@@ -7904,13 +7920,19 @@ export const TOOL_USE_BLIND_KEYS: (keyof Assertion)[] = [
  *
  *  The `choose:`/answers side of this already carried the caveat (stable leading anchor, 1-based index); the
  *  ASSERT side carried it nowhere. Consumed by `test/caveat-docs-sync.test.ts`. */
-export const MODEL_AUTHORED_TEXT_KEYS: (keyof Assertion)[] = ["question_asked", "question_options", "question_context"];
+export const MODEL_AUTHORED_TEXT_KEYS: (keyof Assertion)[] = [
+  "question_asked",
+  "question_options",
+  "question_context",
+  "question_option_count",
+];
 
 /** Assertion keys evaluated on replay only when `controlOut` (full-fidelity) is present. */
 export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "question_asked",
   "question_options",
   "question_context",
+  "question_option_count",
   "questions_count_max",
   "gate_answers_delivered",
   "gate_answer_count_min",
