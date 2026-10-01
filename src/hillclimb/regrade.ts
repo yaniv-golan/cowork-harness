@@ -35,7 +35,8 @@ import { readRefDoc } from "../refs/store.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { judgedOpts } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
-import { readStateIfPresent, readVariantFileIfPresent } from "./runner.js";
+import { flowMetricUnion, metricSigs, refuseChangedMetrics } from "./metric-keys.js";
+import { existingFlowSnapshot, readStateIfPresent, readVariantFileIfPresent } from "./runner.js";
 import { VARIANT_DIR_RE } from "./schema-check.js";
 
 export interface HillclimbRegradeArgs {
@@ -67,7 +68,8 @@ export interface RegradeFlowDeps {
   regrade?: typeof regradeRuns;
   /** Test seam: the metrics merge (default `mergeMetrics`). */
   mergeMetrics?: typeof mergeMetrics;
-  /** The flow's declared metrics, as `run` grades rows with them (none until the scenarios declare metrics). */
+  /** The flow's declared metrics, as `run` grades rows with them (default `flowMetricUnion`, `run`'s own producer: a
+   *  rebuilt row keeps only declared keys, so a caller that passed none would drop every metric column). */
   metricDecls?: (cases: readonly HillclimbCase[]) => MetricDecl[];
 }
 
@@ -86,18 +88,36 @@ export interface RegradeFlowOutcome {
   error?: { category: "usage" | "runtime"; message: string };
 }
 
-/** The metrics seam: re-extracted metric floats (and their unavailable reasons) merge here into every row rebuilt FROM A
- *  RE-GRADE REPORT, after its grade is rebuilt and before its keys are ordered (a row rebuilt with no judge call has no
- *  report, so no re-measure to merge). A no-op until the metrics half fills it; mutates in place. The declarations come
- *  from the same source `run` grades rows with — none until `run` declares them, and both must change together. */
+/** The metrics seam: a re-measure's row metadata merges here into every row rebuilt FROM A RE-GRADE REPORT, after its
+ *  grade is rebuilt and before its keys are ordered (a row rebuilt with no judge call has no report, so no re-measure to
+ *  merge). The values and `_present` keys are already in `row.grade` — `gradeFor` read them from the result the report's
+ *  metrics were merged into — so this sets only what the row's meta says about them, the way `run` writes it: each
+ *  declared metric's signature in `meta.metric_sigs` (a row that predated a metric gains it), and
+ *  `meta.metrics_unavailable` by id — a reason the re-measure gives is added or replaced, an id the grade now reads
+ *  measured loses its reason, any other id's entry stays, and the key is omitted when empty. An agent-failed row
+ *  scores no metric, so it is left as it is. Mutates in place. */
 export function mergeMetrics(
   row: { grade: Record<string, number>; meta: Record<string, unknown> },
   report: RegradeRunReport,
   decls: readonly MetricDecl[],
 ): void {
-  void row;
-  void report;
-  void decls;
+  if (row.meta.failure_class === "errored_agent" || !decls.length) return;
+  const prevSigs = row.meta.metric_sigs;
+  row.meta.metric_sigs = {
+    ...(prevSigs && typeof prevSigs === "object" && !Array.isArray(prevSigs) ? prevSigs : {}),
+    ...metricSigs(decls),
+  };
+  const prev = row.meta.metrics_unavailable;
+  const unavailable: Record<string, unknown> = { ...(prev && typeof prev === "object" && !Array.isArray(prev) ? prev : {}) };
+  for (const m of decls) {
+    if (row.grade[`${m.id}_present`] === 1) delete unavailable[m.id];
+    else {
+      const why = report.metrics?.find((x) => x.id === m.id)?.unavailable;
+      if (why !== undefined) unavailable[m.id] = why;
+    }
+  }
+  if (Object.keys(unavailable).length) row.meta.metrics_unavailable = unavailable;
+  else delete row.meta.metrics_unavailable;
 }
 
 type Row = Record<string, unknown> & { prompt_id?: unknown; rep?: unknown; grade?: Record<string, number>; meta?: Record<string, unknown> };
@@ -398,6 +418,12 @@ async function regradeFlowInner(
     noAgentRun: true,
     ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
   });
+  // The flow's metric columns, refused as `run` refuses them: one id declared two ways across the cases, or a declaration
+  // that changed since the flow's rows (any variant) were written — a rebuilt row would carry the new quantity beside
+  // rows holding the old one. Before the gate, the locks and any judge call.
+  const union = (deps.metricDecls ?? flowMetricUnion)(all);
+  const existing = existingFlowSnapshot(flowArg, deps.cwd);
+  if (existing) refuseChangedMetrics(existing, union);
 
   // The variants: every one with rows, or the one named. Read-only checks first — opening a writer creates files.
   const variants =
@@ -462,7 +488,7 @@ async function regradeFlowInner(
       ...(flowHasPairwise(all.map((c) => ({ assertions: c.scenario.assert ?? [] })))
         ? { pairwise: { metricRefs: metricRefNames(refs) } }
         : {}),
-      metrics: deps.metricDecls?.(all) ?? [],
+      metrics: union,
       merge: deps.mergeMetrics ?? mergeMetrics,
     };
     const refNames = refs.map((r) => r.name);

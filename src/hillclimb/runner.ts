@@ -21,8 +21,7 @@ import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
-import { metricUnion } from "./grade-keys.js";
-import { refuseChangedMetrics, removedMetrics, undeclaredRowMetrics } from "./metric-keys.js";
+import { flowMetricUnion, refuseChangedMetrics, removedMetrics, undeclaredRowMetrics } from "./metric-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
@@ -160,7 +159,7 @@ async function run(
   const { cases: all, skipped } = loadCases(resolve(deps.cwd, args.target));
   if (skipped.length) say(`[${v}] skipped ${skipped.length} non-scenario file(s): ${skipped.join(", ")}`);
   // The flow's metric columns: the union over every case, refused here — before any write — when one id is declared two ways.
-  const metrics = metricUnion(all.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
+  const metrics = flowMetricUnion(all);
   // ...and against the rows already in the flow, in every variant, before the gate can record an approval.
   const existing = existingFlowSnapshot(flowArg, deps.cwd);
   if (existing) refuseChangedMetrics(existing, metrics);

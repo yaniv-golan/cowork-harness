@@ -32,6 +32,7 @@ import { regradeFlow } from "./regrade.js";
 import { freezeRefCommand } from "./freeze-ref.js";
 import { flowHasPairwise } from "./grade-keys.js";
 import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
+import { flowMetricUnion } from "./metric-keys.js";
 
 const CMD = "hillclimb";
 
@@ -310,6 +311,8 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         secrets: [...secrets],
         stderr: (l) => err(l, secrets),
         isolationCheck: () => isolationRefusal(),
+        // The metric columns `run` grades rows with: a rebuilt row keeps only declared keys.
+        metricDecls: flowMetricUnion,
       },
     );
     const payload = { flow: p.options["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow, variants: out.variants, exitCode: out.exitCode };
