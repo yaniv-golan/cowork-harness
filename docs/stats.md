@@ -24,7 +24,7 @@ the `semantic_matches` judge or the LLM decider (`on_unanswered: llm` / `--decid
 separate model calls, so neither `totalUsd` nor the `--max-budget-usd` estimates built from these rows
 counts them. (A critique's evaluator passes are the exception: the roll-up row below carries them.) The
 judge's spend is recorded beside it instead: `judgeCostUsd` sums the run's
-`assertions[].judgeCostUsd` (every attempt of every `semantic_matches` grade), and is absent when no
+`assertions[].judgeCostUsd` (every attempt of every `semantic_matches` and `semantic_pairwise` grade), and is absent when no
 judge call was priced. The LLM decider's spend is recorded the same way: `deciderCostUsd` is the run's
 `deciderCostUsd` (what every completed decider call reported, the gate that whiffed on a partial run included; a call
 that threw is not counted, so it is a floor), absent when

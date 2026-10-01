@@ -1064,7 +1064,7 @@ export const Assertion = z.strictObject({
         .enum(["random", "both"])
         .optional()
         .describe(
-          "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a disagreement scores as a tie",
+          "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a win/loss split scores as a tie, any other disagreement keeps the worse outcome",
         ),
       judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
       evidence_files: z
@@ -1819,24 +1819,6 @@ export interface RunResult {
      *  from a normal fail: an eval aggregator counts this rep as invalid (not a fail, not absent), so a
      *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
     judgeInvalid?: boolean;
-    /** WHY a `semantic_matches` assert refused its verdict, or WHAT it graded — as a typed reason rather
-     *  than prose. There are TEN distinct evidence-unavailable causes (four of them `fork_*`) with different fixes, and one
-     *  success shape; a consumer (usually an agent iterating on a skill) must be able to tell "your
-     *  `evidence_files` glob matched nothing" from "the deliverable was truncated" without regex-scraping
-     *  an English message. Same rationale as `judgeInvalid` above. `paths` carries the concrete file list
-     *  the reason is about: the run's authored paths for `scope_matched_nothing` (so the fix is IN the
-     *  failure), the offending in-scope paths for the omitted/truncated reasons, and the graded set for
-     *  `graded` — recorded on a substantive FAIL too, since the bug this guards against is a false
-     *  ABSENCE and a red is only actionable next to what the judge was actually shown.
-     *  `evidence_incomplete` is the UNSCOPED counterpart of `in_scope_omitted`: they want different fixes
-     *  (add a scope vs. fix the glob or raise the budget), so they must not share one value.
-     *  `no_pre_run_manifest` means the authored set could not be COMPUTED (no baseline to diff against),
-     *  which is distinct from every other reason: those describe evidence that exists and could not be
-     *  fully shown, this one describes evidence that was never derivable. Grading an empty authored set as
-     *  though it were complete is the vacuous green this value exists to make impossible.
-     *  Present only on the live lane, whenever the judge pre-pass ran. On every reason but `graded` the judge
-     *  was NOT called — the refusal is decided from the composed evidence first — so such an assert carries
-     *  no `semanticClaims`, `judgeModel`, `judgeCostUsd`, `judgeUsage`, `judgePromptHash` or `judgedDoc`. */
     /** Per-reference outcomes of a `semantic_pairwise` assert, in the order its references were resolved. `status`
      *  `graded`: the judge compared the run with the frozen reference — `outcome` from the run's side, `value` 1 win
      *  / 0.5 tie / 0 loss / 0.5 both_bad, `order` which output the judge saw first, `positionFlip` when the two calls
@@ -1858,6 +1840,24 @@ export interface RunResult {
       unchecked?: boolean;
       why?: string;
     }>;
+    /** WHY a `semantic_matches` assert refused its verdict, or WHAT it graded — as a typed reason rather
+     *  than prose. There are TEN distinct evidence-unavailable causes (four of them `fork_*`) with different fixes, and one
+     *  success shape; a consumer (usually an agent iterating on a skill) must be able to tell "your
+     *  `evidence_files` glob matched nothing" from "the deliverable was truncated" without regex-scraping
+     *  an English message. Same rationale as `judgeInvalid` above. `paths` carries the concrete file list
+     *  the reason is about: the run's authored paths for `scope_matched_nothing` (so the fix is IN the
+     *  failure), the offending in-scope paths for the omitted/truncated reasons, and the graded set for
+     *  `graded` — recorded on a substantive FAIL too, since the bug this guards against is a false
+     *  ABSENCE and a red is only actionable next to what the judge was actually shown.
+     *  `evidence_incomplete` is the UNSCOPED counterpart of `in_scope_omitted`: they want different fixes
+     *  (add a scope vs. fix the glob or raise the budget), so they must not share one value.
+     *  `no_pre_run_manifest` means the authored set could not be COMPUTED (no baseline to diff against),
+     *  which is distinct from every other reason: those describe evidence that exists and could not be
+     *  fully shown, this one describes evidence that was never derivable. Grading an empty authored set as
+     *  though it were complete is the vacuous green this value exists to make impossible.
+     *  Present only on the live lane, whenever the judge pre-pass ran. On every reason but `graded` the judge
+     *  was NOT called — the refusal is decided from the composed evidence first — so such an assert carries
+     *  no `semanticClaims`, `judgeModel`, `judgeCostUsd`, `judgeUsage`, `judgePromptHash` or `judgedDoc`. */
     semanticEvidence?: {
       reason:
         | "graded"

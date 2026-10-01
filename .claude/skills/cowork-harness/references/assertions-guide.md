@@ -58,3 +58,16 @@ cassette on replay, so check the catalog's replay class before putting one on a 
 `cowork-harness assertions --list` prints the full, always-current key set with one-line semantics
 straight from the schema — treat it (and the catalog) as the source of truth; this map is a
 goal-oriented index into it, not a second catalog.
+
+## Pointwise or pairwise judging
+
+`semantic_matches` grades fixed claims against the run alone; reach for it when the criteria are concrete and
+checkable. `semantic_pairwise` asks whether the run is better than, as good as, or worse than a **frozen reference**
+— an earlier run's output, frozen once with `ref freeze` — and fits when quality is easier to compare than to score
+(a rewrite of an existing skill, "is v2 better than v1"). Three cautions:
+
+- **Freeze once, never regenerate.** A reference frozen from a run changes meaning if it is replaced; freeze a NEW
+  store when the task or the evidence options change (a different prompt or scope is refused, not compared).
+- **A per-case comparison cannot see a cross-case collapse.** If every output drifts toward one style, each can still
+  "beat the reference". Pair it with a structural or set-level assert when that risk matters.
+- **Do not judge with the model under test.** Pin a different `judge_model`; the harness warns when they match.

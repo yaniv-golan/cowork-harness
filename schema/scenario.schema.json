@@ -1120,7 +1120,7 @@
                 ]
               },
               "order": {
-                "description": "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a disagreement scores as a tie",
+                "description": "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a win/loss split scores as a tie, any other disagreement keeps the worse outcome",
                 "type": "string",
                 "enum": [
                   "random",

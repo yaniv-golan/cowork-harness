@@ -680,7 +680,7 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   L.push("Family: claim sub-rows and non-semantic assertion rows. Roll-up and classification rows are shown separately.");
   L.push("No control arm: prior-answerable claims are not flagged.");
   const agentModels = [...new Set(rep.pins.agent.map((p) => p.model))].join(", ");
-  const judgeModels = [...new Set(rep.pins.judge.resolved.map((p) => p.model))].join(", ") || "none (no semantic_matches)";
+  const judgeModels = [...new Set(rep.pins.judge.resolved.map((p) => p.model))].join(", ") || "none (no judged assert)";
   L.push(
     `Agent model: ${agentModels}. Judge (${rep.pins.judge.mode === "override" ? "--judge-model" : "per assert"}): ${judgeModels}; prompt ${rep.pins.judge.promptHash.slice(0, 12)}.`,
   );

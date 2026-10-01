@@ -53,7 +53,10 @@ it.
   nor the arm. Both arms see the same system prompt apart from that id.
 - **Rows.** Every assertion of every scenario is a row. Each `semantic_matches` rubric claim is its own
   row; the assertion's own pass (a function of its claims through `min_pass`) is shown as a *derived*
-  row.
+  row. A `semantic_pairwise` assertion is one row, its pass under `pass_if` (so `pass_if: any` gives a row that
+  is always 1 when graded). Both arms are judged against the same frozen references; eval reports the pass rate,
+  not a win-rate distribution, and never compares arm A's output with arm B's directly. A reference that cannot be
+  read counts as a refusal, never a fail, and a missing one refuses the whole eval before any run.
 - **Units.** Each rep is one run, graded once ("runs × grades").
 
 ## Flags

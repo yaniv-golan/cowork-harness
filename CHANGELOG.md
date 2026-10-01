@@ -54,18 +54,22 @@ All notable changes to this project are documented here. The format is based on
   document (the one `semantic_matches` builds: final message, transcript and authored files, with the same
   evidence options) with a reference document and answers win, tie, loss or `both_bad`. `pass_if` (default
   `not_worse`; also `win`, or `any` for a metric) must hold against every reference in `refs:`. Which output the
-  judge sees first is a seeded coin per run, assert and reference, and `order: both` judges both orders; the judge
-  never sees the words "reference" or "baseline", and answers through `--json-schema` structured output.
+  judge sees first is a seeded coin per run, assert and reference; `order: both` judges both orders (a win/loss
+  split scores as a tie, any other disagreement keeps the worse outcome). Each output sits inside random per-call
+  fences; the judge never sees the words "reference" or "baseline", and answers through `--json-schema`
+  structured output. A judge model equal to the model under test is warned about.
   Per-reference outcomes land in `assertions[].pairwise`; judge spend is reported like `semantic_matches`'.
-  - A missing, damaged or differently-scoped reference, or a reference store inside any mounted source, refuses
-    the run before it spends anything; `record --dry-run` previews the same check.
+  - A missing, damaged or differently-scoped reference, one frozen for a different prompt, or a reference store
+    inside any mounted source, refuses the run before it spends anything — `run`, `record` and `eval` alike;
+    `record --dry-run` previews the same check.
   - Live-only (skipped on replay).
   - `eval` holds a pairwise assert to a concrete judge model and the pairwise prompt hash, and counts a reference
     it could not read as a refusal, not a fail.
 
 - **`ref freeze <run-dir> --scenario <yaml> --out <store>` and `ref verify <store>…`** freeze a kept run's judged
-  document as a reference, once and never rewritten, after checking it against the fingerprint the live judge
-  recorded (a mismatch is refused; a run with none needs `--allow-unchecked`), and re-hash a store's documents.
+  document as a reference, once and never rewritten, after checking that the run is of `--scenario` (same name
+  and prompt) and that the document matches the fingerprint the live judge recorded (a mismatch is refused; a run
+  with none needs `--allow-unchecked`), and re-hash a store's documents.
   Exit `0` / `2` (freeze), `0` / `1` / `2` (verify).
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
