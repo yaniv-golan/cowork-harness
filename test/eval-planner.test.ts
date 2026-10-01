@@ -141,6 +141,8 @@ describe("estimateScheduleCost", () => {
     const c = estimateScheduleCost([{ scenario: "s", jobs: 10, history: h }]);
     expect(c).toMatchObject({ worstObservedUsd: 0, p50Usd: 0, lowerBound: true, unpriced: ["s"], pricedRuns: 0, thinnest: null });
     expect(c.budgetGateWorstUsd).toBe(20);
+    // The covered JSON object carries the same basis — the gate figure never stands in for it.
+    expect(scheduleCostJson(c).worstObservedUsd).toBe(0);
     const line = scheduleCostLine(c);
     expect(line).toMatch(/worst observed \$0\.0000/);
     expect(line).not.toMatch(/\$20/);

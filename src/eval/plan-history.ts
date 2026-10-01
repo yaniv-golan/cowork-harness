@@ -11,7 +11,7 @@ import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync 
 import type { Assertion } from "../types.js";
 import { isLiveModelId } from "../types.js";
 import { isRun, scenarioCostHistory, tierOf, type RunIndexRow } from "../run/run-index.js";
-import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
+import { turnArtifactPath } from "../run/turn-layout.js";
 import { deriveModelProvenance } from "../run/model-provenance.js";
 import { classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult, type RowKey } from "./classify.js";
 import { EXACT_CONTENT_MIN, HISTORY_WINDOW, type CostHistory, type RowHistory } from "./planner.js";
@@ -153,27 +153,27 @@ type Loaded = ClassifiableResult & {
 function wellShaped(x: unknown): x is Loaded {
   if (x === null || typeof x !== "object" || Array.isArray(x)) return false;
   const r = x as Record<string, unknown>;
-  const optArray = (v: unknown) => v === undefined || Array.isArray(v);
-  const optObject = (v: unknown) => v === undefined || (v !== null && typeof v === "object" && !Array.isArray(v));
+  const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  const optObject = (v: unknown) => v === undefined || isObject(v);
+  /** Absent, or an array every element of which passes `each`. */
+  const optArrayOf = (v: unknown, each: (e: unknown) => boolean) => v === undefined || (Array.isArray(v) && v.every(each));
+  const grade = (g: unknown) => isObject(g) && isObject(g.assertion) && optArrayOf(g.semanticClaims, isObject);
   return (
     typeof r.result === "string" &&
-    optArray(r.models) &&
-    (r.models === undefined || (r.models as unknown[]).every((m) => typeof m === "string")) &&
-    optArray(r.modelFallbacks) &&
+    optArrayOf(r.models, (m) => typeof m === "string") &&
+    optArrayOf(r.modelFallbacks, isObject) &&
     optObject(r.modelUsage) &&
     optObject(r.fingerprint) &&
-    optArray(r.assertions) &&
-    (r.assertions === undefined ||
-      (r.assertions as unknown[]).every((a) => a !== null && typeof a === "object" && optObject((a as Record<string, unknown>).assertion)))
+    optArrayOf(r.assertions, grade)
   );
 }
 
 /** Read one run's result.json: a REGULAR file only (opened without following a symlink, and non-blocking so
  *  a FIFO cannot stall the read), at most `maxBytes`. */
 function readResult(row: RunIndexRow, maxBytes: number): Loaded | "pruned" | "unreadable" {
-  const turn = row.turn ?? latestTurn(row.outDir);
-  if (turn === undefined) return "pruned";
-  const p = turnArtifactPath(row.outDir, turn, "result.json");
+  // A row with no turn predates turn tracking and is a fresh run (the hard keys admit it as one), so its rep
+  // is turn 1 — never a later resumed turn that happens to share the run dir.
+  const p = turnArtifactPath(row.outDir, row.turn ?? 1, "result.json");
   let fd: number;
   try {
     fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));

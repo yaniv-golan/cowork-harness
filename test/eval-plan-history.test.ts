@@ -356,13 +356,14 @@ describe("loadCostHistory — the cost basis", () => {
     expect(buildStats(rows, { scenario: SCEN, baseline: BASELINE }).summaries[0].runs).toBe(5);
   });
 
-  it("the worst-observed figure is the budget gate's own basis: scenario name only, unfiltered", () => {
+  it("worst observed is on the cost basis; the budget gate's figure (scenario name only, unfiltered) is carried apart", () => {
     const rows = [run(undefined, { costUsd: 1 }), run(undefined, { costUsd: 7, fidelity: "hostloop", baseline: "desktop-0.9.0" })];
     rows.push(run(undefined, { costUsd: 5, critiqueRole: "rollup" })); // a roll-up is not a run: never in either basis
     const h = loadCostHistory(rows, { scenario: SCEN, baseline: BASELINE, tier: "container" });
     expect(h.budgetGateWorstUsd).toBe(7);
     expect(h.budgetGatePricedRuns).toBe(2);
     expect(perRepCost(h).p95Usd).toBe(1);
+    expect(perRepCost(h).worstObservedUsd).toBe(1);
   });
 
   it("judge and decider spend come from the same rows; absent is not zero", () => {
@@ -455,6 +456,17 @@ describe("loadRowHistory — the judge model", () => {
     expect(claims.every((x) => x.history.n === 1 && x.history.excluded?.judge_model_differs === 1)).toBe(true);
   });
 
+  it("an agent-error rep that was graded still scores 0 on every row, whatever its judge model", () => {
+    // A stall the scenario did not opt out of is the agent's failure (errored_agent), yet the run was graded.
+    const stalled = passing((r) => {
+      r.stalledOnQuestion = true;
+      judgedBy("claude-haiku-4-5")(r);
+    });
+    const h = loadRowHistory([run(stalled)], opts({ judgeModelPin: "claude-opus-5" }));
+    expect(h.judgeModelDiffers).toBe(0);
+    expect(h.rows.every((r) => r.history.k === 0 && r.history.n === 1)).toBe(true);
+  });
+
   it("no judge pin: the judge model is not checked", () => {
     const h = loadRowHistory([run(passing(judgedBy("claude-haiku-4-5")))], opts());
     expect(h.judgeModelDiffers).toBe(0);
@@ -508,6 +520,34 @@ describe("loadRowHistory — malformed and non-regular result files are unreadab
     expect(h.reps).toBe(0);
   });
 
+  it("shapes the classifier would dereference: unreadable, and nothing throws", () => {
+    const semantic = (r: Record<string, unknown>) => (r.assertions as Array<Record<string, unknown>>)[SEMANTIC_INDEX];
+    const cases: Array<[string, Edit, Partial<RowHistoryOptions>]> = [
+      [
+        "a grade with no assertion, prompt hash checked",
+        (r) => void delete (r.assertions as Array<Record<string, unknown>>)[0].assertion,
+        { judgePromptHash: "zzz" },
+      ],
+      [
+        "a grade with no assertion, stalled",
+        (r) => {
+          delete (r.assertions as Array<Record<string, unknown>>)[0].assertion;
+          r.stalledOnQuestion = true;
+        },
+        {},
+      ],
+      ["semanticClaims not an array", (r) => void (semantic(r).semanticClaims = "x"), {}],
+      ["a null semanticClaims element", (r) => void (semantic(r).semanticClaims = [null]), {}],
+      ["a null modelFallbacks element", (r) => void (r.modelFallbacks = [null]), {}],
+    ];
+    for (const [name, e, o] of cases) {
+      let h: ReturnType<typeof loadRowHistory> | undefined;
+      expect(() => (h = loadRowHistory([run(passing(e))], opts({ ...o, judgeModelPin: "claude-opus-5" }))), name).not.toThrow();
+      expect(h!.excludedByKey.unreadable, name).toBe(1);
+      expect(h!.reps, name).toBe(0);
+    }
+  });
+
   it.skipIf(process.platform === "win32")("a FIFO is not opened for reading, and a symlinked result is refused", () => {
     const fifoRow = run(undefined);
     mkdirSync(join(fifoRow.outDir, "turns", "1"), { recursive: true });
@@ -531,7 +571,7 @@ describe("loadRowHistory — index rows built by the real producer", () => {
       x.fidelity = "container";
       x.baseline = BASELINE;
       x.turn = 1;
-      x.runLabel = "eval:e1:a";
+      x.runLabel = "eval:demo:a";
       x.cost = { usd: 0.4 };
     });
     mkdirSync(join(outDir, "turns", "1"), { recursive: true });
@@ -581,5 +621,17 @@ describe("cost at a target N matches `stats`", () => {
     ]);
     expect(est.p50Usd).toBe(stats.p50CostUsd! * 2 * N);
     expect(est.p95Usd).toBe(stats.p95CostUsd! * 2 * N);
+  });
+});
+
+describe("loadRowHistory — a row with no turn is a fresh run: its result is turn 1's", () => {
+  it("reads turns/1, not the latest turn, when the index row carries no turn", () => {
+    // Turn 1 passes row 0; turn 2 (a resume) fails it. The rep is the first turn.
+    const row = run(passing(), { turn: undefined });
+    mkdirSync(join(row.outDir, "turns", "2"), { recursive: true });
+    writeFileSync(join(row.outDir, "turns", "2", "result.json"), JSON.stringify(passing(failRow0)));
+    const h = loadRowHistory([row], opts());
+    expect(h.excludedByKey.turn).toBe(0);
+    expect(rowById(h, 0)).toMatchObject({ k: 1, n: 1 });
   });
 });
