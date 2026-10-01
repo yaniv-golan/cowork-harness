@@ -12,9 +12,13 @@ All notable changes to this project are documented here. The format is based on
   `critique-salvage.json` and the `--out` file (including `--corpus-only --out`) were written without the
   scrub the run's `result.json`, `run.jsonl` and `trace.json` get, so a value those files show as
   `[REDACTED]` could appear verbatim in the evaluator's replies, the self-report, the findings or the
-  evidence package. JSON files are scrubbed by value, so they still parse with any scrub value, and the
-  join and enum fields (`sessionId`, `outDir`, `gradedSkillHash`, `findingFingerprint`, `classification`, …)
-  are kept as written ([docs/critique.md](./docs/critique.md#run-dir-artifacts)).
+  evidence package. JSON files are scrubbed by value, so they still parse with any scrub value, and a
+  listed set of join and enum fields (`sessionId`, `outDir`, `gradedSkillHash`, `items[].classification`,
+  …) is kept as written ([docs/critique.md](./docs/critique.md#run-dir-artifacts)).
+- **`findingFingerprint` is hashed over the secret-scrubbed `idea` and `recommendedAction`.** It was hashed
+  over the raw text and written next to the scrubbed fields, so anyone holding a report could confirm a
+  guessed scrub value offline by hashing candidates. A finding whose text carries no scrub value
+  fingerprints exactly as before.
 
 ## [4.2.0] — 2026-09-30
 

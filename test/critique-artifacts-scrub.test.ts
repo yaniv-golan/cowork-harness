@@ -4,6 +4,9 @@ import { spawnSync, execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { persistCritiqueArtifacts, writeOutFile } from "../src/critique/command";
+import { findingFingerprint, validateCitations } from "../src/critique/evidence";
+import { scrubCritiqueJson } from "../src/critique/scrub-artifacts";
+import { createHash } from "node:crypto";
 
 // Every file `critique` writes is secret-scrubbed like the run's own result.json/run.jsonl/trace.json.
 // The evaluator's replies, the skill's self-report and the evidence package are free text the graded run
@@ -230,4 +233,115 @@ describe.skipIf(!existsSync(CLI))("critique --corpus-only --out is secret-scrubb
       }
     });
   }
+});
+
+// The fingerprint is written verbatim next to the scrubbed idea/action. Hashed over the RAW text it would let
+// anyone holding a report confirm a guessed scrub value offline: hash each candidate, compare.
+describe("findingFingerprint cannot confirm a scrubbed value", () => {
+  // The formula as it stood before this change, written out independently of the code under test.
+  const legacy = (idea: string, classification: string, action: string) => {
+    const n = (t: string) => t.replace(/\s+/g, " ").trim();
+    return createHash("sha256")
+      .update(`${n(idea)}\n${classification}\n${n(action)}`)
+      .digest("hex")
+      .slice(0, 16);
+  };
+
+  it("text carrying no scrub value fingerprints byte-identically to before (existing clusters unaffected)", () => {
+    process.env[ENV_KEY] = "Acme-4471";
+    const item = { idea: "add a tier table", classification: "grounded-and-actionable" as const, recommendedAction: "do it" };
+    expect(findingFingerprint(item)).toBe("65009d22ab539faf"); // pinned from origin/main's implementation
+    expect(findingFingerprint(item)).toBe(legacy(item.idea, item.classification, item.recommendedAction));
+    delete process.env[ENV_KEY];
+    expect(findingFingerprint(item)).toBe("65009d22ab539faf");
+  });
+
+  it("is the hash of the [REDACTED] text, so hashing the right guess does not match", () => {
+    process.env[ENV_KEY] = "Acme-4471";
+    const [item] = validateCitations(
+      [
+        {
+          source: "evaluator",
+          idea: "the skill leaked Acme-4471",
+          classification: "grounded-and-actionable",
+          evidence: "",
+          recommendedAction: "drop Acme-4471",
+        },
+      ],
+      "pkg",
+    );
+    expect(item.findingFingerprint).toBe(legacy("the skill leaked [REDACTED]", "grounded-and-actionable", "drop [REDACTED]"));
+    expect(item.findingFingerprint).toBe("71c16c708746d58f");
+    // the correct guess, and a wrong one, both fail to match
+    for (const guess of ["Acme-4471", "Acme-4472"])
+      expect(item.findingFingerprint).not.toBe(legacy(`the skill leaked ${guess}`, "grounded-and-actionable", `drop ${guess}`));
+
+    // and that is the value the written report carries
+    const dir = tmp("crit-scrub-fp-");
+    persistCritiqueArtifacts(dir, { ...stateWith("Acme-4471", { items: [item] }), outDir: dir }, undefined, { rawEvaluatorReplies: [] });
+    const report = JSON.parse(readFileSync(join(dir, "critique-report.json"), "utf8"));
+    expect(report.items[0].findingFingerprint).toBe("71c16c708746d58f");
+    expect(report.items[0].idea).toBe("the skill leaked [REDACTED]");
+  });
+});
+
+describe("scrubCritiqueJson keeps EXACT paths, not key names", () => {
+  it("a `reason`/`source`/`sessionId` key at an unlisted path is scrubbed; the listed paths are kept", () => {
+    const S = "planted-xyz";
+    const out = scrubCritiqueJson(
+      {
+        sessionId: `sess-${S}`,
+        reason: S,
+        source: S,
+        items: [{ source: `evaluator-${S}`, classification: `c-${S}`, findingFingerprint: `fp-${S}`, idea: S, extra: { source: S } }],
+        gateAnswers: [{ answeredBy: `by-${S}`, reason: S }],
+        evidenceBudget: {
+          corpusOmitted: [{ name: S, reason: `r-${S}` }],
+          trimRecord: [{ section: S, reason: S }],
+        },
+        gradedModels: [`m-${S}`],
+        nested: { sessionId: S, gradedModels: [S] },
+      },
+      "report",
+      [S],
+    );
+    // kept: exact listed paths
+    expect(out.sessionId).toBe(`sess-${S}`);
+    expect(out.items[0].source).toBe(`evaluator-${S}`);
+    expect(out.items[0].classification).toBe(`c-${S}`);
+    expect(out.items[0].findingFingerprint).toBe(`fp-${S}`);
+    expect(out.gateAnswers[0].answeredBy).toBe(`by-${S}`);
+    expect(out.evidenceBudget.corpusOmitted[0].reason).toBe(`r-${S}`);
+    expect(out.gradedModels).toEqual([`m-${S}`]);
+    // scrubbed: the same key names anywhere else
+    expect(out.reason).toBe("[REDACTED]");
+    expect(out.source).toBe("[REDACTED]");
+    expect(out.items[0].idea).toBe("[REDACTED]");
+    expect(out.items[0].extra.source).toBe("[REDACTED]");
+    expect(out.gateAnswers[0].reason).toBe("[REDACTED]");
+    expect(out.evidenceBudget.corpusOmitted[0].name).toBe("[REDACTED]");
+    expect(out.evidenceBudget.trimRecord[0]).toEqual({ section: "[REDACTED]", reason: "[REDACTED]" });
+    expect(out.nested).toEqual({ sessionId: "[REDACTED]", gradedModels: ["[REDACTED]"] });
+  });
+
+  it("salvage keeps the report paths under reportState only; corpus-only keeps its own root", () => {
+    const S = "planted-xyz";
+    const salvage = scrubCritiqueJson(
+      { sessionId: S, infraFailureKind: S, reportState: { sessionId: S, items: [{ source: S }] } },
+      "salvage",
+      [S],
+    );
+    expect(salvage).toEqual({ sessionId: "[REDACTED]", infraFailureKind: S, reportState: { sessionId: S, items: [{ source: S }] } });
+    const corpus = scrubCritiqueJson(
+      { mode: S, skillDir: S, sessionId: S, corpus: { corpusOmitted: [{ name: S, reason: S }] } },
+      "corpus-only",
+      [S],
+    );
+    expect(corpus).toEqual({
+      mode: S,
+      skillDir: S,
+      sessionId: "[REDACTED]",
+      corpus: { corpusOmitted: [{ name: "[REDACTED]", reason: S }] },
+    });
+  });
 });

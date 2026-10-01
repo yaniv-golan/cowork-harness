@@ -1906,10 +1906,11 @@ export function persistCritiqueArtifacts(
   evidenceText: string | undefined,
   salvage: { selfReport?: string; rawEvaluatorReplies: Array<{ pass: 1 | 2; raw: string }> },
 ): void {
-  writeRunArtifact(outDir, "critique-report.json", { json: buildJsonReport(state), indent: 2 });
+  writeRunArtifact(outDir, "critique-report.json", { json: buildJsonReport(state), shape: "report", indent: 2 });
   if (evidenceText !== undefined) writeRunArtifact(outDir, "critique-evidence-package.txt", { text: evidenceText });
   if (state.infraFailure || state.evaluatorError)
     writeRunArtifact(outDir, "critique-salvage.json", {
+      shape: "salvage",
       json: {
         infraFailure: state.infraFailure,
         // The phase and kind ride WITH the reason here too. A salvage consumer reading the top-level
@@ -1930,7 +1931,9 @@ export function persistCritiqueArtifacts(
  *  for this file by name) but never changes the exit taxonomy — the stdout report already shipped. */
 export function writeOutFile(outPath: string, state: ReportState, outputFormat: "json" | "text"): void {
   // Secret-scrubbed like the run-dir copies (`critiqueFileText`); the JSON one by value, so it still parses.
-  const content = critiqueFileText(outputFormat === "json" ? { json: buildJsonReport(state) } : { text: buildTextReport(state) + "\n" });
+  const content = critiqueFileText(
+    outputFormat === "json" ? { json: buildJsonReport(state), shape: "report" } : { text: buildTextReport(state) + "\n" },
+  );
   try {
     writeFileSync(outPath, content);
   } catch (e) {
@@ -2052,7 +2055,7 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
       note,
     };
     content = jsonPayloadEnvelope("critique", true, payload) + "\n";
-    fileContent = jsonPayloadEnvelope("critique", true, scrubCritiqueJson(payload)) + "\n";
+    fileContent = jsonPayloadEnvelope("critique", true, scrubCritiqueJson(payload, "corpus-only")) + "\n";
   } else {
     const pct = ((corpus.corpusBytes * 100) / corpus.corpusCeiling).toFixed(1);
     content =
