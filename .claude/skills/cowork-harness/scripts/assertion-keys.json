@@ -101,7 +101,8 @@
     "requires_capabilities",
     "session",
     "skills",
-    "timeout_ms"
+    "timeout_ms",
+    "workspace_fixture"
   ],
   "verdictModifierKeys": [
     "allow_delete_in",

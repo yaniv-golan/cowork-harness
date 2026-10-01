@@ -69,6 +69,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     userVisibleRoots: undefined,
     readonlyFolderRoots: undefined,
     artifacts: undefined,
+    workspaceFixture: undefined,
     workspaceFiles: undefined,
     contextEvents: undefined,
     mcpErrors: undefined,

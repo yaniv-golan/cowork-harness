@@ -187,7 +187,8 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     points you at the fix.
     *Fix:* to re-check token-free against the edited block, `replay --assert-from <scenario.yaml>` (or
     `--reassert`). That opt-in path is safe by construction for the authored fields — it **hard-fails** if
-    `prompt`/`answers`/`baseline`/`fidelity`/`lane`/`skills`/`requires_capabilities` or the skill content (when a
+    `prompt`/`answers`/`baseline`/`fidelity`/`lane`/`skills`/`requires_capabilities`/`workspace_fixture` (the dir, not
+    its content — that is a `fixture` staleness finding) or the skill content (when a
     fingerprint exists) drifted from the recording (re-record then), and `expect_denied`/filesystem/egress keys
     are sourced but stay **live-only** (it warns; they don't move the replay verdict). **Caveat:** the session's
     `model:` IS in the cassette's `sessionFingerprint` (a `--model`/env model is not; `environment.model`

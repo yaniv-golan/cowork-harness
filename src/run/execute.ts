@@ -105,6 +105,7 @@ import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import {
   classifyWorkspaceFilesWithHealth,
+  deliverableArtifacts,
   trustedWorkspaceFiles,
   scratchpadEvidenceComplete,
   collectArtifactPathsWithHealth,
@@ -123,6 +124,16 @@ import {
 import { resolveAvailableSkills, type PluginSkillRoot } from "./skill-metadata.js";
 import { slashInvokedSkillIds } from "../critique/skill-invocation.js";
 import { computeVerdict } from "./verdict.js";
+import {
+  PRESENCE_KEYS,
+  assertedAuthored,
+  recordedFixtureFileSigs,
+  recordedFixtureRefusal,
+  setWorkspaceFixtureAsWritten,
+  withWorkspaceFixtureSig,
+  workspaceFixtureAsWritten,
+  workspaceFixtureAssertRefusal,
+} from "../fixture/workspace.js";
 import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
 // Moved to ./artifacts.ts so assert.ts can use it without an assert→execute import cycle;
@@ -243,10 +254,13 @@ export function runOutDir(scenarioName: string, sessionId: string): string {
  *  realpath-canonicalized + deduped + sorted, so the set identifies WHICH project a pinned session belongs
  *  to, invariant to launch cwd and symlinks. Used by the cross-project overwrite guard below — cwd is the
  *  wrong axis (it false-negatives when two checkouts launch from the same dir, e.g. CI / $HOME). */
-export function sessionOriginSources(session: ReturnType<typeof loadSession>, sessionRef: string): string[] {
+export function sessionOriginSources(session: ReturnType<typeof loadSession>, sessionRef: string, workspaceFixture?: string): string[] {
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir()); // match buildLaunchPlan's ~ handling
   const raw = [
     ...(sessionRef && sessionRef !== "(inline)" ? [sessionRef] : []),
+    // The fixture is a staged source like an upload: two projects whose sessions match but whose fixtures differ
+    // are different runs, and a pinned re-run must not clear (or resume) the other one's tree.
+    ...(workspaceFixture !== undefined ? [workspaceFixture] : []),
     ...session.uploads,
     ...session.folders.map((f) => f.from),
     ...session.skills.local,
@@ -267,6 +281,21 @@ export function sessionOriginSources(session: ReturnType<typeof loadSession>, se
     }
   });
   return Array.from(new Set(canon)).sort();
+}
+
+/** Clear what a FRESH, same-origin-confirmed pinned re-run (`--session-id` without `--resume`) must not inherit:
+ *  the run dir, and — at microvm, which stages into `<vmWorkHost>/<sessionId>/mnt` rather than the run dir — the
+ *  prior run's outputs there. Without the second, a fresh microvm re-run started with the previous run's
+ *  deliverables in outputs/ (and a workspace_fixture would merge over them; staging refuses a non-empty outputs
+ *  dir as the backstop). Only ever called after the origin check confirmed the dir is this project's. */
+export function clearForFreshPinnedRun(
+  outDir: string,
+  effectiveFidelity: string,
+  sessionId: string,
+  vmWorkHost: string = VM_WORK_HOST,
+): void {
+  rmSync(outDir, { recursive: true, force: true });
+  if (effectiveFidelity === "microvm") rmSync(join(vmWorkHost, sessionId, "mnt", "outputs"), { recursive: true, force: true });
 }
 
 /** A short, deterministic identity hash for a pinned run's source set. With no on-disk sources (inline/
@@ -532,9 +561,20 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
         // COMPLETE authored document. A scenario whose only evidence-bearing key is semantic_matches never
         // armed the manifest, so it never received authored-file evidence at all.
         // semantic_pairwise composes the same judged document (judgedOpts covers both keys).
-        judgedOpts(a) !== undefined,
-    ) || isRecording
+        judgedOpts(a) !== undefined ||
+        // `authored: true` decides "did THIS run write it" against the pre-run hashes, fixture or not.
+        assertsAuthored(a),
+    ) ||
+    // A fixture run must always be able to tell an untouched fixture file (pre-run) from one the step rewrote
+    // (authored) — for `authored`, for the judged evidence, and for `artifacts[].preRun`.
+    scenario.workspace_fixture !== undefined ||
+    isRecording
   );
+}
+
+/** Does this assertion state `authored: true` on any of the four presence/body keys? */
+function assertsAuthored(a: Assertion): boolean {
+  return PRESENCE_KEYS.some((k) => assertedAuthored((a as Record<string, unknown>)[k]) === true);
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
@@ -637,7 +677,21 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Every declared source (plugins, skills, uploads, folders, marketplaces) is resolved and checked HERE,
   // before the run directory exists: a path that does not exist is a UsageError, and a run refused for it
   // leaves no run dir, status.json or index row behind. buildLaunchPlan stages from this same resolution.
-  const launchSources = resolveLaunchSources(session, baseline, effectiveFidelity, !!opts.resume);
+  const launchSources = resolveLaunchSources(session, baseline, effectiveFidelity, !!opts.resume, {
+    ...(scenario.workspace_fixture !== undefined ? { workspaceFixture: scenario.workspace_fixture } : {}),
+  });
+  // A presence/body assertion on a file the fixture provides passes on the fixture alone — refused here, before
+  // the run dir exists, unless it states `authored:`.
+  if (launchSources.workspaceFixture) {
+    const vacuousFixture = workspaceFixtureAssertRefusal(scenario, launchSources.workspaceFixture.files);
+    if (vacuousFixture) throw new UsageError(vacuousFixture);
+  }
+  // A --resume turn re-stages nothing (the fixture dir may be gone), so check against the file list turn 1
+  // recorded: an unannotated presence assertion on one of those files would still pass on the fixture alone.
+  if (opts.resume) {
+    const vacuousFixture = recordedFixtureRefusal(scenario, recordedFixtureFileSigs(outDir));
+    if (vacuousFixture) throw new UsageError(vacuousFixture);
+  }
 
   // semantic_pairwise: every frozen reference must exist, verify and sit outside every mounted source BEFORE any
   // spend — a run that cannot be compared is refused here, not graded evidence-unavailable after it was paid for.
@@ -651,7 +705,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     };
   })();
   {
-    const refusal = pairwiseRefsRefusal(scenario, pairwiseSetup, sessionOriginSources(session, "(inline)"));
+    // The workspace_fixture is copied into outputs/, so a store inside it (or holding it) is readable by the agent too.
+    const refusal = pairwiseRefsRefusal(scenario, pairwiseSetup, sessionOriginSources(session, "(inline)", scenario.workspace_fixture));
     if (refusal) throw new UsageError(refusal);
   }
 
@@ -660,7 +715,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // projects can resolve to the same path. Identify the run by its SOURCE content (sessionOriginSources)
     // and refuse to touch a dir that belongs to a different project — replacing the old blind rmSync,
     // which silently destroyed a colliding peer's persisted, resumable session.
-    const sources = sessionOriginSources(session, scenario.session);
+    const sources = sessionOriginSources(session, scenario.session, scenario.workspace_fixture);
     const myOrigin = sessionOriginKey(sources, scenario.session);
     // A session that mounts NO source (a bare inline scenario) has no content to identify which project it
     // belongs to — its only fallback anchor is cwd, which false-negatives when two projects share a cwd.
@@ -682,7 +737,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
               (confirmable
                 ? `belongs to another project at ${where}`
                 : `can't be confirmed as this project's (the session mounts no source to identify it)`) +
-              ` — set COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1 to override, or use --run-dir`,
+              ` — set COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1 to override, or use --run-dir` +
+              // The identity covers the session file and every staged source, the fixture included, so a resume turn
+              // that changes or drops `workspace_fixture` reads as another project. Say so instead of leaving the
+              // operator to guess.
+              (confirmable
+                ? `. If this is the same project: a --resume turn must declare the same session and the same workspace_fixture as the first turn — both are part of the session's identity`
+                : ""),
           );
         // Refuse to resume onto a pre-layout/mixed shape. `turnArtifactPath` addresses ONLY `turns/<N>/`
         // (no legacy fallback), so resuming one of these writes `turns/<currentTurn>/` next to a root/
@@ -698,7 +759,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // a same-project non-resume run must be FRESH — the prior staged tree (uploads, plugins,
         // mnt/.claude agent state, outputs) would otherwise leak in via cpSync's merge semantics, and a
         // new agentSessionId would be written over stale native session files. Clear it first.
-        rmSync(outDir, { recursive: true, force: true });
+        clearForFreshPinnedRun(outDir, effectiveFidelity, sessionId);
       } else {
         // FAIL CLOSED: never delete a dir whose origin can't be confirmed as ours (different project,
         // missing marker, or an unconfirmable sourceless identity).
@@ -715,7 +776,20 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     mkdirSync(outDir, { recursive: true });
     // Write the origin marker FIRST (before session.json) to minimize the post-mkdir crash window where a
     // dir exists with no marker (which would fail closed on the next run).
-    const sourceHint = sources[0] ?? (scenario.session === "(inline)" ? "(inline session)" : resolve(scenario.session));
+    // Name the project by its session file when it has one — never by the fixture dir, which is a staged source
+    // but not where the project lives.
+    const fixtureCanon = (() => {
+      if (scenario.workspace_fixture === undefined) return undefined;
+      try {
+        return realpathSync(scenario.workspace_fixture);
+      } catch {
+        return resolve(scenario.workspace_fixture);
+      }
+    })();
+    const sourceHint =
+      scenario.session !== "(inline)"
+        ? resolve(scenario.session)
+        : (sources.find((src) => src !== fixtureCanon) ?? sources[0] ?? "(inline session)");
     writeFileSync(originPath, JSON.stringify({ originKey: myOrigin, sourceHint, createdAt: new Date().toISOString() }, null, 2));
   } else {
     mkdirSync(outDir, { recursive: true });
@@ -1512,13 +1586,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         egress,
         durationMs: Date.now() - startedAt - agentStopMs,
         unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
-        fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
+        fingerprint: withWorkspaceFixtureSig(
+          buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
+          plan.workspaceFixture,
+        ),
         onUnanswered,
         nonDeterministicHint: opts.nonDeterministicHint,
         externalChannel: !!opts.externalChannel,
         // The decider most often spent money on exactly the gate that whiffed — keep it on the salvage.
         deciderCostUsd: llmDecider?.costUsd(),
         deciderUsage: llmDecider?.usage(),
+        workspaceFixture: workspaceFixtureAsWritten(scenario),
       });
       // Non-null: `durationMs` is set unconditionally just above (`Date.now() - startedAt`) — the field is
       // typed optional on RunResult/PartialResult for OTHER (non-execute.ts) producers, not this call site.
@@ -1653,6 +1731,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       preRunLinkAware,
       preRunHashes,
       preRunOrigin,
+      // A resume turn reads the FIRST turn's manifest; `authored: true` must not diff against it.
+      resume: !!opts.resume,
       outputsDeletes: scan.outputsDeletes,
       outputsDeleteBasis: scan.outputsDeleteBasis,
       fsDiff,
@@ -2016,7 +2096,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       readonlyFolderRoots,
       // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
       // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
-      artifacts: workspaceFiles?.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+      // `preRun: true` marks an untouched pre-run file (e.g. from a workspace_fixture) — see deliverableArtifacts.
+      artifacts: deliverableArtifacts(workspaceFiles, preRunHashes),
+      workspaceFixture: workspaceFixtureAsWritten(scenario),
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
@@ -2070,7 +2152,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Skill staleness fingerprint, persisted on EVERY run (runs are always kept on disk) so `verify-run` can
       // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
       // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
-      fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
+      fingerprint: withWorkspaceFixtureSig(
+        buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
+        plan.workspaceFixture,
+      ),
       resources, // same single fold as the evaluate() ctx above — not re-read
       // Fields this lane has NEVER set (were implicitly `undefined` before this refactor; now explicit
       // per assembleRunResult's contract — this line makes the omission a reviewable, greppable fact
@@ -2292,6 +2377,18 @@ export function loadScenarioPure(path: string): Scenario {
       asrt.semantic_pairwise.refs = asrt.semantic_pairwise.refs.map((r) =>
         isFileRelative(r) ? resolve(dirname(path), r) : r.replace(/^~(?=$|\/)/, homedir()),
       );
+  // `workspace_fixture` resolves the same way (a path string only — the directory is scanned at launch, with the
+  // other declared sources). `~/…` expands to the home directory; an absolute path is kept.
+  if (scenario.workspace_fixture !== undefined)
+    try {
+      // Keep the ref as written (scenario-file-relative) beside the resolved path: it is what RunResult reports
+      // and scaffold re-emits, so no absolute host path reaches a result or a committed YAML.
+      const asWritten = scenario.workspace_fixture;
+      scenario.workspace_fixture = expandUserPath(asWritten, dirname(resolve(path)));
+      setWorkspaceFixtureAsWritten(scenario, asWritten);
+    } catch (e) {
+      throw new UsageError(`invalid scenario ${path}: workspace_fixture: ${(e as Error).message}`);
+    }
   // Load-time regex validation: fail fast with a clear message rather than letting a malformed pattern
   // crash the run at evaluate() time. NOTE: CLI-supplied rules (--answer/--answer-policy) do NOT
   // pass through here — the runtime try/catch in assert.ts and decider.ts is their safety net.
@@ -2484,10 +2581,16 @@ export function launchSourcesPreflight(
   const withModel = model !== undefined && model !== loaded.model ? applySessionOverrides(loaded, { model }) : loaded;
   const session = opts.ablateSkill ? ablateSession(withModel) : withModel;
   const baseline = opts.baseline ?? loadBaseline(scenario.baseline);
-  resolveLaunchSources(session, baseline, effectiveTier(scenario.fidelity, baseline), false, {
+  const sources = resolveLaunchSources(session, baseline, effectiveTier(scenario.fidelity, baseline), false, {
     stageFilters: false,
     quiet: opts.quiet,
+    ...(scenario.workspace_fixture !== undefined ? { workspaceFixture: scenario.workspace_fixture } : {}),
   });
+  // The same pre-spawn refusal executeScenario makes, so a batch pre-flight or a dry run refuses it too.
+  if (sources.workspaceFixture) {
+    const vacuousFixture = workspaceFixtureAssertRefusal(scenario, sources.workspaceFixture.files);
+    if (vacuousFixture) throw new UsageError(vacuousFixture);
+  }
 }
 
 /** Every input check `executeScenario` makes before it creates a run dir, in its order, for a caller that
@@ -2841,6 +2944,8 @@ export function buildPartialResult(args: {
   /** The LLM decider's spend up to the whiff — see `RunResult.deciderCostUsd`. Absent = none recorded. */
   deciderCostUsd?: number;
   deciderUsage?: RunResult["deciderUsage"];
+  /** The scenario's resolved `workspace_fixture` — see `RunResult.workspaceFixture`. */
+  workspaceFixture?: string;
 }): RunResult {
   const { record } = args;
   const gp = summarizeGateProvenance(record.decisions);
@@ -2973,7 +3078,8 @@ export function buildPartialResult(args: {
     readonlyFolderRoots: args.readonlyFolderRoots,
     // artifacts is a DERIVED VIEW of workspaceFiles — same collectArtifacts walk,
     // filtered to the deliverable classes (excludes class:"input" read-only mounts). No second walk.
-    artifacts: workspaceFiles?.filter((f) => f.class === "output" || f.class === "mount").map((f) => ({ path: f.path, bytes: f.bytes })),
+    artifacts: deliverableArtifacts(workspaceFiles, readPreRunManifestHashes(args.outDir)),
+    workspaceFixture: args.workspaceFixture,
     workspaceFiles, // Working folder panel's canonical file model
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs

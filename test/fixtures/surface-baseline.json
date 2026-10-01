@@ -1083,7 +1083,7 @@
       },
       ".artifacts[].truncationReason": {
         "type": "string",
-        "enum": ["size", "readonly", "unreadable", "input"]
+        "enum": ["size", "readonly", "unreadable", "input", "fixture"]
       },
       ".authoring": {
         "type": "object"
@@ -1206,6 +1206,18 @@
         "type": "array"
       },
       ".fingerprint.skillSources[]": {
+        "type": "string"
+      },
+      ".fingerprint.workspaceFixtureFileSigs": {
+        "type": "array"
+      },
+      ".fingerprint.workspaceFixtureFileSigs[]": {
+        "type": "array"
+      },
+      ".fingerprint.workspaceFixtureFileSigs[][]": {
+        "type": "string"
+      },
+      ".fingerprint.workspaceFixtureSig": {
         "type": "string"
       },
       ".folderPrefixMap": {
@@ -2715,6 +2727,10 @@
         "type": "string",
         "required": true
       },
+      ".artifacts[].preRun": {
+        "type": "boolean",
+        "const": true
+      },
       ".assertions": {
         "type": "array",
         "required": true
@@ -3021,6 +3037,18 @@
         "type": "array"
       },
       ".fingerprint.skillSources[]": {
+        "type": "string"
+      },
+      ".fingerprint.workspaceFixtureFileSigs": {
+        "type": "array"
+      },
+      ".fingerprint.workspaceFixtureFileSigs[]": {
+        "type": "array"
+      },
+      ".fingerprint.workspaceFixtureFileSigs[][]": {
+        "type": "string"
+      },
+      ".fingerprint.workspaceFixtureSig": {
         "type": "string"
       },
       ".fsDiff": {
@@ -3518,7 +3546,9 @@
           "resolved-tier",
           "unverifiable-tier",
           "prompt-assets",
-          "unverifiable-prompt-assets"
+          "unverifiable-prompt-assets",
+          "fixture",
+          "unverifiable-fixture"
         ],
         "required": true
       },
@@ -3981,6 +4011,9 @@
       },
       ".workspaceFiles[].sha256": {
         "type": "string"
+      },
+      ".workspaceFixture": {
+        "type": "string"
       }
     },
     "scenario.schema.json": {
@@ -4086,6 +4119,9 @@
         "type": "string",
         "required": true
       },
+      ".assert[].artifact_json.authored": {
+        "type": "boolean"
+      },
       ".assert[].artifact_json.exists": {
         "type": "boolean"
       },
@@ -4108,6 +4144,9 @@
       ".assert[].artifact_text.artifact": {
         "type": "string",
         "required": true
+      },
+      ".assert[].artifact_text.authored": {
+        "type": "boolean"
       },
       ".assert[].artifact_text.contains": {
         "type": "array"
@@ -4154,8 +4193,19 @@
       ".assert[].file_absent": {
         "type": "string"
       },
-      ".assert[].file_exists": {
+      ".assert[].file_exists<anyOf:0>": {
         "type": "string"
+      },
+      ".assert[].file_exists<anyOf:1>": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].file_exists<anyOf:1>.authored": {
+        "type": "boolean"
+      },
+      ".assert[].file_exists<anyOf:1>.path": {
+        "type": "string",
+        "required": true
       },
       ".assert[].gate_answer_count_min": {
         "type": "integer"
@@ -4694,8 +4744,19 @@
       ".assert[].transcript_not_matches": {
         "type": "string"
       },
-      ".assert[].user_visible_artifact": {
+      ".assert[].user_visible_artifact<anyOf:0>": {
         "type": "string"
+      },
+      ".assert[].user_visible_artifact<anyOf:1>": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].user_visible_artifact<anyOf:1>.authored": {
+        "type": "boolean"
+      },
+      ".assert[].user_visible_artifact<anyOf:1>.path": {
+        "type": "string",
+        "required": true
       },
       ".assert[].vm_path_denied": {
         "type": "boolean",
@@ -4751,6 +4812,9 @@
       },
       ".timeout_ms": {
         "type": "integer"
+      },
+      ".workspace_fixture": {
+        "type": "string"
       }
     },
     "schedule-cost.json": {
@@ -5210,6 +5274,7 @@
       "COWORK_HARNESS_STATUS_POLL_MS",
       "COWORK_HARNESS_STATUS_STALE_MS",
       "COWORK_HARNESS_VERIFY_AGENT_SHA",
+      "COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES",
       "COWORK_HOST_AGENT_BINARY",
       "COWORK_LIMACTL",
       "COWORK_LIMA_INSTANCE",

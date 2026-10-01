@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve, relative, isAbsolute, sep, dirname, extname } from "node:path";
 import type {
@@ -27,6 +27,7 @@ import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
 import { isVmSessionsPath } from "./vm-paths.js";
+import { foldsMatch } from "./fixture/workspace.js";
 
 /** Bytes cap for re-hashing a matched input file on the live / verify-run lane (`input_unmodified`).
  *  Mirrors the pre-run manifest's 50 MiB default and the same env override so the post-run re-hash is
@@ -404,8 +405,8 @@ export interface AssertContext {
   workRoot: string; // dir under which file_exists paths resolve (L0: work/, L1/L2: work/session/mnt)
   userVisiblePrefixes: string[]; // path prefixes promoted to the user (e.g. outputs, .projects)
   /** workRoot-relative paths under userVisiblePrefixes BEFORE the agent ran (RunResult.preRunPaths /
-   *  cassette.preRunPaths). undefined = no pre-run manifest (a --resume run, or an older run/cassette) —
-   *  no_unexpected_files then fails evidence-unavailable, never vacuous-passes. (microvm captures it now —
+   *  cassette.preRunPaths). undefined = no pre-run manifest (an older run/cassette, or a run that never armed
+   *  one) — no_unexpected_files then fails evidence-unavailable, never vacuous-passes. On resume, a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable. (microvm captures it now —
    *  its session tree is snapshotted from the VM into the run dir.) */
   preRunPaths?: string[];
   /** True iff `preRunPaths` was captured link-aware (manifest v2+). When false/undefined (a pre-#38
@@ -423,6 +424,10 @@ export interface AssertContext {
    *  never a vacuous pass just because a (locally meaningless) preRunPaths/preRunHashes happens to be
    *  present. undefined today on every real caller; only a hand-constructed ctx sets this. */
   preRunOrigin?: "local-walk" | "remote-unavailable" | "local-unreadable";
+  /** True on a `--resume` turn. Such a turn captures no pre-run manifest of its own; the manifest it reads is the
+   *  FIRST turn's. `authored: true` keys on this flag (and fails evidence-unavailable), never on the manifest being
+   *  absent, because a workspace_fixture scenario always has one. Absent = not a resume turn (replay: never). */
+  resume?: boolean;
   /** Replay-lane ONLY: authoritative post-run per-path sha256 from the cassette manifest
    *  (cassette.artifacts[].sha256). undefined on live/verify-run (there, input_unmodified re-hashes the
    *  real tree under workRoot). Needed because replay's materialized tree writes 0-byte placeholders for
@@ -521,7 +526,7 @@ export interface AssertContext {
    *  materializeManifest(); empty on live/verify-run. `.has(rel)` = "is body-less"; `.get(rel)` gives the
    *  reason ("readonly"/"size"/"unreadable", or undefined on a pre-v8 entry) so artifact_json's remedy is
    *  precise. */
-  truncatedPaths?: Map<string, "size" | "readonly" | "unreadable" | "input" | undefined>;
+  truncatedPaths?: Map<string, "size" | "readonly" | "unreadable" | "input" | "fixture" | undefined>;
   /** REPLAY-only: workRoot-relative paths that were a symlink/hardlink at record time (v10 `linkKind`
    *  entries). They materialize as placeholder files indistinguishable from real files, so existence
    *  assertions (file_exists / user_visible_artifact / computer_links_resolve) must treat them as
@@ -1520,14 +1525,14 @@ const SCRATCHPAD_PREFIX = "scratchpad/";
  *  - A `-lost` finding on a MODIFIED file on a read-write connected mount (a user's pre-existing HTML the
  *    skill edited) is downgraded to advisory — not the skill's failure to own; surfaced, never a hard fail.
  *  - `-suspect` findings → PASS with the advisory surfaced.
- *  - Missing pre-run manifest (a `--resume` run, or a run predating the manifest seam), a scratchpad walk
- *    skipped on `--resume`, an unresolvable scratchpad path, or an `analysisFailure` on a produced
+ *  - Missing pre-run manifest (a run predating the manifest seam, or one that never armed it; a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable),
+ *    a scratchpad walk skipped on `--resume`, an unresolvable scratchpad path, or an `analysisFailure` on a produced
  *    candidate → could-not-verify (fail-closed), never a silent clean. (Every live sandbox tier captures
  *    a manifest now, microvm included — its session tree is snapshotted from the VM into the run dir.)
  */
 function checkNoLostWriteBack(ctx: AssertContext): KeyResult {
-  // No pre-run manifest → captureAuthoredFiles can't diff, so we cannot know what the run authored. This
-  // is a `--resume` run (no fresh manifest) or a pre-seam run — evidence-unavailable, never a silent clean.
+  // No pre-run manifest → captureAuthoredFiles can't diff, so we cannot know what the run authored. This is a
+  // pre-seam run, or one that never armed the manifest (a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable) — never a silent clean.
   if (ctx.preRunHashes === undefined) {
     return {
       pass: false,
@@ -1587,7 +1592,12 @@ function checkNoLostWriteBack(ctx: AssertContext): KeyResult {
   const isReservedRoot = (rel: string): boolean => {
     if (rel.startsWith(SCRATCHPAD_PREFIX)) return true; // scratchpad is agent-authored by construction
     const root = ctx.userVisiblePrefixes.find((r) => rel === r || rel.startsWith(r + "/"));
-    return root === "outputs"; // `outputs/` starts empty; everything else visible is a connected mount
+    // `outputs/` holds only this session's work. A workspace_fixture pre-populates it, but a fixture stands for an
+    // EARLIER step of the same session (see docs/fidelity-gaps.md), so a fixture file the step rewrote is the
+    // skill's own artifact — a hard fail like any other outputs file — unlike a user's pre-existing file on a
+    // connected mount. (An untouched fixture file is not in the authored set at all.) Everything else visible
+    // is a connected mount.
+    return root === "outputs";
   };
   const wasModified = (rel: string): boolean => {
     if (rel.startsWith(SCRATCHPAD_PREFIX)) return false; // scratchpad files aren't in the pre-run manifest
@@ -1704,6 +1714,121 @@ function slashMatches(re: RegExp, ids: string[] | undefined): boolean {
  * cannot be evaluated (filesystem/egress, or question/gate when controlOut is absent) are stripped
  * from the object BEFORE this runs (see replayCassette), so AND never straddles replay classes.
  */
+/** Did THIS run create or rewrite `p` (a workRoot-relative assertion path)? The same rule the authored-file capture
+ *  applies (`captureAuthoredFilesWithHealth`): a path absent from the pre-run manifest is new; a pre-run path whose
+ *  post-run hash differs was rewritten; an equal hash is an untouched pre-run file (a workspace_fixture file the step
+ *  never touched). Anything that cannot be decided — no manifest, a null pre-run hash (over the cap or
+ *  unreadable), no post-run hash — fails evidence-unavailable: it is never read as authored.
+ *
+ *  It never passes on what the run did not write as a regular file:
+ *   - `authored` applies to a REGULAR FILE. A directory fails: the pre-run manifest records files, so a
+ *     directory the fixture created would otherwise read as "new" (assert on a file inside it instead).
+ *   - a symlink at the path, or a path reached through a symlinked directory, is never authored evidence (the
+ *     pre-run manifest never hashes a link; replacing a fixture file with a link to other content is not
+ *     "writing" it).
+ *   - the lookup uses the file's CANONICAL on-disk name: on a case-insensitive filesystem (macOS APFS)
+ *     `outputs/REPORT.md` is the fixture's `report.md`, and must read as that pre-run file, as it fails "not
+ *     found" on a case-sensitive one. With no exact key, a case-folded match is taken as that pre-run file.
+ *  Post-run hash: the cassette manifest on replay (`postRunHashes`), a bounded re-hash of the real file on live
+ *  / verify-run. */
+function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: true; evidence?: string } | { pass: false; message: string } {
+  const unavailable = (why: string) => ({
+    pass: false as const,
+    message: `evidence unavailable: ${key} {authored: true} on "${p}" — ${why}`,
+  });
+  if (ctx.preRunOrigin === "remote-unavailable") return unavailable("the pre-run manifest is not locally observable (remote)");
+  // Authorship is decided per invocation. A --resume turn captures no pre-run manifest of its own: the one on disk
+  // is the FIRST turn's (taken before turn 1), so diffing against it would credit this turn with everything earlier
+  // turns wrote. Never read that as authored — keyed on the resume flag, not on the manifest being absent, because
+  // a fixture scenario always has one.
+  if (ctx.resume)
+    return unavailable(
+      "this is a --resume turn: authorship is decided per invocation, and a resume turn captures no pre-run manifest of its own (the one on disk is the first turn's), so what THIS turn wrote cannot be told apart from earlier turns' work",
+    );
+  if (ctx.preRunHashes === undefined)
+    return unavailable(
+      "no pre-run manifest for this run/cassette (it predates the manifest, or nothing armed it) — authorship cannot be decided",
+    );
+  const abs = containedPath(ctx.workRoot, p);
+  if (!abs) return { pass: false, message: `unsafe ${key} path "${p}" — must stay under the work root (no absolute paths or "..")` };
+  const lexical = relative(resolve(ctx.workRoot), abs).split(sep).join("/");
+  let st: ReturnType<typeof lstatSync>;
+  try {
+    st = lstatSync(abs);
+  } catch {
+    return { pass: false, message: `${key} {authored: true}: "${p}" not found — nothing this run wrote is there` };
+  }
+  if (st.isSymbolicLink() || ctx.linkPaths?.has(lexical))
+    return unavailable("it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)");
+  if (st.isDirectory())
+    return {
+      pass: false,
+      message: `${key} {authored: true}: \`authored\` applies to a file — "${p}" is a directory (assert on a file the step writes inside it)`,
+    };
+  if (!st.isFile()) return { pass: false, message: `${key} {authored: true}: "${p}" is not a regular file` };
+  // A second hard link is another name for an existing inode (it may be an untouched fixture file); the
+  // authored-file capture the judge grades excludes such a file, so authorship cannot claim it either.
+  if (st.nlink > 1)
+    return unavailable("it has a second hard link (another name for the same file) — the authored-file capture excludes it too");
+  // The canonical on-disk name, relative to the canonical work root. A difference other than case or Unicode
+  // normalization form (macOS resolves NFC and NFD spellings to one name) means the path went through a symlinked
+  // directory. Lookups use the same NFC + lower-case key.
+  let rel: string;
+  try {
+    rel = relative(realpathSync.native(ctx.workRoot), realpathSync.native(abs)).split(sep).join("/");
+  } catch {
+    return unavailable("its on-disk name could not be resolved");
+  }
+  const fold = foldsMatch;
+  if (rel !== lexical && !fold(rel, lexical))
+    return unavailable("it is reached through a symlinked directory — a link is never authored evidence");
+  const hashes = ctx.preRunHashes;
+  if (!Object.hasOwn(hashes, rel)) {
+    const folded = Object.keys(hashes).find((k) => fold(k, rel));
+    if (folded !== undefined) rel = folded;
+  }
+  let post: string | undefined;
+  const postHash = (): string | undefined | "too-large" => {
+    if (ctx.postRunHashes !== undefined) {
+      const post = ctx.postRunHashes;
+      return post[rel] ?? post[lexical] ?? post[Object.keys(post).find((k) => fold(k, rel)) ?? ""];
+    }
+    try {
+      if (st.size > postRunHashCap()) return "too-large";
+      return createHash("sha256").update(readFileSync(abs)).digest("hex");
+    } catch {
+      return undefined;
+    }
+  };
+  if (!Object.hasOwn(hashes, rel)) {
+    if (ctx.preRunPaths?.some((q) => fold(q, rel)))
+      return unavailable("it existed before the run as a link, whose content was never hashed");
+    if (ctx.preRunOrigin === "local-unreadable")
+      return unavailable(
+        "the pre-run baseline is incomplete (a connected-folder source was unreadable), so a new path cannot be proven new",
+      );
+    const h = postHash();
+    if (h === "too-large") return unavailable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)");
+    if (h === undefined) return unavailable("there is no post-run record of it as a regular file");
+    return { pass: true, evidence: `${key}: "${p}" is new this run` };
+  }
+  const pre = hashes[rel];
+  if (pre === null || pre === undefined)
+    return unavailable(
+      "its pre-run hash is unavailable (over COWORK_HARNESS_PRERUN_HASH_CAP, unreadable, or nulled because the recorded body was secret-scrubbed)",
+    );
+  const h = postHash();
+  if (h === "too-large") return unavailable("the file is too large to hash post-run (COWORK_HARNESS_PRERUN_HASH_CAP)");
+  post = h;
+  if (post === undefined) return unavailable("there is no post-run hash for it (removed, or unreadable)");
+  return post === pre
+    ? {
+        pass: false,
+        message: `${key} {authored: true}: "${p}" is an untouched pre-run file (its content equals what was there before the run — e.g. a workspace_fixture file the step never rewrote), not something this run wrote`,
+      }
+    : { pass: true, evidence: `${key}: "${p}" was rewritten this run` };
+}
+
 function check(
   a: Assertion,
   ctx: AssertContext,
@@ -1727,7 +1852,7 @@ function check(
   let semanticEvidence: SemanticEvidence | undefined;
   const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
-  const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | "input" | undefined>();
+  const truncated = ctx.truncatedPaths ?? new Map<string, "size" | "readonly" | "unreadable" | "input" | "fixture" | undefined>();
 
   // Tool-name matching for tool_called / tool_not_called / subagent_tool_used / subagent_tool_absent:
   // a GLOB over the closed set of literal tool identifiers (`*` any run, `?` one char; every other char
@@ -2013,8 +2138,9 @@ function check(
     }
   }
   if (a.file_exists !== undefined) {
-    const abs = containedPath(ctx.workRoot, a.file_exists);
-    if (!abs) results.push(fail(`unsafe file_exists path "${a.file_exists}" — must stay under the work root (no absolute paths or "..")`));
+    const fe = typeof a.file_exists === "string" ? a.file_exists : a.file_exists.path;
+    const abs = containedPath(ctx.workRoot, fe);
+    if (!abs) results.push(fail(`unsafe file_exists path "${fe}" — must stay under the work root (no absolute paths or "..")`));
     else {
       const relPath = relative(resolve(ctx.workRoot), abs);
       if (ctx.linkPaths?.has(relPath)) {
@@ -2023,7 +2149,7 @@ function check(
         // capture that, so fail CLOSED rather than pass on the placeholder.
         results.push(
           fail(
-            `evidence unavailable: "${a.file_exists}" was a symlink/hardlink at record time — replay can't confirm it resolves to real in-root content; re-record or assert on the deliverable`,
+            `evidence unavailable: "${fe}" was a symlink/hardlink at record time — replay can't confirm it resolves to real in-root content; re-record or assert on the deliverable`,
           ),
         );
       } else if (truncated.has(relPath)) {
@@ -2033,15 +2159,16 @@ function check(
       } else {
         // verify the real path (after symlink resolution) is still under workRoot.
         const real = containedRealPath(ctx.workRoot, abs);
-        if (!real) results.push(fail(`unsafe file_exists path "${a.file_exists}" — symlink target escapes the work root`));
+        if (!real) results.push(fail(`unsafe file_exists path "${fe}" — symlink target escapes the work root`));
         else
           results.push(
             existsSync(real)
-              ? ok(`file_exists: "${a.file_exists}" present under ${ctx.workRoot}`)
-              : fail(`file not found: ${a.file_exists} (under ${ctx.workRoot})`),
+              ? ok(`file_exists: "${fe}" present under ${ctx.workRoot}`)
+              : fail(`file not found: ${fe} (under ${ctx.workRoot})`),
           );
       }
     }
+    if (typeof a.file_exists === "object" && a.file_exists.authored === true) results.push(authorshipCheck(ctx, fe, "file_exists"));
   }
   if (a.file_absent !== undefined) {
     const p = a.file_absent;
@@ -2083,7 +2210,7 @@ function check(
     }
   }
   if (a.user_visible_artifact !== undefined) {
-    const p = a.user_visible_artifact;
+    const p = typeof a.user_visible_artifact === "string" ? a.user_visible_artifact : a.user_visible_artifact.path;
     const abs = containedPath(ctx.workRoot, p);
     if (!abs) {
       // normalize/contain BEFORE the prefix test so `outputs/../../x` can't pass startsWith("outputs/")
@@ -2135,6 +2262,8 @@ function check(
         }
       }
     }
+    if (typeof a.user_visible_artifact === "object" && a.user_visible_artifact.authored === true)
+      results.push(authorshipCheck(ctx, p, "user_visible_artifact"));
   }
   if (a.no_lost_write_back !== undefined) {
     // Static Tier A analyzer over the files this run authored — see checkNoLostWriteBack. Live/verify-run
@@ -2960,7 +3089,7 @@ function check(
       } else if (uncheckable.length)
         results.push(
           fail(
-            `evidence unavailable: pre-run hash missing (over size cap) for: ${uncheckable.slice(0, 5).join(", ")} — raise COWORK_HARNESS_PRERUN_HASH_CAP or narrow the glob`,
+            `evidence unavailable: pre-run hash missing (over size cap, or nulled because the recorded body was scrubbed or redacted) for: ${uncheckable.slice(0, 5).join(", ")} — raise COWORK_HARNESS_PRERUN_HASH_CAP or narrow the glob (a scrubbed/redacted body cannot be compared on replay)`,
           ),
         );
       else if (modified.length || removed.length) {
@@ -3228,6 +3357,7 @@ function check(
   }
   if (a.artifact_text !== undefined) {
     const at = a.artifact_text;
+    if (at.authored === true) results.push(authorshipCheck(ctx, at.artifact, "artifact_text"));
     const wantsAny = at.contains ?? at.not_contains ?? at.matches ?? at.not_matches;
     const file = containedPath(ctx.workRoot, at.artifact);
     if (wantsAny === undefined) {
@@ -3272,13 +3402,15 @@ function check(
         results.push(fail(`artifact_text: file not found: ${at.artifact} (under ${ctx.workRoot})`));
       } else if (bodyLess) {
         const cause =
-          replayReason === "input"
-            ? "(an uploaded input — captured hash-only, never inlined)"
-            : replayReason === "readonly" || liveReadonly
-              ? "(read-only connected-folder input — its content is never captured)"
-              : replayReason === "size"
-                ? "(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)"
-                : "(a read-only input, or an artifact larger than the body cap)";
+          replayReason === "fixture"
+            ? "(an untouched binary workspace_fixture file — recorded hash-only; assert on what the step writes)"
+            : replayReason === "input"
+              ? "(an uploaded input — captured hash-only, never inlined)"
+              : replayReason === "readonly" || liveReadonly
+                ? "(read-only connected-folder input — its content is never captured)"
+                : replayReason === "size"
+                  ? "(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)"
+                  : "(a read-only input, or an artifact larger than the body cap)";
         results.push(
           fail(
             `evidence unavailable: artifact_text target "${at.artifact}" was captured body-less ${cause} — content is not available to match against`,
@@ -3338,6 +3470,7 @@ function check(
   }
   if (a.artifact_json !== undefined) {
     const aj = a.artifact_json;
+    if (aj.authored === true) results.push(authorshipCheck(ctx, aj.artifact, "artifact_json"));
     const file = containedPath(ctx.workRoot, aj.artifact);
     if (!file) results.push(fail(`unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`));
     else {
@@ -3380,13 +3513,16 @@ function check(
         // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
         // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
         // also falls here — it's a record-time read failure, so the both-causes text is the safe hint.
-        const cause = isUploadInput
-          ? `(an uploaded input — its content is captured hash-only, never inlined; assert artifact_json on a deliverable instead)`
-          : isReadonlyInput
-            ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
-            : isOverCap
-              ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
-              : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
+        const cause =
+          replayReason === "fixture"
+            ? `(an untouched binary workspace_fixture file — recorded hash-only; assert artifact_json on what the step writes)`
+            : isUploadInput
+              ? `(an uploaded input — its content is captured hash-only, never inlined; assert artifact_json on a deliverable instead)`
+              : isReadonlyInput
+                ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
+                : isOverCap
+                  ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
+                  : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
         results.push(
           fail(
             `evidence unavailable: artifact_json target "${aj.artifact}" was captured body-less ` +
