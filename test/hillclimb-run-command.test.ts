@@ -56,7 +56,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
     snapshotRoot: snaps,
     secrets: [],
     stderr: (l) => err.push(l),
-    flags: { output: "json", quiet: true, verbose: false },
+    flags: {},
     runScenario: async (a) => {
       calls.push({ scenario: a.scenario, extra: a.extra as Record<string, unknown> });
       const outDir = join(cwd, "runs", String(a.extra.runId));

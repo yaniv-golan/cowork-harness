@@ -34,7 +34,7 @@ import { variantSnapshot } from "./snapshot.js";
 /** Where variant snapshots live: outside every git work tree, or the stager would mount them empty. */
 export const defaultSnapshotRoot = (): string => join(homedir(), ".cowork-harness", "hillclimb-snapshots");
 
-export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolean }> {
+export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolean } = { label?: string; ablateSkill?: boolean }> {
   cwd: string;
   env: NodeJS.ProcessEnv;
   snapshotRoot: string;
