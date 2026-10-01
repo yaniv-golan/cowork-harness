@@ -2,10 +2,10 @@
 // the shared no-follow root (src/hillclimb/fs.ts), redacted (secrets, then host paths) — the flow dir is
 // model-influenced AND committable (runner-scaffold.mjs runner-scaffold.mjs l.34-131, 343-455; build-eval.md build-eval.md l.213-219).
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { FlowWriter, redactDeep, slotsIn } from "../src/hillclimb/flow.js";
+import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "../src/hillclimb/flow.js";
 import { FsRefusal } from "../src/hillclimb/fs.js";
 import { UsageError } from "../src/errors.js";
 
@@ -154,5 +154,23 @@ describe("FlowWriter — the variant lock (stricter than S: two runners on one v
 describe("redactDeep", () => {
   it("leaves numbers, booleans and keys alone", () => {
     expect(redactDeep({ a: 1, b: true, [homedir()]: "x" }, [])).toEqual({ a: 1, b: true, [homedir()]: "x" });
+  });
+});
+
+describe("flowHashOf — one identity for a flow, before and after its dir exists", () => {
+  it("is the same for a not-yet-created flow and the created one, through a symlinked ancestor", () => {
+    const real = realpathSync(mkdtempSync(join(tmpdir(), "hc-fh-")));
+    const alias = join(tmpdir(), `hc-fh-alias-${process.pid}`);
+    symlinkSync(real, alias);
+    try {
+      const before = flowHashOf(join(alias, "a", "flow"));
+      mkdirSync(join(real, "a", "flow"), { recursive: true });
+      expect(flowHashOf(join(alias, "a", "flow"))).toBe(before);
+      expect(flowHashOf(join(real, "a", "flow"))).toBe(before);
+      expect(before).toMatch(/^[0-9a-f]{16}$/);
+    } finally {
+      unlinkSync(alias);
+      rmSync(real, { recursive: true, force: true });
+    }
   });
 });

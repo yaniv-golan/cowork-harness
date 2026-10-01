@@ -10,8 +10,9 @@
 // One addition over the scaffold, named as a divergence: a per-variant lock. The scaffold lets two runners append to one variant;
 // with VM-length jobs a loop that re-launches while the old process lives would duplicate (case, rep) rows.
 
-import { unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, realpathSync, unlinkSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { UsageError } from "../errors.js";
 import { scrub } from "../secrets.js";
 import { redactHostPaths } from "../eval/report.js";
@@ -193,4 +194,20 @@ export function slotsIn(text: string | null): Set<string> {
     }
   }
   return out;
+}
+
+/** A flow's identity: sha256 over its real path, 16 hex. The same before the flow dir exists (the nearest
+ *  existing ancestor is resolved and the rest appended) as after, so a variant snapshot taken before the first
+ *  run and the rows written by it name the same flow. */
+export function flowHashOf(flowAbs: string): string {
+  let head = resolve(flowAbs);
+  const tail: string[] = [];
+  while (!existsSync(head)) {
+    const up = dirname(head);
+    if (up === head) break;
+    tail.unshift(basename(head));
+    head = up;
+  }
+  const real = join(existsSync(head) ? realpathSync.native(head) : head, ...tail);
+  return createHash("sha256").update(real).digest("hex").slice(0, 16);
 }

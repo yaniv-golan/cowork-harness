@@ -11,13 +11,12 @@
 
 import { basename, dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
 import { UsageError } from "../errors.js";
 import { pMapBounded } from "../async-pool.js";
 import type { RunResult } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./cases.js";
-import { FlowWriter, redactDeep, slotsIn } from "./flow.js";
+import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { gateDecision, harnessDigest } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
@@ -234,7 +233,7 @@ async function run(
     };
     const tick = setInterval(progress, deps.tickMs ?? 30_000);
     const runLabel = `hillclimb:${basename(flowArg)}:${v}`;
-    const flowHash = createHash("sha256").update(realpathSync.native(flowAbs)).digest("hex").slice(0, 16);
+    const flowHash = flowHashOf(flowAbs);
     const models = new Set<string>();
     markStarted();
     // A failure to WRITE (a row, an error row) stops the pass: the scaffold's process exits there (l.597-599). Here the
