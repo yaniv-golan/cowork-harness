@@ -34,6 +34,8 @@ export interface GradeKeyDecl {
   label: string;
   better?: "higher" | "lower";
   scale?: number;
+  /** A float's floor, when the scenario declares one: `check` reads it as the good end of a lower-is-better metric. */
+  min?: number;
 }
 
 const LABEL_MAX = 14;
@@ -75,6 +77,7 @@ const floatDecl = (m: MetricDecl): GradeKeyDecl => ({
   label: label(m.id),
   better: m.better,
   ...(m.scale !== undefined ? { scale: m.scale } : {}),
+  ...(m.min !== undefined ? { min: m.min } : {}),
 });
 const presentDecl = (id: string): GradeKeyDecl => ({ id: `${id}_present`, kind: "binary", label: label(`${id} measured`) });
 

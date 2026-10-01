@@ -50,6 +50,51 @@ describe("stateTemplateFor", () => {
     expect([...t.state.harness_paths].sort()).toEqual(["evals/_session.yaml", "evals/a.yaml"]);
     expect(t.state.metrics[0].id).toBe("pass");
   });
+
+  describe("scenario metrics", () => {
+    const head = "baseline: latest\nsession: ./_session.yaml\nfidelity: container\nprompt: p\n";
+    const words = (better = "lower") =>
+      `metrics:\n  - id: words\n    artifact: outputs/stats.json\n    path: totals.words\n    better: ${better}\n    unbounded: true\n    min: 5\n`;
+    const ratio = "metrics:\n  - id: ratio\n    artifact: outputs/stats.json\n    path: ratio\n    better: higher\n    scale: 1\n";
+    beforeEach(() => {
+      mkdirSync(join(cwd, "evals"));
+      writeFileSync(join(cwd, "evals", "_session.yaml"), `model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ${SKILL}\n`);
+      writeFileSync(join(cwd, "evals", "a.yaml"), `name: a\n${head}${words()}`);
+      writeFileSync(join(cwd, "evals", "b.yaml"), `name: b\n${head}${ratio}`);
+      writeFileSync(join(cwd, "evals", "c.yaml"), `name: c\n${head}`);
+    });
+
+    it("declares the union over the cases: companions after pass, floats last, each with better (scale and min only when declared)", () => {
+      const t = stateTemplateFor("evals", cwd, {});
+      expect(t.state.metrics.map((m) => m.id)).toEqual(["pass", "pass_present", "words_present", "ratio_present", "words", "ratio"]);
+      expect(t.state.metrics.find((m) => m.id === "words")).toEqual({
+        id: "words",
+        kind: "float",
+        label: "words",
+        better: "lower",
+        min: 5,
+      });
+      expect(t.state.metrics.find((m) => m.id === "ratio")).toEqual({
+        id: "ratio",
+        kind: "float",
+        label: "ratio",
+        better: "higher",
+        scale: 1,
+      });
+      expect(t.state.metrics.find((m) => m.id === "words_present")).toMatchObject({ kind: "binary" });
+    });
+
+    it("metrics.md defines each metric: the file and path it is read from, its direction and its range", () => {
+      const md = stateTemplateFor("evals", cwd, {}).metricsMd;
+      expect(md).toMatch(/`words`.*`totals\.words` in `outputs\/stats\.json`.*lower is better.*no upper bound.*floor 5/);
+      expect(md).toMatch(/`ratio`.*`ratio` in `outputs\/stats\.json`.*higher is better.*bounded above by 1/);
+    });
+
+    it("one id declared two ways is a usage error", () => {
+      writeFileSync(join(cwd, "evals", "c.yaml"), `name: c\n${head}${words("higher")}`);
+      expect(() => stateTemplateFor("evals", cwd, {})).toThrow(/metric "words" is declared differently/);
+    });
+  });
 });
 
 describe("writeMetricsMd (state-template --flow)", () => {

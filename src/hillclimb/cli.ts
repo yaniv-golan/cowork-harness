@@ -51,7 +51,7 @@ export function stateTemplateFor(target: string, cwd: string, env: NodeJS.Proces
   const { cases } = loadCases(resolve(cwd, target));
   const prep = prepareCases(cases, { env });
   return stateTemplate({
-    cases: cases.map((c) => ({ assertions: c.scenario.assert ?? [] })),
+    cases: cases.map((c) => ({ assertions: c.scenario.assert ?? [], metrics: c.scenario.metrics })),
     harnessPaths: prep.derivedPaths(cases).map((p) => relative(cwd, p)),
     decider: false,
   });
