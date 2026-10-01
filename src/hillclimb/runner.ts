@@ -286,7 +286,7 @@ async function run(
           ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
           ...(sigOf(c) !== undefined ? { contentSig: sigOf(c)! } : {}),
           ...(args.ablate ? { ablated: true } : {}),
-          ...(args.deciderLlm ? { nonDeterministic: true } : {}),
+          ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
         },
       };
       let out: ReturnType<typeof attemptRow>;

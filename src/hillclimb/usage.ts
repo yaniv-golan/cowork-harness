@@ -2,7 +2,7 @@
 // usage-guard registry in src/run/cassette.ts imports these, so this module must not import anything that
 // imports cassette.ts.
 
-export const HILLCLIMB_RUN_BOOLEAN_FLAGS = ["--approve-harness", "--ablate", "--dry-run", "--no-copy-inputs", "--decider-llm"] as const;
+export const HILLCLIMB_RUN_BOOLEAN_FLAGS = ["--approve-harness", "--ablate", "--dry-run", "--no-copy-inputs"] as const;
 export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--flow",
   "--variant",
@@ -36,6 +36,6 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --dry-run               print the resolved scope, gate status and estimate; spend nothing
   --judge-model ID        concrete judge model for every semantic assertion
   --no-copy-inputs        do not copy session uploads into <flow>/inputs/
-  --decider-cmd CMD | --decider-dir DIR | --decider-llm   answer unscripted questions
+  --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)
   --output-format text|json   json: one envelope on stdout at exit
   --dotenv FILE  --run-dir DIR   as on every command`;
