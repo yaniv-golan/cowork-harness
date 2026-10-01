@@ -2097,7 +2097,8 @@ async function cmdEval(rawArgs: string[]) {
   };
   const failFor = (e: unknown): never => {
     if (plan && dryRun && !json) printPlan(plan);
-    const payload = plan ? { payload: { ...(dryRun ? { dryRun: true } : {}), plan } } : {};
+    // A dry run's refusal always says it was a dry run; the plan rides along only when it was computed.
+    const payload = plan || dryRun ? { payload: { ...(dryRun ? { dryRun: true } : {}), ...(plan ? { plan } : {}) } } : {};
     if (e instanceof EvalBudgetRefusal)
       return fail("eval", "runtime", e.message, e.hint, json, undefined, undefined, {
         error: { code: "budget_exceeded", budget: e.status },

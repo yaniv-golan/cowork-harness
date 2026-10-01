@@ -353,6 +353,95 @@ describe.runIf(can)("eval --dry-run through the real CLI (stub agent never start
     }
   }, 180_000);
 
+  it("every dry-run refusal says dryRun: true, with or without a plan (identical arms: before any plan)", async () => {
+    const f = fixture();
+    try {
+      const cli = spawnCli(f, [
+        "eval",
+        "q.yaml",
+        "--arm",
+        "a=./a/demo",
+        "--arm",
+        "b=./a/demo",
+        "--out",
+        join(f.root, "eval"),
+        "--dry-run",
+        "--output-format",
+        "json",
+      ]);
+      const r = await exited(cli, 120_000);
+      expect(r.code, cli.stderrText()).toBe(2);
+      const env = JSON.parse(cli.stdoutText());
+      expect(env).toMatchObject({ ok: false, dryRun: true, error: { category: "usage" } });
+      expect(env.error.message).toMatch(/the two arms are identical/);
+      expect(env.plan).toBeUndefined();
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("a refusal after the plan carries plan + dryRun in JSON, and in text prints the plan before the refusal", async () => {
+    const f = fixture();
+    try {
+      // q has 2 rows in the family; at --reps 4 holm cannot confirm (floor 0.0286 > 0.05/2).
+      const unreachable = ["--dry-run", "--correction", "holm", "--fail-on", "confirmed"];
+      const j = await dryRun(f, [...unreachable, "--output-format", "json"]);
+      expect(j.code, j.stderr).toBe(2);
+      const env = JSON.parse(j.stdout);
+      expect(env).toMatchObject({ ok: false, dryRun: true, error: { category: "usage" } });
+      expect(env.error.message).toMatch(/can never fire/);
+      expect(env.plan.cost).toHaveProperty("jobs", 8);
+      const t = await dryRun(f, unreachable);
+      expect(t.code).toBe(2);
+      const planAt = t.stderr.indexOf("[eval] DRY RUN");
+      expect(planAt).toBeGreaterThanOrEqual(0);
+      expect(t.stderr.indexOf("can never fire")).toBeGreaterThan(planAt);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("an argument error carries no plan", async () => {
+    const f = fixture();
+    try {
+      const r = await dryRun(f, ["--dry-run", "--reps", "1", "--output-format", "json"]);
+      expect(r.code).toBe(2);
+      const env = JSON.parse(r.stdout);
+      expect(env.error.category).toBe("usage");
+      expect(env.plan).toBeUndefined();
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
+  it("without --out, the default eval dir is never created", async () => {
+    const f = fixture();
+    try {
+      const cli = spawnCli(f, [
+        "eval",
+        "q.yaml",
+        "--arm",
+        "a=./a/demo",
+        "--arm",
+        "b=./b/demo",
+        "--reps",
+        "4",
+        "--dry-run",
+        "--output-format",
+        "json",
+      ]);
+      const r = await exited(cli, 120_000);
+      expect(r.code, cli.stderrText()).toBe(0);
+      expect(existsSync(join(f.env.HOME!, ".cowork-harness", "evals"))).toBe(false);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
   it("--target-effect without --dry-run is a usage error (exit 2)", async () => {
     const f = fixture();
     try {
