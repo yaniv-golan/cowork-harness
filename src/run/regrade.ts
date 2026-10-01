@@ -74,6 +74,11 @@ export interface RegradedAssertion {
   judgedDoc?: JudgedDocFingerprint;
   judgeInvalid?: boolean;
   semanticEvidence?: RunResult["assertions"][number]["semanticEvidence"];
+  /** A `semantic_pairwise` assert's per-reference outcomes (a fill's kept ones marked `copied`), its composed
+   *  document and its judge's call count — as on the RunResult assertion entry. */
+  pairwise?: RunResult["assertions"][number]["pairwise"];
+  composedDoc?: JudgedDocFingerprint;
+  judgeAttempts?: number;
   /** For an entry this re-grade kept from the live run (a fill: its `semantic_matches` grades) — `not_graded`, and
    *  `copied: true`. Left out of the run's `docMatchesLive`, spend and counts. */
   docMatchesLive: DocMatch;
