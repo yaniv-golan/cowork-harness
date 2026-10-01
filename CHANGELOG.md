@@ -158,8 +158,9 @@ All notable changes to this project are documented here. The format is based on
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
   run` writes rows with, without running the agent: by default every judged assert is graded again (a judge or rubric
   change) and `pass` is recomputed; `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot
-  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, takes every
-  selected variant's lock, and preflights every batch's evidence before any judge call (a refusal writes nothing).
+  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, refuses up
+  front (exit 2) when the host `claude` cannot run the judge isolated, takes every selected variant's lock, and
+  preflights every batch's evidence before any judge call (a refusal writes nothing).
   `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
   `<variant>/regrade.md`, and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1). `regrade`
   now re-grades `semantic_pairwise` asserts in the live run's comparison order, checks their references before any
@@ -317,7 +318,7 @@ All notable changes to this project are documented here. The format is based on
   consumer no longer has to match message prose to tell "refused on cost" from "did not load";
   `error.code` is absent on every other error.
 - **`regrade` names a scenario with nothing to re-grade.** Its refusal of a scenario with no `semantic_matches`
-  assert now carries `error.code: "no_semantic_asserts"` in the JSON error envelope (category `usage`, exit 2 as
+  or `semantic_pairwise` assert now carries `error.code: "no_semantic_asserts"` in the JSON error envelope (category `usage`, exit 2 as
   before), so a caller can tell "nothing to re-grade" from a failure without reading the message.
 - **`regrade` re-reads declared metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade
   file carry `metrics` (the `RunResult.metrics` shape), re-read from the kept work dir. A file is read only while

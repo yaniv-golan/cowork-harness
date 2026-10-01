@@ -163,8 +163,8 @@ export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEn
  *  code is shared with other refusals, so without it the only discriminator was the message prose. `doc_drift` and
  *  `unchecked_content` are `regrade`'s two evidence refusals (the kept evidence differs from what the live judge
  *  read; content the live judge never read would be graded), listed per run dir in the payload's `refusals[]`.
- *  `no_semantic_asserts` is `regrade`'s refusal of a scenario with no `semantic_matches` assert (nothing to
- *  re-grade): a `usage` error a caller may treat as "nothing to do" rather than as a failure. */
+ *  `no_semantic_asserts` is `regrade`'s refusal of a scenario with neither a `semantic_matches` nor a `semantic_pairwise`
+ *  assert (nothing to re-grade): a `usage` error a caller may treat as "nothing to do" rather than as a failure. */
 export type ErrCode = "budget_exceeded" | "doc_drift" | "unchecked_content" | "no_semantic_asserts";
 
 /** Additive extras for the error envelope. `error` fields merge into the `error` object beside the

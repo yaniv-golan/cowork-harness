@@ -34,7 +34,7 @@ agent stderr) — read those before re-running; a re-record rarely tells you mor
 already does.
 <!-- END triage-canonical -->
 
-**`verify-run` never calls the semantic judge**, so it cannot re-grade a `semantic_matches` assert. When the
+**`verify-run` never calls the semantic judge**, so it cannot re-grade a `semantic_matches` or `semantic_pairwise` assert. When the
 rubric changed (or you want another judge model) on a run you already paid for, use
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` instead: it re-grades those asserts against the
 kept run without re-running the agent — unlike the tools above it is not token-free (the judge call is its
