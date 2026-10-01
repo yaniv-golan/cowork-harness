@@ -12,6 +12,7 @@ import {
   rmSync,
   writeFileSync,
   cpSync,
+  appendFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -337,6 +338,41 @@ describe.runIf(POSIX)("hillclimb regrade's judge isolation preflight", () => {
     expect(regradeCalls).toBe(0);
     expect(tree(flow)).toEqual(before);
   }, 180_000);
+
+  // Which modes ask at all: a fill never calls the semantic_matches judge, so only a pairwise assert needs the check there.
+  it.each([
+    ["no judged assert, full", { noPairwise: true }, false, false],
+    ["no judged assert, fill", { noPairwise: true }, true, false],
+    ["semantic_pairwise, fill", {}, true, true],
+    ["semantic_matches only, fill", { noPairwise: true, matches: true }, true, false],
+    ["semantic_matches only, full", { noPairwise: true, matches: true }, false, true],
+  ] as const)(
+    "%s: the isolation check is asked only when a judge would run",
+    async (_n, flowOpts, fillRefs, asked) => {
+      const { evals } = buildFlow(flowOpts);
+      // The fixture's stub judge answers only pairwise, so a semantic_matches assert joins the scenario after the runs;
+      // the check reads the scenario as it is now.
+      if ("matches" in flowOpts)
+        appendFileSync(
+          join(evals, "alpha.yaml"),
+          "  - semantic_matches:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n",
+        );
+      let calls = 0;
+      const out = await regradeFlow(
+        ARGS({ approveHarness: true, fillRefs }),
+        DEPS({
+          isolationCheck: () => {
+            calls++;
+            return "the host claude cannot run isolated (SYNTHETIC refusal)";
+          },
+        }),
+      );
+      expect(calls, JSON.stringify(out)).toBe(asked ? 1 : 0);
+      if (asked) expect(out.exitCode).toBe(2);
+      else expect(out.error?.message ?? "").not.toMatch(/refusing to regrade/);
+    },
+    180_000,
+  );
 
   it("the CLI refuses with the usage envelope when the host claude is too old (no judge call, nothing written)", () => {
     const { cli, flow } = buildFlow();
