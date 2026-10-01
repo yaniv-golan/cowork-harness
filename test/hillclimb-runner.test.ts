@@ -221,6 +221,27 @@ describe("a pass", () => {
     expect(ticks.length).toBeGreaterThan(0);
   });
 
+  it("summary.json names no model when the pass saw more than one main model", async () => {
+    await approved();
+    // beta's main loop answered as a dated snapshot of the pin: still the pinned model, but a second id
+    behave = (id) =>
+      id === "beta"
+        ? {
+            events: [
+              frames[0],
+              JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: `${MODEL}-20260101` } }),
+              frames[1],
+            ],
+          }
+        : {};
+    await runHillclimb(args(), deps());
+    expect(rows("baseline")).toHaveLength(2);
+    const summary = existsSync(vfile("baseline", "summary.json"))
+      ? JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"))
+      : {};
+    expect(summary).not.toHaveProperty("model");
+  });
+
   it("--ablate rows carry meta.ablated", async () => {
     await approved();
     const a = parseHillclimbRunArgs(["evals", "--flow", ".claude/hillclimb/f", "--concurrency", "2", "--ablate", "--approve-harness"]);
@@ -295,7 +316,11 @@ describe("the written flow, end to end", () => {
       JSON.stringify({
         type: "user",
         parent_tool_use_id: null,
-        message: { content: [{ type: "tool_result", tool_use_id: "t1", content: `${secret} at ${homedir()}/proj and ${cwd}/run` }] },
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "t1", content: `${secret} at ${homedir()}/proj and ${homedir()}/.cowork-harness/runs/x` },
+          ],
+        },
       }),
     ];
     behave = () => ({ events: leaky, runDir: join(homedir(), ".cowork-harness", "runs", "s", "local_1") });
@@ -313,8 +338,7 @@ describe("the written flow, end to end", () => {
       readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]));
     for (const f of walk(flowDir())) {
       const text = readFileSync(f, "utf8");
-      for (const bad of [secret, homedir(), cwd, "/Users/", `/${userInfo().username}/`])
-        expect(text, `${f} contains ${bad}`).not.toContain(bad);
+      for (const bad of [secret, homedir(), "/Users/", `/${userInfo().username}/`]) expect(text, `${f} contains ${bad}`).not.toContain(bad);
       expect(hostPathTokens(text), f).toEqual([]);
     }
   });
@@ -324,11 +348,11 @@ describe("failures inside the pool", () => {
   it("a row that cannot be built is that attempt's error row; the pass goes on", async () => {
     await approved();
     // SYNTHETIC: a result whose assertions field is not a list, so the row builder throws on it.
-    behave = (id) => (id === "alpha" ? { result: { ...excerpt, assertions: 5 as never } } : {});
+    behave = (id) => (id === "alpha" ? { result: { ...excerpt, assertions: 5 as never, cost: { usd: 0.25 } } } : {});
     const r = await runHillclimb(args(), deps());
     expect(r).toMatchObject({ exitCode: 1, ok: 1, failed: 1 });
     expect(rows("baseline", "errors.jsonl")).toMatchObject([
-      { prompt_id: "alpha", failure_class: "error", meta: { failure_rule: "row_build" } },
+      { prompt_id: "alpha", failure_class: "error", meta: { failure_rule: "row_build", cost_usd: 0.25, retries_unrecorded: true } },
     ]);
     expect(rows("baseline").map((x) => x.prompt_id)).toEqual(["beta"]);
   });

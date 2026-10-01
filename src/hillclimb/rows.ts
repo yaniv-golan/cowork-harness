@@ -94,6 +94,12 @@ const snake = (e: Record<string, unknown> | undefined): TokenUsage | undefined =
   return Object.keys(out).length ? (out as TokenUsage) : undefined;
 };
 
+/** A semantic_matches grade refused for unavailable evidence, on an assertion with no other key. A multi-key
+ *  assertion keeps ONE pass for all its keys, so its other key's outcome is unknowable — the same guard the
+ *  shared classifier applies (eval/classify.ts repRowValues). */
+const singleKeyRefusal = (g: { assertion: object }): boolean =>
+  Object.keys(g.assertion).length === 1 && semanticRefusalReason(g as never) !== undefined;
+
 /** Every modelUsage entry that IS the main model, summed: the agent keys usage by the PICKED id, so a `[1m]`
  *  context-window pick of the same model is `claude-x[1m]` there while its responses say `claude-x`. */
 function mainModelUsage(mu: Record<string, unknown> | undefined, model: string): TokenUsage | undefined {
@@ -215,13 +221,11 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     !agentFailed &&
     !passed &&
     r !== undefined &&
-    authored(r).some((g) => semanticRefusalReason(g as never) !== undefined) &&
+    authored(r).some(singleKeyRefusal) &&
     computeVerdict(
       {
         ...r,
-        assertions: r.assertions.map((g) =>
-          g.source === undefined && semanticRefusalReason(g as never) !== undefined ? { ...g, pass: true } : g,
-        ),
+        assertions: r.assertions.map((g) => (g.source === undefined && singleKeyRefusal(g) ? { ...g, pass: true } : g)),
       },
       "live",
     ).pass;

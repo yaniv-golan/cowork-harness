@@ -173,6 +173,23 @@ describe("scored rows", () => {
     expect(attemptRow({ result: r }, ctx(r)).row).not.toHaveProperty("skill_invoked");
   });
 
+  it("a run answered through the LLM decider is flagged non-deterministic", () => {
+    const r = fixture("success-semantic");
+    const row = attemptRow({ result: r }, ctx(r, { meta: { ...ctx(r).meta, nonDeterministic: true } })).row as Record<string, any>;
+    expect(row.meta.non_deterministic).toBe(true);
+    expect((attemptRow({ result: r }, ctx(r)).row as Record<string, any>).meta).not.toHaveProperty("non_deterministic");
+  });
+
+  it("an agent-caused failure carries no judge explanation, even when rationales were recorded", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    // ADDED: the run stalled (an agent failure) after its claims were graded with rationales
+    (r as unknown as Record<string, unknown>).stalledOnQuestion = true;
+    r.assertions[3].semanticClaims = r.assertions[3].semanticClaims!.map((c) => ({ ...c, rationale: "why" }));
+    const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
+    expect(row.meta.failure_class).toBe("errored_agent");
+    expect(row).not.toHaveProperty("explanation");
+  });
+
   it("no cost recorded ⇒ cost_usd absent, never 0 (unpriced is not free)", () => {
     const r = fixture("success-semantic");
     expect(attemptRow({ result: r }, ctx(r)).row).not.toHaveProperty("cost_usd");
@@ -255,6 +272,9 @@ describe("scored rows", () => {
     const assertions = r.assertions.map((a) => a.assertion) as Assertion[];
     const row = attemptRow({ result: r }, ctx(r, { assertions })).row as Record<string, any>;
     expect(row.grade.a3_present).toBe(0);
+    // Its other key's outcome is unknowable from the one grade, so a failure is NOT hidden as "unmeasured":
+    // only a single-key semantic refusal leaves pass unmeasured (the shared classifier's rule).
+    expect(row.grade).toMatchObject({ pass: 0, pass_present: 1 });
     for (let j = 0; j < 5; j++) expect(row.grade).not.toHaveProperty(`a3_c${j}`);
   });
 
@@ -405,6 +425,23 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     const row = attemptRow({ result: r }, ctx(r)).row as Record<string, any>;
     expect(row.meta).not.toHaveProperty("retries");
     expect(row.meta.retries_unrecorded).toBe(true);
+  });
+
+  it("an invalid-judge error row keeps the judge's spend (judge_model, judge_usage) for the later promotion", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    // ADDED: an invalid grade that was nevertheless billed
+    r.assertions[3] = {
+      ...r.assertions[3],
+      judgeInvalid: true,
+      judgeModel: "claude-haiku-4-5-20251001",
+      judgeUsage: { input_tokens: 700, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    };
+    const row = errRow(attemptRow({ result: r }, ctx(r)));
+    expect(row).toMatchObject({
+      failure_class: "judge_invalid",
+      judge_model: "claude-haiku-4-5-20251001",
+      judge_usage: { input_tokens: 700 },
+    });
   });
 
   it("judge_retries: unrecorded attempts say so rather than claim 0", () => {

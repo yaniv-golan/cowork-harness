@@ -13,7 +13,7 @@
 // here is scrubbed: the flow writer scrubs every byte it writes.
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { FsRefusal, NoFollowRoot } from "./fs.js";
 import { join } from "node:path";
 
@@ -47,7 +47,7 @@ export interface TraceInput {
   resultCapBytes?: number;
   /** Applied to every text BEFORE any cap slices it — a secret straddling the cut would otherwise leave a
    *  prefix no later scrub can match (src/io.ts makes the same rule for display slices). */
-  redact?: (text: string) => string;
+  redact: (text: string) => string;
 }
 
 export interface TraceOutput {
@@ -147,9 +147,16 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
     return ids;
   };
   const unnamed = input.children.filter((c) => c.toolUseId === undefined).map((c) => ({ c, ids: toolIds(c.lines), used: false }));
+  // Each transcript is inlined at most once: one that dispatches itself (agent-writable on container/microvm)
+  // would otherwise recurse without end.
+  const inlined = new Set<ChildTranscript>();
   const childFor = (dispatchId: string): ChildTranscript | undefined => {
     const named = byId.get(dispatchId);
-    if (named) return named;
+    if (named) {
+      if (inlined.has(named)) return undefined;
+      inlined.add(named);
+      return named;
+    }
     const mine = toolIds(parented.get(dispatchId) ?? []);
     const hit = unnamed.find((u) => !u.used && [...mine].some((id) => u.ids.has(id)));
     if (hit) hit.used = true;
@@ -180,7 +187,7 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
     return parts.join("\n");
   };
 
-  const clean = input.redact ?? ((t: string) => t);
+  const clean = input.redact;
   const capped = (raw: string): string => {
     const text = clean(raw);
     const bytes = Buffer.byteLength(text);

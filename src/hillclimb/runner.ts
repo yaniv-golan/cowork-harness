@@ -296,8 +296,12 @@ async function run(
             retries: 0,
             judge_retries: 0,
             latency_s: report.attemptS,
+            // The attempt's spend stays countable; counters it could not report are said, not zeroed.
             meta: {
               failure_rule: "row_build",
+              retries_unrecorded: true,
+              judge_retries_unrecorded: true,
+              ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
               ...(report.runDir !== undefined ? { run_dir: report.runDir, run_id: basename(report.runDir) } : {}),
             },
           },
@@ -342,11 +346,17 @@ async function run(
       }
     }
     progress();
-    writer.mergeSummary({
-      ...(models.size === 1 ? { model: [...models][0] } : {}),
-      ...(deps.expectedContentSig !== undefined ? { source_sig: deps.expectedContentSig } : {}),
-    });
-    if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
+    // After the pool the rows are on disk: a failure here is reported but never loses the pass's counts.
+    try {
+      writer.mergeSummary({
+        ...(models.size === 1 ? { model: [...models][0] } : {}),
+        ...(deps.expectedContentSig !== undefined ? { source_sig: deps.expectedContentSig } : {}),
+      });
+      if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
+    } catch (e) {
+      fail++;
+      say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);
+    }
     say(`[${v}] done - ${ok} ok, ${fail} failed -> ${join(flowArg, v, "results.jsonl")}`);
     return { exitCode: fail ? 1 : 0, scheduled: tasks.length, ok, failed: fail };
   } finally {

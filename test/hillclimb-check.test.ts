@@ -23,7 +23,7 @@ const setState = (s: FlowSnapshot, f: (st: Row) => void) => {
   s.state = JSON.stringify(st);
 };
 
-describe("headroom (E5a)", () => {
+describe("headroom", () => {
   it("on the fixture's baseline, the case failing on every rep is at the floor; none is at the ceiling", () => {
     // baseline pass by case: extract-table 1,0 · summarize-report 0,0 · long-answer 1,0
     const h = headroom(snap());

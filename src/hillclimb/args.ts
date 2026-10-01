@@ -12,7 +12,7 @@ import { envOutputFormat, parseOutputFormat } from "../run/envelope.js";
 import { VARIANT_DIR_RE } from "./schema-check.js";
 import { HILLCLIMB_RUN_BOOLEAN_FLAGS, HILLCLIMB_RUN_REPEATED_FLAGS, HILLCLIMB_RUN_VALUE_FLAGS } from "./usage.js";
 
-/** The scaffold's defaults (runner-scaffold.mjs l.181-183). `--reps 1` is a covered default from 4.3.0. */
+/** The scaffold's defaults (runner-scaffold.mjs l.181-183). `--reps 1` will be a covered default once the command is wired. */
 export const HILLCLIMB_RUN_DEFAULTS = {
   flow: ".claude/hillclimb/flow",
   variant: "baseline",

@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { FlowWriter, redactDeep } from "../src/hillclimb/flow.js";
+import { FlowWriter, redactDeep, slotsIn } from "../src/hillclimb/flow.js";
 import { FsRefusal } from "../src/hillclimb/fs.js";
 import { UsageError } from "../src/errors.js";
 
@@ -62,13 +62,13 @@ describe("FlowWriter — state, resume, rows", () => {
     w.appendResult({ prompt_id: "a", rep: 0 });
     w.appendResult({ prompt_id: "a", rep: 1 });
     writeFileSync(join(flow(), "baseline", "results.jsonl"), readFileSync(join(flow(), "baseline", "results.jsonl"), "utf8") + "{torn");
-    expect([...w.resumeSet()].sort()).toEqual(["a\u00000", "a\u00001"]);
+    expect([...slotsIn(w.readVariantFile("results.jsonl"))].sort()).toEqual(["a\u00000", "a\u00001"]);
   });
 
   it("errors never occupy a slot: an errors.jsonl line is not in the resume set (runner-scaffold.mjs l.549-551)", () => {
     const w = open();
     w.appendError({ prompt_id: "b", rep: 0, failure_class: "error" });
-    expect(w.resumeSet().size).toBe(0);
+    expect(slotsIn(w.readVariantFile("results.jsonl")).size).toBe(0);
     expect(lines(join(flow(), "baseline", "errors.jsonl"))).toEqual([{ prompt_id: "b", rep: 0, failure_class: "error" }]);
   });
 
@@ -78,6 +78,13 @@ describe("FlowWriter — state, resume, rows", () => {
     w.appendResult({ prompt_id: "b", rep: 0 });
     const text = readFileSync(join(flow(), "baseline", "results.jsonl"), "utf8").split("\n");
     expect(text[2]).toBe('{"prompt_id":"b","rep":0}');
+  });
+
+  it("errors.jsonl gets the same torn-line guard", () => {
+    const w = open();
+    writeFileSync(join(flow(), "baseline", "errors.jsonl"), '{"prompt_id":"a","rep":0,"failure_class":"err');
+    w.appendError({ prompt_id: "b", rep: 0 });
+    expect(readFileSync(join(flow(), "baseline", "errors.jsonl"), "utf8").split("\n")[1]).toBe('{"prompt_id":"b","rep":0}');
   });
 
   it("every written string is redacted: secrets first, then host paths", () => {

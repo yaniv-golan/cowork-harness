@@ -27,7 +27,15 @@ const parentedToolUses = events.filter((l) => {
 }).length;
 
 const trace = (over: Partial<Parameters<typeof turnsFromEvents>[0]> = {}) =>
-  turnsFromEvents({ events, prompt: "the prompt", system: "SYSTEM", children, sidecarPrefix: "baseline/out/c_rep0/blobs/", ...over });
+  turnsFromEvents({
+    events,
+    prompt: "the prompt",
+    system: "SYSTEM",
+    children,
+    sidecarPrefix: "baseline/out/c_rep0/blobs/",
+    redact: (t) => t,
+    ...over,
+  });
 
 describe("readChildTranscripts", () => {
   it("joins each transcript to its dispatch by the meta file's toolUseId", () => {
@@ -206,7 +214,7 @@ describe("a forked skill (context: fork) — its work is the skill's own and mus
   const fevents = readFileSync(join(FDIR, "events.jsonl"), "utf8").trim().split("\n");
   const fchildren = readChildTranscripts(join(FDIR, "subagents"));
   const run = (children: ChildTranscript[]) =>
-    turnsFromEvents({ events: fevents, prompt: "p", children, sidecarPrefix: "baseline/out/c_rep0/blobs/" });
+    turnsFromEvents({ events: fevents, prompt: "p", children, sidecarPrefix: "baseline/out/c_rep0/blobs/", redact: (t) => t });
 
   it("the fork's transcript has no toolUseId, yet is joined to its Skill call by the tool ids it shares", () => {
     expect(fchildren).toHaveLength(1);
@@ -265,4 +273,19 @@ describe("readChildTranscripts over an agent-writable dir", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 10_000);
+});
+
+describe("a transcript that dispatches itself (agent-writable on container/microvm)", () => {
+  it("is inlined once; the repeat is a note, never an endless recursion", () => {
+    // SYNTHETIC: an Agent dispatch whose transcript contains a tool_use reusing the dispatch's own id.
+    const call = (id: string) => ({
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id, name: "Agent", input: { subagent_type: "x" } }] },
+    });
+    const ev = [JSON.stringify({ ...call("loop1"), parent_tool_use_id: null })];
+    const child: ChildTranscript = { toolUseId: "loop1", agentType: "x", lines: [JSON.stringify(call("loop1"))] };
+    const { turns } = turnsFromEvents({ events: ev, prompt: "p", children: [child], sidecarPrefix: "b/", redact: (t) => t });
+    expect(turns.filter((t) => t.role === "tool_call")).toHaveLength(2);
+    expect(turns.some((t) => /transcript not captured|already inlined/.test(t.content))).toBe(true);
+  });
 });

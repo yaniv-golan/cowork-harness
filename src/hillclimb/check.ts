@@ -1,6 +1,6 @@
 // Loop-readiness reports for `hillclimb check`, beside the schema reading in schema-check.ts.
 //
-// headroom (E5a): a baseline case whose every rep sits at the GOOD end of the headline metric (the ceiling)
+// headroom: a baseline case whose every rep sits at the GOOD end of the headline metric (the ceiling)
 // cannot show a gain, and one at the BAD end on every rep (the floor) cannot show a loss — often a broken
 // case or grader. The guide asks for headroom before round 1 (eval-hillclimb.md l.35) and leaves the call to the loop, so
 // this only ever warns: it never changes an exit code.

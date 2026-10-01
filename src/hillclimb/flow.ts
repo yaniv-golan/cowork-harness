@@ -90,11 +90,6 @@ export class FlowWriter {
     return st as Record<string, unknown>;
   }
 
-  /** The (prompt_id, rep) pairs already scored (runner-scaffold.mjs l.401-407). Error rows never occupy a slot. */
-  resumeSet(): Set<string> {
-    return slotsIn(this.r.readIfPresent(this.vpath("results.jsonl")));
-  }
-
   /** A variant file's text, or null when absent (read-only, no-follow). */
   readVariantFile(name: string): string | null {
     return this.r.readIfPresent(this.vpath(name));
@@ -138,7 +133,7 @@ export class FlowWriter {
         return; // a loop-written file we cannot parse is left alone
       }
     const missing = Object.fromEntries(Object.entries(keys).filter(([k, v]) => !(k in cur) && v !== undefined));
-    if (Object.keys(missing).length === 0 && text !== null) return;
+    if (Object.keys(missing).length === 0) return; // nothing to add: never create an empty summary.json
     this.r.writeFile(p, JSON.stringify({ ...cur, ...redactDeep(missing, this.secrets) }, null, 2) + "\n");
   }
 
