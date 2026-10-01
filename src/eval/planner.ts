@@ -71,6 +71,7 @@ export interface PerRepCost {
   judgePricedRuns: number;
   /** Cost-basis runs with no judge cost (no judged assertion, or unpriced). */
   judgeUnpriced: number;
+  deciderMeanUsd?: number;
   deciderP50Usd?: number;
   deciderP95Usd?: number;
   /** The worst single priced run on the cost basis. */
@@ -103,6 +104,7 @@ export function perRepCost(h: CostHistory): PerRepCost {
     ...opt("judgeP95Usd", pct(judge, 0.95)),
     judgePricedRuns: judge.length,
     judgeUnpriced: h.samples.length - judge.length,
+    ...opt("deciderMeanUsd", mean(decider)),
     ...opt("deciderP50Usd", pct(decider, 0.5)),
     ...opt("deciderP95Usd", pct(decider, 0.95)),
     ...opt("worstObservedUsd", agent.length ? agent[agent.length - 1] : undefined),
@@ -133,6 +135,8 @@ export interface ScheduleCostItemEstimate {
   budgetGateWorstUsd?: number;
   judgeMeanUsd?: number;
   judgeP50Usd?: number;
+  deciderMeanUsd?: number;
+  deciderP50Usd?: number;
   perRep: PerRepCost;
 }
 
@@ -150,6 +154,9 @@ export interface ScheduleCost {
   budgetGateWorstUsd: number;
   judgeMeanUsd: number;
   judgeP50Usd: number;
+  /** The LLM decider's spend, totalled like the judge's (scenarios with no priced decider call add 0). */
+  deciderMeanUsd: number;
+  deciderP50Usd: number;
   unpriced: string[];
   lowerBound: boolean;
   /** Cost-basis priced runs behind the estimate, over the priced scenarios. */
@@ -169,6 +176,8 @@ export function estimateScheduleCost(items: readonly ScheduleCostItem[]): Schedu
     budgetGateWorstUsd: 0,
     judgeMeanUsd: 0,
     judgeP50Usd: 0,
+    deciderMeanUsd: 0,
+    deciderP50Usd: 0,
     unpriced: [],
     lowerBound: false,
     pricedRuns: 0,
@@ -190,10 +199,14 @@ export function estimateScheduleCost(items: readonly ScheduleCostItem[]): Schedu
     set("budgetGateWorstUsd", times(perRep.budgetGateWorstUsd));
     set("judgeMeanUsd", times(perRep.judgeMeanUsd));
     set("judgeP50Usd", times(perRep.judgeP50Usd));
+    set("deciderMeanUsd", times(perRep.deciderMeanUsd));
+    set("deciderP50Usd", times(perRep.deciderP50Usd));
     out.jobs += it.jobs;
     out.budgetGateWorstUsd += est.budgetGateWorstUsd ?? 0;
     out.judgeMeanUsd += est.judgeMeanUsd ?? 0;
     out.judgeP50Usd += est.judgeP50Usd ?? 0;
+    out.deciderMeanUsd += est.deciderMeanUsd ?? 0;
+    out.deciderP50Usd += est.deciderP50Usd ?? 0;
     if (priced) {
       out.meanUsd += est.meanUsd!;
       out.p50Usd += est.p50Usd!;
@@ -247,7 +260,7 @@ export function scheduleCostLine(c: ScheduleCost): string {
  *  each of them and is named in `unpriced`.
  *
  *  EXPERIMENTAL (may change): `budgetGateWorstUsd` (the `--max-budget-usd` gate's wider any-tier basis),
- *  `judgeMeanUsd`, `judgeP50Usd` and `items[]` (with its `perRep`). */
+ *  `judgeMeanUsd`, `judgeP50Usd`, `deciderMeanUsd`, `deciderP50Usd` and `items[]` (with its `perRep`). */
 export interface ScheduleCostJson {
   // ---- covered ----
   jobs: number;
@@ -263,6 +276,8 @@ export interface ScheduleCostJson {
   budgetGateWorstUsd: number;
   judgeMeanUsd: number;
   judgeP50Usd: number;
+  deciderMeanUsd: number;
+  deciderP50Usd: number;
   items: Array<Omit<ScheduleCostItemEstimate, "perRep"> & { perRep: PerRepCost }>;
 }
 
@@ -281,6 +296,8 @@ export function scheduleCostJson(c: ScheduleCost): ScheduleCostJson {
     budgetGateWorstUsd: c.budgetGateWorstUsd,
     judgeMeanUsd: c.judgeMeanUsd,
     judgeP50Usd: c.judgeP50Usd,
+    deciderMeanUsd: c.deciderMeanUsd,
+    deciderP50Usd: c.deciderP50Usd,
     items: c.items.map((i) => ({
       scenario: i.scenario,
       jobs: i.jobs,
@@ -292,6 +309,8 @@ export function scheduleCostJson(c: ScheduleCost): ScheduleCostJson {
       ...(i.budgetGateWorstUsd !== undefined ? { budgetGateWorstUsd: i.budgetGateWorstUsd } : {}),
       ...(i.judgeMeanUsd !== undefined ? { judgeMeanUsd: i.judgeMeanUsd } : {}),
       ...(i.judgeP50Usd !== undefined ? { judgeP50Usd: i.judgeP50Usd } : {}),
+      ...(i.deciderMeanUsd !== undefined ? { deciderMeanUsd: i.deciderMeanUsd } : {}),
+      ...(i.deciderP50Usd !== undefined ? { deciderP50Usd: i.deciderP50Usd } : {}),
       perRep: { ...i.perRep },
     })),
   };

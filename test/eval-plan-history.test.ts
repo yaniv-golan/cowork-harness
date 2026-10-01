@@ -467,6 +467,28 @@ describe("loadRowHistory — the judge model", () => {
     expect(h.rows.every((r) => r.history.k === 0 && r.history.n === 1)).toBe(true);
   });
 
+  it("judge pins are per assertion: each semantic assertion is checked against its OWN pin", () => {
+    const judged = [run(passing(judgedBy("claude-haiku-4-5"))), run(passing(judgedBy("claude-opus-5")))];
+    // The eval pins this assertion to haiku: the haiku-graded run counts, the opus-graded one does not.
+    const own = loadRowHistory(judged, opts({ judgeModelPins: new Map([[SEMANTIC_INDEX, "claude-haiku-4-5"]]) }));
+    expect(own.judgeModelDiffers).toBe(1);
+    expect(rowById(own, SEMANTIC_INDEX, "semantic_rollup")).toMatchObject({ k: 1, n: 1 });
+    // A pin for another assertion only says nothing about this one.
+    const other = loadRowHistory(judged, opts({ judgeModelPins: new Map([[SEMANTIC_INDEX + 1, "claude-haiku-4-5"]]) }));
+    expect(other.judgeModelDiffers).toBe(0);
+    expect(rowById(other, SEMANTIC_INDEX, "semantic_rollup")).toMatchObject({ k: 2, n: 2 });
+  });
+
+  it("judge models are compared the way the eval compares them: case and a [1m] suffix do not differ", () => {
+    const judged = [run(passing(judgedBy("claude-opus-5")))];
+    for (const pin of ["Claude-Opus-5", "claude-opus-5[1m]"]) {
+      const viaMap = loadRowHistory(judged, opts({ judgeModelPins: new Map([[SEMANTIC_INDEX, pin]]) }));
+      expect(viaMap.judgeModelDiffers, pin).toBe(0);
+      expect(rowById(viaMap, SEMANTIC_INDEX, "semantic_rollup"), pin).toMatchObject({ k: 1, n: 1 });
+      expect(loadRowHistory(judged, opts({ judgeModelPin: pin })).judgeModelDiffers, pin).toBe(0);
+    }
+  });
+
   it("no judge pin: the judge model is not checked", () => {
     const h = loadRowHistory([run(passing(judgedBy("claude-haiku-4-5")))], opts());
     expect(h.judgeModelDiffers).toBe(0);
