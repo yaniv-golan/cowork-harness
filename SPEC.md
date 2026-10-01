@@ -1143,24 +1143,24 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `authoredCapture.source`, a section's `kind`, `error.code`. **Adding a key or an enum value is MINOR** — a
   consumer must treat an unknown `docMatchesLive` as not `true` (one validating against an older schema copy
   rejects the new value); removing or renaming a key or a value, or changing a key's type or meaning, is MAJOR.
-- **The planned-schedule cost summary** — `schema/schedule-cost.json`: `plan.cost` under `eval --dry-run
-  --output-format json`, and the same object (one serializer, `scheduleCostJson`) on `hillclimb run --dry-run`.
-  Covered on both commands: `jobs` (agent runs scheduled), `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`,
-  `lowerBound`, `unpriced[]`, `pricedRuns` and `thinnest` (null when nothing is priced). **Their one basis:** each
-  scenario's prior runs in the runs dir's index on the schedule's effective tier (`cowork` resolved) and its
-  baseline, turn 1 only, `hillclimb:`-labelled runs excluded, agent cost only (no judge or decider spend).
-  `worstObservedUsd` is on that same basis — the sum over the priced scenarios of jobs × the most expensive run
-  on it — and is NOT the `--max-budget-usd` gate's figure, which reads a wider basis (any tier, baseline or turn;
-  the experimental `budgetGateWorstUsd`). Each dollar key sums the priced scenarios only; an unpriced one adds $0,
-  is named in `unpriced[]`, and sets `lowerBound`. Every other key of that object (`budgetGateWorstUsd`,
-  `judge*`, `decider*`, `items[]`) is experimental. Adding a key is MINOR; removing or renaming one, or changing
-  its basis or meaning, is MAJOR.
   The published schema stays permissive (no `additionalProperties: false`). Meaning that is covered too: a
   per-assert `docMatchesLive` describes that assert's own document, and the run-level value is `false` whenever a
   drift was detected and accepted (`liveDocDrift[]` non-empty) — it is the value to consume. Exit codes: `0`
   every re-graded assert passes (`ok: true` iff exit `0`) · `1` any fails or is judge-invalid · `2` a usage
   error, a refusal before any judge call (the evidence refusals carry `error.code`), or a failure writing a
   regrade file after earlier run dirs were graded (§11). The regrade output FILE is not part of this (below).
+- **The planned-schedule cost summary** — `plan.cost` in the `eval --dry-run` JSON envelope, validated by
+  `schema/schedule-cost.json` (one serializer, `scheduleCostJson`). Covered: `jobs` (agent runs scheduled),
+  `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced[]`, `pricedRuns` and `thinnest` (null
+  when nothing is priced). **Their one basis:** each scenario's prior runs in the runs dir's index on the
+  schedule's effective tier (`cowork` resolved) and its baseline, turn 1 only, `hillclimb:`-labelled runs
+  excluded, agent cost only (no judge or decider spend). `worstObservedUsd` is on that same basis — the sum over
+  the priced scenarios of jobs × the most expensive run on it — and is NOT the `--max-budget-usd` gate's figure,
+  which reads a wider basis (any tier, baseline or turn, hillclimb runs included; the experimental
+  `budgetGateWorstUsd`). Each dollar key sums the priced scenarios only; an unpriced one adds $0, is named in
+  `unpriced[]`, and sets `lowerBound`. Every other key of that object (`budgetGateWorstUsd`, `judge*`,
+  `decider*`, `items[]`) is experimental. Adding a key is MINOR; removing or renaming one, or changing its basis or
+  meaning, is MAJOR.
 - **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **14**
   (`schema/cassette.v14.json`) and its verdict-modifier assertion keys.
 

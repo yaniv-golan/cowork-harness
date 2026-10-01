@@ -4,7 +4,7 @@
 // never say different things.
 //
 // The payload is EXPERIMENTAL (`schemaVersion: 0`) except `cost`'s covered summary keys (see
-// `scheduleCostJson`): those are stable from this release on `eval --dry-run` and on `hillclimb run --dry-run`.
+// `scheduleCostJson`): those are stable from this release on `eval --dry-run`.
 import type { RowKey } from "./classify.js";
 import type { RowHistoryLoad } from "./plan-history.js";
 import { attainableFloor, minRowsToConfirm, type Correction, type Mdd } from "./stats.js";

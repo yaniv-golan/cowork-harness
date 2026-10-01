@@ -57,8 +57,8 @@ All notable changes to this project are documented here. The format is based on
     fixed design's reachability line.
   - `--output-format json` prints `{…, dryRun: true, plan}`. **`plan.cost`'s summary keys — `jobs`, `meanUsd`,
     `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced`, `pricedRuns`, `thinnest` — are a covered
-    surface** on `eval --dry-run` and `hillclimb run --dry-run` (`schema/schedule-cost.json`,
-    [SPEC.md](./SPEC.md) §12); the rest of `plan` is experimental.
+    surface**, validated by `schema/schedule-cost.json` ([SPEC.md](./SPEC.md) §12); the rest of `plan` is
+    experimental.
   - `--max-budget-usd <x>`, with or without `--dry-run`, refuses before any run (exit 2, `error.code:
     "budget_exceeded"`, `budget.basis: "batch"`) when each scenario's worst observed run × its 2 × `--reps` runs
     sums above x. It is a pre-flight only; judge spend is not counted, as on every other command.

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/schedule-cost.json",
   "title": "ScheduleCost",
-  "description": "The cost summary a planned schedule prints before any spend: `plan.cost` in `cowork-harness eval --dry-run --output-format json`, and the same object on `hillclimb run --dry-run` (SPEC §11, §12). A covered surface of the compatibility contract: the nine keys below — their names, types and meanings — are stable on both commands. Every dollar figure is on ONE basis: each scenario's prior runs in the runs dir's index on the schedule's effective tier and baseline, turn 1 only, `hillclimb:`-labelled runs excluded, agent cost (`costUsd`) only — judge and LLM-decider spend are not in it. Each figure sums over the PRICED scenarios; a scenario with no priced run on that basis adds $0 to every figure and is named in `unpriced`, and `lowerBound` is then true. None of the figures is a bound. This schema is deliberately permissive (no `additionalProperties: false`): the object carries EXPERIMENTAL keys beside these (`budgetGateWorstUsd`, `judgeMeanUsd`, `judgeP50Usd`, `deciderMeanUsd`, `deciderP50Usd`, `items[]`) that may change in any minor release.",
+  "description": "The cost summary a planned schedule prints before any spend: `plan.cost` in the `cowork-harness eval --dry-run --output-format json` envelope (SPEC §11, §12). A covered surface of the compatibility contract: the nine keys below — their names, types and meanings — are stable. Every dollar figure is on ONE basis: each scenario's prior runs in the runs dir's index on the schedule's effective tier and baseline, turn 1 only, `hillclimb:`-labelled runs excluded, agent cost (`costUsd`) only — judge and LLM-decider spend are not in it. Each figure sums over the PRICED scenarios; a scenario with no priced run on that basis adds $0 to every figure and is named in `unpriced`, and `lowerBound` is then true. None of the figures is a bound. This schema is deliberately permissive (no `additionalProperties: false`): the object carries EXPERIMENTAL keys beside these (`budgetGateWorstUsd`, `judgeMeanUsd`, `judgeP50Usd`, `deciderMeanUsd`, `deciderP50Usd`, `items[]`) that may change in any minor release.",
   "type": "object",
   "required": ["jobs", "meanUsd", "p50Usd", "p95Usd", "worstObservedUsd", "lowerBound", "unpriced", "pricedRuns", "thinnest"],
   "properties": {
@@ -25,7 +25,7 @@
     },
     "worstObservedUsd": {
       "type": "number",
-      "description": "Sum over the priced scenarios of jobs x the single most expensive run on the basis above — every run at the worst seen. Not a bound, and NOT the `--max-budget-usd` gate's figure, which reads a wider basis (any tier, baseline or turn)."
+      "description": "Sum over the priced scenarios of jobs x the single most expensive run on the basis above — every run at the worst seen. Not a bound, and NOT the `--max-budget-usd` gate's figure, which reads a wider basis (any tier, baseline or turn, hillclimb runs included)."
     },
     "lowerBound": {
       "type": "boolean",

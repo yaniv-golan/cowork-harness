@@ -249,10 +249,10 @@ export function scheduleCostLine(c: ScheduleCost): string {
   );
 }
 
-/** The cost object both `eval --dry-run` and `hillclimb run --dry-run` emit — one function, so the two
- *  commands cannot disagree about what a key means.
+/** The cost object a planned schedule emits (`eval --dry-run`'s `plan.cost`) — one function, so every
+ *  caller means the same thing by each key.
  *
- *  COVERED (stable from this release on both commands): `jobs` (agent runs scheduled), `meanUsd`, `p50Usd`,
+ *  COVERED (stable from this release on `eval --dry-run`): `jobs` (agent runs scheduled), `meanUsd`, `p50Usd`,
  *  `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced`, `pricedRuns`, `thinnest`. Every covered key is
  *  always present (`thinnest` is null when nothing was priced), and every one describes ONE basis: the
  *  scenario's runs on the eval's effective tier and baseline, turn 1, hillclimb runs excluded by default
