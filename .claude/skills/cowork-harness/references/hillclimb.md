@@ -54,7 +54,7 @@ with no `prompt:` (a session file) is skipped.
 `--flow DIR`, `--variant ID` (`baseline` or `v<N>`, N ≥ 1, no leading zero; default `baseline`), `--reps N`
 (default 1), `--concurrency N` (default 4; a decider needs `--concurrency 1`), `--timeout-s N` (default 1800; 0 = none; it bounds
 the whole attempt, the judge included), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
-`--case ID`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--decider-cmd CMD` or
+`--case ID`, `--skill NAME`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--decider-cmd CMD` or
 `--decider-dir DIR`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
 - **Resume is by slot.** A re-run of the same variant runs only the (case, rep) slots with no row in
@@ -78,6 +78,10 @@ the whole attempt, the judge included), `--model ID` and `--judge-model ID` (con
   `plan.cost.unpriced`. A dry run writes nothing, unless `--approve-harness` is also given: then it records
   the harness sha.
 - One runner per variant: a `.lock` in the variant dir refuses a second live runner.
+- **`--skill NAME` picks the skill `skill_invoked` tracks** when the plugin registers more than one; a plugin
+  with one skill (one `skills/<name>/`, or a root `SKILL.md`) is tracked without it. Every pass prints which
+  skill it tracks, or why none. The selection is part of the harness sha, so the loop's command must pass the
+  same `--skill` on every pass; changing, adding or dropping it refuses until re-approved.
 
 ## The harness gate — `--approve-harness` is yours, never the loop's
 
@@ -216,6 +220,8 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
   per-assert `a<i>_win*` drill-down keys, and `meta.pairwise_ref_sha256`. A case with no pairwise assert carries
   the `_present` keys as 0; an agent failure scores 0, measured. `check` errors when a reference document changed
   under the flow.
+- **`skill_invoked` is 1 or 0** for whether the run invoked the tracked skill (`meta.skill_tracked` names it);
+  a row without it means no skill was tracked, not "not invoked".
 - **An agent's own failure is a scored row**: every graded key `0`, `meta.failure_class: "errored_agent"` and
   its `meta.termination_rule`. A row with `status: "truncated"` hit the output-token limit; the headroom check
   skips it.
