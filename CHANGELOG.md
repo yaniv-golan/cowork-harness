@@ -349,8 +349,10 @@ All notable changes to this project are documented here. The format is based on
   `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
   constant across both arms and only enlarged the correction family, which weakened the correction for the
   real rows. An existing eval dir re-rendered with `eval report` loses those rows and can get a smaller `m`, so a
-  row's corrected label can move. An assertion that combines a modifier with another key is still a row. A
-  scenario whose every assertion is a modifier is now refused, as one with no `assert:` entry is.
+  row's corrected label can move. An assertion that combines a modifier with another key is still a row. An eval
+  whose scenarios leave no row at all is refused, as one with no `assert:` entry is; a scenario of modifiers only,
+  alongside others that have rows, contributes runs but no row. `hillclimb` rows follow the same rule: such an
+  assertion gets no `a<i>` grade key, and a later assertion keeps its index.
 - **`lint-skill` lints a file once when two arguments reach it** (a relative and an absolute path to the same
   skill, or a symlinked alias). It used to report each finding once per argument.
 - **`scaffold` no longer asserts on a file that existed before the run unchanged** (marked
