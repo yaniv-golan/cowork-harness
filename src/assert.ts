@@ -1879,8 +1879,15 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
     // and the connected folders) plus uploads/ — exactly what `capturePreRunManifest` walks. Anything else under
     // the work root (a staged plugin or skill tree, say) is absent because it was never walked, not because the
     // run created it.
+    // Decided on the canonical on-disk name, folded like every lookup above, so a case or NFC/NFD spelling of a
+    // walked root is that root.
     const walked = [...ctx.userVisiblePrefixes, "uploads"];
-    if (!walked.some((r) => lexical === r || lexical.startsWith(r + "/")))
+    const segs = rel.split("/");
+    const under = (root: string) => {
+      const r = root.split("/");
+      return segs.length > r.length && r.every((part, i) => part === segs[i] || fold(part, segs[i]));
+    };
+    if (!walked.some(under))
       return undecidable(
         `it is outside the folders the pre-run manifest covers (${walked.join(", ")}), so whether this run wrote it cannot be decided`,
       );
