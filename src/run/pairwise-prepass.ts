@@ -150,6 +150,11 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         continue;
       }
       if (opts.deadline !== undefined && Date.now() >= opts.deadline) {
+        // A metric-only comparison cannot change the verdict: losing it costs that column, not the attempt.
+        if (!gate) {
+          outcomes.push({ ref: ref.name, ...tag, status: "invalid", why: "the deadline passed before this comparison" });
+          continue;
+        }
         ctx.deadlinePassed = true;
         break;
       }

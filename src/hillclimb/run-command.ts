@@ -16,7 +16,8 @@ import { effectiveTier, runOutDir, scenarioInputFindings, sessionOriginSources }
 import { pairwiseRefsRefusal } from "../refs/preflight.js";
 import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { freezeCaseRef } from "./freeze-ref.js";
-import { readRefEntry } from "../refs/store.js";
+import { readRefDoc, readRefEntry } from "../refs/store.js";
+import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { createHash } from "node:crypto";
 
 const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
@@ -263,14 +264,24 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
         sessionOriginSources(sub, "(inline)"),
       );
       if (pw) {
-        // The repair depends on WHY: an absent entry (or one lacking a key) can be frozen; a damaged one, or one frozen
-        // for another prompt, never is — the flow restarts.
-        const e = readRefEntry(join(resolve(deps.cwd, flowArg), BASELINE_REF, "ref"), c.id);
-        const freezable = e.status === "missing" || (e.status === "ok" && e.taskSha256 === sha256(c.scenario.prompt));
-        const hint = freezable
-          ? `the baseline reference is frozen by a baseline pass from its lowest-rep good row, or now with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``
-          : `a frozen reference is never repaired in place: start a fresh flow dir`;
-        throw new UsageError(`case ${c.id}: ${pw}\n  ${hint}`);
+        // The repair depends on WHY: an absent entry, or a sound one for this prompt that lacks a compose key, can be
+        // frozen; a damaged entry or document, or one frozen for another prompt, never is — the flow restarts. Any
+        // other refusal (a store a mount exposes) names its own fix.
+        const store = join(resolve(deps.cwd, flowArg), BASELINE_REF, "ref");
+        const e = readRefEntry(store, c.id);
+        const keys = (c.scenario.assert ?? []).filter((a) => a.semantic_pairwise !== undefined).map(pairwiseComposeKey);
+        const docs = e.status === "ok" ? keys.map((k) => readRefDoc(store, c.id, k).status) : [];
+        const samePrompt = e.status === "ok" && e.taskSha256 === sha256(c.scenario.prompt);
+        // Only a refusal about the baseline reference itself gets a reference repair.
+        const aboutRef = pw.includes(`reference "${BASELINE_REF}"`);
+        const hint = !aboutRef
+          ? undefined
+          : e.status === "missing" || (samePrompt && docs.includes("missing") && !docs.includes("integrity"))
+            ? `the baseline reference is frozen by a baseline pass from its lowest-rep good row, or now with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``
+            : e.status === "integrity" || (e.status === "ok" && (!samePrompt || docs.includes("integrity")))
+              ? `a frozen reference is never repaired in place: start a fresh flow dir`
+              : undefined;
+        throw new UsageError(`case ${c.id}: ${pw}${hint ? `\n  ${hint}` : ""}`);
       }
     }
   }

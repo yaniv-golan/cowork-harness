@@ -391,3 +391,40 @@ describe.runIf(POSIX)("freeze selection reads the run itself", () => {
     });
   });
 });
+
+describe.runIf(POSIX)("a deadline passing during pairwise judging", () => {
+  it("ends the run as a timeout (an errors.jsonl row in a flow), never a scored 'judge not run'", async () => {
+    const file = scenario([...ONE, "  - semantic_pairwise:", "      rubric: ['second']", "      include_subagent_text: true"]);
+    const sc = parseScenarioFile(file);
+    const flow = join(dir, "flow");
+    mkdirSync(join(flow, "baseline"), { recursive: true });
+    const base = await executeScenario(sc, { pairwise: flowPairwiseOptions("alpha", "baseline", discoverFlowRefs(flow)) });
+    expect(
+      freezeCaseRef({
+        flowAbs: flow,
+        variant: "baseline",
+        caseId: "alpha",
+        scenarioFile: file,
+        assertions: sc.assert,
+        prompt: sc.prompt,
+        results: results(rowFor(base.outDir, 0)),
+        secrets: [],
+        command: "hillclimb run",
+      }).status,
+    ).toBe("frozen");
+    // The first comparison outlasts the deadline; the second assert's (gate) comparison must then not start.
+    let deadline = 0;
+    const slow: CompleteStructured = async (c) => {
+      await new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now()) + 50));
+      return { structured: { rationale: "r", verdict: "A" }, model: "claude-judge-x", subtype: "success", ...(c ? {} : {}) };
+    };
+    deadline = Date.now() + 4000;
+    const res = await executeScenario(sc, {
+      pairwise: flowPairwiseOptions("alpha", "v1", discoverFlowRefs(flow)),
+      pairwiseComplete: slow,
+      deadline,
+    });
+    expect(res.result).toBe("error");
+    expect(res.errorSource).toBe("timeout");
+  }, 60_000);
+});
