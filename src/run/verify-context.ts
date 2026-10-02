@@ -9,7 +9,9 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "../agent/session.js";
-import { budgetFields, judgedOpts, toolResultEvidence, type AssertContext } from "../assert.js";
+import { budgetFields, evaluate, expandExpectDenied, judgedOpts, toolResultEvidence, type AssertContext } from "../assert.js";
+import { recordedFixtureFileSigs, recordedFixtureRefusal } from "../fixture/workspace.js";
+import { remeasureMetrics } from "../metrics.js";
 import type { Assertion, RunResult, Scenario } from "../types.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./artifacts.js";
 import { readPreRunManifestOrigin } from "./pre-run-manifest.js";
@@ -485,4 +487,46 @@ export function assertContextFromRunDir(
   };
 
   return { ok: true, ctx, result, scenario, turn: vrTurn, sidecarTranscript, sidecarQuestions };
+}
+
+/** A kept run re-evaluated against a scenario: the rebuilt context, and what it yields. */
+export type ReevaluateRunResult =
+  | (Extract<AssertContextFromRunDirResult, { ok: true }> & {
+      /** `evaluate(scenario.assert)` — every assert, a judged one included (with no judge result in the context it
+       *  reads unevaluated; no judge is called) — then one `egress_denied` entry per `expect_denied` host, in that
+       *  order: the authored entries a live run persists. */
+      deterministic: RunResult["assertions"];
+      /** The scenario's declared metrics, re-measured from the kept work dir (absent when it declares none). */
+      metrics: RunResult["metrics"];
+    })
+  | Exclude<AssertContextFromRunDirResult, { ok: true }>;
+
+/**
+ * Re-evaluate a kept run against a scenario with no live agent and no judge: the evaluation half of `verify-run`,
+ * shared with every consumer that rebuilds a run's outcome from its kept run dir (`hillclimb regrade`).
+ *
+ * The context is `assertContextFromRunDir`'s; then the pre-spawn refusal a live run makes against the fixture files
+ * this run recorded (an on-disk presence/body assert on one of them with no `authored:` would pass on the fixture
+ * alone — refused `usage`); then `evaluate` and `expandExpectDenied` (the live run's own helper, which `evaluate`
+ * does not cover; passing `ctx.egressMissing` tells a missing `egress` field from a run that made no calls); then
+ * `remeasureMetrics` on the same context — each metric file read only while its bytes still equal the run's recorded
+ * post-run hash, never the live run's values.
+ *
+ * Not here: `verify-run`'s answer-coverage and skill-drift checks, which judge the kept run against the CURRENT
+ * skill's gates — a caller that compares runs of different skill snapshots (hillclimb's variants) must not inherit
+ * them.
+ */
+export function reevaluateRun(
+  runDir: string,
+  scenarioOrLoader: Scenario | (() => Scenario),
+  opts: AssertContextFromRunDirOpts = {},
+): ReevaluateRunResult {
+  const loaded = assertContextFromRunDir(runDir, scenarioOrLoader, opts);
+  if (!loaded.ok) return loaded;
+  const { ctx, result, scenario } = loaded;
+  const vacuousFixture = recordedFixtureRefusal(scenario, recordedFixtureFileSigs(runDir) ?? result.fingerprint?.workspaceFixtureFileSigs);
+  if (vacuousFixture) return { ok: false, kind: "usage", message: `${opts.command ?? "verify-run"}: ${vacuousFixture}` };
+  const deterministic = evaluate(scenario.assert, ctx);
+  deterministic.push(...expandExpectDenied(scenario.expect_denied, ctx.egress, ctx.egressMissing));
+  return { ...loaded, deterministic, metrics: remeasureMetrics(ctx, result, scenario.metrics) };
 }

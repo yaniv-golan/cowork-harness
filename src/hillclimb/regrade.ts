@@ -24,8 +24,7 @@ import { classifyRep } from "../eval/classify.js";
 import { pkgVersion } from "../run/envelope.js";
 import { runOutDir } from "../run/execute.js";
 import { regradeRuns, type RegradeOptions, type RegradeOutcome, type RegradeRunReport } from "../run/regrade.js";
-import { assertContextFromRunDir } from "../run/verify-context.js";
-import { remeasureMetrics } from "../metrics.js";
+import { reevaluateRun } from "../run/verify-context.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { computeVerdict } from "../run/verdict.js";
@@ -142,26 +141,30 @@ export type Remeasure = Pick<RegradeRunReport, "metrics">;
 export interface Reevaluation {
   /** What `verify-run` evaluates a scenario against, rebuilt from the kept run dir. */
   ctx: AssertContext;
+  /** The case's authored entries re-evaluated from the kept run: one per scenario assert (a judged one reads
+   *  unevaluated — no judge is called), then one per `expect_denied` host. */
+  deterministic: RunResult["assertions"];
   /** The case's declared metrics, re-measured from the kept work dir (absent when the case declares none). */
   metrics?: NonNullable<RunResult["metrics"]>;
 }
 
 /** Re-evaluate one selected row from its kept run dir: the one per-row step every selected row goes through, in every
- *  mode, before any judge call. The context is `verify-run`'s own (`assertContextFromRunDir`), and the metrics are
- *  re-measured on it by `remeasureMetrics`, as `verify-run` and core `regrade` re-measure them: a file is read only while
- *  its bytes still equal the run's recorded post-run hash. `listed` (never a zeroed value) when the context cannot be
- *  built — a run dir the builder refuses (multi-turn, partial, replay, chat, no result) — or when the case declares a
- *  metric and the kept work dir it would be read from is gone. `row` is the row as written. */
-export function reevaluateFromRun(row: Record<string, unknown>, runDir: string, c: HillclimbCase): Reevaluation | { listed: string } {
-  const built = assertContextFromRunDir(runDir, c.scenario, { command: "hillclimb regrade" });
+ *  mode, before any judge call. It is `verify-run`'s own evaluation (`reevaluateRun`: the kept-run context, the
+ *  recorded-fixture refusal, `evaluate` + `expandExpectDenied`, and the metrics re-measured on the same context — a
+ *  file read only while its bytes still equal the run's recorded post-run hash), without `verify-run`'s
+ *  answer-coverage and skill-drift checks (every variant ran another snapshot of the skill). `listed` (never a zeroed
+ *  value) when the run cannot be re-evaluated — a run dir the builder refuses (multi-turn, partial, replay, chat, no
+ *  result, a work dir a filesystem assert needs gone), an assert the recorded fixture would satisfy on its own — or
+ *  when the case declares a metric and the kept work dir it would be read from is gone. */
+export function reevaluateFromRun(runDir: string, c: HillclimbCase): Reevaluation | { listed: string } {
+  const built = reevaluateRun(runDir, c.scenario, { command: "hillclimb regrade" });
   if (!built.ok) {
     if (built.kind === "scenario") throw new Error("unreachable: the scenario was passed as an object");
     return { listed: `refused: ${built.message.split("\n")[0]}` };
   }
   if (c.scenario.metrics?.length && !existsSync(built.ctx.workRoot))
     return { listed: `its kept work dir is gone (${built.ctx.workRoot || "<unset>"}) — its metrics cannot be re-measured` };
-  const metrics = remeasureMetrics(built.ctx, built.result, c.scenario.metrics);
-  return { ctx: built.ctx, ...(metrics !== undefined ? { metrics } : {}) };
+  return { ctx: built.ctx, deterministic: built.deterministic, ...(built.metrics !== undefined ? { metrics: built.metrics } : {}) };
 }
 
 /** The row's `meta.metrics_unavailable` reasons for the declared ids only. */
@@ -654,7 +657,7 @@ async function regradeFlowInner(
         }
         // Every selected row is re-evaluated from its kept run here, before any judge call: a row whose context cannot be
         // rebuilt is listed, never re-measured as unavailable.
-        const re = reevaluateFromRun(row, runDir, c);
+        const re = reevaluateFromRun(runDir, c);
         if ("listed" in re) {
           vr.listed.push({ prompt_id: id, rep, why: shownMessage(re.listed, deps.secrets) });
           continue;
