@@ -483,6 +483,16 @@ describe("checkMountModeFacts — the outputs mount mode (outputsMountMode)", ()
       expect(mutated).not.toBe(SPAWN);
       expect(run(files(mutated)).some((f) => f.includes("call site"))).toBe(true);
     });
+    it("in a chunk that DOES require the exporting chunk, a same-named alias on another namespace does not count", () => {
+      const mixed = SPAWN.replace(
+        'var C=require("./index.chunk-MOUNT.js");',
+        'var C=require("./index.chunk-MOUNT.js"),D=require("./index.chunk-ELSE.js");',
+      )
+        .split("C.p(")
+        .join("D.p(");
+      expect(mixed).not.toBe(SPAWN);
+      expect(run(files(mixed)).some((f) => f.includes("call site"))).toBe(true);
+    });
     it("a call through a namespace bound to ANOTHER chunk does not count", () => {
       const other = SPAWN.replace('var C=require("./index.chunk-MOUNT.js");', 'var C=require("./index.chunk-ELSE.js");');
       expect(run(files(other)).some((f) => f.includes("call site"))).toBe(true);
