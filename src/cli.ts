@@ -25,7 +25,7 @@ import {
   countStringInFile,
   deriveNativeStagedPath,
   nativeManifestBuild,
-  nativeBuildsForPin,
+  buildNextAgentBinary,
 } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import { recordedFixtureFileSigs, recordedFixtureRefusal } from "./fixture/workspace.js";
@@ -3278,22 +3278,16 @@ async function cmdSync(args: string[]) {
   }
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
-  const nextAgentBinary = {
-    ...baseAgentBinary,
+  const nextAgentBinary = buildNextAgentBinary(baseAgentBinary, {
     stagedPath: derivedStagedPath,
     nativeStagedPath: derivedNativeStagedPath,
-    // Recomputed every sync from the local asar (never spread from the base): the build per CPU arch for the
-    // pinned native version, so a host of another arch is held to ITS build, not the syncing machine's.
-    nativeBuilds: nativeBuildsForPin(res.agentReleaseChannel, derivedNativeStagedPath),
-    // Recomputed from the live asar every sync, never spread from the base: `diffBaselines` is a generic
-    // recursive differ, so this only shows a stable<->RC channel flip if the candidate carries a FRESH
-    // value. A carried-forward one would make the diff silent on exactly the change it exists to catch.
-    releaseBaseUrl: res.agentReleaseBaseUrl ?? undefined,
+    channel: res.agentReleaseChannel,
+    releaseBaseUrl: res.agentReleaseBaseUrl,
     sha256: shaFields.sha256,
     shaProvenance: shaFields.shaProvenance,
     manifestChecksumMatch: shaFields.manifestChecksumMatch,
     stringSentinels,
-  };
+  });
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
   // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the
