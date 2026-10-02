@@ -11,7 +11,7 @@ directory, with the same `T` spelling and the same `--flow F`, and pass the same
 
 ## Differences from the guide's own runner, and what to do
 
-Each line matches one entry of the list in docs/hillclimb.md ("Differences from the loop's own runner").
+Each line matches one entry of the list in [the hillclimb guide](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/hillclimb.md#differences-from-the-loops-own-runner).
 
 - **Single-prompt scenarios:** every case is one prompt; a trace is one conversation. Don't plan multi-turn cases.
 - **System prompt withheld:** a trace's system turn is the Cowork text the harness sent; Anthropic's built-in
@@ -50,8 +50,11 @@ Each line matches one entry of the list in docs/hillclimb.md ("Differences from 
 - **The other commands the loop runs.** `hillclimb check --flow F`, `hillclimb state-template T --flow F`,
   `hillclimb freeze-ref T --flow F --variant <v>`, `hillclimb regrade T --flow F`. Ask the user to allow the ones
   you will run unattended; `regrade` spends on the judge.
-- **Never pass `--approve-harness`.** It records the harness sha and is the user's to run. When a pass refuses
-  on the gate, stop and show the user the files it lists.
+- **Never pass `--approve-harness`.** It records the harness sha and is the user's to run. A refusal before
+  spending prints `refusing to run: …` and exits 2: stop and show the user what it names. `freeze-ref` needs
+  no approval.
+- **`--skill` takes the bare skill name** (a `skills/<dir>` name or the registered name), never `plugin:name`
+  or a path.
 
 ## Step 0.5 — prove the eval can be climbed
 
@@ -65,13 +68,14 @@ Each line matches one entry of the list in docs/hillclimb.md ("Differences from 
 - **Recompute the headline** from `F/<variant>/results.jsonl`, never from `summary.json`.
 - **Spot-check grading.** Read the lowest-scoring baseline rows' `explanation` and traces. If a rubric is wrong,
   tell the user; after they edit it and approve the new sha, `cowork-harness hillclimb regrade T --flow F`
-  re-grades every row in place without running the agent. A deterministic assertion is not re-evaluated by a
-  re-grade: fixing one means re-running into a new flow.
+  re-evaluates every row in place from its kept run without running the agent (judged assertions with a judge
+  call, deterministic ones without).
 - **Triage every zero.** An agent's own failure is a scored row (`meta.failure_class: "errored_agent"`, with
   `meta.termination_rule`). Infrastructure, timeouts, a wrong served model and invalid judge grades are
   `errors.jsonl` rows, never in the scored denominator.
 - **Served model.** A run served by another model, or with no evidence of the pinned one, is an `errors.jsonl`
-  row (`serving_substitution`), not a score.
+  row (`serving_substitution`), not a score; a run with no model evidence whose agent failed on its own is a
+  scored agent failure.
 - **Sub-agents.** Their turns are inlined in the trace after each dispatch; their cost is in `cost_usd`.
 
 ## Step 1 — goal, scope, wiring
@@ -89,11 +93,13 @@ Each line matches one entry of the list in docs/hillclimb.md ("Differences from 
 
 ## Step 2 — stopping condition and budget
 
-- **Spend** = Σ `cost_usd` over every `results.jsonl` + Σ `meta.cost_usd` over every `errors.jsonl` + judge
-  spend + `decider_usd` when a decider runs. `cost_usd` is the agent's whole cost (sub-agents included) and
-  excludes the judge. Price judge spend from `judge_model` × `judge_usage`, or read the exact `judgeCostUsd` from
-  each `meta.run_dir`'s `result.json`. Don't derive agent cost from `model` × `usage`: `usage` is the main model
-  only. A `regrade` replaces `judge_usage`; earlier values are in `F/<variant>/regrade-*.bak.jsonl`.
+- **Agent spend** = Σ `cost_usd` over every `results.jsonl` + Σ `meta.cost_usd` over every `errors.jsonl`.
+  `cost_usd` is the agent's whole cost (sub-agents included) and excludes the judge. Don't derive it from
+  `model` × `usage`: `usage` is the main model only.
+- **Judge and decider spend** = for every row's `meta.run_dir` (results and errors rows): each assertion's
+  `judgeCostUsd` and the `deciderCostUsd` in its `result.json`, plus the `judgeCostUsd` in every re-grade file
+  under `turns/<N>/regrade/`. A row's `judge_model`/`judge_usage` describe its current grades only (a re-grade
+  replaces them): never sum them as spend.
 - `hillclimb run` has no spend cap: check the total against the budget every round.
 - `--dry-run` estimates agent spend for the slots it would run (judge spend not included; a scenario with no
   run history is listed as unpriced).
@@ -117,6 +123,8 @@ Each line matches one entry of the list in docs/hillclimb.md ("Differences from 
   is by (case, rep) slot). Slots with only an `errors.jsonl` row re-run on every pass; a permanent fault re-runs
   forever, so read `failure_class` before re-launching again.
 - **Progress:** answer "how's it going" from `F/vN/progress.txt`.
+- **Reps count from 0:** `rep: 0`, `traces/<id>_rep0.json`. `F/vN/summary.json` is yours: the runner only adds
+  keys it lacks (`model` when one model served the pass), never overwrites one.
 - **Report:** run the lite (or full) report builder on `F` after the runner exits. `$/run` = mean `cost_usd`;
   spend as in Step 2.
 - **Engagement:** report `skill_invoked` beside the score.
@@ -131,8 +139,8 @@ Each line matches one entry of the list in docs/hillclimb.md ("Differences from 
   `F/<variant>/regrade.md` with what moved.
 - **A new metric.** Add `metrics:` to the scenario, have the user approve the sha, re-run
   `cowork-harness hillclimb state-template T --flow F` and merge only the new `metrics` entries into
-  `_state.json`. Rows written before it lack the key (`check` notes them); `hillclimb regrade` fills it on the rows
-  it re-judges. Changing a declared metric is refused (new flow or new id); removing one warns.
+  `_state.json`. Rows written before it lack the key (`check` notes them); `hillclimb regrade T --flow F` fills it
+  from their kept runs. Changing a declared metric is refused (new flow or new id); removing one warns.
 - **Pairwise saturation.** When `check` notes a variant scoring 0.9 or more against the newest reference:
   `cowork-harness hillclimb freeze-ref T --flow F --variant vN`, then `state-template --flow F` and merge the new
   `win_vN` entries, then `cowork-harness hillclimb regrade T --flow F --fill-refs`. Only the baseline's reference

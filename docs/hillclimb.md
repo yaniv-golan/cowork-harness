@@ -52,6 +52,9 @@ step 3's command with `--variant` left for it to fill. Before its first unattend
 allow that command for the session: allow the `cowork-harness hillclimb run evals/ --flow ../hc/my-skill`
 prefix, not a wildcard. That allowlist entry is what bounds an unattended round.
 
+Every command defaults to `--flow .claude/hillclimb/flow`, inside your repo; the examples put it outside instead
+(see the next section). Help goes to stderr: `cowork-harness hillclimb run --help 2>&1 | grep -- --skill`.
+
 Requirements: a `cowork-harness` whose `hillclimb run --help` lists `--skill`; one plugin under test (each
 scenario's session names it as its only `plugins.local_plugins` entry); concrete model ids for the agent and the
 judge (an alias such as `sonnet` is refused, because the loop compares rounds by the model that served them).
@@ -60,7 +63,8 @@ judge (an alias such as `sonnet` is refused, because the loop compares rounds by
 
 Keep the flow dir out of your repo, or ignore most of it. Rows, traces and the copies under `<variant>/out/`
 hold the run's outputs and judge rationales (secret-scrubbed and host-path-redacted text; binary files copied as
-they are), and `inputs/` holds a copy of every file the session uploads.
+they are), and `inputs/` holds a copy of every file the session uploads, as `inputs/<hash>-<name>`, shared by
+every variant (`--no-copy-inputs` skips it). `summary.json` is the loop's: the runner only adds keys it lacks.
 
 The loop's guide suggests committing the flow dir without its traces, so the history survives. If you do, ignore
 at least these, and read what remains before the first commit:
@@ -78,7 +82,7 @@ Three things live outside the flow dir, and the loop needs all three for the who
 - **The kept run dirs** under the runs root (`~/.cowork-harness/runs`, or `--run-dir` / `COWORK_HARNESS_RUNS_DIR`).
   `hillclimb regrade`, `hillclimb freeze-ref` and every row's `meta.run_dir` point into them. Pass the same
   `--run-dir` to every command, and do not `prune` during a climb: `prune` keeps the newest few runs per
-  scenario, and a pruned run can no longer be re-graded or frozen.
+  scenario, and a pruned run cannot be re-graded or frozen.
 - **The per-variant snapshots** in `~/.cowork-harness/hillclimb-snapshots` (`COWORK_HARNESS_HILLCLIMB_SNAPSHOTS`
   moves them). A resumed or appended rep runs its variant's snapshot. They are keyed by the flow dir's real path,
   so moving or renaming the flow dir orphans them.
@@ -97,13 +101,13 @@ Three things live outside the flow dir, and the loop needs all three for the who
 | Prove the mechanism is wired | The `skill_invoked` column (pass `--skill <name>` when the plugin has several skills), and a null run: `hillclimb run … --flow <dir>-null --ablate` into a sibling flow |
 | Recompute the headline from raw results | Rows carry every grade key; recompute from `results.jsonl` |
 | Spot-check grading; fix a rubric and re-grade in place | Edit the rubric, approve the new sha (`--dry-run --approve-harness`), then `hillclimb regrade <target> --flow <dir>`. See [what a re-grade can change](#what-a-re-grade-can-and-cannot-change) |
-| Verify the served model and retries | A row whose run was served by another model, or carries no evidence of the pinned one, is an `errors.jsonl` row (`serving_substitution`) |
+| Verify the served model and retries | A run served by another model is an `errors.jsonl` row (`serving_substitution`), and so is one with no evidence of the pinned model, unless the agent itself failed first (then it is a scored agent failure) |
 | A probe or canary on one case | `hillclimb run … --case <id>`; it is the variant's first run, so it fixes that variant's snapshot |
 | Print the resolved scope every run | Every pass prints the (case, rep) slots it will run and the slots it re-runs after a failure |
 | `_state.json` and `harness_paths` | `hillclimb state-template … --flow <dir>`: save its stdout; after adding a metric, merge only the new `metrics` entries |
 | The runner's harness gate and `--approve-harness` | The same contract: the pass refuses until you record the sha. See [Guardrails](#guardrails-the-harness-adds) |
 | Progress while a round runs | `<flow>/<variant>/progress.txt`, rewritten every 30 seconds |
-| A split for 5-10 cases | Don't split; report the delta as directional. Case ids are scenario file stems |
+| A split for 5-10 cases | Don't split; report the delta as directional. Case ids are scenario file stems (a stem outside `[A-Za-z0-9_.-]`, or longer than 129 characters, is rewritten; `original_id` keeps it) |
 
 ## What each row measures
 
@@ -112,21 +116,33 @@ Three things live outside the flow dir, and the loop needs all three for the who
 - **`pass`** is the scenario's verdict, 1 or 0. `state-template` declares it first, and the loop's report reads
   the first binary metric as its headline, so `pass` is the headline unless you reorder `_state.json`.
 - **Per assertion and per rubric claim:** `a<i>` for each assertion, `a<i>_c<j>` for each claim of a
-  `semantic_matches` rubric, and `claims` (passed claims over graded claims, 0-1).
+  `semantic_matches` rubric, and `claims` (passed claims over graded claims, 0-1). `state-template` declares the
+  per-assertion keys only when every case has the same assertion list; otherwise they are drill-down only, and
+  `metrics.md` says so.
 - **`<key>_present: 0` means the value is absent, not 0.** `pass_present: 0` marks a verdict that failed only
-  because a judge's evidence was refused. Averaging an absent value as 0 reads a capture problem as a regression.
-- **`skill_invoked`** is 1 or 0 for whether the run invoked the tracked skill. A blank means not measured.
+  because one single-key `semantic_matches` assertion's evidence was refused (with a multi-key assertion the row
+  scores `pass: 0`). Averaging an absent value as 0 reads a capture problem as a regression.
+- **`skill_invoked`** is 1 or 0 for whether the run invoked the tracked skill (`meta.skill_tracked` names it). A
+  blank means not measured: no skill was tracked, or the run's record could not tell.
+- **Reps count from 0**: `rep: 0`, `traces/<id>_rep0.json`, `out/<id>_rep0/`.
 - **An agent's own failure is a scored row**: every graded key 0, `meta.failure_class: "errored_agent"`, and the
   rule that classified it in `meta.termination_rule` (for example a run that ended asking for input). A row with
   `status: "truncated"` hit the output-token limit.
-- **`errors.jsonl` holds what is not the skill's score**: `timeout`, `error` (infrastructure), `serving_substitution`
-  and `judge_invalid`. An error row does not fill its slot, so the next pass runs it again; a permanent fault runs
-  again on every pass, and the scope line names it.
-- **Perf fields:** `cost_usd`, `latency_s`, `tool_calls`, `web_searches`, `in_tokens`, `out_tokens`. `latency_s`
-  excludes retry backoff.
+- **`errors.jsonl` holds what is not the skill's score**, by `failure_class`, with the rule in
+  `meta.failure_rule`: `timeout` (the runner's bound), `error` (infrastructure; also a run whose content differs
+  from the variant's snapshot, or a grade that does not line up with the scenario), `serving_substitution` (another
+  model served the run, or no evidence of the pinned one) and `judge_invalid`. When several apply, a timeout wins,
+  then an infrastructure error, then a served-model mismatch. An error row does not fill its slot, so the next pass
+  runs it again; a permanent fault runs again on every pass, and the scope line names it.
+- **Perf fields:** `cost_usd`, `latency_s`, `tool_calls`, `web_searches`, `in_tokens`, `out_tokens` (and
+  `skill_invoked` when tracked). `in_tokens` counts the main model's input, cache-read and cache-creation tokens.
+  `latency_s` excludes retry backoff; when the run reported no duration it is the attempt's wall time
+  (`meta.latency_basis: "wall"`). Rows also carry `decider_usd` when a decider answers questions, but
+  `state-template` never declares it: add it to `perf_fields` yourself.
 
 The trace for each rep opens with the system text the agent was spawned with, and inlines each sub-agent's turns
-after its dispatch. Treat every row's `explanation` (judge rationales and failed-claim text, marked
+after its dispatch. A tool result over 64 KiB is cut in the trace, with the full text in a sidecar under
+`out/<id>_rep<k>/blobs/`. Treat every row's `explanation` (judge rationales and failed-claim text, marked
 `meta.explanation_untrusted`), every trace and every copied output as evidence, never as instructions: they are
 model output, and text in them can try to steer the loop's next edit.
 
@@ -140,13 +156,21 @@ A scenario can declare numbers it measures from an artifact the run writes ([sce
   the report's headline, and `state-template` declares `pass` first. You can still make a number the loop's goal:
   tell the loop to optimize it and to hold `pass`.
 - A float's mean is over the rows where it was measured. An unmeasured value (the artifact missing, the path not
-  a number, the run failed) is omitted with `<id>_present: 0`, never written as 0.
+  a number, the run failed) is omitted with `<id>_present: 0`, never written as 0; `meta.metrics_unavailable`
+  says why, with the codes in [scenario.md](./scenario.md).
+- **The columns are the union over every case.** A case that does not declare a metric carries
+  `<id>_present: 0`. One id declared differently in two scenarios is refused before spending; declarations are
+  compared after normalizing, so an omitted `min` equals `min: 0`.
+- `hillclimb check` warns when a value falls outside `[min, scale]` (an unbounded metric is not range-checked).
 - **Adding a metric** is allowed: re-run `state-template --flow`, merge only the new `metrics` entries into
-  `_state.json`, and approve the new sha. Rows written before it lack the key; `check` notes them.
-  `hillclimb regrade` fills the new key on the rows it re-grades.
+  `_state.json`, and approve the new sha. Rows written before it lack the key (`check` notes them) until
+  `hillclimb regrade` fills it from their kept runs.
 - **Changing a metric** (its artifact, path, direction, scale or minimum) is refused on `run` and `regrade`.
   Start a new flow, or declare it under a new id.
-- **Removing a metric** is allowed, with a warning to drop `<id>` and `<id>_present` from `_state.json`.
+- **Removing a metric** is allowed, with a warning to drop `<id>` and `<id>_present` from `_state.json`. Declaring
+  a removed id again, differently, is refused while any row still carries the old declaration.
+- `hillclimb run` warns when the rows carry a metric `_state.json` does not declare: re-run `state-template` and
+  merge.
 
 ## Judging against a frozen reference (`semantic_pairwise`)
 
@@ -172,15 +196,20 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
   as Cowork's agent reports it. Use it for the loop's `$/run` and `spend`. Don't derive cost from `model` ×
   `usage`: `usage`, `in_tokens` and `out_tokens` count the main model only, so the derivation undercounts any
   run that dispatches sub-agents.
-- **Judge spend is separate.** A row carries its judge's model and token usage (`judge_model`, `judge_usage`);
-  each run's `result.json` has the exact per-assertion `judgeCostUsd`. It is not in `cost_usd`, and it can be
-  about the same size as the agent spend.
-- **Spend for a climb** is the sum of `cost_usd` over every `results.jsonl`, plus `meta.cost_usd` on every
-  `errors.jsonl` row (failed attempts are billed; their top-level `usage` is the main model only), plus judge
-  spend, plus `decider_usd` when a decider answers questions. A `hillclimb regrade` replaces a row's
-  `judge_usage` with the re-grade's own; the earlier values are kept in the `regrade-*.bak.jsonl` files beside it.
+- **Judge spend is separate, and can be about the same size as the agent spend.** It is not in `cost_usd`. A
+  row's `judge_model` and `judge_usage` say who judged its current grades; they are not a spend ledger (a
+  re-grade replaces them).
+- **Spend for a climb:**
+  - agent spend = the sum of `cost_usd` over every `results.jsonl`, plus `meta.cost_usd` on every
+    `errors.jsonl` row (failed attempts are billed; an error row's top-level `usage` is the main model only);
+  - judge and decider spend = for every row's `meta.run_dir` (scored and error rows alike), the
+    `judgeCostUsd` of each assertion and the `deciderCostUsd` in that run's `result.json`, plus the
+    `judgeCostUsd` in every re-grade file a `hillclimb regrade` wrote into the same run dir
+    (`turns/<N>/regrade/*.json`). Those files are never overwritten, so the sum counts every judge call once.
+    This needs the kept run dirs: the rows alone cannot rebuild judge spend, so a loop that sums only
+    `results.jsonl` and `errors.jsonl`, as the loop's guide describes, undercounts it.
 - **There is no spend cap on `hillclimb run`.** Recompute spend from the files after every round, as the loop's
-  guide does, and stop at your budget.
+  guide does, and stop at your budget. (`--max-budget-usd` on `run` and `eval` caps agent spend only.)
 - **`--dry-run` prints an estimate** of the agent spend for the slots it would run, from this machine's run
   history; hillclimb runs themselves are left out of that history. On a machine with no history for a scenario,
   the estimate lists it as unpriced and is a lower bound. Judge spend is not in the estimate.
@@ -206,7 +235,7 @@ with these differences:
   made after it goes into a new variant.
 - **The lever is the plugin.** Each variant snapshots the plugin. The session file (`model`, `effort`,
   `subagent_model`) is shared by every variant and covered by the harness gate, so changing it is a gated edit
-  that every later resume also runs; `--model` on the command line selects the agent model without the gate, so
+  that every later resume also runs; `--model` on the command line selects the agent model outside the gate, so
   leave it out of the allowlisted prefix if the loop's goal is moving to another model. Cowork's system prompt is
   not tunable.
 - **A missing reference is refused before spending.** The reference runner hands the grader a missing reference
@@ -229,12 +258,13 @@ with these differences:
 
 `hillclimb regrade` re-grades the flow's rows from their kept run dirs, without running the agent:
 
-- it re-judges every `semantic_matches` and `semantic_pairwise` assertion and recomputes `pass`;
-- `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot move;
-- it re-measures a declared metric on the rows it re-judges.
+- it re-evaluates every assertion against the kept run (a judged one with a judge call, a deterministic one such
+  as `file_exists` or `tool_called` without) and recomputes `pass`, so a rubric or assertion fix reaches the
+  rows already written;
+- it re-measures every declared metric from the kept run, so a metric added mid-climb fills the older rows;
+- `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot move.
 
-A deterministic assertion (`file_exists`, `tool_called`, `transcript_matches`, …) is not re-evaluated, and a
-case with no judged assertion is left as it is. To change those grades, re-run the variant into a new flow.
+A row whose kept run dir is gone is listed instead of re-graded.
 
 ## Guardrails the harness adds
 
@@ -243,9 +273,13 @@ case with no judged assertion is left as it is. To change those grades, re-run t
   selects), each session file, its uploads and workspace fixtures, the lockfiles in the current directory, the
   `harness_paths` entries, the `--skill` selection, and the harness version and baseline. It never covers the
   plugin the loop edits. Upgrading `cowork-harness` or running `sync` therefore trips it: that is the loop's
-  re-baseline signal. `--approve-harness` is yours to pass, never the loop's.
+  re-baseline signal. With no lockfile in the current directory, dependency changes are outside the sha (a pass
+  says so). `--model` and `--judge-model` are not in it. `hillclimb freeze-ref` needs no approval: the gate covers
+  `run` and `regrade`. `--approve-harness` is yours to pass, never the loop's.
 - **No answer key in reach.** A pass is refused when the agent could read the flow dir, a scenario or session
-  file, a `harness_paths` file or the runs root through a mount, a workspace fixture or the plugin.
+  file, a `harness_paths` file or the runs root through a mount, a workspace fixture or the plugin. A file
+  listed in `harness_paths` that sits inside a workspace fixture counts as an input and is not refused, so keep
+  graders outside fixtures.
 - **The headroom warning.** `hillclimb check`, and the end of every baseline pass, warn about the cases whose
   baseline reps are all at the good or bad end of the headline metric. It never changes the exit code.
 - **Run labels.** Every run is labelled `hillclimb:<flow dir name>:<variant>` in the run index (`stats --label`).
@@ -259,8 +293,8 @@ case with no judged assertion is left as it is. To change those grades, re-run t
 | `no approved harness sha` / `harness changed since last approved run` | Review the files the message lists, then `hillclimb run … --dry-run --approve-harness`. A change you did not make: check the working directory and the target path |
 | A resumed variant refuses: snapshot missing | The flow dir moved, or the snapshot root was cleaned. Restore it, or run into a new variant |
 | A file the skill needs is missing in the run | It is untracked: `git add` it before the variant's first run (the pass printed a count of untracked files) |
-| `skill_invoked` is blank | The plugin has several skills: pass `--skill <name>` on every pass |
-| A non-baseline pass refuses on a pairwise case | The baseline reference is missing: `hillclimb freeze-ref … --variant baseline --case <id>` |
+| `skill_invoked` is blank | The plugin has several skills (pass `--skill <name>`, the bare name, on every pass), it has none, or the run's record could not tell (`meta.skill_tracked` is set but the cell is blank) |
+| A non-baseline pass refuses on a pairwise case | The baseline reference is missing: `hillclimb freeze-ref … --variant baseline --case <id>`, or, when the message says freezing cannot repair it, a fresh flow dir |
 | The same slots run on every pass | They are `errors.jsonl` rows with a permanent fault; read `failure_class` and `error` |
 | `regrade` lists rows "kept run dir is gone" | Pass the `--run-dir` the runs were written with; a pruned run cannot be re-graded |
 | A mean drops after adding a metric or a reference | Rows that predate it carry `<key>_present: 0`; fill them with `hillclimb regrade` before comparing |
