@@ -1384,7 +1384,7 @@ describe.runIf(POSIX)("hillclimb rows record their assertion set (meta.assert_si
     const r = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--reps", "2", "--concurrency", "1", "--approve-harness");
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).toMatch(
-      /warning: 2 row\(s\) were graded under another assertion set than their scenario's now \(baseline alpha rep0, v1 alpha rep0\).*run `hillclimb regrade evals --flow flow --case alpha` to re-evaluate them/,
+      /warning: 2 row\(s\) were graded under another assertion set than their scenario's now \(baseline alpha rep0, v1 alpha rep0\).*run `hillclimb regrade evals --flow flow --case alpha` to re-evaluate them.*--approve-harness/,
     );
     const fresh = rows("v1").find((x) => x.rep === 1)!.meta.assert_sig;
     expect(fresh).toMatch(SIG);
@@ -1393,7 +1393,7 @@ describe.runIf(POSIX)("hillclimb rows record their assertion set (meta.assert_si
     expect(mixed).toEqual([
       expect.stringMatching(
         new RegExp(
-          `^warning: case alpha's rows were graded under 2 assertion sets \\(${String(old)}: baseline 1, v1 1; ${String(fresh)}: v1 1\\)`,
+          `^warning: case alpha's rows were graded under 2 assertion sets \\(${String(old)}: baseline 1, v1 1; ${String(fresh)}: v1 1\\).*run \`hillclimb regrade <scenarios> --flow flow --case alpha\`.*--approve-harness`,
         ),
       ),
     ]);

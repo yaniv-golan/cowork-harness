@@ -198,7 +198,7 @@ async function run(
     const ids = [...new Set(stale.map((r) => r.promptId))];
     const shown = stale.slice(0, 5).map((r) => `${r.variant} ${r.promptId} rep${r.rep}`);
     say(
-      `warning: ${stale.length} row(s) were graded under another assertion set than their scenario's now (${shown.join(", ")}${stale.length > shown.length ? `, and ${stale.length - shown.length} more` : ""}): a comparison over them and this pass's rows mixes two graders — run \`hillclimb regrade ${args.target} --flow ${flowArg}${ids.map((id) => ` --case ${id}`).join("")}\` to re-evaluate them`,
+      `warning: ${stale.length} row(s) were graded under another assertion set than their scenario's now (${shown.join(", ")}${stale.length > shown.length ? `, and ${stale.length - shown.length} more` : ""}): a comparison over them and this pass's rows mixes two graders — run \`hillclimb regrade ${args.target} --flow ${flowArg}${ids.map((id) => ` --case ${id}`).join("")}\` to re-evaluate them (a scenario edited since the flow's last approval also needs --approve-harness on it, which is the user's to give, as on run)`,
     );
   }
   const sigOf = (c: HillclimbCase) => deps.expectedContentSig?.(c);

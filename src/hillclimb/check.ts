@@ -137,7 +137,7 @@ export function metricRangeWarnings(snap: FlowSnapshot): string[] {
 /** One warning per case whose rows (any variant) carry more than one `meta.assert_sig`: they were graded under different
  *  assertion sets (a pass resumed after an approved scenario edit), so a comparison over them mixes two graders. Each
  *  sig is named with its row count per variant, in first-seen order; a row with no sig is not counted. */
-export function assertSigWarnings(snap: FlowSnapshot): string[] {
+export function assertSigWarnings(snap: FlowSnapshot, flowArg = "<flow>", target = "<scenarios>"): string[] {
   const byCase = new Map<string, Map<string, Map<string, number>>>();
   for (const r of rowAssertSigs(snap)) {
     const sigs = byCase.get(r.promptId) ?? new Map<string, Map<string, number>>();
@@ -151,7 +151,7 @@ export function assertSigWarnings(snap: FlowSnapshot): string[] {
     if (sigs.size < 2) continue;
     const where = [...sigs].map(([sig, per]) => `${sig}: ${[...per].map(([v, n]) => `${v} ${n}`).join(", ")}`).join("; ");
     out.push(
-      `warning: case ${id}'s rows were graded under ${sigs.size} assertion sets (${where}) — a comparison over them mixes graders; run \`hillclimb regrade\` to re-evaluate them`,
+      `warning: case ${id}'s rows were graded under ${sigs.size} assertion sets (${where}) — a comparison over them mixes graders; run \`hillclimb regrade ${target} --flow ${flowArg} --case ${id}\` to re-evaluate them (a scenario edited since the flow's last approval also needs --approve-harness on it, which is the user's to give)`,
     );
   }
   return out;

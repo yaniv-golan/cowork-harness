@@ -63,7 +63,7 @@ export function checkReport(flowArg: string, cwd: string): { report: SchemaCheck
     warnings: [
       ...headroom(snap).warnings,
       ...metricRangeWarnings(snap),
-      ...assertSigWarnings(snap),
+      ...assertSigWarnings(snap, normalizeRootArg(flowArg)),
       ...pairwiseHints(snap, normalizeRootArg(flowArg)),
     ],
     exitCode: report.errors ? 1 : 0,
