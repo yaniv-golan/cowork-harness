@@ -971,14 +971,17 @@ async function regradeFlowInner(
         // A fill copies every outcome it does not judge by index, so the run's list must line up with the scenario's. A
         // default regrade rebuilds the list from the scenario (each deterministic assert re-evaluated, each judged one
         // re-judged), so an added or removed assert is applied there, not listed.
-        const mismatch = args.fillRefs ? shapeMismatch(result, c) : undefined;
+        // An agent-failed row scores 0 whatever lines up (a partial run graded no assert at all), so neither fill check
+        // has anything to protect on it.
+        const failedAgent = row.meta?.failure_class === "errored_agent";
+        const mismatch = args.fillRefs && !failedAgent ? shapeMismatch(result, c) : undefined;
         if (mismatch) {
           vr.listed.push({ prompt_id: id, rep, why: `${mismatch} — run a default \`hillclimb regrade\` first, then --fill-refs` });
           continue;
         }
         // A fill keeps every live outcome: one judged against a reference that has since changed (re-frozen by hand)
         // would mix two references in one row — listed before any spend, never written.
-        if (args.fillRefs) {
+        if (args.fillRefs && !failedAgent) {
           let k = 0;
           const entries = (result.assertions ?? []).flatMap((e) =>
             e.source === undefined ? [{ assertionIndex: k++, pairwise: e.pairwise }] : [],
@@ -1248,8 +1251,9 @@ async function regradeFlowInner(
       }
     }
     for (const t of plain) {
-      // A fill keeps every live outcome of a row it does not judge: the same changed-reference rule applies.
-      if (args.fillRefs) {
+      // A fill keeps every live outcome of a row it does not judge: the same changed-reference rule applies (an
+      // agent-failed row aside: it scores 0 whatever it carries).
+      if (args.fillRefs && t.line.row?.meta?.failure_class !== "errored_agent") {
         let k = 0;
         const entries = (t.result.assertions ?? []).flatMap((e) =>
           e.source === undefined ? [{ assertionIndex: k++, pairwise: e.pairwise }] : [],

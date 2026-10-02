@@ -187,12 +187,21 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
   it("a fill rebuilds every scored row — a case with no judged assert too — so state-template declares win_v1", async () => {
     const { cli, rows } = buildFlow({ withBeta: true });
     expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const verdictKeys = (v: string) => {
+      const g = rows(v).find((r) => r.prompt_id === "alpha")!.grade;
+      return { pass: g.pass, a0: g.a0, a1: g.a1 };
+    };
+    const before = { baseline: verdictKeys("baseline"), v1: verdictKeys("v1") };
     const out = await regradeFlow(ARGS({ fillRefs: true }), DEPS());
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
     for (const v of ["baseline", "v1"]) {
       const beta = rows(v).find((r) => r.prompt_id === "beta")!;
       expect(beta.grade).toMatchObject({ win_present: 0, win_v1_present: 0 });
     }
+    // The baseline alpha row went through a fill's re-grade (against v1's reference): a fill never moves pass or an
+    // assert's outcome.
+    expect(rows("baseline").find((r) => r.prompt_id === "alpha")!.meta.regrade_fill).toEqual(["v1"]);
+    expect({ baseline: verdictKeys("baseline"), v1: verdictKeys("v1") }).toEqual(before);
     const t = stateTemplateFor(
       "evals",
       f.cwd,
@@ -1426,6 +1435,17 @@ describe.runIf(POSIX)("hillclimb regrade: an agent-failed row whose run cannot b
     expect(Object.entries(row.grade).filter(([k, x]) => !k.endsWith("_present") && x !== 0)).toEqual([]);
     expect(row.grade).toMatchObject({ pass: 0, a0: 0, a1: 0, words_present: 0 });
     expect(lines.join("\n")).toMatch(/1 agent failure\(s\): meta updated/);
+  }, 240_000);
+
+  it("in a fill too: an agent-failed row whose case gained an assert is never listed (it scores 0 whatever lines up)", async () => {
+    f.cleanup();
+    f = makeStubFixture(ASKS);
+    const { evals } = buildFlow({ noPairwise: true });
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("assert:\n", "assert:\n  - transcript_contains: Nope\n"));
+    const out = await regradeFlow(ARGS({ approveHarness: true, fillRefs: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    for (const v of out.variants) expect(v).toMatchObject({ listed: [], agentFailed: 1 });
   }, 240_000);
 });
 
