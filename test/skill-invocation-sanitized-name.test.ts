@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { computeSkillInvocationVerdict, gradedSkillNameFor, resolveCritiquedSkillDir } from "../src/critique/command.js";
@@ -94,6 +94,21 @@ describe("critique: ids the rewrite makes ambiguous", () => {
   });
   it("two skill dirs that rewrite to the same id: undecidable, never true", () => {
     expect(critiqueVerdict(makePlugin(["my.skill", "my-skill"]), "my.skill", "plug:my-skill")).toBe(undefined);
+  });
+  it("a symlinked skill dir that registers the same id counts as a second skill", () => {
+    const root = makePlugin(["my.skill"]);
+    const elsewhere = join(tmp("cwh-sanit-ext-"), "real");
+    mkdirSync(elsewhere, { recursive: true });
+    writeFileSync(join(elsewhere, "SKILL.md"), "---\nname: real\n---\n# real\n");
+    symlinkSync(elsewhere, join(root, "skills", "my-skill"));
+    expect(critiqueVerdict(root, "my.skill", "plug:my-skill")).toBe(undefined);
+  });
+  it("a skill in a manifest `skills` path that registers the same id counts as a second skill", () => {
+    const root = makePlugin(["my.skill"]);
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "plug", skills: ["./skills", "./extra"] }));
+    mkdirSync(join(root, "extra", "my-skill"), { recursive: true });
+    writeFileSync(join(root, "extra", "my-skill", "SKILL.md"), "---\nname: my-skill\n---\n# my-skill\n");
+    expect(critiqueVerdict(root, "my.skill", "plug:my-skill")).toBe(undefined);
   });
 });
 

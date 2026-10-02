@@ -409,7 +409,8 @@ All notable changes to this project are documented here. The format is based on
   the name as the agent registers it. When that name is ambiguous, a match is reported as unobservable, never as
   invoked: a command file whose stem equals the rewritten name, or a second skill directory that rewrites to the
   same id. A root `SKILL.md` that critique cannot promote to its plugin is now named by its frontmatter `name`,
-  as the agent registers it, instead of by its directory.
+  as the agent registers it, instead of by its directory; when that name differs from the directory, the
+  report's `gradedSkill` changes with it, so such a critique no longer pairs with one made before the upgrade.
 - **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers

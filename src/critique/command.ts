@@ -34,6 +34,7 @@ import { checkMountDelivers } from "./mount-check.js";
 import { binaryPluginIdentity } from "../session.js";
 import { sanitizeSkillName } from "../skill-id.js";
 import { readSkillFrontmatterName } from "../run/skill-metadata.js";
+import { registeredSkills } from "../hillclimb/skill.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
@@ -1340,6 +1341,8 @@ interface ReportState {
    *  slash command is ambiguous and the run does not say which ran. Surfaced so *absent* is an
    *  actionable outcome rather than a dead end. */
   commandShadowsSkill?: boolean;
+  /** Another skill of the plugin registers under the graded skill's id (text report only). */
+  skillIdShared?: boolean;
   /** The graded run's resolved gate answers (from its result.json's gateProvenance), lifted so a
    *  follow-up run can be made deterministic — the text report echoes them as copy-pasteable --answer
    *  lines, mirroring the `skill` lane's footer. */
@@ -1599,7 +1602,11 @@ export function buildTextReport(state: ReportState): string {
     // Only when the shadow is what withheld the verdict. A `false` alongside a shadow is sound — nothing
     // named the skill by ANY channel — and printing "not decidable" next to "none named it" contradicts.
     out.push(
-      `  NOTE: this plugin ships BOTH commands/${state.gradedSkill}.md and skills/${state.gradedSkill}/SKILL.md. They register one identical slash command, the Skill tool launches either through the same registry, and the run does not record which ran — so a positive invocation verdict is not decidable here. Rename one of the two to make it observable.`,
+      `  NOTE: this plugin ships BOTH commands/${sanitizeSkillName(state.gradedSkill ?? "")}.md and the skill ${state.gradedSkill}. They register one identical slash command, the Skill tool launches either through the same registry, and the run does not record which ran — so a positive invocation verdict is not decidable here. Rename one of the two to make it observable.`,
+    );
+  else if (state.skillIdShared && state.skillInvocationObserved === undefined)
+    out.push(
+      `  NOTE: another skill of this plugin registers under the same id as ${state.gradedSkill} (the agent rewrites every character outside [a-zA-Z0-9_-] to "-"), so an observed invocation cannot say which of them ran — a positive invocation verdict is not decidable here. Rename one of them to make it observable.`,
     );
   else if (state.gradedSkill !== undefined && state.skillInvocationObserved === undefined)
     // Absence is a real outcome and must be SAID: without this line "could not observe" read exactly
@@ -2118,18 +2125,16 @@ export function commandShadowsSkillFor(gradedSkillName: string | undefined, reso
   );
 }
 
-/** Two or more `skills/<dir>` of the same plugin that the agent registers under this skill's id
- *  (`skills/my.skill/` and `skills/my-skill/` are both `<plugin>:my-skill`): an observed id cannot tell them
- *  apart, so a match is reported absent, never true. Counted over the rewritten names, so the result is the
- *  same whether the caller names the skill by its directory or by its registered name. */
+/** Two or more skills of the plugin that the agent registers under this skill's id (`skills/my.skill/` and
+ *  `skills/my-skill/`, or a manifest `skills` path, or a symlinked skill dir, all answering to
+ *  `<plugin>:my-skill`): an observed id cannot tell them apart, so a match is reported absent, never true. Read
+ *  from `registeredSkills`, the one model of the agent's skill loader, so the answer is the same whether the
+ *  caller names the skill by its directory or by its registered name. */
 export function skillIdSharedFor(gradedSkillName: string | undefined, pluginRoot: string | undefined): boolean {
   if (gradedSkillName === undefined || pluginRoot === undefined) return false;
   const id = sanitizeSkillName(gradedSkillName);
   try {
-    const sharing = readdirSync(join(pluginRoot, "skills"), { withFileTypes: true }).filter(
-      (e) => e.isDirectory() && sanitizeSkillName(e.name) === id && existsSync(join(pluginRoot, "skills", e.name, "SKILL.md")),
-    );
-    return sharing.length > 1;
+    return registeredSkills(pluginRoot).filter((s) => s.id === id).length > 1;
   } catch {
     return false;
   }
@@ -2373,6 +2378,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // no evidence either way (absent result).
     const gradedSkillName = gradedSkillNameFor(opts.skillSelector, resolvedSkill);
     const commandShadowsSkill = commandShadowsSkillFor(gradedSkillName, resolvedSkill);
+    const skillIdShared = skillIdSharedFor(gradedSkillName, resolvedSkill.pluginRoot);
     // NOTE: the verdict itself is computed after `snapshotTurnBoundary` below — it needs the turn-1
     // events slice, which does not exist until the boundary is captured.
     // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
@@ -2614,6 +2620,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gradedSkill: gradedSkillName,
       skillInvocationObserved,
       commandShadowsSkill: commandShadowsSkill || undefined,
+      skillIdShared: skillIdShared || undefined,
       gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,
       gradedOutcome,

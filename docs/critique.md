@@ -220,7 +220,8 @@ adjudicable". So:
   per-plugin, not per-skill. **Workflow implication: pairing critiques of a
   multi-skill plugin by skillHash alone CROSS-PAIRS different skills** — pair by
   **(`gradedSkillHash`, `gradedSkill`)**; the report's `gradedSkill` field carries the resolved
-  `skills/<name>` (`--skill` or the auto-selection). `--label` remains available for coarser
+  `skills/<name>` (`--skill` or the auto-selection), or, for a skill folder that cannot be promoted to its
+  plugin, the name the agent registers it under. `--label` remains available for coarser
   generation tags.
 - **A fleet-consistency defect is out of scope for any single critique, by construction.** The graded
   agent mounts the whole plugin and can observe sibling behaviour; the evaluator's corpus is ONE skill,
@@ -243,7 +244,9 @@ adjudicable". So:
   `result.json` with no prompt, or a slash prompt on a run with no skill inventory; an unreadable events slice; a top-level `Skill` call
   whose id the record could not read; a bare `/name` that more than one staged skill answers to; or a
   plugin that ships both a command and a skill under one name (`commandShadowsSkill`), where the slash
-  entry and the `Skill` tool launch either through one registry. Absent is never a synonym for `false`,
+  entry and the `Skill` tool launch either through one registry; or another skill of the plugin that the agent
+  registers under the same id (it rewrites every character outside `[a-zA-Z0-9_-]` to `-`, so `skills/my.skill/`
+  and `skills/my-skill/` collide). Absent is never a synonym for `false`,
   and the text report prints a NOTE when it is absent.
 
 ### Skills that need an attached file
@@ -582,7 +585,8 @@ Then pair/cluster across the reports:
   a fingerprint one-off is a lead — possibly a real one-off, possibly a reworded repeat.
 - **Multi-skill plugins: never pair by `gradedSkillHash` alone.** The hash keys the whole mounted
   plugin, so it cross-pairs critiques of *different* skills in the same plugin — pair by
-  **(`gradedSkillHash`, `gradedSkill`)**; `gradedSkill` is the report's resolved `skills/<name>`.
+  **(`gradedSkillHash`, `gradedSkill`)**; `gradedSkill` is the report's resolved `skills/<name>` (or the
+  registered name of a skill folder that cannot be promoted to its plugin).
 - To make the graded runs deterministic across repeats, copy the report's echoed `--answer` lines
   (the graded run's resolved gate answers) into the next invocation.
 
