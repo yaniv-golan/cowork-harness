@@ -1,0 +1,22 @@
+# Acceptance: the full pipeline. The float metric (amount total from metrics.json) is NOT declared here at the
+# start; the runbook adds it mid-loop and re-grades the existing variants.
+name: b1-csv-report
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Analyze sales.csv from my uploads with the csv-report skill and write the insights note.
+assert:
+- tool_called: Bash
+- user_visible_artifact: outputs/metrics.json
+- user_visible_artifact: outputs/insights.md
+- semantic_matches:
+    evidence_files: [outputs/insights.md]
+    rubric:
+    - States the total amount (4200) or the total units (75)
+    - Names North as the region with the most rows or the highest amount
+    - Flags the East row with zero amount and zero units as an anomaly

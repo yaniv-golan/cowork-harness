@@ -143,6 +143,8 @@ interface Declared {
   perfFields: string[];
   metricsDeclared: boolean;
   splitIds: Map<string, string>;
+  /** harness profile: per scenario metric id, the rows (per variant) written before it was declared. */
+  predates: Map<string, Map<string, number>>;
 }
 
 class Collector {
@@ -226,7 +228,7 @@ function checkUsage(c: Collector, file: string, key: string, v: unknown, line?: 
 }
 
 function readDeclared(c: Collector, text: string | undefined): Declared {
-  const d: Declared = { metrics: [], perfFields: [], metricsDeclared: false, splitIds: new Map() };
+  const d: Declared = { metrics: [], perfFields: [], metricsDeclared: false, splitIds: new Map(), predates: new Map() };
   const F = "_state.json";
   if (text === undefined) {
     c.note("state.absent", F, "no _state.json: metrics are inferred from grade keys, and any explanation key flips a metric to judge");
@@ -280,6 +282,8 @@ function readDeclared(c: Collector, text: string | undefined): Declared {
           c.note("state.metrics", F, `${at}.label is ${m.label.length} chars; the full viewer truncates past ${METRIC_LABEL_MAX}`);
       }
       if (m.scale !== undefined && !isFiniteNum(m.scale)) c.error("state.metrics", F, `${at}.scale must be a number`);
+      // Ours: a float's floor (state-template writes it from the scenario's `min`); headroom and the range check read it.
+      if (m.min !== undefined && !isFiniteNum(m.min)) c.error("state.metrics", F, `${at}.min must be a number`);
       if (m.better !== undefined && m.better !== "higher" && m.better !== "lower")
         c.error("state.metrics", F, `${at}.better must be higher|lower`);
       d.metrics.push({ id: m.id, kind: typeof m.kind === "string" ? m.kind : undefined });
@@ -439,7 +443,18 @@ function checkRow(
     for (const [k, v] of Object.entries(grade))
       if (!isFiniteNum(v) && typeof v !== "boolean")
         c.error("row.grade", file, `grade.${k} must be a number or boolean; the report drops it silently`, line);
+    // A scenario metric (a declared float, with its `<id>_present`) the loop declared after this row was written:
+    // the row's meta.metric_sigs (ours) lacks its id, so the row predates it. Counted, not an error.
+    const floats = new Set(d.metrics.filter((m) => m.kind === "float").map((m) => m.id));
+    const sigs = isObj(r.meta) && isObj(r.meta.metric_sigs) ? r.meta.metric_sigs : {};
+    const predated = new Set<string>();
     for (const m of d.metrics) {
+      const metric = m.id.endsWith("_present") ? m.id.slice(0, -"_present".length) : m.id;
+      const absent = !(metric in grade) && !(`${metric}_present` in grade);
+      if (profile === "harness" && floats.has(metric) && absent && !(metric in sigs)) {
+        predated.add(metric);
+        continue;
+      }
       // A key whose `_present` companion is 0 was not measured on this row and is OMITTED, never scored 0
       // (a 0 would be a fabricated failure, or a win for a lower-is-better float). Ours, not upstream: the
       // report just shows a blank cell. Applied in both profiles — both are our reading of the contract.
@@ -453,6 +468,12 @@ function checkRow(
       const v = grade[m.id];
       if (m.kind === "binary" && !(v === 0 || v === 1 || typeof v === "boolean"))
         c.error("row.grade", file, `grade.${m.id} is declared binary but is ${JSON.stringify(v)}`, line);
+    }
+    const variant = file.split("/")[0]!;
+    for (const metric of predated) {
+      const per = d.predates.get(metric) ?? new Map<string, number>();
+      per.set(variant, (per.get(variant) ?? 0) + 1);
+      d.predates.set(metric, per);
     }
   }
 
@@ -650,6 +671,18 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
         const [id, rep] = k.split("\0");
         c.note("trace.missing", `${v}/traces/${id}_rep${rep}.json`, "row has no trace: no click-through for this rep");
       }
+  }
+
+  for (const [metric, per] of d.predates) {
+    const n = [...per.values()].reduce((a, b) => a + b, 0);
+    const where = [...per].map(([v, k]) => `${v} ${k}`).join(", ");
+    // `check` reads the flow alone, not the scenarios, so it cannot tell a metric added after these rows from one no
+    // scenario declares any more; it says both (`state-template --flow` names the removed ones).
+    c.note(
+      "row.grade",
+      "_state.json",
+      `${n} rows do not carry metric ${metric} (${where}): added after they were written, or no scenario declares it any more (then remove it from _state.json); its mean covers the rows that carry it only`,
+    );
   }
 
   for (const [id, sp] of d.splitIds)

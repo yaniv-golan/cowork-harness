@@ -219,6 +219,23 @@ All notable changes to this project are documented here. The format is based on
   message naming the change, which the dry run's gate line names too. `--skill` is not remembered between passes, so the
   runner command the loop repeats must carry it every time. Without `--skill` the sha is what it was before.
 
+- **`hillclimb` grades a scenario's `metrics`.** Each metric declared across a flow's scenarios is a grade key
+  on every row: `<id>` holds the measured value and is left out when nothing was measured (never written as 0),
+  and `<id>_present` says whether it was measured — 0 on a case that does not declare the metric, on an
+  agent-caused failure, and when the metric was unavailable, with the reason in `meta.metrics_unavailable`.
+  `hillclimb state-template` declares them (direction, plus `scale` and `min` when given, with labels unique
+  across the declarations) and defines each in `metrics.md` (the file and path it is read from, its direction and
+  range). `hillclimb run` and `state-template` refuse one metric id declared differently in two scenarios, or
+  spelled in a different case, before spending, naming both cases. Each row records its metrics' declaration
+  signatures in `meta.metric_sigs`, and `hillclimb run` (with `--dry-run`) refuses a metric whose declaration
+  changed since the flow's rows were written, naming the variants; adding or removing a metric mid-flow is allowed,
+  and `run` warns on a removed one and on row metrics `_state.json` does not declare. `hillclimb check` notes rows
+  that predate a declared metric instead of failing them, warns about a float outside `[min, scale]`, refuses a
+  non-numeric `min`, and its headroom reads a lower-is-better float's good end from `min`, 0 when absent.
+  `hillclimb regrade` keeps the metric keys on every row it rebuilds, re-measures them on a row it re-grades (which
+  gains the signatures of metrics added since, and loses an unavailable reason for one now measured), and refuses a
+  changed declaration before any judge call, as `run` does. See docs/cli.md → Numeric metrics in hillclimb.
+
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
   run` writes rows with, without running the agent: by default every judged assert is graded again (a judge or rubric

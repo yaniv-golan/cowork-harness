@@ -222,6 +222,16 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
   under the flow.
 - **`skill_invoked` is 1 or 0** for whether the run invoked the tracked skill (`meta.skill_tracked` names it);
   a row without it means no skill was tracked, not "not invoked".
+- **Numeric metrics.** A scenario's declared `metrics` are columns on every scored row:
+  - `<id>` holds the value, and is present only when the metric was measured.
+  - `<id>_present` is 1 when measured and 0 otherwise. When the metric was unavailable,
+    `meta.metrics_unavailable` names the reason.
+  - Adding a metric mid-flow is allowed. Older rows predate it and do not carry it, and `check` says so in a note.
+    A regrade that re-judges a row re-measures the metric from the kept run.
+  - Changing a declaration is refused (artifact, path, direction, `scale`, `unbounded` or `min`; an omitted `min` is `min: 0`). Start a new flow,
+    or give the metric a new id.
+  - Removing a metric is allowed. Also remove its entries from `_state.json`.
+  - The headline stays the pass rate. A number is never the headline; the metric columns sit beside it.
 - **An agent's own failure is a scored row**: every graded key `0`, `meta.failure_class: "errored_agent"` and
   its `meta.termination_rule`. A row with `status: "truncated"` hit the output-token limit; the headroom check
   skips it.

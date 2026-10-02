@@ -1,0 +1,20 @@
+# Acceptance: pairwise judging with both presentation orders, used by the judge-calibration criteria.
+name: b5-insights-pairwise
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Analyze sales.csv from my uploads with the csv-report skill. Make the insights note useful to a sales manager.
+assert:
+- user_visible_artifact: outputs/insights.md
+- semantic_pairwise:
+    order: both
+    evidence_files: [outputs/insights.md]
+    rubric:
+    - Every insight is grounded in a number from the data
+    - Points out the anomaly and what to do about it
+    - A sales manager could act on it without opening the CSV
