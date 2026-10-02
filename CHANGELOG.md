@@ -409,10 +409,15 @@ All notable changes to this project are documented here. The format is based on
 - **`prune` keeps hillclimb runs.** A run labelled `hillclimb:…` is not pruned and takes no `--keep-last` slot, so
   a routine `prune` during a climb leaves the runs `hillclimb regrade` and `hillclimb freeze-ref` read. A run you
   labelled `--label hillclimb:…` yourself is kept the same way. `prune` prints how many it kept per scenario and
-  label, and lists each one under `--dry-run`. A bare `prune` therefore deletes less than before.
-- **`prune` never deletes a run that is still running.** A run whose `status.json` says `running`, and whose
-  writer is still updating it, is skipped whatever the flags, and the final line counts it. A run frozen at
-  `running` by a crash goes stale and is pruned as usual.
+  label, and lists each one under `--dry-run`. A bare `prune` therefore deletes less than before. A `sess-*` dir
+  follows the pinned rule (`--pinned-older-than`) even when it carries a hillclimb label, and a run dir that is a
+  symlink is not read through, so it is an ordinary run (pruning it removes only the link). The eval note also
+  finds an eval's label in the latest turn's `result.json` when `status.json` is missing or unreadable.
+- **`prune` keeps a run whose `status.json` says `running` while it is still being updated or its process is
+  alive (up to 24h).** Such a run is skipped under every flag, and the final line counts it. "Still being
+  updated" uses the status staleness window (`COWORK_HARNESS_STATUS_STALE_MS`, default 15s, read from `prune`'s own
+  environment). A run frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json`
+  that is not a regular file is not read, so a FIFO there cannot hang `prune`.
 - **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers

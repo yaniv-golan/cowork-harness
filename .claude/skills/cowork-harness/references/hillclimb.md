@@ -154,7 +154,8 @@ It re-grades the flow's scored rows from their kept run dirs (found by `meta.run
 and rewrites each row through the same producer `run` writes it with. Pass the same `--run-dir` /
 `COWORK_HARNESS_RUNS_DIR` the runs were written with, or every row is listed as having no kept run dir. A bare
 `prune` keeps hillclimb-labelled runs; `prune --include-hillclimb` deletes them for every flow under the runs root,
-so pass it only once every climb there is finished.
+a loop still running included, and `freeze-ref` re-reads a frozen reference's source run, so pass it only once
+every climb there is finished.
 
 - **Default:** every judged assert is graded again, with the flow's references as they are now, and `pass` is
   recomputed. Use it after a judge or rubric change. A rubric fix is gated (see the harness gate above).
