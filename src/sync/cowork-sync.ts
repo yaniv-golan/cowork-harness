@@ -3257,6 +3257,15 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   // allowlist entry cannot silently start admitting an unconditional or re-keyed construction.
   CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:
     "frameArtifactsEnabled server-flag-conditional (default absent); shared-predicate conditionality asserted by S6d",
+  // Desktop 2.19675.0. One W1 construction site: `...Sd(a)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}`, with
+  // `function Sd(e){return e.sessionType===t.WR}` and `t.WR` resolving to the literal "scheduled" — set
+  // only for scheduled-task runs. The harness models an interactive session (no sessionType), so there is
+  // no value to pin; pinning would bake a scheduled-only "1" into every modeled spawn. Allowlisting is
+  // unconditional by construction (resolveInto returns on the hit), so S6g asserts that every construction
+  // stays guarded by exactly that predicate — without it, Desktop widening the condition would be admitted
+  // here in silence.
+  CLAUDE_CODE_HOST_SCHEDULED_RUN:
+    "scheduled-task sessionType-conditional (sessionType==='scheduled'); the modeled interactive session has no sessionType; guarded by S6g",
   CLAUDE_CODE_ATTRIBUTION_HEADER: "3p-provider-only branch; harness models 1p",
   // Doubly conditional, and TWO traps a future reader will hit in this order:
   // (1) The managed-settings UI copy for this key names Cowork explicitly ("Raises how long Cowork, Chat
@@ -4266,6 +4275,49 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         "S6f artifact host grant",
         `${GRANT_KEY} is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it`,
       );
+  }
+  // S6g (Desktop 2.19675.0): CLAUDE_CODE_HOST_SCHEDULED_RUN is ALLOWLISTED as scheduled-run-only, and that
+  // claim rests entirely on this guard (the allowlist hit is unconditional). Same scoping rules as S6f, for
+  // the same reasons: a BUNDLE-WIDE COUNT (the key may move to another chunk; a second construction may
+  // appear beside the guarded one), with export-table declarations (`KEY:()=>local`) excluded.
+  // Every construction must be one of two guarded shapes:
+  //   call form   `...<P>(<s>)&&{KEY:…}` where `<P>` resolves, in the spread's own chunk, to EXACTLY
+  //               `function <P>(<e>){return <e>.sessionType===<C>}` and `<C>` is "scheduled" or a
+  //               (namespace) reference whose binding is the literal "scheduled";
+  //   inline form `...<s>.sessionType==="scheduled"&&{KEY:…}`.
+  // An exact-body match is deliberate: a widened (`||…`), negated, re-keyed or constant predicate must fail.
+  {
+    const SCHED_KEY = "CLAUDE_CODE_HOST_SCHEDULED_RUN";
+    const schedMiss = (why: string) => miss("S6g scheduled-run env key", why);
+    const ctors = [...bundle.matchAll(new RegExp(`${SCHED_KEY}:(?!\\(\\)=>)`, "g"))].length;
+    const callSpreads = [...bundle.matchAll(new RegExp(`\\.\\.\\.([\\w$]+)\\(([\\w$]+)\\)&&\\{${SCHED_KEY}:`, "g"))];
+    const inlineSpreads = [...bundle.matchAll(new RegExp(`\\.\\.\\.[\\w$]+\\.sessionType==="scheduled"&&\\{${SCHED_KEY}:`, "g"))];
+    if (ctors !== callSpreads.length + inlineSpreads.length)
+      schedMiss(
+        `${ctors} construction(s) of ${SCHED_KEY} in the bundle but ${callSpreads.length + inlineSpreads.length} spread(s) guarded ` +
+          'on sessionType==="scheduled" — at least one construction is unguarded or newly shaped, so the allowlist\'s ' +
+          "'scheduled runs only' claim no longer holds; reclassify",
+      );
+    for (const s of callSpreads) {
+      const site = siteOf(s[0]);
+      const fn = s[1];
+      const header = new RegExp(`function ${reEsc(fn)}\\(([\\w$]+)\\)\\{`).exec(site);
+      const body = header ? braceBodyOf(site, header[0]) : null;
+      if (!header || body === null) {
+        schedMiss(`the spread's predicate ${fn}() does not resolve to a function in its chunk`);
+        continue;
+      }
+      const cmp = body.match(new RegExp(`^return ${reEsc(header[1])}\\.sessionType===("scheduled"|[\\w$]+(?:\\.[\\w$]+)?)$`));
+      if (!cmp) {
+        schedMiss(`the predicate ${fn}() is no longer exactly \`return <s>.sessionType===<scheduled>\` — it may now admit other sessions`);
+        continue;
+      }
+      if (cmp[1] === '"scheduled"') continue;
+      const ref = resolveNamespaceRef(cmp[1], site, files);
+      if (!ref) schedMiss(`the predicate's comparand ${cmp[1]} could not be resolved`);
+      else if (!new RegExp(`(?<![\\w$.])${reEsc(ref.local)}="scheduled"(?![\\w$])`).test(ref.chunk))
+        schedMiss(`the predicate's comparand ${cmp[1]} no longer resolves to "scheduled"`);
+    }
   }
   // S8 (widened, Desktop 1.28929.0): pin the WHOLE tools[] tail through its closing bracket, not just the
   // first spread after "ToolSearch". The old anchor stopped at `...X.sessionType===`, so anything appended

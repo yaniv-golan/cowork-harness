@@ -1307,6 +1307,79 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts(repointed).join("\n")).toContain("S6f artifact host grant");
   });
 
+  // Desktop 2.19675.0: W1 gained `...Sd(a)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}`, where
+  // `function Sd(e){return e.sessionType===t.WR}` and `t.WR` resolves to the literal "scheduled". The key is
+  // ALLOWLISTED (the modeled interactive session has no sessionType), and the allowlist is unconditional by
+  // construction, so S6g is what keeps that classification honest: every construction must be a spread
+  // guarded by a predicate that resolves to exactly `sessionType==="scheduled"`.
+  const SCHED_PRED =
+    'function zSd(e){return e.sessionType===zN.WR};var zN={};Object.defineProperty(exports,"WR",{enumerable:!0,get:function(){return zx7}});var zx7="scheduled";';
+  const SCHED_SPREAD = '...zSd(a)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},';
+  // The bundled CLI's env-schema export table names the key too; that is a declaration, not a construction.
+  const SCHED_EXPORT = ";var zenv={CLAUDE_CODE_HOST_SCHEDULED_RUN:()=>zjw};";
+  const fixtureSched = () =>
+    fixture2255310().replace(
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},' + SCHED_SPREAD,
+    ) +
+    ";" +
+    SCHED_PRED +
+    SCHED_EXPORT;
+  it("S6g control: the 2.19675.0 scheduled-run spread is CLEAN, and deriveSpawnEnv does not hard-fail on it", () => {
+    expect(checkSpawnContractFacts(fixtureSched())).toEqual([]);
+    const { env, flags } = deriveSpawnEnv(fixtureSched(), greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).not.toBeNull();
+    expect(env).not.toHaveProperty("CLAUDE_CODE_HOST_SCHEDULED_RUN"); // allowlisted, never pinned
+  });
+  it('S6g control: the inline form `...<s>.sessionType==="scheduled"&&{…}` is CLEAN', () => {
+    const inline = fixtureSched().replace(SCHED_SPREAD, '...a.sessionType==="scheduled"&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},');
+    expect(checkSpawnContractFacts(inline)).toEqual([]);
+  });
+  it("S6g control: export-table declaration only (no construction) is CLEAN", () => {
+    expect(checkSpawnContractFacts(fixture2255310() + SCHED_EXPORT)).toEqual([]);
+  });
+  const SCHED_GUARD_MUT: Array<[string, () => string]> = [
+    ["G1 key made unconditional", () => fixtureSched().replace(SCHED_SPREAD, 'CLAUDE_CODE_HOST_SCHEDULED_RUN:"1",')],
+    ["G2 condition widened with ||!0", () => fixtureSched().replace("...zSd(a)&&{", "...zSd(a)||!0&&{")],
+    [
+      "G3 predicate widened to a second sessionType",
+      () => fixtureSched().replace("return e.sessionType===zN.WR}", 'return e.sessionType===zN.WR||e.sessionType==="agent"}'),
+    ],
+    ["G4 predicate negated", () => fixtureSched().replace("return e.sessionType===zN.WR}", "return e.sessionType!==zN.WR}")],
+    ["G5 comparand re-pointed to another value", () => fixtureSched().replace('var zx7="scheduled"', 'var zx7="agent"')],
+    ["G6 predicate no longer resolvable", () => fixtureSched().replace("function zSd(e){", "function zSdGone(e){")],
+    [
+      "G7 predicate reads a different field",
+      () => fixtureSched().replace("return e.sessionType===zN.WR}", "return e.scheduledTaskId===zN.WR}"),
+    ],
+    ["G8 second unguarded construction elsewhere", () => fixtureSched() + ';var elsewhere={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"};'],
+    [
+      "G9 inline form widened to another sessionType",
+      () => fixtureSched().replace(SCHED_SPREAD, '...a.sessionType==="agent"&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},'),
+    ],
+    ["G10 predicate made constant-true", () => fixtureSched().replace("return e.sessionType===zN.WR}", "return!0}")],
+  ];
+  it.each(SCHED_GUARD_MUT)("S6g mutation %s fails loud (%#)", (_label, mutate) => {
+    expect(checkSpawnContractFacts(mutate()).join("\n")).toContain("S6g scheduled-run env key");
+  });
+  it("S6g cross-chunk: the comparand resolves through the require() hop, and fails closed when re-pointed", () => {
+    const spawnChunk =
+      fixture2255310().replace(
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},' + SCHED_SPREAD,
+      ) + ';var zN=require("./index.chunk-MAIN.js");function zSd(e){return e.sessionType===zN.WR}';
+    const main = 'Object.defineProperty(exports,"WR",{enumerable:!0,get:function(){return x7t}});var q=1,x7t="scheduled";';
+    const files = new Map([
+      ["index.chunk-spawn.js", spawnChunk],
+      ["index.chunk-MAIN.js", main],
+    ]);
+    expect(checkSpawnContractFacts([...files.values()].join(""), files)).toEqual([]);
+    const broken = new Map(files);
+    broken.set("index.chunk-MAIN.js", main.replace('x7t="scheduled"', 'x7t="dispatch_child"'));
+    expect(checkSpawnContractFacts([...broken.values()].join(""), broken).join("\n")).toContain("S6g scheduled-run env key");
+  });
+
   // The fixtures above run in single-text mode, where resolveNamespaceRef falls back to searching the one
   // string — so they never exercise the `NS=require("./chunk-X.js")` hop that production actually depends
   // on (the reader lives in a DIFFERENT chunk from the spawn site). This one splits them across two files
