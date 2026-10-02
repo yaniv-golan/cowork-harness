@@ -6075,6 +6075,7 @@ function replayErrorResult(file: string): RunResult {
     partlyScriptedGates: undefined,
     scan: undefined,
     fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
+    outputsMountMode: undefined, // no live run here; absent reads as rw
     effectiveFidelity: undefined,
     fidelityWarnings: undefined,
     staleness: undefined,
@@ -9185,6 +9186,7 @@ export async function replayCassette(
       partlyScriptedGates: rec.partlyScriptedGates.length ? rec.partlyScriptedGates : undefined,
       scan: undefined,
       fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
+      outputsMountMode: undefined, // no live run here; absent reads as rw
       fidelityWarnings: undefined,
       l0HostConfigContamination: undefined,
       missingCapabilityUse: undefined,

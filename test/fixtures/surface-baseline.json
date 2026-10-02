@@ -3310,6 +3310,10 @@
       ".outputsDir": {
         "type": "string"
       },
+      ".outputsMountMode": {
+        "type": "string",
+        "enum": ["rw", "rwd"]
+      },
       ".partial": {
         "type": "boolean"
       },

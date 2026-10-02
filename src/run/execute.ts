@@ -30,7 +30,7 @@ import { buildFingerprint, skillCommit } from "./cassette.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { deriveOutcome } from "./outcome.js";
-import { loadBaseline } from "../baseline.js";
+import { loadBaseline, stampedOutputsMountMode } from "../baseline.js";
 import {
   loadSession,
   resolveSessionPaths,
@@ -1530,12 +1530,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       }
     }
 
+    // The outputs mount mode this run's baseline records ("rwd" from Desktop 2.16120.0: deletes allowed; "rw"
+    // before). Persisted on the result so the verdict — a pure function of RunResult — can follow it. Nothing
+    // on `lane: remote`, where the Desktop mount fact is not evidence (absent reads as rw).
+    const outputsMountMode = stampedOutputsMountMode(baseline, scenario.lane);
     // Detect deletes across every DELETE-DENIED mount, not just outputs — production's denial is a
-    // property of the mount class, so a connected `rw` folder is in scope too.
+    // property of the mount class, so a connected `rw` folder is in scope too. `scanEvents` scans outputs on
+    // every baseline regardless: the authored no_delete_in_outputs / no_delete_in_mounts keys cover it.
     // Host paths the user supplied (the staged input files, captured on the first turn, and this turn's
     // prompt) are not a leak when the agent quotes them back verbatim.
     const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity);
-    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan), inputCorpus);
+    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus);
     // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
     // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
     const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
@@ -1608,7 +1613,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     const fsDiff = outputsFsDiff(readOutputsBaseline(outDir), outputsPostWalk, outputsPathHasher(workRoot));
     scan.outputsDeletes.push(...fsDiff.findings);
     scan.outputsDeleteBasis.push(...fsDiff.findings.map(() => "fs-diff" as const));
-    if (fsDiff.status === "unavailable")
+    // Only when the outputs check is armed: on an rwd run nothing authored reads the diff, so "a delete would go
+    // undetected" would be noise about an operation production allows.
+    if (
+      fsDiff.status === "unavailable" &&
+      (outputsMountMode !== "rwd" || scenario.assert.some((a) => a.no_delete_in_outputs !== undefined))
+    )
       warn(
         `::warning:: [scan] the outputs filesystem diff could not verify this turn (${fsDiff.reason}) — ` +
           `a delete made without a bash command would go undetected\n`,
@@ -1624,6 +1634,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
+        outputsMountMode,
         turn,
         // Without this the salvage lane reported `modelSource: "unresolved"` on a run that WAS pinned —
         // a positive false statement, and one `CompleteRunResult` cannot catch (it guards the result's
@@ -2222,6 +2233,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           },
       // The outputs filesystem diff — a sibling of `scan`, so a proven delete survives a missing events.jsonl.
       fsDiff,
+      outputsMountMode,
       effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
       fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
       l0HostConfigContamination: l0HostConfigContamination || undefined, // failing fidelity signal for protocol+plugins
@@ -3009,6 +3021,8 @@ export function buildPartialResult(args: {
   unanswered: { message: string; hint?: string };
   /** The turn's outputs filesystem diff, already computed when the salvage branch runs. */
   fsDiff?: OutputsFsDiff;
+  /** The baseline's recorded outputs mode (see `stampedOutputsMountMode`); `args.baseline` is only a name. */
+  outputsMountMode?: "rw" | "rwd";
   /** The model the scenario/session pinned, if any — threaded in so a salvaged run reports the same model
    *  provenance a complete one does. Undefined means nothing pinned it (modelSource "unresolved"). */
   pinnedModel?: string;
@@ -3200,6 +3214,7 @@ export function buildPartialResult(args: {
     scan: undefined,
     // Computed before the salvage branch; a filesystem-proven delete must survive into the partial result.
     fsDiff: args.fsDiff,
+    outputsMountMode: args.outputsMountMode,
     fidelityWarnings: undefined,
     l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
@@ -4194,8 +4209,8 @@ export function inputProvenanceCorpus(
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
 export function scanEvents(
   file: string,
-  /** Writable (`rw`) user-visible mount names to attribute deletes to. Production denies unlink/rmdir on
-   *  EVERY such mount, not just `outputs`. Defaults to outputs-only so existing callers are unchanged. */
+  /** Delete-denied (`rw`) user-visible mount names to attribute deletes to. Production denies unlink/rmdir on
+   *  EVERY such mount. `outputs` is scanned in addition whether or not it is listed (see below). */
   rwMounts: string[] = ["outputs"],
   /** Host-path tokens the USER supplied (captured from the staged inputs before the agent ran). A matched
    *  token found here verbatim is not a leak; omitted ⇒ every match leaks, as before. */
@@ -4222,6 +4237,10 @@ export function scanEvents(
   // line could have been silently dropped. >0 makes the scan untrustworthy, treated as evidence-unavailable.
   malformedLines: number;
 } {
+  // `outputs` is ALWAYS scanned, and its hits land in both `outputsDeletes` and `mountDeletes`, even on a
+  // baseline that mounts it delete-allowed ("rwd", Desktop 2.16120.0+) and so leaves it out of `rwMounts`:
+  // the authored `no_delete_in_outputs` and `no_delete_in_mounts` keys cover outputs on every baseline, and
+  // they read exactly this evidence. Only the default verdict follows the recorded mode (verdict.ts).
   const mounts = rwMounts.includes("outputs") ? rwMounts : ["outputs", ...rwMounts];
   const out = {
     outputsDeletes: [] as string[],

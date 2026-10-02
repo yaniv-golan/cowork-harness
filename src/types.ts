@@ -2512,10 +2512,10 @@ export interface RunResult {
      *  outputs path as its own operand; `inferred` = flagged by the detector's inference (unprovable target, relative `cd`).
      *  Absent on results written before it existed — read as "unknown", which fails closed. */
     outputsDeleteBasis?: ("fs-diff" | "named" | "inferred")[];
-    /** Per-mount delete detections across every delete-denied (`rw`) user-visible mount, including
-     *  `outputs`. A SUPERSET of `outputsDeletes`, which is unchanged: production denies unlink/rmdir on
-     *  every such mount, so a delete in a connected folder is a real detection that used to produce no
-     *  signal at all. Reported, not verdict-moving — the harness detects where production ENFORCES. */
+    /** Per-mount delete detections across every delete-denied (`rw`) connected folder, plus `outputs` on every
+     *  baseline (the `no_delete_in_mounts` assertion covers it whatever the recorded mode). A SUPERSET of
+     *  `outputsDeletes`. A connected-folder hit is a delete production denies until approval; it warns
+     *  (`mount_delete`), never moving the verdict on its own — the harness detects where production ENFORCES. */
     mountDeletes?: { mount: string; command: string }[];
     /** A host path that did NOT come from the scenario's inputs appeared in model-visible text. */
     hostPathLeaked: boolean;
@@ -2537,6 +2537,12 @@ export interface RunResult {
    *  an unanswered gate (the diff runs before salvage). Absent on replay, chat, and results written before it
    *  existed. */
   fsDiff?: OutputsFsDiff;
+  /** The mode the run's baseline records for the `outputs` mount, copied when the run executed: `rwd` (Desktop
+   *  2.16120.0 and later, a normal session: deletes allowed) or `rw` (earlier releases: delete-denied). On `rwd`
+   *  an outputs delete does not fail the default verdict; `no_delete_in_outputs` still checks it. Absent on
+   *  `lane: remote` (the Desktop mount fact is not evidence about the cloud lane), replay, chat, and results
+   *  written before it existed — absent reads as `rw`, so those keep the delete-denied verdict. */
+  outputsMountMode?: "rw" | "rwd";
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. */
   effectiveFidelity?: string;
   /** Run-identity metadata for the iterate-across-fixes loop. `runLabel`: the user's `--label` generation

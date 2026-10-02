@@ -1265,6 +1265,11 @@
       "required": ["status", "findings"],
       "additionalProperties": false
     },
+    "outputsMountMode": {
+      "type": "string",
+      "enum": ["rw", "rwd"],
+      "description": "The mode the run's baseline records for the outputs mount: rwd (Desktop 2.16120.0 and later, a normal session: deletes allowed) or rw (earlier: delete-denied). On rwd an outputs delete does not fail the default verdict; no_delete_in_outputs still checks it. Absent on lane: remote, replay, chat, and results written before it existed; absent reads as rw."
+    },
     "effectiveFidelity": {
       "type": "string",
       "description": "The fidelity tier actually used (differs from fidelity when fidelity:'cowork')"
