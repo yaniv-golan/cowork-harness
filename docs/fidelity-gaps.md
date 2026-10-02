@@ -40,7 +40,7 @@ bridge. **No setting reliably decides which lane a real session gets.** As of De
 (2026-10-02), the composer shows no per-session lane picker, on desktop or on the web, in the two
 organizations checked. Cowork has an "Only on this computer" option, at Settings → Cowork in the older
 composer and at Settings → General → Tasks in the merged interface, and sessions still ran in the cloud
-with it **on** (13+ runs on the merged interface, 2026-10-02). Separately, on Desktop 2.16120.0 some new
+with it **on** (13+ runs on Desktop 2.19675.0, merged interface, 2026-10-02). Separately, on Desktop 2.16120.0 some new
 sessions ran locally; the setting's state for those runs is not recorded. Anthropic's
 [architecture overview](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) describes
 the cloud as Cowork's default and says existing desktop deployments can still run sessions on the user's
