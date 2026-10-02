@@ -987,3 +987,5 @@ export function recordedLayoutDivergence(baseline: PlatformBaseline): { recorded
   if (sessionRoot.endsWith(`/${GUEST_MNT_SEGMENT}`)) return { recorded: sessionRoot, staged };
   return undefined;
 }
+
+export const PLUGIN_PATH_VM_REWRITE_MIN_VERSION = "";

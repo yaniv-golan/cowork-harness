@@ -649,3 +649,12 @@ function hostLoopShellSection(
   }
   return stripComments(content).split("{{vmMnt}}").join(vmMnt).trim();
 }
+
+export function hostLoopPluginPathRewrites(
+  _baseline: unknown,
+  _plan: unknown,
+  _mntHost: string,
+  _vmSessionRoot: string,
+): import("../hostloop/plugin-path-rewrite.js").PluginPathRewrite[] {
+  return [];
+}
