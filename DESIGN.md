@@ -47,9 +47,9 @@ the host, not the VM: see "Which Cowork? — both are implemented" under
 [§6, Control protocol mapping](#6-control-protocol-mapping) below, which is authoritative over the
 sandbox-centric description here. The **remote** lane runs the agent in an Anthropic-hosted cloud container instead.
 Anthropic [documents the cloud as Cowork's default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview),
-with local execution remaining available for existing desktop deployments, and for Pro and Max plans
+and says existing desktop deployments can still run sessions on the user's machine; for Pro and Max plans it
 [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new tasks run in
-the cloud from 2026-10-06, with tasks started before that date staying local. Both lanes are in active use, and no
+the cloud from 2026-10-06, with tasks already running on the user's computer finishing there. Both lanes are in active use, and no
 setting reliably decides which one a session gets (see
 [docs/fidelity-gaps.md → Which lane a session actually ran on](./docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)). The lanes differ
 in how a file reaches the user, which is what changes skill behaviour: see

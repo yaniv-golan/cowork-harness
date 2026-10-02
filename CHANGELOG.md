@@ -765,8 +765,8 @@ All notable changes to this project are documented here. The format is based on
   local-lane precondition the same way.
 - The remote lane's device-bridge tools are documented under the names the agent calls,
   `mcp__remote-devices__<tool>` (and `mcp__remote-devices__<server>__<tool>` for a bridged host MCP server), and
-  `device_commit_files` as taking either a shared file's id (`fileUuid`, preferred) or a staged path under the
-  outputs root (`stagedPath`).
+  `device_commit_files` as taking 1–50 files, each naming a shared file's id (`fileUuid`, preferred) or a staged
+  path (`stagedPath`); both are optional in the schema.
 
 ## [4.2.1] — 2026-10-01
 

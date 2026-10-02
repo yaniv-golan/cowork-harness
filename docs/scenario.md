@@ -206,11 +206,13 @@ be reached by the model.
 
 Cowork runs a session in one of two lanes: **local** (the agent on the user's machine) or **remote** (an
 Anthropic-hosted cloud container). As of Desktop 2.19675.0 the composer offers no per-session lane picker,
-and no setting reliably decides the lane; for Pro and Max plans, Anthropic announces that new tasks run in
-the cloud from 2026-10-06 (see
+and no setting reliably decides the lane; for Pro and Max plans, Anthropic
+[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new
+tasks run in the cloud from 2026-10-06 (see
 [fidelity-gaps.md → Which lane a session actually ran on](./fidelity-gaps.md#which-lane-a-session-actually-ran-on)).
 The lanes disagree about what *delivered* means, so a scenario declares which contract it is testing
-against.
+against. `local` is this harness's default because it emulates the local lane; Cowork's
+[documented default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) is the cloud.
 
 | | `lane: local` (default) | `lane: remote` |
 |---|---|---|
@@ -239,8 +241,9 @@ mean real command execution and real writes on the operator's machine on behalf 
 See [fidelity-gaps.md](./fidelity-gaps.md).
 
 **When to reach for it.** Set `lane: remote` to check whether a skill's delivery survives the cloud lane
-(Anthropic announces that from 2026-10-06 new Pro and Max tasks run in the cloud). A skill that delivers by writing into `outputs/` and nothing else will fail
-there — that is the finding, not a harness bug.
+(Anthropic [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile)
+that from 2026-10-06 new Pro and Max tasks run in the cloud). A skill that delivers by writing into
+`outputs/` and nothing else will fail there — that is the finding, not a harness bug.
 
 ## Fidelity tiers (`fidelity:`)
 

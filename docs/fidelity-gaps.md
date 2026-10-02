@@ -43,11 +43,11 @@ composer and at Settings → General → Tasks in the merged interface, and sess
 with it **on** (13+ runs on the merged interface, 2026-10-02). Separately, on Desktop 2.16120.0 some new
 sessions ran locally; the setting's state for those runs is not recorded. Anthropic's
 [architecture overview](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) describes
-the cloud as Cowork's default, with local execution remaining available for existing desktop
-deployments. Its [web, desktop and mobile article](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) adds,
+the cloud as Cowork's default and says existing desktop deployments can still run sessions on the user's
+machine. Anthropic's [web, desktop and mobile article](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) adds,
 for Pro and Max plans, Anthropic's announcement that from 2026-10-06 new tasks run in the cloud and the
-"Only on your computer" option is removed, and that tasks started before that date stay local until they
-are done. So
+option is removed (the article calls it "Only on your computer"), and that tasks already running on the
+user's computer stay there until they are done. So
 establish the lane from the session itself: see
 [Which lane a session actually ran on](#which-lane-a-session-actually-ran-on).
 
@@ -93,24 +93,28 @@ its apt doc stack, `pdfplumber` in pip).
 
 No setting reliably decides the lane (see above), so check the session itself before comparing it to a
 run here. This is the one place these checks are listed. Each of these places a session when it is
-present. `CLAUDE_CODE_ENTRYPOINT` and report paths point both ways; the environment heading and the
-Desktop log lines are positive signals only, and their absence proves nothing.
+present. `CLAUDE_CODE_ENTRYPOINT` read from a hook, and report paths, point both ways; the environment
+heading and the Desktop log lines are positive signals for the local lane only, and their absence proves
+nothing.
 
 - **The agent's environment.** `CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and
-  `remote_cowork` on the cloud lane. Read it from a hook that prints its environment: hooks run in the
-  agent's own process environment. From the shell it is weaker evidence. On the pinned baseline the local
+  `remote_cowork` on the cloud lane. Read it from a hook, because hooks run in the agent's own process
+  environment: add a plugin hook on a per-turn event such as `UserPromptSubmit` whose command is
+  `echo "CLAUDE_CODE_ENTRYPOINT=$CLAUDE_CODE_ENTRYPOINT"`. That event's stdout is added to the model's
+  context, so ask the agent to quote the line back. Do not use `SessionStart`: on the cloud lane it fires
+  only on resume (see the measured table below). From the shell it is weaker evidence. On the pinned baseline the local
   lane runs the agent loop on the host and the shell in the VM, and spawn-env variables are not set in
   that VM shell, so `remote_cowork` from a shell places a session on the cloud lane, but an empty value
   from a local-lane VM shell is not evidence of anything. Do not read it through `device_bash` either: on
-  the cloud lane that tool runs on the user's device, not in the session's container. The entrypoint is a reliable lane marker; the
-  next section is about something else, why remote-only *features* should not be described as gated on
-  it.
+  the cloud lane that tool runs on the user's device, not in the session's container. The entrypoint is
+  a reliable lane marker even though remote-only features are not gated on it (next section).
 - **A sub-agent's environment section.** A dispatched sub-agent that reports a section headed
   `## Cowork environment` (see [subagents.md](./subagents.md)) ran on the local lane. A cloud-lane
   session's prompt is authored by the server and does not carry it. The server can also override that
   section on the local lane, though, so a missing heading alone does not prove the session was cloud.
 - **Desktop's log.** When Desktop starts a local-lane session it writes a `Starting local session
-  local_<id> …` line to `~/Library/Logs/Claude/main.log`; match it to the session by that id. A
+  local_<id> …` line to `~/Library/Logs/Claude/main.log`; match it to the session by its timestamp against when the session
+  started. A
   `LocalAgentModeSessions.start` line at the same moment corroborates it. A `[sessions-bridge]` line
   naming a `cse_<id>` session is the positive signal for the cloud lane. The log rotates (`main1.log` …
   `main4.log`), so search those too. A missing line proves nothing on its own: the log may have rotated
@@ -154,7 +158,7 @@ a live bug report can be placed on the right lane before it is compared to a har
 | `CLAUDE_CODE_DESKTOP_APP_VERSION` | **unset** (and the agent reads it only under the `claude-desktop`/`local-agent` entrypoints) | set by Desktop ≥ 2.2553.1 and by this harness at hostloop from the baseline |
 | Hook lifecycle frames | `CLAUDE_CODE_REMOTE=true` turns on `hook_started`/`hook_response` frames for **every** hook event — the same switch as the CLI's `--include-hook-events`, which Desktop never passes. This is why a Stop hook was visible there and is not on a Desktop-local stream | frames for SessionStart/Setup only; the harness passes the flag itself, at every tier including `protocol`, when a staged plugin declares hooks |
 | Plugin root | `/root/.claude/plugins/synced/<org-uuid>_<account-uuid>/<plugin>/` (`CLAUDE_CODE_SYNC_PLUGINS=1`) | `mnt/.local-plugins/…` (docs/plugin-root.md) |
-| Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` on the device bridge — the agent calls them as `mcp__remote-devices__<server>__<tool>` (asar 2.19675.0) — with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1 | conditionally stubbed to zero tools by Desktop, never stubbed here (see the plugin-MCP section under "Plugins" for the two conditions — the bridge is a third data point for that open decision) |
+| Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1. The agent-facing name, `mcp__remote-devices__<server>__<tool>`, is from asar 2.19675.0 | conditionally stubbed to zero tools by Desktop, never stubbed here (see the plugin-MCP section under "Plugins" for the two conditions — the bridge is a third data point for that open decision) |
 | Plugin hooks | `Stop` fired (block → resend; no UI notice). `SessionStart` fired only on `source: "resume"`, never `startup` — inferred: plugins sync after the session starts. Cowork ships its **own** Stop hooks here (`stop-hook-reply-gate.py`, `stop-hook-git-check.sh` under `/home/claude/.claude/`) | hooks run at every tier (at `protocol` as native host processes; there, without a sealed managed config dir, a plugin installed on the host runs its hooks too); `hook_event_fired` / `hook_event_blocked` grade them, and `hook_output_contains` / `hook_output_not_contains` what they printed |
 | Other env markers | `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud_default`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `CLAUDE_CODE_WEBFETCH_USE_CCR_PROXY=1`, `CLAUDE_EFFORT` (write-only — the effort that applies is the hook payload's `effort.level`) | none are in the pinned spawn env |
 
@@ -1664,8 +1668,8 @@ tools as `mcp__remote-devices__<tool>`, and a host-side MCP server that Desktop 
 nests one level deeper, as `mcp__remote-devices__<server>__<tool>`. Agent-facing tools include
 `device_bash`, `device_list_dir`, `device_stage_files`, `device_commit_files`,
 `device_request_folder_access`, `get_device_info`, and device-artifact tools. `device_commit_files` is the
-remote lane's write-to-disk leg. Each file it writes names a destination inside a connected folder
-(`devicePath`) and a source, which is one of two things: the file id from an earlier `SendUserFile`
+remote lane's write-to-disk leg. A call takes 1–50 files and an optional overall `force`. Each file
+names a destination path on the device (`devicePath`) and a source, which is one of two things: the file id from an earlier `SendUserFile`
 (`fileUuid`), which its description marks as preferred when the file has one, or an absolute staged path under the
 container's outputs root, `/mnt/user-data/outputs/` (`stagedPath`), for an output that was never shared.
 Both source fields are optional in its schema (Desktop 2.19675.0), and a session-host variant of its
@@ -1693,7 +1697,8 @@ required `status`, which diffs against this harness as "wrong name AND wrong sch
 two lanes genuinely disagree, and a harness that adopted `SendUserFile` would green skills that then fail
 on real desktop-local Cowork — inverting the failure class the harness exists to catch. When a probe and
 this harness disagree about file delivery, establish which lane the probe ran on first:
-`CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and `remote_cowork` on the remote one (other
+`CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and `remote_cowork` on the remote one (read it
+from a hook, not the VM shell; other
 checks: [Which lane a session actually ran on](#which-lane-a-session-actually-ran-on)).
 
 ### Workarounds

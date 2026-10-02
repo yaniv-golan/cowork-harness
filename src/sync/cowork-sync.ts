@@ -734,13 +734,10 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "Still one account, one session, and still segment-targetable. " +
       "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
       "for its environment section verbatim, diff the three composed parts) rather than trusting this note. " +
-      "NOTE the probe has a PRECONDITION: the session must run on the LOCAL lane, and Cowork's " +
-      "`Only on this computer` setting (localAgentMode; Settings → Cowork, or Settings → General → Tasks) " +
-      "does not reliably select it — sessions have run in the cloud with it ON. A cloud session's prompt is " +
-      "server-authored and has no `## Cowork environment` section at all. Confirm the lane first " +
-      "(a hook-printed CLAUDE_CODE_ENTRYPOINT=local-agent, or a `Starting local session local_<id>` line in " +
-      "Desktop's main.log; an empty value from the VM shell is not evidence; see docs/fidelity-gaps.md, " +
-      '"Which lane a session actually ran on"), or you will probe a lane this harness does not model.',
+      "NOTE the probe has a PRECONDITION: the session must run on the LOCAL lane. Cowork's " +
+      "`Only on this computer` setting (localAgentMode) does not reliably select it (cloud runs seen with " +
+      "it ON), and Anthropic announces its removal for Pro/Max from 2026-10-06. Confirm the session ran " +
+      "locally before probing; see docs/fidelity-gaps.md, 'Which lane a session actually ran on'.",
   ];
 }
 
