@@ -32,6 +32,8 @@ import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-ind
 import { jsonPayloadEnvelope, envOutputFormat, fail, isJsonOutput, type ErrCategory } from "../run/envelope.js";
 import { checkMountDelivers } from "./mount-check.js";
 import { binaryPluginIdentity } from "../session.js";
+import { sanitizeSkillName } from "../skill-id.js";
+import { readSkillFrontmatterName } from "../run/skill-metadata.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
@@ -748,9 +750,15 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
     // `findEnclosingPluginDir` is INCLUSIVE of its start, so an equal path is shape 1, not shape 2.
     // Shape 2 reaches here only when `applyTargetPromotion` could NOT promote it to the enclosing plugin
     // (see there): the mount is this folder alone, so the plugin's agents and shared references are not in
-    // it and must not be in the corpus. The skill still has a name — its directory's.
-    if (enclosing !== null && enclosing !== mountRoot)
-      return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, basename(mountRoot)), gradedSkillName: basename(mountRoot) };
+    // it and must not be in the corpus. The skill still has a name — the one the agent registers it under:
+    // its frontmatter `name` (minus a leading "<plugin>:", the plugin being this folder), else the
+    // directory's, rewritten by `sanitizeSkillName`.
+    if (enclosing !== null && enclosing !== mountRoot) {
+      const plugin = binaryPluginIdentity(skillFolder).name;
+      const fm = readSkillFrontmatterName(join(skillFolder, "SKILL.md")) ?? "";
+      const registered = sanitizeSkillName((fm.startsWith(`${plugin}:`) ? fm.slice(plugin.length + 1) : fm) || basename(mountRoot));
+      return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, basename(mountRoot)), gradedSkillName: registered };
+    }
     return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder)) };
   }
   const skills = listPluginSkills();
@@ -2099,13 +2107,32 @@ export function gradedSkillNameFor(
 /** A plugin shipping BOTH commands/<n>.md and skills/<n>/SKILL.md registers ONE identical slash command,
  *  and the `Skill` tool launches either through the same registry; the run records the name, not the
  *  kind (vercel@0.48.0 does exactly this). That makes EVERY channel undecidable for this skill — a match
- *  is reported absent, never true. */
+ *  is reported absent, never true. The agent registers a command under its file stem as it is, and a skill
+ *  under its name rewritten (`sanitizeSkillName`), so the colliding stem is the rewritten name:
+ *  `commands/my-skill.md` shadows `skills/my.skill/`, `commands/my.skill.md` does not. */
 export function commandShadowsSkillFor(gradedSkillName: string | undefined, resolved: { pluginRoot: string | undefined }): boolean {
   return (
     gradedSkillName !== undefined &&
     resolved.pluginRoot !== undefined &&
-    existsSync(join(resolved.pluginRoot, "commands", `${gradedSkillName}.md`))
+    existsSync(join(resolved.pluginRoot, "commands", `${sanitizeSkillName(gradedSkillName)}.md`))
   );
+}
+
+/** Two or more `skills/<dir>` of the same plugin that the agent registers under this skill's id
+ *  (`skills/my.skill/` and `skills/my-skill/` are both `<plugin>:my-skill`): an observed id cannot tell them
+ *  apart, so a match is reported absent, never true. Counted over the rewritten names, so the result is the
+ *  same whether the caller names the skill by its directory or by its registered name. */
+export function skillIdSharedFor(gradedSkillName: string | undefined, pluginRoot: string | undefined): boolean {
+  if (gradedSkillName === undefined || pluginRoot === undefined) return false;
+  const id = sanitizeSkillName(gradedSkillName);
+  try {
+    const sharing = readdirSync(join(pluginRoot, "skills"), { withFileTypes: true }).filter(
+      (e) => e.isDirectory() && sanitizeSkillName(e.name) === id && existsSync(join(pluginRoot, "skills", e.name, "SKILL.md")),
+    );
+    return sharing.length > 1;
+  } catch {
+    return false;
+  }
 }
 
 /** critique's `skillInvocationObserved`, computed from a graded run's on-disk record. Extracted from
@@ -2158,7 +2185,7 @@ export function skillInvocationFromRecord(args: {
       typeof taskRaw?.prompt === "string" ? taskRaw.prompt : undefined,
       (taskRaw?.context as { availableSkills?: Array<{ id: string }> } | undefined)?.availableSkills,
     ),
-    commandShadowsSkillFor(gradedSkillName, { pluginRoot }),
+    commandShadowsSkillFor(gradedSkillName, { pluginRoot }) || skillIdSharedFor(gradedSkillName, pluginRoot),
   );
 }
 

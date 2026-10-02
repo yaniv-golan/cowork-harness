@@ -406,7 +406,10 @@ All notable changes to this project are documented here. The format is based on
   registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
   so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a
   skill critique reported "not invoked" and eval's invocation column read false on every rep. They now match
-  the name as the agent registers it.
+  the name as the agent registers it. When that name is ambiguous, a match is reported as unobservable, never as
+  invoked: a command file whose stem equals the rewritten name, or a second skill directory that rewrites to the
+  same id. A root `SKILL.md` that critique cannot promote to its plugin is now named by its frontmatter `name`,
+  as the agent registers it, instead of by its directory.
 - **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers

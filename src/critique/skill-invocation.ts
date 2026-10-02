@@ -7,11 +7,12 @@
  * `root` and `skill` all reported `true`, and `root` collided with the `(root)` sentinel itself.
  * Match ids structurally instead.
  *
- * The selector is a bare skill-directory NAME by construction: `resolveCritiquedSkillDir` refuses
- * anything with a separator, a colon or a dot-dir (`safePathSegment`) before this module sees it. A dir
- * name can still hold characters the agent rewrites when it registers the skill (`my.skill` registers as
- * `<plugin>:my-skill`), so a qualified id is matched against the name as the agent writes it, through the
- * one copy of that rule in `src/skill-id.ts`.
+ * The selector is a skill name: a `skills/<dir>` directory name from critique and eval (a `--skill` value
+ * passes `safePathSegment`: no separator, colon or dot-dir), or the name the agent registers (hillclimb, and
+ * critique's root-SKILL.md case). A directory name can hold characters the agent rewrites when it registers
+ * the skill (`my.skill` registers as `<plugin>:my-skill`), so a qualified id is matched against the name as
+ * the agent writes it, through the one copy of that rule in `src/skill-id.ts` — applying it to an already
+ * registered name changes nothing.
  */
 
 import { sanitizeSkillName } from "../skill-id.js";
@@ -24,7 +25,8 @@ const SENTINELS = new Set(["(root)", "(unknown)"]);
 /** Does an observed skill id name the selected skill? An id is either bare (`deck-review`) or
  *  plugin-qualified (`founder-skills:deck-review`) — both forms occur in the corpus. A bare id must equal
  *  the selector (as written or as the agent rewrites it); a qualified id must match the name as the agent
- *  registers it (`sanitizeSkillName`) AND, when the graded plugin's name is known, the qualifier. `deck-review-lite` must NOT match `deck-review` (what a substring test got wrong), and
+ *  registers it (`sanitizeSkillName`) AND, when the graded plugin's name is known, the qualifier.
+ *  `deck-review-lite` must NOT match `deck-review` (what a substring test got wrong), and
  *  `anthropic-skills:skill-creator` must NOT match a critique of `skill-creator:skill-creator` — on
  *  `hostloop`/`protocol` the host's own plugins are in the inventory, and a same-named skill from
  *  another plugin is exactly the kind of thing that is installed on a maintainer's machine. */
