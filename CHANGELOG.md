@@ -15,6 +15,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **Cassettes: re-record — the agent moved.** `latest` now resolves to `desktop-2.19675.0`, which pins agent **2.1.286**
+  (was 2.1.284). A cassette recorded through `baseline: latest` reports
+  `[stale] baseline moved 2.16120.0 → 2.19675.0 since record — re-record`: `verify-cassettes` and `replay --strict` exit
+  `1` on it, and a plain `replay` warns and keeps its exit code.
+  - At `container`, `microvm` and `hostloop`, re-record. A re-stamp clears the finding but leaves an `agent-version:` note,
+    because the recording ran 2.1.284. Agent 2.1.286 also renames its builtin plugins in the init event (`agents-md` →
+    `cc-plugin-agents-md`, `telemetry` → `cc-plugin-telemetry`) and lists a `plugin-types` slash command, so an
+    assertion on those names needs updating.
+  - At `protocol` a re-stamp is sound: the agent there is the `claude` on your `PATH`, and the first-party spawn env, the
+    Cowork system prompt, the sub-agent append, the egress allowlist and the spawn tools are unchanged.
+  - The committed cassettes: `example-pdf-skill` and `dispatch-shell` are re-recorded, `example-multiselect-gate` is
+    re-stamped, and `hostloop-computer-links` is re-stamped pending a re-recording (it reports the `agent-version:` note).
+- **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
+  the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
   `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
@@ -372,6 +386,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **New baseline `desktop-2.19675.0`** (agent **2.1.286**, stable channel), which `latest` resolves to.
+  - Recorded changes: `spawnEnvKeys` gains `CLAUDE_CODE_HOST_SCHEDULED_RUN` (see below), `asarGateIds` gains 18 ids and
+    loses 2, and the native agent pin names its per-build directory (`claude-code/2.1.286/<build>/…`), which Desktop
+    2.19675.0 introduced.
+  - Unchanged from `desktop-2.16120.0`: the Cowork system prompt, the sub-agent append fingerprints, the egress
+    contract, the model/effort config and the first-party `spawn.env`.
+  - The Desktop init surface was read from 3 local frames. Desktop's `cowork` server declares `send_user_message` in
+    some of them; it is model-gated and was already served on 2.16120.0 (see Documentation). None of the three
+    carried the `create_artifact` family; sessions that get the native `Artifact` tool never do.
 - **`sync` classifies `CLAUDE_CODE_HOST_SCHEDULED_RUN`, which Desktop 2.19675.0 adds to the Cowork spawn env.**
   Desktop sets it to `"1"` only on scheduled-task runs (`sessionType === "scheduled"`). The harness models an
   interactive session, so the key is allowlisted and does not enter `spawn.env`. A new check keeps that honest:
