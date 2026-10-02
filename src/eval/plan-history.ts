@@ -16,11 +16,10 @@ import { deriveModelProvenance, normalizeModelId } from "../run/model-provenance
 import { classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult, type RowKey } from "./classify.js";
 import { EXACT_CONTENT_MIN, HISTORY_WINDOW, type CostHistory, type RowHistory } from "./planner.js";
 
-/** `runLabel` prefix of runs a hillclimb flow made. Its runs are variants under test (often ablated), not
- *  the plugin under eval, so both bases exclude them by default. */
-export const HILLCLIMB_LABEL_PREFIX = "hillclimb:";
-/** `runLabel` prefix of an eval's own reps. Kept: arm A's reps are the best exact-content history. */
-export const EVAL_LABEL_PREFIX = "eval:";
+// `runLabel` prefixes. Hillclimb runs are variants under test (often ablated), not the plugin under eval, so
+// both bases exclude them by default. An eval's own reps are kept: arm A's reps are the best exact-content history.
+import { EVAL_LABEL_PREFIX, HILLCLIMB_LABEL_PREFIX } from "../run/run-labels.js";
+export { EVAL_LABEL_PREFIX, HILLCLIMB_LABEL_PREFIX };
 /** At most this many result.json files are read per scenario while filling the rate window. */
 export const MAX_HISTORY_READS = 500;
 /** A result.json larger than this is counted `unreadable`, never parsed. */

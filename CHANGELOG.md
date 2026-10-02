@@ -31,6 +31,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`prune --include-hillclimb`.** It ranks hillclimb-labelled runs with every other run, so `--keep-last`
+  applies to them. It deletes the `hillclimb regrade` and `hillclimb freeze-ref` evidence of every flow under
+  the runs root, a loop still running included, and `freeze-ref` re-reads a frozen reference's source run: pass it
+  only once every climb there is finished, or scope it with the `<runs-dir>` the climb used.
 - **A question batch your `answers:` script only partly matches is now reported, not just warned about.**
   When one `AskUserQuestion` carries several sub-questions and the scripted rules match some but not all,
   the whole batch goes to the `on_unanswered` fallback, so the matched answers are not delivered. That stays
@@ -424,6 +428,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`prune` keeps hillclimb runs.** A run labelled `hillclimb:…` is not pruned and takes no `--keep-last` slot, so
+  a routine `prune` during a climb leaves the runs `hillclimb regrade` and `hillclimb freeze-ref` read. A run you
+  labelled `--label hillclimb:…` yourself is kept the same way. `prune` prints how many it kept per scenario and
+  label, and lists each one under `--dry-run`. A bare `prune` therefore deletes less than before. A `sess-*` dir
+  follows the pinned rule (`--pinned-older-than`) even when it carries a hillclimb label, and a run dir that is a
+  symlink is not read through, so it is an ordinary run (pruning it removes only the link). The eval note also
+  finds an eval's label in the latest turn's `result.json` when `status.json` is missing or unreadable.
+- **`prune` keeps a run whose `status.json` says `running` while it is still being updated or its process is
+  alive (up to 24h).** Such a run is skipped under every flag, and the final line counts it. "Still being
+  updated" uses the status staleness window (`COWORK_HARNESS_STATUS_STALE_MS`, default 15s, read from `prune`'s own
+  environment). A run frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json`
+  that is not a regular file is not read, so a FIFO there cannot hang `prune`.
 - **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
   registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
   so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a

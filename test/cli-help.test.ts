@@ -118,6 +118,12 @@ describe.skipIf(!can)("cli --help: prune documents --pinned-older-than", () => {
     expect(code).toBe(0);
     expect(text).toContain("--pinned-older-than");
   });
+
+  it("`prune --help` mentions --include-hillclimb", () => {
+    const { code, text } = help("prune");
+    expect(code).toBe(0);
+    expect(text).toContain("--include-hillclimb");
+  });
 });
 
 // The TOP-LEVEL `--help` summary for `analyze-skill` once lagged the per-command help: it omitted
