@@ -1209,7 +1209,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     ["reference_changed", "the reference it was judged against is not the store's now"],
   ] as const)(
     "%s: %s — re-judged, saying why",
-    async (trigger) => {
+    async (trigger, _why) => {
       const { rows } = buildFlow();
       const file = join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json");
       const r = JSON.parse(readFileSync(file, "utf8")) as {
