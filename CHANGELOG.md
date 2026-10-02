@@ -372,6 +372,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`sync` classifies `CLAUDE_CODE_HOST_SCHEDULED_RUN`, which Desktop 2.19675.0 adds to the Cowork spawn env.**
+  Desktop sets it to `"1"` only on scheduled-task runs (`sessionType === "scheduled"`). The harness models an
+  interactive session, so the key is allowlisted and does not enter `spawn.env`. A new check keeps that honest:
+  `sync` refuses if any construction of the key is not guarded by exactly that condition (unconditional, a widened
+  or negated predicate, a second construction elsewhere).
+- **`sync` pins the server config of Cowork's send-message tool (gate `3045399524`) as a tripwire.** The baseline
+  records only whether it is served (`on`, `source`) and its `alwaysLoad` flag; the list of models it is enabled for
+  is reduced away before anything is written, so a change in how the tool is served is a `sync --diff` line
+  without the served value being committed. The tool itself is not modeled (see Documentation).
 - **`eval` no longer makes a row of an assertion whose only keys are verdict modifiers** (`allow_stall`,
   `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
   constant across both arms and only enlarged the correction family, which weakened the correction for the
@@ -402,6 +411,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`sync --diff` reported 57 gate ids as removed on Desktop 2.19675.0 where 2 were.** That release ships its gate
+  defaults as a rule table (`<id>:{rule:…}`), which `provenance.asarGateIds` did not read, so it also missed 2 new
+  ids. The table is now read. The shape occurs in no earlier Desktop release, so no committed baseline changes:
+  re-extracting `desktop-2.16120.0` reproduces its recorded 493 ids exactly.
 - **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers
@@ -620,6 +633,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- `docs/fidelity-gaps.md` documents Cowork's send-message tool (`mcp__cowork__send_user_message`), which the harness
+  does not serve. Desktop offers it, pre-approved, to ordinary sessions on the models a server config enables
+  (observed on Opus 5.5 sessions on Desktop 2.16120.0 and 2.19675.0, not on Opus 5). This gap already applies to
+  `desktop-2.16120.0`: no Desktop release introduced it.
 - The companion skill has a `hillclimb` reference (`references/hillclimb.md`, indexed in `SKILL.md` and
   `llms.txt`) for driving a `/claude-api hillclimb` loop with `hillclimb run`, `check`, `state-template`,
   `freeze-ref` and `regrade`: the flags, the snapshot and harness gate, refusals, exit codes, pairwise references,
