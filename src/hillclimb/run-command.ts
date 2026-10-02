@@ -19,7 +19,7 @@ import { freezeCaseRef } from "./freeze-ref.js";
 import { readRefDoc, readRefEntry } from "../refs/store.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { createHash } from "node:crypto";
-import { flowHasPairwise } from "./grade-keys.js";
+import { flowHasPairwise, metricUnion } from "./grade-keys.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { loadCostHistory } from "../eval/plan-history.js";
@@ -31,11 +31,12 @@ import type { ScenarioRunner } from "../eval/job-runner.js";
 import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
+import { refuseChangedMetrics } from "./metric-keys.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
 import { makeHillclimbJobRunner } from "./job.js";
-import { readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
+import { existingFlowSnapshot, readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
 import { trackedSkill } from "./skill.js";
 import { SNAPSHOT_ROOT_ENV, variantSnapshot } from "./snapshot.js";
 
@@ -140,6 +141,11 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   // The case list is the flow's (every scenario loads); the per-case checks below cover the --case selection only —
   // an unselected case does not run in this pass. The gate, the hidden files and the one-plugin rule cover every case.
   const { cases } = loadCases(resolve(deps.cwd, args.target));
+  // One metric id declared two ways is refused before the snapshot below is taken (the runner recomputes the union).
+  const union = metricUnion(cases.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
+  // ...and a metric re-declared since the flow's rows were written (the runner repeats this too).
+  const existing = existingFlowSnapshot(normalizeRootArg(args.flow), deps.cwd);
+  if (existing) refuseChangedMetrics(existing, union);
   const selected = selectCases(cases, args.cases);
   const prep = prepareCases(
     cases,

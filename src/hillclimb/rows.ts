@@ -20,7 +20,7 @@
 // here; the flow writer scrubs every byte it writes.
 
 import { basename } from "node:path";
-import type { Assertion, RunResult, TokenUsage } from "../types.js";
+import type { Assertion, MetricUnavailable, RunResult, TokenUsage } from "../types.js";
 import {
   authoredGrades,
   classifyRep,
@@ -32,6 +32,7 @@ import {
 } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
 import { caseKeyDecls, refusableAssertion, type MetricDecl, type PairwiseDecls } from "./grade-keys.js";
+import { metricEntries, metricSigs } from "./metric-keys.js";
 import { pairwiseRowValues } from "./pairwise.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { mainLoopModels, servedModelMismatch } from "./served-model.js";
@@ -207,12 +208,9 @@ export function gradeFor(
       explanation.claims = `${UNTRUSTED_JUDGE_PREFIX}${gradedClaims.length - passedN}/${gradedClaims.length} claims failed. ${ordered.map(line).join(" | ")}`;
     }
   }
-  for (const m of ctx.metrics ?? []) {
-    const got = (r as { metrics?: Array<{ id: string; value?: number }> } | undefined)?.metrics?.find((x) => x.id === m.id);
-    const ok = !agentFailed && typeof got?.value === "number" && Number.isFinite(got.value);
-    grade[`${m.id}_present`] = ok ? 1 : 0;
-    if (ok) grade[m.id] = got!.value!;
-  }
+  // The flow's metrics (metric-keys.ts). An agent-caused failure scores no float: every metric reads unmeasured.
+  const metrics = metricEntries(agentFailed ? {} : (r ?? {}), ctx.metrics ?? []);
+  Object.assign(grade, metrics.grade);
   if (ctx.pairwise) {
     const pw = pairwiseRowValues({ assertions: ctx.assertions, entries: authoredGrades, metricRefs: ctx.pairwise.metricRefs, agentFailed });
     Object.assign(grade, pw.grade);
@@ -226,7 +224,7 @@ export function gradeFor(
     for (const o of authoredGrades[i]?.pairwise ?? [])
       if (o.refDocSha256 !== undefined) refShas[`${pairwiseComposeKey(a)}/${o.ref}`] = o.refDocSha256;
   });
-  return { grade, explanation, claims, refShas };
+  return { grade, explanation, claims, refShas, metricsUnavailable: metrics.unavailable };
 }
 
 /** The grade keys in declared order, so every row reads the same way. */
@@ -244,6 +242,8 @@ export interface GradeBlock {
   explanation: Record<string, string>;
   claims: Record<string, string>;
   refShas: Record<string, string>;
+  /** Why each unmeasured flow metric was not measured, keyed by id (the row's `meta.metrics_unavailable`). */
+  metricsUnavailable: Record<string, MetricUnavailable>;
 }
 
 /** The judge fields of a row: which judge models graded it and what they used, how each host judge ran (one shape,
@@ -351,7 +351,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     return errorRow("error", `grade for assertion ${g.misaligned} could not be aligned with the scenario (${g.excluded})`, {
       failure_rule: "grade_alignment",
     });
-  const { explanation, claims, refShas } = g;
+  const { explanation, claims, refShas, metricsUnavailable } = g;
   const ordered = orderedGrade(g.grade, ctx);
 
   const toolCalls = r?.toolCalls;
@@ -408,6 +408,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       judge_retries: jr.judge_retries,
       ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
       ...(Object.keys(claims).length ? { claims } : {}),
+      ...(Object.keys(metricsUnavailable).length ? { metrics_unavailable: metricsUnavailable } : {}),
+      // Each flow metric's declaration as this row was graded under it: a later pass refuses a changed one.
+      ...(ctx.metrics?.length ? { metric_sigs: metricSigs(ctx.metrics) } : {}),
       ...(Object.keys(refShas).length ? { pairwise_ref_sha256: refShas } : {}),
       ...(hasExplanation ? { explanation_untrusted: true } : {}),
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),

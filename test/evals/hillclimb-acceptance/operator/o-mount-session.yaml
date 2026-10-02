@@ -1,0 +1,10 @@
+# Operator-only: Flow B's session plus a read-only mount of the directory that holds the hillclimb flow
+# dirs. `hillclimb run` must refuse before spending (the agent could read prior grades and rubrics).
+model: claude-sonnet-5
+uploads:
+  - ../../../../examples/data/sales.csv
+folders:
+  - { from: ../../../../.claude/hillclimb, mode: r }
+plugins:
+  local_plugins:
+    - ../plugin

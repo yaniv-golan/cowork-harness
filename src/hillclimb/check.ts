@@ -11,7 +11,9 @@ interface DeclaredMetric {
   id: string;
   kind?: string;
   better?: string;
-  scale?: number;
+  /** Typed as read: schema-check reports a non-number as an error, so these are only ever trusted when numbers. */
+  scale?: unknown;
+  min?: unknown;
 }
 
 export interface Headroom {
@@ -60,7 +62,10 @@ export function headroom(snap: FlowSnapshot): Headroom {
   let good: number | undefined;
   let bad: number | undefined;
   if (head.kind === "binary") [good, bad] = better === "higher" ? [1, 0] : [0, 1];
+  // A float's good end is its declared bound in the improving direction: `scale` going up, `min` going down — and a
+  // scenario declares `min` only when the floor is not 0 (docs/scenario.md), so an absent `min` is 0.
   else if (better === "higher" && typeof head.scale === "number") good = head.scale;
+  else if (better === "lower" && (head.min === undefined || typeof head.min === "number")) good = head.min ?? 0;
   if (good === undefined && bad === undefined)
     return {
       metric: head.id,
@@ -68,7 +73,9 @@ export function headroom(snap: FlowSnapshot): Headroom {
       cases: 0,
       ceiling: [],
       floor: [],
-      warnings: [`note: ${head.id} is a float with no declared bound — ceiling/floor not computed`],
+      warnings: [
+        `note: ${head.id} is ${better}-is-better with ${better === "lower" ? "a floor (min) that is not a number" : "no scale declared"} — the good end is unknown, so ceiling/floor are not computed`,
+      ],
     };
 
   const byCase = new Map<string, number[]>();
@@ -99,6 +106,31 @@ export function headroom(snap: FlowSnapshot): Headroom {
       `warning: ${floor.length}/${n} baseline cases are at the floor on ${head.id} (every rep at the bad end): ${floor.join(", ")} — they cannot show a loss; check the case and its grader before round 1`,
     );
   return { metric: head.id, better, cases: n, ceiling, floor, warnings };
+}
+
+/** A declared float's value outside its range, [`min` (0 when absent), `scale`], on any variant's row: a wrong
+ *  `path` or a percent-versus-fraction mix-up, which would also leave headroom's ceiling unreachable. Only a float
+ *  with a numeric `scale` is checked (an unbounded one has no upper end). Warnings: they never change an exit code. */
+export function metricRangeWarnings(snap: FlowSnapshot): string[] {
+  const bounded = declaredMetrics(snap).filter(
+    (m) => m.kind === "float" && typeof m.scale === "number" && (m.min === undefined || typeof m.min === "number"),
+  );
+  const out: string[] = [];
+  if (!bounded.length) return out;
+  for (const [variant, vs] of Object.entries(snap.variants))
+    for (const r of parseRows(vs.results)) {
+      const g = r.grade as Record<string, unknown> | undefined;
+      for (const m of bounded) {
+        const v = g?.[m.id];
+        const lo = (m.min as number | undefined) ?? 0;
+        const hi = m.scale as number;
+        if (typeof v !== "number" || !Number.isFinite(v) || (v >= lo && v <= hi)) continue;
+        out.push(
+          `warning: grade.${m.id} = ${v} is outside its declared range [${lo}, ${hi}] (variant ${variant}, prompt_id ${String(r.prompt_id)}, rep ${String(r.rep)}) — check the metric's path and units`,
+        );
+      }
+    }
+  return out;
 }
 
 /** Ours, on `_state.json`: a declared float needs `better`. The upstream default is "higher", which on a

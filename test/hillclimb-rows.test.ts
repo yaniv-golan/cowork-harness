@@ -10,9 +10,10 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { attemptRow, type AttemptContext } from "../src/hillclimb/rows.js";
+import { metricSig } from "../src/hillclimb/grade-keys.js";
 import { UNTRUSTED_JUDGE_PREFIX } from "../src/hillclimb/schema-check.js";
 import { UnansweredError, BoundaryError } from "../src/errors.js";
-import type { Assertion, RunResult } from "../src/types.js";
+import type { Assertion, RunResult, ScenarioMetric } from "../src/types.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
 const fixture = (n: string): RunResult => JSON.parse(readFileSync(join(FX, `${n}.json`), "utf8")) as RunResult;
@@ -21,6 +22,9 @@ const frames = readFileSync(join(import.meta.dirname, "fixtures", "hillclimb-run
   .split("\n");
 const mainFrame = (model: string) => JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model } });
 const eventsFor = (model: string) => [frames[0], mainFrame(model), frames[1]];
+
+const words: ScenarioMetric = { id: "words", artifact: "outputs/stats.json", path: "words", better: "lower", unbounded: true };
+const ratio: ScenarioMetric = { id: "ratio", artifact: "outputs/stats.json", path: "ratio", better: "higher", scale: 1 };
 
 function ctx(r: RunResult | undefined, over: Partial<AttemptContext> = {}): AttemptContext {
   const assertions = (r?.assertions ?? []).filter((a) => a.source === undefined).map((a) => a.assertion) as Assertion[];
@@ -298,12 +302,81 @@ describe("scored rows", () => {
 
   it("a flow metric this case does not produce is carried as <id>_present 0, never as a value", () => {
     const r = fixture("success-semantic");
-    const row = attemptRow({ result: r }, ctx(r, { metrics: [{ id: "words", better: "lower", unbounded: true }] })).row as Record<
-      string,
-      any
-    >;
+    const row = attemptRow({ result: r }, ctx(r, { metrics: [words] })).row as Record<string, any>;
     expect(row.grade.words_present).toBe(0);
     expect(row.grade).not.toHaveProperty("words");
+    expect(row.meta).not.toHaveProperty("metrics_unavailable");
+  });
+
+  it("a measured metric is its value (a 0 included) with <id>_present 1, after the graded keys, in declaration order", () => {
+    const r = {
+      ...fixture("success-semantic"),
+      metrics: [
+        { id: "ratio", value: 0 },
+        { id: "words", value: 412 },
+      ],
+    }; // ADDED: metrics
+    const row = attemptRow({ result: r }, ctx(r, { metrics: [words, ratio] })).row as Record<string, any>;
+    expect(row.grade).toMatchObject({ words_present: 1, ratio_present: 1, words: 412, ratio: 0 });
+    const keys = Object.keys(row.grade);
+    expect(keys.slice(-2)).toEqual(["words", "ratio"]);
+    expect(keys.indexOf("words_present")).toBe(keys.indexOf("claims_present") + 1);
+    expect(row.meta).not.toHaveProperty("metrics_unavailable");
+  });
+
+  it("an unavailable metric is OMITTED, never 0: <id>_present 0 and the reason in meta.metrics_unavailable", () => {
+    const r = {
+      ...fixture("success-semantic"),
+      metrics: [
+        { id: "words", unavailable: "pre_run" as const },
+        { id: "ratio", value: 0.5 },
+      ],
+    }; // ADDED: metrics
+    const row = attemptRow({ result: r }, ctx(r, { metrics: [words, ratio] })).row as Record<string, any>;
+    expect(row.grade.words_present).toBe(0);
+    expect(row.grade).not.toHaveProperty("words");
+    expect(row.grade.ratio).toBe(0.5);
+    expect(row.meta.metrics_unavailable).toEqual({ words: "pre_run" });
+  });
+
+  it("an agent-caused failure omits every float, even a measured one: <id>_present 0", () => {
+    const r = { ...fixture("stalled-on-question"), metrics: [{ id: "words", value: 9 }] }; // ADDED: metrics
+    const row = attemptRow({ result: r }, ctx(r, { metrics: [words] })).row as Record<string, any>;
+    expect(row.meta.failure_class).toBe("errored_agent");
+    expect(row.grade.words_present).toBe(0);
+    expect(row.grade).not.toHaveProperty("words");
+  });
+
+  it("every scored row stamps the flow's metric declarations as meta.metric_sigs, measured or not", () => {
+    const r = { ...fixture("success-semantic"), metrics: [{ id: "ratio", value: 0.5 }] }; // ADDED: metrics
+    const row = attemptRow({ result: r }, ctx(r, { metrics: [words, ratio] })).row as Record<string, any>;
+    expect(row.meta.metric_sigs).toEqual({ words: metricSig(words), ratio: metricSig(ratio) });
+    // An agent-caused failure is a scored row too: its sigs are stamped like any other.
+    const failed = fixture("stalled-on-question");
+    expect((attemptRow({ result: failed }, ctx(failed, { metrics: [words] })).row as Record<string, any>).meta.metric_sigs).toEqual({
+      words: metricSig(words),
+    });
+  });
+
+  it("a flow with no metrics stamps no meta.metric_sigs", () => {
+    const r = fixture("success-semantic");
+    expect((attemptRow({ result: r }, ctx(r)).row as Record<string, any>).meta).not.toHaveProperty("metric_sigs");
+    expect((attemptRow({ result: r }, ctx(r, { metrics: [] })).row as Record<string, any>).meta).not.toHaveProperty("metric_sigs");
+  });
+
+  it("a metric never carries an explanation, beside a judge's rationale that does", () => {
+    const base = fixture("success-semantic");
+    const r = {
+      ...base,
+      assertions: base.assertions.map((g) =>
+        g.semanticClaims ? { ...g, semanticClaims: g.semanticClaims.map((c) => ({ ...c, rationale: "why" })) } : g,
+      ),
+      metrics: [{ id: "words", value: 3 }],
+    }; // ADDED: rationales, metrics
+    const row = attemptRow({ result: r }, ctx(r, { metrics: [words] })).row as Record<string, any>;
+    expect(Object.keys(row.explanation).length).toBeGreaterThan(0);
+    expect(row.explanation).not.toHaveProperty("words");
+    expect(row.explanation).not.toHaveProperty("words_present");
   });
 
   it("an agent-caused failure (stalled on a question) is SCORED: every graded key 0, the reason in meta", () => {

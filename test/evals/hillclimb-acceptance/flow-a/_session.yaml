@@ -1,0 +1,8 @@
+# Flow A session: the companion skill, the answerer pinned to the gate set's mid-tier model.
+# Path is relative to this file's dir.
+model: claude-sonnet-5
+plugins:
+  local_plugins:
+    - ../../../../.claude/skills/cowork-harness
+  enabled:
+    - cowork-harness@local

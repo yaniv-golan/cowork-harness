@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import { stateTemplate } from "../src/hillclimb/state-template.js";
 import { flowMetricDecls } from "../src/hillclimb/grade-keys.js";
 import { parseScenarioFile } from "../src/run/execute.js";
-import type { Assertion } from "../src/types.js";
+import type { Assertion, ScenarioMetric } from "../src/types.js";
 
 const real = parseScenarioFile("test/evals/scenarios/eval-14-subagent-dispatch-and-declared-unused.yaml");
 const other = [{ file_exists: "outputs/other.md" }] as unknown as Assertion[];
@@ -50,16 +50,84 @@ describe("stateTemplate", () => {
     expect(t.metricsMd).toMatch(/`pass_present`.*refused/s);
     expect(t.metricsMd).toMatch(/per-assertion keys .* not declared/i);
     const withFloat = stateTemplate({
-      cases: [{ assertions: other, metrics: [{ id: "words", better: "lower", unbounded: true }] }],
+      cases: [
+        {
+          assertions: other,
+          metrics: [{ id: "words", artifact: "outputs/stats.json", path: "totals.words", better: "lower", unbounded: true }],
+        },
+      ],
       harnessPaths: [],
       decider: false,
     });
-    expect(withFloat.metricsMd).toMatch(/`words`.*lower is better.*no upper bound/s);
+    // A scenario declares `min` only when the floor is not 0, so the legend states the floor either way.
+    expect(withFloat.metricsMd).toMatch(/`words`.*lower is better.*no upper bound, floor 0\./s);
     expect(withFloat.metricsMd).toMatch(/measured rows only/);
+  });
+
+  it("a metric id that merely starts like a per-assertion key (a11y_score) is a float, not a legend entry", () => {
+    const t2 = stateTemplate({
+      cases: [
+        { assertions: real.assert, metrics: [{ id: "a11y_score", artifact: "outputs/a.json", path: "score", better: "higher", scale: 1 }] },
+        { assertions: real.assert, metrics: [{ id: "a11y_score", artifact: "outputs/a.json", path: "score", better: "higher", scale: 1 }] },
+      ],
+      harnessPaths: [],
+      decider: false,
+    });
+    expect(t2.state.metrics.find((m) => m.id === "a11y_score")).toMatchObject({ kind: "float", better: "higher" });
+    expect(t2.metricsMd).toMatch(/`a11y_score` — a scenario-declared number/);
+    expect(t2.metricsMd).not.toMatch(/`a11y_score` — (claim|assertion|1 when)/);
+  });
+
+  it("the anchored per-index filter admits the per-index pairwise keys and still keeps a11y_score a float", () => {
+    const PW = { semantic_pairwise: { rubric: ["r"] } } as unknown as Assertion;
+    const metric: ScenarioMetric = { id: "a11y_score", artifact: "outputs/a.json", path: "score", better: "higher", scale: 1 };
+    const t3 = stateTemplate({
+      cases: [
+        { assertions: [PW], metrics: [metric] },
+        { assertions: [PW], metrics: [metric] },
+      ],
+      harnessPaths: [],
+      decider: false,
+      pairwiseRefs: [{ ref: "v1", rowsMissing: 0 }],
+    });
+    const ids = t3.state.metrics.map((m) => m.id);
+    for (const id of ["a0_win", "a0_win_present", "a0_win_v1", "a0_win_v1_present"]) expect(ids).toContain(id);
+    expect(t3.state.metrics.find((m) => m.id === "a11y_score")).toMatchObject({ kind: "float" });
+    expect(t3.metricsMd).toMatch(/`a0_win` — `win` of assertion 0 alone\./);
+    expect(t3.metricsMd).toMatch(/`a0_win_v1_present` — 1 when assertion 0's `win_v1` was measured\./);
+    expect(t3.metricsMd).toMatch(/`a11y_score` — a scenario-declared number/);
+    expect(t3.metricsMd).not.toMatch(/`a11y_score` — (claim|assertion|1 when|`win)/);
   });
 
   it("identical assertion lists: metrics.md carries the per-assertion legend", () => {
     const same = stateTemplate({ cases: [{ assertions: real.assert }, { assertions: real.assert }], harnessPaths: [], decider: false });
     expect(same.metricsMd).toMatch(/`a0_c0`.*claim 0 of assertion 0/s);
+  });
+});
+
+describe("labels (the full viewer's legend truncates at 14 chars)", () => {
+  const m = (id: string): ScenarioMetric => ({ id, artifact: "outputs/stats.json", path: id, better: "lower", unbounded: true });
+  const labels = (ms: ScenarioMetric[]) => {
+    const t = stateTemplate({ cases: [{ assertions: other, metrics: ms }], harnessPaths: [], decider: false });
+    return Object.fromEntries(t.state.metrics.map((d) => [d.id, d.label]));
+  };
+
+  it("response_length and response_length_present get distinct labels of at most 14 chars; the number keeps the plain one", () => {
+    const l = labels([m("response_length")]);
+    expect(l.response_length).toBe("response_lengt");
+    expect(l.response_length_present).not.toBe(l.response_length);
+    const all = Object.values(l);
+    expect(new Set(all).size).toBe(all.length);
+    for (const x of all) expect(x.length).toBeLessThanOrEqual(14);
+  });
+
+  it("two long ids that truncate alike are told apart too, and a short id's label is unchanged", () => {
+    const l = labels([m("response_length_a"), m("response_length_b"), m("words")]);
+    const all = Object.values(l);
+    expect(new Set(all).size).toBe(all.length);
+    for (const x of all) expect(x.length).toBeLessThanOrEqual(14);
+    expect(l.words).toBe("words");
+    expect(l.words_present).toBe("words measured");
+    expect(l.pass).toBe("Pass");
   });
 });
