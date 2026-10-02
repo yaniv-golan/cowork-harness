@@ -294,8 +294,8 @@
       {
         "name": "outputs",
         "mountPath": "outputs",
-        "mode": "rw",
-        "purpose": "session outputs/artifacts — delete denied by default (asar IX); rwd only when approved"
+        "mode": "rwd",
+        "purpose": "session outputs/artifacts — deletes ALLOWED for a normal session. Since Desktop 2.16120.0 every mount builder (host-loop computeBashMounts, the VM-loop builder, the shares builder) sets this mount's mode from the exported outputsMountMode, `e?\"rw\":\"rwd\"` with e = isBridgeSession: \"rwd\" for a normal session, \"rw\" (delete denied) only for a bridge session. It no longer goes through the approved-list delete-deny resolver, which connected folders still use. Anchored by checkMountModeFacts."
       },
       {
         "name": "skills",

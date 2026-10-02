@@ -725,6 +725,13 @@ All notable changes to this project are documented here. The format is based on
   does, and prints a stderr note naming the version the link points at. When that symlinked dir holds only an
   unfinished build or an unrecognised entry, the error names it with cause `unfinished` or `unknown-layout`,
   instead of reporting that nothing is staged.
+- **The `desktop-2.16120.0` and `desktop-2.19675.0` baselines record the `outputs` mount as `rwd`.** From Desktop
+  2.16120.0 every mount builder takes the outputs mode from one exported function, `outputsMountMode`, which allows
+  deletes for a normal session and denies them only for a bridge session. Both baselines said `rw` (delete denied).
+  Connected folders keep the approved-list rule. `sync` now pins that function and its non-bridge `"rwd"`, so a change
+  is an unknown delta; the delete-deny resolver's site count could not see this. Nothing the harness runs reads the
+  recorded mode, so no cassette goes stale. The harness's own outputs-delete check is unchanged; see
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them).
 
 ### Documentation
 

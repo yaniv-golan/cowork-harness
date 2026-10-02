@@ -313,9 +313,11 @@ committed baseline and say why in that baseline's `$comment`.
    `missing_boundary`, the session gets a different prompt, and nothing errors anywhere. The anchors pin
    the loud half so the quiet half cannot move unobserved.
 
-   **Includes the mount-mode sentinel.** `checkMountModeFacts` pins five facts about
-   `mountLayout.mounts[].mode`: the delete-deny resolver (`…?"rwd":"rw"`, which is what makes `outputs`
-   and each connected folder `rw`, or `rwd` once approved), plus four mounts whose mode is **hardcoded**
+   **Includes the mount-mode sentinel.** `checkMountModeFacts` pins six facts about
+   `mountLayout.mounts[].mode`: the delete-deny resolver (`…?"rwd":"rw"`, which is what makes each connected
+   folder `rw`, or `rwd` once approved); the exported `outputsMountMode` (Desktop 2.16120.0+), which every mount
+   builder uses for `outputs`: `"rwd"` (deletes allowed) for a normal session and `"rw"` only for a bridge session,
+   pinned by its export and exact body because the resolver's site count cannot see it; plus four mounts whose mode is **hardcoded**
    `"ro"` at the mount-set builder rather than resolved — `uploads`, `.claude/skills`, `.claude/projects`,
    and the per-uuid project attachment `.projects/<uuid>`. Each is pinned individually because a mount
    silently moving from `ro` to a writable mode is a containment change the harness would otherwise model
