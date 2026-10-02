@@ -1,6 +1,6 @@
 // `hillclimb regrade` in-process over a flow the REAL CLI built (stub agent, a fake host-`claude` judge replaying a
 // captured envelope): the seams a CLI run cannot reach — the core re-grade, the metrics merge — are injected here.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   existsSync,
   mkdirSync,
@@ -1233,6 +1233,23 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(rows("v1")[0]!.meta).not.toHaveProperty("regrade_rejudged_because");
     void v1;
   }, 240_000);
+
+  it("the shared-capture warning (a scoped judged assert beside another) is said once per regrade, not per row", async () => {
+    f.cleanup();
+    f = makeStubFixture(`mkdir -p outputs && printf '%s' '{"words":1200}' > outputs/m.json\n${STUB}`);
+    const SCOPED = [...SECOND, "      evidence_files: ['outputs/m.json']"];
+    buildFlow({ extra: SCOPED, reps: 2 });
+    const said: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((c) => (said.push(String(c)), true));
+    try {
+      const { deps } = counting();
+      const out = await regradeFlow(ARGS({ rejudge: true }), { ...deps, stderr: (l) => said.push(l) });
+      expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(said.join("").match(/sharing ONE authored-file capture/g)).toHaveLength(1);
+  }, 300_000);
 
   it("a re-judged outcome is what a later regrade keeps (read from the row's regrade file, never the run's)", async () => {
     const { cli, rows, evals } = buildFlow({ extra: ["  - transcript_contains: All done"] });

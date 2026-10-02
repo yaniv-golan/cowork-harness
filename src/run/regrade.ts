@@ -210,6 +210,9 @@ export interface RegradeOptions {
   pairwise?: { caseId?: string; refs?: PairwiseRef[]; neutralRefs?: string[]; gateRefs?: string[]; onlyRefs?: string[] };
   /** Test seam: the structured judge transport for `semantic_pairwise` (default: the host `claude -p`). */
   pairwiseComplete?: CompleteStructured;
+  /** Leave `evaluate`'s shared-capture warning to the caller, which says it once over many re-grades
+   *  (`sharedCaptureWarning`). */
+  quietSharedCapture?: boolean;
   /** What each run dir's caller-owned row is graded with now (a hillclimb row a previous re-grade rewrote carries
    *  that re-grade's entries, not the run's), by scenario index. A judged assert in `keep` is NOT re-graded: its entry
    *  is copied into the report as it is (`copied: true`, `docMatchesLive: "not_graded"`), no document is composed for
@@ -902,7 +905,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
         );
     // In fill mode a semantic_matches entry is the live one, unchanged: nothing about it was re-graded. A kept assert's
     // entry is the caller's, as it is.
-    const graded = evaluate(semantic, p.ctx).map((e, k) => {
+    const graded = evaluate(semantic, p.ctx, { quietSharedCapture: opts.quietSharedCapture === true }).map((e, k) => {
       const i = sc.assert.indexOf(semantic[k]!);
       const kept = base(i);
       return (keep.has(i) || (fill && semantic[k]!.semantic_matches !== undefined)) && kept ? (kept as typeof e) : e;

@@ -102,6 +102,9 @@ export function parseGatesFromEvents(file: string): { gates: DecisionRequest[]; 
 export type RecomputeAuthored = "no_lost_write_back" | "semantic" | "both";
 
 export interface AssertContextFromRunDirOpts {
+  /** `reevaluateRun` only: leave `evaluate`'s shared-capture warning to the caller (one that re-evaluates a scenario over
+   *  many kept runs says it once — `sharedCaptureWarning`). */
+  quietSharedCapture?: boolean;
   /** Put on the ctx as `secrets`, so the judged document scrubs every section (authored files included)
    *  before capping — exactly what the live run does. Omitted ⇒ no `secrets` on the ctx (verify-run). */
   secrets?: string[];
@@ -529,7 +532,7 @@ export function reevaluateRun(
   const { ctx, result, scenario } = loaded;
   const vacuousFixture = recordedFixtureRefusal(scenario, recordedFixtureFileSigs(runDir) ?? result.fingerprint?.workspaceFixtureFileSigs);
   if (vacuousFixture) return { ok: false, kind: "usage", message: `${opts.command ?? "verify-run"}: ${vacuousFixture}` };
-  const deterministic = evaluate(scenario.assert, ctx);
+  const deterministic = evaluate(scenario.assert, ctx, { quietSharedCapture: opts.quietSharedCapture === true });
   deterministic.push(...expandExpectDenied(scenario.expect_denied, ctx.egress, ctx.egressMissing));
   return { ...loaded, deterministic, metrics: remeasureMetrics(ctx, result, scenario.metrics) };
 }

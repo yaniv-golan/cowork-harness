@@ -41,7 +41,7 @@ import { readRefDoc } from "../refs/store.js";
 import { pairwiseComposeKey, type PairwiseRef } from "../run/pairwise-prepass.js";
 import { JUDGE_PROMPT_HASH } from "../decide/semantic-judge.js";
 import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
-import { judgedOpts } from "../assert.js";
+import { judgedOpts, sharedCaptureWarning } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
 import { flowMetricUnion, metricSigs, refuseChangedMetrics } from "./metric-keys.js";
 import { existingFlowSnapshot, readStateIfPresent, readVariantFileIfPresent } from "./runner.js";
@@ -170,7 +170,8 @@ export interface Reevaluation {
  *  result, a work dir a filesystem assert needs gone), an assert the recorded fixture would satisfy on its own — or
  *  when the case declares a metric and the kept work dir it would be read from is gone. */
 export function reevaluateFromRun(runDir: string, c: HillclimbCase): Reevaluation | { listed: string } {
-  const built = reevaluateRun(runDir, c.scenario, { command: "hillclimb regrade" });
+  // The shared-capture warning is the regrade's to say, once per case (`regradeFlow`), never once per row.
+  const built = reevaluateRun(runDir, c.scenario, { command: "hillclimb regrade", quietSharedCapture: true });
   if (!built.ok) {
     if (built.kind === "scenario") throw new Error("unreachable: the scenario was passed as an object");
     return { listed: `refused: ${built.message.split("\n")[0]}` };
@@ -1101,6 +1102,7 @@ async function regradeFlowInner(
         const keep = new Set(args.fillRefs ? [] : [...t.plan.entries.keys()].filter((i) => !t.plan.rejudge.has(i)));
         return { entries: t.plan.entries, keep };
       },
+      quietSharedCapture: true,
       ...(deps.regradeOptions ?? {}),
       ...(checkOnly ? { checkOnly: true as const } : {}),
     });
@@ -1153,6 +1155,12 @@ async function regradeFlowInner(
       say(
         `harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${join(flowArg, "_state.json")}`,
       );
+    }
+
+    // The shared-capture hazard, said once per case a judge reads (each re-grade and re-evaluation is told not to).
+    for (const id of new Set(batches.filter((b) => !skip.has(b)).map((b) => b.c.id))) {
+      const hazard = sharedCaptureWarning(byId.get(id)!.scenario.assert);
+      if (hazard) say(hazard.trimEnd());
     }
 
     // The spend.
