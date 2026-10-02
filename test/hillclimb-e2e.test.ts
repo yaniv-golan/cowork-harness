@@ -328,7 +328,7 @@ cat "${ENVELOPE}"
     expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
 
     // A full re-grade judges again (baseline neutral vs itself, v1 vs baseline; both vs v1 where not their own).
-    const full = cli("regrade", "evals", "--flow", "flow", "--variant", "v1");
+    const full = cli("regrade", "evals", "--flow", "flow", "--variant", "v1", "--rejudge");
     expect(full.status, full.stderr).toBe(0);
     expect(rowsOf("v1")[0]!.meta.regrade_doc_matches_live).toBe(true);
     expect(resultOf("v1")).toBe(liveResults.v1);
@@ -409,7 +409,8 @@ cat "${ENVELOPE}"
     const res = JSON.parse(readFileSync(rj, "utf8")) as { finalMessage?: string };
     expect(res.finalMessage).toBeTruthy();
     writeFileSync(rj, JSON.stringify({ ...res, finalMessage: `${res.finalMessage} (edited)` }));
-    const r = cli("regrade", "evals", "--flow", "flow");
+    // Only a re-judge reads the evidence again: a default regrade keeps the judged entries and never sends it.
+    const r = cli("regrade", "evals", "--flow", "flow", "--rejudge");
     expect(r.status, r.stderr).toBe(2);
     expect(r.stderr).toMatch(/nothing was re-graded or written[\s\S]*v1 alpha rep0: doc_drift/);
     expect({ baseline: results("baseline"), v1: results("v1") }).toEqual(before);
@@ -434,7 +435,7 @@ cat "${ENVELOPE}"
       }) + "\n",
     );
     const before = results("baseline");
-    const r = cli("regrade", "evals", "--flow", "flow", "--output-format", "json");
+    const r = cli("regrade", "evals", "--flow", "flow", "--rejudge", "--output-format", "json");
     expect(r.status, r.stderr).toBe(1);
     const env = JSON.parse(r.stdout) as {
       variants: Array<{ variant: string; rewritten: number; listed: Array<{ rep: number; why: string }> }>;
