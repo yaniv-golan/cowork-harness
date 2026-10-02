@@ -310,7 +310,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb]
                                prune accumulated run dirs, keeping N most recent per scenario (default: 5);
                                pinned sessions and hillclimb-labelled runs are kept; a run whose status.json
-                               says running is kept while it is still being updated or its process is alive (up to 24h)
+                               says running is kept while it is still being updated or its process is alive (up to 24h);
+                               only dirs named local_* (and sess-* under --pinned-older-than) are deleted; a <runs-dir>
+                               that looks like a run dir, a scenario dir or the parent of a runs root is refused (exit 2)
   migrate-run-dir [<runs-dir>] [--scenario <n>] [--write]
                                convert pre-layout run dirs to the per-turn turns/<N>/ layout (DRY RUN by default)
 
@@ -744,7 +746,13 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "  (up to 24h), under every flag. --include-hillclimb ranks hillclimb runs with every\n" +
     "  other run: it deletes the `hillclimb regrade` / `freeze-ref` evidence of EVERY flow under the runs root, a\n" +
     "  loop still running included (freeze-ref re-reads a frozen reference's source run). Pass it only once every\n" +
-    "  climb is finished, or scope it with an explicit <runs-dir> (the --run-dir the climb used).",
+    "  climb is finished, or scope it with an explicit <runs-dir> (the --run-dir the climb used).\n" +
+    "  Only dirs named local_* (a run's id) are ranked and deleted, and sess-* dirs only under --pinned-older-than;\n" +
+    "  every other dir under a scenario is left alone and counted in the output.\n" +
+    "  The <runs-dir> (or --run-dir) must be the runs root, which holds <scenario>/<run> dirs. A path that looks like\n" +
+    "  a run dir, a dir inside one, a scenario dir, an eval dir, or the parent of a runs root is refused before\n" +
+    "  anything is deleted, --dry-run included; so is a runs root that holds another runs root.\n" +
+    "  exit: 0 done (or nothing to prune) · 2 usage, or a <runs-dir> at the wrong level",
   "migrate-run-dir":
     "usage: migrate-run-dir [<runs-dir>] [--scenario <name>] [--write] [--verbose]\n" +
     "       convert pre-layout run dirs (artifacts at the run-dir root) to the per-turn `turns/<N>/` layout, in place.\n" +
