@@ -1,0 +1,19 @@
+# Acceptance: a sub-agent served by a different model (csv-checker's frontmatter pins Haiku) than the main
+# loop. The rows must stay scored, with no serving_substitution, and the trace carries the sub-agent's turns.
+name: b4-crosscheck-subagent
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Profile sales.csv from my uploads with the csv-report skill, then get an independent cross-check of the sums.
+assert:
+- subagent_dispatched: csv-checker
+- semantic_matches:
+    include_subagent_text: true
+    rubric:
+    - The cross-check compares the amount sum 4200 and the units sum 75 with a recomputation
+    - The reply says whether the cross-check agrees

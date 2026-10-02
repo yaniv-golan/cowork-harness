@@ -1162,3 +1162,79 @@ describe("hillclimb regrade's refusal on the CLI", () => {
     }
   });
 });
+
+// `regrade --case` follows `run --case`: the per-case checks cover the selected cases, the gate covers every case.
+describe.runIf(POSIX)("hillclimb regrade --case: per-case checks cover the selected cases only", () => {
+  /** Point beta at its own session file (outside the scenario dir) and break it one way. */
+  const breakBeta = (evals: string, how: { session?: string; extraAssert?: string }) => {
+    const plugin = join(work, "plugin", "my-plugin");
+    const sessions = join(f.cwd, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    const file = join(sessions, "_beta_session.yaml");
+    writeFileSync(file, (how.session ?? `model: ${MODEL}\nplugins:\n  local_plugins:\n    - PLUGIN\n`).replace("PLUGIN", plugin));
+    const beta = readFileSync(join(evals, "beta.yaml"), "utf8")
+      // Relative, as alpha's: the CLI's cwd is the real path, and an absolute path through a symlinked tmpdir would
+      // hash under a different relative name in-process.
+      .replace(/^session: .*$/m, "session: ../sessions/_beta_session.yaml")
+      .replace(/(assert:\n[\s\S]*?)$/, `$1${how.extraAssert ?? ""}`);
+    writeFileSync(join(evals, "beta.yaml"), beta);
+  };
+  const BREAKS = [
+    [
+      "an alias judge pin",
+      { extraAssert: "  - semantic_matches:\n      rubric: ['c1']\n      judge_model: sonnet\n" },
+      /CONCRETE judge model .*beta.*"sonnet"/,
+    ],
+    [
+      "a missing upload",
+      { session: `model: ${MODEL}\nuploads:\n  - ./no-such-upload.txt\nplugins:\n  local_plugins:\n    - PLUGIN\n` },
+      /harness digest: cannot read sessions\/no-such-upload\.txt/,
+    ],
+    ["an unparseable session", { session: "model: [unclosed\n  - {\n" }, /case beta: session file is not valid YAML/],
+  ] as const;
+
+  it("a broken unselected case does not block regrade --case alpha; the full regrade still refuses it", async () => {
+    const { evals } = buildFlow({ withBeta: true });
+    for (const [what, how, refusal] of BREAKS) {
+      writeFileSync(
+        join(evals, "beta.yaml"),
+        readFileSync(join(evals, "alpha.yaml"), "utf8")
+          .replace(/^name: alpha$/m, "name: beta")
+          .replace(/  - semantic_pairwise:[\s\S]*$/, ""),
+      );
+      breakBeta(evals, how);
+      const err: string[] = [];
+      const full = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), DEPS({ stderr: (l) => err.push(l) }));
+      expect(full.exitCode, what).toBe(2);
+      expect(full.error?.message, what).toMatch(refusal);
+      const sub = await regradeFlow(
+        ARGS({ variant: "v1", cases: ["alpha"], approveHarness: true }),
+        DEPS({ stderr: (l) => err.push(l), regradeOptions: { pairwiseComplete: verdict("A") } }),
+      );
+      expect(sub.error?.message, what).toBeUndefined();
+      expect(sub.exitCode, what).toBe(0);
+      if (what === "an unparseable session") expect(err.join("\n")).toMatch(/note: case beta: .*not selected.*one-plugin/);
+    }
+  }, 300_000);
+
+  it("run --case and regrade --case compute the same harness sha (an unselected case's upload missing)", async () => {
+    const { cli, evals } = buildFlow({ withBeta: true });
+    breakBeta(evals, BREAKS[1][1]);
+    // run approves; regrade, with no --approve-harness, must find the gate approved.
+    const run = cli("run", "evals", "--flow", "flow", "--case", "alpha", "--dry-run", "--approve-harness");
+    expect(run.status, run.stderr).toBe(0);
+    const out = await regradeFlow(ARGS({ variant: "v1", cases: ["alpha"] }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    expect(out.error?.message).toBeUndefined();
+    expect(out.exitCode).toBe(0);
+    // And the other way: regrade approves a changed harness; run's dry run reports it approved.
+    breakBeta(evals, BREAKS[2][1]);
+    const approved = await regradeFlow(
+      ARGS({ variant: "v1", cases: ["alpha"], approveHarness: true }),
+      DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }),
+    );
+    expect(approved.exitCode).toBe(0);
+    const dry = cli("run", "evals", "--flow", "flow", "--case", "alpha", "--dry-run");
+    expect(dry.status, dry.stderr).toBe(0);
+    expect(dry.stderr).toMatch(/harness gate: approved \(sha256 /);
+  }, 300_000);
+});

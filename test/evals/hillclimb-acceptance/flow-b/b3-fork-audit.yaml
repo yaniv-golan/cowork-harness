@@ -1,0 +1,19 @@
+# Acceptance: a `context: fork` skill. Its answer reaches the main agent as the Skill tool result, so the
+# rubric grades it only with include_fork_results.
+name: b3-fork-audit
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Profile sales.csv from my uploads with the csv-report skill, then audit the numbers.
+assert:
+- skill_triggered: csv-audit
+- semantic_matches:
+    include_fork_results: true
+    rubric:
+    - The audit reports the East row whose amount and units are zero
+    - The audit ends with a findings count line

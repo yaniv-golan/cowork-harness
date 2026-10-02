@@ -1,0 +1,64 @@
+{
+  "source": "uploads/sales.csv",
+  "rows": 5,
+  "columns": {
+    "region": {
+      "type": "categorical",
+      "count": 5,
+      "distinct": 4,
+      "top": [
+        [
+          "North",
+          2
+        ],
+        [
+          "East",
+          1
+        ],
+        [
+          "South",
+          1
+        ],
+        [
+          "West",
+          1
+        ]
+      ]
+    },
+    "product": {
+      "type": "categorical",
+      "count": 5,
+      "distinct": 2,
+      "top": [
+        [
+          "Widget",
+          3
+        ],
+        [
+          "Gadget",
+          2
+        ]
+      ]
+    },
+    "amount": {
+      "type": "numeric",
+      "count": 5,
+      "sum": 4200,
+      "mean": 840,
+      "median": 800,
+      "min": 0,
+      "max": 1500,
+      "p90": 1500
+    },
+    "units": {
+      "type": "numeric",
+      "count": 5,
+      "sum": 75,
+      "mean": 15,
+      "median": 15,
+      "min": 0,
+      "max": 30,
+      "p90": 30
+    }
+  }
+}

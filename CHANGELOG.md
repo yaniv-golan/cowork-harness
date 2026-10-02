@@ -167,7 +167,12 @@ All notable changes to this project are documented here. The format is based on
   (naming the plugin's skills), and an unapproved harness change (`--approve-harness` records it; the harness sha
   covers each scenario, its session file, its uploads and its `workspace_fixture` files, exec bits included; a
   fixture is also a read root, so a scenario or session file inside one is refused like one inside a mounted
-  folder). Rows carry the
+  folder). Under `--case`, the per-case checks (the session and
+  its model pins, the scenario's inputs, its `semantic_pairwise` references, the isolation check, the mounts) cover the
+  selected cases only, so a problem in an unselected case never blocks a pass that does not run it; every scenario
+  file must still parse and every case's baseline must still load, the harness gate and the files kept unreadable
+  cover every case, and the one-plugin rule covers every case whose session parses (an unselected case whose session
+  is inline or does not parse is skipped for it, with a note). `hillclimb regrade --case` follows the same rule. Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
@@ -439,6 +444,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
+  registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
+  so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a
+  skill critique reported "not invoked" and eval's invocation column read false on every rep. They now match
+  the name as the agent registers it. When that name is ambiguous, a match is reported as unobservable, never as
+  invoked: a command file whose stem equals the rewritten name, or a second skill directory that rewrites to the
+  same id. A root `SKILL.md` that critique cannot promote to its plugin is now named by its frontmatter `name`,
+  as the agent registers it, instead of by its directory; when that name differs from the directory, the
+  report's `gradedSkill` changes with it, so such a critique no longer pairs with one made before the upgrade.
 - **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers

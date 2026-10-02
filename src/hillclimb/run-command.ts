@@ -12,7 +12,7 @@ import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
 import { applySessionOverrides, expandHome, type SessionConfig } from "../session.js";
 import { buildFingerprint } from "../run/cassette.js";
-import { effectiveTier, runOutDir, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
+import { effectiveTier, loadSessionFromFile, runOutDir, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
 import { pairwiseRefsRefusal } from "../refs/preflight.js";
 import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { freezeCaseRef } from "./freeze-ref.js";
@@ -30,7 +30,7 @@ import { evidenceFacts } from "../eval/invocation.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
 import type { Scenario } from "../types.js";
 import type { HillclimbRunArgs } from "./args.js";
-import { loadCases, type HillclimbCase } from "./cases.js";
+import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { refuseChangedMetrics } from "./metric-keys.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
@@ -138,17 +138,25 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   say: (l: string) => void,
 ): Prepared {
   const v = args.variant;
+  // The case list is the flow's (every scenario loads); the per-case checks below cover the --case selection only —
+  // an unselected case does not run in this pass. The gate, the hidden files and the one-plugin rule cover every case.
   const { cases } = loadCases(resolve(deps.cwd, args.target));
   // One metric id declared two ways is refused before the snapshot below is taken (the runner recomputes the union).
   const union = metricUnion(cases.map((c) => ({ name: c.id, metrics: c.scenario.metrics })));
   // ...and a metric re-declared since the flow's rows were written (the runner repeats this too).
   const existing = existingFlowSnapshot(normalizeRootArg(args.flow), deps.cwd);
   if (existing) refuseChangedMetrics(existing, union);
-  const prep = prepareCases(cases, {
-    ...(args.model !== undefined ? { modelFlag: args.model } : {}),
-    ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
-    env: deps.env,
-  });
+  const selected = selectCases(cases, args.cases);
+  const prep = prepareCases(
+    cases,
+    {
+      ...(args.model !== undefined ? { modelFlag: args.model } : {}),
+      ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
+      env: deps.env,
+    },
+    selected,
+  );
+  for (const n of prep.notes) say(`[${v}] ${n}`);
   const live = prep.lever;
 
   // The judges (semantic_matches, semantic_pairwise) and the LLM decider run the host `claude` isolated and tool-less (eval's rule): a CLI that cannot is
@@ -156,7 +164,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   // decider, so `on_unanswered: llm` then never calls it.
   const llmDecider = args.deciderCmd === undefined && args.deciderDir === undefined;
   if (
-    cases.some(
+    selected.some(
       (c) =>
         (llmDecider && c.scenario.on_unanswered === "llm") ||
         (c.scenario.assert ?? []).some((a) => a.semantic_matches !== undefined || a.semantic_pairwise !== undefined),
@@ -204,7 +212,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   }
 
   // Eval's answer-key guard: no scenario or session file of this flow may be readable through the plugin.
-  const evalFiles = [...new Set(cases.flatMap((c) => [resolve(c.file), prep.sessionFile(c)]))];
+  const evalFiles = [...new Set(cases.flatMap((c) => [resolve(c.file), prep.sessionFile(c)]))].filter((p): p is string => p !== undefined);
   const findings = answerKeyFindings(evalFiles, [{ label: v, sourceDir: live, snapshotDir: pluginDir }]);
   if (findings.length)
     throw new UsageError(
@@ -215,11 +223,13 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
 
   // semantic_pairwise: the flow's own references, found once per pass. Every pairwise assert is judged against all
   // of them (the scenario's `refs:` is ignored here); the baseline's decides the verdict, a later variant's is a
-  // metric. The pre-spend check below and every run of the pass use this one setup.
+  // metric. The pre-spend check below and every run of the pass use this one setup. Whether the flow judges pairwise
+  // is a property of every case (it decides the rows' column set, which a --case pass must not change); the checks and
+  // the judge-call count below cover the selected cases.
   const flowPairwise = flowHasPairwise(cases.map((c) => ({ assertions: c.scenario.assert ?? [] })));
   const refs = flowPairwise ? discoverFlowRefs(resolve(deps.cwd, flowArg)) : [];
   if (flowPairwise) {
-    const ignored = cases.filter((c) => (c.scenario.assert ?? []).some((a) => a.semantic_pairwise?.refs?.length)).map((c) => c.id);
+    const ignored = selected.filter((c) => (c.scenario.assert ?? []).some((a) => a.semantic_pairwise?.refs?.length)).map((c) => c.id);
     say(
       `[${v}] pairwise refs: ${refs.map((r) => r.name).join(", ")} (stores: ${refs.map((r) => tildeify(r.store)).join(", ")})` +
         (ignored.length ? `; the scenario \`refs:\` of ${ignored.join(", ")} is ignored under hillclimb` : ""),
@@ -229,7 +239,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   if (flowPairwise && args.dryRun) {
     // The judge's spend is not in plan.cost (agent spend only): say how many calls a rep makes, at most.
     const judged = refs.filter((r) => r.name !== v).length;
-    const calls = cases.reduce(
+    const calls = selected.reduce(
       (n, c) =>
         n +
         (c.scenario.assert ?? []).reduce(
@@ -244,10 +254,27 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   }
 
   // Per case: the session pointed at the variant's plugin, its signature from the same fingerprint call a run
-  // makes, and the input checks a run makes before its run dir exists — over the SUBSTITUTED session.
+  // makes, and the input checks a run makes before its run dir exists — over the SUBSTITUTED session. Selected cases
+  // only; an unselected case whose session loads still records its signature, so the variant's source_sig is the
+  // same under any --case selection WHEN every unselected case's session loads. One that does not (or an inline
+  // session) records no signature: a --case pass then records a source_sig a full pass would not, and summary.json
+  // keeps the first writer's.
   const sessions = new Map<string, SessionConfig>();
   const sigs = new Map<string, string>();
+  const chosen = new Set(selected.map((c) => c.id));
   for (const c of cases) {
+    if (chosen.has(c.id)) continue;
+    try {
+      const declared = loadSessionFromFile(c.scenario.session);
+      const sub = applySessionOverrides(declared, { skillDirSubstitution: [declared.plugins.local_plugins[0], pluginDir] });
+      const baseline = prep.baseline(c);
+      const sig = buildFingerprint(c.scenario.session, baseline.appVersion, undefined, c.scenario.skills, baseline, sub).contentSig;
+      if (sig !== undefined) sigs.set(c.id, sig);
+    } catch {
+      /* not run in this pass: its refusal is a pass that selects it */
+    }
+  }
+  for (const c of selected) {
     const declared = prep.session(c);
     let sub: SessionConfig;
     try {
@@ -325,7 +352,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
 
   // A scenario whose longest recorded run outlasts the ceiling would end every rep as a timeout row: say so first.
   if (args.timeoutS > 0)
-    for (const c of cases) {
+    for (const c of selected) {
       const longest = Math.max(
         0,
         ...indexRows()

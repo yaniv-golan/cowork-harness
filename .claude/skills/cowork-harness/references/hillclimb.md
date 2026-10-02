@@ -52,8 +52,10 @@ with no `prompt:` (a session file) is skipped.
 ## The flags of `run`
 
 `--flow DIR`, `--variant ID` (`baseline` or `v<N>`, N ≥ 1, no leading zero; default `baseline`), `--reps N`
-(default 1), `--concurrency N` (default 4; a decider needs `--concurrency 1`), `--timeout-s N` (default 1800; 0 = none; it bounds
-the whole attempt, the judge included), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
+(default 1), `--concurrency N` (default 4; a decider needs `--concurrency 1`), `--timeout-s N` (default 1800; 0 = none: the agent's bound, the
+scenario's `timeout_ms` lowered to it, a tie going to the runner; no judge starts after it, though one already
+running finishes; reaching it is an `errors.jsonl` `timeout` row, while a shorter `timeout_ms` of the scenario's own
+firing first is a scored `errored_agent` row), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
 `--case ID`, `--skill NAME`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--decider-cmd CMD` or
 `--decider-dir DIR`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
@@ -118,6 +120,11 @@ is approved. `--approve-harness` on `regrade` records it, and is yours there too
 - an unapproved or changed harness (see above), a missing or incomplete variant snapshot, a plugin with no
   git-tracked files, a snapshot root inside the plugin, the flow dir or the runs root, a live lock;
 - a decider with `--concurrency` above 1.
+
+Under `--case`, the per-case refusals (the session, model pins, inputs, `semantic_pairwise` references, isolation,
+mounts) cover only the selected cases, so a canary is not blocked by another case's problem. The flow-level ones
+still cover every case: every scenario must parse, the harness sha and the answer key's hidden files span all
+cases, and the one-plugin rule covers every session that parses. `regrade --case` follows the same rule.
 
 The full list is in [SPEC.md §11](https://github.com/yaniv-golan/cowork-harness/blob/main/SPEC.md#11-machine-output---output-format-json).
 
