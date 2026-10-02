@@ -402,6 +402,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
+  registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
+  so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a
+  skill critique reported "not invoked" and eval's invocation column read false on every rep. They now match
+  the name as the agent registers it.
 - **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers
