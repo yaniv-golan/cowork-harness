@@ -25,6 +25,7 @@ import {
   countStringInFile,
   deriveNativeStagedPath,
   nativeManifestBuild,
+  nativeBuildsForPin,
 } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import { recordedFixtureFileSigs, recordedFixtureRefusal } from "./fixture/workspace.js";
@@ -3272,6 +3273,9 @@ async function cmdSync(args: string[]) {
     ...baseAgentBinary,
     stagedPath: derivedStagedPath,
     nativeStagedPath: derivedNativeStagedPath,
+    // Recomputed every sync from the local asar (never spread from the base): the build per CPU arch for the
+    // pinned native version, so a host of another arch is held to ITS build, not the syncing machine's.
+    nativeBuilds: nativeBuildsForPin(res.agentReleaseChannel, derivedNativeStagedPath),
     // Recomputed from the live asar every sync, never spread from the base: `diffBaselines` is a generic
     // recursive differ, so this only shows a stable<->RC channel flip if the candidate carries a FRESH
     // value. A carried-forward one would make the diff silent on exactly the change it exists to catch.

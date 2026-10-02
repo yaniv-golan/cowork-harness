@@ -12,6 +12,10 @@
     "manifestChecksumMatch": true,
     "stringSentinels": {
       "tengu_saddle_lantern": 2
+    },
+    "nativeBuilds": {
+      "arm64": "f2326db61802",
+      "x64": "fda00b160da4"
     }
   },
   "guest": {
@@ -499,7 +503,8 @@
         "on": true,
         "source": "force",
         "value": {
-          "alwaysLoad": true
+          "alwaysLoad": true,
+          "enabledDigest": "4256447a8c80588d"
         }
       },
       "canSaveSkill:3246569822": {

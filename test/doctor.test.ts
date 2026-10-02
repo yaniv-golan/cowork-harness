@@ -833,6 +833,34 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
     });
   });
 
+  // latest (desktop-2.19675.0 onwards) also pins the build PER ARCH. An x64 host is held to the x64 entry, not
+  // to the arm64 build in nativeStagedPath — through the real probe, with the host arch faked.
+  const asArch = (arch: string, fn: () => void) => {
+    const saved = Object.getOwnPropertyDescriptor(process, "arch")!;
+    Object.defineProperty(process, "arch", { value: arch, configurable: true });
+    try {
+      fn();
+    } finally {
+      Object.defineProperty(process, "arch", saved);
+    }
+  };
+  it("x64 host: latest's x64 build staged → ok, no note; another x64 build only → fail, kind build", () => {
+    const x64 = loadBaseline("latest").agentBinary?.nativeBuilds?.x64;
+    expect(x64, "precondition: latest pins an x64 build").toMatch(/^[0-9a-f]{12}$/);
+    asArch("x64", () => {
+      withHome((home) => {
+        const bin = stageBuild(home, pinned(), x64!, 100);
+        const r = realProbe.hostAgentBinary();
+        expect(r).toMatchObject({ ok: true, path: bin });
+        expect(r.ok && r.note).toBeFalsy();
+      });
+      withHome((home) => {
+        stageBuild(home, pinned(), "cccccccccccc", 100);
+        expect(realProbe.hostAgentBinary()).toMatchObject({ ok: false, kind: "build" });
+      });
+    });
+  });
+
   it("a major/minor jump staged → fail, kind major-minor, and doctor gives that cause's remedy (not 'nothing staged')", () => {
     withHome((home) => {
       const [a, b] = pinned().split(".").map(Number);

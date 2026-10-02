@@ -460,6 +460,9 @@ export interface NativeStagingDrift {
   pinned?: string;
   /** The build the pin names (per-build pins only). */
   pinnedBuild?: string;
+  /** The baseline pins builds per arch (`nativeBuilds`) but none for this host's arch, so the version alone
+   *  was matched. Set only on a resolved kind. */
+  hostArchUnpinned?: { arch: string; pinnedArchs: string[] };
   /** The chosen version, when something was found. */
   found?: string;
   /** The chosen build (per-build candidates, or a flat one with a marker). */
@@ -501,9 +504,18 @@ export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeSt
       ? { kind: "exact", stagedPath: staged, path: staged }
       : { kind: "missing", cause: "missing", stagedPath: staged };
   }
-  const { root, version: pinned, build: pinnedBuild } = pin;
+  const { root, version: pinned } = pin;
+  // The build to hold the staged binary to. With a per-arch map (`nativeBuilds`), ONLY the host arch's entry
+  // counts — the build in nativeStagedPath is the SYNCING machine's arch, which another arch never stages. No entry
+  // for this arch: match by version, and say so. No map at all (every baseline before it existed): the build in
+  // the path, as before.
+  const hostArch = process.arch === "arm64" ? "arm64" : "x64";
+  const builds = baseline.agentBinary?.nativeBuilds;
+  const archs = builds ? (Object.keys(builds) as Array<"arm64" | "x64">).filter((k) => builds[k]) : [];
+  const pinnedBuild = archs.length ? builds![hostArch] : pin.build;
+  const hostArchUnpinned = archs.length && !pinnedBuild ? { hostArchUnpinned: { arch: hostArch, pinnedArchs: archs } } : {};
   const base = { stagedPath: staged, pinned, ...(pinnedBuild ? { pinnedBuild } : {}), root };
-  const pinLayout = pinnedBuild ? "nested" : "flat";
+  const pinLayout = pin.build ? "nested" : "flat";
   const describe = (c: NativeCandidate, rest: NativeCandidate[]) => ({
     found: c.version,
     ...(c.build ? { foundBuild: c.build } : {}),
@@ -528,7 +540,14 @@ export function classifyNativeStagingDrift(baseline: PlatformBaseline): NativeSt
     }
     const [c, ...rest] = own.candidates;
     const stillThere = c.layout === "nested" && pinLayout === "flat" && existsSync(staged);
-    return { kind: "exact", ...base, ...describe(c, rest), ...(stillThere ? { pinnedFilePresent: true } : {}), ...link };
+    return {
+      kind: "exact",
+      ...base,
+      ...describe(c, rest),
+      ...(stillThere ? { pinnedFilePresent: true } : {}),
+      ...link,
+      ...hostArchUnpinned,
+    };
   }
 
   if (!existsSync(root)) return { kind: "missing", cause: "missing-root", ...base };
@@ -613,6 +632,11 @@ export function resolveHostAgentBinary(baseline: PlatformBaseline): string {
         `cowork-harness: the pinned native agent "${d.stagedPath}" is present, but a verified build of ${d.found} is staged; ` +
           `running that build, "${d.path}".\n`,
       );
+    if (d.hostArchUnpinned)
+      process.stderr.write(
+        `cowork-harness: the baseline pins no native build for ${d.hostArchUnpinned.arch} (only ${d.hostArchUnpinned.pinnedArchs.join(", ")}); ` +
+          `matching ${d.found} by version — running build ${d.foundBuild ?? "(flat install)"}.\n`,
+      );
     const amb = ambiguityNote(d);
     if (amb) process.stderr.write(`cowork-harness: ${amb}.\n`);
     return resolve(d.path!);
@@ -673,6 +697,21 @@ export function nativeManifestBuild(
 ): { version: string; build: string } | undefined {
   const build = channel?.nativeBuilds?.[arch === "arm64" ? "darwin-arm64" : "darwin-x64"];
   return channel && build ? { version: channel.sdkVersion, build } : undefined;
+}
+
+/** `sync`'s `agentBinary.nativeBuilds`: the asar SDK descriptor's darwin build per arch, recorded only when the
+ *  descriptor is for the version `nativeStagedPath` pins (after an auto-update Desktop can run a version the asar
+ *  does not describe, and another version's builds would be wrong for it). Undefined otherwise. Pure. */
+export function nativeBuildsForPin(
+  channel: { sdkVersion: string; nativeBuilds?: Partial<Record<string, string>> } | null | undefined,
+  nativeStagedPath: string,
+): { arm64?: string; x64?: string } | undefined {
+  const version = parseNativeStagedPath(nativeStagedPath)?.version;
+  if (!channel || !version || channel.sdkVersion !== version) return undefined;
+  const out: { arm64?: string; x64?: string } = {};
+  if (channel.nativeBuilds?.["darwin-arm64"]) out.arm64 = channel.nativeBuilds["darwin-arm64"];
+  if (channel.nativeBuilds?.["darwin-x64"]) out.x64 = channel.nativeBuilds["darwin-x64"];
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**
