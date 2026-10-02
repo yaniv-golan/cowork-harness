@@ -115,6 +115,11 @@ is approved. `--approve-harness` on `regrade` records it, and is yours there too
   git-tracked files, a snapshot root inside the plugin, the flow dir or the runs root, a live lock;
 - a decider with `--concurrency` above 1.
 
+Under `--case`, the per-case refusals (the session, model pins, inputs, `semantic_pairwise` references, isolation,
+mounts) cover only the selected cases, so a canary is not blocked by another case's problem. The flow-level ones
+still cover every case: every scenario must parse, the harness sha and the answer key's hidden files span all
+cases, and the one-plugin rule covers every session that parses. `regrade --case` follows the same rule.
+
 The full list is in [SPEC.md §11](https://github.com/yaniv-golan/cowork-harness/blob/main/SPEC.md#11-machine-output---output-format-json).
 
 ## `freeze-ref` — a new bar for `semantic_pairwise`
