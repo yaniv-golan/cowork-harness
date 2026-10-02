@@ -477,11 +477,14 @@ export function assertContextFromRunDir(
     evidenceErrors: result.evidenceErrors,
     effectiveFidelity: result.effectiveFidelity,
     // A kept run dir is re-checked on the SAME machine that ran it — grouped with the live
-    // execute.ts lane (both check a host-shaped computer:// link's path directly). result.json doesn't
-    // persist each connected folder's real host source path, so `workRoot` (the run's own mnt root,
-    // already required above for FS-class asserts) is the only host root this can reconstruct —
-    // a host-shaped link pointing outside it (or with workRoot unset) resolves as evidence-unavailable
-    // rather than falling back to an unconstrained existsSync (see computer-links.ts).
+    // execute.ts lane (both check a host-shaped computer:// link's path directly). Neither result.json
+    // nor any other file in the run dir records each connected folder's real host source path (the live
+    // lane's extra host roots, `plan.mounts[].hostPath`), so `workRoot` (the run's own mnt root, already
+    // required above for FS-class asserts) is the only host root this can reconstruct — a host-shaped link
+    // into a connected folder (hostloop bind-mounts folders at their real host path) or with workRoot unset
+    // resolves as evidence-unavailable rather than falling back to an unconstrained existsSync (see
+    // computer-links.ts). Reconstructing the roots from the scenario's session file now would name today's
+    // folders, not the run's; persisting the folders' host paths in result.json is what would close it.
     linkResolution: { mode: "live", hostRoots: workRoot ? [workRoot] : [] },
     ...budgetFields(result),
   };

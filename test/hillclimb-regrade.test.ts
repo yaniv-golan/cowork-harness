@@ -931,32 +931,51 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(row.meta.regrade_reevaluated).toBe(true);
   }, 240_000);
 
-  it.each([
-    ["a case with no judged assert", true],
-    ["a judged case", false],
-  ] as const)(
-    "%s: an assert unchanged since the run that re-evaluates differently is listed, never written, no judge call",
+  // The run's own outcome of an assert unchanged since the run is what its grader said: a kept run re-evaluated to
+  // another outcome means our reconstruction differs (a changed sidecar, an evaluator fix, evidence a kept run does
+  // not record), not the grader. The live entry stays, and the row says so.
+  it.each([["a case with no judged assert", true]] as const)(
+    "%s: an assert unchanged since the run that re-evaluates differently keeps its live outcome, noted per row",
     async (_n, noPairwise) => {
-      const { flow, rows } = buildFlow({ noPairwise, extra: ["  - transcript_contains: All done"] });
+      const { rows } = buildFlow({ noPairwise, extra: ["  - transcript_contains: All done"] });
+      const old = rows("v1")[0]!;
+      expect(old.grade).toMatchObject({ a1: 1 });
       // The kept evidence changed under the row: its transcript sidecar no longer holds what the run said.
-      const sidecar = join(runDirOf(rows("v1")[0]!), "turns", "1", "run.jsonl");
+      const sidecar = join(runDirOf(old), "turns", "1", "run.jsonl");
       writeFileSync(sidecar, readFileSync(sidecar, "utf8").replaceAll("All done.", "Something else."));
-      const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
-      const { seen, deps } = counting();
-      const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
-      expect(out.exitCode).toBe(1);
-      expect(seen.calls).toBe(0);
-      expect(out.variants[0]!.listed).toEqual([
-        {
-          prompt_id: "alpha",
-          rep: 0,
-          why: expect.stringMatching(/assertion 1 \(`transcript_contains`\) is unchanged since the run but re-evaluates differently/),
-        },
+      const lines: string[] = [];
+      const { deps } = counting();
+      const out = await regradeFlow(ARGS({ variant: "v1" }), { ...deps, stderr: (l) => lines.push(l) });
+      expect(out.exitCode, JSON.stringify(out)).toBe(0);
+      expect(out.variants[0]!.listed).toEqual([]);
+      const row = rows("v1")[0]!;
+      expect(row.grade.a1).toBe(1);
+      expect(row.grade.pass).toBe(old.grade.pass);
+      expect(row.meta.regrade_kept_live).toEqual([1]);
+      expect(lines.filter((l) => /kept its live outcome/.test(l))).toEqual([
+        expect.stringMatching(/\[v1\] alpha rep0: assertion 1 \(`transcript_contains`\) passes in the run, fails re-evaluated now/),
       ]);
-      expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
     },
     240_000,
   );
+
+  it("an assert added beside an unchanged one that re-evaluates differently: the added one is evaluated, the unchanged one keeps its live outcome", async () => {
+    const { rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const old = rows("v1")[0]!;
+    const sidecar = join(runDirOf(old), "turns", "1", "run.jsonl");
+    writeFileSync(sidecar, readFileSync(sidecar, "utf8").replaceAll("All done.", "Something else."));
+    // A second `result: success`: matched by identity with multiplicity, so it is new (index 2), not the run's index 0.
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(
+      sc,
+      readFileSync(sc, "utf8").replace("  - transcript_contains: All done\n", "  - transcript_contains: All done\n  - result: success\n"),
+    );
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    const row = rows("v1")[0]!;
+    expect(row.grade).toMatchObject({ pass: 1, a0: 1, a1: 1, a2: 1 });
+    expect(row.meta.regrade_kept_live).toEqual([1]);
+  }, 240_000);
 
   it("a row whose re-evaluation changes nothing stays byte for byte and is counted re-evaluated", async () => {
     const { flow } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
