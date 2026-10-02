@@ -222,6 +222,22 @@ const declTuple = (m: MetricDecl): string =>
  *  the sha256 of its canonical tuple. A later pass compares it, so a column cannot change meaning mid-flow. */
 export const metricSig = (m: MetricDecl): string => createHash("sha256").update(declTuple(m)).digest("hex").slice(0, 16);
 
+/** A JSON value with every object's keys sorted, so key order never changes it; `undefined` members are dropped, as
+ *  `JSON.stringify` drops them. Two assertions are the same assertion when their canonical JSON is equal. */
+export function canonicalJson(v: unknown): string {
+  const sort = (x: unknown): unknown =>
+    Array.isArray(x)
+      ? x.map(sort)
+      : x !== null && typeof x === "object"
+        ? Object.fromEntries(
+            Object.keys(x)
+              .sort()
+              .map((k) => [k, sort((x as Record<string, unknown>)[k])]),
+          )
+        : x;
+  return JSON.stringify(sort(v)) ?? "null";
+}
+
 /** The union of the cases' scenario-declared metrics, in first-seen order. A metric id declared differently in
  *  another case (any field: the file, the path, the direction, the bound, the floor) is refused, naming both cases:
  *  one column cannot mean two things. Ids are compared case-insensitively, as the scenario compares its own: two

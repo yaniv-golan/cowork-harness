@@ -75,7 +75,18 @@ afterEach(() => {
 });
 
 /** A flow: `alpha` (pairwise), and with `withBeta` a deterministic-only `beta`; baseline + v1 passes (`reps` each). */
-function buildFlow(opts: { withBeta?: boolean; reps?: number; noPairwise?: boolean; metrics?: string[]; skill?: string } = {}) {
+function buildFlow(
+  opts: {
+    withBeta?: boolean;
+    reps?: number;
+    noPairwise?: boolean;
+    metrics?: string[];
+    skill?: string;
+    /** More deterministic assert lines (`  - key: value`), after `result: success`. */
+    extra?: string[];
+    expectDenied?: string[];
+  } = {},
+) {
   const plugin = join(work, "plugin", "my-plugin");
   // With `skill`, a second skill makes the plugin multi-skill, and both passes select `skill` with --skill.
   for (const s of opts.skill !== undefined ? ["x", "y"] : ["x"]) {
@@ -85,7 +96,11 @@ function buildFlow(opts: { withBeta?: boolean; reps?: number; noPairwise?: boole
   const evals = join(f.cwd, "evals");
   mkdirSync(evals);
   writeFileSync(join(evals, "_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
-  const head = "baseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n";
+  const head =
+    "baseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\n" +
+    (opts.expectDenied?.length ? `expect_denied: [${opts.expectDenied.join(", ")}]\n` : "") +
+    "assert:\n  - result: success\n" +
+    (opts.extra ?? []).map((l) => `${l}\n`).join("");
   const metrics = opts.metrics?.length ? `metrics:\n${opts.metrics.join("\n")}\n` : "";
   writeFileSync(
     join(evals, "alpha.yaml"),
@@ -101,8 +116,10 @@ function buildFlow(opts: { withBeta?: boolean; reps?: number; noPairwise?: boole
     spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
   const reps = String(opts.reps ?? 1);
   const sel = opts.skill !== undefined ? ["--skill", opts.skill] : [];
-  expect(cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1", "--reps", reps, ...sel).status).toBe(0);
-  expect(cli("run", "evals", "--flow", "flow", "--variant", "v1", "--concurrency", "1", "--reps", reps, ...sel).status).toBe(0);
+  for (const pass of [["--approve-harness"], ["--variant", "v1"]]) {
+    const r = cli("run", "evals", "--flow", "flow", ...pass, "--concurrency", "1", "--reps", reps, ...sel);
+    expect(r.status, r.stderr).toBe(0);
+  }
   // In-process calls read the same runs root and judge binary.
   for (const [k, v] of Object.entries({
     COWORK_HARNESS_RUNS_DIR: f.runsDir,
@@ -314,30 +331,38 @@ describe.runIf(POSIX)("hillclimb regrade leaves what it should not touch", () =>
     }
   }, 240_000);
 
-  it("a row whose scenario gained an assertion since its run is listed before any judge call", async () => {
-    const { flow, evals } = buildFlow();
+  // This test used to pin that a row whose scenario gained an assert was listed in every mode. Deliberately changed: a
+  // default regrade rebuilds the list from the scenario (the added deterministic assert re-evaluated from the kept run,
+  // the judged one re-judged), so only a fill, which copies outcomes by index, still lists it — before any judge call.
+  it("a row whose scenario gained an assertion: a fill lists it before any judge call; a default regrade re-evaluates it", async () => {
+    const { cli, flow, evals, rows } = buildFlow();
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
     const sc = join(evals, "alpha.yaml");
     writeFileSync(sc, readFileSync(sc, "utf8").replace("assert:\n", "assert:\n  - transcript_contains: done\n"));
     const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
     let calls = 0;
-    const out = await regradeFlow(
-      ARGS({ approveHarness: true }),
-      DEPS({
-        regradeOptions: {
-          pairwiseComplete: async () => {
-            calls++;
-            return { structured: { rationale: "r", verdict: "A" }, model: "claude-haiku-4-5", subtype: "success" };
-          },
+    const deps = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => {
+          calls++;
+          return { structured: { rationale: "r", verdict: "A" }, model: "claude-haiku-4-5", subtype: "success" };
         },
-      }),
-    );
-    expect(out.exitCode).toBe(1);
+      },
+    });
+    const fill = await regradeFlow(ARGS({ approveHarness: true, fillRefs: true }), deps);
+    expect(fill.exitCode).toBe(1);
     expect(calls).toBe(0);
-    expect(out.variants.find((v) => v.variant === "v1")!.listed).toMatchObject([
-      { why: expect.stringMatching(/now has 3 assertion\(s\), its run graded 2/) },
+    expect(fill.variants.find((v) => v.variant === "v1")!.listed).toMatchObject([
+      { why: expect.stringMatching(/now has 3 assertion\(s\), its run graded 2 — run a default `hillclimb regrade` first/) },
     ]);
     expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
-  }, 180_000);
+    const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(calls).toBeGreaterThan(0);
+    // The added assert is a0 now; the run's two moved to a1 and a2.
+    expect(rows("v1")[0]!.grade).toMatchObject({ a0: 1, a1: 1 });
+    expect(rows("v1")[0]!.grade).toHaveProperty("a2_present");
+  }, 240_000);
 });
 
 // A host `claude` too old to run the judge isolated: its `--help` (exit 0, as the real CLI's) lacks the isolation flags.
@@ -660,7 +685,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
       expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/re-measured 1/);
       expect(readdirSync(join(flow, v)).some((n) => /^regrade-[0-9a-f]{16}\.bak\.jsonl$/.test(n))).toBe(true);
     }
-    expect(lines.join("\n")).toMatch(/baseline 1 rewritten, 1 re-measured; v1 1 rewritten, 1 re-measured/);
+    expect(lines.join("\n")).toMatch(/baseline 1 rewritten, 1 re-evaluated, 1 re-measured; v1 1 rewritten, 1 re-evaluated, 1 re-measured/);
   }, 240_000);
 
   it("a re-measure that changes only the row's metric meta still rewrites it; one that changes nothing leaves it byte for byte", async () => {
@@ -805,20 +830,29 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
     }
   }, 240_000);
 
-  it("a flow with no metrics and a case with no judged assert: nothing to re-grade, nothing written (unchanged)", async () => {
+  // This test used to pin the opposite: a case with no judged assert in a flow with no metrics was skipped unread, so a
+  // run dir the kept-run builder refuses was never noticed. Deliberately flipped: every selected row is re-evaluated
+  // from its kept run, so that row is listed, and its healthy sibling is re-evaluated and left byte for byte.
+  it("a flow with no metrics and a case with no judged assert: every row is re-evaluated, a refused run dir listed", async () => {
     const { flow, rows } = buildFlow({ noPairwise: true });
-    // A multi-turn run dir the kept-run builder would refuse: unselected, the row is never re-evaluated, so not listed.
     const dir = join(f.runsDir, "alpha", rows("v1")[0]!.meta.run_id as string);
     cpSync(join(dir, "turns", "1"), join(dir, "turns", "2"), { recursive: true });
-    const before = tree(flow);
+    const before = readFileSync(join(flow, "baseline", "results.jsonl"), "utf8");
     const lines: string[] = [];
     const out = await regradeFlow(ARGS(), DEPS({ stderr: (l) => lines.push(l) }));
-    expect(out.exitCode, JSON.stringify(out)).toBe(0);
-    expect(out.variants.map((v) => ({ rewritten: v.rewritten, remeasured: v.remeasured, listed: v.listed }))).toEqual([
-      { rewritten: 0, remeasured: 0, listed: [] },
-      { rewritten: 0, remeasured: 0, listed: [] },
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(
+      out.variants.map((v) => ({ rewritten: v.rewritten, reevaluated: v.reevaluated, remeasured: v.remeasured, listed: v.listed })),
+    ).toEqual([
+      { rewritten: 0, reevaluated: 1, remeasured: 0, listed: [] },
+      {
+        rewritten: 0,
+        reevaluated: 0,
+        remeasured: 0,
+        listed: [{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(/^refused: .*holds 2 turns/) }],
+      },
     ]);
-    expect(tree(flow)).toEqual(before);
+    expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before);
     expect(lines.join("\n")).not.toMatch(/re-measured/);
   }, 240_000);
 
@@ -832,6 +866,206 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
     expect(out.exitCode).toBe(2);
     expect(out.error?.message).toMatch(/metric "other" is declared differently from the rows already in baseline, v1/);
     expect(tree(flow)).toEqual(before);
+  }, 240_000);
+});
+
+// Every selected row's deterministic asserts are re-evaluated from its kept run (verify-run's own evaluation): a
+// changed value is applied, never kept stale; an unchanged assert that re-evaluates differently is listed. Each flow is
+// written by real `hillclimb run` passes; the scenario is edited afterwards, as a loop fixes its grader mid-flow.
+describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from the kept run", () => {
+  const edit = (evals: string, from: string, to: string) => {
+    const sc = join(evals, "alpha.yaml");
+    const text = readFileSync(sc, "utf8");
+    expect(text).toContain(from);
+    writeFileSync(sc, text.replace(from, to));
+  };
+  const counting = () => {
+    const seen = { calls: 0 };
+    const deps = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => {
+          seen.calls++;
+          return { structured: { rationale: "r", verdict: "A" }, model: "claude-haiku-4-5", subtype: "success" };
+        },
+      },
+    });
+    return { seen, deps };
+  };
+  const runDirOf = (row: { meta: Record<string, unknown> }) => join(f.runsDir, "alpha", row.meta.run_id as string);
+
+  it("a deterministic-only case whose assert VALUE changed: the outcome and pass move (never the stale live outcome)", async () => {
+    const { flow, rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    // Precondition: the live rows pass the assert as written.
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a1: 1 });
+    edit(evals, "transcript_contains: All done", "transcript_contains: Nope");
+    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    for (const v of ["baseline", "v1"]) {
+      const row = rows(v)[0]!;
+      expect(row.grade).toMatchObject({ pass: 0, a0: 1, a1: 0 });
+      expect(row.meta).toMatchObject({
+        regrade_reevaluated: true,
+        regrade_harness_version: expect.any(String),
+        regraded_at: expect.any(String),
+      });
+      expect(out.variants.find((x) => x.variant === v)).toMatchObject({ rewritten: 1, reevaluated: 1, listed: [] });
+      // The deterministic move shows in regrade.md's moved table.
+      expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/a1 1→0/);
+    }
+  }, 240_000);
+
+  it("a case with deterministic and judged asserts: the deterministic change applies, the judged one is re-judged, one verdict", async () => {
+    const { rows, evals } = buildFlow({ extra: ["  - transcript_contains: All done"] });
+    // The live pass depends on the stub judge's verdict against a shuffled order: only the deterministic assert is pinned.
+    expect(rows("v1")[0]!.grade).toMatchObject({ a1: 1 });
+    edit(evals, "transcript_contains: All done", "transcript_contains: Nope");
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(seen.calls).toBeGreaterThan(0);
+    const row = rows("v1")[0]!;
+    expect(row.grade).toMatchObject({ pass: 0, a0: 1, a1: 0 });
+    expect(row.meta.regrade_doc_matches_live).toBeDefined();
+    expect(row.meta.regrade_reevaluated).toBe(true);
+  }, 240_000);
+
+  it.each([
+    ["a case with no judged assert", true],
+    ["a judged case", false],
+  ] as const)(
+    "%s: an assert unchanged since the run that re-evaluates differently is listed, never written, no judge call",
+    async (_n, noPairwise) => {
+      const { flow, rows } = buildFlow({ noPairwise, extra: ["  - transcript_contains: All done"] });
+      // The kept evidence changed under the row: its transcript sidecar no longer holds what the run said.
+      const sidecar = join(runDirOf(rows("v1")[0]!), "turns", "1", "run.jsonl");
+      writeFileSync(sidecar, readFileSync(sidecar, "utf8").replaceAll("All done.", "Something else."));
+      const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+      const { seen, deps } = counting();
+      const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+      expect(out.exitCode).toBe(1);
+      expect(seen.calls).toBe(0);
+      expect(out.variants[0]!.listed).toEqual([
+        {
+          prompt_id: "alpha",
+          rep: 0,
+          why: expect.stringMatching(/assertion 1 \(`transcript_contains`\) is unchanged since the run but re-evaluates differently/),
+        },
+      ]);
+      expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+    },
+    240_000,
+  );
+
+  it("a row whose re-evaluation changes nothing stays byte for byte and is counted re-evaluated", async () => {
+    const { flow } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const before = tree(flow);
+    const out = await regradeFlow(ARGS(), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(out.variants.map(({ variant, rewritten, reevaluated, listed }) => ({ variant, rewritten, reevaluated, listed }))).toEqual([
+      { variant: "baseline", rewritten: 0, reevaluated: 1, listed: [] },
+      { variant: "v1", rewritten: 0, reevaluated: 1, listed: [] },
+    ]);
+    expect(tree(flow)).toEqual(before);
+  }, 240_000);
+
+  it("expect_denied: a judged case's rows are re-judged, a fill's filled — never listed for the trailing egress_denied entries", async () => {
+    // `expect_denied` needs a sandboxed tier, which the stub agent cannot run: the kept runs are given the shape a sandboxed
+    // run persists — one trailing `egress_denied` entry per host after the asserts' — and the scenario declares the host.
+    const { cli, rows, evals } = buildFlow();
+    for (const v of ["baseline", "v1"]) {
+      const file = join(runDirOf(rows(v)[0]!), "turns", "1", "result.json");
+      const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: unknown[] };
+      r.assertions.push({ assertion: { egress_denied: "blocked.example" }, pass: false, message: "expected blocked.example to be denied" });
+      writeFileSync(file, JSON.stringify(r));
+    }
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("assert:\n", "expect_denied: [blocked.example]\nassert:\n"));
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const { seen, deps } = counting();
+    const fill = await regradeFlow(ARGS({ fillRefs: true, approveHarness: true }), deps);
+    expect(
+      fill.variants.flatMap((v) => v.listed),
+      JSON.stringify(fill),
+    ).toEqual([]);
+    expect(rows("baseline")[0]!.grade).toHaveProperty("win_v1");
+    seen.calls = 0;
+    const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+    expect(out.variants[0]!.listed, JSON.stringify(out)).toEqual([]);
+    expect(out.variants[0]!.rewritten).toBe(1);
+    expect(seen.calls).toBeGreaterThan(0);
+    expect(rows("v1")[0]!.meta.regrade_reevaluated).toBe(true);
+  }, 240_000);
+
+  it("expect_denied: a host added since the run is re-evaluated (pass moves), and a fill lists it", async () => {
+    const { rows, evals } = buildFlow({ noPairwise: true });
+    expect(rows("v1")[0]!.grade.pass).toBe(1);
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("assert:\n", "expect_denied: [blocked.example]\nassert:\n"));
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), DEPS());
+    expect(out.variants[0]!.listed, JSON.stringify(out)).toEqual([]);
+    // No egress decision was recorded, so the denial cannot be shown: the assert fails, and with it the verdict.
+    expect(rows("v1")[0]!.grade.pass).toBe(0);
+  }, 240_000);
+
+  it("--fill-refs with a deterministic grader change: listed (run a default regrade first), pass never moves, no judge call", async () => {
+    const { cli, flow, evals } = buildFlow({ extra: ["  - transcript_contains: All done"] });
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    edit(evals, "transcript_contains: All done", "transcript_contains: Nope");
+    const before = {
+      b: readFileSync(join(flow, "baseline", "results.jsonl"), "utf8"),
+      v1: readFileSync(join(flow, "v1", "results.jsonl"), "utf8"),
+    };
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ fillRefs: true, approveHarness: true }), deps);
+    expect(out.exitCode).toBe(1);
+    expect(seen.calls).toBe(0);
+    for (const v of out.variants)
+      expect(v.listed).toEqual([
+        {
+          prompt_id: "alpha",
+          rep: 0,
+          why: expect.stringMatching(/the grader changed since the run.*run a default `hillclimb regrade` first/),
+        },
+      ]);
+    expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before.b);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before.v1);
+  }, 240_000);
+
+  it("an assert the recorded workspace fixture satisfies on its own is listed before any judge call (verify-run's refusal)", async () => {
+    f.cleanup();
+    f = makeStubFixture(`mkdir -p outputs && printf '%s' '{"words":1200}' > outputs/m.json\n${STUB}`);
+    const { flow, rows, evals } = buildFlow();
+    // The shape a run that staged a workspace_fixture persists: the fixture's files recorded on its fingerprint.
+    const file = join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json");
+    const r = JSON.parse(readFileSync(file, "utf8")) as { fingerprint: Record<string, unknown> };
+    // Paths relative to the fixture root, which a run stages as `outputs/`.
+    r.fingerprint.workspaceFixtureFileSigs = [["m.json", "0".repeat(64)]];
+    writeFileSync(file, JSON.stringify(r));
+    // A grader edit adds a presence assert on that file with no `authored:` — it would pass on the fixture alone.
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("assert:\n", "assert:\n  - file_exists: outputs/m.json\n"));
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(seen.calls).toBe(0);
+    expect(out.variants[0]!.listed).toEqual([
+      { prompt_id: "alpha", rep: 0, why: expect.stringMatching(/^refused: .*the workspace_fixture already provides/) },
+    ]);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+  }, 240_000);
+
+  it("a row whose kept work dir is gone, with a filesystem assert, is listed (never re-evaluated as failing)", async () => {
+    f.cleanup();
+    f = makeStubFixture(`mkdir -p outputs && printf '%s' '{"words":1200}' > outputs/m.json\n${STUB}`);
+    const { flow, rows } = buildFlow({ noPairwise: true, extra: ["  - file_exists: outputs/m.json"] });
+    const result = JSON.parse(readFileSync(join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json"), "utf8")) as { workDir: string };
+    rmSync(result.workDir, { recursive: true, force: true });
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS());
+    expect(out.exitCode).toBe(1);
+    expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(/^refused: .*work dir not found/) }]);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
   }, 240_000);
 });
 
