@@ -55,7 +55,7 @@ import {
   subagentBranchFingerprint,
   checkSubagentPromptFacts,
 } from "../src/sync/cowork-sync.js";
-import { checkNormalizationSanity, checkEgressContractFacts } from "../src/sync/cowork-sync.js";
+import { checkNormalizationSanity, checkEgressContractFacts, extractAsarGateIds } from "../src/sync/cowork-sync.js";
 import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
@@ -190,6 +190,68 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     // Mirrors the sync() else-if guard: count only gates whose source !== "absent".
     const liveMatches = Object.values(gates).filter((g) => g.source !== "absent");
     expect(liveMatches).toEqual([]);
+  });
+
+  // The cowork send-message tool's server config is pinned as a TRIPWIRE that may record only its presence
+  // (on/source) and `alwaysLoad`. Its served value also carries the list of models the tool is enabled for
+  // and may carry a replacement tool description; neither may reach a committed baseline.
+  it("pins the send-message tool config as a tripwire: on/source/alwaysLoad and a digest of the enabled condition, never the list", () => {
+    expect(PINNED_GATES["3045399524"]).toBe("sendUserMessageConfig");
+    const f = makeFcache({
+      "3045399524": {
+        value: { alwaysLoad: true, enabled: ["claude-model-x", "claude-model-y[1m]"], prompt: "SERVED DESCRIPTION TEXT" },
+        on: true,
+        off: false,
+        source: "force",
+      },
+    });
+    const g = decodeFcacheGates(f)!["3045399524"];
+    expect(g).toMatchObject({ id: "3045399524", name: "sendUserMessageConfig", on: true, source: "force" });
+    expect(Object.keys(g.value as object).sort()).toEqual(["alwaysLoad", "enabledDigest"]);
+    expect(g.value).toMatchObject({ alwaysLoad: true });
+    expect((g.value as { enabledDigest: string }).enabledDigest).toMatch(/^[0-9a-f]{16}$/);
+    const raw = JSON.stringify(g);
+    expect(raw).not.toContain("claude-model");
+    expect(raw).not.toContain("SERVED DESCRIPTION");
+    expect(raw).not.toContain('"enabled":'); // the condition itself never; only its digest
+  });
+
+  it("the send-message tripwire records alwaysLoad:false when it is absent or the value is not an object", () => {
+    const absent = makeFcache({ "3045399524": { value: { enabled: true }, on: true, off: false, source: "force" } });
+    expect(decodeFcacheGates(absent)!["3045399524"].value).toMatchObject({ alwaysLoad: false });
+    const scalar = makeFcache({ "3045399524": { value: false, on: false, off: true, source: "defaultValue" } });
+    expect(decodeFcacheGates(scalar)!["3045399524"]).toMatchObject({ on: false, source: "defaultValue", value: { alwaysLoad: false } });
+  });
+
+  // The tripwire must SEE a change of the enabled-model condition — the change it exists for — without the list
+  // itself ever being recorded. A digest of the canonical `enabled` value does both.
+  describe("the send-message tripwire's enabledDigest", () => {
+    const digestOf = (enabled: unknown) =>
+      (
+        decodeFcacheGates(makeFcache({ "3045399524": { value: { alwaysLoad: true, enabled }, on: true, off: false, source: "force" } }))![
+          "3045399524"
+        ].value as { enabledDigest: string }
+      ).enabledDigest;
+    it("flips when the enabled set changes (a model added, removed, or everything enabled)", () => {
+      const base = digestOf(["claude-model-a", "claude-model-b"]);
+      expect(digestOf(["claude-model-a", "claude-model-b", "claude-model-c"])).not.toBe(base);
+      expect(digestOf(["claude-model-a"])).not.toBe(base);
+      expect(digestOf(true)).not.toBe(base);
+      expect(digestOf(false)).not.toBe(digestOf(true));
+      expect(digestOf([])).not.toBe(digestOf(false));
+    });
+    it("is stable across a server-side reorder of the same set", () => {
+      expect(digestOf(["claude-model-b", "claude-model-a"])).toBe(digestOf(["claude-model-a", "claude-model-b"]));
+    });
+    it("ignores the served prompt and other keys (only the enabled condition)", () => {
+      const a = decodeFcacheGates(
+        makeFcache({ "3045399524": { value: { alwaysLoad: true, enabled: ["m"], prompt: "X" }, on: true, off: false, source: "force" } }),
+      )!;
+      const b = decodeFcacheGates(
+        makeFcache({ "3045399524": { value: { alwaysLoad: true, enabled: ["m"] }, on: true, off: false, source: "force" } }),
+      )!;
+      expect(a["3045399524"].value).toEqual(b["3045399524"].value);
+    });
   });
 
   it("decodes a normal (non-absent) entry when the dark gate 2614807392 IS present in the fcache", () => {
@@ -346,6 +408,139 @@ describe("cowork-sync platform guard", () => {
   });
 });
 
+// Desktop >= 2.16120.0 (binary-verified in 2.16120.0 and 2.19675.0, absent in 2.9939.4): the OUTPUTS mount's mode
+// comes from an exported `outputsMountMode`, `function B(e){return e?"rw":"rwd"}` with e = isBridgeSession, called by
+// all three mount builders (host-loop computeBashMounts, the VM-loop builder, the shares builder). So deletes in
+// outputs are ALLOWED for a normal session and denied only for a bridge session. The delete-deny resolver's floor
+// cannot see this (its `?"rwd":"rw"` count is 2 in all three builds), so it gets its own anchor.
+// Three builders call it — here locally in one chunk; in the real bundle through a re-export alias (see below).
+const OUTPUTS_MODE_FACT =
+  ';var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return e?"rw":"rwd"}' +
+  ';pa[o("outputs")]={path:a,mode:zOmm(b1)};pb[o("outputs")]={path:a,mode:zOmm(b2)};pc[o("outputs")]??={path:a,mode:zOmm(b3)}';
+/** checkMountModeFacts over a one-chunk synthetic bundle (sync always passes its per-chunk map). */
+const mmf = (s: string) => checkMountModeFacts(s, new Map([["index.js", s]]));
+
+describe("checkMountModeFacts — the outputs mount mode (outputsMountMode)", () => {
+  const BASE = 'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";' + OUTPUTS_MODE_FACT;
+  const ofOutputs = (flags: string[]) => flags.filter((f) => f.includes("outputsMountMode"));
+  it('control: the export returning "rwd" for a non-bridge session is clean', () => {
+    expect(ofOutputs(mmf(BASE))).toEqual([]);
+  });
+  it.each([
+    ["the export is gone", (s: string) => s.replace("outputsMountMode:()=>zOmm", "somethingElse:()=>zOmm")],
+    ["the non-bridge branch now denies deletes", (s: string) => s.replace('return e?"rw":"rwd"', 'return e?"rw":"rw"')],
+    ["the branches swapped", (s: string) => s.replace('return e?"rw":"rwd"', 'return e?"rwd":"rw"')],
+    ["the function no longer branches on its argument", (s: string) => s.replace('return e?"rw":"rwd"', 'return"rwd"')],
+    ["the export points at a function that does not resolve", (s: string) => s.replace("function zOmm(", "function zOther(")],
+  ])("MUTATION: %s → flags", (_label, mutate) => {
+    const mutated = mutate(BASE);
+    expect(mutated).not.toBe(BASE);
+    expect(ofOutputs(mmf(mutated)).length).toBeGreaterThan(0);
+  });
+  // Minified names repeat across chunks: the function must be resolved in the chunk that EXPORTS it.
+  it("resolves the function in the exporting chunk, not another chunk's same-named function", () => {
+    const files = new Map([
+      ["index.chunk-OTHER.js", 'function zOmm(e){return e?"rw":"rwd"}'],
+      [
+        "index.chunk-MOUNT.js",
+        'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return!0}' +
+          ";pa.o={mode:zOmm(b1)};pb.o={mode:zOmm(b2)};pc.o={mode:zOmm(b3)}",
+      ],
+    ]);
+    expect(ofOutputs(checkMountModeFacts([...files.values()].join(""), files)).length).toBeGreaterThan(0);
+    files.set("index.chunk-MOUNT.js", files.get("index.chunk-MOUNT.js")!.replace("return!0", 'return e?"rw":"rwd"'));
+    expect(ofOutputs(checkMountModeFacts([...files.values()].join(""), files))).toEqual([]);
+  });
+
+  // "Every mount builder uses it" is the claim the baselines make, so the CALLERS are pinned too, not just the function:
+  // a builder going back to a hardcoded mode for outputs must flag. In the real bundle the builders live in another
+  // chunk and call it through the module's re-export alias: `defineProperty(exports,"p",…return B)` and
+  // `C=require("./<that chunk>")`, then `mode:C.p(<isBridgeSession>)` three times.
+  describe("its callers: a floor of 3 call sites, through the re-export alias", () => {
+    const MOUNT =
+      'var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return e?"rw":"rwd"}' +
+      'Object.defineProperty(exports,"p",{enumerable:!0,get:function(){return zOmm}});' +
+      'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";';
+    const SPAWN =
+      'var C=require("./index.chunk-MOUNT.js");' +
+      'i.push({name:"outputs",path:e.outputsDir,mode:C.p(e.isBridgeSession),hide:[]});' +
+      "let v={path:t.jz(i),mode:C.p(c)};w[O]??={path:t.jz(r.getOutputsDir(i)),mode:C.p(p)};";
+    const files = (spawn: string) =>
+      new Map([
+        ["index.chunk-MOUNT.js", MOUNT],
+        ["index.chunk-SPAWN.js", spawn],
+      ]);
+    const run = (f: Map<string, string>) => ofOutputs(checkMountModeFacts([...f.values()].join(""), f));
+    it("control: three builders call it through the alias → clean", () => {
+      expect(run(files(SPAWN))).toEqual([]);
+    });
+    it.each([
+      ['one builder hardcodes "rw" for outputs', "mode:C.p(c)", 'mode:"rw"'],
+      ["one builder goes back to the approved-list resolver", "mode:C.p(p)", "mode:V(o,a,p)"],
+      ['the shares builder hardcodes "rwd"', "mode:C.p(e.isBridgeSession)", 'mode:"rwd"'],
+    ])("MUTATION: %s → flags the call-site floor", (_label, from, to) => {
+      const mutated = SPAWN.replace(from, to);
+      expect(mutated).not.toBe(SPAWN);
+      expect(run(files(mutated)).some((f) => f.includes("call site"))).toBe(true);
+    });
+    // Only a MOUNT site counts (`mode:<ns>.<alias>(`): an unrelated call of the same alias must not mask a builder
+    // that stopped using it.
+    it("an unrelated call of the alias does not stand in for a dropped builder", () => {
+      const mutated = SPAWN.replace("mode:C.p(c)", 'mode:"rw"') + "let unrelated=C.p(q);";
+      expect(run(files(mutated)).some((f) => f.includes("call site"))).toBe(true);
+    });
+    it("in a chunk that DOES require the exporting chunk, a same-named alias on another namespace does not count", () => {
+      const mixed = SPAWN.replace(
+        'var C=require("./index.chunk-MOUNT.js");',
+        'var C=require("./index.chunk-MOUNT.js"),D=require("./index.chunk-ELSE.js");',
+      )
+        .split("C.p(")
+        .join("D.p(");
+      expect(mixed).not.toBe(SPAWN);
+      expect(run(files(mixed)).some((f) => f.includes("call site"))).toBe(true);
+    });
+    it("a call through a namespace bound to ANOTHER chunk does not count", () => {
+      const other = SPAWN.replace('var C=require("./index.chunk-MOUNT.js");', 'var C=require("./index.chunk-ELSE.js");');
+      expect(run(files(other)).some((f) => f.includes("call site"))).toBe(true);
+    });
+  });
+});
+
+// Oracle over saved Desktop asars (a local backup dir, never present on CI): `<dir>/<version>/app.asar`. Reads the
+// main-process bundle straight out of the asar (a JSON header + raw file bytes), normalizes it as sync does, and
+// checks the anchor: absent in 2.9939.4, present with "rwd" in 2.16120.0 and 2.19675.0.
+function readAsarBuildFiles(asarPath: string): Map<string, string> {
+  const buf = readFileSync(asarPath);
+  const headerSize = buf.readUInt32LE(4);
+  const jsonLen = buf.readUInt32LE(12);
+  const header = JSON.parse(buf.subarray(16, 16 + jsonLen).toString("utf8")) as { files: Record<string, any> };
+  const base = 8 + headerSize;
+  const build = header.files[".vite"]?.files?.build?.files ?? {};
+  const out = new Map<string, string>();
+  for (const [name, e] of Object.entries(build) as Array<[string, { size?: number; offset?: string; unpacked?: boolean }]>) {
+    if (!name.endsWith(".js") || e.unpacked || e.offset === undefined || e.size === undefined) continue;
+    const start = base + Number(e.offset);
+    out.set(name, normalizeBundleQuotes(buf.subarray(start, start + e.size).toString("utf8")));
+  }
+  return out;
+}
+const ASAR_BACKUPS = process.env.COWORK_ASAR_BACKUP_DIR;
+describe.skipIf(!ASAR_BACKUPS)("outputsMountMode oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each([
+    ["2.9939.4", false],
+    ["2.16120.0", true],
+    ["2.19675.0", true],
+  ])('%s: anchor present with the non-bridge "rwd" return = %s', (version, present) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    // With the backup dir named, a missing expected asar is a failure, never a silent pass.
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100); // the bundle was actually read
+    const flags = checkMountModeFacts([...files.values()].join(""), files).filter((f) => f.includes("outputsMountMode"));
+    expect(flags.length === 0).toBe(present);
+  });
+});
+
 describe("checkMountModeFacts (mount-mode drift guard for the hand-authored baseline)", () => {
   // A synthetic bundle carrying every binary-verified mode fact: the delete-deny resolver plus each
   // mount whose mode is hardcoded `"ro"` at the spawn-time builder. Widened from two facts to five once
@@ -358,19 +553,22 @@ describe("checkMountModeFacts (mount-mode drift guard for the hand-authored base
     'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"}' +
     'function IXbash(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}' +
     ';l[Es(".claude/skills")]={path:x,mode:"ro"};l[Es(".claude/projects")]={path:y,mode:"ro"}' +
-    ';l[Es(`.projects/${e.uuid}`)]={path:z,mode:"ro"}';
+    ';l[Es(`.projects/${e.uuid}`)]={path:z,mode:"ro"}' +
+    // Desktop >= 2.16120.0: the OUTPUTS mount is no longer resolved through the delete-deny resolver; its mode is
+    // the exported `outputsMountMode`, "rwd" (deletes allowed) for every non-bridge session.
+    OUTPUTS_MODE_FACT;
   it("returns no flags when every mode fact is present", () => {
-    expect(checkMountModeFacts(ok)).toEqual([]);
+    expect(mmf(ok)).toEqual([]);
   });
   it("flags when the IX delete-deny resolver is gone (outputs/projects default may have changed)", () => {
     // BOTH lanes, so the floor sees 0 sites. Mutating one lane is a different case — covered below.
     const drifted = ok.split('?"rwd":"rw"').join('?"rwd":"rwd"'); // delete now allowed by default
-    const flags = checkMountModeFacts(drifted);
+    const flags = mmf(drifted);
     expect(flags.some((f) => f.includes("delete-deny resolver"))).toBe(true);
   });
   it("flags when uploads is no longer read-only", () => {
     const drifted = ok.replace('("uploads")]={path:wa(i),mode:"ro"', '("uploads")]={path:wa(i),mode:"rw"');
-    const flags = checkMountModeFacts(drifted);
+    const flags = mmf(drifted);
     expect(flags.some((f) => f.includes("uploads"))).toBe(true);
   });
 });
@@ -1307,6 +1505,132 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts(repointed).join("\n")).toContain("S6f artifact host grant");
   });
 
+  // Desktop 2.19675.0: W1 gained `...Sd(a)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}`, where
+  // `function Sd(e){return e.sessionType===t.WR}` and `t.WR` resolves to the literal "scheduled". The key is
+  // ALLOWLISTED (the modeled interactive session has no sessionType), and the allowlist is unconditional by
+  // construction, so S6g is what keeps that classification honest: every construction must be a spread
+  // guarded by a predicate that resolves to exactly `sessionType==="scheduled"`.
+  const SCHED_PRED =
+    'function zSd(e){return e.sessionType===zN.WR};var zN={};Object.defineProperty(exports,"WR",{enumerable:!0,get:function(){return zx7}});var zx7="scheduled";';
+  const SCHED_SPREAD = '...zSd(r)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},';
+  // The bundled CLI's env-schema export table names the key too; that is a declaration, not a construction.
+  const SCHED_EXPORT = ";var zenv={CLAUDE_CODE_HOST_SCHEDULED_RUN:()=>zjw};";
+  const fixtureSched = () =>
+    fixture2255310().replace(
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+      '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},' + SCHED_SPREAD,
+    ) +
+    ";" +
+    SCHED_PRED +
+    SCHED_EXPORT;
+  it("S6g control: the 2.19675.0 scheduled-run spread is CLEAN, and deriveSpawnEnv does not hard-fail on it", () => {
+    expect(checkSpawnContractFacts(fixtureSched())).toEqual([]);
+    const { env, flags } = deriveSpawnEnv(fixtureSched(), greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).not.toBeNull();
+    expect(env).not.toHaveProperty("CLAUDE_CODE_HOST_SCHEDULED_RUN"); // allowlisted, never pinned
+  });
+  it('S6g control: the inline form `...<s>.sessionType==="scheduled"&&{…}` is CLEAN', () => {
+    const inline = fixtureSched().replace(SCHED_SPREAD, '...a.sessionType==="scheduled"&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},');
+    expect(checkSpawnContractFacts(inline)).toEqual([]);
+  });
+  // Zero constructions is NOT a pass when the bundle still names the key (the bundled CLI declares it): either Desktop
+  // stopped constructing it (drop the allowlist entry with this check) or the construction was reshaped beyond the
+  // counter — both must be loud. A bundle that never mentions the key (every Desktop before 2.19675.0) has nothing
+  // to guard and stays clean.
+  it("S6g: the key declared (export table) but constructed nowhere → flags, not a vacuous pass", () => {
+    expect(checkSpawnContractFacts(fixture2255310() + SCHED_EXPORT).join("\n")).toContain("S6g scheduled-run env key");
+  });
+  it("S6g control: a bundle that never mentions the key stays clean", () => {
+    expect(checkSpawnContractFacts(fixture2255310())).toEqual([]);
+  });
+  const SCHED_GUARD_MUT: Array<[string, () => string]> = [
+    ["G1 key made unconditional", () => fixtureSched().replace(SCHED_SPREAD, 'CLAUDE_CODE_HOST_SCHEDULED_RUN:"1",')],
+    ["G2 condition widened with ||!0", () => fixtureSched().replace("...zSd(r)&&{", "...zSd(r)||!0&&{")],
+    [
+      "G3 predicate widened to a second sessionType",
+      () => fixtureSched().replace("return e.sessionType===zN.WR}", 'return e.sessionType===zN.WR||e.sessionType==="agent"}'),
+    ],
+    ["G4 predicate negated", () => fixtureSched().replace("return e.sessionType===zN.WR}", "return e.sessionType!==zN.WR}")],
+    ["G5 comparand re-pointed to another value", () => fixtureSched().replace('var zx7="scheduled"', 'var zx7="agent"')],
+    ["G6 predicate no longer resolvable", () => fixtureSched().replace("function zSd(e){", "function zSdGone(e){")],
+    [
+      "G7 predicate reads a different field",
+      () => fixtureSched().replace("return e.sessionType===zN.WR}", "return e.scheduledTaskId===zN.WR}"),
+    ],
+    ["G8 second unguarded construction elsewhere", () => fixtureSched() + ';var elsewhere={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"};'],
+    [
+      "G9 inline form widened to another sessionType",
+      () => fixtureSched().replace(SCHED_SPREAD, '...a.sessionType==="agent"&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},'),
+    ],
+    ["G10 predicate made constant-true", () => fixtureSched().replace("return e.sessionType===zN.WR}", "return!0}")],
+    // A quoted key is a construction too: an unconditional `"KEY":"1"` must not slip past the counter.
+    ["G11 unconditional QUOTED-key construction added", () => fixtureSched() + ';var q={"CLAUDE_CODE_HOST_SCHEDULED_RUN":"1"};'],
+    // The predicate's argument must be the session object read as `<arg>.sessionType` beside it.
+    ["G12 predicate called on something other than the session", () => fixtureSched().replace("...zSd(r)&&{", "...zSd(zOther)&&{")],
+  ];
+  it.each(SCHED_GUARD_MUT)("S6g mutation %s fails loud (%#)", (_label, mutate) => {
+    expect(checkSpawnContractFacts(mutate()).join("\n")).toContain("S6g scheduled-run env key");
+  });
+  it("S6g cross-chunk: the comparand resolves through the require() hop, and fails closed when re-pointed", () => {
+    const spawnChunk =
+      fixture2255310().replace(
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},' + SCHED_SPREAD,
+      ) + ';var zN=require("./index.chunk-MAIN.js");function zSd(e){return e.sessionType===zN.WR}';
+    const main = 'Object.defineProperty(exports,"WR",{enumerable:!0,get:function(){return x7t}});var q=1,x7t="scheduled";';
+    const files = new Map([
+      ["index.chunk-spawn.js", spawnChunk],
+      ["index.chunk-MAIN.js", main],
+    ]);
+    expect(checkSpawnContractFacts([...files.values()].join(""), files)).toEqual([]);
+    const broken = new Map(files);
+    broken.set("index.chunk-MAIN.js", main.replace('x7t="scheduled"', 'x7t="dispatch_child"'));
+    expect(checkSpawnContractFacts([...broken.values()].join(""), broken).join("\n")).toContain("S6g scheduled-run env key");
+  });
+
+  // Minified names repeat across chunks. Two chunks can carry the IDENTICAL spread text `...zSd(r)&&{KEY:…}` with
+  // DIFFERENT `zSd` bodies; each spread's predicate must be resolved in the chunk that holds it. Resolving by the
+  // spread text found the first chunk for both, so a widened predicate in the second chunk read as clean.
+  describe("S6g resolves each spread's predicate in ITS OWN chunk", () => {
+    const good =
+      fixture2255310().replace(
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},' + SCHED_SPREAD,
+      ) +
+      ";" +
+      SCHED_PRED;
+    const widened = 'var r={};var w={...zSd(r)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},T:`${r.sessionType}`};function zSd(e){return!0};';
+    const check = (files: Map<string, string>) => checkSpawnContractFacts([...files.values()].join(""), files).join("\n");
+    it("control: two chunks, both predicates exact → clean", () => {
+      const files = new Map([
+        ["index.chunk-A.js", good],
+        ["index.chunk-B.js", 'var r={};var w={...zSd(r)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},T:`${r.sessionType}`};' + SCHED_PRED],
+      ]);
+      expect(check(files)).toBe("");
+    });
+    it("the widened predicate in the SECOND chunk → flags", () => {
+      expect(
+        check(
+          new Map([
+            ["index.chunk-A.js", good],
+            ["index.chunk-B.js", widened],
+          ]),
+        ),
+      ).toContain("S6g scheduled-run env key");
+    });
+    it("the widened predicate in the FIRST chunk → flags, and only that spread", () => {
+      const out = check(
+        new Map([
+          ["index.chunk-B.js", widened],
+          ["index.chunk-A.js", good],
+        ]),
+      );
+      expect(out).toContain("S6g scheduled-run env key");
+      expect(out.split("\n").filter((l) => l.includes("S6g")).length).toBe(1);
+    });
+  });
+
   // The fixtures above run in single-text mode, where resolveNamespaceRef falls back to searching the one
   // string — so they never exercise the `NS=require("./chunk-X.js")` hop that production actually depends
   // on (the reader lives in a DIFFERENT chunk from the spawn site). This one splits them across two files
@@ -1729,6 +2053,37 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const { env, flags } = deriveSpawnEnv(bundle, gates, readRealBundleFilesOrSkip() ?? undefined);
     expect(flags).toEqual([]);
     expect(env).toEqual(golden);
+  });
+
+  // Non-circular oracle for asarGateIds over the REAL asar: every key of the gate-defaults RULE TABLE
+  // (`<id>:{rule:…}`, Desktop 2.19675.0+) is counted by a regex independent of the extractor and must
+  // appear in its output. An identifier-only lookahead missed all 136 entries on 2.19675.0, which read as 55
+  // phantom removals. Vacuous on a bundle that predates the table — so it also asserts it found entries
+  // whenever the shape is present at all.
+  it("asarGateIds oracle: every rule-table key in the real asar is extracted", () => {
+    const files = (readRealBundleOrSkip(), readRealBundleFilesOrSkip());
+    if (!files) return;
+    const ruleKeys = new Set<string>();
+    for (const t of files.values())
+      for (const m of t.matchAll(/[{,](\d{8,10}):\{rule:/g)) if (!m[1].startsWith("0") && Number(m[1]) < 2 ** 32) ruleKeys.add(m[1]);
+    // Non-vacuity: Desktop 2.19675.0 is the first build that ships the table (136 keys; 0 in every earlier asar on
+    // record). On such a build an EMPTY oracle set means the shape moved under both regexes at once — exactly the
+    // drift this test exists for — so it must fail rather than pass with `missing: []`. The version is read from the
+    // bundle ACTUALLY loaded (its build metadata, `"appVersion":"<ver>"`), so a COWORK_ASAR_BUNDLE override is keyed
+    // on itself, never on whatever Desktop happens to be installed; an unreadable version fails rather than skipping.
+    const joined = [...files.values()].join("");
+    const version = [...joined.matchAll(/\\?"appVersion\\?":\\?"(\d+\.\d+\.\d+)\\?"/g)].map((m) => m[1]).find((v) => v !== "0.0.0");
+    expect(version, "the bundle read states its Desktop version in its build metadata").toBeDefined();
+    const parts = (v: string) => v.split(".").map(Number);
+    const atLeast = (v: string, min: string) => {
+      const [a, b] = [parts(v), parts(min)];
+      for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+      return true;
+    };
+    if (atLeast(version!, "2.19675.0")) expect(ruleKeys.size).toBeGreaterThan(0);
+    const ids = new Set(extractAsarGateIds(files));
+    const missing = [...ruleKeys].filter((k) => !ids.has(k));
+    expect(missing).toEqual([]);
   });
 
   // 11. Structural-regression (non-circular): checkSpawnContractFacts over the REAL asar returns [] today.
@@ -3439,10 +3794,11 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
     'p[r.a(`.projects/${e.uuid}`)]={path:w,mode:"ro"};' +
     'let m=n?"rw":t?.includes(e)?"rwd":"rw";' +
     // Second lane (host-loop computeBashMounts) — the checker floors on the SITE COUNT, see `ok` above.
-    'let mb=n?"rw":t?.includes(e)?"rwd":"rw";';
+    'let mb=n?"rw":t?.includes(e)?"rwd":"rw";' +
+    OUTPUTS_MODE_FACT;
 
   it("clean bundle → no flags", () => {
-    expect(checkMountModeFacts(CLEAN)).toEqual([]);
+    expect(mmf(CLEAN)).toEqual([]);
   });
 
   it.each([
@@ -3455,13 +3811,13 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
   ])("MUTATION: %s moving → flags", (_label, from, to) => {
     const mutated = CLEAN.split(from).join(to);
     expect(mutated).not.toBe(CLEAN); // the mutation actually applied — a no-op mutation proves nothing
-    expect(checkMountModeFacts(mutated).length).toBeGreaterThan(0);
+    expect(mmf(mutated).length).toBeGreaterThan(0);
   });
 
   it("structural regression: the REAL asar is clean", () => {
     const files = readRealBundleFilesOrSkip();
     if (!files) return;
-    expect(checkMountModeFacts([...files.values()].join(""))).toEqual([]);
+    expect(checkMountModeFacts([...files.values()].join(""), files)).toEqual([]);
   });
 
   // The real bundle builds each of these mounts at TWO sites — the VM-loop mount-set builder and
@@ -3472,7 +3828,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
     const TWO_LANE = CLEAN + CLEAN.replace('let m=n?"rw":t?.includes(e)?"rwd":"rw";', "");
 
     it("a two-lane bundle with both sites read-only is clean", () => {
-      expect(checkMountModeFacts(TWO_LANE)).toEqual([]);
+      expect(mmf(TWO_LANE)).toEqual([]);
     });
 
     it.each([
@@ -3484,7 +3840,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
       const j = TWO_LANE.indexOf('mode:"ro"', i);
       const mutated = TWO_LANE.slice(0, j) + 'mode:"rw"' + TWO_LANE.slice(j + 'mode:"ro"'.length);
       expect(mutated).not.toBe(TWO_LANE);
-      expect(checkMountModeFacts(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
+      expect(mmf(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
     });
 
     it.each([
@@ -3496,7 +3852,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
       const j = TWO_LANE.indexOf('mode:"ro"', i);
       const mutated = TWO_LANE.slice(0, j) + 'mode:"rw"' + TWO_LANE.slice(j + 'mode:"ro"'.length);
       expect(mutated).not.toBe(TWO_LANE);
-      expect(checkMountModeFacts(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
+      expect(mmf(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
     });
 
     // The delete-deny resolver had the same single-anchor shape and the same two-lane reality. The
@@ -3506,12 +3862,12 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
       const mutated = CLEAN.slice(0, i) + '?"rw":"rw"' + CLEAN.slice(i + '?"rwd":"rw"'.length);
       expect(mutated).not.toBe(CLEAN);
       expect(mutated.split('?"rwd":"rw"').length - 1).toBe(1); // exactly one site left — a one-lane loss
-      expect(checkMountModeFacts(mutated).some((f) => f.includes("below the pinned floor"))).toBe(true);
+      expect(mmf(mutated).some((f) => f.includes("below the pinned floor"))).toBe(true);
     });
 
     it("a lane GAINING the resolver is benign and must not flag", () => {
       const extra = CLEAN + 'let mc=n?"rw":t?.includes(e)?"rwd":"rw";';
-      expect(checkMountModeFacts(extra)).toEqual([]);
+      expect(mmf(extra)).toEqual([]);
     });
   });
 });

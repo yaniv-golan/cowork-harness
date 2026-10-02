@@ -93,6 +93,27 @@ describe.skipIf(!can)("replay --reassert --write — persist a stream-derivable 
     expect(after.scenario.assert).not.toEqual(before.scenario.assert); // ONLY the assert block changed
   });
 
+  it("(i) the rewrite drops what the recorder no longer keeps (here a rate_limit_info), and says so", () => {
+    const cwd = tmp();
+    const c = JSON.parse(cassetteJson({ assert: [{ result: "success" }] }));
+    c.events.splice(
+      1,
+      0,
+      JSON.stringify({
+        type: "rate_limit_event",
+        rate_limit_info: { status: "allowed", unifiedWindows: { five_hour: { utilization: 0.5 } } },
+      }),
+    );
+    write(cwd, "c.cassette.json", JSON.stringify(c, null, 2));
+    write(cwd, "c.yaml", scenarioYaml("  - transcript_contains: hello\n"));
+    const w = replay(cwd, ["c.cassette.json", "--reassert", "--write", "--output-format", "json"]);
+    expect(w.code).toBe(0);
+    expect(w.stderr).toMatch(/removed from its events what the recorder no longer keeps \(rate-limit-info\)/);
+    const ev = readCassette(cwd).events.map((l: string) => JSON.parse(l));
+    expect(ev.find((e: { type: string }) => e.type === "rate_limit_event").rate_limit_info).toEqual({});
+    expect(readCassette(cwd).scenario.assert).toEqual([{ transcript_contains: "hello" }]);
+  });
+
   it("(f) idempotent: a second --write is a no-op (no churn) once the block already matches", () => {
     const cwd = tmp();
     write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));

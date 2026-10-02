@@ -217,7 +217,7 @@ function makeSkillDir(files: Record<string, string>): string {
 describe.skipIf(!can)("rehash — conditional re-stamp", () => {
   const liveBaseline = loadBaseline("latest").appVersion;
 
-  function cassetteFixture(lane: "local" | "remote" | undefined): string {
+  function cassetteFixture(lane: "local" | "remote" | undefined, extraEvents: string[] = []): string {
     const skillDir = makeSkillDir({ "SKILL.md": "# probe\ndo a thing\n" });
     const dir = mkdtempSync(join(tmpdir(), "cwh-p8-rehash-"));
     const sessionPath = join(dir, "session.yaml");
@@ -252,6 +252,7 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
       scenario,
       events: [
         JSON.stringify({ type: "system", subtype: "init" }),
+        ...extraEvents,
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
       ],
       fingerprint: { baseline: liveBaseline, skillHash: fp.skillHash, contentSig: fp.contentSig },
@@ -272,6 +273,31 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
     const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
     expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
     expect(onDisk.fingerprint.hashFormat).toBe("jcs1"); // the version/hashFormat invariant holds after migration
+  });
+
+  // A rewrite path must not re-publish what the recorder now removes from every cassette.
+  it("the migrating rewrite drops what the recorder no longer keeps (rate_limit_info, the model menu)", () => {
+    const dir = cassetteFixture(undefined, [
+      JSON.stringify({
+        type: "rate_limit_event",
+        rate_limit_info: { status: "allowed", unifiedWindows: { five_hour: { utilization: 0.5 } } },
+      }),
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          request_id: "init-1",
+          response: { commands: [], agents: [], models: [{ value: "m", description: "· $1/$2 per Mtok" }] },
+        },
+      }),
+    ]);
+    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout.trim()).results[0].action).toBe("migrated");
+    const raw = readFileSync(join(dir, "s.cassette.json"), "utf8");
+    expect(raw).not.toMatch(/utilization|per Mtok/);
+    const ev = (JSON.parse(raw).events as string[]).map((l) => JSON.parse(l));
+    expect(ev.find((e) => e.type === "rate_limit_event").rate_limit_info).toEqual({});
+    expect(ev.find((e) => e.type === "control_response").response.response.models).toEqual([]);
   });
 
   it("lane: local (explicit) migrates the same way — the floor does not depend on scenario keys", () => {

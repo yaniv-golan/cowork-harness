@@ -1634,6 +1634,130 @@ function isCapabilityManifest(line: string): boolean {
   return false;
 }
 
+/** The agent's `initialize` registry response, matched exactly as `isCapabilityManifest` matches it:
+ *  `request_id: "init-1"`, or the `commands` + `agents` shape fallback. */
+function isInitializeRegistryResponse(m: { type?: string; response?: { request_id?: string; response?: unknown } }): boolean {
+  if (m?.type !== "control_response") return false;
+  const body = m.response?.response;
+  if (!body || typeof body !== "object") return false;
+  return m.response?.request_id === "init-1" || ("commands" in body && "agents" in body);
+}
+
+/** Remove the ACCOUNT's model menu from a cassette: `models[]` of the agent's `initialize` registry
+ *  response, which lists the models this account is offered, their display copy and, on a pay-per-token
+ *  account, per-Mtok pricing. It is account-shaped and a committed cassette would publish it.
+ *
+ *  Safe by construction for replay: nothing in the harness reads that field. Replay, the verdict and the
+ *  staleness checks take the model from `system/init`/`result` events and `RunResult.models`, the
+ *  fingerprint is built from the scenario, session and baseline (never from events), and no hash covers
+ *  `events`. The array is emptied rather than deleted, so the line keeps its shape. Every other field of the
+ *  response (commands, agents, account, …) and every other line stays byte-identical. Only lines that
+ *  change are re-serialized.
+ *
+ *  Unconditional at record time, `--no-redact` included: that flag disables the opt-in content policy,
+ *  and this is not policy content. Pure; returns the SAME object when there is nothing to scrub. */
+export function scrubAccountModelMenu(cassette: Cassette): Cassette {
+  let changed = false;
+  const events = (cassette.events ?? []).map((l) => {
+    if (!l.includes('"models"')) return l;
+    let m: { type?: string; response?: { request_id?: string; response?: Record<string, unknown> } };
+    try {
+      m = JSON.parse(l);
+    } catch {
+      return l;
+    }
+    if (!isInitializeRegistryResponse(m)) return l;
+    const body = m.response!.response!;
+    if (!Array.isArray(body.models) || body.models.length === 0) return l;
+    changed = true;
+    return JSON.stringify({ ...m, response: { ...m.response, response: { ...body, models: [] } } });
+  });
+  return changed ? { ...cassette, events } : cassette;
+}
+
+/** The agent's own frame line around a sub-agent's report, and its continuation hint. Agent-binary text: not
+ *  ours to publish (see test/fixture-transcript-guard.test.ts). Matched by their fixed openers only. */
+const HANDBACK_FRAME_LINE = /^\[Subagent hand-back\][^\n]*/gm;
+const HANDBACK_CONTINUE_HINT = / ?\(use SendMessage with to:[^\n]*\)/g;
+const HANDBACK_PLACEHOLDER = "[subagent report]";
+
+/** Every string leaf of a parsed event, rewritten by `f`; returns the SAME value when nothing changed. */
+function mapStrings(v: unknown, f: (s: string) => string): unknown {
+  if (typeof v === "string") return f(v);
+  if (Array.isArray(v)) {
+    const out = v.map((x) => mapStrings(x, f));
+    return out.some((x, i) => x !== v[i]) ? out : v;
+  }
+  if (v !== null && typeof v === "object") {
+    let changed = false;
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      out[k] = mapStrings(x, f);
+      if (out[k] !== x) changed = true;
+    }
+    return changed ? out : v;
+  }
+  return v;
+}
+
+export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame";
+
+/** What the recorder removes from EVERY cassette before writing it (`--no-redact` included — none of it is
+ *  policy content):
+ *   - `model-menu`: `models[]` of the agent's `initialize` registry response (see scrubAccountModelMenu);
+ *   - `rate-limit-info`: a recorded event's `rate_limit_info` — a subscription account's usage (utilization,
+ *     reset times, overage state) — emptied to `{}`, the event kept;
+ *   - `subagent-hand-back-frame`: the agent binary's frame line around a sub-agent's report ("[Subagent
+ *     hand-back] …") replaced by a neutral placeholder, and the "(use SendMessage with to: …)" continuation hint
+ *     dropped, wherever they occur in an event. The report body (indented below the frame), the agentId and the
+ *     usage block stay.
+ *  Safe for replay by construction: nothing in `src` reads the menu, `rate_limit*`, or the frame/hint text; the
+ *  fingerprint never reads `events`; no hash covers `events`. The record path still holds the result to the
+ *  verdict-preservation check. Pure; returns the SAME cassette and no kinds when there is nothing to remove. */
+export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette; kinds: RecordedScrubKind[] } {
+  const kinds = new Set<RecordedScrubKind>();
+  const menu = scrubAccountModelMenu(cassette);
+  if (menu !== cassette) kinds.add("model-menu");
+  let changed = false;
+  const events = (menu.events ?? []).map((l) => {
+    const hasRate = l.includes('"rate_limit_info"');
+    const hasFrame = l.includes("[Subagent hand-back]") || l.includes("use SendMessage with to:");
+    if (!hasRate && !hasFrame) return l;
+    let e: unknown;
+    try {
+      e = JSON.parse(l);
+    } catch {
+      return l;
+    }
+    let next = e;
+    if (hasRate && next !== null && typeof next === "object" && "rate_limit_info" in next) {
+      const ri = (next as { rate_limit_info?: unknown }).rate_limit_info;
+      if (!(ri !== null && typeof ri === "object" && Object.keys(ri).length === 0)) {
+        next = { ...(next as object), rate_limit_info: {} };
+        kinds.add("rate-limit-info");
+      }
+    }
+    if (hasFrame) {
+      const framed = mapStrings(next, (str) => str.replace(HANDBACK_FRAME_LINE, HANDBACK_PLACEHOLDER).replace(HANDBACK_CONTINUE_HINT, ""));
+      if (framed !== next) {
+        next = framed;
+        kinds.add("subagent-hand-back-frame");
+      }
+    }
+    if (next === e) return l;
+    changed = true;
+    return JSON.stringify(next);
+  });
+  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame"];
+  return { cassette: changed ? { ...menu, events } : menu, kinds: order.filter((k) => kinds.has(k)) };
+}
+
+/** Indirection for the scrub's verdict-preservation check, so a test can observe the call and inject a failure. */
+export const scrubVerification = {
+  verify: (base: Cassette, scrubbed: Cassette, cassetteDir?: string): Promise<void> =>
+    assertRedactionVerdictPreserved(base, scrubbed, cassetteDir),
+};
+
 /** Tiers whose recordings inherit the host environment, so their transcripts can carry the recording
  *  machine's own inventory. `cowork` is included because it resolves to container OR hostloop via a baseline
  *  gate — the privacy scan fails closed rather than loading a baseline to find out. */
@@ -5706,25 +5830,45 @@ export async function freezeRecordedRun(
       { id: (result.models ?? []).filter(isLiveModelId)[0], source: result.modelSource },
     ),
   };
+  // ALWAYS: remove the account data and the agent's hand-back frame (see scrubRecordedAgentData) — not policy
+  // content, so --no-redact does not skip it. Held to the same verdict-preservation check as policy redaction,
+  // so it can never manufacture or hide a result. If that check throws or trips, the paid run is NOT lost: the
+  // cassette is written UNSCRUBBED with a warning that names the scrub (not the redaction policy, which this is
+  // not). The committed-cassette guard then refuses it, which is the loud outcome a harness bug deserves.
+  const scrub = scrubRecordedAgentData(base);
+  let menuScrubbed = base;
+  if (scrub.kinds.length) {
+    try {
+      await scrubVerification.verify(base, scrub.cassette, dirname(cassettePath));
+      menuScrubbed = scrub.cassette;
+    } catch (e) {
+      warn(
+        `::warning:: record: the recorder's account-data scrub (${scrub.kinds.join(", ")}) could not be verified as ` +
+          `verdict-preserving — ${(e as Error).message.split("\n")[0]}. The cassette is written UNSCRUBBED so this paid run ` +
+          `is not lost; it still carries that data, so do not commit it as is. This is a harness bug (the scrub ` +
+          `touches nothing a verdict reads) — please report it.\n`,
+      );
+    }
+  }
   // (opt-in) content redaction over the whole surface. Empty policy → no-op. Non-empty → must be
   // VERDICT-PRESERVING: replay both and refuse to write on divergence (a manufactured green).
   const policy = opts.noRedact
     ? { patterns: [], keyNames: [] }
     : loadRedactionPolicy([process.cwd(), ...extraPolicyDirs, dirname(cassettePath)]);
-  let cassette = base;
+  let cassette = menuScrubbed;
   if (policy.patterns.length || policy.keyNames.length) {
-    const redacted = redactCassette(base, policy);
+    const redacted = redactCassette(menuScrubbed, policy);
     // BEFORE the divergence check: when a negative tool-input check is hit by redaction, the redacted replay
     // reports it evidence-unavailable, the verdicts diverge, and the check below refuses the write. This
     // line is what tells the author WHY.
-    for (const f of redactionRewroteNegativeToolInputs(base, redacted))
+    for (const f of redactionRewroteNegativeToolInputs(menuScrubbed, redacted))
       warn(
         `::warning:: record: ${f}. Assert on a literal the policy does not rewrite (lint: tool-input-regex-redactable), or keep this check on a live gate.\n`,
       );
     // The same, for what a command hook printed: a hook_output_* needle the policy rewrote, or a selected stream
     // it tokenised, is evidence-unavailable on replay.
-    for (const f of redactionRewroteHookOutput(base, redacted)) warn(`::warning:: record: ${f}.\n`);
-    await assertRedactionVerdictPreserved(base, redacted, dirname(cassettePath));
+    for (const f of redactionRewroteHookOutput(menuScrubbed, redacted)) warn(`::warning:: record: ${f}.\n`);
+    await assertRedactionVerdictPreserved(menuScrubbed, redacted, dirname(cassettePath));
     cassette = redacted;
   }
   // The slug-collision refusal used to live HERE, after the paid run. It moved into `preSpendVerdicts`
@@ -6388,8 +6532,16 @@ async function writeReassertedAssertBlock(
     raw.cassetteVersion = stamp;
     raw.$schema = cassetteSchemaUrl(stamp);
   }
+  // A rewrite path must not re-publish what the recorder now removes (scrubRecordedAgentData; replay, the verdict
+  // and the fingerprint read none of it). Applied to the events only — the re-asserted block above is untouched.
+  const rescrubbed = scrubRecordedAgentData(rawCassette as unknown as Cassette);
+  if (rescrubbed.kinds.length) (rawCassette as unknown as { events: string[] }).events = rescrubbed.cassette.events;
   writeFileAtomic(cassetteFile, JSON.stringify(rawCassette, null, 2)); // atomic — no partial cassette on a crash
-  warn(`::notice:: [replay --write] ${cassetteFile}: wrote the re-asserted block back to the cassette (events/controlOut unchanged)\n`);
+  warn(
+    rescrubbed.kinds.length
+      ? `::notice:: [replay --write] ${cassetteFile}: wrote the re-asserted block back to the cassette, and removed from its events what the recorder no longer keeps (${rescrubbed.kinds.join(", ")}); controlOut unchanged\n`
+      : `::notice:: [replay --write] ${cassetteFile}: wrote the re-asserted block back to the cassette (events/controlOut unchanged)\n`,
+  );
 }
 
 /** `replay <file|dir>` — deterministic protocol-replay; re-evaluates content assertions. A directory
@@ -7686,7 +7838,9 @@ export function cmdRehash(args: string[]): void {
           cassetteVersion: requiredVersion,
           ...(cassette.fingerprint ? { fingerprint: { ...cassette.fingerprint, hashFormat: ACTIVE_HASH_FORMAT } } : {}),
         };
-        writeFileAtomic(file, JSON.stringify(stamped, null, 2));
+        // A rewrite path must not re-publish what the recorder now removes (scrubRecordedAgentData — pure, and
+        // verdict-safe by construction: nothing it touches is read by replay, the verdict or the fingerprint).
+        writeFileAtomic(file, JSON.stringify(scrubRecordedAgentData(stamped).cassette, null, 2));
       }
       results.push({ file, action: "migrated", reason: `v${recordedVersion} → v${requiredVersion} (metadata only — zero skill sources)` });
       continue;
@@ -7790,7 +7944,8 @@ export function cmdRehash(args: string[]): void {
         cassetteVersion: requiredVersion,
         fingerprint: migrated.fingerprint,
       };
-      writeFileAtomic(file, JSON.stringify(updated, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
+      // Same as the metadata branch: drop what the recorder removes before rewriting (see scrubRecordedAgentData).
+      writeFileAtomic(file, JSON.stringify(scrubRecordedAgentData(updated).cassette, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
     }
     results.push({
       file,
