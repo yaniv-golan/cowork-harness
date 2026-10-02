@@ -4306,45 +4306,73 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   // S6g (Desktop 2.19675.0): CLAUDE_CODE_HOST_SCHEDULED_RUN is ALLOWLISTED as scheduled-run-only, and that
   // claim rests entirely on this guard (the allowlist hit is unconditional). Same scoping rules as S6f, for
   // the same reasons: a BUNDLE-WIDE COUNT (the key may move to another chunk; a second construction may
-  // appear beside the guarded one), with export-table declarations (`KEY:()=>local`) excluded.
-  // Every construction must be one of two guarded shapes:
-  //   call form   `...<P>(<s>)&&{KEY:…}` where `<P>` resolves, in the spread's own chunk, to EXACTLY
-  //               `function <P>(<e>){return <e>.sessionType===<C>}` and `<C>` is "scheduled" or a
-  //               (namespace) reference whose binding is the literal "scheduled";
+  // appear beside the guarded one), with export-table declarations (`KEY:()=>local`) excluded and quoted
+  // keys (`"KEY":…`) counted. Every construction must be one of two guarded shapes:
+  //   call form   `...<P>(<s>)&&{KEY:…}` where `<P>` resolves, IN THE SPREAD'S OWN CHUNK, to EXACTLY
+  //               `function <P>(<e>){return <e>.sessionType===<C>}`, `<C>` is "scheduled" or a (namespace)
+  //               reference whose binding is the literal "scheduled", and `<s>` is the session object
+  //               (read as `<s>.sessionType` beside the spread);
   //   inline form `...<s>.sessionType==="scheduled"&&{KEY:…}`.
-  // An exact-body match is deliberate: a widened (`||…`), negated, re-keyed or constant predicate must fail.
+  // Matched PER CHUNK, never by searching for the spread text: minified names repeat across chunks, so two
+  // chunks can hold byte-identical spreads over different `<P>` bodies, and a text search would resolve both
+  // in whichever chunk comes first. An exact-body match is deliberate: a widened (`||…`), negated, re-keyed or
+  // constant predicate must fail. So must a minifier reshape — an arrow predicate (`const P=e=>…`) or optional
+  // chaining (`e?.sessionType`) fails closed ON PURPOSE, as S6d/S6f do; update the shapes here when it does.
+  // Zero constructions is a failure only while the bundle still names the key (the bundled CLI declares it):
+  // the construction was removed (drop the allowlist entry together with this check) or reshaped beyond the
+  // counter. A bundle that never mentions the key has nothing to guard.
   {
     const SCHED_KEY = "CLAUDE_CODE_HOST_SCHEDULED_RUN";
     const schedMiss = (why: string) => miss("S6g scheduled-run env key", why);
-    const ctors = [...bundle.matchAll(new RegExp(`${SCHED_KEY}:(?!\\(\\)=>)`, "g"))].length;
-    const callSpreads = [...bundle.matchAll(new RegExp(`\\.\\.\\.([\\w$]+)\\(([\\w$]+)\\)&&\\{${SCHED_KEY}:`, "g"))];
-    const inlineSpreads = [...bundle.matchAll(new RegExp(`\\.\\.\\.[\\w$]+\\.sessionType==="scheduled"&&\\{${SCHED_KEY}:`, "g"))];
-    if (ctors !== callSpreads.length + inlineSpreads.length)
+    const chunks = files ? [...files.values()] : [bundle];
+    const ctorRe = new RegExp(`(?:"${SCHED_KEY}"|'${SCHED_KEY}'|(?<![\\w$"'])${SCHED_KEY}):(?!\\(\\)=>)`, "g");
+    const keyOpen = `\\{["']?${SCHED_KEY}["']?:`;
+    const callRe = new RegExp(`\\.\\.\\.([\\w$]+)\\(([\\w$]+)\\)&&${keyOpen}`, "g");
+    const inlineRe = new RegExp(`\\.\\.\\.[\\w$]+\\.sessionType==="scheduled"&&${keyOpen}`, "g");
+    let ctors = 0;
+    let guarded = 0;
+    for (const chunk of chunks) {
+      ctors += [...chunk.matchAll(ctorRe)].length;
+      const callSpreads = [...chunk.matchAll(callRe)];
+      guarded += callSpreads.length + [...chunk.matchAll(inlineRe)].length;
+      for (const s of callSpreads) {
+        const [, fn, arg] = s;
+        const at = s.index ?? 0;
+        if (!new RegExp(`(?<![\\w$.])${reEsc(arg)}\\.sessionType(?![\\w$])`).test(chunk.slice(Math.max(0, at - 3000), at + 3000))) {
+          schedMiss(`the spread's predicate ${fn}() is called on ${arg}, which is not read as the session's sessionType beside it`);
+          continue;
+        }
+        const header = new RegExp(`function ${reEsc(fn)}\\(([\\w$]+)\\)\\{`).exec(chunk);
+        const body = header ? braceBodyOf(chunk, header[0]) : null;
+        if (!header || body === null) {
+          schedMiss(`the spread's predicate ${fn}() does not resolve to a function in its chunk`);
+          continue;
+        }
+        const cmp = body.match(new RegExp(`^return ${reEsc(header[1])}\\.sessionType===("scheduled"|[\\w$]+(?:\\.[\\w$]+)?)$`));
+        if (!cmp) {
+          schedMiss(
+            `the predicate ${fn}() is no longer exactly \`return <s>.sessionType===<scheduled>\` — it may now admit other sessions`,
+          );
+          continue;
+        }
+        if (cmp[1] === '"scheduled"') continue;
+        const ref = resolveNamespaceRef(cmp[1], chunk, files);
+        if (!ref) schedMiss(`the predicate's comparand ${cmp[1]} could not be resolved`);
+        else if (!new RegExp(`(?<![\\w$.])${reEsc(ref.local)}="scheduled"(?![\\w$])`).test(ref.chunk))
+          schedMiss(`the predicate's comparand ${cmp[1]} no longer resolves to "scheduled"`);
+      }
+    }
+    if (ctors === 0 && bundle.includes(SCHED_KEY))
       schedMiss(
-        `${ctors} construction(s) of ${SCHED_KEY} in the bundle but ${callSpreads.length + inlineSpreads.length} spread(s) guarded ` +
+        `${SCHED_KEY} is named in the bundle but constructed nowhere the guard can count — it was removed (drop its ` +
+          "allowlist entry together with this check) or reshaped beyond the counter; reclassify",
+      );
+    else if (ctors !== guarded)
+      schedMiss(
+        `${ctors} construction(s) of ${SCHED_KEY} in the bundle but ${guarded} spread(s) guarded ` +
           'on sessionType==="scheduled" — at least one construction is unguarded or newly shaped, so the allowlist\'s ' +
           "'scheduled runs only' claim no longer holds; reclassify",
       );
-    for (const s of callSpreads) {
-      const site = siteOf(s[0]);
-      const fn = s[1];
-      const header = new RegExp(`function ${reEsc(fn)}\\(([\\w$]+)\\)\\{`).exec(site);
-      const body = header ? braceBodyOf(site, header[0]) : null;
-      if (!header || body === null) {
-        schedMiss(`the spread's predicate ${fn}() does not resolve to a function in its chunk`);
-        continue;
-      }
-      const cmp = body.match(new RegExp(`^return ${reEsc(header[1])}\\.sessionType===("scheduled"|[\\w$]+(?:\\.[\\w$]+)?)$`));
-      if (!cmp) {
-        schedMiss(`the predicate ${fn}() is no longer exactly \`return <s>.sessionType===<scheduled>\` — it may now admit other sessions`);
-        continue;
-      }
-      if (cmp[1] === '"scheduled"') continue;
-      const ref = resolveNamespaceRef(cmp[1], site, files);
-      if (!ref) schedMiss(`the predicate's comparand ${cmp[1]} could not be resolved`);
-      else if (!new RegExp(`(?<![\\w$.])${reEsc(ref.local)}="scheduled"(?![\\w$])`).test(ref.chunk))
-        schedMiss(`the predicate's comparand ${cmp[1]} no longer resolves to "scheduled"`);
-    }
   }
   // S8 (widened, Desktop 1.28929.0): pin the WHOLE tools[] tail through its closing bracket, not just the
   // first spread after "ToolSearch". The old anchor stopped at `...X.sessionType===`, so anything appended

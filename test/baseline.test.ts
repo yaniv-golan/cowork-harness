@@ -1342,7 +1342,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
   // guarded by a predicate that resolves to exactly `sessionType==="scheduled"`.
   const SCHED_PRED =
     'function zSd(e){return e.sessionType===zN.WR};var zN={};Object.defineProperty(exports,"WR",{enumerable:!0,get:function(){return zx7}});var zx7="scheduled";';
-  const SCHED_SPREAD = '...zSd(a)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},';
+  const SCHED_SPREAD = '...zSd(r)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},';
   // The bundled CLI's env-schema export table names the key too; that is a declaration, not a construction.
   const SCHED_EXPORT = ";var zenv={CLAUDE_CODE_HOST_SCHEDULED_RUN:()=>zjw};";
   const fixtureSched = () =>
@@ -1364,12 +1364,19 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const inline = fixtureSched().replace(SCHED_SPREAD, '...a.sessionType==="scheduled"&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},');
     expect(checkSpawnContractFacts(inline)).toEqual([]);
   });
-  it("S6g control: export-table declaration only (no construction) is CLEAN", () => {
-    expect(checkSpawnContractFacts(fixture2255310() + SCHED_EXPORT)).toEqual([]);
+  // Zero constructions is NOT a pass when the bundle still names the key (the bundled CLI declares it): either Desktop
+  // stopped constructing it (drop the allowlist entry with this check) or the construction was reshaped beyond the
+  // counter — both must be loud. A bundle that never mentions the key (every Desktop before 2.19675.0) has nothing
+  // to guard and stays clean.
+  it("S6g: the key declared (export table) but constructed nowhere → flags, not a vacuous pass", () => {
+    expect(checkSpawnContractFacts(fixture2255310() + SCHED_EXPORT).join("\n")).toContain("S6g scheduled-run env key");
+  });
+  it("S6g control: a bundle that never mentions the key stays clean", () => {
+    expect(checkSpawnContractFacts(fixture2255310())).toEqual([]);
   });
   const SCHED_GUARD_MUT: Array<[string, () => string]> = [
     ["G1 key made unconditional", () => fixtureSched().replace(SCHED_SPREAD, 'CLAUDE_CODE_HOST_SCHEDULED_RUN:"1",')],
-    ["G2 condition widened with ||!0", () => fixtureSched().replace("...zSd(a)&&{", "...zSd(a)||!0&&{")],
+    ["G2 condition widened with ||!0", () => fixtureSched().replace("...zSd(r)&&{", "...zSd(r)||!0&&{")],
     [
       "G3 predicate widened to a second sessionType",
       () => fixtureSched().replace("return e.sessionType===zN.WR}", 'return e.sessionType===zN.WR||e.sessionType==="agent"}'),
@@ -1387,6 +1394,10 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       () => fixtureSched().replace(SCHED_SPREAD, '...a.sessionType==="agent"&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},'),
     ],
     ["G10 predicate made constant-true", () => fixtureSched().replace("return e.sessionType===zN.WR}", "return!0}")],
+    // A quoted key is a construction too: an unconditional `"KEY":"1"` must not slip past the counter.
+    ["G11 unconditional QUOTED-key construction added", () => fixtureSched() + ';var q={"CLAUDE_CODE_HOST_SCHEDULED_RUN":"1"};'],
+    // The predicate's argument must be the session object read as `<arg>.sessionType` beside it.
+    ["G12 predicate called on something other than the session", () => fixtureSched().replace("...zSd(r)&&{", "...zSd(zOther)&&{")],
   ];
   it.each(SCHED_GUARD_MUT)("S6g mutation %s fails loud (%#)", (_label, mutate) => {
     expect(checkSpawnContractFacts(mutate()).join("\n")).toContain("S6g scheduled-run env key");
@@ -1406,6 +1417,48 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const broken = new Map(files);
     broken.set("index.chunk-MAIN.js", main.replace('x7t="scheduled"', 'x7t="dispatch_child"'));
     expect(checkSpawnContractFacts([...broken.values()].join(""), broken).join("\n")).toContain("S6g scheduled-run env key");
+  });
+
+  // Minified names repeat across chunks. Two chunks can carry the IDENTICAL spread text `...zSd(r)&&{KEY:…}` with
+  // DIFFERENT `zSd` bodies; each spread's predicate must be resolved in the chunk that holds it. Resolving by the
+  // spread text found the first chunk for both, so a widened predicate in the second chunk read as clean.
+  describe("S6g resolves each spread's predicate in ITS OWN chunk", () => {
+    const good =
+      fixture2255310().replace(
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},' + SCHED_SPREAD,
+      ) +
+      ";" +
+      SCHED_PRED;
+    const widened = 'var r={};var w={...zSd(r)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},T:`${r.sessionType}`};function zSd(e){return!0};';
+    const check = (files: Map<string, string>) => checkSpawnContractFacts([...files.values()].join(""), files).join("\n");
+    it("control: two chunks, both predicates exact → clean", () => {
+      const files = new Map([
+        ["index.chunk-A.js", good],
+        ["index.chunk-B.js", 'var r={};var w={...zSd(r)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"},T:`${r.sessionType}`};' + SCHED_PRED],
+      ]);
+      expect(check(files)).toBe("");
+    });
+    it("the widened predicate in the SECOND chunk → flags", () => {
+      expect(
+        check(
+          new Map([
+            ["index.chunk-A.js", good],
+            ["index.chunk-B.js", widened],
+          ]),
+        ),
+      ).toContain("S6g scheduled-run env key");
+    });
+    it("the widened predicate in the FIRST chunk → flags, and only that spread", () => {
+      const out = check(
+        new Map([
+          ["index.chunk-B.js", widened],
+          ["index.chunk-A.js", good],
+        ]),
+      );
+      expect(out).toContain("S6g scheduled-run env key");
+      expect(out.split("\n").filter((l) => l.includes("S6g")).length).toBe(1);
+    });
   });
 
   // The fixtures above run in single-text mode, where resolveNamespaceRef falls back to searching the one
