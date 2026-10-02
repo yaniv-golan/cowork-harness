@@ -209,7 +209,13 @@ A Desktop update deletes the prior version's staged agent while often leaving an
 a scenario pinning that agent version resolves to nothing. `doctor` validates the agent for its own
 current baseline, not what each scenario pins, so it can report ready seconds before the run fails.
 
-Prefer **repinning `baseline:` to an installed version** for anything
+To keep the exact pin, **recover the pinned ELF**: re-download that version from the release channel,
+check its sha256 against the baseline's, and set `COWORK_AGENT_BINARY` to it
+([maintenance.md → Recovering an old agent version](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md#recovering-an-old-agent-version)).
+Check the sha yourself, because an override makes the harness's check advisory. The error message
+points here.
+
+Otherwise prefer **repinning `baseline:` to an installed version** for anything
 reproducibility-bound — you keep an exact pin and move it deliberately. `baseline: latest` never rots
 but silently drifts, so two runs weeks apart are not comparable; a pin and `latest` have opposite
 failure modes.

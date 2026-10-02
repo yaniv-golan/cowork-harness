@@ -438,6 +438,34 @@ describe("resolveAgentBinary newest-sibling fallback", () => {
     expect(resolveAgentBinary(baseline)).toBe(override);
   });
 
+  // The pinned ELF was pruned and a sibling exists. The only remedy that keeps the exact pin is to recover
+  // the pinned version from the release channel, sha-verify it and point COWORK_AGENT_BINARY at it — the
+  // runbook in docs/maintenance.md. The message names it on its FIRST line, which is all doctor shows.
+  it("pinned ELF pruned, sibling present → the message names the recovery runbook and COWORK_AGENT_BINARY", () => {
+    const vmRoot = stageVm(["2.1.177"]);
+    const baseline = baselineWith(join(vmRoot, "2.1.999", "claude"));
+    let msg = "";
+    let kind: string | undefined;
+    try {
+      resolveAgentBinary(baseline);
+    } catch (e) {
+      msg = (e as Error).message;
+      kind = (e as { kind?: string }).kind;
+    }
+    expect(kind).toBe("pruned"); // doctor keys its remedy on this
+    const line1 = msg.split("\n")[0];
+    expect(line1).toContain("COWORK_AGENT_BINARY=");
+    expect(line1).toContain("sha-verify");
+    expect(line1).toContain("docs/maintenance.md#recovering-an-old-agent-version");
+    expect(line1).toContain("COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1");
+    expect(line1).toContain("2.1.999");
+  });
+
+  it("the runbook anchor the message links to exists in docs/maintenance.md", () => {
+    const md = readFileSync(join(__dirname, "..", "docs", "maintenance.md"), "utf8");
+    expect(md).toMatch(/^### Recovering an old agent version$/m);
+  });
+
   it("throws the original error when no sibling binary exists", () => {
     const vmRoot = stageVm([]); // claude-code-vm exists but is empty
     const baseline = baselineWith(join(vmRoot, "2.1.999", "claude"));
@@ -457,6 +485,7 @@ describe("resolveHostAgentBinary / classifyNativeStagingDrift — native staging
   const stageNative = (versions: string[]) => {
     const root = mkdtempSync(join(tmpdir(), "cowork-native-"));
     const nativeRoot = join(root, "claude-code");
+    mkdirSync(nativeRoot, { recursive: true }); // an empty list must still leave claude-code/ present
     for (const v of versions) {
       const leafDir = join(nativeRoot, v, "claude.app", "Contents", "MacOS");
       mkdirSync(leafDir, { recursive: true });
@@ -519,8 +548,13 @@ describe("resolveHostAgentBinary / classifyNativeStagingDrift — native staging
     const nativeRoot = stageNative([]); // claude-code exists but is empty
     const baseline = nativeBaselineWith(nativePath(nativeRoot, "2.1.205"));
 
-    expect(classifyNativeStagingDrift(baseline)).toMatchObject({ kind: "missing" });
+    expect(classifyNativeStagingDrift(baseline)).toMatchObject({ kind: "missing", cause: "missing" });
+    // The message names the root it scanned and BOTH layouts it checked, so a layout change Desktop makes
+    // next reads as "nothing under either layout" rather than the generic "open Cowork once" advice.
     expect(() => resolveHostAgentBinary(baseline)).toThrow(/Staged NATIVE agent binary not found/);
+    expect(() => resolveHostAgentBinary(baseline)).toThrow(nativeRoot);
+    expect(() => resolveHostAgentBinary(baseline)).toThrow(/<ver>\/claude\.app.*<ver>\/<build>\/claude\.app/);
+    expect(() => resolveHostAgentBinary(baseline)).not.toThrow(/Open Cowork once/);
   });
 
   it("COWORK_HOST_AGENT_BINARY override keeps top precedence over both the exact path and any drift tolerance", () => {

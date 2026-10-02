@@ -23,6 +23,7 @@ function partialRecord(over: Partial<RunRecord> = {}): RunRecord {
     gateOptions: [],
     decisions: [{ kind: "tool", name: "Read", decision: "allow", by: "parity" }],
     permissiveAutoAllow: [],
+    partlyScriptedGates: [],
     unanswered: [],
     toolResults: [],
     gateAnswers: [],
@@ -95,6 +96,31 @@ describe("buildPartialResult — salvage a whiffed run", () => {
     expect(result.toolCounts).toEqual({ Read: 1 });
     // a salvaged partial is still a live LOCAL run — execution provenance is stamped, not left undefined
     expect(result.execution).toEqual({ location: "local" });
+  });
+
+  it("keeps a partly scripted batch the run ended on (a `fail` fallback), so the salvaged result explains why", () => {
+    const { outDir, workRoot, configDir } = runDirWithArtifact();
+    const finding = { requestId: "req-1", matched: ["Which jurisdiction?"], unmatched: ["Which round?"] };
+    const args = {
+      scenarioName: "s",
+      prompt: "p",
+      fidelity: "container",
+      baseline: "b",
+      outDir,
+      workRoot,
+      configDir,
+      pluginSkillRoots: [],
+      userVisibleRoots: ["outputs"],
+      readonlyFolderRoots: [],
+      effectiveFidelity: "container",
+      egress: [],
+      durationMs: 1,
+      unanswered: { message: "m" },
+    };
+    expect(buildPartialResult({ ...args, record: partialRecord({ partlyScriptedGates: [finding] }) }).partlyScriptedGates).toEqual([
+      finding,
+    ]);
+    expect(buildPartialResult({ ...args, record: partialRecord() }).partlyScriptedGates).toBeUndefined();
   });
 
   it("omits the hint key when the gate carried none", () => {

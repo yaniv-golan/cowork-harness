@@ -27,7 +27,8 @@ export const PlatformBaseline = z.looseObject({
     // npmPackage/preferReuseStaged removed: there is NO npm path — the Linux/arm64 ELF is
     // bind-mounted from the staged Desktop install (or COWORK_AGENT_BINARY). Tolerated-but-ignored
     // if present in an old baseline (z.object strips unknown keys).
-    // Desktop ALSO stages a native macOS Mach-O binary (claude-code/<ver>/claude.app/Contents/MacOS/claude)
+    // Desktop ALSO stages a native macOS Mach-O binary (claude-code/<ver>/claude.app/Contents/MacOS/claude, or
+    // per build from Desktop 2.19675.0: claude-code/<ver>/<build>/claude.app/…; see parseNativeStagedPath)
     // alongside the Linux/arm64 ELF above — hostloop's agent loop runs on the host directly from this
     // binary (no container), while only bash/web_fetch route into a VM. The ELF stays the source of
     // truth for container/microvm and for hostloop's bash/web_fetch VM sidecar image. Optional: a
@@ -2207,7 +2208,8 @@ export interface RunResult {
         | "scan_unavailable"
         | "ended_with_question"
         | "undelivered_deliverables"
-        | "delivery_unobservable";
+        | "delivery_unobservable"
+        | "partly_scripted_gate";
       severity: "fail" | "warn";
       message: string;
     }>;
@@ -2474,6 +2476,12 @@ export interface RunResult {
   nonDeterministicTerminal?: boolean;
   /** tools auto-allowed by cowork parity for unscripted, off-registry permission requests — real Cowork BLOCKS these for the user. A non-empty list means a green is NOT a faithful pass (pin with --answer or permission_parity: strict). */
   permissiveAutoAllow?: string[];
+  /** Question batches the scenario's scripted `answers:` matched only PART of. Answers are delivered
+   *  atomically, so each such batch went WHOLE to the `on_unanswered` fallback and the matched answers were
+   *  never delivered. `matched`/`unmatched` name the sub-questions. Report-only (the warn-severity
+   *  `partly_scripted_gate` verdict signal); never moves the verdict. Re-derived from the cassette's frozen
+   *  `answers:` on replay and from the current scenario on `verify-run`. Absent when none. */
+  partlyScriptedGates?: Array<{ requestId?: string; matched: string[]; unmatched: string[] }>;
   /** Post-run scan signals (live lane only). computeVerdict default-fails on `hostPathLeaked`, and on
    *  `outputsDeletes` as tiered by `outputsDeleteTier` (src/run/outputs-delete-tier.ts), when the scenario did
    *  NOT author the matching assertion. Absent on the replay lane (a cassette can't reproduce them). */

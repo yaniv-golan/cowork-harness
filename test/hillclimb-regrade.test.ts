@@ -75,10 +75,13 @@ afterEach(() => {
 });
 
 /** A flow: `alpha` (pairwise), and with `withBeta` a deterministic-only `beta`; baseline + v1 passes (`reps` each). */
-function buildFlow(opts: { withBeta?: boolean; reps?: number; noPairwise?: boolean; metrics?: string[] } = {}) {
+function buildFlow(opts: { withBeta?: boolean; reps?: number; noPairwise?: boolean; metrics?: string[]; skill?: string } = {}) {
   const plugin = join(work, "plugin", "my-plugin");
-  mkdirSync(join(plugin, "skills", "x"), { recursive: true });
-  writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n");
+  // With `skill`, a second skill makes the plugin multi-skill, and both passes select `skill` with --skill.
+  for (const s of opts.skill !== undefined ? ["x", "y"] : ["x"]) {
+    mkdirSync(join(plugin, "skills", s), { recursive: true });
+    writeFileSync(join(plugin, "skills", s, "SKILL.md"), `---\nname: ${s}\ndescription: d\n---\nbody\n`);
+  }
   const evals = join(f.cwd, "evals");
   mkdirSync(evals);
   writeFileSync(join(evals, "_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
@@ -97,8 +100,9 @@ function buildFlow(opts: { withBeta?: boolean; reps?: number; noPairwise?: boole
   const cli = (...a: string[]) =>
     spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
   const reps = String(opts.reps ?? 1);
-  expect(cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1", "--reps", reps).status).toBe(0);
-  expect(cli("run", "evals", "--flow", "flow", "--variant", "v1", "--concurrency", "1", "--reps", reps).status).toBe(0);
+  const sel = opts.skill !== undefined ? ["--skill", opts.skill] : [];
+  expect(cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1", "--reps", reps, ...sel).status).toBe(0);
+  expect(cli("run", "evals", "--flow", "flow", "--variant", "v1", "--concurrency", "1", "--reps", reps, ...sel).status).toBe(0);
   // In-process calls read the same runs root and judge binary.
   for (const [k, v] of Object.entries({
     COWORK_HARNESS_RUNS_DIR: f.runsDir,
@@ -172,7 +176,7 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
       "evals",
       f.cwd,
       { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
-      "flow",
+      { flow: "flow" },
     );
     expect(t.state.metrics.map((m) => m.id)).toContain("win_v1");
   }, 180_000);
@@ -250,6 +254,40 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
     expect(out.error?.message ?? "").not.toMatch(/--model/);
     expect(readdirSync(join(f.cwd, "flow", "v1")).some((n) => n.endsWith(".bak.jsonl"))).toBe(true);
+  }, 180_000);
+});
+
+describe.runIf(POSIX)("hillclimb regrade applies run's harness gate to a flow approved with --skill", () => {
+  const stateOf = () => JSON.parse(readFileSync(join(f.cwd, "flow", "_state.json"), "utf8")) as Record<string, unknown>;
+
+  it("nothing changed since `run --skill x --approve-harness`: regrade passes the gate", async () => {
+    buildFlow({ skill: "x" });
+    expect(stateOf()).toMatchObject({ harness_skill: "x" });
+    const out = await regradeFlow(ARGS(), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    expect(out.error?.message ?? "").not.toMatch(/harness/);
+    expect(out.exitCode, JSON.stringify(out.error)).toBe(0);
+  }, 180_000);
+
+  it("regrade --approve-harness keeps harness_skill, and the next `run --skill x` is approved", async () => {
+    const { cli, evals } = buildFlow({ skill: "x" });
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("rubric: ['answers']", "rubric: ['answers', 'is brief']"));
+    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    expect(out.exitCode, JSON.stringify(out.error)).toBe(0);
+    expect(stateOf()).toMatchObject({ harness_skill: "x" });
+    const r = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--skill", "x", "--dry-run");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/harness gate: approved/);
+  }, 180_000);
+
+  it("a real scenario edit still refuses regrade", async () => {
+    const { evals } = buildFlow({ skill: "x" });
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("rubric: ['answers']", "rubric: ['answers', 'is brief']"));
+    const out = await regradeFlow(ARGS(), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    expect(out.exitCode).toBe(2);
+    expect(out.error?.message).toMatch(/harness changed since last approved run/);
+    expect(stateOf()).toMatchObject({ harness_skill: "x" });
   }, 180_000);
 });
 
@@ -483,7 +521,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     const { cli, flow, rows, evals } = buildFlow({ metrics: [OTHER, WORDS] });
     // _state.json declares both metrics (the loop merged state-template's entries), and keeps them after the removal.
     const env = { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
-    const t = stateTemplateFor("evals", f.cwd, env, "flow");
+    const t = stateTemplateFor("evals", f.cwd, env, { flow: "flow" });
     const st = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
     writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...t.state }));
     expect(checkReport("flow", f.cwd).exitCode).toBe(0);
@@ -510,14 +548,14 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     expect(rows("v1")[0]!.meta.metrics_unavailable).toEqual({ lost: "missing_artifact" });
     const env = { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
     const st = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
-    writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...stateTemplateFor("evals", f.cwd, env, "flow").state }));
+    writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...stateTemplateFor("evals", f.cwd, env, { flow: "flow" }).state }));
     expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
     // WORDS removed, GONE added: v1's row lacks only its own reference, so the fill rebuilds it with no judge call.
     const sc = join(evals, "alpha.yaml");
     writeFileSync(sc, readFileSync(sc, "utf8").replace(`${WORDS}\n`, `${GONE}\n`).replace(`${LOST}\n`, ""));
     // _state.json declares the added metric (the loop merged state-template's new entry); `run`'s rows predate it.
     const st2 = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
-    const added = stateTemplateFor("evals", f.cwd, env, "flow").state as { metrics: Array<{ id: string }> };
+    const added = stateTemplateFor("evals", f.cwd, env, { flow: "flow" }).state as { metrics: Array<{ id: string }> };
     st2.metrics = [...st2.metrics, ...added.metrics.filter((m) => !st2.metrics.some((x: { id: string }) => x.id === m.id))];
     writeFileSync(join(flow, "_state.json"), JSON.stringify(st2));
     const r = cli("regrade", "evals", "--flow", "flow", "--fill-refs", "--approve-harness");

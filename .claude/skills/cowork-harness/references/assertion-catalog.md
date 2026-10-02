@@ -129,7 +129,7 @@ dotted path.
 
 **VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; eleven
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`) and eleven are **warn**-severity (informational, never flip pass/fail). All twenty-two signal
+`"success"`) and twelve are **warn**-severity (informational, never flip pass/fail). All twenty-three signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 | Code | Severity | Meaning |
@@ -155,8 +155,9 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `ended_with_question` | warn | Live-lane heuristic: the final answer contains a question (or closes on a request for input, the same test as `stalled`) and the run wrote no deliverable to `outputs/` — the lenient sibling of `stalled` (covers a mid-message `?`, or tool work after the last gate that still ended asking). Opt out: `allow_stall` |
 | `undelivered_deliverables` | warn | The skill produced file(s) OUTSIDE every user-visible root and never delivered them, so they stay invisible to the user. Fires on every run without opting in, because the scenarios that most need it are the ones whose author never considered delivery. Silent when the evidence cannot answer the question (no workspace walk, a tier that runs no scratchpad walk, absent delivery telemetry, a resumed turn, or a lane where delivery is unobservable — see `delivery_unobservable`) — never a vacuous clean. **`lane: local` only**: on remote, delivery cannot be measured at all, so that lane reports `delivery_unobservable` instead of guessing. Opt out: `allow_undelivered_deliverables` |
 | `delivery_unobservable` | warn | `lane: remote` only — the run produced file(s), but whether any reached the user CANNOT be verified: nothing is delivered by location on that lane and the harness models no remote delivery tool (production uses the agent-native `SendUserFile`). The honest counterpart to `undelivered_deliverables`, which would otherwise fire on every remote run that writes anything — a signal that always fires carries no information. Mutually exclusive with it; quiet when the run produced nothing to deliver. A harness coverage gap, not a skill defect. Opt out: `allow_undelivered_deliverables` |
+| `partly_scripted_gate` | warn | A question batch (one `AskUserQuestion` with several sub-questions) that the scenario's `answers:` matched only PART of. Answers are delivered atomically, so the whole batch went to the `on_unanswered` fallback and the matched answers were NOT delivered — the fallback may contradict them. The message names the matched and unmatched sub-questions and who answered instead; `result.partlyScriptedGates` carries the full lists. Fires only on a partial match within one batch (a single-question gate no rule matched is the ordinary unanswered case). Re-derived on `replay` (from the cassette's frozen answers) and `verify-run` (from the current scenario). Fix: script every sub-question of the batch |
 | `exec_infra_error` | warn | Host-loop: one or more container `exec` calls failed for infrastructure reasons, so those tool calls returned an error to the agent. Warns rather than fails because the run's other evidence is intact — unlike `infra_error`, where a dead supervisor contaminates everything. Caveat: if *every* exec failed, the agent ran nothing and this still only warns — check `result.infraErrors` |
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.verdict.signals[].severity` or the run's exit code. Only the eleven **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the twelve **warn** codes are truly benign.

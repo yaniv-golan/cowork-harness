@@ -31,6 +31,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **A question batch your `answers:` script only partly matches is now reported, not just warned about.**
+  When one `AskUserQuestion` carries several sub-questions and the scripted rules match some but not all,
+  the whole batch goes to the `on_unanswered` fallback, so the matched answers are not delivered. That stays
+  the same. The run now also records each such batch in `RunResult.partlyScriptedGates`
+  (`{requestId, matched, unmatched}`, naming the sub-questions) and raises the warn-severity
+  `partly_scripted_gate` verdict signal, which names the matched and unmatched sub-questions and who answered
+  the batch instead. `replay` re-derives it from the cassette's frozen `answers:`, and `verify-run` from the
+  scenario you pass: `verify-run` clears once every sub-question is scripted, and a replay once the run is re-recorded
+  with them scripted (a replay reads the answers frozen at record). It never changes a verdict or exit
+  code, and a single-question gate that no rule matched does not raise it.
 - **Scenario `metrics:` — numbers a scenario measures, beside the verdict.** Each entry
   (`{id, artifact, path, better, scale | unbounded, min?}`; `scale` is the upper bound of the range, `min` the floor, default 0) reads one number from a JSON file the run wrote and is
   reported in `RunResult.metrics` as `{id, value}` or `{id, unavailable: <reason>}` — one per declared id, in order,
@@ -153,10 +163,11 @@ All notable changes to this project are documented here. The format is based on
   every case: the plugin the loop tunes. Each variant runs from a snapshot of that plugin taken on its first run, so a resume or
   appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
   refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
-  inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), and an unapproved
-  harness change (`--approve-harness` records it; the harness sha covers each scenario, its session file, its uploads
-  and its `workspace_fixture` files, exec bits included; a fixture is also a read root, so a scenario or session
-  file inside one is refused like one inside a mounted folder). Rows carry the
+  inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), an unknown `--skill`
+  (naming the plugin's skills), and an unapproved harness change (`--approve-harness` records it; the harness sha
+  covers each scenario, its session file, its uploads and its `workspace_fixture` files, exec bits included; a
+  fixture is also a read root, so a scenario or session file inside one is refused like one inside a mounted
+  folder). Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
@@ -172,6 +183,21 @@ All notable changes to this project are documented here. The format is based on
   flow dir is not the default passes the same dir to every one.
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
   home directory that is itself a git work tree. See SPEC §11/§12.
+  `skill_invoked` is `1` or `0` for whether the run invoked the tracked skill; a blank cell means not measured (no
+  tracked skill, or a record that could not tell), never "not invoked". The tracked skill is matched by the id the agent
+  registers: `<plugin>:<name>`, the name being a skill directory's name or a root `SKILL.md`'s frontmatter `name` (else
+  the plugin directory's name), with every character outside `[a-zA-Z0-9_-]` replaced by `-`. The candidates are the
+  skills the agent loads: `skills/*/`, the paths in the manifest's `skills` field (a string or an array, each `.` or
+  `./`-prefixed), and a root `SKILL.md` when there is no `skills/` and no `skills` field (an empty one counts); a `SKILL.md` that is not a regular file or is over 1 MiB is skipped. A plugin with one
+  skill is tracked; with several, `--skill <name>` (on `run` and `state-template`; a directory name or a registered name)
+  picks one, and without it the rows omit the column, the run lists the skills, and `state-template` leaves
+  `skill_invoked` out of `perf_fields` (as it does for a plugin with no skill). Every scored row records the tracked id in `meta.skill_tracked`. A pass whose
+  tracked skill differs from the one the rows already in its variant record is refused (a row with no
+  `meta.skill_tracked` records none, so a pass tracking a skill over it only warns); another variant may track a different skill,
+  with a warning. A `--skill` selection is part of the harness sha: `--approve-harness` records it in `_state.json` as
+  `harness_skill`, beside `harness_sha`, and a run whose `--skill` was changed, added or dropped since is refused with a
+  message naming the change, which the dry run's gate line names too. `--skill` is not remembered between passes, so the
+  runner command the loop repeats must carry it every time. Without `--skill` the sha is what it was before.
 
 - **`hillclimb` grades a scenario's `metrics`.** Each metric declared across a flow's scenarios is a grade key
   on every row: `<id>` holds the measured value and is left out when nothing was measured (never written as 0),
@@ -194,7 +220,8 @@ All notable changes to this project are documented here. The format is based on
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
   run` writes rows with, without running the agent: by default every judged assert is graded again (a judge or rubric
   change) and `pass` is recomputed; `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot
-  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, refuses up
+  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, under the
+  `--skill` the flow was approved with (`harness_skill`, which its `--approve-harness` keeps), refuses up
   front (exit 2) when the host `claude` cannot run the judge isolated, takes every selected variant's lock, and
   preflights every batch's evidence before any judge call (a refusal writes nothing).
   `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
@@ -572,6 +599,41 @@ All notable changes to this project are documented here. The format is based on
   reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's evaluation. Both keys now
   check the file type first and fail with "is not a regular file" on anything that is neither a regular file nor a
   directory (a FIFO, a socket or a device).
+- **`hostloop` finds the native agent that Claude Desktop 2.19675.0 stages.** That Desktop stages the native
+  macOS agent per build, `claude-code/<ver>/<build>/claude.app/…`, and moves an existing flat install
+  (`claude-code/<ver>/claude.app/…`) into its build dir. The harness looked only for the flat layout, so `hostloop`
+  failed on every such install, and `doctor` advised opening Cowork, which changed nothing. It reads both layouts:
+  - A same-major.minor patch difference is tolerated with a stderr note, as before, whichever layout it is staged
+    in. A baseline pinning flat 2.1.284 runs a staged 2.1.286 build with that note and no env var. The note says
+    whether the version used is newer or older than the pin and, when the pinned version's build dir is present
+    but not runnable, why.
+  - A build counts only when it is a real directory whose `.verified` marker names it. A build dir with no marker
+    (one Desktop has not finished staging), a marker naming another build, no `claude.app` or a bare `claude`
+    binary is skipped, and the message names the reason. A symlinked build dir is skipped, as Desktop skips it.
+    The fallback search over other versions also skips a symlinked version dir, which is a harness rule.
+  - When several builds of one version are staged, a pin that names a build selects it. Otherwise the newest
+    `.verified` mtime wins, then build name, with a stderr note naming the builds passed over. When a flat pin's
+    file is still present but a verified build of that version wins, a stderr line names both paths.
+  - A different build of a pinned build needs `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, like a major/minor drift.
+  - `sync` writes the full path of the staged build, preferring the build the asar's own manifest names, so the
+    recorded `nativeStagedPath` exists under either layout.
+- **`doctor` names the cause when the native agent is not found, and gives that cause's remedy.** The causes are no
+  staging dir, nothing staged in either layout, a build Desktop has not finished staging, a build dir that is not a
+  runnable build, an unrecognised layout, a major/minor or build mismatch, and a bad `COWORK_HOST_AGENT_BINARY`. It
+  no longer says "open Cowork once" for them: off macOS it names the tier that does run there, and it notes that an
+  account whose Claude runs on its organization's infrastructure has nothing staged locally. With
+  `COWORK_HOST_AGENT_BINARY` set, it no longer shows a patch-drift note for a binary the run does not use.
+- **A pruned pinned ELF (`container`/`microvm`) points at the recovery runbook.** The error and `doctor`'s remedy
+  name the way to keep the exact pin: recover and sha-verify that version, then set `COWORK_AGENT_BINARY` to it
+  ([docs/maintenance.md](./docs/maintenance.md#recovering-an-old-agent-version)). The error previously offered only
+  `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, which runs a different version, and `doctor` said to open Cowork. For an
+  ELF that was never staged, both say that Desktop stages it on macOS and that elsewhere `COWORK_AGENT_BINARY` must
+  point at a Linux ELF, instead of saying to open Cowork.
+- **A symlinked pinned native version dir is diagnosed and reported accurately.** When the pinned version dir
+  (`claude-code/<ver>`) is a symlink to a dir of another name, `hostloop` still runs the binary it holds, as Desktop
+  does, and prints a stderr note naming the version the link points at. When that symlinked dir holds only an
+  unfinished build or an unrecognised entry, the error names it with cause `unfinished` or `unknown-layout`,
+  instead of reporting that nothing is staged.
 
 ### Documentation
 
@@ -585,6 +647,10 @@ All notable changes to this project are documented here. The format is based on
 - The companion skill now says what a `lint-skill` ignore marker costs: it is an edit to `SKILL.md`, so it
   changes the skill hash (staling that skill's cassettes) and adds text the agent reads. `--suppressions <file>`
   (one entry per accepted site) or `--ignore-rule` avoids both.
+- [docs/maintenance.md](./docs/maintenance.md) describes the per-build native staging layout and how the harness
+  chooses among builds, and the ELF recovery runbook notes the `linux-x64` ELF on an x64 Mac. The troubleshooting
+  FAQ and the companion skill list recovering the pinned ELF as the remedy that keeps the exact pin, and the FAQ has
+  an entry for a native agent that is not found at `hostloop`.
 
 ## [4.2.1] — 2026-10-01
 

@@ -44,6 +44,8 @@ export function stateTemplate(opts: {
    *  `--flow`. A column is declared only when NO scored row lacks it: rows written before its reference was frozen do
    *  not carry it, and `check` would then fail every one of them. */
   pairwiseRefs?: ReadonlyArray<{ ref: string; rowsMissing: number }>;
+  /** The rows will carry skill_invoked (a tracked skill); false leaves it out of perf_fields. Default true. */
+  skillInvoked?: boolean;
 }): StateTemplate {
   const notes: string[] = [];
   const declare = (opts.pairwiseRefs ?? []).filter((r) => r.rowsMissing === 0).map((r) => r.ref);
@@ -56,7 +58,8 @@ export function stateTemplate(opts: {
   if (opts.pairwiseRefs === undefined && flowHasPairwise(opts.cases))
     notes.push("pass --flow to declare a win_<vN> column for each later variant's frozen reference (only `win` is declared without it)");
   const metrics = flowMetricDecls(opts.cases, { metricRefs: declare });
-  const perf = opts.decider ? [...PERF, { id: "decider_usd", label: "Decider $", unit: "$" }] : [...PERF];
+  const base = opts.skillInvoked === false ? PERF.filter((f) => f.id !== "skill_invoked") : PERF;
+  const perf = opts.decider ? [...base, { id: "decider_usd", label: "Decider $", unit: "$" }] : [...base];
   return {
     state: { metrics, perf_fields: perf, harness_paths: [...opts.harnessPaths] },
     metricsMd: metricsMd(metrics, metricUnion(opts.cases)),

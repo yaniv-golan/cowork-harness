@@ -790,6 +790,12 @@ describe("schema-check: _state.json", () => {
     expectOnly(check(withState((st) => (st.harness_paths = "a"))), "error", "state.harness_paths");
     expectOnly(check(withState((st) => (st.harness_sha = 12))), "error", "state.harness_sha");
   });
+
+  it("harness_skill (the --skill an approval hashed, written by the runner) is accepted as a string, an error otherwise", () => {
+    const ok = check(withState((st) => ((st.harness_sha = "a".repeat(64)), (st.harness_skill = "deck-review"))));
+    expect(ok.findings).toEqual([]);
+    expectOnly(check(withState((st) => (st.harness_skill = 3))), "error", "state.harness_skill");
+  });
 });
 
 describe("schema-check: summary.json", () => {
