@@ -806,7 +806,10 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
   }, 240_000);
 
   it("a flow with no metrics and a case with no judged assert: nothing to re-grade, nothing written (unchanged)", async () => {
-    const { flow } = buildFlow({ noPairwise: true });
+    const { flow, rows } = buildFlow({ noPairwise: true });
+    // A multi-turn run dir the kept-run builder would refuse: unselected, the row is never re-evaluated, so not listed.
+    const dir = join(f.runsDir, "alpha", rows("v1")[0]!.meta.run_id as string);
+    cpSync(join(dir, "turns", "1"), join(dir, "turns", "2"), { recursive: true });
     const before = tree(flow);
     const lines: string[] = [];
     const out = await regradeFlow(ARGS(), DEPS({ stderr: (l) => lines.push(l) }));
