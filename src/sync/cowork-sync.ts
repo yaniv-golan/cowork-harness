@@ -1504,7 +1504,7 @@ function extractFromAsar(
     for (const f of checkEgressContractFacts(bundle, bundleFiles)) flag(unknown, f);
     // drift guard: mountLayout modes are hand-authored (not synced) — verify the binary-verified
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
-    for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
+    for (const f of checkMountModeFacts(bundle, bundleFiles)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
@@ -1591,7 +1591,9 @@ function extractFromAsar(
  * see the baselines' `$comment_modes`). Pure over the bundle string → token-free unit-testable.
  *
  * Facts (app.asar 1.12603.1): uploads is mounted read-only (`mode:"ro"`); outputs + projects default to
- * `"rw"` (delete DENIED) via the `IX` resolver, whose delete-approved branch is `…?"rwd":"rw"`.
+ * `"rw"` (delete DENIED) via the `IX` resolver, whose delete-approved branch is `…?"rwd":"rw"`. From Desktop
+ * 2.16120.0 OUTPUTS no longer goes through that resolver: it is `outputsMountMode` ("rwd" for a normal session) —
+ * see the anchor at the top of checkMountModeFacts. Connected folders still use the resolver.
  */
 /**
  * Code-shape tripwires: string-occurrence counts over the asar bundle that watch a feature whose
@@ -1645,8 +1647,35 @@ export function checkCodeTripwires(bundle: string): string[] {
  *  mount-set builder and host-loop `computeBashMounts`. A FLOOR, not an equality — see its use site. */
 const MOUNT_DELETE_DENY_MIN_SITES = 2;
 
-export function checkMountModeFacts(bundle: string): string[] {
+export function checkMountModeFacts(bundle: string, files?: Map<string, string>): string[] {
   const flags: string[] = [];
+  // The OUTPUTS mount (Desktop >= 2.16120.0). Its mode no longer goes through the delete-deny resolver below:
+  // all three mount builders (host-loop computeBashMounts, the VM-loop builder, the shares builder) call the
+  // exported `outputsMountMode`, `function <B>(<e>){return <e>?"rw":"rwd"}` with <e> = isBridgeSession — so
+  // deletes in outputs are ALLOWED for a normal session and denied only for a bridge session. The baselines
+  // record outputs as "rwd" on that basis. The resolver's floor cannot see this (its `?"rwd":"rw"` count is 2
+  // in 2.9939.4, 2.16120.0 and 2.19675.0 alike), so pin the export and its exact body. Resolved in the chunk
+  // that EXPORTS it — minified names repeat across chunks. Absent before 2.16120.0, where this flags, which is
+  // correct: that install does not build what the pinned baselines describe.
+  {
+    const exportRe = /(?<![\w$])outputsMountMode:\(\)=>([\w$]+)/;
+    const site = files ? [...files.values()].find((c) => exportRe.test(c)) : exportRe.test(bundle) ? bundle : undefined;
+    const local = site ? exportRe.exec(site)![1] : undefined;
+    const header = local && site ? new RegExp(`function ${reEsc(local)}\\(([\\w$]+)\\)\\{`).exec(site) : null;
+    const body = header && site ? braceBodyOf(site, header[0]) : null;
+    const why = !local
+      ? "the outputsMountMode export is gone"
+      : body === null
+        ? `outputsMountMode's function ${local}() does not resolve in its chunk`
+        : body !== `return ${header![1]}?"rw":"rwd"`
+          ? `outputsMountMode no longer returns exactly \`<isBridgeSession>?"rw":"rwd"\` (body: \`${body.slice(0, 80)}\`)`
+          : undefined;
+    if (why)
+      flags.push(
+        `mountLayout: ${why} — the outputs mount mode the baselines record ("rwd" for a normal session, "rw" for a bridge ` +
+          "session) may have changed; re-derive mountLayout.mounts outputs.mode (see baselines $comment_modes)",
+      );
+  }
   // The delete-deny resolver. A bare `.test()` was the same single-anchor hole the per-mount checks below
   // just closed: the resolver is now built on BOTH lanes (1 site in Desktop 1.34493.1, 2 from 1.37937.0),
   // so once one lane has it, `.test()` cannot see the other lane losing it. Guard a FLOOR rather than an
@@ -1658,7 +1687,7 @@ export function checkMountModeFacts(bundle: string): string[] {
   if (denySites < MOUNT_DELETE_DENY_MIN_SITES)
     flags.push(
       `mountLayout: the delete-deny resolver (IX \`…?"rwd":"rw"\`) is built at ${denySites} site(s), below the pinned floor of ` +
-        `${MOUNT_DELETE_DENY_MIN_SITES} — an execution lane lost delete-deny resolution, so outputs/projects default mode may have ` +
+        `${MOUNT_DELETE_DENY_MIN_SITES} — an execution lane lost delete-deny resolution, so the connected-folder default mode may have ` +
         "changed on that lane; re-derive mountLayout.mounts[].mode per lane (see baselines $comment_modes)",
     );
   // Every mount whose mode is HARDCODED at the mount-set builder, rather than resolved through
@@ -1667,7 +1696,8 @@ export function checkMountModeFacts(bundle: string): string[] {
   // with a live approved-list read. The hardcoded modes below are identical either way, which is why
   // one set of anchors covers both — but a reader reasoning about WHEN a mode is decided needs this.
   // the delete-deny resolver above. Read first-party from the builder, which assembles the whole set:
-  // outputs and each connected folder go through the resolver (`rw`, or `rwd` once approved) while these
+  // each connected folder goes through the resolver (`rw`, or `rwd` once approved; outputs has its own
+  // `outputsMountMode` from 2.16120.0, anchored above) while these
   // are pinned `"ro"`. Worth pinning individually because a mount silently moving from `ro` to a
   // writable mode is a containment change we would otherwise model wrongly with nothing failing.
   //

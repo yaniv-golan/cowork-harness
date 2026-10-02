@@ -409,6 +409,79 @@ describe("cowork-sync platform guard", () => {
   });
 });
 
+// Desktop >= 2.16120.0 (binary-verified in 2.16120.0 and 2.19675.0, absent in 2.9939.4): the OUTPUTS mount's mode
+// comes from an exported `outputsMountMode`, `function B(e){return e?"rw":"rwd"}` with e = isBridgeSession, called by
+// all three mount builders (host-loop computeBashMounts, the VM-loop builder, the shares builder). So deletes in
+// outputs are ALLOWED for a normal session and denied only for a bridge session. The delete-deny resolver's floor
+// cannot see this (its `?"rwd":"rw"` count is 2 in all three builds), so it gets its own anchor.
+const OUTPUTS_MODE_FACT = ';var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return e?"rw":"rwd"}';
+
+describe("checkMountModeFacts — the outputs mount mode (outputsMountMode)", () => {
+  const BASE = 'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";' + OUTPUTS_MODE_FACT;
+  const ofOutputs = (flags: string[]) => flags.filter((f) => f.includes("outputsMountMode"));
+  it('control: the export returning "rwd" for a non-bridge session is clean', () => {
+    expect(ofOutputs(checkMountModeFacts(BASE))).toEqual([]);
+  });
+  it.each([
+    ["the export is gone", (s: string) => s.replace("outputsMountMode:()=>zOmm", "somethingElse:()=>zOmm")],
+    ["the non-bridge branch now denies deletes", (s: string) => s.replace('return e?"rw":"rwd"', 'return e?"rw":"rw"')],
+    ["the branches swapped", (s: string) => s.replace('return e?"rw":"rwd"', 'return e?"rwd":"rw"')],
+    ["the function no longer branches on its argument", (s: string) => s.replace('return e?"rw":"rwd"', 'return"rwd"')],
+    ["the export points at a function that does not resolve", (s: string) => s.replace("function zOmm(", "function zOther(")],
+  ])("MUTATION: %s → flags", (_label, mutate) => {
+    const mutated = mutate(BASE);
+    expect(mutated).not.toBe(BASE);
+    expect(ofOutputs(checkMountModeFacts(mutated)).length).toBeGreaterThan(0);
+  });
+  // Minified names repeat across chunks: the function must be resolved in the chunk that EXPORTS it.
+  it("resolves the function in the exporting chunk, not another chunk's same-named function", () => {
+    const files = new Map([
+      ["index.chunk-OTHER.js", 'function zOmm(e){return e?"rw":"rwd"}'],
+      [
+        "index.chunk-MOUNT.js",
+        'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return!0}',
+      ],
+    ]);
+    expect(ofOutputs(checkMountModeFacts([...files.values()].join(""), files)).length).toBeGreaterThan(0);
+    files.set("index.chunk-MOUNT.js", files.get("index.chunk-MOUNT.js")!.replace("return!0", 'return e?"rw":"rwd"'));
+    expect(ofOutputs(checkMountModeFacts([...files.values()].join(""), files))).toEqual([]);
+  });
+});
+
+// Oracle over saved Desktop asars (a local backup dir, never present on CI): `<dir>/<version>/app.asar`. Reads the
+// main-process bundle straight out of the asar (a JSON header + raw file bytes), normalizes it as sync does, and
+// checks the anchor: absent in 2.9939.4, present with "rwd" in 2.16120.0 and 2.19675.0.
+function readAsarBuildFiles(asarPath: string): Map<string, string> {
+  const buf = readFileSync(asarPath);
+  const headerSize = buf.readUInt32LE(4);
+  const jsonLen = buf.readUInt32LE(12);
+  const header = JSON.parse(buf.subarray(16, 16 + jsonLen).toString("utf8")) as { files: Record<string, any> };
+  const base = 8 + headerSize;
+  const build = header.files[".vite"]?.files?.build?.files ?? {};
+  const out = new Map<string, string>();
+  for (const [name, e] of Object.entries(build) as Array<[string, { size?: number; offset?: string; unpacked?: boolean }]>) {
+    if (!name.endsWith(".js") || e.unpacked || e.offset === undefined || e.size === undefined) continue;
+    const start = base + Number(e.offset);
+    out.set(name, normalizeBundleQuotes(buf.subarray(start, start + e.size).toString("utf8")));
+  }
+  return out;
+}
+const ASAR_BACKUPS = process.env.COWORK_ASAR_BACKUP_DIR;
+describe.skipIf(!ASAR_BACKUPS)("outputsMountMode oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each([
+    ["2.9939.4", false],
+    ["2.16120.0", true],
+    ["2.19675.0", true],
+  ])('%s: anchor present with the non-bridge "rwd" return = %s', (version, present) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    if (!existsSync(asar)) return;
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100); // the bundle was actually read
+    const flags = checkMountModeFacts([...files.values()].join(""), files).filter((f) => f.includes("outputsMountMode"));
+    expect(flags.length === 0).toBe(present);
+  });
+});
+
 describe("checkMountModeFacts (mount-mode drift guard for the hand-authored baseline)", () => {
   // A synthetic bundle carrying every binary-verified mode fact: the delete-deny resolver plus each
   // mount whose mode is hardcoded `"ro"` at the spawn-time builder. Widened from two facts to five once
@@ -421,7 +494,10 @@ describe("checkMountModeFacts (mount-mode drift guard for the hand-authored base
     'function IX(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"}' +
     'function IXbash(A,e,t){return t?"rw":e!=null&&e.includes(A)?"rwd":"rw"} … l[Es("uploads")]={path:wa(i),mode:"ro"}' +
     ';l[Es(".claude/skills")]={path:x,mode:"ro"};l[Es(".claude/projects")]={path:y,mode:"ro"}' +
-    ';l[Es(`.projects/${e.uuid}`)]={path:z,mode:"ro"}';
+    ';l[Es(`.projects/${e.uuid}`)]={path:z,mode:"ro"}' +
+    // Desktop >= 2.16120.0: the OUTPUTS mount is no longer resolved through the delete-deny resolver; its mode is
+    // the exported `outputsMountMode`, "rwd" (deletes allowed) for every non-bridge session.
+    OUTPUTS_MODE_FACT;
   it("returns no flags when every mode fact is present", () => {
     expect(checkMountModeFacts(ok)).toEqual([]);
   });
@@ -3657,7 +3733,8 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
     'p[r.a(`.projects/${e.uuid}`)]={path:w,mode:"ro"};' +
     'let m=n?"rw":t?.includes(e)?"rwd":"rw";' +
     // Second lane (host-loop computeBashMounts) — the checker floors on the SITE COUNT, see `ok` above.
-    'let mb=n?"rw":t?.includes(e)?"rwd":"rw";';
+    'let mb=n?"rw":t?.includes(e)?"rwd":"rw";' +
+    OUTPUTS_MODE_FACT;
 
   it("clean bundle → no flags", () => {
     expect(checkMountModeFacts(CLEAN)).toEqual([]);
@@ -3679,7 +3756,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
   it("structural regression: the REAL asar is clean", () => {
     const files = readRealBundleFilesOrSkip();
     if (!files) return;
-    expect(checkMountModeFacts([...files.values()].join(""))).toEqual([]);
+    expect(checkMountModeFacts([...files.values()].join(""), files)).toEqual([]);
   });
 
   // The real bundle builds each of these mounts at TWO sites — the VM-loop mount-set builder and
