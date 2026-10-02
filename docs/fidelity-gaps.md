@@ -996,26 +996,29 @@ built-in absent from the tier's current set.
 
 ## Hostloop: the substituted plugin path shares the VM path's suffix; real Cowork's does not
 
-**Real Cowork behaviour (host-loop, observed on Desktop 2.9939.4):** the plugin's base directory the
-agent substitutes into a skill's text (the skill's own base dir, the `${CLAUDE_PLUGIN_ROOT}` it expands)
-is a host staging path of the form `$TMPDIR/claude-hostloop-plugins/<hash>/<basename>/…` — a symlink
-Desktop creates only when the host plugin path contains a space; a path with no space is passed
-through as the raw host path. Either way the path does not exist in the VM, and in the VM shell `$CLAUDE_PLUGIN_ROOT` and `$CLAUDE_SKILL_DIR` are empty. The plugin's
-files are reachable in the VM only at `/sessions/<slug>/mnt/.local-plugins/…` or
-`/sessions/<slug>/mnt/.remote-plugins/plugin_<id>/…`.
+**Real Cowork behaviour (host-loop):** the plugin's base directory the agent substitutes into a skill's
+text (the skill's own base dir, the `${CLAUDE_PLUGIN_ROOT}` it expands) is a host path of the form
+`$TMPDIR/claude-hostloop-plugins/<hash>/<basename>/…` — a symlink Desktop creates only when the host
+plugin path contains a space; a path with no space is passed through as the raw host path (observed on
+Desktop 2.9939.4). The path does not exist in the VM, but Cowork's bash tool rewrites it — and the raw
+install path, its `/private/var` spelling and its escaped and quoted forms — to the plugin's
+`/sessions/<slug>/mnt/.local-plugins/…` or `/sessions/<slug>/mnt/.remote-plugins/plugin_<id>/…` mount
+before a command runs (Desktop 1.40609.0 and later; measured on 2.19675.0). In the VM shell
+`$CLAUDE_PLUGIN_ROOT` and `$CLAUDE_SKILL_DIR` are empty.
 
 **Harness behaviour:** the `--plugin-dir` the native agent is given, and so the path it substitutes, is
 the staged copy inside the run dir: `<run-dir>/work/session/mnt/.local-plugins/…` (or
-`…/mnt/.remote-plugins/plugin_<id>/…`) — `src/runtime/hostloop.ts`, `src/runtime/argv.ts`. It is equally
-dead in the VM shell, and both env vars are equally unset, so a shell step that uses the substituted
-path as-is fails the same way in both. (Host-side `Read`/`Grep` of that path works in both.) The
-difference is the suffix: the harness's host path ends in the same `/mnt/.local-plugins/…` or
-`/mnt/.remote-plugins/…` tail as the VM path, and real Cowork's does not.
+`…/mnt/.remote-plugins/plugin_<id>/…`) — `src/runtime/hostloop.ts`, `src/runtime/argv.ts`. The
+`hostloop` bash tool applies the same rewrite to that path (`src/hostloop/plugin-path-rewrite.ts`), and
+both env vars are equally unset, so a bash command that uses the substituted path as its own word
+behaves the same in both. The difference is the shape: the harness's host path ends in the same
+`/mnt/.local-plugins/…` or `/mnt/.remote-plugins/…` tail as the VM path, and real Cowork's does not.
 
-**Consequence:** a skill that converts the substituted host path into a VM path by keeping its suffix
-(strip everything before `/mnt/`, prepend `/sessions/<slug>`) passes under `hostloop` and fails in real
-Cowork. Discover the mount by searching for the skill's own files instead — the recipe is in
-[plugin-root.md](./plugin-root.md#in-vm-bash--the-token-is-not-reliable).
+**Consequence:** the shape is visible wherever the host path is not rewritten — host-side tools, a
+sub-agent's prompt, a file or tool result the shell reads the path from. A skill that converts such a
+path into a VM path by keeping its suffix (strip everything before `/mnt/`, prepend `/sessions/<slug>`)
+passes under `hostloop` and fails in real Cowork. Discover the mount by searching for the skill's own
+files instead — the recipe is in [plugin-root.md](./plugin-root.md#in-vm-bash--what-the-shell-receives).
 
 ---
 

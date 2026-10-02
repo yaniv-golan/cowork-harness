@@ -379,13 +379,13 @@ gate; the naive first-reach invocation without `--strict` is a silent rubber-sta
 | connected folders | production default **rw** (rwd only after delete-approval consent); the harness's `mode: r` is a HARNESS EXTENSION for authoring read-only fixtures (bind-mounted `:ro` — Read passes, Write is blocked), and a `rw`/`rwd` folder additionally requires operator consent to run | rw per mount, except a harness `mode: r` folder, which is `:ro` | same — a harness `mode: r` folder is read-only, not rw |
 | `/sessions/*` | DENIED (a VM path on a host filesystem) | valid — it IS the sub-agent's namespace | valid — it IS the sub-agent's namespace |
 | delete semantics | file tools have no delete verb | `rm` is **not** blocked at the mount by the harness — production denies deletes in outputs/connected folders outright, unblockable except through its own approval flow, but the harness mounts those writable and catches a delete **after the fact** via a post-run scan/assertion; a per-mount delete-deny is separate, not-yet-built work | same post-hoc detection as bash |
-| `${CLAUDE_PLUGIN_ROOT}` | the braced token is pre-resolved into the agent's prompt TEXT at definition load, to a HOST path; the literal token is never expanded by file tools | a bare `$CLAUDE_PLUGIN_ROOT` is empty in the VM shell; the pre-resolved host path does not exist there | braced: pre-resolved in text to the VM mount path. Bare, in the Bash subprocess: the harness (`container`/`microvm`) sets no value; for real Cowork's VM loop see the [plugin-root.md tier table](./plugin-root.md#how-the-tiers-map) |
+| `${CLAUDE_PLUGIN_ROOT}` | the braced token is pre-resolved into the agent's prompt TEXT at definition load, to a HOST path; the literal token is never expanded by file tools | a bare `$CLAUDE_PLUGIN_ROOT` is empty in the VM shell; the pre-resolved host path is rewritten to the plugin's VM mount when it appears in a bash command as its own word | braced: pre-resolved in text to the VM mount path. Bare, in the Bash subprocess: the harness (`container`/`microvm`) sets no value; for real Cowork's VM loop see the [plugin-root.md tier table](./plugin-root.md#how-the-tiers-map) |
 
 The `${CLAUDE_PLUGIN_ROOT}` row deserves a second read: a plugin's own file references resolve because
 the path is substituted into the prompt text when the plugin definition is loaded, not because a
 sub-agent's shell inherits an environment variable — do not rely on the variable in a Bash-tool
 subprocess on any tier. See [plugin-root.md](./plugin-root.md) for the full authoring guide (per-tier
-staging paths, the host-loop self-heal, and the lint tooling that catches a hardcoded-token footgun in
+staging paths, the mount-discovery recipe, and the lint tooling that catches a bare-variable or forwarded-root footgun in
 a skill's shell steps).
 
 ## What a host-loop sub-agent is TOLD about that matrix (Desktop >= 1.46388.3)
@@ -450,7 +450,7 @@ rather than re-deriving its own. What determines a child's tools:
 | ToolSearch | ON when unset (the agent's default mode); `ENABLE_TOOL_SEARCH=off` or `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` disables it (a "standard" mode name that actually means DISABLED — a naming trap). A 4-tool agent legitimately lacks it (evidence: `mcp_search_unavailable`). Tune it via the harness's `agent_env` session knob. |
 | WebSearch | a normal built-in tool; included by the allowlist like any other. |
 | MCP additions (`mcpServers:` frontmatter) | the one sanctioned extra-tool channel for a custom agent — but **plugin-shipped agents cannot use it**: the loader discards a plugin agent's `mcpServers`/`permissionMode`/`hooks` at load time. |
-| tool aliases | host-loop only: `Bash → mcp__workspace__bash`, `WebFetch → mcp__workspace__web_fetch`, single-hop. An alias never GRANTS a tool — a bare `Bash` in frontmatter resolves only when `mcp__workspace__bash` is already in the child's bound set. VM tiers set no aliases (their `Bash`/`WebFetch` are the literal built-in tools). |
+| tool aliases | host-loop only: `Bash → mcp__workspace__bash`, `WebFetch → mcp__workspace__web_fetch`, single-hop. An alias never GRANTS a tool — a bare `Bash` in frontmatter resolves only when `mcp__workspace__bash` is already in the child's bound set, so a plugin agent whose `tools:` lists `Bash` but not `mcp__workspace__bash` has no shell at host-loop (measured on Desktop 2.19675.0); name `mcp__workspace__bash` to give it one. VM tiers set no aliases (their `Bash`/`WebFetch` are the literal built-in tools). |
 | pre-approval | host-loop pre-approves `mcp__workspace__bash` for the whole session (no permission gate ever fires for it); `web_fetch` still routes through the normal permission gate — one recorded decision, matching production's shape. |
 
 ## Cross-tier sub-agent deltas

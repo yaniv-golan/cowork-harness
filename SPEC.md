@@ -155,7 +155,7 @@ child_process.spawn(<resolveHostAgentBinary(baseline)>, [ …§3.1 args, HOST pa
 })
 ```
 - `--disallowedTools Bash WebFetch NotebookEdit`; append `mcp__workspace__bash mcp__workspace__web_fetch` to `--tools`/`--allowedTools`. (The asar `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS` = {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; only Bash/NotebookEdit/WebFetch exist in the CLI agent's 26-tool registry — REPL/JavaScript are absent here.)
-- `CLAUDE_PLUGIN_ROOT` / `--plugin-dir` point at the STAGED plugin copy — a REAL host path (`join(mntHost, m.mountPath)`), the same directory the sidecar's bind mount below also targets. (2+ configured plugins keep an unresolvable sentinel for both consumers — a pre-existing per-plugin-hook scoping limitation.)
+- `CLAUDE_PLUGIN_ROOT` / `--plugin-dir` point at the STAGED plugin copy — a REAL host path (`join(mntHost, m.mountPath)`), the same directory the sidecar's bind mount below also targets. (2+ configured plugins keep an unresolvable sentinel for both consumers — a pre-existing per-plugin-hook scoping limitation.) The `hostloop` workspace bash rewrites those host plugin paths, and the skills dir, to their VM mounts before executing a command (Desktop's host-loop behaviour from 1.40609.0; `src/hostloop/plugin-path-rewrite.ts`); the recorded tool input keeps the host path.
 - `cwd` = the harness-owned `<mntHost>/outputs` dir — this MUST equal the PreToolUse gate's `hostCwd` (below); a mismatch is cross-checked live via the hook payload's `input.cwd` and warned loudly, never silently trusted.
 - Connected folders are NEVER staged/copied for the native process — they're read directly at their real `Mount.hostPath` (bind-mounted into the sidecar too, so the native tools and `bash` see the same bytes).
 - system-prompt append includes the host-loop "Shell access" section (unchanged generator).
@@ -170,7 +170,8 @@ docker run --rm -i --platform linux/arm64 --network <net>
   -e HTTP_PROXY/HTTPS_PROXY/http_proxy/https_proxy/NO_PROXY/no_proxy  (the run's egress proxy — `docker
      exec` inherits container env, so this is bash's egress config at this tier; empty when there is no
      proxy. NO agent-env, and specifically NO CLAUDE_PLUGIN_ROOT: real host-loop leaves it unset in the
-     guest and the agent self-heals by `find`ing the mount)
+     guest, so a bare $CLAUDE_PLUGIN_ROOT is empty in bash; a substituted host plugin path in a command
+     is rewritten to its VM mount instead)
   -v <sessionHost>:/sessions/<id>                                    # outputs/uploads/staged plugins
   [-v <sessionHost>/mnt/<p>:/sessions/<id>/mnt/<p>:ro]…              # mode:r NON-folder mounts only
   -v <folder.hostPath>:/sessions/<id>/mnt/<folderMountPath>[:ro]…    # REAL folder paths — never copies
