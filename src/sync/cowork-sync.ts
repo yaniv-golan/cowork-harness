@@ -473,7 +473,14 @@ export function extractAsarGateIds(files: Map<string, string>): string[] {
   //
   // The lookbehind (rather than consuming `[{,]`) is load-bearing: entries are adjacent, so a
   // delimiter-consuming match eats the comma the NEXT entry needs and silently drops every other one.
-  const bareKeyRe = /(?<=[{,])(\d{5,13}):(?=[A-Za-z_$])/g;
+  //
+  // THIRD SHAPE (Desktop 2.19675.0): the defaults map became a declarative RULE TABLE —
+  // `pWt={147471044:{rule:"always",value:!0},…,4055864154:{rule:"remote"},…}` — whose entries open with
+  // `{`, so the identifier-only lookahead above missed all 136 of them (55 phantom removals, 2 hidden
+  // additions on that release). Widened to that exact `{rule:` opener only, never to `{` in general: any
+  // other object-valued numeric key is noise. The shape occurs 0 times in every earlier Desktop asar on
+  // record, so no committed list changes.
+  const bareKeyRe = /(?<=[{,])(\d{5,13}):(?=[A-Za-z_$]|\{rule:)/g;
   const out = new Set<string>();
   for (const text of files.values())
     for (const m of [...text.matchAll(re), ...text.matchAll(bareKeyRe)]) {

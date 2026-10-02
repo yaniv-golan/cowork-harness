@@ -56,6 +56,36 @@ describe("extractAsarGateIds — the gate-DEFAULTS map's bare-numeric keys", () 
   it("still excludes a sub-8-digit constant that happens to sit in an object literal", () => {
     expect(extractAsarGateIds(filesOf("var z={4194304:bw,748063099:bw};"))).toEqual(["748063099"]);
   });
+
+  // Desktop 2.19675.0 rewrote the defaults map as a declarative RULE TABLE —
+  // `pWt={147471044:{rule:"always",value:!0},…,4055864154:{rule:"remote"},…}` — whose values open with `{`,
+  // not an identifier. The identifier-only lookahead missed every entry: on the real bundle that read as
+  // 57 removed gate ids where 2 were really removed, and hid 2 real additions only the table names.
+  it("captures rule-table entries `<id>:{rule:…}` (the 2.19675.0 defaults shape), adjacent ones included", () => {
+    const ids = extractAsarGateIds(
+      filesOf(
+        'var pWt={147471044:{rule:"always",value:!0},151700879:{rule:"always",value:"inherit"},4055864154:{rule:"remote"},' +
+          '1263782781:{rule:"forcedFor",group:"sessionHostDevice",value:{s:1}},2464296336:{rule:"when",condition:"selfHostedSessions",value:!0}};',
+      ),
+    );
+    expect(ids).toEqual(["147471044", "151700879", "1263782781", "2464296336", "4055864154"]);
+  });
+
+  it("reads both shapes in one bundle (old `<id>:<ctor>` entries keep working)", () => {
+    const ids = extractAsarGateIds(filesOf("var a={505512513:QC(!0),3559681707:$C(`off`)};", 'var b={3310072118:{rule:"remote"}};'));
+    expect(ids).toEqual(["505512513", "3310072118", "3559681707"]);
+  });
+
+  // The widening is the rule shape ONLY: any other object-valued numeric key is still noise.
+  it("does NOT admit a numeric key whose object value is not a rule entry", () => {
+    expect(extractAsarGateIds(filesOf("var o={123456789:{foo:1},234567891:{ rule:1}};"))).toEqual([]);
+  });
+
+  it("applies the id-space filter to rule entries too", () => {
+    expect(extractAsarGateIds(filesOf('var o={1234567:{rule:"remote"},4294967296:{rule:"remote"},17519066:{rule:"remote"}};'))).toEqual([
+      "17519066",
+    ]);
+  });
 });
 
 describe("extractAsarGateIds — what it keeps", () => {

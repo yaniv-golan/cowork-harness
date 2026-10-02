@@ -55,7 +55,7 @@ import {
   subagentBranchFingerprint,
   checkSubagentPromptFacts,
 } from "../src/sync/cowork-sync.js";
-import { checkNormalizationSanity, checkEgressContractFacts } from "../src/sync/cowork-sync.js";
+import { checkNormalizationSanity, checkEgressContractFacts, extractAsarGateIds } from "../src/sync/cowork-sync.js";
 import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
@@ -1802,6 +1802,22 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const { env, flags } = deriveSpawnEnv(bundle, gates, readRealBundleFilesOrSkip() ?? undefined);
     expect(flags).toEqual([]);
     expect(env).toEqual(golden);
+  });
+
+  // Non-circular oracle for asarGateIds over the REAL asar: every key of the gate-defaults RULE TABLE
+  // (`<id>:{rule:…}`, Desktop 2.19675.0+) is counted by a regex independent of the extractor and must
+  // appear in its output. An identifier-only lookahead missed all 136 entries on 2.19675.0, which read as 55
+  // phantom removals. Vacuous on a bundle that predates the table — so it also asserts it found entries
+  // whenever the shape is present at all.
+  it("asarGateIds oracle: every rule-table key in the real asar is extracted", () => {
+    const files = (readRealBundleOrSkip(), readRealBundleFilesOrSkip());
+    if (!files) return;
+    const ruleKeys = new Set<string>();
+    for (const t of files.values())
+      for (const m of t.matchAll(/[{,](\d{8,10}):\{rule:/g)) if (!m[1].startsWith("0") && Number(m[1]) < 2 ** 32) ruleKeys.add(m[1]);
+    const ids = new Set(extractAsarGateIds(files));
+    const missing = [...ruleKeys].filter((k) => !ids.has(k));
+    expect(missing).toEqual([]);
   });
 
   // 11. Structural-regression (non-circular): checkSpawnContractFacts over the REAL asar returns [] today.
