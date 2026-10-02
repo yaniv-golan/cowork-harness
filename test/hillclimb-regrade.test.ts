@@ -471,7 +471,7 @@ describe.runIf(POSIX)("hillclimb regrade's judge isolation preflight", () => {
     const { cli, flow } = buildFlow();
     const before = tree(flow);
     writeFileSync(join(work, "judge.sh"), OLD_JUDGE, { mode: 0o755 });
-    const r = cli("regrade", "evals", "--flow", "flow", "--output-format", "json");
+    const r = cli("regrade", "evals", "--flow", "flow", "--rejudge", "--output-format", "json");
     expect(r.status, r.stderr).toBe(2);
     const env = JSON.parse(r.stdout) as { command: string; ok: boolean; error: { category: string; message: string } };
     expect(env).toMatchObject({ command: "hillclimb regrade", ok: false, error: { category: "usage" } });
@@ -714,7 +714,9 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
       expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/words —→1200/);
       expect(readdirSync(join(flow, v)).some((n) => /^regrade-[0-9a-f]{16}\.bak\.jsonl$/.test(n))).toBe(true);
     }
-    expect(lines.join("\n")).toMatch(/baseline 1 rewritten, 1 re-evaluated, 1 re-measured; v1 1 rewritten, 1 re-evaluated, 1 re-measured/);
+    expect(lines.join("\n")).toMatch(
+      /baseline 1 rewritten, 1 re-evaluated \(no judge call\), 1 re-measured \(no judge call\); v1 1 rewritten, 1 re-evaluated \(no judge call\), 1 re-measured \(no judge call\)/,
+    );
   }, 240_000);
 
   it("a metric added to a case whose run recorded no pre-run manifest: `_present: 0`, reason no_manifest (never pre_run)", async () => {
@@ -1026,6 +1028,38 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     const row = rows("v1")[0]!;
     expect(row.grade).toMatchObject({ pass: 1, a0: 1, a1: 1, a2: 1 });
     expect(row.meta.regrade_kept_live).toEqual([1]);
+  }, 240_000);
+
+  it("an index-shifting edit: the moved table compares no a<i> across the two lists, and says so", async () => {
+    const { flow, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("assert:\n", "assert:\n  - transcript_contains: Nope\n"));
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    const md = readFileSync(join(flow, "v1", "regrade.md"), "utf8");
+    expect(md).toMatch(/\| alpha \| 0 \| pass 1→0 \(a<i> not compared: the assertion list changed\) \|/);
+    expect(md).not.toMatch(/a0 1→0/);
+  }, 240_000);
+
+  it("counts: re-measured counts only rows of a case that declares a metric; the summary says no judge was called", async () => {
+    f.cleanup();
+    f = makeStubFixture(`mkdir -p outputs && printf '%s' '{"words":1200}' > outputs/m.json\n${STUB}`);
+    const { rows, evals } = buildFlow({
+      noPairwise: true,
+      withBeta: true,
+      metrics: ["  - { id: other, artifact: outputs/m.json, path: words, better: higher, scale: 2000 }"],
+    });
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8") + "  - { id: words, artifact: outputs/m.json, path: words, better: higher, scale: 2000 }\n");
+    const lines: string[] = [];
+    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ stderr: (l) => lines.push(l) }));
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    for (const v of out.variants) expect(v).toMatchObject({ rewritten: 2, reevaluated: 2, remeasured: 1 });
+    expect(rows("v1").find((r) => r.prompt_id === "alpha")!.meta.regrade_remeasured).toBe(true);
+    expect(rows("v1").find((r) => r.prompt_id === "beta")!.meta).not.toHaveProperty("regrade_remeasured");
+    expect(lines.at(-1)).toMatch(
+      /^hillclimb regrade: baseline 2 rewritten, 2 re-evaluated \(no judge call\), 1 re-measured \(no judge call\)/,
+    );
   }, 240_000);
 
   it("a row whose re-evaluation changes nothing stays byte for byte and is counted re-evaluated", async () => {
@@ -1420,6 +1454,20 @@ describe.runIf(POSIX)("hillclimb rows record their assertion set (meta.assert_si
     expect(out.variants.map((v) => v.rewritten)).toEqual([1, 1]);
     expect(checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w))).toEqual([]);
     void flow;
+  }, 240_000);
+
+  it("a row with no assert_sig whose assert values changed is stamped when rebuilt, though no outcome moved", async () => {
+    const { flow, rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const file = join(flow, "v1", "results.jsonl");
+    const row = rows("v1")[0]!;
+    delete row.meta.assert_sig;
+    writeFileSync(file, JSON.stringify(row) + "\n");
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: All"));
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(rows("v1")[0]!.grade).toEqual(row.grade);
+    expect(rows("v1")[0]!.meta.assert_sig).toMatch(SIG);
   }, 240_000);
 
   it("a row with no assert_sig (written before it existed) is never called stale", () => {

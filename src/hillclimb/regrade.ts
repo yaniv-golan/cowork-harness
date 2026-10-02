@@ -500,6 +500,9 @@ const JUDGE_SIDE_META = [
 const carriedJudgeMeta = (row: Row): Record<string, unknown> =>
   Object.fromEntries(JUDGE_SIDE_META.flatMap((k) => (row.meta && k in row.meta ? [[k, row.meta[k]]] : [])));
 
+/** A case that declares a metric of its own (a row of another case carries the flow's columns unmeasured). */
+const declaresMetrics = (c: HillclimbCase): boolean => (c.scenario.metrics?.length ?? 0) > 0;
+
 const withVerdict = (r: RunResult): RunResult => ({ ...r, verdict: computeVerdict(r, "live") as RunResult["verdict"] });
 
 /** The result with its metrics as a re-measure measured them, id by id: a re-measure with no finite value (a pruned or
@@ -707,6 +710,19 @@ function missingRefs(result: RunResult, c: HillclimbCase, refNames: readonly str
   if (!pairwiseIdx.length) return [];
   const authored = (result.assertions ?? []).filter((e) => e.source === undefined);
   return refNames.filter((ref) => pairwiseIdx.some((i) => !(authored[i]?.pairwise ?? []).some((o) => o.ref === ref)));
+}
+
+/** Whether a row's `a<i>` keys before and after a rebuild name the same asserts: its assertion set is the scenario's
+ *  now (same `assert_sig`), or — a row no regrade rewrote, so graded under its run's list — the run's list has the same
+ *  length and the same keys at every index (a value edit keeps the alignment; an inserted or removed assert breaks it).
+ *  A row an earlier regrade rewrote under another set has a list nothing here records: not aligned. */
+function aIndexAligned(row: Row, result: RunResult, c: HillclimbCase): boolean {
+  const sig = row.meta?.assert_sig;
+  if (sig !== undefined && sig === assertSig(c.scenario)) return true;
+  if (row.meta?.regraded_at !== undefined) return false;
+  const was = authoredOf(result).map((e) => keysOf(e.assertion));
+  const now = authoredNow(c).map(keysOf);
+  return was.length === now.length && was.every((k, i) => k === now[i]);
 }
 
 /** The grade keys a rebuild moved: the verdict, each assert's (`a<i>`, its claims and companions), the claims and win
@@ -1142,6 +1158,8 @@ async function regradeFlowInner(
     // The spend.
     const rebuilt = new Map<Line, Row>();
     const before = new Map<Line, Record<string, number> | undefined>();
+    // Rebuilt rows whose a<i> keys name other asserts than before (`aIndexAligned`): the moved table leaves them out.
+    const misaligned = new Set<Line>();
     const at = new Date().toISOString();
     for (const b of batches) {
       if (skip.has(b)) continue;
@@ -1218,6 +1236,7 @@ async function regradeFlowInner(
         }
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
+        if (!aIndexAligned(t.line.row!, t.result, b.c)) misaligned.add(t.line);
       }
     }
     for (const t of plain) {
@@ -1268,14 +1287,14 @@ async function regradeFlowInner(
           ...(t.plan.fromFile ? carriedJudgeMeta(t.line.row!) : {}),
           regraded_at: at,
           ...reevaluatedMeta(t.c, t),
-          ...(re ? { regrade_remeasured: true } : {}),
+          ...(re && declaresMetrics(t.c) ? { regrade_remeasured: true } : {}),
           ...(args.fillRefs ? { regrade_fill: t.missing } : {}),
         },
         undefined,
         re,
       );
       if (!("why" in got)) {
-        if (re) vr.remeasured++;
+        if (re && declaresMetrics(t.c)) vr.remeasured++;
         if (deterministicIndexes(t.c).length) vr.reevaluated++;
       }
       if ("why" in got) vr.listed.push({ prompt_id: t.c.id, rep, why: got.why });
@@ -1286,14 +1305,17 @@ async function regradeFlowInner(
         (["metric_sigs", "metrics_unavailable", "regrade_kept_live"] as const).every(
           (k) => JSON.stringify(got.row.meta?.[k]) === JSON.stringify(t.line.row!.meta?.[k]),
         ) &&
-        // A row that records another assertion set is brought current; one that records none (written before the sig
-        // existed) is not rewritten for it alone.
-        (t.line.row!.meta?.assert_sig === undefined || t.line.row!.meta.assert_sig === got.row.meta?.assert_sig)
+        // A row that records another assertion set is brought current. One that records none (written before the sig
+        // existed) was graded under its run's list: it is stamped when that list is not the scenario's now.
+        (t.line.row!.meta?.assert_sig === undefined
+          ? authoredOf(t.result).length === authoredNow(t.c).length && t.live.every((e) => e !== undefined)
+          : t.line.row!.meta.assert_sig === got.row.meta?.assert_sig)
       )
         continue;
       else {
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
+        if (!aIndexAligned(t.line.row!, t.result, t.c)) misaligned.add(t.line);
       }
     }
 
@@ -1327,6 +1349,7 @@ async function regradeFlowInner(
         continue;
       before.set(m.line, m.line.row!.grade);
       rebuilt.set(m.line, got.row);
+      if (!aIndexAligned(m.line.row!, m.result, m.c)) misaligned.add(m.line);
     }
 
     // Write each variant atomically; untouched lines byte for byte.
@@ -1342,9 +1365,13 @@ async function regradeFlowInner(
         progress.written.push(v);
       }
       const metricIds = shape.metrics.map((m) => m.id);
+      // A row whose a<i> keys name other asserts than before is compared on everything but them, and says so.
       const moved = changed
-        .map((l) => ({ l, keys: changedKeys(before.get(l), rebuilt.get(l)!.grade, metricIds) }))
-        .filter((x) => x.keys.length);
+        .map((l) => ({
+          l,
+          keys: changedKeys(before.get(l), rebuilt.get(l)!.grade, metricIds).filter((k) => !misaligned.has(l) || !/^a\d+/.test(k)),
+        }))
+        .filter((x) => x.keys.length || misaligned.has(x.l));
       const mean = (rows: Array<Record<string, number> | undefined>) => {
         const xs = rows.map((g) => g?.pass).filter((x): x is number => typeof x === "number");
         return xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(2) : "n/a";
@@ -1357,7 +1384,9 @@ async function regradeFlowInner(
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
           const a = rebuilt.get(l)!.grade ?? {};
-          return `| ${String(l.row!.prompt_id)} | ${String(l.row!.rep)} | ${keys.map((k) => `${k} ${b[k] ?? "—"}→${a[k] ?? "—"}`).join(", ")} |`;
+          const note = misaligned.has(l) ? "(a<i> not compared: the assertion list changed)" : "";
+          const cell = [keys.map((k) => `${k} ${b[k] ?? "—"}→${a[k] ?? "—"}`).join(", "), note].filter(Boolean).join(" ");
+          return `| ${String(l.row!.prompt_id)} | ${String(l.row!.rep)} | ${cell} |`;
         }),
         ...(pv.v.listed.length ? ["", "Not re-graded:", ...pv.v.listed.map((x) => `- ${x.prompt_id} rep${x.rep}: ${x.why}`)] : []),
         "",
@@ -1388,7 +1417,7 @@ async function regradeFlowInner(
       `hillclimb regrade: ${outcome.variants
         .map(
           (v) =>
-            `${v.variant} ${v.rewritten} rewritten${v.reevaluated ? `, ${v.reevaluated} re-evaluated` : ""}${v.remeasured ? `, ${v.remeasured} re-measured` : ""}${v.agentFailed ? `, ${v.agentFailed} agent failure(s): meta updated` : ""}${v.listed.length ? `, ${v.listed.length} listed` : ""}`,
+            `${v.variant} ${v.rewritten} rewritten${v.reevaluated ? `, ${v.reevaluated} re-evaluated (no judge call)` : ""}${v.remeasured ? `, ${v.remeasured} re-measured (no judge call)` : ""}${v.agentFailed ? `, ${v.agentFailed} agent failure(s): meta updated` : ""}${v.listed.length ? `, ${v.listed.length} listed` : ""}`,
         )
         .join("; ")}`,
     );
