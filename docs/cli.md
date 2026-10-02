@@ -646,9 +646,10 @@ so they predate the metric. `hillclimb check` reports them in a note per metric,
 and not the scenarios, so the note goes by where the rows that lack the metric sit among the rows that carry it
 (variants in order — baseline, v1, v2, … — then file order): rows before the last one that carries it predate it, and
 `hillclimb regrade` re-measures them (e.g. "2 rows do not carry metric words (baseline 2): written before a row that
-does, so they predate it …"); rows after it are a metric no scenario declares any more, to remove from `_state.json`
-("… written after the last row that does, so no scenario declares it since v2 …"); and when no row carries it, the
-note says so and gives both readings. `hillclimb regrade` re-measures every metric of every selected row from the kept run's
+does, so they predate it …"); rows after it are either a metric no scenario declares any more (since the first of
+them: remove it from `_state.json`) or rows a partial re-measure left behind (a regrade limited by `--variant` or
+`--case`, or rows it listed), and the note names both ("… written after the last row that does — either no scenario
+declares it since v2 …"); and when no row carries it, the note says so and gives both readings. `hillclimb regrade` re-measures every metric of every selected row from the kept run's
 work dir — a row a judge re-grades, and with no judge call a case with no judged assert, an agent-failed row and a
 fill's neutral-only row — so the row gains the metric: its value and `<id>_present`, its signature in
 `meta.metric_sigs`, and its reason in `meta.metrics_unavailable` when it is still unavailable (`<id>` stays omitted

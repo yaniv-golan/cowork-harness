@@ -679,7 +679,9 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
 
   // `check` reads the flow alone, not the scenarios, so where the rows that lack a metric sit among the rows that carry
   // it (variants in order — baseline, v1, v2, ... — then file order) is all it can go by: before the last one that
-  // carries it, they predate it; after it, no scenario declares it any more; with none carrying it, it cannot tell.
+  // carries it, they predate it; after it, no scenario declares it any more — or a partial re-measure (a regrade limited
+  // by --variant/--case, or rows it listed) left them behind, which the flow alone cannot tell apart, so both are named;
+  // with none carrying it, it cannot tell.
   const variantOrder = (v: string) => (v === "baseline" ? -1 : /^v\d+$/.test(v) ? Number(v.slice(1)) : Number.MAX_SAFE_INTEGER);
   for (const [metric, at] of d.predates) {
     const ordered = [...at].sort((a, b) => variantOrder(a.variant) - variantOrder(b.variant) || a.line - b.line);
@@ -711,7 +713,7 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
       c.note(
         "row.grade",
         "_state.json",
-        `${head(after)}: written after the last row that does, so no scenario declares it since ${after[0]!.variant} — remove it from _state.json (its mean covers the rows that carry it only)`,
+        `${head(after)}: written after the last row that does — either no scenario declares it since ${after[0]!.variant} (then remove it from _state.json), or these rows were not re-measured (a regrade limited by --variant or --case, or rows it listed): \`hillclimb regrade\` re-measures them (its mean covers the rows that carry it only)`,
       );
   }
 

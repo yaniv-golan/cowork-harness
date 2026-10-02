@@ -348,18 +348,18 @@ describe("schema-check: row fields", () => {
         ]);
     });
 
-    it("rows after the last row that carries it are a metric no scenario declares any more, since the first of them", () => {
+    it("rows after the last row that carries it: no scenario declares it since the first of them, or a partial re-measure", () => {
       const s = declared();
       const rs = rows(s, "baseline");
       rs.forEach(carry);
       setRows(s, rs, "baseline");
       for (const snap of [s, v1First(s)])
         expect(predateNotes(check(snap)).map((f) => f.message)).toEqual([
-          "6 rows do not carry metric words (v1 6): written after the last row that does, so no scenario declares it since v1 — remove it from _state.json (its mean covers the rows that carry it only)",
+          "6 rows do not carry metric words (v1 6): written after the last row that does — either no scenario declares it since v1 (then remove it from _state.json), or these rows were not re-measured (a regrade limited by --variant or --case, or rows it listed): `hillclimb regrade` re-measures them (its mean covers the rows that carry it only)",
         ]);
     });
 
-    it("a carrier in the middle splits the lacking rows: those before it predate it, those after are removed", () => {
+    it("a carrier in the middle splits the lacking rows: those before it predate it; those after name both causes", () => {
       const s = declared();
       const rs = rows(s, "baseline");
       carry(rs[2]!);
@@ -367,7 +367,7 @@ describe("schema-check: row fields", () => {
       expect(predateNotes(check(s)).map((f) => f.message)).toEqual([
         expect.stringMatching(/^2 rows do not carry metric words \(baseline 2\): written before a row that does/),
         expect.stringMatching(
-          /^9 rows do not carry metric words \(baseline 3, v1 6\): written after the last row that does, so no scenario declares it since baseline/,
+          /^9 rows do not carry metric words \(baseline 3, v1 6\): written after the last row that does — either no scenario declares it since baseline \(then remove it from _state.json\), or these rows were not re-measured \(a regrade limited by --variant or --case, or rows it listed\): `hillclimb regrade` re-measures them/,
         ),
       ]);
     });
