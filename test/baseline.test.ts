@@ -4,7 +4,6 @@ import * as acorn from "acorn";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
-import { spawnSync } from "node:child_process";
 import {
   BASELINES_DIR,
   compareBaselineVersions,
@@ -414,13 +413,18 @@ describe("cowork-sync platform guard", () => {
 // all three mount builders (host-loop computeBashMounts, the VM-loop builder, the shares builder). So deletes in
 // outputs are ALLOWED for a normal session and denied only for a bridge session. The delete-deny resolver's floor
 // cannot see this (its `?"rwd":"rw"` count is 2 in all three builds), so it gets its own anchor.
-const OUTPUTS_MODE_FACT = ';var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return e?"rw":"rwd"}';
+// Three builders call it — here locally in one chunk; in the real bundle through a re-export alias (see below).
+const OUTPUTS_MODE_FACT =
+  ';var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return e?"rw":"rwd"}' +
+  ';pa[o("outputs")]={path:a,mode:zOmm(b1)};pb[o("outputs")]={path:a,mode:zOmm(b2)};pc[o("outputs")]??={path:a,mode:zOmm(b3)}';
+/** checkMountModeFacts over a one-chunk synthetic bundle (sync always passes its per-chunk map). */
+const mmf = (s: string) => checkMountModeFacts(s, new Map([["index.js", s]]));
 
 describe("checkMountModeFacts — the outputs mount mode (outputsMountMode)", () => {
   const BASE = 'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";' + OUTPUTS_MODE_FACT;
   const ofOutputs = (flags: string[]) => flags.filter((f) => f.includes("outputsMountMode"));
   it('control: the export returning "rwd" for a non-bridge session is clean', () => {
-    expect(ofOutputs(checkMountModeFacts(BASE))).toEqual([]);
+    expect(ofOutputs(mmf(BASE))).toEqual([]);
   });
   it.each([
     ["the export is gone", (s: string) => s.replace("outputsMountMode:()=>zOmm", "somethingElse:()=>zOmm")],
@@ -431,7 +435,7 @@ describe("checkMountModeFacts — the outputs mount mode (outputsMountMode)", ()
   ])("MUTATION: %s → flags", (_label, mutate) => {
     const mutated = mutate(BASE);
     expect(mutated).not.toBe(BASE);
-    expect(ofOutputs(checkMountModeFacts(mutated)).length).toBeGreaterThan(0);
+    expect(ofOutputs(mmf(mutated)).length).toBeGreaterThan(0);
   });
   // Minified names repeat across chunks: the function must be resolved in the chunk that EXPORTS it.
   it("resolves the function in the exporting chunk, not another chunk's same-named function", () => {
@@ -439,12 +443,50 @@ describe("checkMountModeFacts — the outputs mount mode (outputsMountMode)", ()
       ["index.chunk-OTHER.js", 'function zOmm(e){return e?"rw":"rwd"}'],
       [
         "index.chunk-MOUNT.js",
-        'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return!0}',
+        'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return!0}' +
+          ";pa.o={mode:zOmm(b1)};pb.o={mode:zOmm(b2)};pc.o={mode:zOmm(b3)}",
       ],
     ]);
     expect(ofOutputs(checkMountModeFacts([...files.values()].join(""), files)).length).toBeGreaterThan(0);
     files.set("index.chunk-MOUNT.js", files.get("index.chunk-MOUNT.js")!.replace("return!0", 'return e?"rw":"rwd"'));
     expect(ofOutputs(checkMountModeFacts([...files.values()].join(""), files))).toEqual([]);
+  });
+
+  // "Every mount builder uses it" is the claim the baselines make, so the CALLERS are pinned too, not just the function:
+  // a builder going back to a hardcoded mode for outputs must flag. In the real bundle the builders live in another
+  // chunk and call it through the module's re-export alias: `defineProperty(exports,"p",…return B)` and
+  // `C=require("./<that chunk>")`, then `mode:C.p(<isBridgeSession>)` three times.
+  describe("its callers: a floor of 3 call sites, through the re-export alias", () => {
+    const MOUNT =
+      'var zMount={outputsMountMode:()=>zOmm};function zOmm(e){return e?"rw":"rwd"}' +
+      'Object.defineProperty(exports,"p",{enumerable:!0,get:function(){return zOmm}});' +
+      'let m=n?"rw":t?.includes(e)?"rwd":"rw";let mb=n?"rw":t?.includes(e)?"rwd":"rw";';
+    const SPAWN =
+      'var C=require("./index.chunk-MOUNT.js");' +
+      'i.push({name:"outputs",path:e.outputsDir,mode:C.p(e.isBridgeSession),hide:[]});' +
+      "let v={path:t.jz(i),mode:C.p(c)};w[O]??={path:t.jz(r.getOutputsDir(i)),mode:C.p(p)};";
+    const files = (spawn: string) =>
+      new Map([
+        ["index.chunk-MOUNT.js", MOUNT],
+        ["index.chunk-SPAWN.js", spawn],
+      ]);
+    const run = (f: Map<string, string>) => ofOutputs(checkMountModeFacts([...f.values()].join(""), f));
+    it("control: three builders call it through the alias → clean", () => {
+      expect(run(files(SPAWN))).toEqual([]);
+    });
+    it.each([
+      ['one builder hardcodes "rw" for outputs', "mode:C.p(c)", 'mode:"rw"'],
+      ["one builder goes back to the approved-list resolver", "mode:C.p(p)", "mode:V(o,a,p)"],
+      ['the shares builder hardcodes "rwd"', "mode:C.p(e.isBridgeSession)", 'mode:"rwd"'],
+    ])("MUTATION: %s → flags the call-site floor", (_label, from, to) => {
+      const mutated = SPAWN.replace(from, to);
+      expect(mutated).not.toBe(SPAWN);
+      expect(run(files(mutated)).some((f) => f.includes("call site"))).toBe(true);
+    });
+    it("a call through a namespace bound to ANOTHER chunk does not count", () => {
+      const other = SPAWN.replace('var C=require("./index.chunk-MOUNT.js");', 'var C=require("./index.chunk-ELSE.js");');
+      expect(run(files(other)).some((f) => f.includes("call site"))).toBe(true);
+    });
   });
 });
 
@@ -474,7 +516,8 @@ describe.skipIf(!ASAR_BACKUPS)("outputsMountMode oracle over saved Desktop asars
     ["2.19675.0", true],
   ])('%s: anchor present with the non-bridge "rwd" return = %s', (version, present) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
-    if (!existsSync(asar)) return;
+    // With the backup dir named, a missing expected asar is a failure, never a silent pass.
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
     expect(files.size).toBeGreaterThan(100); // the bundle was actually read
     const flags = checkMountModeFacts([...files.values()].join(""), files).filter((f) => f.includes("outputsMountMode"));
@@ -499,17 +542,17 @@ describe("checkMountModeFacts (mount-mode drift guard for the hand-authored base
     // the exported `outputsMountMode`, "rwd" (deletes allowed) for every non-bridge session.
     OUTPUTS_MODE_FACT;
   it("returns no flags when every mode fact is present", () => {
-    expect(checkMountModeFacts(ok)).toEqual([]);
+    expect(mmf(ok)).toEqual([]);
   });
   it("flags when the IX delete-deny resolver is gone (outputs/projects default may have changed)", () => {
     // BOTH lanes, so the floor sees 0 sites. Mutating one lane is a different case — covered below.
     const drifted = ok.split('?"rwd":"rw"').join('?"rwd":"rwd"'); // delete now allowed by default
-    const flags = checkMountModeFacts(drifted);
+    const flags = mmf(drifted);
     expect(flags.some((f) => f.includes("delete-deny resolver"))).toBe(true);
   });
   it("flags when uploads is no longer read-only", () => {
     const drifted = ok.replace('("uploads")]={path:wa(i),mode:"ro"', '("uploads")]={path:wa(i),mode:"rw"');
-    const flags = checkMountModeFacts(drifted);
+    const flags = mmf(drifted);
     expect(flags.some((f) => f.includes("uploads"))).toBe(true);
   });
 });
@@ -2009,17 +2052,19 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       for (const m of t.matchAll(/[{,](\d{8,10}):\{rule:/g)) if (!m[1].startsWith("0") && Number(m[1]) < 2 ** 32) ruleKeys.add(m[1]);
     // Non-vacuity: Desktop 2.19675.0 is the first build that ships the table (136 keys; 0 in every earlier asar on
     // record). On such a build an EMPTY oracle set means the shape moved under both regexes at once — exactly the
-    // drift this test exists for — so it must fail rather than pass with `missing: []`.
-    const installed = spawnSync("defaults", ["read", "/Applications/Claude.app/Contents/Info.plist", "CFBundleShortVersionString"], {
-      encoding: "utf8",
-    }).stdout?.trim();
+    // drift this test exists for — so it must fail rather than pass with `missing: []`. The version is read from the
+    // bundle ACTUALLY loaded (its build metadata, `"appVersion":"<ver>"`), so a COWORK_ASAR_BUNDLE override is keyed
+    // on itself, never on whatever Desktop happens to be installed; an unreadable version fails rather than skipping.
+    const joined = [...files.values()].join("");
+    const version = [...joined.matchAll(/\\?"appVersion\\?":\\?"(\d+\.\d+\.\d+)\\?"/g)].map((m) => m[1]).find((v) => v !== "0.0.0");
+    expect(version, "the bundle read states its Desktop version in its build metadata").toBeDefined();
     const parts = (v: string) => v.split(".").map(Number);
     const atLeast = (v: string, min: string) => {
       const [a, b] = [parts(v), parts(min)];
       for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
       return true;
     };
-    if (installed && /^\d+\.\d+\.\d+$/.test(installed) && atLeast(installed, "2.19675.0")) expect(ruleKeys.size).toBeGreaterThan(0);
+    if (atLeast(version!, "2.19675.0")) expect(ruleKeys.size).toBeGreaterThan(0);
     const ids = new Set(extractAsarGateIds(files));
     const missing = [...ruleKeys].filter((k) => !ids.has(k));
     expect(missing).toEqual([]);
@@ -3737,7 +3782,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
     OUTPUTS_MODE_FACT;
 
   it("clean bundle → no flags", () => {
-    expect(checkMountModeFacts(CLEAN)).toEqual([]);
+    expect(mmf(CLEAN)).toEqual([]);
   });
 
   it.each([
@@ -3750,7 +3795,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
   ])("MUTATION: %s moving → flags", (_label, from, to) => {
     const mutated = CLEAN.split(from).join(to);
     expect(mutated).not.toBe(CLEAN); // the mutation actually applied — a no-op mutation proves nothing
-    expect(checkMountModeFacts(mutated).length).toBeGreaterThan(0);
+    expect(mmf(mutated).length).toBeGreaterThan(0);
   });
 
   it("structural regression: the REAL asar is clean", () => {
@@ -3767,7 +3812,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
     const TWO_LANE = CLEAN + CLEAN.replace('let m=n?"rw":t?.includes(e)?"rwd":"rw";', "");
 
     it("a two-lane bundle with both sites read-only is clean", () => {
-      expect(checkMountModeFacts(TWO_LANE)).toEqual([]);
+      expect(mmf(TWO_LANE)).toEqual([]);
     });
 
     it.each([
@@ -3779,7 +3824,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
       const j = TWO_LANE.indexOf('mode:"ro"', i);
       const mutated = TWO_LANE.slice(0, j) + 'mode:"rw"' + TWO_LANE.slice(j + 'mode:"ro"'.length);
       expect(mutated).not.toBe(TWO_LANE);
-      expect(checkMountModeFacts(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
+      expect(mmf(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
     });
 
     it.each([
@@ -3791,7 +3836,7 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
       const j = TWO_LANE.indexOf('mode:"ro"', i);
       const mutated = TWO_LANE.slice(0, j) + 'mode:"rw"' + TWO_LANE.slice(j + 'mode:"ro"'.length);
       expect(mutated).not.toBe(TWO_LANE);
-      expect(checkMountModeFacts(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
+      expect(mmf(mutated).some((f) => f.includes("one execution lane's mount became writable"))).toBe(true);
     });
 
     // The delete-deny resolver had the same single-anchor shape and the same two-lane reality. The
@@ -3801,12 +3846,12 @@ describe("checkMountModeFacts — hardcoded mount modes", () => {
       const mutated = CLEAN.slice(0, i) + '?"rw":"rw"' + CLEAN.slice(i + '?"rwd":"rw"'.length);
       expect(mutated).not.toBe(CLEAN);
       expect(mutated.split('?"rwd":"rw"').length - 1).toBe(1); // exactly one site left — a one-lane loss
-      expect(checkMountModeFacts(mutated).some((f) => f.includes("below the pinned floor"))).toBe(true);
+      expect(mmf(mutated).some((f) => f.includes("below the pinned floor"))).toBe(true);
     });
 
     it("a lane GAINING the resolver is benign and must not flag", () => {
       const extra = CLEAN + 'let mc=n?"rw":t?.includes(e)?"rwd":"rw";';
-      expect(checkMountModeFacts(extra)).toEqual([]);
+      expect(mmf(extra)).toEqual([]);
     });
   });
 });
