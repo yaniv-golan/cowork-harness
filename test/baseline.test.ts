@@ -192,6 +192,34 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
     expect(liveMatches).toEqual([]);
   });
 
+  // The cowork send-message tool's server config is pinned as a TRIPWIRE that may record only its presence
+  // (on/source) and `alwaysLoad`. Its served value also carries the list of models the tool is enabled for
+  // and may carry a replacement tool description; neither may reach a committed baseline.
+  it("pins the send-message tool config as a tripwire that records only on/source/alwaysLoad", () => {
+    expect(PINNED_GATES["3045399524"]).toBe("sendUserMessageConfig");
+    const f = makeFcache({
+      "3045399524": {
+        value: { alwaysLoad: true, enabled: ["claude-model-x", "claude-model-y[1m]"], prompt: "SERVED DESCRIPTION TEXT" },
+        on: true,
+        off: false,
+        source: "force",
+      },
+    });
+    const g = decodeFcacheGates(f)!["3045399524"];
+    expect(g).toEqual({ id: "3045399524", name: "sendUserMessageConfig", on: true, source: "force", value: { alwaysLoad: true } });
+    const raw = JSON.stringify(g);
+    expect(raw).not.toContain("claude-model");
+    expect(raw).not.toContain("SERVED DESCRIPTION");
+    expect(raw).not.toContain("enabled");
+  });
+
+  it("the send-message tripwire records alwaysLoad:false when it is absent or the value is not an object", () => {
+    const absent = makeFcache({ "3045399524": { value: { enabled: true }, on: true, off: false, source: "force" } });
+    expect(decodeFcacheGates(absent)!["3045399524"].value).toEqual({ alwaysLoad: false });
+    const scalar = makeFcache({ "3045399524": { value: false, on: false, off: true, source: "defaultValue" } });
+    expect(decodeFcacheGates(scalar)!["3045399524"]).toMatchObject({ on: false, source: "defaultValue", value: { alwaysLoad: false } });
+  });
+
   it("decodes a normal (non-absent) entry when the dark gate 2614807392 IS present in the fcache", () => {
     const f = makeFcache({
       "2614807392": { value: true, on: true, off: false, source: "force" },

@@ -246,6 +246,14 @@ export const PINNED_GATES: Record<string, string> = {
   // (not a descriptor): the asar maps it positionally in a `Promise.all` destructure whose result object
   // is `{…, coworkArtifacts: <the 2940196192 result>, …}`.
   "2940196192": "coworkArtifacts",
+  // Server config for the `cowork` server's send-message tool (Desktop >= 2.16120.0; read as a dynamic
+  // config `{enabled: boolean | string[], prompt?, alwaysLoad?}`, the tool is served to sessions with no
+  // sessionType whose model the config enables). NOT MODELED by the harness — see docs/fidelity-gaps.md,
+  // "Cowork's send-message tool is not served". Pinned as a TRIPWIRE only, and through
+  // GATE_VALUE_PROJECTIONS so the baseline records presence (on/source) and `alwaysLoad` and NOTHING else:
+  // the served value names the enabled models and may carry a replacement tool description, and neither
+  // belongs in a committed baseline. Name is a descriptor (the asar reads it by id only).
+  "3045399524": "sendUserMessageConfig",
   // The Chrome/CIC permission handler's session flag — force/on, and NOT the auto-mode rubric gate
   // (that is 3424551112, above). Pinned alongside it so the pair cannot be confused again: an earlier
   // pass attributed the rubric to this id purely because the rubric arrays sit near its call site.
@@ -638,6 +646,17 @@ export function checkAgentReleaseChannel(channel: AgentReleaseChannel | null, ag
   ];
 }
 
+/** Per-gate REDUCTION of the served value before it is recorded. A pinned gate normally records its
+ *  value verbatim; an entry here replaces it with exactly the fields the tripwire needs, so a gate whose
+ *  value carries account-shaped detail (model lists, served prompt text) can still be pinned without
+ *  that detail ever reaching a committed baseline. Applied in `decodeFcacheGates`, the only reader. */
+const GATE_VALUE_PROJECTIONS: Record<string, (value: unknown) => unknown> = {
+  // Only `alwaysLoad`; production reads it as `alwaysLoad ?? false`, so absent and non-object both mean false.
+  "3045399524": (value) => ({
+    alwaysLoad: typeof value === "object" && value !== null && (value as { alwaysLoad?: unknown }).alwaysLoad === true,
+  }),
+};
+
 export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string, GateState> | null {
   if (!existsSync(path)) return null;
   let buf: Buffer;
@@ -664,7 +683,8 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
       if (DARK_GATES.has(id)) out[id] = { id, name, on: false, source: "absent", value: undefined };
       continue;
     }
-    out[id] = { id, name, on: !!f.on, source: String(f.source ?? "defaultValue"), value: f.value };
+    const project = GATE_VALUE_PROJECTIONS[id];
+    out[id] = { id, name, on: !!f.on, source: String(f.source ?? "defaultValue"), value: project ? project(f.value) : f.value };
   }
   return out;
 }

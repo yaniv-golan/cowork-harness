@@ -1581,6 +1581,26 @@ error here — a
 false red — and a skill that would have fixed a rendering bug after looking at the screenshot has no
 such loop in the harness, so a green run says nothing about how the page actually renders.
 
+### Not served: `send_user_message` (Cowork's send-message tool)
+
+**Real Cowork behaviour:** the `cowork` server can also declare `mcp__cowork__send_user_message`. It takes
+one Markdown `message`, which Desktop shows to the user verbatim while the agent keeps working, and the
+tool's result only acknowledges delivery. It is registered always-loaded and pre-approved (no permission
+prompt), like `present_files`. Whether a session gets it is decided by a server-delivered config (gate
+`3045399524`), not by the Desktop version: it is offered to ordinary sessions (no session type, so never
+scheduled-task or dispatch runs) **whose model the config enables**, and the enabled set is server-chosen
+and changes without a Desktop release. Observed on Desktop 2.16120.0 and 2.19675.0: Opus 5.5 sessions
+carry it and Opus 5 sessions do not. The builtin `SendUserMessage` tool of dispatch
+sessions is a different tool.
+
+**Harness behaviour:** not served at any tier; the harness's `cowork` server registers `present_files`
+only. A model that would have used it to relay a mid-task value or snippet writes it into its normal
+text instead, so assertions on the final reply or the transcript can read differently from a real
+session, and a skill whose instructions tell the agent to call it gets an unknown-tool error here, which
+is a false red. It has no file or network effect, so file, artifact and egress assertions are unaffected.
+`sync` pins the config as a tripwire (presence and the always-load flag only; the enabled model list is
+deliberately not recorded), so a change to how it is served shows up as a `sync --diff` line.
+
 ### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
 
 The remote lane also has an internal MCP server the harness does not model at all, wire-named
