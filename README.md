@@ -248,8 +248,9 @@ different — folders arrive under `$HOME/mnt/`, deliverables go to `/mnt/user-d
 handed over with `SendUserFile`, and the environment prompt is authored by the server rather than by
 Desktop. **No setting reliably decides which lane you get.** Cowork's "Only on this computer" option
 (Settings → Cowork in the older composer, Settings → General → Tasks in the merged interface) has been
-**on** while sessions still ran in the cloud (observed 2026-10-02), and on Desktop 2.19675.0 the composer
-offers no per-session lane picker. For Pro and Max plans, Anthropic
+**on** while sessions still ran in the cloud (observed 2026-10-02); on 2026-10-03 the older Cowork composer ran
+sessions locally and the merged composer ran them in the cloud (2 of 2 each, one Personal/Max organization), and
+on Desktop 2.19675.0 the composer offers no per-session lane picker. For Pro and Max plans, Anthropic
 [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that from 2026-10-06
 new tasks run in the cloud and the option is removed, and that tasks already running on the user's computer stay there. To know which
 lane a session ran on, check the session itself — see
