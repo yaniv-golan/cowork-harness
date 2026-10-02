@@ -2205,11 +2205,12 @@ def cmd_lint(args):
 # v1 declines to do.
 
 _PLUGIN_ROOT_TOKEN = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\}?")
-# A runtime SELF-HEAL for a ${CLAUDE_PLUGIN_ROOT} path the VM does not have at host-loop: discovering the
+# A runtime SELF-HEAL for a plugin-root path the VM shell cannot use (a bare $CLAUDE_PLUGIN_ROOT, a skill
+# outside a plugin, a path glued to other text the host-loop rewrite leaves alone): discovering the
 # real mount under /sessions at run time (the prescribed pattern — e.g.
 # `[ -d "$X" ] || X=$(find /sessions ... -name ...)`, or an inline `|| python3 "$(find /sessions ...)"`).
 # When a bash block that uses the token ALSO contains a `find` over /sessions, the block rescues that path
-# → downgrade the WARN to INFO. Conservative: we do NOT verify the find pattern actually matches the
+# → report it as INFO. Conservative: we do NOT verify the find pattern actually matches the
 # plugin's layout (hence the INFO's "not validated").
 _SELF_HEAL = re.compile(r"\bfind\b[^\n]*/sessions")
 # Opening/closing fence: ``` or ~~~ (>=3), optional info string (language).
