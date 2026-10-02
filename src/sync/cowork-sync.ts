@@ -734,9 +734,13 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "Still one account, one session, and still segment-targetable. " +
       "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
       "for its environment section verbatim, diff the three composed parts) rather than trusting this note. " +
-      "NOTE the probe now has a PRECONDITION: Cowork's `Only on this computer` setting (localAgentMode) is " +
-      "OFF by default, and with it off a session runs server-side with a server-authored prompt that has no " +
-      "`## Cowork environment` section at all. Turn it ON, or you will probe a lane this harness does not model.",
+      "NOTE the probe has a PRECONDITION: the session must run on the LOCAL lane, and Cowork's " +
+      "`Only on this computer` setting (localAgentMode; Settings → Cowork, or Settings → General → Tasks) " +
+      "does not reliably select it — sessions have run in the cloud with it ON. A cloud session's prompt is " +
+      "server-authored and has no `## Cowork environment` section at all. Confirm the lane first " +
+      "(CLAUDE_CODE_ENTRYPOINT=local-agent, or a `Starting local session local_<id>` line in Desktop's " +
+      'main.log; see docs/fidelity-gaps.md, "Which lane a session actually ran on"), or you will probe a ' +
+      "lane this harness does not model.",
   ];
 }
 
@@ -4017,9 +4021,9 @@ function enclosingFunctionName(chunk: string, at: number): string | null {
  *     s.stepStarted("download_and_sdk_prepare");let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);
  *
  * reached from the `startVM` export (`startVM:()=>KJ`, whose body calls the function holding that step).
- * On this account the local VM now boots only because the cloud lane's device bash starts it, so this is
- * the harness's sole agent supply — if Desktop drops the call or moves it off the startVM path, the agent
- * stops being staged with nothing else noticing. Fail closed.
+ * On this account (late 2026-09) the local VM often boots only because a cloud session's device_bash starts
+ * it, so this is the harness's sole agent supply — if Desktop drops the call or moves it off the startVM
+ * path, the agent stops being staged with nothing else noticing. Fail closed.
  */
 export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];

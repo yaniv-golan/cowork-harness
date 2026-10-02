@@ -4,10 +4,10 @@ import { locationDelivers } from "../src/run/verdict.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-/** The `lane` axis — which Cowork product lane's DELIVERY CONTRACT a run is held to. Cowork offers the
- *  choice per session ("Run this task: In the cloud / On your computer"), cloud is the default for new
- *  sessions, and the two lanes disagree about what "delivered" means: locally a file under a user-visible
- *  root is delivered by location; remotely nothing is delivered by location at all. */
+/** The `lane` axis — which Cowork product lane's DELIVERY CONTRACT a run is held to. Cowork has no
+ *  per-session lane picker on 2.19675.0 and no setting reliably decides the lane, and the two lanes
+ *  disagree about what "delivered" means: locally a file under a user-visible root is delivered by
+ *  location; remotely nothing is delivered by location at all. */
 describe("lane axis — schema", () => {
   it("defaults to local, so every existing scenario keeps its meaning", () => {
     expect(Scenario.parse({ prompt: "x", fidelity: "container" }).lane).toBe("local");

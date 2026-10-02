@@ -204,9 +204,13 @@ be reached by the model.
 
 ## Lanes (`lane:`) — which delivery contract the run is held to
 
-Cowork runs a session in one of two lanes, chosen per session by the user ("Run this task: **In the
-cloud** / **On your computer**"), with cloud the default for new sessions. They disagree about what
-*delivered* means, so a scenario declares which contract it is testing against.
+Cowork runs a session in one of two lanes: **local** (the agent on the user's machine) or **remote** (an
+Anthropic-hosted cloud container). As of Desktop 2.19675.0 the composer offers no per-session lane picker,
+and no setting reliably decides the lane; for Pro and Max plans, Anthropic announces that new tasks run in
+the cloud from 2026-10-06 (see
+[fidelity-gaps.md → Which lane a session actually ran on](./fidelity-gaps.md#which-lane-a-session-actually-ran-on)).
+The lanes disagree about what *delivered* means, so a scenario declares which contract it is testing
+against.
 
 | | `lane: local` (default) | `lane: remote` |
 |---|---|---|
@@ -230,12 +234,12 @@ cloud** / **On your computer**"), with cloud the default for new sessions. They 
 what changes is the contract its assertions are held to.
 
 **Scoped to delivery semantics.** The remote lane's device bridge (`device_bash`, `device_commit_files`,
-and the rest of `internal__remote-devices__*`) is deliberately not modeled: emulating it faithfully would
+and the rest of the `mcp__remote-devices__*` tools) is deliberately not modeled: emulating it faithfully would
 mean real command execution and real writes on the operator's machine on behalf of a simulated session.
 See [fidelity-gaps.md](./fidelity-gaps.md).
 
-**When to reach for it.** Set `lane: remote` to check whether a skill's delivery survives the lane most
-new Cowork sessions get. A skill that delivers by writing into `outputs/` and nothing else will fail
+**When to reach for it.** Set `lane: remote` to check whether a skill's delivery survives the cloud lane,
+where new Pro and Max tasks run from 2026-10-06. A skill that delivers by writing into `outputs/` and nothing else will fail
 there — that is the finding, not a harness bug.
 
 ## Fidelity tiers (`fidelity:`)

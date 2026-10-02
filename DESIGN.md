@@ -45,8 +45,13 @@ agent on the user's own machine, with an **Apple Virtualization.framework microV
 this harness emulates. Where the agent LOOP runs inside that lane is a separate axis, and on the pinned baseline it is
 the host, not the VM: see "Which Cowork? — both are implemented" under
 [§6, Control protocol mapping](#6-control-protocol-mapping) below, which is authoritative over the
-sandbox-centric description here. The **remote** lane runs the agent in an Anthropic-hosted cloud container instead, and is
-the default for new sessions from 2026-07-07 (local stays available, and both are in active use). The lanes differ
+sandbox-centric description here. The **remote** lane runs the agent in an Anthropic-hosted cloud container instead.
+Anthropic [documents the cloud as Cowork's default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview),
+with local execution remaining available for existing desktop deployments, and for Pro and Max plans
+[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new tasks run in
+the cloud from 2026-10-06, with tasks already started staying local. Both lanes are in active use, and no
+setting reliably decides which one a session gets (see
+[docs/fidelity-gaps.md → Which lane a session actually ran on](./docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)). The lanes differ
 in how a file reaches the user, which is what changes skill behaviour: see
 [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) → "File delivery" for the split and
 [docs/scenario.md](./docs/scenario.md)'s `lane:` key for holding a run to either contract. The local lane:

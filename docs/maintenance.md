@@ -275,12 +275,17 @@ committed baseline and say why in that baseline's `$comment`.
    `vm` always mandatory; `manifest` and `suffix` mandatory together once either is recorded — a partial
    entry is itself a hard-fail), then re-run `cowork-harness sync`.
 
-   > **PRECONDITION for any live probe of real Cowork.** Cowork's "Only on this computer" setting
-   > (Settings → Cowork) selects the lane. With it **off** — observed to be the default state on a
-   > current install — a session runs server-side under a server-authored prompt with no
-   > `## Cowork environment` section at all, and you will be diffing a lane this harness does not
-   > model. Turn it on and start a FRESH session before probing. This cost one wasted probe on
-   > 2026-09-05.
+   > **PRECONDITION for any live probe of real Cowork: the probe session must run on the local lane.**
+   > Cowork's "Only on this computer" setting (Settings → Cowork, or Settings → General → Tasks in the
+   > merged interface) does not reliably select it: sessions have run in the cloud with it **on**
+   > (observed 2026-10-02), and for Pro and Max plans Anthropic
+   > [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new
+   > tasks run in the cloud from 2026-10-06. A cloud-lane session runs under a server-authored prompt with
+   > no `## Cowork environment` section at all, and you will be diffing a lane this harness does not
+   > model. Start a FRESH session and confirm its lane before probing — see
+   > [fidelity-gaps.md → Which lane a session actually ran on](./fidelity-gaps.md#which-lane-a-session-actually-ran-on).
+   > If no new session lands on the local lane, the probe cannot be run from that account. Probing the
+   > wrong lane cost one wasted probe on 2026-09-05.
 
    > **Then REPOINT the baseline at the new asset** — `spawn.subagentAppendHostLoop` (and/or
    > `spawn.subagentAppend`) in the freshly written `baselines/desktop-<new>.json`. These pointers are
