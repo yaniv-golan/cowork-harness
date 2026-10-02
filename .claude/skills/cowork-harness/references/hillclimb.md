@@ -52,8 +52,10 @@ with no `prompt:` (a session file) is skipped.
 ## The flags of `run`
 
 `--flow DIR`, `--variant ID` (`baseline` or `v<N>`, N ≥ 1, no leading zero; default `baseline`), `--reps N`
-(default 1), `--concurrency N` (default 4; a decider needs `--concurrency 1`), `--timeout-s N` (default 1800; 0 = none; it bounds
-the whole attempt, the judge included), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
+(default 1), `--concurrency N` (default 4; a decider needs `--concurrency 1`), `--timeout-s N` (default 1800; 0 = none: the agent's bound, the
+scenario's `timeout_ms` lowered to it, a tie going to the runner; no judge starts after it, though one already
+running finishes; reaching it is an `errors.jsonl` `timeout` row, while a shorter `timeout_ms` of the scenario's own
+firing first is a scored `errored_agent` row), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
 `--case ID`, `--skill NAME`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--decider-cmd CMD` or
 `--decider-dir DIR`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
