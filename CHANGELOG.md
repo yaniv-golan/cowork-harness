@@ -225,8 +225,9 @@ All notable changes to this project are documented here. The format is based on
 
 - **Hillclimb rows record the assertion set they were graded under** (`meta.assert_sig`, a hash of the case's
   `assert` and `expect_denied`). A `hillclimb run` resumed after an approved scenario edit warns, naming the rows the
-  old asserts graded and the `hillclimb regrade … --case <id>` that re-evaluates them; `hillclimb check` warns per
-  case whose rows carry more than one, so a comparison over them never silently mixes two graders.
+  old asserts graded and the `hillclimb regrade <target> --flow <dir> --case <id>` that re-evaluates them;
+  `hillclimb check` warns per case whose rows carry more than one, so a comparison over them never silently mixes
+  two graders.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb

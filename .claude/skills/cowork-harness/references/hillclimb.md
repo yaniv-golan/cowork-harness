@@ -62,8 +62,8 @@ the whole attempt, the judge included), `--model ID` and `--judge-model ID` (con
   forever; the scope line names those slots. Raising `--reps` adds reps.
 - **Each row records the assertion set it was graded under** (`meta.assert_sig`, a hash of the case's `assert` and
   `expect_denied`). A pass resumed after an approved scenario edit warns, naming the rows (any variant) the old
-  asserts graded and the `hillclimb regrade … --case <id>` that re-evaluates them; `check` warns per case whose rows
-  carry more than one. A row written before the sig existed is never called stale.
+  asserts graded and the `hillclimb regrade <target> --flow <dir> --case <id>` that re-evaluates them; `check` warns
+  per case whose rows carry more than one. A row written before the sig existed is never called stale.
 - **Each variant runs from a snapshot** of the plugin taken on its first run, so a resumed or appended rep
   measures that variant, not the plugin the loop has since edited. Snapshots live in
   `~/.cowork-harness/hillclimb-snapshots` (`COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` moves them: an absolute path
