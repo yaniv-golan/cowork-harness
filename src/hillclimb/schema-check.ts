@@ -143,8 +143,9 @@ interface Declared {
   perfFields: string[];
   metricsDeclared: boolean;
   splitIds: Map<string, string>;
-  /** harness profile: per scenario metric id, the rows (per variant) written before it was declared. */
-  predates: Map<string, Map<string, number>>;
+  /** harness profile: per scenario metric id, every scored row's line and whether it carries the metric (its sig in
+   *  `meta.metric_sigs`) or lacks it (no sig and no grade key), for the note on the rows that lack it. */
+  predates: Map<string, Array<{ variant: string; line: number; carries: boolean }>>;
 }
 
 class Collector {
@@ -448,6 +449,7 @@ function checkRow(
     const floats = new Set(d.metrics.filter((m) => m.kind === "float").map((m) => m.id));
     const sigs = isObj(r.meta) && isObj(r.meta.metric_sigs) ? r.meta.metric_sigs : {};
     const predated = new Set<string>();
+    const carried = new Set<string>();
     for (const m of d.metrics) {
       const metric = m.id.endsWith("_present") ? m.id.slice(0, -"_present".length) : m.id;
       const absent = !(metric in grade) && !(`${metric}_present` in grade);
@@ -455,6 +457,8 @@ function checkRow(
         predated.add(metric);
         continue;
       }
+      // Carried: its sig, or a grade key for it (a row written before sigs existed that measured it).
+      if (floats.has(metric) && (metric in sigs || !absent)) carried.add(metric);
       // A key whose `_present` companion is 0 was not measured on this row and is OMITTED, never scored 0
       // (a 0 would be a fabricated failure, or a win for a lower-is-better float). Ours, not upstream: the
       // report just shows a blank cell. Applied in both profiles — both are our reading of the contract.
@@ -470,10 +474,10 @@ function checkRow(
         c.error("row.grade", file, `grade.${m.id} is declared binary but is ${JSON.stringify(v)}`, line);
     }
     const variant = file.split("/")[0]!;
-    for (const metric of predated) {
-      const per = d.predates.get(metric) ?? new Map<string, number>();
-      per.set(variant, (per.get(variant) ?? 0) + 1);
-      d.predates.set(metric, per);
+    for (const [metric, carries] of [...[...predated].map((m) => [m, false] as const), ...[...carried].map((m) => [m, true] as const)]) {
+      const at = d.predates.get(metric) ?? [];
+      at.push({ variant, line, carries });
+      d.predates.set(metric, at);
     }
   }
 
@@ -673,16 +677,42 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
       }
   }
 
-  for (const [metric, per] of d.predates) {
-    const n = [...per.values()].reduce((a, b) => a + b, 0);
-    const where = [...per].map(([v, k]) => `${v} ${k}`).join(", ");
-    // `check` reads the flow alone, not the scenarios, so it cannot tell a metric added after these rows from one no
-    // scenario declares any more; it says both (`state-template --flow` names the removed ones).
-    c.note(
-      "row.grade",
-      "_state.json",
-      `${n} rows do not carry metric ${metric} (${where}): added after they were written, or no scenario declares it any more (then remove it from _state.json); its mean covers the rows that carry it only`,
-    );
+  // `check` reads the flow alone, not the scenarios, so where the rows that lack a metric sit among the rows that carry
+  // it (variants in order — baseline, v1, v2, ... — then file order) is all it can go by: before the last one that
+  // carries it, they predate it; after it, no scenario declares it any more; with none carrying it, it cannot tell.
+  const variantOrder = (v: string) => (v === "baseline" ? -1 : /^v\d+$/.test(v) ? Number(v.slice(1)) : Number.MAX_SAFE_INTEGER);
+  for (const [metric, at] of d.predates) {
+    const ordered = [...at].sort((a, b) => variantOrder(a.variant) - variantOrder(b.variant) || a.line - b.line);
+    const last = ordered.map((x) => x.carries).lastIndexOf(true);
+    const lacking = ordered.map((x, i) => ({ ...x, i })).filter((x) => !x.carries);
+    if (!lacking.length) continue;
+    const head = (rows: typeof lacking) => {
+      const per = new Map<string, number>();
+      for (const x of rows) per.set(x.variant, (per.get(x.variant) ?? 0) + 1);
+      return `${rows.length} rows do not carry metric ${metric} (${[...per].map(([v, k]) => `${v} ${k}`).join(", ")})`;
+    };
+    if (last < 0) {
+      c.note(
+        "row.grade",
+        "_state.json",
+        `${head(lacking)} and no row does: no scenario declares it any more (then remove it from _state.json), or it was declared after every row was written (\`hillclimb regrade\` re-measures them)`,
+      );
+      continue;
+    }
+    const before = lacking.filter((x) => x.i < last);
+    const after = lacking.filter((x) => x.i > last);
+    if (before.length)
+      c.note(
+        "row.grade",
+        "_state.json",
+        `${head(before)}: written before a row that does, so they predate it (or a re-measure listed them) — \`hillclimb regrade\` re-measures them; its mean covers the rows that carry it only`,
+      );
+    if (after.length)
+      c.note(
+        "row.grade",
+        "_state.json",
+        `${head(after)}: written after the last row that does, so no scenario declares it since ${after[0]!.variant} — remove it from _state.json (its mean covers the rows that carry it only)`,
+      );
   }
 
   for (const [id, sp] of d.splitIds)

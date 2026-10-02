@@ -314,7 +314,10 @@ describe("schema-check: row fields", () => {
     };
     const predateNotes = (r: SchemaCheckReport) => r.findings.filter((f) => /do not carry metric/.test(f.message));
 
-    it("a row with no metric_sigs predates it: no error, ONE aggregated note per metric", () => {
+    // The note used to say "added after they were written, or no scenario declares it any more" for every lacking row.
+    // Deliberately split by where the lacking rows sit among the rows that carry the metric (variants in order —
+    // baseline, v1, v2, ... — then file order): no row carries it, they come before the last one that does, or after it.
+    it("no row carries it: no error, ONE aggregated note per metric, saying no row carries it", () => {
       const s = declared();
       const n = allRows(s).length;
       const r = check(s);
@@ -322,12 +325,50 @@ describe("schema-check: row fields", () => {
       expect(predateNotes(r)).toEqual([
         expect.objectContaining({
           level: "note",
-          message: expect.stringMatching(
-            new RegExp(
-              `^${n} rows do not carry metric words \\(.*\\): added after they were written, or no scenario declares it any more \\(then remove it from _state\\.json\\); its mean covers the rows that carry it only$`,
-            ),
-          ),
+          message: `${n} rows do not carry metric words (baseline 6, v1 6) and no row does: no scenario declares it any more (then remove it from _state.json), or it was declared after every row was written (\`hillclimb regrade\` re-measures them)`,
         }),
+      ]);
+    });
+
+    const carry = (r: Row) => {
+      (r.meta as Row).metric_sigs = { words: "0123456789abcdef" };
+      Object.assign(r.grade as Row, { words_present: 1, words: 40 });
+    };
+    /** The same snapshot with its variants listed v1 first: the order is the variants', never the listing's. */
+    const v1First = (s: FlowSnapshot): FlowSnapshot => ({ ...s, variants: { v1: s.variants.v1!, baseline: s.variants.baseline! } });
+
+    it("rows before the last row that carries it predate it", () => {
+      const s = declared();
+      const rs = rows(s, "v1");
+      rs.forEach(carry);
+      setRows(s, rs, "v1");
+      for (const snap of [s, v1First(s)])
+        expect(predateNotes(check(snap)).map((f) => f.message)).toEqual([
+          "6 rows do not carry metric words (baseline 6): written before a row that does, so they predate it (or a re-measure listed them) — `hillclimb regrade` re-measures them; its mean covers the rows that carry it only",
+        ]);
+    });
+
+    it("rows after the last row that carries it are a metric no scenario declares any more, since the first of them", () => {
+      const s = declared();
+      const rs = rows(s, "baseline");
+      rs.forEach(carry);
+      setRows(s, rs, "baseline");
+      for (const snap of [s, v1First(s)])
+        expect(predateNotes(check(snap)).map((f) => f.message)).toEqual([
+          "6 rows do not carry metric words (v1 6): written after the last row that does, so no scenario declares it since v1 — remove it from _state.json (its mean covers the rows that carry it only)",
+        ]);
+    });
+
+    it("a carrier in the middle splits the lacking rows: those before it predate it, those after are removed", () => {
+      const s = declared();
+      const rs = rows(s, "baseline");
+      carry(rs[2]!);
+      setRows(s, rs, "baseline");
+      expect(predateNotes(check(s)).map((f) => f.message)).toEqual([
+        expect.stringMatching(/^2 rows do not carry metric words \(baseline 2\): written before a row that does/),
+        expect.stringMatching(
+          /^9 rows do not carry metric words \(baseline 3, v1 6\): written after the last row that does, so no scenario declares it since baseline/,
+        ),
       ]);
     });
 
