@@ -415,7 +415,9 @@ export function cmdRunsGc(args: string[]): void {
     // mkdir and its status.json write, a few synchronous calls apart — has no guard.
     // Only dirs named like a run id are candidates (see LOCAL_RUN_ID_RE / PINNED_RUN_ID_RE). Dotfiles are not
     // counted (.DS_Store and the like).
-    const dirs = readdirSync(scenarioDir).filter((name) => isDir(join(scenarioDir, name)));
+    const dirs = readdirSync(scenarioDir)
+      .filter((name) => isDir(join(scenarioDir, name)))
+      .sort();
     for (const name of dirs) {
       if (name.startsWith(".") || LOCAL_RUN_ID_RE.test(name) || PINNED_RUN_ID_RE.test(name)) continue;
       if (looksLikeRunDir(join(scenarioDir, name))) oddRuns.push(join(scenarioDir, name));
