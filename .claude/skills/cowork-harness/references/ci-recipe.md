@@ -467,7 +467,7 @@ in `result.json` and in the stdout envelope, by construction). Each entry is
 - **`assertion`** — one of *your* `assert:` items failed; `assertion` names its key (`file_exists`,
   `semantic_matches`, …).
 - **`guard`** — a signal you didn't author: `stalled`, `permissive_auto_allow`, `missing_capability`, a
-  host-path leak, an `outputs/` delete, an infra or transport error, an unanswered gate.
+  host-path leak, an `outputs/` delete on a baseline where outputs is delete-denied, an infra or transport error, an unanswered gate.
 - **`staleness`** — on `replay --strict` / `--assert-from` / `--reassert`, skill or baseline drift,
   which those modes escalate to a hard failure on purpose (frozen events must not green an edited
   assert against a skill whose current source produces something else).

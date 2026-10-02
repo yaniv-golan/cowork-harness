@@ -305,7 +305,10 @@ Recognize these before "fixing" a non-bug:
   expansion would exceed the scanner's work budget (about a hundred distinct variables in one 10 KB line) is
   not expanded — every mount it names literally counts as deleted in. Waive any of these with
   `allow_outputs_delete`. The warn is raised even when `no_delete_in_outputs` is authored (the assertion
-  passes; this warn is how the hit stays visible in text output).
+  passes; this warn is how the hit stays visible in text output). On a baseline recording outputs as `rwd`
+  (Desktop 2.16120.0+, including `latest`) none of `outputs_delete`, `outputs_delete_unconfirmed` and
+  `outputs_diff_unavailable` fires unless `no_delete_in_outputs` is authored, and the roster shows
+  `outputs-delete —` (not applicable; the evidence stays in `scan` / `fsDiff`).
 - **`outputs_diff_unavailable`** (`WARN`) — the outputs filesystem diff could not verify this turn and the
   text scan saw nothing, so a delete by a script file or a non-bash tool would have gone unseen.
 - **`scan_unavailable`** (`WARN`) — emitted only on the live lane: `events.jsonl` was missing/corrupt, so

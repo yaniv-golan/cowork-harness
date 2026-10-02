@@ -70,20 +70,25 @@ authorable). Reach for this list when debugging a run's behavior, that one while
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.
 
 8. **Read-only mounts are enforced; delete-deny is a HARNESS gap — production DOES enforce it.**
-   `mode:r` mounts get a real `:ro` bind (a write fails in-guest). But `rw` vs `rwd`
-   (write-but-no-delete on `outputs/` / connected folders) is *not* mount-enforced **in the harness** —
-   `rm` succeeds and is only caught post-hoc by `no_delete_in_outputs`. **Real Cowork enforces it live:**
-   outputs is a FUSE mount, and `unlink`/`rmdir` fail `Operation not permitted`; a skill must request
-   approval via `allow_cowork_file_delete` (which re-mounts the folder `rwd` mid-session) to delete.
-   **Only unlinking is denied.** Emptying a file in place — `truncate -s 0`, `> file`, `shred` without
-   `-u` — and renaming *within* outputs both SUCCEED in production, so the harness does not flag them
-   either. Renaming a file OUT of outputs fails (`EXDEV`, then `EPERM` on the copy-then-unlink
-   fallback), so that stays a delete. Two consequences: a skill should not stage disposable scratch
-   under `outputs/` (in production, cleanup there costs an approval prompt), and a skill's
+   (On `rw` mounts — see below for which mounts those are.) `mode:r` mounts get a real `:ro` bind (a write fails in-guest). But `rw` vs `rwd`
+   (write-but-no-delete) is *not* mount-enforced **in the harness** — `rm` succeeds and is only caught
+   post-hoc. **Real Cowork enforces it live on a `rw` mount:** a FUSE mount where `unlink`/`rmdir` fail
+   `Operation not permitted`; a skill must request approval via `allow_cowork_file_delete` (which
+   re-mounts the folder `rwd` mid-session) to delete. **Which mounts are `rw` depends on the release:** a
+   connected folder always is until approved; `outputs/` was `rw` before Desktop 2.16120.0, and from
+   2.16120.0 a normal session mounts it `rwd`, so `rm`, `mv` and overwrite-by-rename there succeed in
+   production (measured on 2.19675.0, no permission card). The harness's default verdict follows the
+   baseline's recorded outputs mode: on `latest` an outputs delete passes unless the scenario asserts
+   `no_delete_in_outputs: true`, which checks on every baseline.
+   **On a `rw` mount only unlinking is denied** (probed 2026-08-04, when outputs was still `rw`). Emptying
+   a file in place — `truncate -s 0`, `> file`, `shred` without `-u` — and renaming *within* the mount both
+   SUCCEED, so the harness does not flag them. Renaming a file OUT of a `rw` outputs mount failed
+   (`EXDEV`, then `EPERM` on the copy-then-unlink fallback), so that stays a delete; on an `rwd` outputs
+   mount the fallback's unlink should succeed, but that is not probed. Consequences on a `rw` mount: a
+   skill should not stage disposable scratch there (cleanup costs an approval prompt), and a skill's
    "catch-EPERM-then-request-approval" branch cannot be exercised at any harness tier (the `rm` just
-   succeeds here). Do not read this gotcha as "delete-deny may not be real in production" — it is real.
-   If a scenario's deletion IS intended, assert `allow_outputs_delete: true` rather than dropping
-   `no_delete_in_outputs` — omitting it does not permit anything.
+   succeeds here). On an older `rw` baseline, if a scenario's deletion IS intended, assert
+   `allow_outputs_delete: true` (a no-op on `rwd` baselines) rather than dropping `no_delete_in_outputs`.
 
 9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could
    leak. Put it at a working-dir or install root (token resolution: env > `--dotenv` > `./.env` >
@@ -293,7 +298,7 @@ authorable). Reach for this list when debugging a run's behavior, that one while
 
 26. **A `skill`-lane `PASS` does not mean the skill ran, or that the run was the one you wanted.** *Why:*
     an open-ended `skill` run has no `assert:` block, so its verdict reports only that **no guard fired**
-    (no error, stall, host-path leak, `outputs/` delete, permissive auto-allow or capability gap). On
+    (no error, stall, host-path leak, `outputs/` delete where outputs is delete-denied, permissive auto-allow or capability gap). On
     `run` the same word additionally means *your assertions held*; on `skill --repeat N`, `PASS — N/N`
     means N runs cleared the guards — it says nothing about which model served them, whether the skill
     was invoked, or whether they were the ablated arm. *Fix:* read the three fields the record already

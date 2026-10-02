@@ -132,8 +132,13 @@ assert:
 ```text
 ✓ success [container] · 7 tools · 24.3s · $0.18
    [provenance] model=claude-sonnet-5  skill=offered,invoked  ablated=false
-   guards: capability-use ✓  permissive-auto-allow ✓  host-path ✓  outputs-delete ✓
+   guards: capability-use ✓  permissive-auto-allow ✓  host-path ✓  outputs-delete —
 ```
+
+`✓` means a guard ran and found nothing, `✗` that it fired, `?` that it could not conclude, and `—` that it does
+not apply. `outputs-delete —` is what a live run on `latest` shows: from Desktop 2.16120.0 Cowork lets a skill delete
+in `outputs/`, so that check is off unless the scenario asserts `no_delete_in_outputs`. Its evidence is still in
+`result.json`.
 
 That `skill=offered,invoked` is the part a transcript cannot give you: whether the skill was *selected*,
 not just whether the answer looked right. `offered,NOT-invoked` on a green run means the model solved
