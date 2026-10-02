@@ -142,7 +142,8 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
  * declared isolation guarantees were not actually met:
  *   - a cowork-parity permissive auto-allow real Cowork would BLOCK (fail unless the scenario opts in
  *     via `allow_permissive_auto_allow`),
- *   - a recorded unauthorized delete in mnt/outputs, or a host-path leak — UNLESS the scenario already
+ *   - a recorded unauthorized delete in mnt/outputs (on a baseline that records outputs `rw`; from Desktop
+ *     2.16120.0 a normal session may delete there), or a host-path leak — UNLESS the scenario already
  *     authored the matching assertion (`no_delete_in_outputs` / `transcript_no_host_path`), in which
  *     case that assertion owns the verdict and we don't double-count.
  *

@@ -844,15 +844,15 @@ export const Assertion = z.strictObject({
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
   // `false` reads as "permit deletes" but would behave identically to `true` (a silent no-effect), so it is
-  // rejected. OMITTING the key does NOT permit deletes either: a detected delete still fails the run via the
-  // `outputs_delete` verdict signal, which fires precisely BECAUSE the key was not authored. Authoring it
-  // makes the failure an explicit assertion instead of a signal. To accept a delete, use
-  // `allow_outputs_delete: true`.
+  // rejected. What OMITTING it means depends on the baseline: where outputs is recorded `rw` (Desktop before
+  // 2.16120.0) a detected delete still fails via the `outputs_delete` signal, which fires BECAUSE the key was
+  // not authored (accept one with `allow_outputs_delete: true`); where it is `rwd` (2.16120.0+, deletes allowed
+  // in a normal session) an omitted key means no check. Authoring it checks on every baseline.
   no_delete_in_outputs: z
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, a delete in command/call position has an outputs path as its own operand, or the diff could not verify; a hit resting only on inference with a clean diff passes (the outputs_delete_unconfirmed warn is still raised). Only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
+      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, a delete in command/call position has an outputs path as its own operand, or the diff could not verify; a hit resting only on inference with a clean diff passes (the outputs_delete_unconfirmed warn is still raised). Only `true` is valid (writing `false` is a rejected footgun). Checks on every baseline. Omitting it: on a baseline recording outputs `rw` (Desktop before 2.16120.0) a detected delete still fails via the outputs_delete signal (allow_outputs_delete accepts one); on `rwd` (2.16120.0+, where Cowork allows deletes in outputs) nothing checks outputs deletes",
     ),
   no_unexpected_files: z
     .array(z.string().min(1))
@@ -1041,16 +1041,16 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. WAIVES the harness's post-hoc detection; it does NOT model production's allow_cowork_file_delete approval handshake, so a skill relying on the live EPERM still behaves differently here. Mutually exclusive with no_delete_in_outputs",
+      "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. Has an effect only on a baseline recording outputs `rw` (Desktop before 2.16120.0); on `rwd` (2.16120.0+) an outputs delete does not fail by default, so it is an accepted no-op. WAIVES the harness's post-hoc detection; it does NOT model a live EPERM. Mutually exclusive with no_delete_in_outputs",
     ),
-  // Production denies unlink/rmdir on EVERY delete-denied (`rw`) mount, not just outputs, and approval is
-  // strictly per-mount. `no_delete_in_outputs` covers only outputs and keeps its exact meaning; this is
-  // the mount-wide form. Deletes in a mount named by `allow_delete_in` are waived (see below).
+  // Production denies unlink/rmdir on EVERY delete-denied (`rw`) connected folder, and approval is strictly
+  // per-mount. `no_delete_in_outputs` covers only outputs; this is the mount-wide form, and it covers outputs
+  // on every baseline too (an authored assertion is never narrowed by a baseline change). Deletes in a mount named by `allow_delete_in` are waived (see below).
   no_delete_in_mounts: z
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete is DETECTED in any delete-denied mount (outputs + every `rw` connected folder) that is not waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on every such mount until per-mount approval",
+      "fails if a delete is DETECTED in outputs (on every baseline, including those where Cowork allows it) or in any `rw` connected folder, unless that mount is waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on a `rw` connected folder until per-mount approval",
     ),
   // A WAIVER of the harness's post-hoc detection for the named mounts, mirroring allow_outputs_delete
   // exactly: detection still RUNS and the hits stay in result.json for forensics — only the verdict is

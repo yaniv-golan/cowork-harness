@@ -3385,8 +3385,9 @@ function mountMatchers(name: string): MountMatchers {
   return m;
 }
 
-/** Default safe-staging prefixes, always active. Real Cowork denies an outputs-delete STRUCTURALLY at the
- *  resolved target's mount — outputs is a FUSE mount that fails `unlink`/`rmdir` with EPERM — a delete whose target
+/** Default safe-staging prefixes, always active. Where Cowork denies an outputs delete (an `rw` outputs mount:
+ *  Desktop before 2.16120.0, or a Dispatch bridge session), it does so STRUCTURALLY at the resolved target's
+ *  mount — a FUSE mount that fails `unlink`/`rmdir` with EPERM — so a delete whose target
  *  provably lands under `/tmp` (or the literal, unexpanded `$TMPDIR`/`${TMPDIR}` idiom) is genuinely never
  *  an outputs delete in production, so treating it as scratch here is MORE faithful, not less safe. (Prior
  *  rationale for leaving this opt-in — "`/tmp` is NOT assumed scratch" — predated that binary finding.) */
@@ -3724,8 +3725,8 @@ function mvDeletesOutputs(stmt: string, mm: MountMatchers): boolean {
  * exported so the rule is directly unit-testable. RESIDUAL GAP: a delete via a script file / renamed binary
  * / non-bash tool still evades this post-hoc scan — real enforcement is the deferred FUSE/MCP sub-project.
  * Also out of scope: the harness has no counterpart to production's `allow_cowork_file_delete` escalation
- * tool (a sub-agent that hits a real outputs-delete EPERM should call that, not silently fail) — this scan
- * only feeds the `no_delete_in_outputs` assertion, it never blocks execution.
+ * tool (a sub-agent that hits a real delete EPERM should call that, not silently fail) — this scan only feeds
+ * the outputs-delete verdict and assertions, it never blocks execution.
  */
 /** The SECOND outputs-delete detector: a pre/post path diff, independent of the command scanner.
  *  Any path the pre-run manifest recorded under `outputs/` that is absent from the post-run walk is
