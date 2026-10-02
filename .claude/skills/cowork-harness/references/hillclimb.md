@@ -230,7 +230,8 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   one aside); one whose kept
   work dir is gone while its case declares a metric; one with an assert the recorded `workspace_fixture` would
   satisfy on its own (`verify-run`'s refusal: state `authored:`); in a fill, one whose assert list or judged
-  assert does not line up with the scenario or whose deterministic outcome changed (run a default `regrade` first); one whose
+  assert does not line up with the scenario or whose deterministic outcome changed (run a default `regrade` first;
+  an agent-failed row aside); one whose
   re-grade is judge-invalid; in a fill one whose kept outcome was judged against a reference that has changed
   since; and an open `judge_invalid` slot.
 
