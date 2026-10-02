@@ -601,7 +601,7 @@ there are three families:
   `dryRun: true` with the estimate at `plan.cost`, where `eval --dry-run` puts it), `hillclimb check` (`reading`, `disclaimer`, `profile`, `findings`, `errors`, `notes`, `warnings`),
   `hillclimb state-template` (`state`, `metrics_md`, and with `--flow` `metrics_md_file`; `notes` when a column was left
   undeclared, experimental), `hillclimb freeze-ref` (payload experimental, §12: `frozen`, `added`, `exists`, `refused`,
-  `exitCode`), `hillclimb regrade` (payload experimental, §12: `flow`, `variants` (each `{variant, rewritten, listed, reevaluated, remeasured, regradeFiles, backup?}`), `exitCode`; so are `<variant>/regrade.md`, the `regrade-<sha16>.bak.jsonl` backups and the rows' `meta.regrade_*` and `meta.assert_sig` keys), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
+  `exitCode`), `hillclimb regrade` (payload experimental, §12: `flow`, `variants` (each `{variant, rewritten, listed, reevaluated, remeasured, agentFailed, regradeFiles, backup?}`), `exitCode`; so are `<variant>/regrade.md`, the `regrade-<sha16>.bak.jsonl` backups and the rows' `meta.regrade_*` and `meta.assert_sig` keys), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
   `answer` (`gate`, `answers`), `fixture export` (exit `0` written, `2` usage or refusal; payload experimental,
   §12: `message`, `written`, `skipped`, `refused` (`[]`), `notes`, `bytes`, `outputsDir`, `partial`, `result`; a
   refusal is the error envelope, its message in `error.message`, carrying `refused[]` and whichever of the other

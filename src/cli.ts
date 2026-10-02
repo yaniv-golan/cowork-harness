@@ -272,7 +272,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   hillclimb state-template <scenario.yaml | dir/> [--flow DIR]   print a _state.json skeleton for the loop to save;
                                with --flow, also write <flow>/metrics.md. Pass the same --flow to every hillclimb command
   hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR]   freeze a variant's pairwise references (win_<vN>)
-  hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--fill-refs: add win_<vN>)
+  hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--rejudge: every judged assert; --fill-refs: add win_<vN>)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
