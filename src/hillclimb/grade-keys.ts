@@ -238,12 +238,30 @@ export function canonicalJson(v: unknown): string {
   return JSON.stringify(sort(v)) ?? "null";
 }
 
+/** An assertion as hillclimb identifies it: `semantic_pairwise.refs` left out. `parseScenarioFile` rewrites refs to
+ *  host-absolute paths, and hillclimb ignores them (a flow's references are its own), so a checkout's location must
+ *  not change an assertion's identity. Any other assert is returned as it is, so its canonical JSON is unchanged. */
+function withoutRefs(a: unknown): unknown {
+  const sp = (a as { semantic_pairwise?: unknown } | null)?.semantic_pairwise;
+  if (sp === null || typeof sp !== "object" || !("refs" in sp)) return a;
+  const { refs: _refs, ...rest } = sp as Record<string, unknown>;
+  void _refs;
+  return { ...(a as object), semantic_pairwise: rest };
+}
+
+/** Two assertions are the same assertion when their identities are equal: the canonical JSON (key order never
+ *  changes it) of the assertion as written, `semantic_pairwise.refs` left out. Every judge input an assert carries —
+ *  its rubric, claims, judge model, evidence scope (`include_subagent_text`, `evidence_files`, `include_fork_results`)
+ *  and so its pairwise compose key — is part of it. */
+export const assertIdentity = (a: unknown): string => canonicalJson(withoutRefs(a));
+
 /** The assertion set a row was graded under, stamped on every scored row (`meta.assert_sig`): the first 16 hex chars
- *  of the sha256 of the canonical `{assert, expect_denied}` — key order never changes it. Rows of one case carrying two
- *  sigs were graded by two graders; `hillclimb regrade` brings them current. */
+ *  of the sha256 of the canonical `{assert, expect_denied}` — key order never changes it, and neither does where the
+ *  checkout lives (`semantic_pairwise.refs` is left out, as in `assertIdentity`). Rows of one case carrying two sigs
+ *  were graded by two graders; `hillclimb regrade` brings them current. */
 export const assertSig = (s: { assert: readonly unknown[]; expect_denied?: readonly string[] }): string =>
   createHash("sha256")
-    .update(canonicalJson({ assert: s.assert, expect_denied: s.expect_denied ?? [] }))
+    .update(canonicalJson({ assert: s.assert.map(withoutRefs), expect_denied: s.expect_denied ?? [] }))
     .digest("hex")
     .slice(0, 16);
 
