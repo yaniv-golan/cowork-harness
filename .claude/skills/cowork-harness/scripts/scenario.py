@@ -31,6 +31,7 @@ lint flags (see references/scenario-schema.md for the why of each):
                                `on_unanswered: agent` → `llm` rename hint
   E  authored `replay_protocol_fidelity` assertion   (replay-synthesized only)
   E  `assertions:` instead of `assert:`              (block ignored → every check no-ops)
+  E  `hook-output-control-char` a control char in a hook_output_* text/matches (YAML `\\b`; run refuses it)
   E  a presence assert + its absence sibling            (unsatisfiable; run/skill/record refuse it:
                                                        questions_count_max:0 vs gate presence,
                                                        no_hook_blocked vs hook_blocked,
@@ -146,6 +147,8 @@ CONTENT_KEYS = {
     "compaction_occurred",
     "hook_event_fired",
     "hook_event_blocked",
+    "hook_output_contains",
+    "hook_output_not_contains",
     "all_tasks_completed",
     "task_count_min",
     "task_status",
@@ -399,6 +402,10 @@ _EMBEDDED_ENUMS = {
     "assert.semantic_pairwise.order": ["random", "both"],
     "assert.hook_event_fired": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_event_blocked": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_output_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_output_contains.stream": ["stdout", "stderr", "any"],
+    "assert.hook_output_not_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_output_not_contains.stream": ["stdout", "stderr", "any"],
 }
 
 
@@ -1680,6 +1687,28 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
         # Report EVERY contradictory group, not just the first — a scenario can carry more than one.
         if hits:
             clauses.append(f"{absence_label} alongside {' and '.join(hits)} ({why})")
+    # Value-level, so not a group above (mirrors hookOutputContradictions in src/run/execute.ts): the same event
+    # and needle in hook_output_not_contains and hook_output_contains, where the negative's stream covers the
+    # positive's (equal, or `any`). `contains: any` + `not_contains: stderr` is satisfiable — not flagged.
+    for n in _assert_values(items, "hook_output_not_contains"):
+        for p in _assert_values(items, "hook_output_contains"):
+            if not isinstance(n, dict) or not isinstance(p, dict):
+                continue
+            n_stream = n.get("stream", "any")
+            p_stream = p.get("stream", "any")
+            # Only str needles compare: PyYAML (YAML 1.1) reads `yes` / `on` as True where the harness's loader keeps
+            # the strings, so `text: yes` and `text: on` would compare equal here and not there.
+            same_needle = any(
+                isinstance(n.get(f), str) and isinstance(p.get(f), str) and n.get(f) == p.get(f) for f in ("text", "matches")
+            )
+            if n.get("event") != p.get("event") or not same_needle or not (n_stream == "any" or n_stream == p_stream):
+                continue
+            needle = f"text {json.dumps(n['text'])}" if "text" in n else f"matches {json.dumps(n['matches'])}"
+            clauses.append(
+                f"`hook_output_not_contains` alongside `hook_output_contains` for {n.get('event')} {needle} "
+                f"(stream {n_stream} / {p_stream}) (both read the same hook_response frames — the output "
+                f"`hook_output_contains` requires is the output `hook_output_not_contains` requires not to exist)"
+            )
     if clauses:
         findings.append(
             Finding(
@@ -1694,6 +1723,26 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 path,
             )
         )
+    # E: a control character in a hook_output_* needle. The harness's loader refuses it (src/types.ts, CONTROL_CHAR):
+    # it is almost always a YAML double-quoted escape (`"\bfailed\b"` loads a backspace), and a needle no hook
+    # prints makes the negative key pass silently. Mirrored so this linter rejects what `run` rejects.
+    for key in ("hook_output_contains", "hook_output_not_contains"):
+        for v in _assert_values(items, key):
+            if not isinstance(v, dict):
+                continue
+            for f in ("text", "matches"):
+                s = v.get(f)
+                if isinstance(s, str) and _HOOK_NEEDLE_CONTROL_CHAR.search(s):
+                    findings.append(
+                        Finding(
+                            "ERROR",
+                            "hook-output-control-char",
+                            f"`{key}.{f}` {json.dumps(s)} contains a control character — in a double-quoted YAML "
+                            f"string `\\b` is a backspace, not a word boundary. The harness refuses this scenario at load.",
+                            "Single-quote the value (e.g. '\\bfailed open\\b').",
+                            path,
+                        )
+                    )
 
     # W: mixed-class assert item → the live-only half is dropped on replay (manifest-backed keys are NOT)
     for idx, item in enumerate(items):
@@ -1838,6 +1887,9 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
 
     return findings
 
+
+# The same class as the harness's CONTROL_CHAR (src/types.ts): tab, newline and carriage return are allowed.
+_HOOK_NEEDLE_CONTROL_CHAR = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 _DQ_REGEX_LINE = re.compile(
     r'^\s*-?\s*(' + "|".join(sorted(REGEX_KEYS)) + r')\s*:\s*"([^"]*\\[^"]*)"'
@@ -2022,6 +2074,7 @@ LINT_RULES = {
     "fidelity-missing": "ERROR",
     "file-absent-contradiction": "ERROR",
     "gate-needs-controlout": "INFO",
+    "hook-output-control-char": "ERROR",
     "host-path-assert-cowork": "WARN",
     "host-path-assert-tier": "ERROR",
     "lane-remote-incompatible-key": "ERROR",
@@ -2365,7 +2418,8 @@ def _lint_hook_events(path):
                 "INFO", "hook-event-not-served",
                 f"`{name}` {fires} — but cowork-harness "
                 f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. "
-                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` grade it from the agent's own "
+                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` (and `hook_output_*` for what it "
+                f"printed) grade it from the agent's own "
                 f"hook_response frames (the harness passes --include-hook-events because this plugin declares "
                 f"hooks); but if real Cowork installs a `{name}` hook of its own, the harness does not reproduce "
                 f"it, so anything driven by that is absent here. (Cowork installs hooks of its own for "

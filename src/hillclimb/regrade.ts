@@ -28,7 +28,7 @@ import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
 import { lexists, normalizeRootArg, NoFollowRoot } from "./fs.js";
-import { gateDecision, harnessDigest } from "./gate.js";
+import { approvedHarnessSkill, flowHarnessDigest, gateDecision } from "./gate.js";
 import { flowHasPairwise, type MetricDecl } from "./grade-keys.js";
 import { discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
@@ -437,11 +437,16 @@ async function regradeFlowInner(
   // The harness gate, exactly as `run` applies it: a rubric fix is a gated scenario edit.
   const state = readStateIfPresent(flowArg, deps.cwd);
   const baselineIds = [...new Set(all.map((c) => prep.baseline(c).appVersion))].sort();
-  const digest = harnessDigest({
+  // Hashed under the `--skill` selection the flow was approved with: regrade never changes what skill_invoked tracks.
+  const approvedSkill = approvedHarnessSkill(state);
+  const digest = flowHarnessDigest({
     cwd: deps.cwd,
-    listed: Array.isArray(state.harness_paths) ? state.harness_paths.map(String) : [],
+    state,
     derived: prep.derivedPaths(all),
-    virtual: { ...prep.derivedValues(all), "cowork-harness-version": deps.harnessVersion ?? pkgVersion(), baseline: baselineIds.join(",") },
+    derivedValues: prep.derivedValues(all),
+    harnessVersion: deps.harnessVersion ?? pkgVersion(),
+    baselineId: baselineIds.join(","),
+    ...(approvedSkill !== undefined ? { skill: approvedSkill } : {}),
   });
   const decision = gateDecision(state, digest.sha, args.approveHarness);
   if (decision.kind === "absent")
@@ -636,7 +641,7 @@ async function regradeFlowInner(
       );
     // Every refusal is decided: record the approval now, so a refused regrade never records one.
     if (decision.kind === "approve") {
-      writers.get(variants[0]!)!.approveHarness(digest.sha);
+      writers.get(variants[0]!)!.approveHarness(digest.sha, approvedSkill);
       say(
         `harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${join(flowArg, "_state.json")}`,
       );

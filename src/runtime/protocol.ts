@@ -73,6 +73,26 @@ export function managedConfigMode(env: NodeJS.ProcessEnv): boolean {
   return !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN);
 }
 
+/** The config dir the L0 agent will read, and whether it is the OPERATOR's real one (so their installed plugins,
+ *  skills, hooks and MCP servers are live alongside the thing under test). THE single derivation: spawnProtocol
+ *  uses it to raise the contamination signal, and a pre-spawn warning asks it the same question rather than
+ *  re-deriving the answer. */
+export function protocolConfigDirs(
+  configDir: string,
+  useManagedConfig: boolean,
+): { agentConfigDir: string; operatorConfigDir: string; readsOperatorConfig: boolean } {
+  const operatorConfigDir = realpathIfPossible(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"));
+  const agentConfigDir = realpathIfPossible(useManagedConfig ? configDir : (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")));
+  return { agentConfigDir, operatorConfigDir, readsOperatorConfig: agentConfigDir === operatorConfigDir };
+}
+
+/** Does an L0 agent spawned from this plan read the operator's real config dir? Pre-spawn form of the check
+ *  spawnProtocol makes (same env construction, same comparison). Throws as managedConfigMode does on a bad
+ *  COWORK_MANAGED_CONFIG. */
+export function protocolReadsOperatorConfig(plan: LaunchPlan): boolean {
+  return protocolConfigDirs(plan.configDir, managedConfigMode(buildProtocolEnv(plan))).readsOperatorConfig;
+}
+
 /** realpath when the path exists, else the path itself — a config dir that does not exist yet is still
  *  comparable by spelling, and a symlinked HOME (macOS /tmp, /var) must not read as a different dir. */
 function realpathIfPossible(p: string): string {
@@ -196,6 +216,10 @@ export function spawnProtocol(
     // The host `claude` CLI accepts --append-system-prompt just like the staged binary does, so L0
     // records can carry Cowork framing instead of running with no system prompt extension at all.
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
+    // Hook lifecycle frames, on the same rule as the other tiers (see baseAgentArgs): only when a staged plugin
+    // declares runnable hooks. Without it the host CLI streams SessionStart/Setup frames only, and every other
+    // event's hook_event_* / hook_output_* assertion read "never fired" here.
+    ...(plan.includeHookEvents ? ["--include-hook-events"] : []),
   ];
 
   // The L0 divergence is no longer about DELIVERY — --plugin-dir is passed above, so a declared plugin
@@ -211,11 +235,7 @@ export function spawnProtocol(
   // `useManagedConfig` is NOT the same as "sealed": a pinned `plugins.config_dir` pointing at the real
   // config dir reaches host discovery with that boolean TRUE. So test the dir the agent will actually
   // read, not the branch that chose it.
-  const operatorConfigDir = realpathIfPossible(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"));
-  const agentConfigDir = realpathIfPossible(
-    useManagedConfig ? plan.configDir : (process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")),
-  );
-  const l0HostConfigContamination = agentConfigDir === operatorConfigDir;
+  const { agentConfigDir, readsOperatorConfig: l0HostConfigContamination } = protocolConfigDirs(plan.configDir, useManagedConfig);
   if (l0HostConfigContamination) {
     warn(
       `::warning:: ${scenario.name}: L0 (protocol) is reading your REAL config dir (${agentConfigDir}), so your ` +

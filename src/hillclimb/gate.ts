@@ -25,11 +25,15 @@ export interface DigestInput {
   derived: readonly string[];
   /** Name → value entries standing in for the runner's own source. */
   virtual: Readonly<Record<string, string>>;
+  /** Selections that define the measurement without being files (`skill:<name>` under `--skill`), hashed after
+   *  the virtual entries as `tag\0`, in order. None ⇒ nothing is hashed, so the sha is the one recorded before
+   *  tags existed. */
+  tags?: readonly string[];
 }
 
 export interface Digest {
   sha: string;
-  /** What was hashed, in order: cwd-relative paths, then `<name>` virtual entries. */
+  /** What was hashed, in order: cwd-relative paths, then `<name>` virtual entries, then the tags as written. */
   hashed: string[];
   skipped: Array<{ path: string; code: string }>;
   lockfiles: string[];
@@ -61,8 +65,43 @@ export function harnessDigest(input: DigestInput): Digest {
     h.update(name).update("\0").update(input.virtual[k]).update("\0");
     hashed.push(name);
   }
+  for (const t of input.tags ?? []) {
+    h.update(t).update("\0");
+    hashed.push(t);
+  }
   return { sha: h.digest("hex"), hashed, skipped, lockfiles };
 }
+
+/** What a flow's harness sha covers, whichever command computes it (`run`, `regrade`): one function, so the two can
+ *  never hash different inputs for one flow. */
+export interface FlowDigestInput {
+  cwd: string;
+  /** The flow's `_state.json` (its `harness_paths` are hashed when present). */
+  state: Readonly<Record<string, unknown>>;
+  /** Every scenario the positional resolves to, with their session files, uploads and fixtures. */
+  derived: readonly string[];
+  /** Name → value signatures of the derived inputs that are not plain files (a fixture's tree). */
+  derivedValues?: Readonly<Record<string, string>>;
+  harnessVersion: string;
+  /** The platform baselines, joined. */
+  baselineId: string;
+  /** The `--skill` selection (`run`), or the one `harness_skill` recorded (`regrade`, which never changes it). */
+  skill?: string;
+}
+
+export function flowHarnessDigest(i: FlowDigestInput): Digest {
+  return harnessDigest({
+    cwd: i.cwd,
+    listed: Array.isArray(i.state.harness_paths) ? i.state.harness_paths.map(String) : [],
+    derived: i.derived,
+    virtual: { ...i.derivedValues, "cowork-harness-version": i.harnessVersion, baseline: i.baselineId },
+    tags: i.skill !== undefined ? [`skill:${i.skill}`] : [],
+  });
+}
+
+/** The selection a flow's harness sha was approved with: `_state.json` `harness_skill`, when it is a string. */
+export const approvedHarnessSkill = (state: Readonly<Record<string, unknown>>): string | undefined =>
+  typeof state.harness_skill === "string" ? state.harness_skill : undefined;
 
 /** The `harness_paths` entries that resolve inside the skill dir. Listing one would make every round stop
  *  for approval, because the loop edits that dir by design. An entry that no longer exists resolves through its

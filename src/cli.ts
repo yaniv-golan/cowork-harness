@@ -23,7 +23,8 @@ import {
   listBaselineNames,
   sha256File,
   countStringInFile,
-  newestStagedSibling,
+  deriveNativeStagedPath,
+  nativeManifestBuild,
 } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import { recordedFixtureFileSigs, recordedFixtureRefusal } from "./fixture/workspace.js";
@@ -51,6 +52,7 @@ import {
   coerceLabel,
   type OnUnanswered,
   type RunContext,
+  type PartlyScriptedGate,
 } from "./decide/decider.js";
 import { claudeCliComplete, isolationRefusal } from "./decide/llm-transport.js";
 import type { DecisionRequest } from "./agent/session.js";
@@ -266,12 +268,13 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
                                each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
   eval report <eval-dir>       rebuild an eval's report from its directory ($0)
-  hillclimb run <scenario.yaml | dir/>   the runner for /claude-api hillclimb: every scenario --reps times into
-                               <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
+  hillclimb run <scenario.yaml | dir/> [--flow DIR]   the runner for /claude-api hillclimb: every scenario
+                               --reps times into <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
   hillclimb check [--flow DIR]   check a flow dir against our reading of the hillclimb schema
-  hillclimb state-template <scenario.yaml | dir/>   print a _state.json skeleton for the loop to save
-  hillclimb freeze-ref <scenario.yaml | dir/> --variant ID   freeze a variant's pairwise references (win_<vN>)
-  hillclimb regrade <scenario.yaml | dir/>   re-grade a flow's rows from their kept runs (--fill-refs: add win_<vN>)
+  hillclimb state-template <scenario.yaml | dir/> [--flow DIR]   print a _state.json skeleton for the loop to save;
+                               with --flow, also write <flow>/metrics.md. Pass the same --flow to every hillclimb command
+  hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR]   freeze a variant's pairwise references (win_<vN>)
+  hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--fill-refs: add win_<vN>)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
@@ -3184,49 +3187,20 @@ async function cmdSync(args: string[]) {
     log(`  (The new agentVersion is ${res.agentVersion}. Open Cowork once to stage the binary, then re-run sync.)`);
     log(`  resolveAgentBinary will fail until the file is present or COWORK_AGENT_BINARY is set.`);
   }
-  // Same convention-derivation for the NATIVE macOS binary hostloop spawns directly for the agent loop:
-  //   ~/Library/Application Support/Claude/claude-code/<agentVersion>/claude.app/Contents/MacOS/claude
-  //
-  // Unlike the VM ELF above, the native .app and the container/microvm ELF version INDEPENDENTLY —
-  // Desktop stages the native macOS app and the VM Linux ELF on separate cadences, and real Cowork
-  // hostloop mode spawns whatever Desktop currently has staged natively (decoupled from the VM ELF by
-  // design, not a bug to paper over). Deriving nativeStagedPath from res.agentVersion (the VM
-  // .sdk-version) therefore produces a phantom path whenever the two cadences have drifted — e.g. VM
-  // ELF at 2.1.202 while claude-code/ only has 2.1.205 staged. So instead of reusing res.agentVersion,
-  // scan claude-code/ for its OWN newest present version and pin that; only fall back to the
-  // agentVersion-derived convention when no native .app is staged at all (so an empty install still
-  // produces a baseline).
-  const oldNativeStagedPath = (baseAgentBinary.nativeStagedPath as string) ?? "";
-  const nativeVersionRe = /claude-code\/[^/]+\/claude\.app\/Contents\/MacOS\/claude$/;
-  const NATIVE_LEAF = "claude.app/Contents/MacOS/claude";
+  // The NATIVE macOS binary hostloop spawns directly for the agent loop. It versions INDEPENDENTLY of the
+  // VM ELF above (Desktop stages them on separate cadences), and since Desktop 2.19675.0 it is staged per
+  // build (`claude-code/<ver>/<build>/claude.app/…`). deriveNativeStagedPath scans claude-code/ for its own
+  // newest staged version in either layout and pins the build the asar manifest names — see its doc.
   const homeDir = process.env.HOME ?? "~";
-  const nativeVersionRoot = join(homeDir, "Library/Application Support/Claude/claude-code");
-  const newestNative = newestStagedSibling(nativeVersionRoot, NATIVE_LEAF);
-  let derivedNativeStagedPath: string;
-  if (newestNative) {
-    // Store in the same ~-prefixed convention as the rest of the baseline.
-    derivedNativeStagedPath = newestNative.startsWith(homeDir) ? `~${newestNative.slice(homeDir.length)}` : newestNative;
-  } else if (nativeVersionRe.test(oldNativeStagedPath)) {
-    derivedNativeStagedPath = oldNativeStagedPath.replace(
-      nativeVersionRe,
-      `claude-code/${res.agentVersion}/claude.app/Contents/MacOS/claude`,
-    );
-  } else {
-    derivedNativeStagedPath = `~/Library/Application Support/Claude/claude-code/${res.agentVersion}/claude.app/Contents/MacOS/claude`;
-    if (oldNativeStagedPath)
-      log(
-        `WARNING: agentBinary.nativeStagedPath layout was unexpected ("${oldNativeStagedPath}") — rewrote to the canonical path for ${res.agentVersion}.`,
-      );
-  }
-  const resolvedNativeDerived = derivedNativeStagedPath.replace(/^~(?=$|\/)/, join(process.env.HOME ?? "~"));
-  if (!existsSync(resolvedNativeDerived)) {
-    log(`WARNING: derived agentBinary.nativeStagedPath does not exist on this machine: ${derivedNativeStagedPath}`);
-    log(
-      `  (No native .app is staged under claude-code/. Set COWORK_HOST_AGENT_BINARY=<path> to the staged binary, ` +
-        `or point at the backed-up .app under ~/cowork-agent-backup/<ver>/claude.app/Contents/MacOS/claude.)`,
-    );
-    log(`  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`);
-  }
+  const nativeDerived = deriveNativeStagedPath({
+    nativeRoot: join(homeDir, "Library/Application Support/Claude/claude-code"),
+    homeDir,
+    oldNativeStagedPath: (baseAgentBinary.nativeStagedPath as string) ?? "",
+    agentVersion: res.agentVersion,
+    manifestBuild: nativeManifestBuild(res.agentReleaseChannel, process.arch),
+  });
+  for (const w of nativeDerived.warnings) log(w);
+  const derivedNativeStagedPath = nativeDerived.path;
   // Agent-binary provenance (shared, non-secret): record the ELF sha256 + how we know it. Prefer a
   // measured-local hash of the staged binary (the point-of-truth) + cross-check against the official
   // release manifest; if the binary isn't staged on this machine, fall back to the official-manifest hash
@@ -4531,6 +4505,10 @@ async function cmdVerifyRun(args: string[]) {
       : null;
 
   let answerCoverage: { matched: number; total: number } | undefined;
+  // Re-derived from the CURRENT scenario's answers by the same decide() calls the coverage loop makes (the
+  // live run's value described the answers it ran with); an author who scripts the missing sub-question sees
+  // the finding go. Report-only — the warn signal never moves the verdict.
+  const partlyScriptedGates: PartlyScriptedGate[] = [];
   if (scenario.answers.length > 0) {
     // Answer-coverage validates against the kept run's gate SNAPSHOT (its events.jsonl). If the skill changed,
     // those gates are stale and a green here is false confidence — refuse rather than vouch (can't verify ⇒ not
@@ -4590,6 +4568,7 @@ async function cmdVerifyRun(args: string[]) {
       transcript: () => sidecarTranscript ?? "",
       toolLog: () => [],
       runId: "verify-run",
+      notePartlyScripted: (f) => partlyScriptedGates.push(f),
     };
     const softFallback = scenario.on_unanswered === "first" || scenario.on_unanswered === "llm";
     let matched = 0;
@@ -4636,7 +4615,8 @@ async function cmdVerifyRun(args: string[]) {
   // scan/parity signals already persisted in result.json). Synthetic answer_coverage failures (above) flow
   // through here as `code:"assertion"` fails — so verify-run can now exit 1 on an answer miss, not just an
   // assert miss. Answer-less scenarios never add any, so their exit code is unchanged.
-  const verdict = computeVerdict({ ...result, assertions }, "live");
+  const judged: RunResult = { ...result, partlyScriptedGates: partlyScriptedGates.length ? partlyScriptedGates : undefined };
+  const verdict = computeVerdict({ ...judged, assertions }, "live");
   // Metrics are re-measured like the assertions: the CURRENT scenario's declaration, read from the kept work dir,
   // each file only while its bytes still equal the run's recorded post-run hash — never the live run's values.
   const metrics = remeasureMetrics(ctx, result, scenario.metrics);
@@ -4662,7 +4642,7 @@ async function cmdVerifyRun(args: string[]) {
     // runs the real query against a real failing envelope — that test, not this comment, is what stops
     // the flat shape from being restored as a "simplification".
     out(
-      jsonEnvelope("verify-run", [{ ...result, assertions, metrics }], {
+      jsonEnvelope("verify-run", [{ ...judged, assertions, metrics }], {
         extra: {
           pass: verdict.pass,
           assertions: assertions.map((a) => ({ assertion: a.assertion, pass: a.pass, message: a.message })),
@@ -4734,7 +4714,7 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
     },
     { title: "Transcript / prose", match: (k) => k.startsWith("transcript_") && k !== "transcript_no_host_path" },
     { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") },
-    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") || k.startsWith("hook_event_") },
+    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") || k.startsWith("hook_event_") || k.startsWith("hook_output_") },
     {
       title: "Path denial / VM paths",
       match: (k) => k.includes("path_denied") || k === "no_vm_path_file_op" || k === "transcript_no_host_path",

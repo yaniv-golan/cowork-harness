@@ -304,6 +304,10 @@ label validation by intent (mutually exclusive with `choose`):
 - when_question: "company name"
   answer: "Acme Holdings LLC"
 ```
+**Batched gates are answered as one unit.** When one `AskUserQuestion` carries several sub-questions and
+your rules match only some of them, the WHOLE batch goes to `on_unanswered` and the matched answers are not
+delivered. The run reports it (warn signal `partly_scripted_gate`, `result.partlyScriptedGates` naming the
+matched and unmatched sub-questions) without changing the verdict; script every sub-question to pin it.
 
 **Tool permissions:**
 ```yaml
@@ -352,7 +356,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 `no_vm_path_file_op`, `dispatch_count_max`,
 `skill_triggered`, `no_skill_triggered`, `skill_available`, `connector_available`, `tool_available`,
 `skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
-`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `hook_event_fired`, `hook_event_blocked`, `all_tasks_completed`, `task_status`, `task_count_min`, `no_scratchpad_leak`, `present_files_called`, `result`
+`max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `hook_event_fired`, `hook_event_blocked`, `hook_output_contains`, `hook_output_not_contains`, `all_tasks_completed`, `task_status`, `task_count_min`, `no_scratchpad_leak`, `present_files_called`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.

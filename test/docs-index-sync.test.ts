@@ -162,11 +162,14 @@ describe("verdict-signals docs ↔ code", () => {
   // before. The second cannot fire on a healthy run: it needs the per-turn outputs diff to have been
   // unable to verify (missing/incomplete snapshot or an unreadable post-run walk) — and silence there was
   // the thing wrong with it.
-  it('the docs\' "only eleven warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 12 as of `partly_scripted_gate`. It fires only where the decider's existing stderr warning already
+  // fires (scripted rules matched some, not all, sub-questions of one batch), so no clean run gains it; on
+  // the `first`/`llm` fallbacks it co-occurs with `non_deterministic`, and on `fail` the run is already red.
+  it('the docs\' "only twelve warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(11);
-    expect(scenarioMdText).toMatch(/Only eleven codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(12);
+    expect(scenarioMdText).toMatch(/Only twelve codes are \*\*warn\*\*-severity/);
   });
 });
 

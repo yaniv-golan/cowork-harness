@@ -47,6 +47,29 @@ describe("harnessDigest", () => {
     expect(d.hashed).toEqual(["evals/_session.yaml", "evals/a.yaml", "<baseline>", "<cowork-harness-version>"]);
   });
 
+  it("without a tag the sha is the one recorded before tags existed: an approved flow keeps its approval", () => {
+    // Pinned literal, computed on the code before `tags` was added; it must never move.
+    expect(harnessDigest(base()).sha).toBe("d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71");
+    expect(harnessDigest({ ...base(), tags: [] }).sha).toBe("d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71");
+  });
+
+  it("a tag (the --skill selection) joins the sha after the virtual entries and shows in what was hashed", () => {
+    const d = harnessDigest({ ...base(), tags: ["skill:a"] });
+    const h = createHash("sha256");
+    for (const [rel, body] of [
+      ["evals/_session.yaml", "model: x\n"],
+      ["evals/a.yaml", "prompt: a\n"],
+      ["<baseline>", "2.9939.4"],
+      ["<cowork-harness-version>", "4.3.0"],
+    ])
+      h.update(rel).update("\0").update(body).update("\0");
+    h.update("skill:a").update("\0");
+    expect(d.sha).toBe(h.digest("hex"));
+    expect(d.hashed).toEqual(["evals/_session.yaml", "evals/a.yaml", "<baseline>", "<cowork-harness-version>", "skill:a"]);
+    expect(harnessDigest({ ...base(), tags: ["skill:b"] }).sha).not.toBe(d.sha);
+    expect(harnessDigest(base()).sha).not.toBe(d.sha);
+  });
+
   it("an edit to any derived file flips the sha; so does a version or baseline change", () => {
     const before = harnessDigest(base()).sha;
     put("evals/_session.yaml", "model: y\n");

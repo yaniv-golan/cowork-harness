@@ -10,7 +10,7 @@
 // the skill failing.
 import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
 import type { Assertion, RunResult } from "../types.js";
-import { isLiveModelId } from "../types.js";
+import { VERDICT_MODIFIER_KEYS, isLiveModelId } from "../types.js";
 import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.js";
 import { firstAssertionKey } from "../run/repeat.js";
 import { matchesTerminalUsageLimitText } from "../usage-limit.js";
@@ -338,11 +338,22 @@ export interface RowKey {
   claim?: string;
 }
 
-/** Every assertion of the frozen scenario is a row; each `semantic_matches` rubric claim is a sub-row.
+/** An assertion whose every set key is a verdict modifier (`{allow_stall: true}`, …). It is graded `pass`
+ *  unconditionally (assert.ts), so as a row it is 1 on every graded rep in both arms and 0 on an errored one —
+ *  the errored-by-agent rate, which is reported on its own. One with any other key is an ordinary row. */
+export function isModifierOnlyAssertion(a: Assertion): boolean {
+  const keys = Object.entries(a).filter(([, v]) => v !== undefined);
+  return keys.length > 0 && keys.every(([k]) => (VERDICT_MODIFIER_KEYS as readonly string[]).includes(k));
+}
+
+/** Every assertion of the frozen scenario is a row, except a verdict-modifier-only one (it cannot detect
+ *  anything and would only enlarge the correction family); each `semantic_matches` rubric claim is a sub-row.
+ *  A row keeps its assertion's index in the scenario, so a skipped modifier leaves a gap, never a shift.
  *  Rows come from the scenario, never from a result — an errored rep's result has fewer or no grades. */
 export function scenarioRows(scenario: string, assertions: readonly Assertion[]): RowKey[] {
   const rows: RowKey[] = [];
   assertions.forEach((a, assertionIndex) => {
+    if (isModifierOnlyAssertion(a)) return;
     const label = firstAssertionKey(a);
     const rubric = a.semantic_matches?.rubric;
     rows.push({

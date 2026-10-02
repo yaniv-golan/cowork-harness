@@ -13,12 +13,14 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--judge-model",
   "--decider-cmd",
   "--decider-dir",
+  "--skill",
   "--output-format",
   "--dotenv",
   "--run-dir",
 ] as const;
 export const HILLCLIMB_RUN_REPEATED_FLAGS = ["--case"] as const;
 /** `hillclimb regrade`'s own booleans (its value flags are a subset of run's). */
+export const HILLCLIMB_REGRADE_VALUE_FLAGS = ["--flow", "--variant", "--judge-model", "--output-format"] as const;
 export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = ["--approve-harness", "--fill-refs", "--allow-doc-drift", "--allow-unchecked"] as const;
 
 export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--reps N]
@@ -30,13 +32,17 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --variant ID            'baseline' or 'v<N>' (default baseline)
   --model ID              concrete model id the agent must be served by; an alias is refused
   --reps N                reps per case (default 1)
-  --concurrency N         jobs in flight (default 4; 1 with a decider)
+  --concurrency N         jobs in flight (default 4; a decider needs --concurrency 1)
   --timeout-s N           per-case wall-clock ceiling in seconds (default 1800; 0 = none)
   --approve-harness       record the harness sha in _state.json (yours to pass, never the loop's)
   --case ID               run only this case (file stem or scenario name); repeatable
   --ablate                run with the skill removed (the null run); use a sibling flow dir
   --dry-run               print the resolved scope, gate status and estimate; spend nothing
   --judge-model ID        concrete judge model for every semantic assertion
+  --skill NAME            the plugin skill whose invocation the rows record (skill_invoked): a skill
+                          directory's name or its registered name; needed when the plugin registers
+                          several skills. It joins the harness sha, so changing it needs
+                          --approve-harness; pass the same --skill on every pass
   --no-copy-inputs        do not copy session uploads into <flow>/inputs/
   --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)
   --output-format text|json   json: one envelope on stdout at exit
@@ -46,11 +52,13 @@ export const HILLCLIMB_CHECK_USAGE = `usage: hillclimb check [--flow DIR] [--out
        Checks a flow dir against our reading of the published hillclimb schema, plus _state.json's metric
        declarations, and warns when a baseline case has no headroom. Exit 0 clean, 1 findings, 2 usage.`;
 
-export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <scenario.yaml | dir/> [--flow DIR] [--output-format text|json]
+export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <scenario.yaml | dir/> [--flow DIR] [--skill NAME] [--output-format text|json]
        Prints a _state.json skeleton for the loop to save: the metrics every row carries, the perf columns and
        the files the harness gate digests. With --flow, also writes the metrics legend to <flow>/metrics.md
        (an existing copy that differs is kept; the new legend goes to metrics.md.new). json: the envelope
-       also carries it as metrics_md.`;
+       also carries it as metrics_md. --skill NAME is checked against the plugin as run's is (an unknown
+       skill exits 2, naming the plugin's skills); with several skills and no --skill, or no skill at all,
+       skill_invoked is left out of perf_fields.`;
 
 export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR] [--case ID]... [--output-format text|json]
        Freezes each selected semantic_pairwise case's reference into <flow>/<variant>/ref from the variant's

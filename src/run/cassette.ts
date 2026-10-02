@@ -111,7 +111,7 @@ import { resolveAgentImageProvenance, type AgentImageProvenance } from "../runti
 import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 import { readTimeline, type TimelineHeader, type TimelineEvent } from "../agent/timeline.js";
 import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
-import { ABSTAIN, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
+import { ABSTAIN, ScriptedDecider, UnansweredError, type Decider, type OnUnanswered } from "../decide/decider.js";
 import { fileChannel, writeDoneMarker, type DecisionChannel } from "../decide/external-channel.js";
 import { pMapBounded } from "../async-pool.js";
 import { isVmSessionsPath } from "../vm-paths.js";
@@ -476,7 +476,7 @@ export interface Cassette {
 //  the object form — the reason replay now refuses a future cassette before evaluating anything.) Every other
 //  scenario still stamps v12. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
 // v14: ONE interpretation bump shared by the keys of this release that an older reader cannot read. Today:
-//  `semantic_matches.include_fork_results`, `semantic_pairwise`, the `authored` forms and `question_option_count`
+//  `semantic_matches.include_fork_results`, `semantic_pairwise`, the `authored` forms, `question_option_count` and the `hook_output_*` keys
 //  (V14_ASSERT_FEATURES below), and `workspace_fixture`. Later keys of this release stamp the
 //  same version with no further bump: a top-level key adds its own KEY_REQUIRED_VERSION entry returning 14,
 //  an assert-level one appends a predicate to V14_ASSERT_FEATURES. A cassette using any of them stamps v14, so
@@ -586,6 +586,8 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
   },
   // `question_option_count` — the key itself, as for `semantic_pairwise`.
   (a) => !!a && typeof a === "object" && "question_option_count" in (a as object),
+  // `hook_output_contains` / `hook_output_not_contains` — the keys themselves, as for `semantic_pairwise`.
+  (a) => !!a && typeof a === "object" && ("hook_output_contains" in (a as object) || "hook_output_not_contains" in (a as object)),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -2541,6 +2543,7 @@ function minimalRec(): RunRecord {
     gateOptions: [],
     decisions: [],
     permissiveAutoAllow: [],
+    partlyScriptedGates: [],
     unanswered: [],
     toolResults: [],
     gateAnswers: [],
@@ -2781,6 +2784,29 @@ function buildReplayDecider(_session: CassetteAgentSession, controlOutIndex: Map
   };
 }
 
+/** Replay answers from the recording, so the scenario's scripted decider never runs and never reports a
+ *  partly scripted batch. Classify each question gate against the cassette's FROZEN `answers:` with the
+ *  scripted decider's own rule lookup (`ScriptedDecider.partlyScripted`) and report through the same
+ *  `RunContext` sink the live run uses. Report-only: the inner decider's answer is returned unchanged. */
+function withPartlyScriptedFindings(inner: Decider, rules: Scenario["answers"] | undefined): Decider {
+  let scripted: ScriptedDecider | undefined;
+  try {
+    scripted = rules?.length ? new ScriptedDecider(rules) : undefined;
+  } catch {
+    scripted = undefined; // an uncompilable frozen pattern: the finding is report-only, never fail the replay on it
+  }
+  if (!scripted) return inner;
+  return {
+    async decide(req, ctx) {
+      if (req.kind === "question") {
+        const f = scripted!.partlyScripted(req.questions);
+        if (f) ctx?.notePartlyScripted?.({ requestId: req.id, ...f });
+      }
+      return inner.decide(req, ctx);
+    },
+  };
+}
+
 const NOOP_DECIDER: Decider = {
   async decide() {
     return ABSTAIN;
@@ -2926,6 +2952,70 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
             );
         }
       }
+    }
+  });
+  return findings;
+}
+
+/** The frozen `hook_response` frames of an events stream, by LINE index (redaction maps `events` line for line,
+ *  so the same index in the base and redacted streams is the same frame). Non-frames are `undefined`. */
+function frozenHookResponses(events: string[]): Array<Record<string, unknown> | undefined> {
+  return (Array.isArray(events) ? events : []).map((l) => {
+    try {
+      const m = JSON.parse(l) as Record<string, unknown> | null;
+      return m && typeof m === "object" && m.type === "system" && m.subtype === "hook_response" ? m : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+}
+
+/** RECORD-TIME finding for `hook_output_contains` / `hook_output_not_contains`, the sibling of
+ *  `redactionRewroteNegativeToolInputs` (same inputs, same output shape, same channel). Reports, per assertion:
+ *   - a `text` / `matches` needle the policy itself REWROTE (replay reports it evidence-unavailable);
+ *   - `hook_response` frames for the asserted event whose selected stream (`stdout`, `stderr`, or either) carries
+ *     a redaction token after redaction and did not before — a miss over such a stream, and any regex result,
+ *     is evidence-unavailable on replay.
+ *  Both keys are reported. For `hook_output_not_contains` this is what makes the verdict-divergence check refuse
+ *  the write; for `hook_output_contains` a literal hit outside the tokens still passes on replay, so the finding
+ *  may be advisory — but a miss or a regex over that stream is not, and the author should hear it once, here. */
+export function redactionRewroteHookOutput(base: Cassette, redacted: Cassette): string[] {
+  const findings: string[] = [];
+  const baseAsserts = (base.scenario?.assert ?? []) as Array<Record<string, unknown>>;
+  const redAsserts = (redacted.scenario?.assert ?? []) as Array<Record<string, unknown>>;
+  let before: ReturnType<typeof frozenHookResponses> | undefined;
+  let after: ReturnType<typeof frozenHookResponses> | undefined;
+  baseAsserts.forEach((a, i) => {
+    for (const key of ["hook_output_contains", "hook_output_not_contains"] as const) {
+      const v = a?.[key];
+      if (!v || typeof v !== "object") continue;
+      const o = v as { event?: unknown; stream?: unknown; text?: unknown; matches?: unknown };
+      const redO = redAsserts[i]?.[key] as typeof o | undefined;
+      for (const f of ["text", "matches"] as const) {
+        const src = o[f];
+        const redSrc = redO && typeof redO === "object" ? redO[f] : undefined;
+        if (typeof src === "string" && typeof redSrc === "string" && hasRedactionToken(redSrc) && !hasRedactionToken(src))
+          findings.push(
+            `assert[${i}] ${key}.${f} ${JSON.stringify(src)} was itself rewritten by the redaction policy — the committed cassette no longer carries the needle you wrote, so replay reports it evidence-unavailable`,
+          );
+      }
+      before ??= frozenHookResponses(base.events);
+      after ??= frozenHookResponses(redacted.events);
+      const stream = o.stream === "stdout" || o.stream === "stderr" ? o.stream : "any";
+      const fields = stream === "any" ? (["stdout", "stderr"] as const) : ([stream] as const);
+      let n = 0;
+      for (let k = 0; k < before.length && k < after.length; k++) {
+        const b = before[k];
+        const r = after[k];
+        if (!b || !r || b.hook_event !== o.event) continue;
+        if (fields.some((fl) => typeof r[fl] === "string" && hasRedactionToken(r[fl] as string) && !hasRedactionToken(String(b[fl] ?? ""))))
+          n++;
+      }
+      if (n)
+        findings.push(
+          `assert[${i}] ${key} on ${String(o.event)}: ${n} \`${String(o.event)}\` hook_response frame${n === 1 ? "" : "s"} ${n === 1 ? "carries" : "carry"} a redaction token in ${stream === "any" ? "stdout or stderr" : stream} — output this check reads, so on the committed cassette a miss there (and any \`matches\` result) can only be reported evidence-unavailable. ` +
+            `Ways out: narrow \`stream\` to one the policy leaves alone; use a literal \`text\` that sits outside the redacted span; or accept that this check is live-only`,
+        );
     }
   });
   return findings;
@@ -3152,10 +3242,23 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
   //    kept the original literal, manufacturing a false "redaction changed assertions" failure. Widen the
   //    pattern to tolerate the optional `:label:hash` suffix.
   const normalizeMsg = (msg: string | undefined): string => (msg ?? "").replace(/\[REDACTED(?::[^\]]+)?\]/g, "");
+  // `hook_output_*` failures are compared by KEY only. Their messages quote excerpts of the very stream the policy
+  // rewrites, centred on offsets that move when it does, and a miss over a tokenised stream is re-labelled
+  // evidence-unavailable — so base and redacted messages differ whenever redaction touched that output, with no
+  // change to what was graded. A pass flipping to a fail is still refused (the pairs compare above), and
+  // redactionRewroteHookOutput names the downgrade at record time.
+  // Keyed off the message, not the entry: one `assert:` entry can carry several keys, and only this key's own
+  // message is exempt. The entry's position stays in the compared string, so two entries of the same key trading
+  // outcomes still differ (both runs evaluate the same scenario, in the same order).
+  const HOOK_OUTPUT_MSG = /^(?:evidence unavailable: )?(hook_output_(?:not_)?contains)(?::|'s) /;
   const failedMsgs = (result: RunResult): string[] =>
     result.assertions
-      .filter((a) => !a.pass)
-      .map((a) => normalizeMsg(a.message))
+      .map((a, i) => ({ a, i }))
+      .filter(({ a }) => !a.pass)
+      .map(({ a, i }) => {
+        const key = HOOK_OUTPUT_MSG.exec(a.message ?? "")?.[1];
+        return key ? `#${i} ${key}` : normalizeMsg(a.message);
+      })
       .sort();
 
   // 3. INTERNAL sha256 consistency of the REDACTED cassette: every committed body's stored sha256 must
@@ -5618,6 +5721,9 @@ export async function freezeRecordedRun(
       warn(
         `::warning:: record: ${f}. Assert on a literal the policy does not rewrite (lint: tool-input-regex-redactable), or keep this check on a live gate.\n`,
       );
+    // The same, for what a command hook printed: a hook_output_* needle the policy rewrote, or a selected stream
+    // it tokenised, is evidence-unavailable on replay.
+    for (const f of redactionRewroteHookOutput(base, redacted)) warn(`::warning:: record: ${f}.\n`);
     await assertRedactionVerdictPreserved(base, redacted, dirname(cassettePath));
     cassette = redacted;
   }
@@ -5822,6 +5928,7 @@ function replayErrorResult(file: string): RunResult {
     nonDeterministic: undefined,
     nonDeterministicTerminal: undefined,
     permissiveAutoAllow: undefined,
+    partlyScriptedGates: undefined,
     scan: undefined,
     fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
     effectiveFidelity: undefined,
@@ -7849,6 +7956,9 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "compaction_occurred",
   "hook_event_fired", // hook_response system frames are stream content — the re-drive reproduces them via parseMessage
   "hook_event_blocked",
+  // the same frames' stdout / stderr fields
+  "hook_output_contains",
+  "hook_output_not_contains",
   "all_tasks_completed",
   "task_count_min",
   "task_status",
@@ -8124,7 +8234,10 @@ export async function replayCassette(
   // ReplayDecider: look up recorded decision body → deserialize → return.
   // Only constructed (and only drives the decision pipeline) when controlOut is present.
   // Reuse the session's already-parsed controlOut index for the decider (no re-parsing).
-  const replayDecider = session.hasControlOut ? buildReplayDecider(session, session.controlOutIndex) : NOOP_DECIDER;
+  const replayDecider = withPartlyScriptedFindings(
+    session.hasControlOut ? buildReplayDecider(session, session.controlOutIndex) : NOOP_DECIDER,
+    cassette.scenario.answers,
+  );
 
   // pass Infinity as dialogTimeoutMs — the synchronous decider resolves before any timer,
   // and there is no child, so the synchronous respond() is safe here.
@@ -8913,6 +9026,8 @@ export async function replayCassette(
       unansweredGate: undefined,
       nonDeterministicTerminal: undefined,
       permissiveAutoAllow: undefined,
+      // Re-derived on the re-drive from the cassette's FROZEN `answers:` (see withPartlyScriptedFindings).
+      partlyScriptedGates: rec.partlyScriptedGates.length ? rec.partlyScriptedGates : undefined,
       scan: undefined,
       fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
       fidelityWarnings: undefined,

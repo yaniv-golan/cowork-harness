@@ -23,7 +23,7 @@ import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
 import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
 import { tildeify } from "../io.js";
-import { installTerminationHandler } from "../termination.js";
+import { installTerminationHandler, parkIfTerminating, registerTerminationStep } from "../termination.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsRoot } from "../run/trace-view.js";
 import { checkBatchBudget, noHistoryCauseText, runsDirInfo } from "../run/budget.js";
@@ -426,7 +426,10 @@ function resolveEvalContext(args: EvalArgs, deps: EvalDeps): EvalContext {
       throw new UsageError((e as Error).message);
     }
   }
-  if (rowCount === 0) throw new UsageError("eval: no scenario has an assert: entry — there is nothing to compare");
+  if (rowCount === 0)
+    throw new UsageError(
+      "eval: no scenario has an assert: entry that is compared (a verdict modifier such as allow_stall is not a row) — there is nothing to compare",
+    );
 
   // Pins.
   const agentPins = resolveAgentPins(
@@ -814,21 +817,36 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   const { now, scenarios, agentPins, judgePins, evalId, evalDir, say } = ctx;
   // Created now, or an existing EMPTY dir: either way, a refusal before the manifest removes what we made.
   const createdDir = !existsSync(evalDir);
+  // A refusal after the dir was made (a bad snapshot, the guard, a preflight) leaves nothing behind, so the
+  // same --out can be used again. Once the manifest exists the eval has started and the dir is kept.
+  const discardUnstarted = () => {
+    if (existsSync(join(evalDir, MANIFEST_FILE))) return;
+    if (createdDir) rmSync(evalDir, { recursive: true, force: true });
+    else for (const e of readdirSync(evalDir)) rmSync(join(evalDir, e), { recursive: true, force: true });
+  };
+  // A signal must not leave the arm snapshots behind either. Without a handler the default action kills the
+  // process mid-copy and no `catch` runs; with it, the signal is handled at the yield below (the preparation is
+  // synchronous), where this step discards the unstarted eval before the handler exits. Once the manifest is
+  // written the step is dropped: the eval has started, its dir is kept, and each run cleans up its own work.
+  installTerminationHandler();
+  let dropDiscardStep: (() => void) | undefined = registerTerminationStep("helpers", discardUnstarted);
   mkdirSync(evalDir, { recursive: true });
   try {
     return await afterEvalDir();
   } catch (e) {
-    // A refusal after the dir was made (a bad snapshot, the guard, a preflight) leaves nothing behind, so the
-    // same --out can be used again. Once the manifest exists the eval has started and the dir is kept.
-    if (!existsSync(join(evalDir, MANIFEST_FILE))) {
-      if (createdDir) rmSync(evalDir, { recursive: true, force: true });
-      else for (const e of readdirSync(evalDir)) rmSync(join(evalDir, e), { recursive: true, force: true });
-    }
+    discardUnstarted();
     throw e;
+  } finally {
+    dropDiscardStep?.();
   }
 
   async function afterEvalDir(): Promise<EvalOutcome> {
     const { snaps, sessions, sigs, skill, evalFiles } = prepareArms(args, deps, ctx, evalDir, "run");
+    // Everything above is synchronous, so a signal that arrived during it is still pending: yield once so the
+    // handler runs now — discarding the snapshots and exiting — rather than after the manifest, when the eval
+    // would be kept as started with no run. Parking covers a handler that is still finishing.
+    await new Promise<void>((res) => setImmediate(res));
+    await parkIfTerminating();
 
     // Manifest.
     const manifestScenarios: ManifestScenario[] = scenarios.map((s) => ({
@@ -877,6 +895,9 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     };
     writeFileSync(join(evalDir, MANIFEST_FILE), JSON.stringify(manifest, null, 2) + "\n");
     writeFileSync(join(evalDir, RUNS_FILE), "");
+    // The eval has started: from here a signal keeps the dir (see above).
+    dropDiscardStep?.();
+    dropDiscardStep = undefined;
 
     // Schedule.
     const jobs = buildSchedule(

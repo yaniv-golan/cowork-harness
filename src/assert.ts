@@ -22,7 +22,7 @@ import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
 import { finalizeRationale } from "./decide/semantic-judge.js";
-import { warn } from "./io.js";
+import { scrubForTerminal, warn } from "./io.js";
 import { DEFAULT_AUTHORED_PER_FILE_BYTES, authoredTotalBytes, collectArtifactPathsWithHealth, isLosslessUtf8 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches } from "./glob.js";
@@ -1590,6 +1590,213 @@ type KeyResult = { pass: true; evidence?: string } | { pass: false; message: str
 const WRITE_BACK_SOURCE_EXTS = new Set([".html", ".htm", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".py"]);
 const SCRATCHPAD_PREFIX = "scratchpad/";
 
+/** The note the agent appends to a command's stdout when output past its in-memory cap was cut (its shell
+ *  `TaskOutput`, which async hooks report through; read from the staged agent binary, 2.1.284). Every variant opens
+ *  `Output truncated (<N>KB total)` — "Full output saved to: …", "…could not all be saved…", "…later output was
+ *  discarded…". */
+const SPILL_MARKER_RE = /\n?Output truncated \(\d+KB total\)/;
+
+/** `hook_output_contains` / `hook_output_not_contains`: a command hook's `stdout` / `stderr` on its `hook_response`
+ *  frames (RunResult.contextEvents; replay re-derives them from the frozen stream). A hook that fails OPEN and says
+ *  why on stderr passes hook_event_fired, so this reads the text it printed. Never vacuous: no frame for the event
+ *  fails both keys, because a disabled or misplaced hook is exactly what the negative form guards against.
+ *
+ *  Redaction follows the `tool_not_called` object rules: a needle a redaction policy rewrote is unknowable; a literal
+ *  HIT counts only when the text lies wholly inside one stretch of bytes the policy left alone (between tokens); and a
+ *  MISS on a token-bearing stream is unknown, since the replaced bytes might have held it. A miss is equally unknown
+ *  when a hook for the event STARTED and never answered (no `hook_response` with its `hook_id`), or when the agent
+ *  truncated a frame's output (SPILL_MARKER_RE). */
+function checkHookOutput(
+  key: "hook_output_contains" | "hook_output_not_contains",
+  spec: { event: string; stream?: "stdout" | "stderr" | "any"; text?: string; matches?: string },
+  negative: boolean,
+  ctx: AssertContext,
+): KeyResult {
+  const fail = (message: string): KeyResult => ({ pass: false, message });
+  if (ctx.contextEvents === undefined)
+    return fail(`${key}: no context events captured (older run / lane without context events) — cannot verify`);
+  const needle = spec.text ?? spec.matches;
+  if (!needle || (spec.text !== undefined) === (spec.matches !== undefined))
+    return fail(`${key}: set exactly one non-empty \`text\` or \`matches\``);
+  if (hasRedactionToken(needle))
+    return fail(
+      `evidence unavailable: ${key}'s ${spec.text !== undefined ? "text" : "regex"} was rewritten by the cassette's redaction policy — it cannot be evaluated on replay. Match a literal the policy does not rewrite, or check it on a live run`,
+    );
+  // Over output a redaction policy rewrote, a LITERAL hit is still trustworthy when it sits inside one untouched
+  // segment between tokens — those bytes are the hook's own — but a literal miss is not (the replaced bytes might
+  // have held it), and a REGEX says nothing either way (`.`, `[^/]` or a lookahead match the token's own text).
+  // Such a stream is `unknown`. A hit carries its offset in the stream, so the excerpt can be centred on it.
+  type Judged = { hit: true; at: number; len: number } | { hit: false; unknown: boolean };
+  let judge: (s: string) => Judged;
+  if (spec.text !== undefined) {
+    const t = spec.text;
+    judge = (s) => {
+      // The untouched segments between tokens, with their offsets in `s` (matchAll clones the global regex, so
+      // REDACTION_TOKEN_RE's lastIndex is never read or left behind).
+      let from = 0;
+      const segments: { start: number; text: string }[] = [];
+      for (const m of s.matchAll(REDACTION_TOKEN_RE)) {
+        segments.push({ start: from, text: s.slice(from, m.index) });
+        from = m.index + m[0].length;
+      }
+      segments.push({ start: from, text: s.slice(from) });
+      for (const seg of segments) {
+        const i = seg.text.indexOf(t);
+        if (i >= 0) return { hit: true, at: seg.start + i, len: t.length };
+      }
+      return { hit: false, unknown: hasRedactionToken(s) };
+    };
+  } else {
+    const c = compileUserRegex(spec.matches!);
+    if ("error" in c) return fail(`${key}: bad regex "${spec.matches}": ${c.error}`);
+    judge = (s) => {
+      if (hasRedactionToken(s)) return { hit: false, unknown: true };
+      const m = c.re.exec(s);
+      return m ? { hit: true, at: m.index, len: m[0].length } : { hit: false, unknown: false };
+    };
+  }
+  const stream = spec.stream ?? "any";
+  const fields = stream === "any" ? (["stdout", "stderr"] as const) : ([stream] as const);
+  const events = ctx.contextEvents;
+  const ofEvent = (subtype: string) => events.filter((e) => e.subtype === subtype && e.data?.hook_event === spec.event);
+  const frames = ofEvent("hook_response");
+  // A `hook_started` with no `hook_response` of the same `hook_id`: an async or backgrounded hook, or one still
+  // running when the run ended. Whatever it printed never reached the stream, so its absence cannot be shown. A
+  // recording without `hook_started` frames (an older one) contributes nothing here and grades as before.
+  const responded = new Set(frames.map((e) => e.data?.hook_id).filter((id): id is string => typeof id === "string"));
+  const pending = new Set(
+    ofEvent("hook_started")
+      .map((e) => e.data?.hook_id)
+      .filter((id): id is string => typeof id === "string" && !responded.has(id)),
+  ).size;
+  const pendingNote = `${pending} \`${spec.event}\` hook(s) started without a response`;
+  const shownNeedle = spec.text !== undefined ? JSON.stringify(spec.text) : `/${spec.matches}/i`;
+  const where = stream === "any" ? "stdout or stderr" : stream;
+  if (frames.length === 0)
+    return fail(
+      pending
+        ? `evidence unavailable: ${key}: ${pendingNote} — the hook ran, but its output never reached the stream (an async or backgrounded hook, or one still running when the run ended)`
+        : `${key}: no hook_response frame for \`${spec.event}\` was recorded — the staged plugin declares no such hook, the hook never ran, its hooks.json is not at <plugin>/hooks/hooks.json (the root is silently ignored), or the recording predates --include-hook-events`,
+    );
+  // One line of about EXCERPT chars, centred on the hit when there is one. The WHOLE stream is scrubbed before it
+  // is sliced (a secret cut by the window's edge would otherwise escape the scrub as a fragment) and the hit is
+  // re-located in the scrubbed text. The window is widened rather than cut through a redaction token, so a
+  // half-token never reaches the message as if it were the hook's text; widening the start shifts the end by the
+  // same amount, but never past the hit, so the hit stays in frame.
+  const EXCERPT = 200;
+  const excerpt = (raw: string, at = 0, len = 0) => {
+    const s = scrubForTerminal(raw);
+    if (s !== raw) {
+      // Exact unless a secret straddles the hit's edge; the end floor below keeps the hit in frame either way.
+      const pre = scrubForTerminal(raw.slice(0, at)).length;
+      const post = scrubForTerminal(raw.slice(at + len)).length;
+      at = Math.min(pre, s.length);
+      len = Math.max(0, s.length - post - at);
+    }
+    let start = 0;
+    let end = s.length;
+    if (s.length > EXCERPT) {
+      start = Math.max(0, Math.min(at + Math.floor(len / 2) - EXCERPT / 2, s.length - EXCERPT));
+      end = start + EXCERPT;
+      const floor = Math.min(s.length, at + Math.min(len, EXCERPT));
+      const tokens = [...s.matchAll(REDACTION_TOKEN_RE)].map((m) => [m.index, m.index + m[0].length] as const);
+      for (const [a, b] of tokens)
+        if (a < start && b > start) {
+          end = Math.max(floor, end - (start - a));
+          start = a;
+        }
+      for (const [a, b] of tokens) if (a < end && b > end) end = b;
+    }
+    let one = s.slice(start, end).replace(REDACTION_TOKEN_RE, "(redacted)").replace(/\s+/g, " ").trim();
+    let cut = end < s.length;
+    // Only a pathological token (`[REDACTED:` and kilobytes before its `]`) gets here; keep the line bounded.
+    if (one.length > EXCERPT * 2) {
+      one = one.slice(0, EXCERPT * 2);
+      cut = true;
+    }
+    return JSON.stringify(`${start > 0 ? "…" : ""}${one}${cut ? "…" : ""}`);
+  };
+  // At most this many frames are listed in a message; an event can fire dozens of times (each PreToolUse).
+  const LISTED = 5;
+  const listed = <T>(xs: T[], show: (x: T) => string) =>
+    xs.slice(0, LISTED).map(show).join("; ") + (xs.length > LISTED ? `; +${xs.length - LISTED} more` : "");
+  const name = (e: (typeof frames)[number]) => (typeof e.data?.hook_name === "string" ? e.data.hook_name : spec.event);
+  const read = frames.map((e) => {
+    // The agent's spill marker: an async hook's output past its in-memory cap is cut, this note is appended to
+    // stdout, and stderr is reported as "". What the hook printed before the cut is still its own (a hit there
+    // counts); anything else on the frame is unknown.
+    const spill = typeof e.data?.stdout === "string" ? SPILL_MARKER_RE.exec(e.data.stdout) : null;
+    const texts = fields.map((f) => {
+      const v = e.data?.[f];
+      if (typeof v !== "string") return undefined;
+      return spill && f === "stdout" ? v.slice(0, spill.index) : v;
+    });
+    const present = texts.filter((t): t is string => t !== undefined);
+    const judged = present.map((t) => ({ t, j: judge(t) }));
+    const hit = judged.find((x) => x.j.hit);
+    return {
+      e,
+      present,
+      missing: texts.length - present.length,
+      hit: hit && hit.j.hit ? { text: hit.t, at: hit.j.at, len: hit.j.len } : undefined,
+      unknown: judged.some((x) => !x.j.hit && x.j.unknown),
+      truncated: spill !== null,
+    };
+  });
+  const hitFrames = read.filter((r) => r.hit !== undefined);
+  const exitOf = (r: (typeof read)[number]) => (typeof r.e.data?.exit_code === "number" ? r.e.data.exit_code : "unknown");
+  const unreadable = read.filter((r) => r.missing > 0).length;
+  const truncated = read.filter((r) => r.truncated).length;
+  const redacted = read.filter((r) => r.unknown).length;
+  if (!negative) {
+    if (hitFrames.length > 0) {
+      const h = hitFrames[0]!.hit!;
+      return {
+        pass: true,
+        evidence: `${key}: ${name(hitFrames[0]!.e)} printed ${shownNeedle} on ${where}: ${excerpt(h.text, h.at, h.len)}`,
+      };
+    }
+    // Not found — and when a frame lacks a selected field, carries output a redaction policy rewrote or the agent
+    // truncated, or a hook started and never answered, that is not a shown absence: the unread bytes might have
+    // held it. Labelled evidence-unavailable on the same rules the negative key uses, so the two never disagree.
+    const seen = listed(
+      read,
+      (r) => `${name(r.e)}: ${r.present.length ? r.present.map((t) => excerpt(t)).join(" / ") : "(no output field)"}`,
+    );
+    return fail(
+      `${unreadable || redacted || truncated || pending ? "evidence unavailable: " : ""}${key}: no \`${spec.event}\` hook printed ${shownNeedle} on ${where} across ${frames.length} frame(s)${
+        redacted ? ` (${redacted} carry output rewritten by a redaction policy)` : ""
+      }${unreadable ? ` (${unreadable} without the ${where} field)` : ""}${
+        truncated ? ` (${truncated} carry output the agent truncated)` : ""
+      }${pending ? ` (${pendingNote})` : ""} — seen: ${seen}`,
+    );
+  }
+  if (hitFrames.length > 0)
+    return fail(
+      `${key}: ${hitFrames.length} \`${spec.event}\` hook frame(s) printed ${shownNeedle} on ${where}: ${listed(
+        hitFrames,
+        (r) => `${name(r.e)} (exit ${exitOf(r)}): ${excerpt(r.hit!.text, r.hit!.at, r.hit!.len)}`,
+      )}`,
+    );
+  if (pending > 0)
+    return fail(
+      `evidence unavailable: ${key}: ${pendingNote}, so absence of ${shownNeedle} cannot be shown — an async or backgrounded hook, or one still running when the run ended, never reports its output`,
+    );
+  if (unreadable > 0)
+    return fail(
+      `evidence unavailable: ${key}: ${unreadable} of ${frames.length} \`${spec.event}\` frame(s) carry no ${where === "stdout or stderr" ? "stdout and stderr" : where} field, so absence cannot be shown`,
+    );
+  if (truncated > 0)
+    return fail(
+      `evidence unavailable: ${key}: ${truncated} \`${spec.event}\` frame(s) carry output the agent truncated ("Output truncated (…KB total)" — an async hook's output past the agent's in-memory cap, with stderr dropped), so absence of ${shownNeedle} cannot be shown`,
+    );
+  if (redacted > 0)
+    return fail(
+      `evidence unavailable: ${key}: ${redacted} \`${spec.event}\` frame(s) carry output rewritten by a redaction policy, so absence of ${shownNeedle} cannot be shown`,
+    );
+  return { pass: true, evidence: `${key}: none of ${frames.length} \`${spec.event}\` frame(s) printed ${shownNeedle} on ${where}` };
+}
+
 /**
  * Evaluate `no_lost_write_back`. Selects the files the run authored (from `ctx.authoredFiles`, plus the
  * capture-health `omittedPaths`/`readErrors` so a dropped/unreadable authored source is never treated as
@@ -2795,6 +3002,13 @@ function check(
             : fail(`hook_event_blocked: no hook_response frame for \`${a.hook_event_blocked}\` was recorded — the hook never fired`),
       );
     }
+  }
+  for (const [key, spec, negative] of [
+    ["hook_output_contains", a.hook_output_contains, false],
+    ["hook_output_not_contains", a.hook_output_not_contains, true],
+  ] as const) {
+    if (spec === undefined) continue;
+    results.push(checkHookOutput(key, spec, negative, ctx));
   }
   if (a.no_scratchpad_leak !== undefined) {
     // THE HARNESS now serves present_files at BOTH container and hostloop (closing the prior coverage

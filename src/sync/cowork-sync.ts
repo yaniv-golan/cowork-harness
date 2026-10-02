@@ -58,6 +58,9 @@ export interface SyncResult {
    *  checksum cross-check is SKIPPED rather than guessed against the stable path. Derived from the
    *  LOCAL asar, so it is available offline — only the checksum fetch needs the network. */
   agentReleaseBaseUrl: string | null;
+  /** The whole descriptor `agentReleaseBaseUrl` came from — `sync` also reads its native build dirs
+   *  (`nativeBuilds`) to pin the build Desktop's manifest names. null under the same conditions. */
+  agentReleaseChannel: AgentReleaseChannel | null;
   /** Tool surface of Desktop's own SDK-MCP servers, read from real Desktop init frames written since this
    *  release was installed (see desktop-init-surface.ts). `observed:false` when no such session exists.
    *  NEVER carried forward from the base baseline: that would stamp one release's surface with the next's. */
@@ -495,6 +498,10 @@ export interface AgentReleaseChannel {
   /** The descriptor's own pinned SDK version. NOT necessarily the STAGED agent version — see
    *  checkAgentReleaseChannel: Desktop pins the next SDK before it stages it, measured twice. */
   sdkVersion: string;
+  /** The native build dir Desktop installs for each darwin platform the descriptor names: the first 12 hex
+   *  characters, lowercased, of `bundle.checksum` when the platform has a bundle, else of `checksum`
+   *  (2.19675.0's `expectedChecksumForTarget` + `Vdr`). Absent when the descriptor names no darwin platform. */
+  nativeBuilds?: Partial<Record<"darwin-arm64" | "darwin-x64", string>>;
 }
 
 /** Matches BOTH channel shapes and nothing else. The `/rc/<sha>` group is optional because a stable
@@ -553,14 +560,30 @@ export function extractAgentReleaseChannel(bundle: string): AgentReleaseChannel 
     } catch {
       continue;
     }
-    const d = parsed as { version?: unknown; baseUrl?: unknown; manifest?: { version?: unknown } };
+    const d = parsed as {
+      version?: unknown;
+      baseUrl?: unknown;
+      manifest?: { version?: unknown; platforms?: Record<string, { checksum?: unknown; bundle?: { checksum?: unknown } } | undefined> };
+    };
     // Self-consistency: the descriptor's own two version fields must agree (24/24 do). This is the
     // check that the blob is what we think it is — NOT a check against the staged agent version, which
     // legitimately differs and is handled in checkAgentReleaseChannel.
     if (typeof d.version !== "string" || typeof d.baseUrl !== "string") continue;
     if (typeof d.manifest?.version !== "string" || d.manifest.version !== d.version) continue;
     if (!RELEASE_BASE_URL_RE.test(d.baseUrl)) continue;
-    found.set(`${d.version}|${d.baseUrl}`, { baseUrl: d.baseUrl, sdkVersion: d.version });
+    const nativeBuilds: Partial<Record<"darwin-arm64" | "darwin-x64", string>> = {};
+    for (const p of ["darwin-arm64", "darwin-x64"] as const) {
+      const plat = d.manifest.platforms?.[p];
+      const sum = plat?.bundle !== undefined ? plat.bundle.checksum : plat?.checksum;
+      if (typeof sum === "string" && /^[0-9a-fA-F]{64}$/.test(sum)) nativeBuilds[p] = sum.slice(0, 12).toLowerCase();
+    }
+    // The dedupe key ignores nativeBuilds: two descriptors that differ ONLY in a darwin checksum would collapse
+    // to whichever came last. Never observed (one SDK descriptor per asar); kept as the existing key on purpose.
+    found.set(`${d.version}|${d.baseUrl}`, {
+      baseUrl: d.baseUrl,
+      sdkVersion: d.version,
+      ...(Object.keys(nativeBuilds).length ? { nativeBuilds } : {}),
+    });
   }
   // Exactly one DISTINCT descriptor, asserted rather than assumed: `asarGateIds` twice under-reported by
   // silently taking a subset of a population it believed was whole. Picking one of several here would
@@ -862,6 +885,7 @@ export function sync(): SyncResult {
     modelEffortConfig,
     promptFingerprint,
     agentReleaseBaseUrl: agentReleaseChannel?.baseUrl ?? null,
+    agentReleaseChannel,
     desktopInitSurface: initSurface.surface,
     unknownDeltas: unknown,
     notes,

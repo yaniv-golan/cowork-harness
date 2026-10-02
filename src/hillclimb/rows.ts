@@ -9,7 +9,7 @@
 //   4. the agent's own failure (errored_agent)              → SCORED: every graded key 0, reason in meta
 //   5. no model evidence on an otherwise-valid run     → errors, `serving_substitution`
 //   6. a run built from another snapshot than the variant's → errors, `error` + meta.arm_source_drift
-//   7. an invalid judge grade                               → errors, `judge_invalid` (promotable by regrade)
+//   7. an invalid judge grade                               → errors, `judge_invalid` (regrade lists it with the `run` that re-runs it)
 //   8. a grade that does not line up with the scenario      → errors, `error` (never a guessed value)
 //   9. otherwise                                            → SCORED
 // A served-model mismatch outranks an agent error (3 before 4): a score from the wrong model is not the
@@ -73,6 +73,8 @@ export interface AttemptContext {
     runDir?: string;
     contentSig?: string;
     skillHash?: string;
+    /** The registered id `skill_invoked` was measured against (`<plugin>:<name>`); absent when the column is omitted. */
+    skillTracked?: string;
     ablated?: boolean;
     nonDeterministic?: boolean;
   };
@@ -397,6 +399,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       flow_hash: ctx.meta.flowHash,
       ...(ctx.meta.contentSig !== undefined ? { content_sig: ctx.meta.contentSig } : {}),
       ...(ctx.meta.skillHash !== undefined ? { skill_hash: ctx.meta.skillHash } : {}),
+      ...(ctx.meta.skillTracked !== undefined ? { skill_tracked: ctx.meta.skillTracked } : {}),
       ...(r?.apiRetries
         ? { retries, retry_delay_s: r.apiRetries.delayMs / 1000, subagent_retries: r.apiRetries.subagentCount }
         : { retries_unrecorded: true }),

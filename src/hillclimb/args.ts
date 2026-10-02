@@ -39,6 +39,8 @@ export interface HillclimbRunArgs {
   judgeModel?: string;
   deciderCmd?: string;
   deciderDir?: string;
+  /** The plugin skill the `skill_invoked` column tracks (`skills/<name>/` of the variant's snapshot). */
+  skill?: string;
   outputFormat: "text" | "json";
   globals: Array<{ flag: "--dotenv" | "--run-dir"; value: string }>;
 }
@@ -160,6 +162,7 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
     ...(values["--judge-model"] !== undefined ? { judgeModel: values["--judge-model"] } : {}),
     ...(deciderCmd !== undefined ? { deciderCmd } : {}),
     ...(deciderDir !== undefined ? { deciderDir } : {}),
+    ...(values["--skill"] !== undefined ? { skill: values["--skill"] } : {}),
     outputFormat,
     globals,
   };

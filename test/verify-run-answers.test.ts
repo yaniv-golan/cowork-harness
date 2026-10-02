@@ -168,3 +168,45 @@ describe.skipIf(!can)("verify-run answer-coverage", () => {
     expect(r.text).toMatch(/gate evidence incomplete/);
   });
 });
+
+describe.skipIf(!can)("verify-run reports a partly scripted question batch (report-only)", () => {
+  const J = "Which jurisdiction structure applies?";
+  const R = "Which round are you raising?";
+  /** A kept run whose one gate batches two sub-questions, as events.jsonl records it verbatim. */
+  function batchRun(): string {
+    const run = keptRun();
+    const frame = {
+      type: "control_request",
+      request_id: "req-batch",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        tool_use_id: "toolu_b",
+        input: {
+          questions: [
+            { question: J, options: [{ label: "Israeli parent" }, { label: "Delaware (already flipped)" }] },
+            { question: R, options: [{ label: "Seed" }, { label: "Series A" }] },
+          ],
+        },
+      },
+    };
+    writeFileSync(join(run, "events.jsonl"), JSON.stringify(frame) + "\n");
+    writeFileSync(join(run, "turns", "1", "trace.json"), JSON.stringify({ questions: [J, R], steps: [] }));
+    return run;
+  }
+  const rules = (extra = "") =>
+    `on_unanswered: first\nanswers:\n  - when_question: "jurisdiction structure"\n    choose: "Delaware (already flipped)"\n${extra}assert:\n  - result: success\n`;
+
+  it("names matched and unmatched sub-questions as a warn signal; exit code is unchanged", () => {
+    const run = batchRun();
+    const partly = verifyRun(run, scenarioFile(run, rules()));
+    expect(partly.code).toBe(0);
+    expect(partly.text).toMatch(/partly_scripted_gate: this question batch is only partly scripted/);
+    expect(partly.text).toContain(JSON.stringify(J));
+    expect(partly.text).toContain(JSON.stringify(R));
+
+    const full = verifyRun(run, scenarioFile(run, rules(`  - when_question: "round"\n    choose: "Seed"\n`)));
+    expect(full.code).toBe(0);
+    expect(full.text).not.toMatch(/partly_scripted_gate/);
+  });
+});
