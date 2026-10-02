@@ -904,12 +904,13 @@ describe.skipIf(!can)("prune still prunes a real runs root", () => {
   it("F10: a runs root nested three levels down is left untouched (the allowlist, not the shape check)", () => {
     const R = realRoot(tmp("prune-ok-"), "s", 3);
     realRoot(join(R, "x", "y", "nested"), "t", 8);
+    for (const w of ["w1", "w2"]) mkdirSync(join(R, "x", w)); // siblings, so a ranking of x's children would delete
     const before = snapshotTree(join(R, "x"));
     const r = prune(["--keep-last", "1", R]);
     expect(r.status, r.stderr).toBe(0);
     expect(runCount(join(R, "s"))).toBe(1);
     expect(snapshotTree(join(R, "x"))).toEqual(before);
-    expect(r.stderr).toMatch(/left 1 dir\(s\) that are not named like a run alone/);
+    expect(r.stderr).toMatch(/left 3 dir\(s\) that are not named like a run alone/);
   });
 });
 
