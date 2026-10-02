@@ -12,6 +12,12 @@ All notable changes to this project are documented here. The format is based on
   before its manifest, instead of writing a report with every run errored, and `eval --dry-run` makes the same
   check. `regrade` makes it before its first grade. A `semantic_pairwise` assert graded by the host `claude`
   triggers it, as `semantic_matches` does. All exit 2, before any model call.
+- **`record` no longer writes the recording account's model menu into a cassette.** The agent's `initialize` response
+  lists the models the account is offered, with their display copy and, on a pay-per-token account, per-Mtok
+  pricing; a committed cassette published it. `record` now empties that `models` array before writing, on every
+  recording, `--no-redact` included. Nothing in replay, the verdict, staleness or the fingerprint reads it, and the
+  write is held to the same verdict-preservation check as policy redaction. A cassette recorded by an older harness
+  may still carry it; re-record to drop it. The committed cassettes are scrubbed.
 
 ### Upgrade notes
 
@@ -25,8 +31,8 @@ All notable changes to this project are documented here. The format is based on
     assertion on those names needs updating.
   - At `protocol` a re-stamp is sound: the agent there is the `claude` on your `PATH`, and the first-party spawn env, the
     Cowork system prompt, the sub-agent append, the egress allowlist and the spawn tools are unchanged.
-  - The committed cassettes: `example-pdf-skill` and `dispatch-shell` are re-recorded, `example-multiselect-gate` is
-    re-stamped, and `hostloop-computer-links` is re-stamped pending a re-recording (it reports the `agent-version:` note).
+  - The committed cassettes: `example-pdf-skill`, `dispatch-shell` and `hostloop-computer-links` are re-recorded, and
+    `example-multiselect-gate` is re-stamped.
 - **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
   the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
