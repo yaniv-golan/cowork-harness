@@ -1,5 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, readFileSync, utimesSync, rmSync, symlinkSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  utimesSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -635,7 +646,7 @@ describe.skipIf(!can)("prune refuses a root at the wrong level", () => {
       indexRow(C);
       for (const s of ["a", "b"]) for (let i = 0; i < 3; i++) mkdirSync(join(C, s, `local_${s}${i}aaaaaaaaaaaa`), { recursive: true });
       return { top: P, args: ["--keep-last", "1", P] };
-    }, /looks like the parent of a runs root: .*myroot holds index\.jsonl/);
+    }, /looks like the parent of a runs root: .*myroot \(index\.jsonl\)/);
   });
 
   it("R1d: an empty child named runs (the default runs-dir name) is refused", () => {
@@ -643,7 +654,7 @@ describe.skipIf(!can)("prune refuses a root at the wrong level", () => {
       const P = tmp("prune-lvl-");
       mkdirSync(join(P, "runs"));
       return { top: P, args: [P] };
-    }, /looks like the parent of a runs root: .*runs has the default runs-dir name/);
+    }, /looks like the parent of a runs root: .*runs \(the default runs-dir name\)/);
   });
 
   it("R1e: a runs root holding a nested runs root is refused with the nested message; the nested root prunes by its own path", () => {
@@ -652,9 +663,9 @@ describe.skipIf(!can)("prune refuses a root at the wrong level", () => {
       R = realRoot(tmp("prune-lvl-"), "s", 3);
       realRoot(join(R, "nested"), "t", 3);
       return { top: R, args: ["--keep-last", "1", R] };
-    }, /holds a nested runs root at/);
+    }, /holds a nested runs root, so prune cannot run on it: /);
     expect(err).toContain(join(R, "nested"));
-    expect(err).not.toMatch(/parent of a runs root/);
+    expect(err).not.toMatch(/parent of/);
     const ok = prune(["--keep-last", "1", join(R, "nested")]);
     expect(ok.status, ok.stderr).toBe(0);
     expect(runCount(join(R, "nested", "t"))).toBe(1);
@@ -667,7 +678,7 @@ describe.skipIf(!can)("prune refuses a root at the wrong level", () => {
       realRoot(join(P, "runs"));
       realRoot(join(P, "runs-old"));
       return { top: P, args: [P] };
-    }, /parent of a runs root/);
+    }, /looks like the parent of runs roots: /);
     expect(err).toContain(join(P, "runs"));
     expect(err).toContain(join(P, "runs-old"));
   });
@@ -680,7 +691,7 @@ describe.skipIf(!can)("prune refuses a root at the wrong level", () => {
     }, /looks like a scenario dir, not a runs root: .*local_\w+ is a run dir \(status\.json, turns\/\)/);
     expect(err).toMatch(/no per-scenario scope/);
     expect(err).toContain(`prune --dry-run ${R}`);
-    expect(err).not.toMatch(/parent of a runs root/);
+    expect(err).not.toMatch(/parent of/);
     const ok = prune(["--keep-last", "1", R]);
     expect(ok.status, ok.stderr).toBe(0);
     expect(runCount(join(R, "s"))).toBe(1);
@@ -836,7 +847,7 @@ describe.skipIf(!can)("prune still prunes a real runs root", () => {
     expect(r.status, r.stderr).toBe(0);
     expect(runCount(join(R, "s"))).toBe(1);
     expect(existsSync(join(R, "notes", "a", "b")) && existsSync(join(R, "notes", "c")) && existsSync(join(R, "tmp"))).toBe(true);
-    expect(r.stderr).toMatch(/left 2 dir\(s\) that are not named like a run alone/);
+    expect(r.stderr).toMatch(/left alone 2 dir\(s\) not named like a run/);
   });
 
   it("F7: chat/, quarantine/, .migrating/ and capability-cache.json", () => {
@@ -874,7 +885,7 @@ describe.skipIf(!can)("prune still prunes a real runs root", () => {
     const r = prune(["--keep-last", "1", H]);
     expect(r.status, r.stderr).toBe(0);
     expect(snapshotTree(H)).toEqual(before);
-    expect(r.stderr).toMatch(/left \d+ dir\(s\) that are not named like a run alone/);
+    expect(r.stderr).toMatch(/left alone \d+ dir\(s\) not named like a run/);
   });
 
   it("F9: a repo-like dir is left untouched, with the count printed", () => {
@@ -898,7 +909,8 @@ describe.skipIf(!can)("prune still prunes a real runs root", () => {
     const r = prune(["--keep-last", "1", G]);
     expect(r.status, r.stderr).toBe(0);
     expect(snapshotTree(G)).toEqual(before);
-    expect(r.stderr).toMatch(/left 10 dir\(s\) that are not named like a run alone/);
+    expect(r.stderr).toMatch(/left alone 10 dir\(s\) not named like a run/);
+    expect(r.stderr).toContain(`no <scenario>/<run> dirs found under ${G}; the default runs root is ~/.cowork-harness/runs`);
   });
 
   it("F10: a runs root nested three levels down is left untouched (the allowlist, not the shape check)", () => {
@@ -910,7 +922,7 @@ describe.skipIf(!can)("prune still prunes a real runs root", () => {
     expect(r.status, r.stderr).toBe(0);
     expect(runCount(join(R, "s"))).toBe(1);
     expect(snapshotTree(join(R, "x"))).toEqual(before);
-    expect(r.stderr).toMatch(/left 3 dir\(s\) that are not named like a run alone/);
+    expect(r.stderr).toMatch(/left alone 3 dir\(s\) not named like a run/);
   });
 });
 
@@ -987,5 +999,89 @@ describe("runDirEvidence: one reader for the ranking and the level check", () =>
     expect(gc.pruneLevelRefusal(R)).toBeUndefined();
     expect(gc.pruneLevelRefusal(join(R, "s"))).toMatch(/scenario dir/);
     expect(dirname(R)).toBe(P);
+  });
+});
+
+describe.skipIf(!can)("prune level check: review follow-ups", () => {
+  it("a runs root whose child holds a manifest.json still prunes; the child is left alone", () => {
+    const R = realRoot(tmp("prune-fu-"), "s", 3);
+    mkdirSync(join(R, "backup"));
+    writeFileSync(join(R, "backup", "manifest.json"), "{}");
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(runCount(join(R, "s"))).toBe(1);
+    expect(existsSync(join(R, "backup", "manifest.json"))).toBe(true);
+  });
+
+  it("<run>/turns/1 names the run dir it is inside, and hints at the runs root", () => {
+    let R = "";
+    let run = "";
+    const err = expectRefused(() => {
+      R = tmp("prune-fu-");
+      run = runDir(R, "s", { mtimeSec: T0 });
+      return { top: R, args: [join(run, "turns", "1")] };
+    }, /is inside the run dir /);
+    expect(err).toContain(`is inside the run dir ${run}`);
+    expect(err).toContain(`prune --dry-run ${R}`);
+  });
+
+  it("the parent hint prefers the child named runs over an earlier-sorted runs root", () => {
+    let P = "";
+    const err = expectRefused(() => {
+      P = tmp("prune-fu-");
+      realRoot(join(P, "aaa-root"));
+      realRoot(join(P, "runs"));
+      return { top: P, args: [P] };
+    }, /looks like the parent of runs roots: /);
+    expect(err).toContain(`Did you mean: cowork-harness prune --dry-run ${join(P, "runs")} (or ${join(P, "aaa-root")})`);
+  });
+
+  it("several nested runs roots are listed as one clean list", () => {
+    let R = "";
+    const err = expectRefused(() => {
+      R = realRoot(tmp("prune-fu-"), "s", 2);
+      realRoot(join(R, "n1"), "t", 2);
+      realRoot(join(R, "n2"), "t", 2);
+      return { top: R, args: [R] };
+    }, /holds nested runs roots, so prune cannot run on it: /);
+    expect(err).toContain(`${join(R, "n1")} (index.jsonl), ${join(R, "n2")} (index.jsonl). Nothing was deleted.`);
+  });
+
+  it("a root from COWORK_HARNESS_RUNS_DIR says so; one from --run-dir or the positional does not", () => {
+    const R = realRoot(tmp("prune-fu-"), "s", 3);
+    const env = prune([], { COWORK_HARNESS_RUNS_DIR: join(R, "s") });
+    expect(env.status, env.stderr).toBe(2);
+    expect(env.stderr).toContain(`prune: ${join(R, "s")} (from COWORK_HARNESS_RUNS_DIR) looks like a scenario dir`);
+    const flag = prune(["--run-dir", join(R, "s")], { COWORK_HARNESS_RUNS_DIR: "/tmp/cwh-env-loses" });
+    expect(flag.status).toBe(2);
+    expect(flag.stderr).not.toContain("from COWORK_HARNESS_RUNS_DIR");
+    const pos = prune([join(R, "s")], { COWORK_HARNESS_RUNS_DIR: R });
+    expect(pos.status).toBe(2);
+    expect(pos.stderr).not.toContain("from COWORK_HARNESS_RUNS_DIR");
+  });
+
+  // chmod 000 has no effect for root, so the case is meaningless there.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable dir is skipped and counted, not a crash", () => {
+    const R = realRoot(tmp("prune-fu-"), "s", 3);
+    const locked = join(R, "locked");
+    mkdirSync(join(locked, "local_0000000000001"), { recursive: true });
+    const P = tmp("prune-fu-");
+    const lockedChild = join(P, "locked");
+    mkdirSync(join(lockedChild, "x"), { recursive: true });
+    chmodSync(locked, 0o000);
+    chmodSync(lockedChild, 0o000);
+    try {
+      const r = prune(["--keep-last", "1", R]);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toContain(`skipped 1 dir(s) it could not read: ${locked}`);
+      expect(runCount(join(R, "s"))).toBe(1);
+      const lv = prune([P]); // the level scan meets the unreadable child, too
+      expect(lv.status, lv.stderr).toBe(0);
+      expect(lv.stderr).not.toMatch(/\n\s+at /);
+    } finally {
+      chmodSync(locked, 0o755);
+      chmodSync(lockedChild, 0o755);
+    }
+    expect(existsSync(join(locked, "local_0000000000001"))).toBe(true);
   });
 });

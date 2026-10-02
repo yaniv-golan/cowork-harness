@@ -48,6 +48,12 @@ export function setRunsDir(value: string): void {
   process.env.COWORK_HARNESS_RUNS_DIR = expandUserPath(value);
 }
 
+/** Whether `--run-dir` was given, before or after the subcommand. When it was not, a set
+ *  COWORK_HARNESS_RUNS_DIR came from the environment (or a .env file). */
+export function runDirFlagGiven(): boolean {
+  return state?.leading["--run-dir"] === true || applied.has("--run-dir");
+}
+
 /** Called once by main(), after the leading flags are handled and BEFORE any .env file is loaded. */
 export function recordLeadingGlobals(leading: Record<CommandGlobalFlag, boolean>): void {
   state = { protectedKeys: new Set(Object.keys(process.env)), leading, installCredentials: new Set() };
