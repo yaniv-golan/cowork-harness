@@ -217,9 +217,9 @@ async function run(
       .filter((p) => !hiddenSet.has(p)),
   );
   const listed = listedRaw.map((p) => resolve(deps.cwd, p)).filter((p) => !inputs.has(p) && lexists(p));
-  // Over EVERY case, whatever --case selects: a sibling scenario reachable through a selected case's mount is
-  // still the flow's answer key.
-  const exposed = pathsInsideMounts([flowAbs, ...hidden, ...listed], deps.mountRoots(all));
+  // The hidden files are EVERY case's, whatever --case selects: a sibling scenario reachable through a selected case's
+  // mount is still the flow's answer key. The mounts are the selected cases': only theirs exist in this pass.
+  const exposed = pathsInsideMounts([flowAbs, ...hidden, ...listed], deps.mountRoots(cases));
   if (exposed.length)
     throw new UsageError(
       `refusing to run: the agent could read ${exposed.map((x) => `${x.path} (through the mount ${x.mount})`).join("; ")} — prior rounds' grades, judge rationales and the rubric must stay outside every folder the session mounts`,

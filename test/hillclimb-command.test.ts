@@ -96,6 +96,49 @@ describe("prepareCases", () => {
   });
 });
 
+describe("prepareCases — a --case selection scopes the per-case refusals", () => {
+  const sel = (ids: string[]) => {
+    const { cases } = loadCases(dir);
+    return { cases, selected: cases.filter((c) => ids.includes(c.id)) };
+  };
+
+  it("on_unanswered: prompt, an inline session and an alias pin refuse only when their case is selected", () => {
+    scenario("a.yaml");
+    scenario("b.yaml", "on_unanswered: prompt\n");
+    writeFileSync(join(dir, "c.yaml"), "name: c\nbaseline: latest\nfidelity: container\nprompt: p\n");
+    session("alias.yaml", `model: sonnet\nplugins:\n  local_plugins:\n    - ${SKILL}\n`);
+    scenario("d.yaml", "", "./alias.yaml");
+    const { cases, selected } = sel(["a"]);
+    const p = prepareCases(cases, { env: {} }, selected);
+    expect(p.pin(selected[0]!)).toBe("claude-sonnet-5");
+    expect(() => prepareCases(cases, { env: {} }, sel(["a", "b"]).selected)).toThrow(/case b: on_unanswered: prompt/);
+    expect(() => prepareCases(cases, { env: {} }, sel(["a", "c"]).selected)).toThrow(/case c: the scenario has no session file/);
+    expect(() => prepareCases(cases, { env: {} }, sel(["a", "d"]).selected)).toThrow(/CONCRETE agent model/);
+  });
+
+  it("the protocol tier without a managed config dir refuses only when that case is selected", () => {
+    scenario("a.yaml");
+    writeFileSync(join(dir, "p.yaml"), "name: p\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: p\n");
+    const saved = process.env.COWORK_MANAGED_CONFIG;
+    process.env.COWORK_MANAGED_CONFIG = "0";
+    try {
+      const { cases, selected } = sel(["a"]);
+      expect(() => prepareCases(cases, { env: {} }, selected)).not.toThrow();
+      expect(() => prepareCases(cases, { env: {} })).toThrow(/case p: fidelity protocol/);
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_MANAGED_CONFIG;
+      else process.env.COWORK_MANAGED_CONFIG = saved;
+    }
+  });
+
+  it("the one-plugin rule still covers an unselected case whose session parses", () => {
+    session("two.yaml", `model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ${SKILL}\n    - ${SKILL}\n`);
+    scenario("a.yaml");
+    scenario("b.yaml", "", "./two.yaml");
+    expect(() => prepareCases(loadCases(dir).cases, { env: {} }, sel(["a"]).selected)).toThrow(/case b: .*exactly one/);
+  });
+});
+
 describe("prepareCases — what defines the measurement, and what the agent can read", () => {
   it("derived paths: the scenario file, its session file and every uploaded input", () => {
     const up = join(dir, "input.csv");
