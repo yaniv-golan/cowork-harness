@@ -27,7 +27,7 @@ const PAIRS: Record<string, string> = {
   "The full report viewer is untested": "Full report viewer untested",
   "`cost_usd` is the agent's reported total, not a derivation": "`cost_usd` is the reported total",
   "The kept runs and snapshots live outside the flow dir": "Kept runs and snapshots outside the flow dir",
-  "Each variant runs a snapshot of the plugin's git-tracked files": "Git-tracked snapshot",
+  "Inside a git work tree, each variant runs a snapshot of the plugin's git-tracked files": "Git-tracked snapshot",
   "The lever is the plugin": "The lever is the plugin",
   "A missing reference is refused before spending": "Missing reference refused",
   Timeouts: "Timeouts",

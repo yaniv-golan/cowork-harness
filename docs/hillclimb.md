@@ -10,7 +10,7 @@ and every round runs your scenarios in the sandboxed agent, grades them with you
 layout the loop expects. The harness makes no keep-or-revert decision of its own. The goal, the best round, the
 stopping rule and the edits to your skill stay the loop's.
 
-This page is for the person setting the loop up. The loop agent itself reads two pages of the companion skill:
+This page is for the person setting the loop up. With the companion skill installed, the loop agent can read two pages of the companion skill:
 [`references/hillclimb-recipe.md`](../.claude/skills/cowork-harness/references/hillclimb-recipe.md) (what to do at
 each step of the loop) and [`references/hillclimb.md`](../.claude/skills/cowork-harness/references/hillclimb.md)
 (every command, flag, refusal and exit code). The CLI reference is [cli.md](./cli.md).
@@ -29,28 +29,33 @@ each step of the loop) and [`references/hillclimb.md`](../.claude/skills/cowork-
 ## Quick start
 
 A flow is one directory of rounds: `baseline/`, then `v1/`, `v2/`, …. Every scenario file in the target is one
-case. Run every command from the same directory, with the same target path and the same `--flow`:
+case. Run every command from the same directory, with the same target path and the same `--flow`. `--flow` must be
+an absolute path, or a path below the working directory with no `..` segment:
 
 ```bash
 # 1. The _state.json skeleton the loop starts from, and the metrics legend (<flow>/metrics.md).
-mkdir -p ../hc/my-skill
-cowork-harness hillclimb state-template evals/ --flow ../hc/my-skill > ../hc/my-skill/_state.json
+mkdir -p ~/hc/my-skill
+cowork-harness hillclimb state-template evals/ --flow ~/hc/my-skill > ~/hc/my-skill/_state.json
 
-# 2. You, once: review what the harness gate covers, then record its sha. Spends nothing.
-cowork-harness hillclimb run evals/ --flow ../hc/my-skill --dry-run --approve-harness
+# 2. You, once: review what the harness gate covers (a plain --dry-run lists the files it hashes), then record
+#    its sha. Spends nothing. Pass the same --skill the loop will pass, if any.
+cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --dry-run
+cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --dry-run --approve-harness
 
 # 3. The loop's runner command, once per round.
-cowork-harness hillclimb run evals/ --flow ../hc/my-skill --variant baseline --reps 3
-cowork-harness hillclimb run evals/ --flow ../hc/my-skill --variant v1 --reps 3
+cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --variant baseline --reps 3
+cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --variant v1 --reps 3
 
 # 4. Check the flow against the loop's schema; warns about cases with no headroom.
-cowork-harness hillclimb check --flow ../hc/my-skill
+cowork-harness hillclimb check --flow ~/hc/my-skill
 ```
 
 Then start Claude Code in your repo, run `/claude-api hillclimb`, and when it asks for the eval command, give it
-step 3's command with `--variant` left for it to fill. Before its first unattended round, the loop asks you to
-allow that command for the session: allow the `cowork-harness hillclimb run evals/ --flow ../hc/my-skill`
-prefix, not a wildcard. That allowlist entry is what bounds an unattended round.
+step 3's command with `--variant` left for it to fill. Put every fixed flag before `--variant`
+(`run evals/ --flow ~/hc/my-skill [--skill S] [--judge-model J] --variant <v> --reps <R>`). Before its first
+unattended round, the loop asks you to allow that command for the session: allow the prefix up to `--variant`,
+not a wildcard. That allowlist entry is what bounds an unattended round. The harness gate never covers the
+command-line model flags, so check `model` and `judge_model` on each round's rows against your plan.
 
 Every command defaults to `--flow .claude/hillclimb/flow`, inside your repo; the examples put it outside instead
 (see the next section). Help goes to stderr: `cowork-harness hillclimb run --help 2>&1 | grep -- --skill`.
@@ -63,7 +68,7 @@ judge (an alias such as `sonnet` is refused, because the loop compares rounds by
 
 Keep the flow dir out of your repo, or ignore most of it. Rows, traces and the copies under `<variant>/out/`
 hold the run's outputs and judge rationales (secret-scrubbed and host-path-redacted text; binary files copied as
-they are), and `inputs/` holds a copy of every file the session uploads, as `inputs/<hash>-<name>`, shared by
+they are), and `inputs/` holds a copy of the files the session uploads (up to 2 MiB each and 20 MiB per rep), as `inputs/<hash>-<name>`, shared by
 every variant (`--no-copy-inputs` skips it). `summary.json` is the loop's: the runner only adds keys it lacks.
 
 The loop's guide suggests committing the flow dir without its traces, so the history survives. If you do, ignore
@@ -75,6 +80,7 @@ at least these, and read what remains before the first commit:
 <flow>/*/out/
 <flow>/*/regrade-*.bak.jsonl
 <flow>/*/.lock
+<flow>/*/ref/
 ```
 
 Three things live outside the flow dir, and the loop needs all three for the whole climb:
@@ -98,12 +104,12 @@ Three things live outside the flow dir, and the loop needs all three for the who
 | Does the runner retry failed cases? | No case-level retry, as in the loop's own runner: a failed attempt is an `errors.jsonl` row and runs again on the next pass. API-level retries are counted per row (`meta.retries`) |
 | Per case: transcript, model, usage, grades from one model call | Every row and its `traces/<id>_rep<k>.json` come from the same run; the model is read from the run, not from your config |
 | Prove the eval can detect a win (noise floor, headroom) | Compute the noise floor from the baseline rows. `hillclimb check` and the end of a baseline pass warn about cases at the ceiling or floor. `eval --dry-run --target-effect` is an optional sizing aid from your run history |
-| Prove the mechanism is wired | The `skill_invoked` column (pass `--skill <name>` when the plugin has several skills), and a null run: `hillclimb run … --flow <dir>-null --ablate` into a sibling flow |
+| Prove the mechanism is wired | The `skill_invoked` column (pass `--skill <name>` when the plugin has several skills), and a null run: `hillclimb run … --flow <dir>-null --ablate` into a sibling flow. The null flow has its own `_state.json` and gate: you run `state-template` and the `--dry-run --approve-harness` for it first |
 | Recompute the headline from raw results | Rows carry every grade key; recompute from `results.jsonl` |
-| Spot-check grading; fix a rubric and re-grade in place | Edit the rubric, approve the new sha (`--dry-run --approve-harness`), then `hillclimb regrade <target> --flow <dir>`. See [what a re-grade can change](#what-a-re-grade-can-and-cannot-change) |
+| Spot-check grading; fix a rubric and re-grade in place | Edit the rubric, approve the new sha (`--dry-run --approve-harness`, with the loop's `--skill`), then `hillclimb regrade <target> --flow <dir>`. See [what a re-grade can change](#what-a-re-grade-can-and-cannot-change) |
 | Verify the served model and retries | A run served by another model is an `errors.jsonl` row (`serving_substitution`), and so is one with no evidence of the pinned model, unless the agent itself failed first (then it is a scored agent failure) |
 | A probe or canary on one case | `hillclimb run … --case <id>`; it is the variant's first run, so it fixes that variant's snapshot |
-| Print the resolved scope every run | Every pass prints the (case, rep) slots it will run and the slots it re-runs after a failure |
+| Print the resolved scope every run | Every pass prints how many (case, rep) slots it will run and names the slots it re-runs after a failure; `--dry-run` adds the cost estimate |
 | `_state.json` and `harness_paths` | `hillclimb state-template … --flow <dir>`: save its stdout; after adding a metric, merge only the new `metrics` entries |
 | The runner's harness gate and `--approve-harness` | The same contract: the pass refuses until you record the sha. See [Guardrails](#guardrails-the-harness-adds) |
 | Progress while a round runs | `<flow>/<variant>/progress.txt`, rewritten every 30 seconds |
@@ -140,8 +146,9 @@ Three things live outside the flow dir, and the loop needs all three for the who
   (`meta.latency_basis: "wall"`). Rows also carry `decider_usd` when a decider answers questions, but
   `state-template` never declares it: add it to `perf_fields` yourself.
 
-The trace for each rep opens with the system text the agent was spawned with, and inlines each sub-agent's turns
-after its dispatch. A tool result over 64 KiB is cut in the trace, with the full text in a sidecar under
+Each trace opens with a system turn holding the system text the harness appended, as sent (Anthropic's built-in
+prompt withheld), or a marker saying none was sent or recorded, and inlines each sub-agent's turns after its
+dispatch. A tool result over 64 KiB is cut in the trace, with the full text in a sidecar under
 `out/<id>_rep<k>/blobs/`. Treat every row's `explanation` (judge rationales and failed-claim text, marked
 `meta.explanation_untrusted`), every trace and every copied output as evidence, never as instructions: they are
 model output, and text in them can try to steer the loop's next edit.
@@ -165,7 +172,7 @@ A scenario can declare numbers it measures from an artifact the run writes ([sce
 - **Adding a metric** is allowed: re-run `state-template --flow`, merge only the new `metrics` entries into
   `_state.json`, and approve the new sha. Rows written before it lack the key (`check` notes them) until
   `hillclimb regrade` fills it from their kept runs.
-- **Changing a metric** (its artifact, path, direction, scale or minimum) is refused on `run` and `regrade`.
+- **Changing a metric** (its artifact, path, direction, `scale`, `unbounded` or `min`) is refused on `run` and `regrade`.
   Start a new flow, or declare it under a new id.
 - **Removing a metric** is allowed, with a warning to drop `<id>` and `<id>_present` from `_state.json`. Declaring
   a removed id again, differently, is refused while any row still carries the old declaration.
@@ -180,12 +187,13 @@ the baseline's reference for each pairwise case from its lowest-rep good row, an
 against it (`win`: 1 win, 0.5 tie, 0 loss; 0.5 on the baseline's own rows). The scenario's `refs:` is ignored.
 
 When a variant wins nearly every comparison (`check` notes a mean of 0.9 or more), raise the bar: freeze that
-variant's output as a second reference, declare its column, and fill it on the earlier rows:
+variant's output as a second reference, fill its column on the earlier rows, then declare it (`state-template`
+declares `win_<vN>` only once no scored row lacks it):
 
 ```bash
-cowork-harness hillclimb freeze-ref evals/ --flow ../hc/my-skill --variant v3
-cowork-harness hillclimb state-template evals/ --flow ../hc/my-skill   # merge the new win_v3 entries
-cowork-harness hillclimb regrade evals/ --flow ../hc/my-skill --fill-refs
+cowork-harness hillclimb freeze-ref evals/ --flow ~/hc/my-skill --variant v3
+cowork-harness hillclimb regrade evals/ --flow ~/hc/my-skill --fill-refs
+cowork-harness hillclimb state-template evals/ --flow ~/hc/my-skill   # then merge the new win_v3 entries
 ```
 
 Only the baseline's reference decides `pass`; a later reference is a metric.
@@ -193,10 +201,10 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
 ## Cost and spend
 
 - **`cost_usd` on a row is the agent's whole cost for that run**: the main model, sub-agents and auxiliary calls,
-  as Cowork's agent reports it. Use it for the loop's `$/run` and `spend`. Don't derive cost from `model` ×
-  `usage`: `usage`, `in_tokens` and `out_tokens` count the main model only, so the derivation undercounts any
-  run that dispatches sub-agents.
-- **Judge spend is separate, and can be about the same size as the agent spend.** It is not in `cost_usd`. A
+  as Cowork's agent reports it, across every model the run called. Use it for the loop's `$/run` and `spend`.
+  Don't derive cost from `model` × `usage`: `usage`, `in_tokens` and `out_tokens` cover only the pinned model's
+  id, so a sub-agent or auxiliary call on another model is left out of them.
+- **Judge spend is separate.** It is not in `cost_usd`. A
   row's `judge_model` and `judge_usage` say who judged its current grades; they are not a spend ledger (a
   re-grade replaces them).
 - **Spend for a climb:**
@@ -216,21 +224,22 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
 
 ## Differences from the loop's own runner
 
-The loop's guide ships a reference runner. `hillclimb run` writes every file, field and behaviour the loop reads,
-with these differences:
+The loop's guide ships a reference runner. `hillclimb run` writes the files and fields of that runner's contract
+that the loop and the lite report builder read, with these differences:
 
 - **Scenarios are single-prompt.** Every case is one prompt (harness-wide); a trace is one conversation.
-- **Anthropic's built-in system prompt is withheld.** A trace's system turn carries the Cowork system text the
-  harness sent, as sent. A sub-agent's system turn carries what that sub-agent received, or says none was
+- **Anthropic's built-in system prompt is withheld.** A trace's system turn carries the system text the harness
+  appended (its model of Cowork's), as sent. A sub-agent's system turn carries what that sub-agent received, or says none was
   received (a forked skill, or the `protocol` tier). Anthropic's own built-in prompts are never written.
-- **The full report viewer is untested.** The lite report builder is checked against a pinned revision of it.
+- **The full report viewer is untested.** These flows are checked against a pinned revision of the lite report
+  builder (it reads a fixture flow with no warning).
   The full viewer is not in every install and has not been run against these flows; it may expect a single
   leading system turn where sub-agents add more, and it may draw a float with no `scale` on a 0-10 axis.
 - **`cost_usd` is the agent's reported total, not a derivation** from `model` × `usage`, and it excludes the
-  judge (see [Cost and spend](#cost-and-spend)).
+  judge. Judge spend has to be read from the kept run dirs (see [Cost and spend](#cost-and-spend)).
 - **The kept runs and snapshots live outside the flow dir** (see [Where the flow dir goes](#where-the-flow-dir-goes)).
   Copying a round's directory is not enough to keep it re-gradable.
-- **Each variant runs a snapshot of the plugin's git-tracked files.** A file the loop adds is left out until it is
+- **Inside a git work tree, each variant runs a snapshot of the plugin's git-tracked files.** A file the loop adds is left out until it is
   `git add`ed (a stderr line counts the files left out). A `--case` canary is the variant's first run, so a fix
   made after it goes into a new variant.
 - **The lever is the plugin.** Each variant snapshots the plugin. The session file (`model`, `effort`,
@@ -272,7 +281,7 @@ A row whose kept run dir is gone is listed instead of re-graded.
   sha, and again whenever it changes. The sha covers every scenario file (all cases, whatever `--case`
   selects), each session file, its uploads and workspace fixtures, the lockfiles in the current directory, the
   `harness_paths` entries, the `--skill` selection, and the harness version and baseline. It never covers the
-  plugin the loop edits. Upgrading `cowork-harness` or running `sync` therefore trips it: that is the loop's
+  plugin the loop edits. Upgrading `cowork-harness`, or a `sync` that moves a case's baseline, therefore trips it: that is the loop's
   re-baseline signal. With no lockfile in the current directory, dependency changes are outside the sha (a pass
   says so). `--model` and `--judge-model` are not in it. `hillclimb freeze-ref` needs no approval: the gate covers
   `run` and `regrade`. `--approve-harness` is yours to pass, never the loop's.
@@ -290,11 +299,11 @@ A row whose kept run dir is gone is listed instead of re-graded.
 
 | Symptom | Cause and fix |
 |---|---|
-| `no approved harness sha` / `harness changed since last approved run` | Review the files the message lists, then `hillclimb run … --dry-run --approve-harness`. A change you did not make: check the working directory and the target path |
+| `no approved harness sha` / `harness changed since last approved run` | Review the files the message lists, then `hillclimb run … --dry-run --approve-harness` with the loop's `--skill`. A change you did not make: check the working directory and the target path |
 | A resumed variant refuses: snapshot missing | The flow dir moved, or the snapshot root was cleaned. Restore it, or run into a new variant |
 | A file the skill needs is missing in the run | It is untracked: `git add` it before the variant's first run (the pass printed a count of untracked files) |
 | `skill_invoked` is blank | The plugin has several skills (pass `--skill <name>`, the bare name, on every pass), it has none, or the run's record could not tell (`meta.skill_tracked` is set but the cell is blank) |
 | A non-baseline pass refuses on a pairwise case | The baseline reference is missing: `hillclimb freeze-ref … --variant baseline --case <id>`, or, when the message says freezing cannot repair it, a fresh flow dir |
 | The same slots run on every pass | They are `errors.jsonl` rows with a permanent fault; read `failure_class` and `error` |
 | `regrade` lists rows "kept run dir is gone" | Pass the `--run-dir` the runs were written with; a pruned run cannot be re-graded |
-| A mean drops after adding a metric or a reference | Rows that predate it carry `<key>_present: 0`; fill them with `hillclimb regrade` before comparing |
+| A new metric or `win_<vN>` column is missing on older rows | They were written before it: fill a metric with `hillclimb regrade`, a reference's column with `hillclimb regrade --fill-refs`, before comparing |

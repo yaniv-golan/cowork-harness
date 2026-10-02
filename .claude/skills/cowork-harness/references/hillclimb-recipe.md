@@ -8,6 +8,7 @@ runner are in [docs/hillclimb.md](https://github.com/yaniv-golan/cowork-harness/
 
 Throughout: `F` is the flow dir and `T` the scenario file or directory. Run every command from the same
 directory, with the same `T` spelling and the same `--flow F`, and pass the same `--run-dir` (or none) every time.
+`F` must be absolute, or below the working directory with no `..` segment.
 
 ## Differences from the guide's own runner, and what to do
 
@@ -38,11 +39,12 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 
 ## Step 0 — the runnable eval
 
-- **The command.** `cowork-harness hillclimb run T --flow F --variant <baseline|vN> --reps <R>`, plus
-  `--skill <name>` when the plugin has more than one skill and `--judge-model <id>` when a scenario has a judged
-  assertion. Results land in `F/<variant>/`. Show the user this command and ask them to allow its prefix, up to
-  `--variant`, for the session. If the goal is moving to another model, leave `--model` out of the allowed prefix
-  so each round can pass its own.
+- **The command.** `cowork-harness hillclimb run T --flow F [--skill <name>] [--judge-model <id>] --variant
+  <baseline|vN> --reps <R>`: every fixed flag before `--variant`. `--skill` is needed when the plugin has more than
+  one skill; `--judge-model` is optional and pins one judge for every judged assertion. Results land in
+  `F/<variant>/`. Show the user this command and ask them to allow its prefix, up to `--variant`, for the session.
+  If the goal is moving to another model, keep `--model` out of the prefix so each round can pass its own. The
+  gate never covers the command-line model flags: check `model` and `judge_model` on each round's rows.
 - **Retries.** No case-level retry: a failed attempt is an `errors.jsonl` row and runs again on the next pass.
   API retries are counted per row in `meta.retries` and never absorbed.
 - **Per-case data.** Every row and its `traces/<id>_rep<k>.json` come from one run: the transcript, the served
@@ -63,7 +65,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   whose reps all sit at the ceiling or the floor; they have no headroom. `eval --dry-run --target-effect <pp>` is
   an optional sizing aid that prices reps from run history.
 - **The mechanism is wired.** Read `skill_invoked` (1 or 0; a blank means not measured). Run the null run into a
-  sibling flow: `cowork-harness hillclimb run T --flow F-null --ablate --reps <R>`. If the scores barely drop,
+  sibling flow: `cowork-harness hillclimb run T --flow F-null --ablate --reps <R>`. The null flow has its own
+  `_state.json` and gate: ask the user to run `state-template T --flow F-null` (saved as `F-null/_state.json`)
+  and the `--dry-run --approve-harness` for it before you launch it. If the scores barely drop,
   the eval is not measuring the skill.
 - **Recompute the headline** from `F/<variant>/results.jsonl`, never from `summary.json`.
 - **Spot-check grading.** Read the lowest-scoring baseline rows' `explanation` and traces. If a rubric is wrong,
@@ -142,8 +146,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   `_state.json`. Rows written before it lack the key (`check` notes them); `hillclimb regrade T --flow F` fills it
   from their kept runs. Changing a declared metric is refused (new flow or new id); removing one warns.
 - **Pairwise saturation.** When `check` notes a variant scoring 0.9 or more against the newest reference:
-  `cowork-harness hillclimb freeze-ref T --flow F --variant vN`, then `state-template --flow F` and merge the new
-  `win_vN` entries, then `cowork-harness hillclimb regrade T --flow F --fill-refs`. Only the baseline's reference
+  `cowork-harness hillclimb freeze-ref T --flow F --variant vN`, then
+  `cowork-harness hillclimb regrade T --flow F --fill-refs`, then `state-template T --flow F` and merge the new
+  `win_vN` entries (it declares them only once no scored row lacks them). Only the baseline's reference
   decides `pass`.
 
 ## Step 5 — report and hand back
