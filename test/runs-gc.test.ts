@@ -1060,6 +1060,18 @@ describe.skipIf(!can)("prune level check: review follow-ups", () => {
     expect(pos.stderr).not.toContain("from COWORK_HARNESS_RUNS_DIR");
   });
 
+  // The level scan does not follow symlinks below the root (a cloud-storage folder can block a stat for minutes).
+  // A runs root reached through one is not recognised, and the name allowlist keeps it intact.
+  it("a runs root behind a symlinked child is left untouched", () => {
+    const P = tmp("prune-fu-");
+    const target = realRoot(join(tmp("prune-fu-target-"), "r"), "s", 8);
+    symlinkSync(target, join(P, "linked"));
+    const before = snapshotTree(target);
+    const r = prune(["--keep-last", "1", P]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(snapshotTree(target)).toEqual(before);
+  });
+
   // chmod 000 has no effect for root, so the case is meaningless there.
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable dir is skipped and counted, not a crash", () => {
     const R = realRoot(tmp("prune-fu-"), "s", 3);

@@ -1,5 +1,5 @@
 import { applyParsedCommandGlobals, runDirFlagGiven, withCommandGlobals } from "./command-globals.js";
-import { existsSync, readdirSync, statSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, statSync, rmSync, type Dirent } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { defaultRunsHome, runsWriteRoot } from "./trace-view.js";
@@ -150,41 +150,43 @@ function markerList(e: RunDirEvidence): string {
 
 /** The level scan's bounds. It runs on whatever path the user typed, a home dir included, so it must stay cheap:
  *  at most LEVEL_SCAN_MAX_CHILDREN children of any one dir are looked at, and the whole scan stops looking for
- *  more evidence after LEVEL_SCAN_BUDGET entries. What it does not see is still protected by the name allowlist. */
+ *  more evidence after LEVEL_SCAN_BUDGET units (one per entry, more per run-dir probe) or LEVEL_SCAN_DEADLINE_MS.
+ *  It never follows a symlink below the root and never stats a plain entry: a cloud-storage folder (Google Drive
+ *  and the like) can block a stat for minutes. What the scan does not see is still protected by the name
+ *  allowlist. */
 const LEVEL_SCAN_MAX_CHILDREN = 2000;
 const LEVEL_SCAN_BUDGET = 20_000;
-/** Entries the current level scan may still examine; undefined outside `pruneLevelRefusal` (no bound). */
-let scanBudget: number | undefined;
-/** Spend `n` units of the level-scan budget; false once it is spent. Always true outside a level scan. */
+const LEVEL_SCAN_DEADLINE_MS = 3000;
+/** The current level scan's remaining budget and deadline; undefined outside `pruneLevelRefusal` (no bound). */
+let scan: { left: number; until: number } | undefined;
+/** Spend `n` units of the level-scan budget; false once it or the deadline is spent. Always true outside a scan. */
 function charge(n: number): boolean {
-  if (scanBudget === undefined) return true;
-  scanBudget -= n;
-  return scanBudget >= 0;
+  if (scan === undefined) return true;
+  scan.left -= n;
+  return scan.left >= 0 && Date.now() < scan.until;
 }
 
-/** Dir children of `dir` for the level scan, sorted, following symlinks as the deletion loop does. Dot entries
- *  (`.migrating`, `.git`, `.Trash`, ...) are never descended into: no writer names a scenario or a run with a
- *  leading dot. An unreadable dir (EPERM, EACCES) has no children. */
+/** Dir children of `dir` for the level scan, sorted. Dot entries (`.migrating`, `.git`, `.Trash`, ...) are never
+ *  descended into: no writer names a scenario or a run with a leading dot. Symlinks are not followed, and the
+ *  entry type comes from the directory listing, so no entry is stat'ed. An unreadable dir (EPERM, EACCES) has
+ *  no children. */
 function dirChildren(dir: string): string[] {
   if (!charge(1)) return [];
-  let names: string[];
+  let entries: Dirent[];
   try {
-    names = readdirSync(dir);
+    entries = readdirSync(dir, { withFileTypes: true });
   } catch {
     return [];
   }
-  const out: string[] = [];
-  for (const n of names
-    .filter((x) => !x.startsWith("."))
+  const out = entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+    .map((e) => e.name)
     .sort()
-    .slice(0, LEVEL_SCAN_MAX_CHILDREN)) {
-    if (!charge(1)) break;
-    if (isDir(join(dir, n))) out.push(n);
-  }
-  return out;
+    .slice(0, LEVEL_SCAN_MAX_CHILDREN);
+  return charge(out.length) ? out : [];
 }
-/** `looksLikeRunDir`, charged to the level-scan budget (false once it is spent). */
-const scanLooksLikeRunDir = (dir: string): boolean => charge(1) && looksLikeRunDir(dir);
+/** `looksLikeRunDir`, charged to the level-scan budget (false once it is spent). A probe is several fs calls. */
+const scanLooksLikeRunDir = (dir: string): boolean => charge(6) && looksLikeRunDir(dir);
 const looksLikeScenarioDir = (dir: string): boolean => dirChildren(dir).some((x) => scanLooksLikeRunDir(join(dir, x)));
 /** Every non-dot child of `dir` is named like a run id (a scenario whose runs are all empty scaffold dirs). */
 function runIdNamed(dir: string): boolean {
@@ -221,11 +223,11 @@ const DEFAULT_RUNS_DIR_NAME = basename(defaultRunsHome());
  *  `source` is appended to the path in the message (e.g. where the root came from). The scan is bounded (see
  *  LEVEL_SCAN_BUDGET). */
 export function pruneLevelRefusal(root: string, source = ""): string | undefined {
-  scanBudget = LEVEL_SCAN_BUDGET;
+  scan = { left: LEVEL_SCAN_BUDGET, until: Date.now() + LEVEL_SCAN_DEADLINE_MS };
   try {
     return levelRefusal(root, source);
   } finally {
-    scanBudget = undefined;
+    scan = undefined;
   }
 }
 
@@ -267,7 +269,7 @@ function levelRefusal(root: string, source: string): string | undefined {
 
   const children = dirChildren(abs);
   for (const c of children) {
-    if (!charge(1)) break;
+    if (!charge(6)) break;
     const e = runDirEvidence(join(abs, c));
     if (looksLikeRunDirFrom(e))
       return refuse(`looks like a scenario dir, not a runs root: ${join(root, c)} is a run dir (${markerList(e)})`, wider(dirname(abs)));
@@ -481,15 +483,26 @@ export function cmdRunsGc(args: string[]): void {
     // mkdir and its status.json write, a few synchronous calls apart — has no guard.
     // Only dirs named like a run id are candidates (see LOCAL_RUN_ID_RE / PINNED_RUN_ID_RE). Dotfiles are not
     // counted (.DS_Store and the like).
-    const scenarioNames = readNames(scenarioDir);
-    if (scenarioNames === undefined) continue;
-    const dirs = scenarioNames.filter((name) => isDir(join(scenarioDir, name))).sort();
-    for (const name of dirs) {
-      if (name.startsWith(".") || LOCAL_RUN_ID_RE.test(name) || PINNED_RUN_ID_RE.test(name)) continue;
-      if (looksLikeRunDir(join(scenarioDir, name))) oddRuns.push(join(scenarioDir, name));
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(scenarioDir, { withFileTypes: true });
+    } catch {
+      unreadable.push(scenarioDir);
+      continue;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // A run-id-named entry is followed through a symlink, as before (a symlinked run dir is pruned as a link).
+    // Anything else is typed from the listing alone, never stat'ed: under a wrong root that can be a cloud-storage
+    // folder, where a stat can block for minutes.
+    const isRunId = (name: string) => LOCAL_RUN_ID_RE.test(name) || PINNED_RUN_ID_RE.test(name);
+    for (const e of entries) {
+      if (e.name.startsWith(".") || isRunId(e.name) || !e.isDirectory()) continue;
+      if (looksLikeRunDir(join(scenarioDir, e.name))) oddRuns.push(join(scenarioDir, e.name));
       else otherDirs++;
     }
-    const runIdDirs = dirs.filter((name) => LOCAL_RUN_ID_RE.test(name) || PINNED_RUN_ID_RE.test(name));
+    const runIdDirs = entries
+      .filter((e) => isRunId(e.name) && (e.isDirectory() || (e.isSymbolicLink() && isDir(join(scenarioDir, e.name)))))
+      .map((e) => e.name);
     runNamed += runIdDirs.length;
     const sorted = runIdDirs
       .map((name) => {
