@@ -1069,6 +1069,76 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
   }, 240_000);
 });
 
+// `meta.assert_sig`: the assertion set a row was graded under. A pass resumed after a scenario edit (approved) writes new
+// rows beside old ones graded by the old asserts; `run` warns, `check` flags the mix, and a regrade brings them current.
+describe.runIf(POSIX)("hillclimb rows record their assertion set (meta.assert_sig)", () => {
+  const SIG = /^[0-9a-f]{16}$/;
+  it("a resumed pass after an assert edit warns naming the stale rows; check flags the mix; a regrade clears both", async () => {
+    const { cli, flow, rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const old = rows("v1")[0]!.meta.assert_sig;
+    expect(old).toMatch(SIG);
+    expect(rows("baseline")[0]!.meta.assert_sig).toBe(old);
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: Nope"));
+    // Resume v1 with a second rep: the gate is approved for the edit, rep0 is kept, rep1 is graded by the new assert.
+    const r = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--reps", "2", "--concurrency", "1", "--approve-harness");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(
+      /warning: 2 row\(s\) were graded under another assertion set than their scenario's now \(baseline alpha rep0, v1 alpha rep0\).*run `hillclimb regrade evals --flow flow --case alpha` to re-evaluate them/,
+    );
+    const fresh = rows("v1").find((x) => x.rep === 1)!.meta.assert_sig;
+    expect(fresh).toMatch(SIG);
+    expect(fresh).not.toBe(old);
+    const mixed = checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w));
+    expect(mixed).toEqual([
+      expect.stringMatching(
+        new RegExp(
+          `^warning: case alpha's rows were graded under 2 assertion sets \\(${String(old)}: baseline 1, v1 1; ${String(fresh)}: v1 1\\)`,
+        ),
+      ),
+    ]);
+    const out = await regradeFlow(ARGS(), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    for (const v of ["baseline", "v1"]) for (const row of rows(v)) expect(row.meta.assert_sig).toBe(fresh);
+    expect(checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w))).toEqual([]);
+    const again = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--reps", "2", "--dry-run");
+    expect(again.stderr).not.toMatch(/assertion set/);
+    void flow;
+  }, 240_000);
+
+  it("an assert edit that moves no outcome: a regrade still brings each row's assert_sig current (the only change)", async () => {
+    const { flow, rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const old = rows("v1")[0]!;
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: All"));
+    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    const now = rows("v1")[0]!;
+    expect(now.grade).toEqual(old.grade);
+    expect(now.meta.assert_sig).toMatch(SIG);
+    expect(now.meta.assert_sig).not.toBe(old.meta.assert_sig);
+    expect(out.variants.map((v) => v.rewritten)).toEqual([1, 1]);
+    expect(checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w))).toEqual([]);
+    void flow;
+  }, 240_000);
+
+  it("a row with no assert_sig (written before it existed) is never called stale", () => {
+    const { cli, flow, rows, evals } = buildFlow({ noPairwise: true });
+    const file = join(flow, "v1", "results.jsonl");
+    const row = rows("v1")[0]!;
+    delete row.meta.assert_sig;
+    writeFileSync(file, JSON.stringify(row) + "\n");
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("prompt: hi\n", "prompt: hi\nexpect_denied: [blocked.example]\n"));
+    const r = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--reps", "1", "--dry-run", "--approve-harness");
+    // Only the baseline row, which carries the old sig, is named.
+    expect(r.stderr).toMatch(
+      /warning: 1 row\(s\) were graded under another assertion set than their scenario's now \(baseline alpha rep0\)/,
+    );
+    expect(checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w))).toEqual([]);
+  }, 240_000);
+});
+
 describe("hillclimb regrade's refusal on the CLI", () => {
   it("text mode prints a refusal once (the flow's own stderr line), json mode prints the envelope", () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), "hc-regrade-once-")));

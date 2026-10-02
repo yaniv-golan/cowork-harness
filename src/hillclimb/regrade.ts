@@ -35,7 +35,7 @@ import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
 import { lexists, normalizeRootArg, NoFollowRoot } from "./fs.js";
 import { approvedHarnessSkill, flowHarnessDigest, gateDecision } from "./gate.js";
-import { canonicalJson, flowHasPairwise, type MetricDecl } from "./grade-keys.js";
+import { assertSig, canonicalJson, flowHasPairwise, type MetricDecl } from "./grade-keys.js";
 import { discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
@@ -472,6 +472,8 @@ function rebuiltRow(
     repl.judge_model = row.judge_model;
     repl.judge_usage = row.judge_usage;
   }
+  // Rebuilt from the scenario as it is now: the assertion set the row is graded under now.
+  put("assert_sig", assertSig(c.scenario));
   for (const [k, v] of Object.entries(extraMeta)) put(k, v);
   for (const k of clear) if (!set.has(k)) delete meta[k];
   repl.meta = meta;
@@ -1031,7 +1033,10 @@ async function regradeFlowInner(
         (["grade", "explanation"] as const).every((k) => JSON.stringify(got.row[k]) === JSON.stringify(t.line.row![k])) &&
         (["metric_sigs", "metrics_unavailable"] as const).every(
           (k) => JSON.stringify(got.row.meta?.[k]) === JSON.stringify(t.line.row!.meta?.[k]),
-        )
+        ) &&
+        // A row that records another assertion set is brought current; one that records none (written before the sig
+        // existed) is not rewritten for it alone.
+        (t.line.row!.meta?.assert_sig === undefined || t.line.row!.meta.assert_sig === got.row.meta?.assert_sig)
       )
         continue;
       else {

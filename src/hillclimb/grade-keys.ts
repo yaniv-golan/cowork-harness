@@ -238,6 +238,15 @@ export function canonicalJson(v: unknown): string {
   return JSON.stringify(sort(v)) ?? "null";
 }
 
+/** The assertion set a row was graded under, stamped on every scored row (`meta.assert_sig`): the first 16 hex chars
+ *  of the sha256 of the canonical `{assert, expect_denied}` — key order never changes it. Rows of one case carrying two
+ *  sigs were graded by two graders; `hillclimb regrade` brings them current. */
+export const assertSig = (s: { assert: readonly unknown[]; expect_denied?: readonly string[] }): string =>
+  createHash("sha256")
+    .update(canonicalJson({ assert: s.assert, expect_denied: s.expect_denied ?? [] }))
+    .digest("hex")
+    .slice(0, 16);
+
 /** The union of the cases' scenario-declared metrics, in first-seen order. A metric id declared differently in
  *  another case (any field: the file, the path, the direction, the bound, the floor) is refused, naming both cases:
  *  one column cannot mean two things. Ids are compared case-insensitively, as the scenario compares its own: two

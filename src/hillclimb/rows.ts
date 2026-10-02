@@ -31,7 +31,7 @@ import {
   type ClassifiableResult,
 } from "../eval/classify.js";
 import { combineJudges } from "./judge-rollup.js";
-import { caseKeyDecls, refusableAssertion, type MetricDecl, type PairwiseDecls } from "./grade-keys.js";
+import { assertSig, caseKeyDecls, refusableAssertion, type MetricDecl, type PairwiseDecls } from "./grade-keys.js";
 import { metricEntries, metricSigs } from "./metric-keys.js";
 import { pairwiseRowValues } from "./pairwise.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
@@ -50,6 +50,8 @@ export interface AttemptContext {
   prompt: string;
   /** The scenario's authored assertions — the frozen list every grade lines up against. */
   assertions: readonly Assertion[];
+  /** The scenario's `expect_denied` hosts (graded as trailing `egress_denied` entries); part of `meta.assert_sig`. */
+  expectDenied?: readonly string[];
   metrics?: readonly MetricDecl[];
   /** Set when any case of the flow has `semantic_pairwise`: every row then carries the win columns, one per
    *  reference the pass judged against. */
@@ -411,6 +413,8 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(Object.keys(metricsUnavailable).length ? { metrics_unavailable: metricsUnavailable } : {}),
       // Each flow metric's declaration as this row was graded under it: a later pass refuses a changed one.
       ...(ctx.metrics?.length ? { metric_sigs: metricSigs(ctx.metrics) } : {}),
+      // The assertion set it was graded under: a later pass warns when the scenario's differs.
+      assert_sig: assertSig({ assert: ctx.assertions, expect_denied: ctx.expectDenied ?? [] }),
       ...(Object.keys(refShas).length ? { pairwise_ref_sha256: refShas } : {}),
       ...(hasExplanation ? { explanation_untrusted: true } : {}),
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),

@@ -21,7 +21,7 @@ import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { approvedHarnessSkill, flowHarnessDigest, gateDecision, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
-import { flowMetricUnion, refuseChangedMetrics, removedMetrics, undeclaredRowMetrics } from "./metric-keys.js";
+import { flowMetricUnion, refuseChangedMetrics, removedMetrics, staleAssertSigRows, undeclaredRowMetrics } from "./metric-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
@@ -191,6 +191,16 @@ async function run(
       );
 
   const cases = selectCases(all, args.cases);
+  // Rows graded under another assertion set than the scenario's now (an approved scenario edit): a resumed pass writes new
+  // rows beside them, so warn — never refuse: a row whose run dir is gone could never be brought current.
+  const stale = existing ? staleAssertSigRows(existing, cases) : [];
+  if (stale.length) {
+    const ids = [...new Set(stale.map((r) => r.promptId))];
+    const shown = stale.slice(0, 5).map((r) => `${r.variant} ${r.promptId} rep${r.rep}`);
+    say(
+      `warning: ${stale.length} row(s) were graded under another assertion set than their scenario's now (${shown.join(", ")}${stale.length > shown.length ? `, and ${stale.length - shown.length} more` : ""}): a comparison over them and this pass's rows mixes two graders — run \`hillclimb regrade ${args.target} --flow ${flowArg}${ids.map((id) => ` --case ${id}`).join("")}\` to re-evaluate them`,
+    );
+  }
   const sigOf = (c: HillclimbCase) => deps.expectedContentSig?.(c);
   // One signature for the variant: over every case's (all cases, so a --case subset records the same one).
   const caseSigs = all.map((c) => `${c.id}\0${sigOf(c) ?? ""}`).sort();
@@ -407,6 +417,7 @@ async function run(
         scenarioName: c.name,
         prompt: c.scenario.prompt,
         assertions: c.scenario.assert,
+        expectDenied: c.scenario.expect_denied ?? [],
         metrics,
         ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
         rep,

@@ -12,7 +12,7 @@ import { isolationRefusal } from "../decide/llm-transport.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
 import { HILLCLIMB_RUN_DEFAULTS, parseHillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
-import { headroom, metricRangeWarnings, pairwiseHints, pairwiseRefFindings, stateMetricFindings } from "./check.js";
+import { assertSigWarnings, headroom, metricRangeWarnings, pairwiseHints, pairwiseRefFindings, stateMetricFindings } from "./check.js";
 import { prepareCases } from "./command.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
@@ -60,7 +60,12 @@ export function checkReport(flowArg: string, cwd: string): { report: SchemaCheck
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
   return {
     report,
-    warnings: [...headroom(snap).warnings, ...metricRangeWarnings(snap), ...pairwiseHints(snap, normalizeRootArg(flowArg))],
+    warnings: [
+      ...headroom(snap).warnings,
+      ...metricRangeWarnings(snap),
+      ...assertSigWarnings(snap),
+      ...pairwiseHints(snap, normalizeRootArg(flowArg)),
+    ],
     exitCode: report.errors ? 1 : 0,
   };
 }
