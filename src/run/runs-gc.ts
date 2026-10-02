@@ -1,10 +1,12 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
-import { existsSync, readdirSync, readFileSync, statSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { classifyRunDir, hasTurnDirs } from "./turn-layout.js";
 import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
+import { evalIdOfLabel, isHillclimbLabel, runLabelOf } from "./run-labels.js";
+import { isStatusStale, readRunStatus } from "./run-status.js";
 
 const log = (s: string) => process.stderr.write(s + "\n");
 
@@ -19,13 +21,14 @@ function liveJournalsFor(runsRoot: string, scenarioSlug: string): number {
 
 const DEFAULT_KEEP_LAST = 5;
 
-/** The eval id a run dir belongs to (its run label is `eval:<eval-id>:<arm>`), or undefined. Read from the
- *  run's status.json, which is written when the run starts. */
-function evalIdOf(dir: string): string | undefined {
+/** How long ago a run's status.json was last written, when it says the run is still `running` and is not
+ *  stale (`isStatusStale`: its writer still ticks). undefined for a finished, crashed, stale, unreadable or
+ *  status-less run — none of which has a live writer to race. */
+function liveRunAgeMs(dir: string): number | undefined {
   try {
-    const label = (JSON.parse(readFileSync(join(dir, "status.json"), "utf8")) as { runLabel?: unknown }).runLabel;
-    const m = typeof label === "string" ? /^eval:([^:]+):/.exec(label) : null;
-    return m ? m[1] : undefined;
+    const st = readRunStatus(dir);
+    if (st.state !== "running" || isStatusStale(st)) return undefined;
+    return Math.max(0, Date.now() - Date.parse(st.updatedAt));
   } catch {
     return undefined;
   }
@@ -60,7 +63,7 @@ const isRealRun = (dir: string) => {
   return shape.kind === "legacy" || shape.kind === "mixed";
 };
 
-/** `cowork-harness prune [--keep-last <n>] [--dry-run] [<runs-dir>]`
+/** `cowork-harness prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb] [--dry-run] [<runs-dir>]`
  *
  *  For each scenario directory under the runs root, ranks EPHEMERAL run dirs by (1) real-run first (a
  *  turns/ dir, an events.jsonl, or a pre-layout shape — see isRealRun), (2) mtime descending, (3) name — then keeps the N most recent of that order
@@ -71,6 +74,15 @@ const isRealRun = (dir: string) => {
  *  default — pass `--pinned-older-than <N>d|h|m` to also reclaim pinned sessions whose last activity is
  *  older than that window (opt-in, so a programmatic consumer that leaks one pinned session per run has a
  *  policy to reclaim them; nothing pinned is touched without the flag).
+ *  HILLCLIMB runs — any run labelled `hillclimb:…` (what `hillclimb run` writes, `hillclimb:<basename(flow)>:<variant>`,
+ *  and also a run a user labelled `--label hillclimb:…` by hand) — are kept the same way: never pruned and never
+ *  in a --keep-last slot, because `hillclimb regrade` and `hillclimb freeze-ref` read them and refuse once one is
+ *  gone. The label is the only signal: their dir names are ordinary `local_*` ids. `--include-hillclimb` puts
+ *  them back into the ranking (it does not delete them wholesale). The label names the flow dir by basename only,
+ *  so prune cannot tell which flow, or which project, a run came from: the flag releases the runs of EVERY flow
+ *  under the root, a loop still running included.
+ *  A run whose status.json says `running` and is not stale (its writer still ticks) is never deleted, pinned,
+ *  hillclimb or plain — it is skipped and counted.
  *  The default root is the flat, machine-global `~/.cowork-harness/runs` (shared across projects), so a
  *  bare `prune` prunes ephemeral runs from ALL projects; pass an explicit <runs-dir> to scope it.
  *  Safe by default (dry-run-able). */
@@ -80,7 +92,7 @@ export function cmdRunsGc(args: string[]): void {
     p = parseArgs(
       args,
       withCommandGlobals({
-        booleans: ["--dry-run"],
+        booleans: ["--dry-run", "--include-hillclimb"],
         values: ["--keep-last", "--pinned-older-than"],
       }),
     );
@@ -112,6 +124,7 @@ export function cmdRunsGc(args: string[]): void {
   }
 
   const dryRun = p.flags["--dry-run"] ?? false;
+  const includeHillclimb = p.flags["--include-hillclimb"] ?? false;
   const runsRoot = p.positionals[0] ?? runsWriteRoot();
   const now = Date.now();
 
@@ -122,12 +135,31 @@ export function cmdRunsGc(args: string[]): void {
 
   let deleted = 0;
   let kept = 0;
+  let skippedRunning = 0;
+  // Protected hillclimb runs, counted per "<scenario>\0<label>" for the summary.
+  const hillclimbKept = new Map<string, number>();
+  let hillclimbPruned = 0;
   // An eval's runs are ordinary ephemeral runs, so --keep-last trims them. Its report is rebuilt from the
   // eval dir, never from these, but the report's evidence links point here — say which evals lost runs.
   const evalRunsPruned = new Map<string, number>();
-  const notePruned = (dir: string) => {
-    const id = evalIdOf(dir);
+  const notePruned = (label: string | undefined) => {
+    const id = evalIdOfLabel(label);
     if (id !== undefined) evalRunsPruned.set(id, (evalRunsPruned.get(id) ?? 0) + 1);
+    if (isHillclimbLabel(label)) hillclimbPruned++;
+  };
+  /** Delete one run dir — unless it is still running, which no flag overrides. Returns whether it went. */
+  const pruneDir = (d: { path: string; label: string | undefined }, how: string): boolean => {
+    const liveAge = liveRunAgeMs(d.path);
+    if (liveAge !== undefined) {
+      log(`↷ skipped ${d.path}: still running (status.json updated ${Math.round(liveAge / 1000)}s ago)`);
+      skippedRunning++;
+      return false;
+    }
+    notePruned(d.label);
+    if (!dryRun) rmSync(d.path, { recursive: true, force: true });
+    log(`${dryRun ? "(dry-run) " : ""}✗ pruned ${how}${d.path}${includeHillclimb && isHillclimbLabel(d.label) ? ` (${d.label})` : ""}`);
+    deleted++;
+    return true;
   };
 
   for (const scenarioSlug of readdirSync(runsRoot).sort()) {
@@ -157,8 +189,12 @@ export function cmdRunsGc(args: string[]): void {
 
     // Rank run dirs: (1) real-run first (a completed/in-flight run outranks an empty scaffold dir for a
     // keep slot), (2) newest first (mtime desc), (3) name desc as a deterministic tiebreaker.
+    // Each dir's label is read once (status.json, else the latest turn's result.json) and serves both the
+    // hillclimb partition and the eval note. A dir that yields no label is an ordinary run: if neither file
+    // parses, `regrade`/`freeze-ref` cannot use it either. The one window with no label yet — between a run's
+    // mkdir and its status.json write, a few synchronous calls apart — has no guard.
     const sorted = readdirSync(scenarioDir)
-      .map((name) => ({ name, path: join(scenarioDir, name) }))
+      .map((name) => ({ name, path: join(scenarioDir, name), label: runLabelOf(join(scenarioDir, name)) }))
       .filter(({ path }) => {
         try {
           return statSync(path).isDirectory();
@@ -191,7 +227,17 @@ export function cmdRunsGc(args: string[]): void {
     // slot either, or a retained pinned dir would evict a newer ephemeral `local_*` that should be kept.
     // Only ephemeral `local_*` runs are subject to --keep-last.
     const pinned = sorted.filter((d) => d.name.startsWith("sess-"));
-    const ephemeral = sorted.filter((d) => !d.name.startsWith("sess-"));
+    const rest = sorted.filter((d) => !d.name.startsWith("sess-"));
+    // HILLCLIMB runs are the second protected partition, for the same reason: kept, and outside the
+    // --keep-last count, so a flow's reps never evict the newest plain runs of the same scenario. Only
+    // --include-hillclimb returns them to the ranking below.
+    const hillclimb = includeHillclimb ? [] : rest.filter((d) => isHillclimbLabel(d.label));
+    const ephemeral = includeHillclimb ? rest : rest.filter((d) => !isHillclimbLabel(d.label));
+    for (const d of hillclimb) {
+      const key = `${scenarioSlug}\0${d.label}`;
+      hillclimbKept.set(key, (hillclimbKept.get(key) ?? 0) + 1);
+      if (dryRun) log(`(dry-run) ⛨ kept hillclimb ${d.path}`);
+    }
 
     // Pinned sessions are retained unconditionally UNLESS --pinned-older-than opts in to reclaiming the
     // stale ones (by last-activity mtime). Nothing pinned is deleted without that explicit flag.
@@ -203,10 +249,7 @@ export function cmdRunsGc(args: string[]): void {
         /* deleted between filter and loop — treat as fresh (kept) */
       }
       if (pinnedOlderThanMs !== undefined && now - mtime > pinnedOlderThanMs) {
-        notePruned(d.path);
-        if (!dryRun) rmSync(d.path, { recursive: true, force: true });
-        log(`${dryRun ? "(dry-run) " : ""}✗ pruned pinned ${d.path}`);
-        deleted++;
+        pruneDir(d, "pinned ");
       } else {
         kept++;
       }
@@ -216,25 +259,47 @@ export function cmdRunsGc(args: string[]): void {
       if (i < keepLast) {
         kept++;
       } else {
-        notePruned(ephemeral[i].path);
-        if (!dryRun) {
-          rmSync(ephemeral[i].path, { recursive: true, force: true });
-        }
-        log(`${dryRun ? "(dry-run) " : ""}✗ pruned ${ephemeral[i].path}`);
-        deleted++;
+        pruneDir(ephemeral[i], "");
       }
     }
   }
 
+  const protectedHillclimb = [...hillclimbKept.values()].reduce((a, b) => a + b, 0);
+  if (protectedHillclimb > 0) {
+    // Grouped by scenario and FULL label. The label carries the flow dir's basename only, so two projects on
+    // the default flow (`.claude/hillclimb/flow`) show as the same group.
+    log(
+      `⛨ prune: kept ${protectedHillclimb} hillclimb run dir(s) outside --keep-last — \`hillclimb regrade\` and \`hillclimb freeze-ref\` read them:`,
+    );
+    for (const [key, n] of [...hillclimbKept].sort(([a], [b]) => a.localeCompare(b))) {
+      const [scenario, label] = key.split("\0");
+      log(`    ${scenario}  ${label}  ${n}`);
+    }
+    log(
+      `  --include-hillclimb ranks them with every other run, which deletes the regrade and freeze-ref evidence of EVERY flow under ${runsRoot}, ` +
+        `a loop still running included (and freeze-ref re-reads a frozen reference's source run). Pass it only once every climb under this root is finished, ` +
+        `or scope it to one climb's runs with an explicit <runs-dir> (the --run-dir the climb used).`,
+    );
+  }
+  if (hillclimbPruned > 0)
+    log(
+      `::warning:: prune: ${hillclimbPruned} hillclimb run dir(s) ${dryRun ? "would be " : ""}pruned under --include-hillclimb — \`hillclimb regrade\` and \`hillclimb freeze-ref\` ` +
+        `${dryRun ? "would refuse" : "now refuse"} the rows that point at them, for every flow under ${runsRoot}.`,
+    );
   for (const [id, n] of [...evalRunsPruned].sort(([a], [b]) => a.localeCompare(b)))
     log(
       `::warning:: prune: ${n} of the ${dryRun ? "run dir(s) prune would remove" : "pruned run dir(s)"} belong to eval ${id} — its report's evidence links ${dryRun ? "would point" : "now point"} at deleted runs. ` +
         `\`eval report <eval-dir>\` still rebuilds the report (it reads only the eval dir); raise --keep-last to keep an eval's runs.`,
     );
+  // Extra clauses appear only when non-zero, so the line is unchanged for a root with neither.
+  const extras = [
+    protectedHillclimb > 0 ? `protected ${protectedHillclimb} hillclimb` : undefined,
+    skippedRunning > 0 ? `skipped ${skippedRunning} running` : undefined,
+  ].filter((x): x is string => x !== undefined);
   log(
     deleted > 0
-      ? `✓ prune: pruned ${deleted} run dir(s), kept ${kept}${dryRun ? " (dry-run — nothing deleted)" : ""}`
-      : `✓ prune: nothing to prune (${kept} run dir(s) within --keep-last ${keepLast})`,
+      ? `✓ prune: pruned ${deleted} run dir(s), kept ${kept}${extras.map((x) => `, ${x}`).join("")}${dryRun ? " (dry-run — nothing deleted)" : ""}`
+      : `✓ prune: nothing to prune (${kept} run dir(s) within --keep-last ${keepLast}${extras.map((x) => `; ${x}`).join("")})`,
   );
   return process.exit(0);
 }

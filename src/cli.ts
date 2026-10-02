@@ -306,8 +306,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
                                for hostloop/protocol recordings; review + tailor the patterns before recording;
                                --force re-copies it to pick up rules added by a later release)
-  prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
-                               prune accumulated run dirs, keeping N most recent per scenario (default: 5)
+  prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb]
+                               prune accumulated run dirs, keeping N most recent per scenario (default: 5);
+                               pinned sessions, hillclimb-labelled runs and still-running runs are kept
   migrate-run-dir [<runs-dir>] [--scenario <n>] [--write]
                                convert pre-layout run dirs to the per-turn turns/<N>/ layout (DRY RUN by default)
 
@@ -734,7 +735,12 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       (commit what migrated, budget a re-record for the rest). 1 = nothing migrated and at least one\n" +
     "       could not. 2 = usage. The JSON envelope carries the same split as migrated/skipped/errors.",
   prune:
-    "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
+    "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)\n" +
+    "  Pinned sess-* sessions and hillclimb-labelled runs (`hillclimb:…`) are kept outside --keep-last; a run whose\n" +
+    "  status.json says it is still running is never deleted. --include-hillclimb ranks hillclimb runs with every\n" +
+    "  other run: it deletes the `hillclimb regrade` / `freeze-ref` evidence of EVERY flow under the runs root, a\n" +
+    "  loop still running included (freeze-ref re-reads a frozen reference's source run). Pass it only once every\n" +
+    "  climb is finished, or scope it with an explicit <runs-dir> (the --run-dir the climb used).",
   "migrate-run-dir":
     "usage: migrate-run-dir [<runs-dir>] [--scenario <name>] [--write] [--verbose]\n" +
     "       convert pre-layout run dirs (artifacts at the run-dir root) to the per-turn `turns/<N>/` layout, in place.\n" +
