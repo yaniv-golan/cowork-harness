@@ -314,3 +314,8 @@ Hardening a skill is a loop: run → read what it did → fix → run again. Two
 **Lane note:** the exploratory driver is `skill <dir> --decider-llm --intent "<what this run tests>"`,
 which is flagged non-deterministic (a green here is exploration, not a scripted pass) — pin the
 load-bearing gates with `--answer` once you know which fire.
+
+## Recipe 7 — Climb a skill with `/claude-api hillclimb`
+
+The loop's procedure, with `hillclimb run` as its runner, is its own page:
+[`hillclimb-recipe.md`](hillclimb-recipe.md). The command reference is [`hillclimb.md`](hillclimb.md).

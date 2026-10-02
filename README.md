@@ -377,6 +377,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/debugging.md](./docs/debugging.md) | Debugging a run — `inspect`/`trace`/`verify-run`/`diff`/`chat` for a misbehaving skill; the false-green hunt for a green you don't trust; and the **iterate-across-fixes verification loop** (ground findings in run evidence; pair by `fingerprint.skillHash`). |
 | [docs/cassette.md](./docs/cassette.md) | `record`/`replay` cassettes — what replay checks, which assertions are skipped. |
 | [docs/eval.md](./docs/eval.md) | **EXPERIMENTAL** — `eval`: a paired before/after comparison of two versions of a plugin, per assertion and per rubric claim, with pinned models and an exact test. A drop is a signal to investigate, not proof. |
+| [docs/hillclimb.md](./docs/hillclimb.md) | `hillclimb`: the runner for Claude Code's `/claude-api hillclimb` loop — setup, where the flow dir goes, how the loop's steps map to commands, what each row measures, cost, and the differences from the loop's own runner. |
 | [docs/critique.md](./docs/critique.md) | **EXPERIMENTAL** — `critique`: run a skill, ask the agent what confused it, then grade that self-report against a frozen record. Its verdict is an advisory lead, not an attestation. |
 | [docs/run-status.md](./docs/run-status.md) | Checking whether a background run is alive — the `status.json` file + `cowork-harness status [--follow]`. |
 | [docs/stats.md](./docs/stats.md) | The `stats` command + `index.jsonl` — querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run. |

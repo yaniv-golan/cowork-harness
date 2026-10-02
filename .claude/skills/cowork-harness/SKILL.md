@@ -160,4 +160,5 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/critique.md`](references/critique.md) | `critique` report and evidence-package shapes |
 | [`references/eval.md`](references/eval.md) | `eval`: paired before/after of two plugin versions — labels, refusals, exit codes, files |
 | [`references/hillclimb.md`](references/hillclimb.md) | `hillclimb run` / `check` / `state-template` / `freeze-ref` / `regrade` for a `/claude-api hillclimb` loop — pass `--flow` to each, the harness gate, resume, pairwise references, re-grading, refusals, exit codes |
+| [`references/hillclimb-recipe.md`](references/hillclimb-recipe.md) | Recipe 7: the `/claude-api hillclimb` loop with the harness as its runner, step by step — the runner command, Step 0.5 checks, metrics, spend, rounds, stalls |
 | `scripts/scenario.py` | `scaffold`, `lint`, `lint-skill`, `resolve-agent-types <plugin-dir>` (validates a pinned `subagent_type` against `plugin.json` + `agents/*.md`) |
