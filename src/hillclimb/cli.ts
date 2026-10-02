@@ -349,6 +349,8 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     }
     applyParsedCommandGlobals(CMD, p, json);
     if (p.positionals.length !== 1) return usage(`hillclimb regrade takes exactly one scenario file or directory`, HILLCLIMB_REGRADE_USAGE);
+    if (p.flags["--rejudge"] === true && p.flags["--fill-refs"] === true)
+      return usage(`hillclimb regrade: --rejudge and --fill-refs exclude each other (a fill re-judges nothing)`, HILLCLIMB_REGRADE_USAGE);
     const out = await regradeFlow(
       {
         target: p.positionals[0],
@@ -357,6 +359,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         cases: (p.repeated?.["--case"] as string[] | undefined) ?? [],
         ...(p.options["--judge-model"] !== undefined ? { judgeModel: p.options["--judge-model"] } : {}),
         fillRefs: p.flags["--fill-refs"] === true,
+        rejudge: p.flags["--rejudge"] === true,
         approveHarness: p.flags["--approve-harness"] === true,
         allowDocDrift: p.flags["--allow-doc-drift"] === true,
         allowUnchecked: p.flags["--allow-unchecked"] === true,

@@ -21,7 +21,13 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
 export const HILLCLIMB_RUN_REPEATED_FLAGS = ["--case"] as const;
 /** `hillclimb regrade`'s own booleans (its value flags are a subset of run's). */
 export const HILLCLIMB_REGRADE_VALUE_FLAGS = ["--flow", "--variant", "--judge-model", "--output-format"] as const;
-export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = ["--approve-harness", "--fill-refs", "--allow-doc-drift", "--allow-unchecked"] as const;
+export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = [
+  "--approve-harness",
+  "--fill-refs",
+  "--rejudge",
+  "--allow-doc-drift",
+  "--allow-unchecked",
+] as const;
 
 export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--reps N]
        [--concurrency N] [--timeout-s N (0 = no ceiling)] [--approve-harness] [flags]

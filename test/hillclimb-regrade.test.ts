@@ -24,6 +24,8 @@ import { metricSigs } from "../src/hillclimb/metric-keys.js";
 import type { ScenarioMetric } from "../src/types.js";
 import type { CompleteStructured } from "../src/decide/pairwise-judge.js";
 import { checkReport, stateTemplateFor } from "../src/hillclimb/cli.js";
+import { parseScenarioFile } from "../src/run/execute.js";
+import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 
 const MODEL = "claude-sonnet-5";
 const line = (o: unknown) => `printf '%s\\n' '${JSON.stringify(o)}'`;
@@ -85,6 +87,8 @@ function buildFlow(
     /** More deterministic assert lines (`  - key: value`), after `result: success`. */
     extra?: string[];
     expectDenied?: string[];
+    /** Isolation-check cases only: how a semantic_matches assert joins the scenario after the runs. */
+    matches?: "added" | "recorded";
   } = {},
 ) {
   const plugin = join(work, "plugin", "my-plugin");
@@ -229,12 +233,12 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
       }) as typeof regradeRuns,
       mergeMetrics: (row) => void merged.push(Object.keys(row.grade).join(",")),
     });
-    const out = await regradeFlow(ARGS(), deps);
+    const out = await regradeFlow(ARGS({ rejudge: true }), deps);
     expect(out.exitCode).toBe(0);
     expect(seen.every((o) => !("allowUnchecked" in o))).toBe(true);
     expect(merged).toHaveLength(2);
     seen.length = 0;
-    await regradeFlow(ARGS({ allowUnchecked: true }), deps);
+    await regradeFlow(ARGS({ allowUnchecked: true, rejudge: true }), deps);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((o) => o.allowUnchecked === true)).toBe(true);
   }, 180_000);
@@ -242,7 +246,7 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
   it("a failure after the judge calls began is a runtime error naming what was written, never a refusal", async () => {
     buildFlow();
     const out = await regradeFlow(
-      ARGS(),
+      ARGS({ rejudge: true }),
       DEPS({
         regradeOptions: { pairwiseComplete: verdict("A") },
         mergeMetrics: () => {
@@ -259,7 +263,7 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     const rep1 = rows("v1").find((r) => r.rep === 1)!;
     const dir = join(f.runsDir, "alpha", rep1.meta.run_id as string);
     cpSync(join(dir, "turns", "1"), join(dir, "turns", "2"), { recursive: true });
-    const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    const out = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
     const v1 = out.variants.find((v) => v.variant === "v1")!;
     expect(v1.rewritten).toBe(1);
     expect(v1.listed).toMatchObject([{ rep: 1, why: expect.stringMatching(/refused/) }]);
@@ -268,7 +272,10 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
   it("a flow whose session names no model (run with --model) is not refused for an agent model", async () => {
     const { evals } = buildFlow();
     writeFileSync(join(evals, "_session.yaml"), readFileSync(join(evals, "_session.yaml"), "utf8").replace(`model: ${MODEL}\n`, ""));
-    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    const out = await regradeFlow(
+      ARGS({ approveHarness: true, rejudge: true }),
+      DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }),
+    );
     expect(out.error?.message ?? "").not.toMatch(/--model/);
     expect(readdirSync(join(f.cwd, "flow", "v1")).some((n) => n.endsWith(".bak.jsonl"))).toBe(true);
   }, 180_000);
@@ -323,7 +330,7 @@ describe.runIf(POSIX)("hillclimb regrade leaves what it should not touch", () =>
     expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
     expect((await regradeFlow(ARGS({ fillRefs: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }))).exitCode).toBe(0);
     expect(rows("baseline")[0]!.meta).toHaveProperty("regrade_fill");
-    expect((await regradeFlow(ARGS(), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }))).exitCode).toBe(0);
+    expect((await regradeFlow(ARGS({ rejudge: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }))).exitCode).toBe(0);
     for (const v of ["baseline", "v1"]) {
       const meta = rows(v)[0]!.meta;
       expect(meta).not.toHaveProperty("regrade_fill");
@@ -356,11 +363,13 @@ describe.runIf(POSIX)("hillclimb regrade leaves what it should not touch", () =>
       { why: expect.stringMatching(/now has 3 assertion\(s\), its run graded 2 — run a default `hillclimb regrade` first/) },
     ]);
     expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+    const kept = rows("v1")[0]!.grade;
     const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
-    expect(calls).toBeGreaterThan(0);
+    // The pairwise assert is matched by identity at its new index: kept, never re-judged.
+    expect(calls).toBe(0);
     // The added assert is a0 now; the run's two moved to a1 and a2.
-    expect(rows("v1")[0]!.grade).toMatchObject({ a0: 1, a1: 1 });
+    expect(rows("v1")[0]!.grade).toMatchObject({ a0: 1, a1: 1, a2: kept.a1 });
     expect(rows("v1")[0]!.grade).toHaveProperty("a2_present");
   }, 240_000);
 });
@@ -381,7 +390,7 @@ describe.runIf(POSIX)("hillclimb regrade's judge isolation preflight", () => {
     let regradeCalls = 0;
     const lines: string[] = [];
     const out = await regradeFlow(
-      ARGS({ approveHarness: true }),
+      ARGS({ approveHarness: true, rejudge: true }),
       DEPS({
         stderr: (l) => lines.push(l),
         isolationCheck: () => {
@@ -405,27 +414,45 @@ describe.runIf(POSIX)("hillclimb regrade's judge isolation preflight", () => {
     expect(tree(flow)).toEqual(before);
   }, 180_000);
 
-  // Which modes ask at all: a fill never calls the semantic_matches judge, so only a pairwise assert needs the check there.
+  // Which regrades ask at all: only one that would call a judge. A default regrade re-judges only a judged assert whose
+  // inputs changed (or every one under --rejudge); a fill judges only a comparison a row lacks.
   it.each([
-    ["no judged assert, full", { noPairwise: true }, false, false],
-    ["no judged assert, fill", { noPairwise: true }, true, false],
-    ["semantic_pairwise, fill", {}, true, true],
-    ["semantic_matches only, fill", { noPairwise: true, matches: true }, true, false],
-    ["semantic_matches only, full", { noPairwise: true, matches: true }, false, true],
+    ["no judged assert, full", { noPairwise: true }, {}, false],
+    ["no judged assert, fill", { noPairwise: true }, { fillRefs: true }, false],
+    ["semantic_pairwise, fill, a reference frozen since", {}, { fillRefs: true, freeze: true }, true],
+    ["semantic_pairwise, fill, nothing to fill", {}, { fillRefs: true }, false],
+    ["semantic_pairwise, full, nothing changed", {}, {}, false],
+    ["semantic_pairwise, full, --rejudge", {}, { rejudge: true }, true],
+    ["semantic_matches only, fill", { noPairwise: true, matches: "added" }, { fillRefs: true }, false],
+    ["semantic_matches only, full, added since the run", { noPairwise: true, matches: "added" }, {}, true],
+    ["semantic_matches only, full, unchanged since the run", { noPairwise: true, matches: "recorded" }, {}, false],
+    ["semantic_matches only, full, unchanged, --rejudge", { noPairwise: true, matches: "recorded" }, { rejudge: true }, true],
   ] as const)(
     "%s: the isolation check is asked only when a judge would run",
-    async (_n, flowOpts, fillRefs, asked) => {
-      const { evals } = buildFlow(flowOpts);
+    async (_n, flowOpts, mode, asked) => {
+      const { cli, evals, rows } = buildFlow(flowOpts);
       // The fixture's stub judge answers only pairwise, so a semantic_matches assert joins the scenario after the runs;
-      // the check reads the scenario as it is now.
-      if ("matches" in flowOpts)
-        appendFileSync(
-          join(evals, "alpha.yaml"),
-          "  - semantic_matches:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n",
-        );
+      // the check reads the scenario as it is now. "recorded": the runs are given the entry a judged run persists for it.
+      if ("matches" in flowOpts) {
+        const sc = join(evals, "alpha.yaml");
+        appendFileSync(sc, "  - semantic_matches:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n");
+        if (flowOpts.matches === "recorded")
+          for (const v of ["baseline", "v1"]) {
+            const file = join(f.runsDir, "alpha", rows(v)[0]!.meta.run_id as string, "turns", "1", "result.json");
+            const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: unknown[] };
+            r.assertions.push({
+              assertion: parseScenarioFile(sc).assert.at(-1),
+              pass: true,
+              judgeModel: "claude-haiku-4-5",
+              judgePromptHash: JUDGE_PROMPT_HASH,
+            });
+            writeFileSync(file, JSON.stringify(r));
+          }
+      }
+      if ("freeze" in mode) expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
       let calls = 0;
       const out = await regradeFlow(
-        ARGS({ approveHarness: true, fillRefs }),
+        ARGS({ approveHarness: true, fillRefs: "fillRefs" in mode, rejudge: "rejudge" in mode }),
         DEPS({
           isolationCheck: () => {
             calls++;
@@ -615,7 +642,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
   it("in-process with no metricDecls dep, the flow's union is still the default (no caller can drop the columns)", async () => {
     writing();
     const { rows } = buildFlow({ metrics: [OTHER] });
-    const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    const out = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
     expect(rows("v1")[0]!.grade).toMatchObject({ other_present: 1, other: 1200 });
     expect(rows("v1")[0]!.meta.regrade_doc_matches_live).toBeDefined();
@@ -724,29 +751,33 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
     ]);
   }, 240_000);
 
-  it("a case with a judged assert is still re-judged, and re-measured by that re-grade (not counted as re-measure-only)", async () => {
+  it("a judged case: an added metric is re-measured with no judge call; under --rejudge the re-grade re-measures it", async () => {
     writing();
     const { rows, evals } = buildFlow({ metrics: [OTHER] });
     addMetrics(evals, WORDS);
     let calls = 0;
-    const out = await regradeFlow(
-      ARGS({ variant: "v1", approveHarness: true }),
-      DEPS({
-        regradeOptions: {
-          pairwiseComplete: async () => {
-            calls++;
-            return { structured: { rationale: "r", verdict: "A" }, model: "claude-haiku-4-5", subtype: "success" };
-          },
+    const deps = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => {
+          calls++;
+          return { structured: { rationale: "r", verdict: "A" }, model: "claude-haiku-4-5", subtype: "success" };
         },
-      }),
-    );
+      },
+    });
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(calls).toBe(0);
+    expect(rows("v1")[0]!.grade).toMatchObject({ words_present: 1, words: 1200 });
+    expect(rows("v1")[0]!.meta.regrade_remeasured).toBe(true);
+    expect(out.variants[0]).toMatchObject({ rewritten: 1, remeasured: 1 });
+    const again = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), deps);
+    expect(again.exitCode, JSON.stringify(again)).toBe(0);
     expect(calls).toBeGreaterThan(0);
     const row = rows("v1")[0]!;
     expect(row.grade).toMatchObject({ words_present: 1, words: 1200 });
     expect(row.meta.regrade_doc_matches_live).toBeDefined();
     expect(row.meta).not.toHaveProperty("regrade_remeasured");
-    expect(out.variants[0]).toMatchObject({ rewritten: 1, remeasured: 0 });
+    expect(again.variants[0]).toMatchObject({ rewritten: 1, remeasured: 0 });
   }, 240_000);
 
   it("a row whose kept run dir is gone or refused is listed per row (exit 1) and left untouched; its sibling is re-measured", async () => {
@@ -916,13 +947,13 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     }
   }, 240_000);
 
-  it("a case with deterministic and judged asserts: the deterministic change applies, the judged one is re-judged, one verdict", async () => {
+  it("a case with deterministic and judged asserts under --rejudge: the deterministic change applies, the judged one is re-judged, one verdict", async () => {
     const { rows, evals } = buildFlow({ extra: ["  - transcript_contains: All done"] });
     // The live pass depends on the stub judge's verdict against a shuffled order: only the deterministic assert is pinned.
     expect(rows("v1")[0]!.grade).toMatchObject({ a1: 1 });
     edit(evals, "transcript_contains: All done", "transcript_contains: Nope");
     const { seen, deps } = counting();
-    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true, rejudge: true }), deps);
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
     expect(seen.calls).toBeGreaterThan(0);
     const row = rows("v1")[0]!;
@@ -934,7 +965,10 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
   // The run's own outcome of an assert unchanged since the run is what its grader said: a kept run re-evaluated to
   // another outcome means our reconstruction differs (a changed sidecar, an evaluator fix, evidence a kept run does
   // not record), not the grader. The live entry stays, and the row says so.
-  it.each([["a case with no judged assert", true]] as const)(
+  it.each([
+    ["a case with no judged assert", true],
+    ["a judged case", false],
+  ] as const)(
     "%s: an assert unchanged since the run that re-evaluates differently keeps its live outcome, noted per row",
     async (_n, noPairwise) => {
       const { rows } = buildFlow({ noPairwise, extra: ["  - transcript_contains: All done"] });
@@ -944,9 +978,11 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
       const sidecar = join(runDirOf(old), "turns", "1", "run.jsonl");
       writeFileSync(sidecar, readFileSync(sidecar, "utf8").replaceAll("All done.", "Something else."));
       const lines: string[] = [];
-      const { deps } = counting();
+      const { seen, deps } = counting();
       const out = await regradeFlow(ARGS({ variant: "v1" }), { ...deps, stderr: (l) => lines.push(l) });
       expect(out.exitCode, JSON.stringify(out)).toBe(0);
+      // Nothing a judge reads changed: no judge call (the changed sidecar is never sent).
+      expect(seen.calls).toBe(0);
       expect(out.variants[0]!.listed).toEqual([]);
       const row = rows("v1")[0]!;
       expect(row.grade.a1).toBe(1);
@@ -1010,7 +1046,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     ).toEqual([]);
     expect(rows("baseline")[0]!.grade).toHaveProperty("win_v1");
     seen.calls = 0;
-    const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+    const out = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), deps);
     expect(out.variants[0]!.listed, JSON.stringify(out)).toEqual([]);
     expect(out.variants[0]!.rewritten).toBe(1);
     expect(seen.calls).toBeGreaterThan(0);
@@ -1051,6 +1087,136 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before.b);
     expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before.v1);
   }, 240_000);
+
+  // A default regrade re-judges a judged assert only when something its judge reads or grades with changed: a
+  // deterministic fix costs no judge call and re-rolls no verdict.
+  const SECOND = ["  - semantic_pairwise:", "      rubric: ['second']", "      judge_model: claude-haiku-4-5-20251001"];
+  /** A row without the keys a regrade rewrites whatever it re-judges. */
+  const judgedView = (r: { grade: Record<string, number>; meta: Record<string, unknown> } & Record<string, unknown>) => {
+    const meta = { ...r.meta };
+    for (const k of ["assert_sig", "regraded_at", "regrade_harness_version", "regrade_reevaluated"]) delete meta[k];
+    const grade = Object.fromEntries(Object.entries(r.grade).filter(([k]) => !/^(pass|a1)(_|$)/.test(k)));
+    return { ...r, grade, meta };
+  };
+
+  it("a deterministic-only edit: zero judge calls, every judged entry kept byte for byte", async () => {
+    const { rows, evals } = buildFlow({ extra: ["  - transcript_contains: All done"] });
+    const before = rows("v1")[0]!;
+    edit(evals, "transcript_contains: All done", "transcript_contains: Nope");
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(seen.calls).toBe(0);
+    const after = rows("v1")[0]!;
+    expect(after.grade).toMatchObject({ pass: 0, a1: 0 });
+    expect(judgedView(after)).toEqual(judgedView(before));
+    expect(after.meta).not.toHaveProperty("regrade_rejudged_because");
+  }, 240_000);
+
+  it("a rubric edit: only that assert is re-judged, the other judged one kept as it was", async () => {
+    const { rows, evals } = buildFlow({ extra: SECOND });
+    const before = rows("v1")[0]!;
+    edit(evals, "rubric: ['second']", "rubric: ['second, edited']");
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    // One comparison: the edited assert against the baseline (the kept assert is never sent).
+    expect(seen.calls).toBe(1);
+    const after = rows("v1")[0]!;
+    expect(after.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["assert_changed"] }]);
+    const keys = (g: Record<string, number>) => Object.fromEntries(Object.entries(g).filter(([k]) => /^a2(_|$)/.test(k)));
+    expect(keys(after.grade)).toEqual(keys(before.grade));
+    expect(Object.keys(keys(after.grade)).length).toBeGreaterThan(0);
+  }, 240_000);
+
+  it("--rejudge re-judges every judged assert of every row", async () => {
+    buildFlow({ extra: SECOND });
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(seen.calls).toBe(2);
+  }, 240_000);
+
+  it("--judge-model other than the one that graded re-judges, saying why", async () => {
+    const { rows } = buildFlow();
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1", judgeModel: "claude-opus-4-8" }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(seen.calls).toBe(1);
+    expect(rows("v1")[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["judge_model"] }]);
+  }, 240_000);
+
+  it.each([
+    ["judge_prompt", "it was graded under another judge prompt template"],
+    ["reference_changed", "the reference it was judged against is not the store's now"],
+  ] as const)(
+    "%s: %s — re-judged, saying why",
+    async (trigger) => {
+      const { rows } = buildFlow();
+      const file = join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json");
+      const r = JSON.parse(readFileSync(file, "utf8")) as {
+        assertions: Array<{ judgePromptHash?: string; pairwise?: Array<{ refDocSha256?: string }> }>;
+      };
+      const e = r.assertions[1]!;
+      if (trigger === "judge_prompt") e.judgePromptHash = "0".repeat(16);
+      else e.pairwise![0]!.refDocSha256 = "0".repeat(64);
+      writeFileSync(file, JSON.stringify(r));
+      const { seen, deps } = counting();
+      const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+      expect(out.exitCode, JSON.stringify(out)).toBe(0);
+      expect(seen.calls).toBe(1);
+      expect(rows("v1")[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: [trigger] }]);
+    },
+    240_000,
+  );
+
+  it("opponents_changed: a reference frozen since re-judges the rows that lack it (the row's own variant's aside)", async () => {
+    const { cli, rows } = buildFlow();
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const v1 = rows("v1")[0]!;
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS(), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    // The baseline row is compared with v1's reference; the v1 row lacks only its own (neutral) one.
+    expect(seen.calls).toBe(1);
+    expect(rows("baseline")[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["opponents_changed"] }]);
+    expect(rows("baseline")[0]!.grade).toHaveProperty("win_v1");
+    expect(rows("v1")[0]!.meta).not.toHaveProperty("regrade_rejudged_because");
+    void v1;
+  }, 240_000);
+
+  it("a re-judged outcome is what a later regrade keeps (read from the row's regrade file, never the run's)", async () => {
+    const { cli, rows, evals } = buildFlow({ extra: ["  - transcript_contains: All done"] });
+    // pass_if win, and a judge that says both are bad: the re-judged assert fails where the live one passed.
+    edit(evals, "rubric: ['answers']", "rubric: ['answers']\n      pass_if: win");
+    const bad = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => ({
+          structured: { rationale: "r", verdict: "both_bad" },
+          model: "claude-haiku-4-5",
+          subtype: "success",
+        }),
+      },
+    });
+    expect((await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), bad)).exitCode).toBe(0);
+    const rejudged = rows("v1")[0]!;
+    expect(rejudged.grade).toMatchObject({ pass: 0, a2: 0 });
+    // A deterministic edit next: nothing judged changed since that re-grade, so no judge call and a2 stays 0.
+    edit(evals, "transcript_contains: All done", "transcript_contains: All");
+    const { seen, deps } = counting();
+    expect((await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps)).exitCode).toBe(0);
+    expect(seen.calls).toBe(0);
+    const later = rows("v1")[0]!;
+    expect(later.grade).toMatchObject({ pass: 0, a2: 0 });
+    expect(later.meta.regrade_file).toBe(rejudged.meta.regrade_file);
+    // A fill after it: the v1 row lacks only its own variant's (neutral) outcome — rebuilt with no judge call, its
+    // judged entries still the re-grade's, never listed and never reverted to the run's.
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const fill = await regradeFlow(ARGS({ variant: "v1", fillRefs: true }), deps);
+    expect(fill.variants[0]!.listed, JSON.stringify(fill)).toEqual([]);
+    expect(seen.calls).toBe(0);
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 0, a2: 0 });
+  }, 300_000);
 
   it("an assert the recorded workspace fixture satisfies on its own is listed before any judge call (verify-run's refusal)", async () => {
     f.cleanup();

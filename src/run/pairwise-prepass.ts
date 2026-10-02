@@ -40,6 +40,9 @@ export interface PairwisePrepassOpts {
    *  live run's, from `copyOutcome`, recorded `copied: true` — no judge call, so it cannot move. */
   onlyRefs?: ReadonlySet<string>;
   copyOutcome?: (assertIndex: number, ref: string) => Outcome | undefined;
+  /** Asserts (by index in `assertions`) this pass leaves alone: no document is composed, no judge called, nothing
+   *  recorded in the context. The index still seeds every other assert's comparison order, so the list is passed whole. */
+  skip?: (assertIndex: number) => boolean;
   /** Epoch ms after which no judge call may start. A comparison not started by then is not made, and
    *  `deadlinePassed` is set on the context, so the caller ends the run as a timeout. */
   deadline?: number;
@@ -100,7 +103,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
   for (let i = 0; i < assertions.length; i++) {
     const a = assertions[i]!;
     const p = a.semantic_pairwise;
-    if (p === undefined) continue;
+    if (p === undefined || opts.skip?.(i)) continue;
     const built = candidateDocument(ctx, a);
     ctx.semanticDocInfo.set(a, {
       evidenceCut: built.evidenceCut,

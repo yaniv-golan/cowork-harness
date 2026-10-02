@@ -210,6 +210,12 @@ export interface RegradeOptions {
   pairwise?: { caseId?: string; refs?: PairwiseRef[]; neutralRefs?: string[]; gateRefs?: string[]; onlyRefs?: string[] };
   /** Test seam: the structured judge transport for `semantic_pairwise` (default: the host `claude -p`). */
   pairwiseComplete?: CompleteStructured;
+  /** What each run dir's caller-owned row is graded with now (a hillclimb row a previous re-grade rewrote carries
+   *  that re-grade's entries, not the run's), by scenario index. A judged assert in `keep` is NOT re-graded: its entry
+   *  is copied into the report as it is (`copied: true`, `docMatchesLive: "not_graded"`), no document is composed for
+   *  it and no judge is called. In a fill these entries are also what every kept outcome is copied from. Default (or
+   *  undefined for a run dir): the run's own result.json entries, nothing kept. */
+  graded?: (runDir: string) => { entries: ReadonlyMap<number, RunResult["assertions"][number]>; keep: ReadonlySet<number> } | undefined;
 }
 
 /** `RegradeOptions` for an evidence preflight. Kept out of `RegradeOptions` itself so a caller that never asks for
@@ -740,7 +746,9 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     // fingerprint to compare with at all. An assert whose evidence will be refused is decided here by the same
     // `semanticRefusal` over the same context, and left out: no judge is called for it, so its document
     // reaches no one and there is nothing to warn about.
-    const newSemantic = sc.assert.filter((a) => judgedOpts(a) !== undefined);
+    // An assert the caller keeps is never handed to a judge, so there is nothing to say about its document.
+    const keepHere = opts.graded?.(runDir)?.keep;
+    const newSemantic = sc.assert.filter((a, i) => judgedOpts(a) !== undefined && !keepHere?.has(i));
     const willRefuse = new Set<Assertion>();
     const newDocs = new Map<Assertion, JudgedDocFingerprint>();
     for (const a of newSemantic) {
@@ -749,8 +757,9 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       if (semanticRefusal(a, second.ctx, built)) willRefuse.add(a);
       else newDocs.set(a, built.fingerprint);
     }
-    const blind = newSemantic.flatMap((a, ordinal) => {
+    const blind = newSemantic.flatMap((a) => {
       if (willRefuse.has(a)) return [];
+      const ordinal = sc.assert.filter((x) => judgedOpts(x) !== undefined).indexOf(a);
       const { match } = compareWithLive(a, ordinal, sc.assert.indexOf(a), newDocs.get(a), live, false);
       return match === "unknown" || match === "live_refused" ? [{ assertionIndex: sc.assert.indexOf(a), docMatch: match }] : [];
     });
@@ -850,15 +859,19 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
           secrets,
         ),
       );
+    // What the caller's row is graded with now, and the asserts it keeps (never re-graded here).
+    const g = opts.graded?.(p.runDir);
+    const keep = g?.keep ?? new Set<number>();
+    const base = (i: number) => (g ? g.entries.get(i) : p.liveEntries[i]);
+    const toGrade = semantic.filter((a) => !keep.has(sc.assert.indexOf(a)));
     // Fill mode only adds pairwise comparisons: a semantic_matches grade is not repeated (its live entry is kept below).
     if (!fill) {
       const { judge, judgeFor } = judgesForRun({ modelOverride: opts.judgeModel }, opts.makeJudge);
       // The SAME array to both calls: `check` reads the judge's results back by assertion identity.
-      await runSemanticJudges(semantic, p.ctx, judge, judgeFor);
+      await runSemanticJudges(toGrade, p.ctx, judge, judgeFor);
     }
-    if (sc.assert.some((a) => a.semantic_pairwise !== undefined)) {
+    if (sc.assert.some((a, i) => a.semantic_pairwise !== undefined && !keep.has(i))) {
       const setup = pairwiseSetupFor(sc, opts);
-      const liveEntries = p.liveEntries;
       // The FULL assert list: the comparison order is seeded by the assert's index in the scenario, as it was live,
       // and by the run id the live pre-pass used (the run dir's name).
       await runPairwiseJudges(sc.assert, p.ctx, {
@@ -871,9 +884,10 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
         ...(opts.pairwise?.onlyRefs
           ? {
               onlyRefs: new Set(opts.pairwise.onlyRefs),
-              copyOutcome: (i: number, ref: string) => liveEntries[i]?.pairwise?.find((o) => o.ref === ref),
+              copyOutcome: (i: number, ref: string) => base(i)?.pairwise?.find((o) => o.ref === ref),
             }
           : {}),
+        ...(keep.size ? { skip: (i: number) => keep.has(i) } : {}),
         judgeFor: (model) => makePairwiseJudge({ model, complete: opts.pairwiseComplete ?? claudeCliCompleteStructured }),
         ...(opts.pairwiseComplete ? {} : { transport: () => transportIdentity() }),
         modelFor: (a) => opts.judgeModel ?? a.semantic_pairwise?.judge_model ?? defaultJudgeModel(),
@@ -886,10 +900,12 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
         throw new Error(
           `${CMD}: internal: assert ${sc.assert.indexOf(a)} was predicted to refuse its evidence but a judge was called for it`,
         );
-    // In fill mode a semantic_matches entry is the live one, unchanged: nothing about it was re-graded.
-    const graded = evaluate(semantic, p.ctx).map((g, k) => {
-      const live = p.liveEntries[sc.assert.indexOf(semantic[k]!)];
-      return fill && semantic[k]!.semantic_matches !== undefined && live ? (live as typeof g) : g;
+    // In fill mode a semantic_matches entry is the live one, unchanged: nothing about it was re-graded. A kept assert's
+    // entry is the caller's, as it is.
+    const graded = evaluate(semantic, p.ctx).map((e, k) => {
+      const i = sc.assert.indexOf(semantic[k]!);
+      const kept = base(i);
+      return (keep.has(i) || (fill && semantic[k]!.semantic_matches !== undefined)) && kept ? (kept as typeof e) : e;
     });
     const metrics = remeasureMetrics(p.ctx, { workspaceFiles: p.workspaceFiles }, sc.metrics);
 
@@ -899,25 +915,25 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     const assertions: RegradedAssertion[] = graded.map((g, ordinal) => {
       const a = semantic[ordinal];
       const assertionIndex = sc.assert.indexOf(a);
+      // A fill kept this semantic_matches entry from the live run (or the caller kept the assert): nothing re-read it, so
+      // it carries no new document comparison and is marked as kept.
+      if (keep.has(assertionIndex) || (fill && a.semantic_matches !== undefined))
+        return { ...g, assertionIndex, docMatchesLive: "not_graded", copied: true } as RegradedAssertion;
       // Over the fingerprint of what the judge was handed, not the drift check's copy.
       const refusedNow = g.semanticEvidence !== undefined && g.semanticEvidence.reason !== "graded";
       const c = compareWithLive(a, ordinal, assertionIndex, p.ctx.judgedDocs?.get(a) ?? p.ctx.composedDocs?.get(a), p.live, refusedNow);
       differing.push(...c.differing);
       const now = p.ctx.judgedDocs?.get(a) ?? p.ctx.composedDocs?.get(a);
       const readDrift = c.match !== "not_graded" && now?.sections.some((x) => drifted.has(`${x.kind}\0${x.path ?? ""}`)) === true;
-      // A fill kept this semantic_matches entry from the live run: nothing re-read it, so it carries no new document
-      // comparison and is marked as kept.
-      if (fill && a.semantic_matches !== undefined)
-        return { assertionIndex, ...g, docMatchesLive: "not_graded", copied: true } as RegradedAssertion;
       return {
         assertionIndex,
         ...g,
         docMatchesLive: readDrift ? false : c.match,
       } as RegradedAssertion;
     });
-    // What this re-grade actually judged: in a fill, the pairwise asserts only — the kept entries' spend, invalid
-    // grades and document comparisons belong to the live run, not to this one.
-    const rejudged = fill ? assertions.filter((a) => a.assertion.semantic_pairwise !== undefined) : assertions;
+    // What this re-grade actually judged: never a kept entry (in a fill, every semantic_matches one) — its spend,
+    // invalid grades and document comparisons belong to whatever graded it, not to this re-grade.
+    const rejudged = assertions.filter((a) => a.copied !== true);
     // Per assert, the value describes that assert's own document; the run's value never reads true (or not_graded)
     // over a drift that was detected and accepted.
     const docMatchesLive = p.drift.length ? false : aggregate(rejudged.map((a) => a.docMatchesLive));
