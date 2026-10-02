@@ -333,7 +333,7 @@ const fakeRunner = (body: string): string => {
   chmodSync(f, 0o755);
   return f;
 };
-// argv: exec -w <cwd> <container> <shell> -c <command>
+// argv: exec -w <cwd> <container> <shell> -c <command>  ($1 … $7)
 const PRINT_COMMAND = 'for a; do last=$a; done; printf "%s" "$last"\n';
 
 async function callBash(opts: { runner: string; rewrites?: PluginPathRewrite[] }, args: Record<string, unknown>) {
@@ -369,7 +369,7 @@ describe("the workspace bash handler runs the rewritten command", () => {
     expect(r.content[0]!.text).toBe(`${V}/out.txt`);
   });
   it("the shell is bash, as in Cowork", async () => {
-    const r = await callBash({ runner: fakeRunner('printf "%s" "$4"\n') }, { command: "true" });
+    const r = await callBash({ runner: fakeRunner('printf "%s" "$5"\n') }, { command: "true" });
     expect(r.content[0]!.text).toBe("bash");
   });
   it("a bash-only construct runs (process substitution, which a POSIX sh rejects)", async () => {

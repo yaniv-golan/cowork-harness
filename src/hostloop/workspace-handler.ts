@@ -501,9 +501,9 @@ async function execInContainer(
 ) {
   if (!command) return textResult("error: missing 'command'", true);
   // Async (execFile, not spawnSync) so the awaited MCP handler yields the event loop while the subprocess
-  // runs — a slow `docker exec` no longer blocks all protocol I/O. Each call independent (fresh sh).
+  // runs — a slow `docker exec` no longer blocks all protocol I/O. Each call independent (a fresh `bash -c`, as Cowork runs it).
   try {
-    const { stdout, stderr } = await pexec(runner, ["exec", "-w", cwd, container, "sh", "-c", command], {
+    const { stdout, stderr } = await pexec(runner, ["exec", "-w", cwd, container, "bash", "-c", command], {
       encoding: "utf8",
       timeout: timeoutMs, // honor the model-requested timeout_ms (clamped at the call site)
       maxBuffer: 8 * 1024 * 1024,

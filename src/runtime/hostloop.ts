@@ -281,7 +281,7 @@ export function spawnHostLoop(
 
   const agentNativeHost = resolveHostAgentBinary(baseline);
   // Bind-mounted into the bash sidecar for parity; not run by any harness-spawned process here (sidecar CMD
-  // is a keep-alive, bash is `docker exec … sh -c`, the executed agent is agentNativeHost above — model bash
+  // is a keep-alive, bash is `docker exec … bash -c`, the executed agent is agentNativeHost above — model bash
   // could invoke it inside the hardened sidecar, an accepted patch-only residual). So tolerate a patch-newer
   // VM ELF when the pin was pruned by a Desktop update, instead of hard-failing a run that doesn't execute it.
   const agentVmHost = resolveAgentBinary(baseline, { parityMount: true });
