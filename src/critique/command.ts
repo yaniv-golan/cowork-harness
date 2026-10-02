@@ -32,6 +32,9 @@ import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-ind
 import { jsonPayloadEnvelope, envOutputFormat, fail, isJsonOutput, type ErrCategory } from "../run/envelope.js";
 import { checkMountDelivers } from "./mount-check.js";
 import { binaryPluginIdentity } from "../session.js";
+import { sanitizeSkillName } from "../skill-id.js";
+import { readSkillFrontmatterName } from "../run/skill-metadata.js";
+import { registeredSkills } from "../hillclimb/skill.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import type { SkillMdStatus } from "./package-evidence.js";
 import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
@@ -748,9 +751,15 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
     // `findEnclosingPluginDir` is INCLUSIVE of its start, so an equal path is shape 1, not shape 2.
     // Shape 2 reaches here only when `applyTargetPromotion` could NOT promote it to the enclosing plugin
     // (see there): the mount is this folder alone, so the plugin's agents and shared references are not in
-    // it and must not be in the corpus. The skill still has a name — its directory's.
-    if (enclosing !== null && enclosing !== mountRoot)
-      return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, basename(mountRoot)), gradedSkillName: basename(mountRoot) };
+    // it and must not be in the corpus. The skill still has a name — the one the agent registers it under:
+    // its frontmatter `name` (minus a leading "<plugin>:", the plugin being this folder), else the
+    // directory's, rewritten by `sanitizeSkillName`.
+    if (enclosing !== null && enclosing !== mountRoot) {
+      const plugin = binaryPluginIdentity(skillFolder).name;
+      const fm = readSkillFrontmatterName(join(skillFolder, "SKILL.md")) ?? "";
+      const registered = sanitizeSkillName((fm.startsWith(`${plugin}:`) ? fm.slice(plugin.length + 1) : fm) || basename(mountRoot));
+      return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, basename(mountRoot)), gradedSkillName: registered };
+    }
     return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder)) };
   }
   const skills = listPluginSkills();
@@ -1332,6 +1341,8 @@ interface ReportState {
    *  slash command is ambiguous and the run does not say which ran. Surfaced so *absent* is an
    *  actionable outcome rather than a dead end. */
   commandShadowsSkill?: boolean;
+  /** Another skill of the plugin registers under the graded skill's id (text report only). */
+  skillIdShared?: boolean;
   /** The graded run's resolved gate answers (from its result.json's gateProvenance), lifted so a
    *  follow-up run can be made deterministic — the text report echoes them as copy-pasteable --answer
    *  lines, mirroring the `skill` lane's footer. */
@@ -1591,7 +1602,11 @@ export function buildTextReport(state: ReportState): string {
     // Only when the shadow is what withheld the verdict. A `false` alongside a shadow is sound — nothing
     // named the skill by ANY channel — and printing "not decidable" next to "none named it" contradicts.
     out.push(
-      `  NOTE: this plugin ships BOTH commands/${state.gradedSkill}.md and skills/${state.gradedSkill}/SKILL.md. They register one identical slash command, the Skill tool launches either through the same registry, and the run does not record which ran — so a positive invocation verdict is not decidable here. Rename one of the two to make it observable.`,
+      `  NOTE: this plugin ships BOTH commands/${sanitizeSkillName(state.gradedSkill ?? "")}.md and the skill ${state.gradedSkill}. They register one identical slash command, the Skill tool launches either through the same registry, and the run does not record which ran — so a positive invocation verdict is not decidable here. Rename one of the two to make it observable.`,
+    );
+  else if (state.skillIdShared && state.skillInvocationObserved === undefined)
+    out.push(
+      `  NOTE: another skill of this plugin registers under the same id as ${state.gradedSkill} (the agent rewrites every character outside [a-zA-Z0-9_-] to "-"), so an observed invocation cannot say which of them ran — a positive invocation verdict is not decidable here. Rename one of them to make it observable.`,
     );
   else if (state.gradedSkill !== undefined && state.skillInvocationObserved === undefined)
     // Absence is a real outcome and must be SAID: without this line "could not observe" read exactly
@@ -2099,13 +2114,30 @@ export function gradedSkillNameFor(
 /** A plugin shipping BOTH commands/<n>.md and skills/<n>/SKILL.md registers ONE identical slash command,
  *  and the `Skill` tool launches either through the same registry; the run records the name, not the
  *  kind (vercel@0.48.0 does exactly this). That makes EVERY channel undecidable for this skill — a match
- *  is reported absent, never true. */
+ *  is reported absent, never true. The agent registers a command under its file stem as it is, and a skill
+ *  under its name rewritten (`sanitizeSkillName`), so the colliding stem is the rewritten name:
+ *  `commands/my-skill.md` shadows `skills/my.skill/`, `commands/my.skill.md` does not. */
 export function commandShadowsSkillFor(gradedSkillName: string | undefined, resolved: { pluginRoot: string | undefined }): boolean {
   return (
     gradedSkillName !== undefined &&
     resolved.pluginRoot !== undefined &&
-    existsSync(join(resolved.pluginRoot, "commands", `${gradedSkillName}.md`))
+    existsSync(join(resolved.pluginRoot, "commands", `${sanitizeSkillName(gradedSkillName)}.md`))
   );
+}
+
+/** Two or more skills of the plugin that the agent registers under this skill's id (`skills/my.skill/` and
+ *  `skills/my-skill/`, or a manifest `skills` path, or a symlinked skill dir, all answering to
+ *  `<plugin>:my-skill`): an observed id cannot tell them apart, so a match is reported absent, never true. Read
+ *  from `registeredSkills`, the one model of the agent's skill loader, so the answer is the same whether the
+ *  caller names the skill by its directory or by its registered name. */
+export function skillIdSharedFor(gradedSkillName: string | undefined, pluginRoot: string | undefined): boolean {
+  if (gradedSkillName === undefined || pluginRoot === undefined) return false;
+  const id = sanitizeSkillName(gradedSkillName);
+  try {
+    return registeredSkills(pluginRoot).filter((s) => s.id === id).length > 1;
+  } catch {
+    return false;
+  }
 }
 
 /** critique's `skillInvocationObserved`, computed from a graded run's on-disk record. Extracted from
@@ -2158,7 +2190,7 @@ export function skillInvocationFromRecord(args: {
       typeof taskRaw?.prompt === "string" ? taskRaw.prompt : undefined,
       (taskRaw?.context as { availableSkills?: Array<{ id: string }> } | undefined)?.availableSkills,
     ),
-    commandShadowsSkillFor(gradedSkillName, { pluginRoot }),
+    commandShadowsSkillFor(gradedSkillName, { pluginRoot }) || skillIdSharedFor(gradedSkillName, pluginRoot),
   );
 }
 
@@ -2346,6 +2378,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // no evidence either way (absent result).
     const gradedSkillName = gradedSkillNameFor(opts.skillSelector, resolvedSkill);
     const commandShadowsSkill = commandShadowsSkillFor(gradedSkillName, resolvedSkill);
+    const skillIdShared = skillIdSharedFor(gradedSkillName, resolvedSkill.pluginRoot);
     // NOTE: the verdict itself is computed after `snapshotTurnBoundary` below — it needs the turn-1
     // events slice, which does not exist until the boundary is captured.
     // Resolved gate answers, lifted for the reproduce-deterministically echo (the `skill` lane already
@@ -2587,6 +2620,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gradedSkill: gradedSkillName,
       skillInvocationObserved,
       commandShadowsSkill: commandShadowsSkill || undefined,
+      skillIdShared: skillIdShared || undefined,
       gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,
       gradedOutcome,
