@@ -1,6 +1,6 @@
 # Run, record and lock
 
-Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
 
 ## Part II — RUN, RECORD & LOCK
 
@@ -204,7 +204,7 @@ Recognize these before "fixing" a non-bug:
   `markitdown`/`magika` (`ml_extract`), `cv2` (`cv`), `camelot`/`tabula` (`pdf_tables`), or `wand`
   (`magick`) can trip this even though real Cowork **ships** those (per the rootfs manifest captured at
   Desktop `2.9939.2` — `baselines/provisioning/rootfs-provisioning.json`, which is the dated evidence
-  behind that sentence; 2 baselines have shipped since without a re-capture). The message says so ("likely a FALSE
+  behind that sentence; 3 baselines have shipped since without a re-capture). The message says so ("likely a FALSE
   NEGATIVE (real Cowork ships them)"). Fix: rebuild full parity (`--build-arg COWORK_FULL_PARITY=1`, point
   `COWORK_AGENT_IMAGE` at it), or — if the skill's fallback is genuinely equivalent — assert
   `allow_missing_capability: true`. (Two sources: a skill *observed using* an omitted family, live lane;

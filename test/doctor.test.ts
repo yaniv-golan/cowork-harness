@@ -17,7 +17,7 @@ import {
   type DoctorCheck,
   type ImageFreshness,
 } from "../src/run/doctor.js";
-import { loadBaseline, pinnedNativeAgentVersion } from "../src/baseline.js";
+import { classifyNativeStagingDrift, loadBaseline, pinnedNativeAgentVersion, resolveHostAgentBinary } from "../src/baseline.js";
 
 const OK_PROBE: DoctorProbe = {
   nodeMajor: () => 22,
@@ -801,14 +801,35 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
     });
   });
 
+  // A FLAT pin is what every baseline before desktop-2.19675.0 carries, so this case pins one explicitly
+  // rather than reading `latest` (which now names a build). It drives the same three calls the real probe
+  // makes — resolver, classifier, note — so the end-to-end path is the one doctor runs.
   it("two builds of the pinned version (flat pin) → ok, with relocated AND ambiguous notes naming both builds", () => {
     withHome((home) => {
-      stageBuild(home, pinned(), "aaaaaaaaaaaa", 100);
-      const bin = stageBuild(home, pinned(), "bbbbbbbbbbbb", 200);
+      const flat = loadBaseline("desktop-2.16120.0");
+      const ver = pinnedNativeAgentVersion(flat)!;
+      expect(flat.agentBinary?.nativeStagedPath).toMatch(new RegExp(`/${ver.replace(/\./g, "\\.")}/claude\\.app/`)); // precondition: flat
+      stageBuild(home, ver, "aaaaaaaaaaaa", 100);
+      const bin = stageBuild(home, ver, "bbbbbbbbbbbb", 200);
+      expect(resolveHostAgentBinary(flat)).toBe(bin);
+      const note = nativeDriftNote(classifyNativeStagingDrift(flat));
+      expect(note).toMatch(/pinned path uses the flat layout/);
+      expect(note).toMatch(/ambiguous: 2 builds of [\d.]+, using bbbbbbbbbbbb/);
+    });
+  });
+
+  // `latest` (desktop-2.19675.0 onwards) pins the BUILD. The pinned build wins over a newer sibling build of
+  // the same version — no drift and no ambiguity, so no note at all.
+  it("latest's build pin with a newer sibling build of the same version staged → ok, the PINNED build", () => {
+    withHome((home) => {
+      const pinnedPath = loadBaseline("latest").agentBinary?.nativeStagedPath ?? "";
+      const build = pinnedPath.match(/\/[\d.]+\/([0-9a-f]{12})\/claude\.app\//)?.[1];
+      expect(build).toBeDefined(); // precondition: latest pins a build
+      const bin = stageBuild(home, pinned(), build!, 100);
+      stageBuild(home, pinned(), "bbbbbbbbbbbb", 200);
       const r = realProbe.hostAgentBinary();
       expect(r).toMatchObject({ ok: true, path: bin });
-      expect(r.ok && r.note).toMatch(/pinned path uses the flat layout/);
-      expect(r.ok && r.note).toMatch(/ambiguous: 2 builds of [\d.]+, using bbbbbbbbbbbb/);
+      expect(r.ok && r.note).toBeFalsy(); // exact build pin: no drift, no ambiguity
     });
   });
 

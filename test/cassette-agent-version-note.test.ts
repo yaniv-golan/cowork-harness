@@ -134,7 +134,9 @@ describe("agent-version note — every committed cassette", () => {
     // pinned ELF (compared against agentVersion).
     const tier: string | undefined = c.effectiveFidelity ?? c.scenario?.fidelity;
     if (tier === "hostloop") {
-      const native = /claude-code\/([^/]+)\/claude\.app\/Contents\/MacOS\/claude$/.exec(
+      // Both staging layouts: flat `claude-code/<ver>/claude.app/…` (before Desktop 2.19675.0) and per-build
+      // `claude-code/<ver>/<12-hex build>/claude.app/…`. Kept independent of pinnedNativeAgentVersion on purpose.
+      const native = /claude-code\/([^/]+)\/(?:[0-9a-f]{12}\/)?claude\.app\/Contents\/MacOS\/claude$/.exec(
         (() => {
           try {
             return (
