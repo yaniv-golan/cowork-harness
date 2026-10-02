@@ -446,11 +446,17 @@ async function regradeFlowInner(
   const cases = selectCases(all, args.cases);
   const byId = new Map(cases.map((c) => [c.id, c]));
   // No agent runs here, so no agent model needs resolving (a flow run with --model would otherwise be refused).
-  const prep = prepareCases(all, {
-    env: deps.env,
-    noAgentRun: true,
-    ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
-  });
+  // `run --case`'s rule: the per-case checks cover the selected cases; the gate below covers every case.
+  const prep = prepareCases(
+    all,
+    {
+      env: deps.env,
+      noAgentRun: true,
+      ...(args.judgeModel !== undefined ? { judgeModelFlag: args.judgeModel } : {}),
+    },
+    cases,
+  );
+  for (const n of prep.notes) say(n);
   // The flow's metric columns, refused as `run` refuses them: one id declared two ways across the cases, or a declaration
   // that changed since the flow's rows (any variant) were written — a rebuilt row would carry the new quantity beside
   // rows holding the old one. Before the gate, the locks and any judge call.
