@@ -683,6 +683,8 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
       expect(row.meta).not.toHaveProperty("regrade_file");
       expect(out.variants.find((x) => x.variant === v)).toMatchObject({ rewritten: 1, remeasured: 1, listed: [] });
       expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/re-measured 1/);
+      // The metric columns that moved are in the moved table.
+      expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/words —→1200/);
       expect(readdirSync(join(flow, v)).some((n) => /^regrade-[0-9a-f]{16}\.bak\.jsonl$/.test(n))).toBe(true);
     }
     expect(lines.join("\n")).toMatch(/baseline 1 rewritten, 1 re-evaluated, 1 re-measured; v1 1 rewritten, 1 re-evaluated, 1 re-measured/);
