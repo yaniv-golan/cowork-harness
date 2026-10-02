@@ -16,7 +16,7 @@
 // can refuse is decided before the first judge call, over every selected variant: the host-`claude` isolation check,
 // the gate, the locks, and each batch's evidence preflight.
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
@@ -29,7 +29,8 @@ import { remeasureMetrics } from "../metrics.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { computeVerdict } from "../run/verdict.js";
-import type { RunResult, Scenario } from "../types.js";
+import type { RunResult } from "../types.js";
+import type { AssertContext } from "../assert.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
@@ -137,19 +138,30 @@ export function mergeMetrics(
  *  the case declares none). A re-grade report is one. */
 export type Remeasure = Pick<RegradeRunReport, "metrics">;
 
-/** Re-evaluate one row from its kept run dir, with no judge call: the one per-row step every row no judge re-grades
- *  goes through. Its first (today only) product is the case's metrics, re-measured exactly as `verify-run` and core
- *  `regrade` re-measure them — the kept-run builder (`assertContextFromRunDir`) and `remeasureMetrics`, so a file is
- *  read only while its bytes still equal the run's recorded post-run hash. A run dir the builder refuses (multi-turn,
- *  partial, replay, chat, no result) is `refused`, with the builder's message. */
-export function reevaluateFromRun(runDir: string, scenario: Scenario): Remeasure | { refused: string } {
-  const built = assertContextFromRunDir(runDir, scenario, { command: "hillclimb regrade" });
+/** One row re-evaluated from its kept run: the context the kept-run builder rebuilt, and the products read from it. */
+export interface Reevaluation {
+  /** What `verify-run` evaluates a scenario against, rebuilt from the kept run dir. */
+  ctx: AssertContext;
+  /** The case's declared metrics, re-measured from the kept work dir (absent when the case declares none). */
+  metrics?: NonNullable<RunResult["metrics"]>;
+}
+
+/** Re-evaluate one selected row from its kept run dir: the one per-row step every selected row goes through, in every
+ *  mode, before any judge call. The context is `verify-run`'s own (`assertContextFromRunDir`), and the metrics are
+ *  re-measured on it by `remeasureMetrics`, as `verify-run` and core `regrade` re-measure them: a file is read only while
+ *  its bytes still equal the run's recorded post-run hash. `listed` (never a zeroed value) when the context cannot be
+ *  built — a run dir the builder refuses (multi-turn, partial, replay, chat, no result) — or when the case declares a
+ *  metric and the kept work dir it would be read from is gone. `row` is the row as written. */
+export function reevaluateFromRun(row: Record<string, unknown>, runDir: string, c: HillclimbCase): Reevaluation | { listed: string } {
+  const built = assertContextFromRunDir(runDir, c.scenario, { command: "hillclimb regrade" });
   if (!built.ok) {
     if (built.kind === "scenario") throw new Error("unreachable: the scenario was passed as an object");
-    return { refused: built.message };
+    return { listed: `refused: ${built.message.split("\n")[0]}` };
   }
-  const metrics = remeasureMetrics(built.ctx, built.result, scenario.metrics);
-  return metrics !== undefined ? { metrics } : {};
+  if (c.scenario.metrics?.length && !existsSync(built.ctx.workRoot))
+    return { listed: `its kept work dir is gone (${built.ctx.workRoot || "<unset>"}) — its metrics cannot be re-measured` };
+  const metrics = remeasureMetrics(built.ctx, built.result, c.scenario.metrics);
+  return { ctx: built.ctx, ...(metrics !== undefined ? { metrics } : {}) };
 }
 
 /** The row's `meta.metrics_unavailable` reasons for the declared ids only. */
@@ -175,6 +187,8 @@ interface Target {
   result: RunResult;
   /** The references this row's comparisons lack (fill mode); empty when it needs no judge call. */
   missing: string[];
+  /** The row re-evaluated from its kept run, before any judge call. */
+  re: Reevaluation;
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -638,8 +652,23 @@ async function regradeFlowInner(
             continue;
           }
         }
+        // Every selected row is re-evaluated from its kept run here, before any judge call: a row whose context cannot be
+        // rebuilt is listed, never re-measured as unavailable.
+        const re = reevaluateFromRun(row, runDir, c);
+        if ("listed" in re) {
+          vr.listed.push({ prompt_id: id, rep, why: shownMessage(re.listed, deps.secrets) });
+          continue;
+        }
         const agentFailed = classifyRep({ result: result as never }, {}).bucket === "errored_agent";
-        const t: Target = { variant: v, c, line, runDir, result, missing: args.fillRefs ? missingRefs(result, c, refNames) : [] };
+        const t: Target = {
+          variant: v,
+          c,
+          line,
+          runDir,
+          result,
+          missing: args.fillRefs ? missingRefs(result, c, refNames) : [],
+          re,
+        };
         if (!judged || (args.fillRefs ? agentFailed || !t.missing.filter((r) => r !== v).length : agentFailed)) {
           // No comparison to judge: a case with no judged assert, an agent failure (it scores 0 whatever the judge
           // says), and a row lacking only its own variant's (neutral) outcome. Rebuilt with no judge call, so it is
@@ -820,17 +849,8 @@ async function regradeFlowInner(
         }
       }
       const vr = perVariant.get(t.variant)!.v;
-      // Re-evaluated from the kept run when the flow declares a metric: the case's metrics, re-measured. A run dir the
-      // kept-run builder refuses is listed, never re-measured as zero.
-      const re = shape.metrics.length ? reevaluateFromRun(t.runDir, t.c.scenario) : undefined;
-      if (re && "refused" in re) {
-        vr.listed.push({
-          prompt_id: t.c.id,
-          rep: Number(t.line.row?.rep),
-          why: shownMessage(`refused: ${re.refused.split("\n")[0]}`, deps.secrets),
-        });
-        continue;
-      }
+      // Its re-evaluation's metrics, when the flow declares any (a flow that declares none carries no metric column).
+      const re: Remeasure | undefined = shape.metrics.length ? t.re : undefined;
       const live = re ? withRemeasured(t.result, re) : t.result;
       const got = rebuiltRow(
         t.line.row!,

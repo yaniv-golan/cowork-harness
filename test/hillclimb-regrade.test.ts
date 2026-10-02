@@ -540,6 +540,9 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     expect(c.exitCode).toBe(0);
   }, 240_000);
 
+  // This test used to pin the opposite: a row rebuilt with no judge call was not re-measured, so it kept predating an
+  // added metric (no column, no sig) and `check` noted it. Deliberately flipped: every selected row is now re-evaluated
+  // from its kept run, so a metric added mid-flow is filled on it too.
   it("a fill's row rebuilt with no judge call is re-measured: a removed metric goes, an added one is sigged with its reason", () => {
     writing();
     // LOST is never measured (no file), so the run records its unavailable reason; it is removed below with WORDS.
@@ -746,6 +749,39 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
     expect(rows("v1").find((r) => r.rep === 1)!.grade).toMatchObject({ words_present: 1, words: 1200 });
     expect(rep1).toBeDefined();
   }, 240_000);
+
+  it.each([
+    ["a judged case", false],
+    ["a case with no judged assert", true],
+  ] as const)(
+    "%s: a row whose kept work dir is gone is listed (exit 1), never re-measured as unavailable; nothing judged",
+    async (_n, noPairwise) => {
+      writing();
+      const { flow, rows, evals } = buildFlow({ metrics: [OTHER], noPairwise });
+      const runDir = runDirOf(rows("v1")[0]!);
+      const result = JSON.parse(readFileSync(join(runDir, "turns", "1", "result.json"), "utf8")) as { workDir: string };
+      rmSync(result.workDir, { recursive: true, force: true });
+      addMetrics(evals, WORDS);
+      const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+      let calls = 0;
+      const out = await regradeFlow(
+        ARGS({ variant: "v1", approveHarness: true }),
+        DEPS({
+          regradeOptions: {
+            pairwiseComplete: async () => {
+              calls++;
+              return { structured: { rationale: "r", verdict: "A" }, model: "claude-haiku-4-5", subtype: "success" };
+            },
+          },
+        }),
+      );
+      expect(out.exitCode).toBe(1);
+      expect(calls).toBe(0);
+      expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(/work dir is gone/) }]);
+      expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+    },
+    240_000,
+  );
 
   it("an agent-failed row gains the added metric's sig and `_present: 0`, never a value or a reason", async () => {
     // A closing question with no gate: the run stalls on it, the agent's own failure (scored, every graded key 0).
