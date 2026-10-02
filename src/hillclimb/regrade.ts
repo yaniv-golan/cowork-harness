@@ -7,6 +7,10 @@
 //                   written); every other outcome and every semantic_matches grade is the live one, so `pass` cannot
 //                   move. Every scored row is re-graded through the same producer, so each carries every win column.
 //
+// In both modes every selected row's metrics are re-measured from its kept run: by the core re-grade for a row a judge
+// re-grades, and by `reevaluateFromRun` — no judge call — for every other row (a case with no judged assert, an agent
+// failure, a fill row that needs no comparison), so a metric added mid-flow is filled on every row.
+//
 // A row is rewritten by the SAME producer `run` writes it with (`gradeFor` over the result with the re-graded entries
 // substituted), never patched key by key. `result.json` is never touched (`regrade`'s own invariant). Everything that
 // can refuse is decided before the first judge call, over every selected variant: the host-`claude` isolation check,
@@ -20,10 +24,12 @@ import { classifyRep } from "../eval/classify.js";
 import { pkgVersion } from "../run/envelope.js";
 import { runOutDir } from "../run/execute.js";
 import { regradeRuns, type RegradeOptions, type RegradeOutcome, type RegradeRunReport } from "../run/regrade.js";
+import { assertContextFromRunDir } from "../run/verify-context.js";
+import { remeasureMetrics } from "../metrics.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { computeVerdict } from "../run/verdict.js";
-import type { RunResult } from "../types.js";
+import type { RunResult, Scenario } from "../types.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
@@ -78,6 +84,10 @@ export interface RegradeFlowVariant {
   rewritten: number;
   /** Rows not re-graded, with why. Nothing was written for them. */
   listed: Array<{ prompt_id: string; rep: number; why: string }>;
+  /** Rows whose metrics were re-measured from their kept run with no judge call (a case with no judged assert, an
+   *  agent-failed row, a fill row that needed no comparison). A row whose re-measure changed nothing is counted here
+   *  but not rewritten. */
+  remeasured: number;
   regradeFiles: string[];
   backup?: string;
 }
@@ -88,10 +98,10 @@ export interface RegradeFlowOutcome {
   error?: { category: "usage" | "runtime"; message: string };
 }
 
-/** The metrics seam: a re-measure's row metadata merges here into every row rebuilt FROM A RE-GRADE REPORT, after its
- *  grade is rebuilt and before its keys are ordered (a row rebuilt with no judge call has no report, so no re-measure to
- *  merge). The values and `_present` keys are already in `row.grade` — `gradeFor` read them from the result the report's
- *  metrics were merged into — so this sets only what the row's meta says about them, the way `run` writes it:
+/** The metrics seam: a re-measure's row metadata merges here into every row rebuilt from a re-measure — a re-grade
+ *  report's, or the one `reevaluateFromRun` makes for a row no judge re-grades — after its grade is rebuilt and before
+ *  its keys are ordered. The values and `_present` keys are already in `row.grade` — `gradeFor` read them from the result
+ *  the re-measured metrics were merged into — so this sets only what the row's meta says about them, the way `run` writes it:
  *  `meta.metric_sigs` is exactly the declarations' signatures (a row that predated a metric gains its sig; a removed
  *  metric's sig goes with its column, which the rebuilt grade no longer carries; omitted when none is declared), and
  *  `meta.metrics_unavailable` by id — a reason the re-measure gives is added or replaced, an id the grade now reads
@@ -99,7 +109,7 @@ export interface RegradeFlowOutcome {
  *  no metric, so it gains no reason. Mutates in place. */
 export function mergeMetrics(
   row: { grade: Record<string, number>; meta: Record<string, unknown> },
-  report: RegradeRunReport,
+  report: Remeasure,
   decls: readonly MetricDecl[],
 ): void {
   if (decls.length) row.meta.metric_sigs = metricSigs(decls);
@@ -121,6 +131,25 @@ export function mergeMetrics(
   }
   if (Object.keys(unavailable).length) row.meta.metrics_unavailable = unavailable;
   else delete row.meta.metrics_unavailable;
+}
+
+/** What a re-measure of one kept run produced: the case's declared metrics, read from the kept work dir (absent when
+ *  the case declares none). A re-grade report is one. */
+export type Remeasure = Pick<RegradeRunReport, "metrics">;
+
+/** Re-evaluate one row from its kept run dir, with no judge call: the one per-row step every row no judge re-grades
+ *  goes through. Its first (today only) product is the case's metrics, re-measured exactly as `verify-run` and core
+ *  `regrade` re-measure them — the kept-run builder (`assertContextFromRunDir`) and `remeasureMetrics`, so a file is
+ *  read only while its bytes still equal the run's recorded post-run hash. A run dir the builder refuses (multi-turn,
+ *  partial, replay, chat, no result) is `refused`, with the builder's message. */
+export function reevaluateFromRun(runDir: string, scenario: Scenario): Remeasure | { refused: string } {
+  const built = assertContextFromRunDir(runDir, scenario, { command: "hillclimb regrade" });
+  if (!built.ok) {
+    if (built.kind === "scenario") throw new Error("unreachable: the scenario was passed as an object");
+    return { refused: built.message };
+  }
+  const metrics = remeasureMetrics(built.ctx, built.result, scenario.metrics);
+  return metrics !== undefined ? { metrics } : {};
 }
 
 /** The row's `meta.metrics_unavailable` reasons for the declared ids only. */
@@ -205,21 +234,23 @@ function regradedResult(live: RunResult, report: RegradeRunReport, keepVerdict: 
     void _d;
     return entry as unknown as typeof e;
   });
-  const copy = { ...live, assertions } as RunResult;
+  const copy = withRemeasured({ ...live, assertions } as RunResult, report);
   // A fill re-judged no gating comparison: the live verdict stands, so `pass` cannot move by construction.
   if (!keepVerdict) copy.verdict = computeVerdict(copy, "live") as RunResult["verdict"];
-  // The metrics as the re-grade re-measured them, id by id: a re-measure with no finite value (a pruned or changed file)
-  // never replaces a value the run measured.
-  if (report.metrics !== undefined) {
-    const byId = new Map((live.metrics ?? []).map((m) => [m.id, m]));
-    for (const m of report.metrics) {
-      const prev = byId.get(m.id);
-      const fresh = typeof (m as { value?: unknown }).value === "number" && Number.isFinite((m as { value: number }).value);
-      if (fresh || prev === undefined || typeof (prev as { value?: unknown }).value !== "number") byId.set(m.id, m);
-    }
-    copy.metrics = [...byId.values()] as RunResult["metrics"];
-  }
   return copy;
+}
+
+/** The result with its metrics as a re-measure measured them, id by id: a re-measure with no finite value (a pruned or
+ *  changed file) never replaces a value the run measured. One rule for a re-graded row and a re-measured-only one. */
+function withRemeasured(live: RunResult, re: Remeasure): RunResult {
+  if (re.metrics === undefined) return live;
+  const byId = new Map((live.metrics ?? []).map((m) => [m.id, m]));
+  for (const m of re.metrics) {
+    const prev = byId.get(m.id);
+    const fresh = typeof (m as { value?: unknown }).value === "number" && Number.isFinite((m as { value: number }).value);
+    if (fresh || prev === undefined || typeof (prev as { value?: unknown }).value !== "number") byId.set(m.id, m);
+  }
+  return { ...live, metrics: [...byId.values()] as RunResult["metrics"] };
 }
 
 /** Rebuild one scored row from a result: grade, explanation, claim texts, reference shas and judge fields through the
@@ -233,7 +264,9 @@ function rebuiltRow(
   shape: { pairwise?: { metricRefs: readonly string[] }; metrics: readonly MetricDecl[]; merge: typeof mergeMetrics },
   extraMeta: Record<string, unknown>,
   judgeFieldsFrom: RunResult | undefined,
-  report: RegradeRunReport | undefined,
+  /** The row's re-measure (a re-grade report, or `reevaluateFromRun`'s); undefined when its metrics were not re-measured
+   *  (a flow that declares none). */
+  report: Remeasure | undefined,
 ): { row: Row } | { why: string } {
   const rep = classifyRep({ result: result as never }, {});
   if (rep.bucket === "judge_invalid")
@@ -265,13 +298,14 @@ function rebuiltRow(
     "regrade_doc_matches_live",
     "regrade_unchecked",
     "regrade_file",
+    "regrade_remeasured",
     "regraded_at",
   ];
   const grade = { ...g.grade };
   if (report) shape.merge({ grade, meta }, report, shape.metrics);
   else {
-    // Not re-measured, so the row stays as `run` left it. A removed metric's sig and unavailable reason go with its
-    // column (the ordered grade no longer carries it). A metric the row predates (no sig) gains neither a sig nor the
+    // Not re-measured (only a flow that declares no metric), so the row stays as `run` left it. A removed metric's sig
+    // and unavailable reason go with its column (the ordered grade no longer carries it). A metric the row predates (no sig) gains neither a sig nor the
     // `<id>` / `<id>_present` keys `gradeFor` emits for every declared metric — a `_present: 0` would read as
     // "measured: no", and `check` would no longer count the row as predating the metric.
     const sigs = meta.metric_sigs;
@@ -540,7 +574,9 @@ async function regradeFlowInner(
       targets: Target[];
     }
     const batches: Batch[] = [];
-    const plain: Target[] = []; // rows re-graded with no judge call (fill mode: nothing missing, or an agent failure)
+    // Rows rebuilt with no judge call — a case with no judged assert (re-measured; in a fill, also given its columns),
+    // an agent failure, a fill row lacking only its own variant's outcome — each re-evaluated from its kept run.
+    const plain: Target[] = [];
     const perVariant = new Map<string, { lines: Line[]; old: string; v: RegradeFlowVariant }>();
     for (const v of variants) {
       const old = writers.get(v)!.readVariantFile("results.jsonl") ?? "";
@@ -555,7 +591,7 @@ async function regradeFlowInner(
             return { raw }; // a torn line is kept as it is
           }
         });
-      const vr: RegradeFlowVariant = { variant: v, rewritten: 0, listed: [], regradeFiles: [] };
+      const vr: RegradeFlowVariant = { variant: v, rewritten: 0, listed: [], remeasured: 0, regradeFiles: [] };
       perVariant.set(v, { lines, old, v: vr });
       outcome.variants.push(vr);
       const groups = new Map<string, Batch>();
@@ -570,9 +606,10 @@ async function regradeFlowInner(
           continue;
         }
         const judged = c.scenario.assert.some((a) => judgedOpts(a) !== undefined);
-        // Nothing to re-grade: the row stands — except in a fill, which rebuilds EVERY scored row (no judge call for
-        // this one) so a later reference's win column is on every row of the flow.
-        if (!judged && !args.fillRefs) continue;
+        // Nothing to re-grade: the row stands — unless the flow declares a metric (the row is re-measured from its kept
+        // run, no judge call), or in a fill, which rebuilds EVERY scored row (no judge call for this one) so a later
+        // reference's win column is on every row of the flow.
+        if (!judged && !args.fillRefs && !union.length) continue;
         const runDir = runDirOf(row, c);
         const result = runDir ? readResult(runDir) : undefined;
         if (!runDir || !result) {
@@ -603,9 +640,10 @@ async function regradeFlowInner(
         }
         const agentFailed = classifyRep({ result: result as never }, {}).bucket === "errored_agent";
         const t: Target = { variant: v, c, line, runDir, result, missing: args.fillRefs ? missingRefs(result, c, refNames) : [] };
-        if (args.fillRefs ? agentFailed || !t.missing.filter((r) => r !== v).length : agentFailed) {
-          // No comparison to judge: an agent failure scores 0 whatever the judge says, and a row lacking only its own
-          // variant's (neutral) outcome needs no judge call. A fill still rebuilds it, so it carries every column.
+        if (!judged || (args.fillRefs ? agentFailed || !t.missing.filter((r) => r !== v).length : agentFailed)) {
+          // No comparison to judge: a case with no judged assert, an agent failure (it scores 0 whatever the judge
+          // says), and a row lacking only its own variant's (neutral) outcome. Rebuilt with no judge call, so it is
+          // re-measured and, in a fill, carries every column.
           plain.push(t);
           continue;
         }
@@ -781,20 +819,37 @@ async function regradeFlowInner(
           continue;
         }
       }
+      const vr = perVariant.get(t.variant)!.v;
+      // Re-evaluated from the kept run when the flow declares a metric: the case's metrics, re-measured. A run dir the
+      // kept-run builder refuses is listed, never re-measured as zero.
+      const re = shape.metrics.length ? reevaluateFromRun(t.runDir, t.c.scenario) : undefined;
+      if (re && "refused" in re) {
+        vr.listed.push({
+          prompt_id: t.c.id,
+          rep: Number(t.line.row?.rep),
+          why: shownMessage(`refused: ${re.refused.split("\n")[0]}`, deps.secrets),
+        });
+        continue;
+      }
+      const live = re ? withRemeasured(t.result, re) : t.result;
       const got = rebuiltRow(
         t.line.row!,
-        withOwnNeutral(t.result, t.c, t.variant, refNames),
+        withOwnNeutral(live, t.c, t.variant, refNames),
         t.c,
         shape,
-        { regraded_at: at, ...(args.fillRefs ? { regrade_fill: t.missing } : {}) },
+        { regraded_at: at, ...(re ? { regrade_remeasured: true } : {}), ...(args.fillRefs ? { regrade_fill: t.missing } : {}) },
         undefined,
-        undefined,
+        re,
       );
-      if ("why" in got) perVariant.get(t.variant)!.v.listed.push({ prompt_id: t.c.id, rep: Number(t.line.row?.rep), why: got.why });
-      // Nothing to add (every column already there, nothing re-judged): the row stays byte for byte.
+      if (re && !("why" in got)) vr.remeasured++;
+      if ("why" in got) vr.listed.push({ prompt_id: t.c.id, rep: Number(t.line.row?.rep), why: got.why });
+      // Nothing to add (every column already there, nothing re-judged, the metrics re-measured as they were): the row
+      // stays byte for byte.
       else if (
-        JSON.stringify(got.row.grade) === JSON.stringify(t.line.row!.grade) &&
-        JSON.stringify(got.row.explanation) === JSON.stringify(t.line.row!.explanation)
+        (["grade", "explanation"] as const).every((k) => JSON.stringify(got.row[k]) === JSON.stringify(t.line.row![k])) &&
+        (["metric_sigs", "metrics_unavailable"] as const).every(
+          (k) => JSON.stringify(got.row.meta?.[k]) === JSON.stringify(t.line.row!.meta?.[k]),
+        )
       )
         continue;
       else {
@@ -823,7 +878,7 @@ async function regradeFlowInner(
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
-        `rewritten ${pv.v.rewritten}, listed ${pv.v.listed.length}; mean pass before ${mean(changed.map((l) => before.get(l)))}, after ${mean(changed.map((l) => rebuilt.get(l)!.grade))}`,
+        `rewritten ${pv.v.rewritten}${pv.v.remeasured ? `, re-measured ${pv.v.remeasured} (no judge call)` : ""}, listed ${pv.v.listed.length}; mean pass before ${mean(changed.map((l) => before.get(l)))}, after ${mean(changed.map((l) => rebuilt.get(l)!.grade))}`,
         ...(moved.length ? ["", "| case | rep | moved |", "|---|---|---|"] : []),
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
@@ -856,7 +911,12 @@ async function regradeFlowInner(
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;
     say(
-      `hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${v.rewritten} rewritten${v.listed.length ? `, ${v.listed.length} listed` : ""}`).join("; ")}`,
+      `hillclimb regrade: ${outcome.variants
+        .map(
+          (v) =>
+            `${v.variant} ${v.rewritten} rewritten${v.remeasured ? `, ${v.remeasured} re-measured` : ""}${v.listed.length ? `, ${v.listed.length} listed` : ""}`,
+        )
+        .join("; ")}`,
     );
     return outcome;
   } finally {
