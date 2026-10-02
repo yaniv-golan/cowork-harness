@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, utimesSync, rmSync } from "node:fs";
+import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, utimesSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -214,8 +214,10 @@ describe.skipIf(!can)("prune does not demote an unmigrated legacy run to junk", 
 // Every dir below is written by the real writers, and its mtime is set LAST, so the ranking the test intends is
 // the one prune sees.
 const FLOW = ".claude/hillclimb/flow";
-const doneMeta = (runLabel?: string): RunStatusMeta => ({
-  pid: 1,
+/** A pid that has exited, so the running guard's live-process branch never applies unless a test asks for it. */
+const DEAD_PID = spawnSync(process.execPath, ["-e", ""]).pid as number;
+const doneMeta = (runLabel?: string, pid = DEAD_PID): RunStatusMeta => ({
+  pid,
   scenario: "s",
   fidelity: "container",
   sessionId: "00000000-0000-0000-0000-000000000000",
@@ -232,6 +234,8 @@ interface DirOpts {
   status?: "done" | "running" | "none" | "corrupt";
   resultLabel?: string | null; // override the result.json label; null = no label there
   turns?: boolean; // default true
+  pid?: number; // recorded in status.json (default: an exited pid)
+  writtenAt?: number; // epoch ms the status writer sees as "now" (default: real now)
   mtimeSec: number;
   name?: string;
 }
@@ -239,7 +243,11 @@ function runDir(root: string, scenario: string, o: DirOpts): string {
   const dir = join(root, scenario, o.name ?? runId());
   mkdirSync(dir, { recursive: true });
   const status = o.status ?? "done";
-  const meta = doneMeta(o.label);
+  const meta = doneMeta(o.label, o.pid);
+  if (o.writtenAt !== undefined) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(o.writtenAt);
+  }
   if (status === "done") {
     writeRunningStatus(dir, meta);
     finalizeRunStatus(dir, meta, emptyRecord, "success", 1000);
@@ -248,6 +256,7 @@ function runDir(root: string, scenario: string, o: DirOpts): string {
   } else if (status === "corrupt") {
     writeFileSync(join(dir, "status.json"), '{"state":"runn');
   }
+  if (o.writtenAt !== undefined) vi.useRealTimers();
   if (o.turns !== false) {
     const t1 = join(dir, "turns", "1");
     mkdirSync(t1, { recursive: true });
@@ -359,6 +368,39 @@ describe.skipIf(!can)("prune and hillclimb runs", () => {
     expect(r.stderr).toMatch(/s\s+hillclimb:flow:v1\s+2/);
   });
 
+  it("a status.json that parses without a label is an unlabelled run: result.json is not consulted", () => {
+    const root = mkdtempSync(join(tmpdir(), "prune-hc-"));
+    const unlabelled = runDir(root, "s", { resultLabel: v1, mtimeSec: T0 }); // status.json has no runLabel
+    runDir(root, "s", { mtimeSec: T0 + 100 });
+    const r = prune(["--keep-last", "1", root]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(unlabelled)).toBe(false);
+  });
+
+  it("a symlinked run dir is not read through: an ordinary run, and pruning it removes only the link", () => {
+    const root = mkdtempSync(join(tmpdir(), "prune-hc-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "prune-hc-target-"));
+    const target = runDir(elsewhere, "x", { label: baseline, mtimeSec: T0 });
+    mkdirSync(join(root, "s"), { recursive: true });
+    const link = join(root, "s", runId());
+    symlinkSync(target, link);
+    runDir(root, "s", { mtimeSec: T0 + 100 });
+    const r = prune(["--keep-last", "1", root]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(link), "a symlinked dir was protected through its link").toBe(false);
+    expect(existsSync(join(target, "status.json")), "pruning a symlinked run dir deleted its target").toBe(true);
+    expect(r.stderr).not.toMatch(/protected \d+ hillclimb/);
+  });
+
+  it("a hillclimb-labelled sess-* dir follows the pinned rule, and --pinned-older-than reclaiming it does not name --include-hillclimb", () => {
+    const root = mkdtempSync(join(tmpdir(), "prune-hc-"));
+    const oldPinned = runDir(root, "s", { name: "sess-hc", label: baseline, mtimeSec: T0 - 30 * 86_400 });
+    const r = prune(["--pinned-older-than", "7d", root]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(oldPinned)).toBe(false);
+    expect(r.stderr).not.toMatch(/--include-hillclimb/);
+  });
+
   it("a run with no readable label is an ordinary run, pruned past the cap", () => {
     const root = mkdtempSync(join(tmpdir(), "prune-hc-"));
     const noLabel = runDir(root, "s", { status: "none", mtimeSec: T0 }); // result.json without a label
@@ -442,7 +484,50 @@ describe.skipIf(!can)("prune never deletes a run that is still running", () => {
     runDir(root, "s", { mtimeSec: T0 + 100 });
     const r = prune(["--keep-last", "1", root], { COWORK_HARNESS_STATUS_STALE_MS: "1" });
     expect(r.status, r.stderr).toBe(0);
-    expect(existsSync(dead), "a crashed run frozen at 'running' was kept forever").toBe(false);
+    expect(existsSync(dead), "a crashed run frozen at 'running' (its process gone) was kept").toBe(false);
     expect(r.stderr).not.toMatch(/still running/);
+  });
+
+  // The status ticker runs only while the agent session is driven; staging before it and judging/finalizing after
+  // it leave status.json at "running" with a frozen updatedAt. The recorded pid tells a live run from a crash.
+  it("a stale running status whose recorded process is alive keeps the run", () => {
+    const root = mkdtempSync(join(tmpdir(), "prune-live-"));
+    const judging = runDir(root, "s", { label: hillclimbRunLabel(FLOW, "v1"), status: "running", pid: process.pid, mtimeSec: T0 });
+    runDir(root, "s", { mtimeSec: T0 + 100 });
+    const r = prune(["--include-hillclimb", "--keep-last", "1", root], { COWORK_HARNESS_STATUS_STALE_MS: "1" });
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(judging), "prune deleted a live run between status ticks").toBe(true);
+    expect(r.stderr).toContain(`↷ skipped ${judging}: still running (its process ${process.pid} is alive)`);
+  });
+
+  it("a live pid does not keep a running status last updated more than 24h ago", () => {
+    const root = mkdtempSync(join(tmpdir(), "prune-live-"));
+    const old = runDir(root, "s", { status: "running", pid: process.pid, writtenAt: Date.now() - 25 * 3_600_000, mtimeSec: T0 });
+    runDir(root, "s", { mtimeSec: T0 + 100 });
+    const r = prune(["--keep-last", "1", root]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(old), "a pid alive for over 24h kept a run frozen at 'running'").toBe(false);
+  });
+
+  it("an updatedAt more than a minute in the future does not count as live", () => {
+    const root = mkdtempSync(join(tmpdir(), "prune-live-"));
+    const future = runDir(root, "s", { status: "running", writtenAt: Date.now() + 10 * 60_000, mtimeSec: T0 });
+    runDir(root, "s", { mtimeSec: T0 + 100 });
+    const r = prune(["--keep-last", "1", root]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(future), "a future updatedAt shielded the run forever").toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("a FIFO status.json does not hang prune", () => {
+    const root = mkdtempSync(join(tmpdir(), "prune-live-"));
+    const fifoDir = runDir(root, "s", { status: "none", mtimeSec: T0 });
+    const mk = spawnSync("mkfifo", [join(fifoDir, "status.json")]);
+    if (mk.status !== 0) return; // no mkfifo on this platform
+    utimesSync(fifoDir, T0, T0);
+    runDir(root, "s", { mtimeSec: T0 + 100 });
+    const r = spawnSync("node", [CLI, "prune", "--include-hillclimb", "--keep-last", "1", root], { encoding: "utf8", timeout: 20_000 });
+    expect(r.error, "prune hung reading a FIFO status.json").toBeUndefined();
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(fifoDir)).toBe(false);
   });
 });

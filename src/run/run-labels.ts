@@ -1,7 +1,7 @@
 // Run labels: the `runLabel` a run carries in its status.json and its result.json, and the one reader every
 // consumer of a kept run dir uses to recover it. Kept free of heavy imports so `prune` can read a label without
 // loading the planner or the hillclimb runner.
-import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { latestTurn, turnArtifactPath } from "./turn-layout.js";
 
@@ -19,8 +19,8 @@ export const hillclimbRunLabel = (flowArg: string, variant: string): string => `
 const MAX_LABEL_SOURCE_BYTES = 32 * 1024 * 1024;
 
 /** Parse one JSON file: a regular file only (opened without following a symlink, and non-blocking so a FIFO
- *  cannot stall the read), at most `MAX_LABEL_SOURCE_BYTES`. undefined when absent, oversized or unparseable. */
-function readSmallJson(p: string): unknown {
+ *  cannot stall the read), at most 32 MiB. undefined when absent, not a regular file, oversized or unparseable. */
+export function readSmallJson(p: string): unknown {
   let fd: number;
   try {
     fd = openSync(p, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0));
@@ -44,12 +44,24 @@ const labelIn = (v: unknown): string | undefined => {
   return typeof label === "string" && label.length > 0 ? label : undefined;
 };
 
-/** The run's label: from status.json (written right after the run dir is created, before any spawn), else from
- *  the latest turn's result.json (written at turn end, so it covers a run whose status.json write failed or was
- *  damaged). undefined when neither file yields one: an unlabelled run, or a dir nothing can be read from. */
+/** Whether `dir` is itself a symlink (a run dir never is; one is not read through). */
+export function isSymlink(dir: string): boolean {
+  try {
+    return lstatSync(dir).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/** The run's label: from status.json (written right after the run dir is created, before any spawn), else — only
+ *  when status.json is absent or unparseable — from the latest turn's result.json (written at turn end, so it
+ *  covers a run whose status.json write failed or was damaged). A status.json that parses but carries no label
+ *  means an unlabelled run. undefined when nothing yields a label, and for a run dir that is a symlink, which is
+ *  never read through. */
 export function runLabelOf(dir: string): string | undefined {
-  const fromStatus = labelIn(readSmallJson(join(dir, "status.json")));
-  if (fromStatus !== undefined) return fromStatus;
+  if (isSymlink(dir)) return undefined;
+  const status = readSmallJson(join(dir, "status.json"));
+  if (status !== undefined) return labelIn(status);
   const turn = latestTurn(dir);
   return turn === undefined ? undefined : labelIn(readSmallJson(turnArtifactPath(dir, turn, "result.json")));
 }

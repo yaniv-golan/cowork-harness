@@ -308,7 +308,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                --force re-copies it to pick up rules added by a later release)
   prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb]
                                prune accumulated run dirs, keeping N most recent per scenario (default: 5);
-                               pinned sessions, hillclimb-labelled runs and still-running runs are kept
+                               pinned sessions and hillclimb-labelled runs are kept; a run whose status.json
+                               says running is kept while it is still being updated or its process is alive (up to 24h)
   migrate-run-dir [<runs-dir>] [--scenario <n>] [--write]
                                convert pre-layout run dirs to the per-turn turns/<N>/ layout (DRY RUN by default)
 
@@ -736,8 +737,10 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       could not. 2 = usage. The JSON envelope carries the same split as migrated/skipped/errors.",
   prune:
     "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)\n" +
-    "  Pinned sess-* sessions and hillclimb-labelled runs (`hillclimb:…`) are kept outside --keep-last; a run whose\n" +
-    "  status.json says it is still running is never deleted. --include-hillclimb ranks hillclimb runs with every\n" +
+    "  Pinned sess-* sessions and hillclimb-labelled runs (`hillclimb:…`) are kept outside --keep-last; a sess-* dir\n" +
+    "  follows the pinned rule (--pinned-older-than) even with a hillclimb label. A run whose status.json says running\n" +
+    "  is kept while it is still being updated (COWORK_HARNESS_STATUS_STALE_MS, default 15s) or its process is alive\n" +
+    "  (up to 24h), under every flag. --include-hillclimb ranks hillclimb runs with every\n" +
     "  other run: it deletes the `hillclimb regrade` / `freeze-ref` evidence of EVERY flow under the runs root, a\n" +
     "  loop still running included (freeze-ref re-reads a frozen reference's source run). Pass it only once every\n" +
     "  climb is finished, or scope it with an explicit <runs-dir> (the --run-dir the climb used).",

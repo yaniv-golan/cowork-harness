@@ -5,8 +5,8 @@ import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { classifyRunDir, hasTurnDirs } from "./turn-layout.js";
 import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
-import { evalIdOfLabel, isHillclimbLabel, runLabelOf } from "./run-labels.js";
-import { isStatusStale, readRunStatus } from "./run-status.js";
+import { evalIdOfLabel, isHillclimbLabel, isSymlink, readSmallJson, runLabelOf } from "./run-labels.js";
+import { isStatusStale, isValidRunStatus } from "./run-status.js";
 
 const log = (s: string) => process.stderr.write(s + "\n");
 
@@ -21,17 +21,41 @@ function liveJournalsFor(runsRoot: string, scenarioSlug: string): number {
 
 const DEFAULT_KEEP_LAST = 5;
 
-/** How long ago a run's status.json was last written, when it says the run is still `running` and is not
- *  stale (`isStatusStale`: its writer still ticks). undefined for a finished, crashed, stale, unreadable or
- *  status-less run — none of which has a live writer to race. */
-function liveRunAgeMs(dir: string): number | undefined {
+/** A "running" status whose updatedAt is older than this is not kept on its pid alone. */
+const LIVE_PID_MAX_AGE_MS = 24 * 3_600_000;
+/** An updatedAt this far in the future is not trusted as live. */
+const FUTURE_SKEW_MS = 60_000;
+
+/** Whether process `pid` exists. EPERM means it exists under another user. */
+function pidAlive(pid: unknown): boolean {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false; // 0 / negative address a group
   try {
-    const st = readRunStatus(dir);
-    if (st.state !== "running" || isStatusStale(st)) return undefined;
-    return Math.max(0, Date.now() - Date.parse(st.updatedAt));
-  } catch {
-    return undefined;
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+/** Why a run dir counts as still running, or undefined. Its status.json must say `running`, and either still
+ *  be updated (not `isStatusStale`, which reads COWORK_HARNESS_STATUS_STALE_MS from prune's own environment,
+ *  default 15s) or record a pid that is alive with an updatedAt under 24h old. The pid branch exists because the
+ *  status ticker runs only while the agent session is driven: during staging and spawn before it, and judging and
+ *  finalizing after it, a live run's status.json sits at `running` with a frozen updatedAt. A pid reused by an
+ *  unrelated process keeps a dead run at most 24h, which costs only disk. An updatedAt more than a minute in the
+ *  future, or unparseable, is not live (fail toward suspect). The file is read without following a symlink and
+ *  without blocking, so a FIFO cannot hang prune. A symlinked run dir is not read through. */
+function liveRunReason(dir: string): string | undefined {
+  if (isSymlink(dir)) return undefined;
+  const st = readSmallJson(join(dir, "status.json"));
+  if (!isValidRunStatus(st) || st.state !== "running") return undefined;
+  const updated = Date.parse(st.updatedAt);
+  if (Number.isNaN(updated)) return undefined;
+  const age = Date.now() - updated;
+  if (age < -FUTURE_SKEW_MS) return undefined;
+  if (!isStatusStale(st)) return `status.json updated ${Math.round(Math.max(0, age) / 1000)}s ago`;
+  if (age <= LIVE_PID_MAX_AGE_MS && pidAlive(st.pid)) return `its process ${st.pid} is alive`;
+  return undefined;
 }
 
 /** Parse a `<N>d|h|m` retention window (e.g. `7d`, `24h`, `30m`) to milliseconds, or undefined if
@@ -81,8 +105,8 @@ const isRealRun = (dir: string) => {
  *  them back into the ranking (it does not delete them wholesale). The label names the flow dir by basename only,
  *  so prune cannot tell which flow, or which project, a run came from: the flag releases the runs of EVERY flow
  *  under the root, a loop still running included.
- *  A run whose status.json says `running` and is not stale (its writer still ticks) is never deleted, pinned,
- *  hillclimb or plain — it is skipped and counted.
+ *  A run whose status.json says `running` is skipped and counted, pinned, hillclimb or plain, while that file is
+ *  still being updated or its recorded process is alive (up to 24h) — see liveRunReason.
  *  The default root is the flat, machine-global `~/.cowork-harness/runs` (shared across projects), so a
  *  bare `prune` prunes ephemeral runs from ALL projects; pass an explicit <runs-dir> to scope it.
  *  Safe by default (dry-run-able). */
@@ -145,13 +169,15 @@ export function cmdRunsGc(args: string[]): void {
   const notePruned = (label: string | undefined) => {
     const id = evalIdOfLabel(label);
     if (id !== undefined) evalRunsPruned.set(id, (evalRunsPruned.get(id) ?? 0) + 1);
-    if (isHillclimbLabel(label)) hillclimbPruned++;
+    // Only the flag's own effect: a hillclimb-labelled `sess-*` dir reclaimed by --pinned-older-than is not it.
+    if (includeHillclimb && isHillclimbLabel(label)) hillclimbPruned++;
   };
-  /** Delete one run dir — unless it is still running, which no flag overrides. Returns whether it went. */
+  /** Delete one run dir — unless it is still running (see liveRunReason); no flag overrides that. A symlinked
+   *  run dir loses only the link (rmSync does not follow it). */
   const pruneDir = (d: { path: string; label: string | undefined }, how: string): boolean => {
-    const liveAge = liveRunAgeMs(d.path);
-    if (liveAge !== undefined) {
-      log(`↷ skipped ${d.path}: still running (status.json updated ${Math.round(liveAge / 1000)}s ago)`);
+    const live = liveRunReason(d.path);
+    if (live !== undefined) {
+      log(`↷ skipped ${d.path}: still running (${live})`);
       skippedRunning++;
       return false;
     }
@@ -226,6 +252,7 @@ export function cmdRunsGc(args: string[]): void {
     // flat (cross-project) runs root, so they are NEVER pruned — and they must not occupy a --keep-last
     // slot either, or a retained pinned dir would evict a newer ephemeral `local_*` that should be kept.
     // Only ephemeral `local_*` runs are subject to --keep-last.
+    // A `sess-*` dir follows the pinned rule even when it carries a hillclimb label.
     const pinned = sorted.filter((d) => d.name.startsWith("sess-"));
     const rest = sorted.filter((d) => !d.name.startsWith("sess-"));
     // HILLCLIMB runs are the second protected partition, for the same reason: kept, and outside the
@@ -268,23 +295,18 @@ export function cmdRunsGc(args: string[]): void {
   if (protectedHillclimb > 0) {
     // Grouped by scenario and FULL label. The label carries the flow dir's basename only, so two projects on
     // the default flow (`.claude/hillclimb/flow`) show as the same group.
-    log(
-      `⛨ prune: kept ${protectedHillclimb} hillclimb run dir(s) outside --keep-last — \`hillclimb regrade\` and \`hillclimb freeze-ref\` read them:`,
-    );
+    log(`⛨ prune: kept ${protectedHillclimb} hillclimb run dir(s) for regrade/freeze-ref, outside --keep-last:`);
     for (const [key, n] of [...hillclimbKept].sort(([a], [b]) => a.localeCompare(b))) {
       const [scenario, label] = key.split("\0");
       log(`    ${scenario}  ${label}  ${n}`);
     }
-    log(
-      `  --include-hillclimb ranks them with every other run, which deletes the regrade and freeze-ref evidence of EVERY flow under ${runsRoot}, ` +
-        `a loop still running included (and freeze-ref re-reads a frozen reference's source run). Pass it only once every climb under this root is finished, ` +
-        `or scope it to one climb's runs with an explicit <runs-dir> (the --run-dir the climb used).`,
-    );
+    log(`  \`prune --include-hillclimb\` removes them (every flow under this root) — see \`prune --help\``);
   }
   if (hillclimbPruned > 0)
     log(
       `::warning:: prune: ${hillclimbPruned} hillclimb run dir(s) ${dryRun ? "would be " : ""}pruned under --include-hillclimb — \`hillclimb regrade\` and \`hillclimb freeze-ref\` ` +
-        `${dryRun ? "would refuse" : "now refuse"} the rows that point at them, for every flow under ${runsRoot}.`,
+        `${dryRun ? "would refuse" : "now refuse"} the rows that point at them, for every flow under ${runsRoot}, a loop still running included ` +
+        `(freeze-ref re-reads a frozen reference's source run).`,
     );
   for (const [id, n] of [...evalRunsPruned].sort(([a], [b]) => a.localeCompare(b)))
     log(
