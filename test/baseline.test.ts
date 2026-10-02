@@ -4,6 +4,7 @@ import * as acorn from "acorn";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
+import { spawnSync } from "node:child_process";
 import {
   BASELINES_DIR,
   compareBaselineVersions,
@@ -1896,6 +1897,19 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const ruleKeys = new Set<string>();
     for (const t of files.values())
       for (const m of t.matchAll(/[{,](\d{8,10}):\{rule:/g)) if (!m[1].startsWith("0") && Number(m[1]) < 2 ** 32) ruleKeys.add(m[1]);
+    // Non-vacuity: Desktop 2.19675.0 is the first build that ships the table (136 keys; 0 in every earlier asar on
+    // record). On such a build an EMPTY oracle set means the shape moved under both regexes at once — exactly the
+    // drift this test exists for — so it must fail rather than pass with `missing: []`.
+    const installed = spawnSync("defaults", ["read", "/Applications/Claude.app/Contents/Info.plist", "CFBundleShortVersionString"], {
+      encoding: "utf8",
+    }).stdout?.trim();
+    const parts = (v: string) => v.split(".").map(Number);
+    const atLeast = (v: string, min: string) => {
+      const [a, b] = [parts(v), parts(min)];
+      for (let i = 0; i < 3; i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+      return true;
+    };
+    if (installed && /^\d+\.\d+\.\d+$/.test(installed) && atLeast(installed, "2.19675.0")) expect(ruleKeys.size).toBeGreaterThan(0);
     const ids = new Set(extractAsarGateIds(files));
     const missing = [...ruleKeys].filter((k) => !ids.has(k));
     expect(missing).toEqual([]);
