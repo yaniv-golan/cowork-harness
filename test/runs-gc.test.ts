@@ -586,10 +586,11 @@ function realRoot(root: string, scenario = "s", n = 3): string {
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
 const runCount = (dir: string) => readdirSync(dir).filter((n) => n.startsWith("local_")).length;
 
-/** Run `args` against a fresh fixture, with and without --dry-run: exit 2, the message, and an unchanged tree. */
+/** Run `args` against a fresh fixture, with and without --dry-run: exit 2, the message, and an unchanged tree.
+ *  The real run goes LAST and its stderr is returned, so a caller's fixture variable names the same build. */
 function expectRefused(build: () => { top: string; args: string[] }, message: RegExp, env: NodeJS.ProcessEnv = {}): string {
   let stderr = "";
-  for (const dry of [false, true]) {
+  for (const dry of [true, false]) {
     const { top, args } = build();
     const before = snapshotTree(top);
     const r = prune(dry ? ["--dry-run", ...args] : args, env);
