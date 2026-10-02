@@ -502,9 +502,10 @@ All notable changes to this project are documented here. The format is based on
   environment). A run frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json`
   that is not a regular file is not read, so a FIFO there cannot hang `prune`.
 - **`prune` deletes only run dirs, and refuses a `<runs-dir>` at the wrong level.** It ranks and deletes only
-  dirs named `local_*` (a run's id), and `sess-*` dirs only under `--pinned-older-than`. Any other dir under a
-  scenario is left alone, and `prune` prints how many it left; a dir that looks like a run but has another name
-  is counted on its own line, with up to three paths. Before, `prune` given the wrong dir treated the level
+  dirs named `local_` followed by lowercase letters and digits (a run's id), and dirs named `sess-` followed by
+  letters, digits, `_` or `-` only under `--pinned-older-than`. Any other dir under a scenario is left alone, and
+  `prune` prints how many it left; a dir that looks like a run but has another name is counted on its own line,
+  with up to three paths. A dir `prune` cannot read is skipped and counted. Before, `prune` given the wrong dir treated the level
   below it as scenarios and deleted their contents past `--keep-last`. It now exits 2 and deletes nothing,
   `--dry-run` included, when the root is a run dir, a dir inside a run dir, a scenario dir, an eval dir or a dir
   of eval dirs, the parent of a runs root (such as `~/.cowork-harness`), or a file. The message says what the

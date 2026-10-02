@@ -129,7 +129,7 @@ describe.skipIf(!can)("cli --help: prune documents --pinned-older-than", () => {
     const { code, text } = help("prune");
     expect(code).toBe(0);
     expect(text).toContain("must be the runs root");
-    expect(text).toContain("Only dirs named local_*");
+    expect(text).toContain("Only dirs named local_ followed by lowercase letters and digits");
     expect(text).toMatch(/exit: 0 .* 2 usage, or a <runs-dir> at the wrong level/);
   });
 });
