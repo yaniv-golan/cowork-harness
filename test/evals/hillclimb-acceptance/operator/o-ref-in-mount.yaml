@@ -1,0 +1,14 @@
+# Operator-only acceptance check: a semantic_pairwise reference store inside a mounted folder is refused
+# before the run spends anything (the agent could read its own answer key).
+name: o-ref-in-mount
+baseline: latest
+session: ./o-mount-session.yaml
+fidelity: container
+on_unanswered: first
+prompt: Analyze sales.csv from my uploads with the csv-report skill. Make the insights note useful to a sales manager.
+assert:
+- semantic_pairwise:
+    refs: [../../../../.claude/hillclimb/acceptance-b/baseline/ref]
+    evidence_files: [outputs/insights.md]
+    rubric:
+    - Every insight is grounded in a number from the data

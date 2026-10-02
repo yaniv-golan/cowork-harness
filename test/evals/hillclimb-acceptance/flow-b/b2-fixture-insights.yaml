@@ -1,0 +1,22 @@
+# Acceptance: resume a pipeline from a saved workspace. outputs/ starts with step 1's metrics.json and
+# summary.md (repo-own, produced by the bundled script from the example CSV); the prompt asks for step 2.
+name: b2-fixture-insights
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+workspace_fixture: fixtures/after-metrics
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: >-
+  The metrics step already ran: outputs/metrics.json and outputs/summary.md are from it. Use the csv-report
+  skill to write only the insights note, without re-running the producer.
+assert:
+- file_exists: {path: outputs/insights.md, authored: true}
+- semantic_matches:
+    evidence_files: [outputs/insights.md]
+    rubric:
+    - States the total amount (4200) or the total units (75)
+    - Flags the East row with zero amount and zero units as an anomaly

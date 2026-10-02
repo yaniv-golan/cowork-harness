@@ -1,0 +1,19 @@
+# Acceptance: a prose deliverable graded PAIRWISE against the baseline variant's frozen document.
+# Under `hillclimb run` the flow's references replace any `refs:` (none declared here).
+name: acceptance-test-plan-pairwise
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+prompt: >-
+  I maintain a Claude Code skill that reads an uploaded CSV, runs a bundled Python script on it and writes
+  outputs/metrics.json plus a markdown summary. I want to regression-test it with cowork-harness before every
+  release. Write a short test plan to outputs/test-plan.md: which fidelity tier to use and why, three to five
+  assertions with one line each on what they catch, and what you would run per PR versus nightly.
+assert:
+- user_visible_artifact: outputs/test-plan.md
+- semantic_pairwise:
+    evidence_files: [outputs/test-plan.md]
+    rubric:
+    - Names a concrete fidelity tier and gives a reason tied to this skill (the bundled script, the upload, egress)
+    - Each assertion names an existing cowork-harness assertion key and says what failure it catches
+    - Separates a cheap per-PR check from a slower or costlier nightly check

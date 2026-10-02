@@ -1,0 +1,19 @@
+# Operator-only acceptance check (one live run): `authored: true` on a fixture file the run is told not to
+# touch must FAIL; `authored: false` on the same file passes; the rewritten insights note counts as authored.
+name: o-fixture-authored-untouched
+baseline: latest
+session: ../flow-b/_session.yaml
+fidelity: container
+workspace_fixture: ../flow-b/fixtures/after-metrics
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: >-
+  The metrics step already ran: outputs/metrics.json and outputs/summary.md are from it. Use the csv-report
+  skill to write only the insights note, without re-running the producer.
+assert:
+- file_exists: {path: outputs/metrics.json, authored: true}
+- file_exists: {path: outputs/metrics.json, authored: false}
+- file_exists: {path: outputs/insights.md, authored: true}

@@ -1,0 +1,9 @@
+# Operator-only acceptance check: refused before spend because a mount exposes the flow dir.
+name: o-mount-exposes-flow
+baseline: latest
+session: ./o-mount-session.yaml
+fidelity: container
+on_unanswered: first
+prompt: Analyze sales.csv from my uploads with the csv-report skill and write the insights note.
+assert:
+- user_visible_artifact: outputs/insights.md

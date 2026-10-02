@@ -1,0 +1,8 @@
+# Flow B session: the synthetic csv-acceptance plugin (csv-report, the forked csv-audit skill and the csv-checker
+# agent pinned to a different model than the main loop). The CSV is repo-own example data.
+model: claude-sonnet-5
+uploads:
+  - ../../../../examples/data/sales.csv
+plugins:
+  local_plugins:
+    - ../plugin
