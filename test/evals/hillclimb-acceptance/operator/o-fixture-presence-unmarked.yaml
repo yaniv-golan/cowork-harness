@@ -1,0 +1,10 @@
+# Operator-only acceptance check: a presence assert on a fixture file without `authored:` is refused when
+# the scenario loads (it would pass on the inherited file whatever the run did).
+name: o-fixture-presence-unmarked
+baseline: latest
+session: ../flow-b/_session.yaml
+fidelity: container
+workspace_fixture: ../flow-b/fixtures/after-metrics
+prompt: Use the csv-report skill to write only the insights note, without re-running the producer.
+assert:
+- file_exists: outputs/metrics.json
