@@ -1204,6 +1204,7 @@ read as a double, so an integer above 2^53 loses precision.
 | `remote` | `lane: remote` — the lane's filesystem is not locally observable |
 | `pruned` | there is no work tree to read (a replay of a cassette with no artifact manifest), or (regrade) the kept file differs from what the run wrote |
 | `pre_run` | the run did not write the file — see below |
+| `no_manifest` | the run recorded no pre-run manifest, so whether it wrote the file cannot be decided — re-run the case (declaring a metric arms the manifest) |
 
 **`pre_run`: a metric reads only what the run wrote.** "Wrote" is the rule `authored: true` uses: the file's content
 hash compared with the pre-run manifest. A file absent before the run is new; one whose hash changed was rewritten;
@@ -1211,7 +1212,10 @@ either is measured. There is no record of the write itself, so **a file the run 
 untouched**: a fixture file the step rewrote with identical bytes is `pre_run`, exactly like one it never opened —
 `pre_run` does not mean the agent did nothing. `pre_run` also covers every case where authorship cannot be decided,
 as `authored: true` does: a `--resume` turn, a hard-linked file, a symlink at the path or a path through a
-symlinked directory, a missing pre-run manifest or hash, and a path outside the folders the pre-run manifest walks.
+symlinked directory, a missing pre-run hash, and a path outside the folders the pre-run manifest walks. A run with no
+pre-run manifest at all is `no_manifest` instead: nothing then says the run did not write the file. A live run never
+reads `no_manifest` (declaring a metric arms the manifest); a kept run or cassette recorded without one does — a
+metric added to a scenario after its run, or an old cassette.
 So a metric should read a file under `outputs/` or a connected folder.
 
 **In `hillclimb`** each metric is a grade key on every row, `<id>` beside `<id>_present`, with the reason an
@@ -1222,7 +1226,7 @@ one's declaration is refused, since the flow's rows were graded under the old on
 **Replay** measures the frozen declaration against the cassette's manifest, so it needs the body inline. A metric the
 recording cannot support — no artifact manifest, a body over the inline cap or unreadable at record time, a missing
 pre- or post-run hash — is reported unavailable and named once in a `::warning::`, with a remedy where a re-record
-would measure it (raise `--max-artifact-bytes` for `size`); one that states what the run did (a link, an untouched
+would measure it (raise `--max-artifact-bytes` for `size`) or a re-run would (`no_manifest`); one that states what the run did (a link, an untouched
 file, a file outside the walked folders) is not warned about. `replay --assert-from` and
 `--reassert` measure the on-disk declaration, as they do for `assert`, and `--write` freezes it with the assert
 block; a plain replay notices an on-disk `metrics:` block that differs from the frozen one. **`verify-run`** and

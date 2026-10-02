@@ -634,7 +634,8 @@ has the same keys:
   never written as 0, so a mean over `<id>` covers measured rows only.
 - `<id>_present` is 1 when measured and 0 otherwise: on a case that does not declare the metric, on an agent-caused
   failure, and when the metric was unavailable. In the last case the row's `meta.metrics_unavailable` names the reason
-  (`missing_artifact`, `pre_run`, ... — the table in scenario.md).
+  (`missing_artifact`, `pre_run`, `no_manifest`, ... — the table in scenario.md). A metric added to a case whose run
+  recorded no pre-run manifest (it declared no metric and no judged assert) reads `no_manifest` on its old rows.
 - `meta.metric_sigs` records each metric's declaration signature, as the row was graded under it.
 
 **Adding a metric** mid-flow is allowed. Re-run `hillclimb state-template` and merge its new `metrics` entries into

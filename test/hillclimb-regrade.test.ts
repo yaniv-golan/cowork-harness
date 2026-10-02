@@ -717,6 +717,21 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
     expect(lines.join("\n")).toMatch(/baseline 1 rewritten, 1 re-evaluated, 1 re-measured; v1 1 rewritten, 1 re-evaluated, 1 re-measured/);
   }, 240_000);
 
+  it("a metric added to a case whose run recorded no pre-run manifest: `_present: 0`, reason no_manifest (never pre_run)", async () => {
+    writing();
+    // No metric and no judged assert: nothing armed the run's pre-run manifest.
+    const { rows, evals } = buildFlow({ noPairwise: true });
+    addMetrics(evals, "metrics:", WORDS);
+    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    for (const v of ["baseline", "v1"]) {
+      const row = rows(v)[0]!;
+      expect(row.grade).toMatchObject({ words_present: 0 });
+      expect(row.grade).not.toHaveProperty("words");
+      expect(row.meta.metrics_unavailable).toEqual({ words: "no_manifest" });
+    }
+  }, 240_000);
+
   it("a re-measure that changes only the row's metric meta still rewrites it; one that changes nothing leaves it byte for byte", async () => {
     writing();
     const { flow, rows } = buildFlow({ noPairwise: true, metrics: [OTHER] });

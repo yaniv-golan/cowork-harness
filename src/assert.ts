@@ -2022,7 +2022,14 @@ export type Authorship =
   | { state: "untouched" }
   /** Cannot be decided — never read as authored. `evidence: true` when the recorded evidence (the manifest, a
    *  pre- or post-run hash) is what is missing, rather than the shape of the path or the turn. */
-  | { state: "undecidable"; why: string; evidence: boolean }
+  | {
+      state: "undecidable";
+      why: string;
+      evidence: boolean;
+      /** `no_manifest`: undecidable only because the run recorded no pre-run manifest (nothing armed it, or it predates
+       *  the manifest) — the one cause a re-run of the case cures. */
+      cause?: "no_manifest";
+    }
   | { state: "unsafe" }
   | { state: "not_found" }
   | { state: "directory" }
@@ -2051,10 +2058,12 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
       "this is a --resume turn: authorship is decided per invocation, and a resume turn captures no pre-run manifest of its own (the one on disk is the first turn's), so what THIS turn wrote cannot be told apart from earlier turns' work",
     );
   if (ctx.preRunHashes === undefined)
-    return undecidable(
-      "no pre-run manifest for this run/cassette (it predates the manifest, or nothing armed it) — authorship cannot be decided",
-      true,
-    );
+    return {
+      state: "undecidable",
+      why: "no pre-run manifest for this run/cassette (it predates the manifest, or nothing armed it) — authorship cannot be decided",
+      evidence: true,
+      cause: "no_manifest",
+    };
   const abs = containedPath(ctx.workRoot, p);
   if (!abs) return { state: "unsafe" };
   const lexical = relative(resolve(ctx.workRoot), abs).split(sep).join("/");

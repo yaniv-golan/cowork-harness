@@ -1260,6 +1260,7 @@ export const METRIC_UNAVAILABLE = [
   "remote",
   "pruned",
   "pre_run",
+  "no_manifest",
 ] as const;
 export type MetricUnavailable = (typeof METRIC_UNAVAILABLE)[number];
 

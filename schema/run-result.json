@@ -1093,7 +1093,7 @@
     },
     "metrics": {
       "type": "array",
-      "description": "The scenario's declared `metrics`, measured: one entry per declared id, in declaration order, each with exactly one of `value` (a finite number read from the artifact) or `unavailable` (why not). Never part of the verdict. Absent when the scenario declares none (an empty list included), on a partial run, on chat, and on a replay that could not drive the cassette. Reasons: missing_artifact (no readable regular file there), missing_path (the dotted path does not resolve), not_json (the file is not valid JSON), not_a_number (the value is not a finite number — never coerced), readonly (a read-only connected-folder input), size (over the 10 MiB body cap, or a body the recording did not keep), remote (lane: remote — nothing locally observable), pruned (no work tree to read, or it no longer holds what the run wrote), pre_run (the run did not write the file: an untouched pre-run file, one rewritten with identical bytes, or one whose authorship cannot be decided).",
+      "description": "The scenario's declared `metrics`, measured: one entry per declared id, in declaration order, each with exactly one of `value` (a finite number read from the artifact) or `unavailable` (why not). Never part of the verdict. Absent when the scenario declares none (an empty list included), on a partial run, on chat, and on a replay that could not drive the cassette. Reasons: missing_artifact (no readable regular file there), missing_path (the dotted path does not resolve), not_json (the file is not valid JSON), not_a_number (the value is not a finite number — never coerced), readonly (a read-only connected-folder input), size (over the 10 MiB body cap, or a body the recording did not keep), remote (lane: remote — nothing locally observable), pruned (no work tree to read, or it no longer holds what the run wrote), pre_run (the run did not write the file: an untouched pre-run file, one rewritten with identical bytes, or one whose authorship cannot be decided — a link, a second hard link, a --resume turn), no_manifest (the run recorded no pre-run manifest, so whether it wrote the file cannot be decided; re-run the case — declaring a metric arms the manifest).",
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -1101,7 +1101,7 @@
         "properties": {
           "id": { "type": "string" },
           "value": { "type": "number" },
-          "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run"] }
+          "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run", "no_manifest"] }
         },
         "oneOf": [
           { "required": ["value"], "properties": { "value": {} }, "not": { "required": ["unavailable"], "properties": { "unavailable": {} } } },

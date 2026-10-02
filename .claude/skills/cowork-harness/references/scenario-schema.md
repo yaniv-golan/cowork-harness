@@ -129,7 +129,8 @@ metrics:                            # OPTIONAL — numbers read from JSON files 
                                     # verdict. `better` required; exactly one of scale (the range's upper
                                     # bound; `min` is the floor, default 0) / unbounded: true.
                                     # A file the run did not write (incl. one rewritten with identical
-                                    # bytes) is unavailable: pre_run. Arms the pre-run manifest.
+                                    # bytes) is unavailable: pre_run; a kept run recorded with no
+                                    # pre-run manifest, no_manifest. Arms the pre-run manifest.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files

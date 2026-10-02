@@ -123,7 +123,7 @@ function measure(ctx: MetricsContext, m: ScenarioMetric): MetricMeasurement {
   }
   const who = authorshipOf(ctx, m.artifact, { postHash: hash });
   if (who.state === "untouched") return off("pre_run", "an untouched pre-run file (identical bytes, even if rewritten)");
-  if (who.state === "undecidable") return off("pre_run", who.why, who.evidence);
+  if (who.state === "undecidable") return undecidableMetric(who, off);
   if (who.state !== "new" && who.state !== "rewritten") return off("missing_artifact", `not a regular file (${who.state})`);
   let doc: unknown;
   try {
@@ -137,6 +137,19 @@ function measure(ctx: MetricsContext, m: ScenarioMetric): MetricMeasurement {
   if (typeof r.value !== "number" || !Number.isFinite(r.value))
     return off("not_a_number", `"${m.path}" is ${JSON.stringify(r.value) ?? String(r.value)}`);
   return { id: m.id, value: r.value };
+}
+
+/** A metric whose authorship cannot be decided. With no pre-run manifest at all it is `no_manifest`: nothing says the
+ *  run did not write the file, so `pre_run` would be a false claim — and a re-record would not help, but a re-run
+ *  does (declaring a metric arms the manifest). Every other undecidable case (a link, a second hard link, a --resume
+ *  turn, a missing per-file hash) stays `pre_run`. */
+function undecidableMetric(
+  who: Extract<ReturnType<typeof authorshipOf>, { state: "undecidable" }>,
+  off: (unavailable: MetricUnavailable, why: string, evidenceLimited?: boolean, remedy?: string) => MetricMeasurement,
+): MetricMeasurement {
+  if (who.cause === "no_manifest")
+    return off("no_manifest", who.why, true, "re-run the case: declaring a metric arms the pre-run manifest, so a new run records one");
+  return off("pre_run", who.why, who.evidence);
 }
 
 /** One measurement per declared metric, in declaration order. */
