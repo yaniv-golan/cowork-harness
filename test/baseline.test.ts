@@ -196,7 +196,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
   // The cowork send-message tool's server config is pinned as a TRIPWIRE that may record only its presence
   // (on/source) and `alwaysLoad`. Its served value also carries the list of models the tool is enabled for
   // and may carry a replacement tool description; neither may reach a committed baseline.
-  it("pins the send-message tool config as a tripwire that records only on/source/alwaysLoad", () => {
+  it("pins the send-message tool config as a tripwire: on/source/alwaysLoad and a digest of the enabled condition, never the list", () => {
     expect(PINNED_GATES["3045399524"]).toBe("sendUserMessageConfig");
     const f = makeFcache({
       "3045399524": {
@@ -207,18 +207,52 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
       },
     });
     const g = decodeFcacheGates(f)!["3045399524"];
-    expect(g).toEqual({ id: "3045399524", name: "sendUserMessageConfig", on: true, source: "force", value: { alwaysLoad: true } });
+    expect(g).toMatchObject({ id: "3045399524", name: "sendUserMessageConfig", on: true, source: "force" });
+    expect(Object.keys(g.value as object).sort()).toEqual(["alwaysLoad", "enabledDigest"]);
+    expect(g.value).toMatchObject({ alwaysLoad: true });
+    expect((g.value as { enabledDigest: string }).enabledDigest).toMatch(/^[0-9a-f]{16}$/);
     const raw = JSON.stringify(g);
     expect(raw).not.toContain("claude-model");
     expect(raw).not.toContain("SERVED DESCRIPTION");
-    expect(raw).not.toContain("enabled");
+    expect(raw).not.toContain('"enabled":'); // the condition itself never; only its digest
   });
 
   it("the send-message tripwire records alwaysLoad:false when it is absent or the value is not an object", () => {
     const absent = makeFcache({ "3045399524": { value: { enabled: true }, on: true, off: false, source: "force" } });
-    expect(decodeFcacheGates(absent)!["3045399524"].value).toEqual({ alwaysLoad: false });
+    expect(decodeFcacheGates(absent)!["3045399524"].value).toMatchObject({ alwaysLoad: false });
     const scalar = makeFcache({ "3045399524": { value: false, on: false, off: true, source: "defaultValue" } });
     expect(decodeFcacheGates(scalar)!["3045399524"]).toMatchObject({ on: false, source: "defaultValue", value: { alwaysLoad: false } });
+  });
+
+  // The tripwire must SEE a change of the enabled-model condition — the change it exists for — without the list
+  // itself ever being recorded. A digest of the canonical `enabled` value does both.
+  describe("the send-message tripwire's enabledDigest", () => {
+    const digestOf = (enabled: unknown) =>
+      (
+        decodeFcacheGates(makeFcache({ "3045399524": { value: { alwaysLoad: true, enabled }, on: true, off: false, source: "force" } }))![
+          "3045399524"
+        ].value as { enabledDigest: string }
+      ).enabledDigest;
+    it("flips when the enabled set changes (a model added, removed, or everything enabled)", () => {
+      const base = digestOf(["claude-model-a", "claude-model-b"]);
+      expect(digestOf(["claude-model-a", "claude-model-b", "claude-model-c"])).not.toBe(base);
+      expect(digestOf(["claude-model-a"])).not.toBe(base);
+      expect(digestOf(true)).not.toBe(base);
+      expect(digestOf(false)).not.toBe(digestOf(true));
+      expect(digestOf([])).not.toBe(digestOf(false));
+    });
+    it("is stable across a server-side reorder of the same set", () => {
+      expect(digestOf(["claude-model-b", "claude-model-a"])).toBe(digestOf(["claude-model-a", "claude-model-b"]));
+    });
+    it("ignores the served prompt and other keys (only the enabled condition)", () => {
+      const a = decodeFcacheGates(
+        makeFcache({ "3045399524": { value: { alwaysLoad: true, enabled: ["m"], prompt: "X" }, on: true, off: false, source: "force" } }),
+      )!;
+      const b = decodeFcacheGates(
+        makeFcache({ "3045399524": { value: { alwaysLoad: true, enabled: ["m"] }, on: true, off: false, source: "force" } }),
+      )!;
+      expect(a["3045399524"].value).toEqual(b["3045399524"].value);
+    });
   });
 
   it("decodes a normal (non-absent) entry when the dark gate 2614807392 IS present in the fcache", () => {

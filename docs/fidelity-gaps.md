@@ -1598,8 +1598,9 @@ only. A model that would have used it to relay a mid-task value or snippet write
 text instead, so assertions on the final reply or the transcript can read differently from a real
 session, and a skill whose instructions tell the agent to call it gets an unknown-tool error here, which
 is a false red. It has no file or network effect, so file, artifact and egress assertions are unaffected.
-`sync` pins the config as a tripwire (presence and the always-load flag only; the enabled model list is
-deliberately not recorded), so a change to how it is served shows up as a `sync --diff` line.
+`sync` pins the config as a tripwire. A baseline records whether it is served, the always-load flag, and a digest
+of its enabled-model condition, never the model list itself. A model added to or removed from the set, or the tool
+enabled for every model, therefore changes the digest and shows up as a `sync --diff` line.
 
 ### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
 
