@@ -171,7 +171,12 @@ All notable changes to this project are documented here. The format is based on
   (naming the plugin's skills), and an unapproved harness change (`--approve-harness` records it; the harness sha
   covers each scenario, its session file, its uploads and its `workspace_fixture` files, exec bits included; a
   fixture is also a read root, so a scenario or session file inside one is refused like one inside a mounted
-  folder). Rows carry the
+  folder). Under `--case`, the per-case checks (the session and
+  its model pins, the scenario's inputs, its `semantic_pairwise` references, the isolation check, the mounts) cover the
+  selected cases only, so a problem in an unselected case never blocks a pass that does not run it; every scenario
+  file must still parse and every case's baseline must still load, the harness gate and the files kept unreadable
+  cover every case, and the one-plugin rule covers every case whose session parses (an unselected case whose session
+  is inline or does not parse is skipped for it, with a note). `hillclimb regrade --case` follows the same rule. Rows carry the
   per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
@@ -202,6 +207,23 @@ All notable changes to this project are documented here. The format is based on
   `harness_skill`, beside `harness_sha`, and a run whose `--skill` was changed, added or dropped since is refused with a
   message naming the change, which the dry run's gate line names too. `--skill` is not remembered between passes, so the
   runner command the loop repeats must carry it every time. Without `--skill` the sha is what it was before.
+
+- **`hillclimb` grades a scenario's `metrics`.** Each metric declared across a flow's scenarios is a grade key
+  on every row: `<id>` holds the measured value and is left out when nothing was measured (never written as 0),
+  and `<id>_present` says whether it was measured — 0 on a case that does not declare the metric, on an
+  agent-caused failure, and when the metric was unavailable, with the reason in `meta.metrics_unavailable`.
+  `hillclimb state-template` declares them (direction, plus `scale` and `min` when given, with labels unique
+  across the declarations) and defines each in `metrics.md` (the file and path it is read from, its direction and
+  range). `hillclimb run` and `state-template` refuse one metric id declared differently in two scenarios, or
+  spelled in a different case, before spending, naming both cases. Each row records its metrics' declaration
+  signatures in `meta.metric_sigs`, and `hillclimb run` (with `--dry-run`) refuses a metric whose declaration
+  changed since the flow's rows were written, naming the variants; adding or removing a metric mid-flow is allowed,
+  and `run` warns on a removed one and on row metrics `_state.json` does not declare. `hillclimb check` notes rows
+  that predate a declared metric instead of failing them, warns about a float outside `[min, scale]`, refuses a
+  non-numeric `min`, and its headroom reads a lower-is-better float's good end from `min`, 0 when absent.
+  `hillclimb regrade` keeps the metric keys on every row it rebuilds, re-measures them on a row it re-grades (which
+  gains the signatures of metrics added since, and loses an unavailable reason for one now measured), and refuses a
+  changed declaration before any judge call, as `run` does. See docs/cli.md → Numeric metrics in hillclimb.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
@@ -418,6 +440,15 @@ All notable changes to this project are documented here. The format is based on
   updated" uses the status staleness window (`COWORK_HARNESS_STATUS_STALE_MS`, default 15s, read from `prune`'s own
   environment). A run frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json`
   that is not a regular file is not read, so a FIFO there cannot hang `prune`.
+- **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
+  registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
+  so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a
+  skill critique reported "not invoked" and eval's invocation column read false on every rep. They now match
+  the name as the agent registers it. When that name is ambiguous, a match is reported as unobservable, never as
+  invoked: a command file whose stem equals the rewritten name, or a second skill directory that rewrites to the
+  same id. A root `SKILL.md` that critique cannot promote to its plugin is now named by its frontmatter `name`,
+  as the agent registers it, instead of by its directory; when that name differs from the directory, the
+  report's `gradedSkill` changes with it, so such a critique no longer pairs with one made before the upgrade.
 - **`hook_event_fired` / `hook_event_blocked` see every hook event at `protocol`.** That tier builds its own argv
   and never passed `--include-hook-events`, so only SessionStart/Setup frames reached the stream and a plugin's
   Stop or PostToolUse hook read "never fired" there. It now passes the flag on the same rule as the other tiers

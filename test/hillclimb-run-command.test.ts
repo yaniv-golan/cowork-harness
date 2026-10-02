@@ -15,6 +15,7 @@ import {
   writeFileSync,
   chmodSync,
   renameSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -794,6 +795,37 @@ describe("runHillclimbCommand", () => {
     expect(err.join("\n")).not.toMatch(/--timeout-s 1800/);
   });
 
+  it("one metric id declared two ways across cases refuses before the snapshot is taken", async () => {
+    const metric = (better: string) =>
+      `metrics:\n  - id: words\n    artifact: outputs/stats.json\n    path: words\n    better: ${better}\n    unbounded: true\n`;
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + metric("lower"));
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO.replace("name: Alpha", "name: Beta") + metric("higher"));
+    const r = await runHillclimbCommand(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/refusing to run: metric "words" is declared differently in alpha and beta/);
+    expect(calls).toEqual([]);
+    expect(readdirSync(snaps)).toEqual([]);
+    expect(existsSync(join(cwd, "flow"))).toBe(false);
+  });
+
+  it("a metric re-declared since the flow's rows were written refuses before the next variant's snapshot is taken", async () => {
+    const metric = (better: string) =>
+      `metrics:\n  - id: words\n    artifact: outputs/stats.json\n    path: words\n    better: ${better}\n    unbounded: true\n`;
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + metric("lower"));
+    expect((await runHillclimbCommand(args("--approve-harness"), deps())).exitCode).toBe(0);
+    // Snapshots sit at <root>/<flow hash>/<variant>/: the baseline's was taken.
+    const snapped = () => readdirSync(snaps).flatMap((h) => readdirSync(join(snaps, h)));
+    expect(snapped()).toEqual(["baseline"]);
+    calls = [];
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO + metric("higher"));
+    const r = await runHillclimbCommand(args("--variant", "v1", "--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(err.join("\n")).toMatch(/refusing to run: metric "words" .*baseline.*declaration changed/);
+    expect(calls).toEqual([]);
+    expect(snapped()).toEqual(["baseline"]);
+    expect(existsSync(join(cwd, "flow", "v1"))).toBe(false);
+  });
+
   it("a lock left by a runner that was killed (its pid gone) does not block the next pass", async () => {
     await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
     const dead = spawnSync(process.execPath, ["-e", ""]).pid; // a real process that has exited
@@ -801,6 +833,223 @@ describe("runHillclimbCommand", () => {
     expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(0);
     expect(rows()).toHaveLength(1);
     expect(existsSync(join(cwd, "flow", "baseline", ".lock"))).toBe(false); // released after the pass
+  });
+});
+
+// `--case` scopes the per-case checks to the selected cases; the flow-level ones (the case list, the harness gate,
+// the answer key's hidden files, the one-plugin rule) still cover every case.
+describe("--case: per-case checks cover the selected cases only", () => {
+  const BETA_SESSION = () => `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`;
+  /** A second case, beta, with its own session file (default: a good one). The session sits outside the scenario
+   *  dir: an unparseable YAML file IN it is a scenario the case list cannot load (flow-level, tested apart). */
+  const betaSession = () => join(cwd, "sessions", "_beta_session.yaml");
+  const BETA_SCENARIO = () => SCENARIO.replace("name: Alpha", "name: Beta").replace("./_session.yaml", betaSession());
+  const beta = (opts: { scenario?: string; session?: string } = {}) => {
+    mkdirSync(join(cwd, "sessions"), { recursive: true });
+    writeFileSync(betaSession(), opts.session ?? BETA_SESSION());
+    writeFileSync(join(cwd, "evals", "beta.yaml"), opts.scenario ?? BETA_SCENARIO());
+  };
+  const PAIRWISE_NO_REF = () =>
+    BETA_SCENARIO().replace(/  - semantic_matches:[\s\S]*$/, `  - semantic_pairwise:\n      judge_model: "claude-haiku-4-5-20251001"\n`);
+  const gateLine = () => err.find((l) => l.startsWith("harness gate:"));
+
+  it("an unselected pairwise case with no reference does not block --case on a good one; the full pass still refuses it", async () => {
+    beta({ scenario: PAIRWISE_NO_REF() });
+    // A later variant: the flow holds no baseline reference for beta, so beta's pairwise preflight refuses.
+    const v1 = ["--variant", "v1"];
+    const dry = await runHillclimbCommand(args("--dry-run", "--case", "alpha", ...v1), deps({ indexRows: () => [] }));
+    expect(dry.error?.message).toBeUndefined();
+    expect(dry.exitCode).toBe(0);
+    const pass = await runHillclimbCommand(args("--approve-harness", "--case", "alpha", ...v1), deps());
+    expect(pass.error?.message).toBeUndefined();
+    expect(calls.map((c) => c.scenario.name)).toEqual(["Alpha"]);
+    // The flow judges pairwise (beta has an assert), so alpha's row carries the flow's one column set, as a full pass writes it.
+    const row = JSON.parse(
+      readFileSync(join(cwd, "flow", "v1", "results.jsonl"), "utf8")
+        .trim()
+        .split("\n")[0]!,
+    );
+    expect(row.grade).toMatchObject({ win_present: 0 });
+    err = [];
+    const full = await runHillclimbCommand(args("--dry-run", ...v1), deps({ indexRows: () => [] }));
+    expect(full.exitCode).toBe(2);
+    expect(full.error?.message).toMatch(/case beta: semantic_pairwise: [\s\S]*reference "baseline"/);
+  });
+
+  it("an unselected pairwise case adds no judge calls to the dry run's count", async () => {
+    beta({ scenario: PAIRWISE_NO_REF().replace("semantic_pairwise:\n", "semantic_pairwise:\n      order: both\n") });
+    // A later variant: the baseline reference counts as a judged reference for every pairwise assert.
+    await runHillclimbCommand(args("--dry-run", "--case", "alpha", "--variant", "v1"), deps({ indexRows: () => [] }));
+    expect(err.join("\n")).toMatch(/up to 0 judge call\(s\) per rep/);
+  });
+
+  for (const [what, opts, refusal] of [
+    ["an alias model pin", { session: `model: sonnet\nplugins:\n  local_plugins:\n    - PLUGIN\n` }, /CONCRETE agent model/],
+    [
+      "a missing upload",
+      { session: `model: ${MODEL}\nuploads:\n  - ./no-such-upload.txt\nplugins:\n  local_plugins:\n    - PLUGIN\n` },
+      /case beta: .*no-such-upload/,
+    ],
+    ["an unparseable session file", { session: "model: [unclosed\n  - {\n" }, /case beta: /],
+    [
+      "a missing workspace_fixture",
+      { scenario: "workspace_fixture: ../no-such-fixture\n" },
+      /case beta: workspace_fixture \S*no-such-fixture: no such directory/,
+    ],
+  ] as const)
+    it(`an unselected case with ${what} does not block --case on a good one; the full pass refuses it`, async () => {
+      if ("scenario" in opts) beta({ scenario: BETA_SCENARIO() + opts.scenario });
+      else beta({ session: opts.session.replace("PLUGIN", plugin) });
+      const dry = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+      expect(dry.error?.message).toBeUndefined();
+      expect(dry.exitCode).toBe(0);
+      err = [];
+      const full = await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
+      expect(full.exitCode).toBe(2);
+      expect(full.error?.message).toMatch(refusal);
+    });
+
+  const UPLOAD_SESSION = () => BETA_SESSION().replace("plugins:", "uploads:\n  - ./in.txt\nplugins:");
+  const uploadPath = () => join(cwd, "sessions", "in.txt");
+  for (const [what, make, refusal] of [
+    ["a directory", () => mkdirSync(uploadPath()), /case beta: .*in\.txt.*directory/],
+    [
+      "an unreadable file",
+      () => (writeFileSync(uploadPath(), "input\n"), chmodSync(uploadPath(), 0o000)),
+      /cannot read sessions\/in\.txt \(EACCES\)/,
+    ],
+  ] as const)
+    it(`an unselected case's upload that exists but is ${what} does not block --case; it leaves the gate's set, so the sha moves`, async (ctx) => {
+      if (what === "an unreadable file" && process.getuid?.() === 0) ctx.skip(); // root reads a 0o000 file
+      beta({ session: UPLOAD_SESSION() });
+      writeFileSync(uploadPath(), "input\n");
+      await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+      const readable = gateLine();
+      expect(readable).toMatch(/sessions\/in\.txt/);
+      rmSync(uploadPath());
+      make();
+      try {
+        err = [];
+        const dry = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+        expect(dry.error?.message).toBeUndefined();
+        expect(dry.exitCode).toBe(0);
+        const dropped = gateLine();
+        expect(dropped).not.toMatch(/sessions\/in\.txt/);
+        expect(dropped).not.toBe(readable);
+        err = [];
+        const full = await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
+        expect(full.exitCode).toBe(2);
+        expect(full.error?.message).toMatch(refusal);
+      } finally {
+        if (existsSync(uploadPath()) && !statSync(uploadPath()).isDirectory()) chmodSync(uploadPath(), 0o644);
+      }
+    });
+
+  it("an unselected inline session is named on stderr, as skipped for the one-plugin rule", async () => {
+    beta({ scenario: BETA_SCENARIO().replace(/^session: .*\n/m, "") });
+    const dry = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+    expect(dry.exitCode).toBe(0);
+    expect(err.join("\n")).toMatch(/note: case beta: .*inline.*not selected.*one-plugin/);
+    err = [];
+    const full = await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
+    expect(full.exitCode).toBe(2);
+    expect(full.error?.message).toMatch(/case beta: the scenario has no session file/);
+  });
+
+  it("an unparseable unselected session is named on stderr, as skipped for the one-plugin rule", async () => {
+    beta({ session: "model: [unclosed\n  - {\n" });
+    await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+    expect(err.join("\n")).toMatch(/note: case beta: .*not selected.*one-plugin/);
+  });
+
+  it("an unparseable unselected SCENARIO file still refuses under --case, naming the file", async () => {
+    beta({ scenario: "name: Beta\nprompt: [unclosed\n  - {\n" });
+    const r = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/beta\.yaml/);
+  });
+
+  it("an unselected case's scenario reachable through a SELECTED case's mount is still refused", async () => {
+    const sub = join(cwd, "mounted");
+    mkdirSync(sub);
+    beta();
+    // beta.yaml really lives in the folder alpha's session mounts.
+    renameSync(join(cwd, "evals", "beta.yaml"), join(sub, "beta.yaml"));
+    symlinkSync(join(sub, "beta.yaml"), join(cwd, "evals", "beta.yaml"));
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nfolders:\n  - from: ${sub}\nplugins:\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    const r = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/could read .*beta\.yaml/);
+  });
+
+  it("a mount only an UNSELECTED case declares does not refuse (it does not exist in this pass); the full pass still refuses", async () => {
+    beta({ session: `model: ${MODEL}\nfolders:\n  - from: ${join(cwd, "evals")}\nplugins:\n  local_plugins:\n    - ${plugin}\n` });
+    const dry = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+    expect(dry.error?.message).toBeUndefined();
+    expect(dry.exitCode).toBe(0);
+    err = [];
+    const full = await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
+    expect(full.exitCode).toBe(2);
+    expect(full.error?.message).toMatch(/could read .*alpha\.yaml/);
+  });
+
+  it("the harness sha is the same for a --case pass and a full pass: the gate covers every case", async () => {
+    beta({ session: BETA_SESSION().replace("plugins:", "uploads:\n  - ./in.txt\nplugins:") });
+    writeFileSync(join(cwd, "sessions", "in.txt"), "input\n");
+    await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ indexRows: () => [] }));
+    const sub = gateLine();
+    err = [];
+    await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
+    const full = gateLine();
+    for (const f of ["evals/beta.yaml", "sessions/_beta_session.yaml", "sessions/in.txt"]) expect(sub).toContain(f);
+    expect(sub).toBe(full);
+  });
+
+  it("the variant's source_sig is the same for a --case pass and a full pass", async () => {
+    beta();
+    const sig = () => JSON.parse(readFileSync(join(cwd, "flow", "baseline", "summary.json"), "utf8")).source_sig as string;
+    await runHillclimbCommand(args("--approve-harness", "--case", "alpha"), deps());
+    const sub = sig();
+    expect(sub).toMatch(/^[0-9a-f]{64}$/);
+    // summary.json keeps the first writer's keys: clear it so the full pass records its own.
+    rmSync(join(cwd, "flow", "baseline", "summary.json"));
+    await runHillclimbCommand(args(), deps());
+    expect(calls.map((c) => c.scenario.name)).toEqual(["Alpha", "Beta"]);
+    expect(sig()).toBe(sub);
+  });
+
+  it("an unparseable unselected session still feeds the gate: the sha is selection-independent and moves with its bytes", async () => {
+    beta({ session: "model: [unclosed\n  - {\n" });
+    writeFileSync(join(cwd, "evals", "gamma.yaml"), SCENARIO.replace("name: Alpha", "name: Gamma"));
+    const shaFor = async (...sel: string[]) => {
+      err = [];
+      const r = await runHillclimbCommand(args("--dry-run", ...sel.flatMap((s) => ["--case", s])), deps({ indexRows: () => [] }));
+      expect(r.error?.message).toBeUndefined();
+      return gateLine();
+    };
+    const a = await shaFor("alpha");
+    expect(a).toMatch(/over: .*_beta_session\.yaml/);
+    expect(await shaFor("gamma")).toBe(a);
+    expect(await shaFor("alpha", "gamma")).toBe(a);
+    writeFileSync(betaSession(), "model: [still unclosed\n  - {\n");
+    const moved = await shaFor("alpha");
+    expect(moved).not.toBe(a);
+  });
+
+  it("an unselected semantic case does not trigger the isolation check when the selected cases need none", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace(/  - semantic_matches:[\s\S]*$/, ""));
+    beta(); // beta keeps its semantic_matches
+    let asked = false;
+    const refuse = () => ((asked = true), "SYNTHETIC isolation refusal");
+    const dry = await runHillclimbCommand(args("--dry-run", "--case", "alpha"), deps({ isolationCheck: refuse, indexRows: () => [] }));
+    expect(asked).toBe(false);
+    expect(dry.exitCode).toBe(0);
+    const full = await runHillclimbCommand(args("--dry-run"), deps({ isolationCheck: refuse, indexRows: () => [] }));
+    expect(full.exitCode).toBe(2);
+    expect(full.error?.message).toContain("SYNTHETIC isolation refusal");
   });
 });
 

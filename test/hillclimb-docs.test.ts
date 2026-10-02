@@ -129,4 +129,10 @@ describe("the skill's hillclimb reference", () => {
     for (const f of [...HILLCLIMB_REGRADE_BOOLEAN_FLAGS, ...HILLCLIMB_REGRADE_VALUE_FLAGS, "--case"]) expect(ref, f).toContain(`\`${f}`);
     expect(ref).toMatch(/^cowork-harness hillclimb regrade .*--fill-refs/m);
   });
+
+  it("explains a scenario's numeric metric columns under Reading results", () => {
+    const reading = doc(REF).split("## Reading results")[1] ?? "";
+    for (const s of ["`<id>`", "`<id>_present`", "`meta.metrics_unavailable`", "predate", "refused", "never the headline"])
+      expect(reading, s).toContain(s);
+  });
 });

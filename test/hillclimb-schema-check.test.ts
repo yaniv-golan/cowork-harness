@@ -290,6 +290,107 @@ describe("schema-check: row fields", () => {
     });
   });
 
+  describe("grade: a scenario metric declared after a row was written (the row's meta.metric_sigs lacks it)", () => {
+    /** The fixture with `words` declared as the state-template declares a scenario metric. */
+    const declared = (): FlowSnapshot =>
+      withState((st) =>
+        (st.metrics as Row[]).push(
+          { id: "words_present", kind: "binary", label: "words measured" },
+          { id: "words", kind: "float", better: "lower" },
+        ),
+      );
+    const allRows = (s: FlowSnapshot) =>
+      Object.keys(s.variants)
+        .filter((v) => s.variants[v]!.results)
+        .flatMap((v) => rows(s, v));
+    const editAll = (s: FlowSnapshot, f: (r: Row, i: number) => void) => {
+      let i = 0;
+      for (const v of Object.keys(s.variants)) {
+        if (!s.variants[v]!.results) continue;
+        const rs = rows(s, v);
+        for (const r of rs) f(r, i++);
+        setRows(s, rs, v);
+      }
+    };
+    const predateNotes = (r: SchemaCheckReport) => r.findings.filter((f) => /do not carry metric/.test(f.message));
+
+    it("a row with no metric_sigs predates it: no error, ONE aggregated note per metric", () => {
+      const s = declared();
+      const n = allRows(s).length;
+      const r = check(s);
+      expect(r.findings.filter((f) => f.level === "error")).toEqual([]);
+      expect(predateNotes(r)).toEqual([
+        expect.objectContaining({
+          level: "note",
+          message: expect.stringMatching(
+            new RegExp(
+              `^${n} rows do not carry metric words \\(.*\\): added after they were written, or no scenario declares it any more \\(then remove it from _state\\.json\\); its mean covers the rows that carry it only$`,
+            ),
+          ),
+        }),
+      ]);
+    });
+
+    it("a row whose metric_sigs lacks the id predates it too; a row that carries it is not counted", () => {
+      const s = declared();
+      const n = allRows(s).length;
+      editAll(s, (r, i) => {
+        (r.meta as Row).metric_sigs = i === 0 ? { words: "0123456789abcdef" } : { other: "0123456789abcdef" };
+        if (i === 0) Object.assign(r.grade as Row, { words_present: 1, words: 40 });
+      });
+      const r = check(s);
+      expect(r.findings.filter((f) => f.level === "error")).toEqual([]);
+      expect(predateNotes(r).map((f) => f.message)).toEqual([
+        expect.stringMatching(new RegExp(`^${n - 1} rows do not carry metric words `)),
+      ]);
+    });
+
+    it("a row whose metric_sigs HAS the id but whose grade lacks <id>_present is still an error", () => {
+      const s = declared();
+      editAll(s, (r, i) => i === 0 && ((r.meta as Row).metric_sigs = { words: "0123456789abcdef" }));
+      const errs = check(s).findings.filter((f) => f.level === "error");
+      expect(errs.map((f) => f.message)).toEqual([
+        "declared metric words_present is missing from grade",
+        "declared metric words is missing from grade",
+      ]);
+    });
+
+    it("a row with no metric_sigs that does carry <id>_present: 1 knows the metric, so a missing <id> is still an error", () => {
+      const s = declared();
+      editAll(s, (r, i) => i === 0 && ((r.grade as Row).words_present = 1));
+      expect(
+        check(s)
+          .findings.filter((f) => f.level === "error")
+          .map((f) => f.message),
+      ).toEqual(["declared metric words is missing from grade"]);
+    });
+
+    it("only a scenario metric (a declared float and its _present) is exempt: a row with no metric_sigs still needs pass", () => {
+      const s = declared();
+      editAll(s, (r, i) => i === 0 && delete (r.grade as Row).pass);
+      expect(
+        check(s)
+          .findings.filter((f) => f.level === "error")
+          .map((f) => f.message),
+      ).toEqual(["declared metric pass is missing from grade"]);
+    });
+
+    it("the schema profile (a flow some other runner wrote: no metric_sigs) keeps every missing key an error", () => {
+      const r = check(declared(), "schema");
+      expect(r.findings.filter((f) => f.level === "error").length).toBeGreaterThan(0);
+      expect(predateNotes(r)).toEqual([]);
+    });
+
+    it("a metric the rows carry but _state.json no longer declares (a removed metric) is no error", () => {
+      const s = base();
+      editAll(s, (r) => {
+        Object.assign(r.grade as Row, { old_present: 1, old: 3 });
+        (r.meta as Row).metric_sigs = { old: "0123456789abcdef" };
+      });
+      expect(check(s).findings.filter((f) => f.level === "error")).toEqual([]);
+    });
+  });
+
   it("grade: a binary-declared metric must be 0/1; a non-numeric value is an error", () => {
     expectOnly(check(withRow((row) => ((row.grade as Row).pass = 0.5))), "error", "row.grade");
     expectOnly(check(withRow((row) => ((row.grade as Row).extra = "yes"))), "error", "row.grade");
@@ -620,7 +721,7 @@ describe("schema-check: _state.json", () => {
     expect(rulesAt(r, "note")).toContain("state.absent");
   });
 
-  it("metrics: list shape, id, kind, duplicate, label length, better, scale", () => {
+  it("metrics: list shape, id, kind, duplicate, label length, better, scale, min", () => {
     // A non-list metrics is ignored by the report, so the judge-flip note follows (12 rows carry explanations).
     const notList = check(withState((st) => (st.metrics = { pass: "binary" })));
     expect(rulesAt(notList, "error")).toEqual(["state.metrics"]);
@@ -633,6 +734,9 @@ describe("schema-check: _state.json", () => {
     expectOnly(check(m({ kind: "percent" })), "error", "state.metrics");
     expectOnly(check(m({ better: "up" })), "error", "state.metrics");
     expectOnly(check(m({ scale: "10" })), "error", "state.metrics");
+    // `min`, a float's floor: a string would silently disable headroom's lower-is-better end.
+    expectOnly(check(m({ min: "0" })), "error", "state.metrics");
+    expect(check(m({ min: 0.5 })).findings).toEqual([]);
     expectOnly(check(m({ label: "a very long label indeed" })), "note", "state.metrics");
     expectOnly(check(m({ kind: undefined })), "note", "state.metrics");
     expectOnly(

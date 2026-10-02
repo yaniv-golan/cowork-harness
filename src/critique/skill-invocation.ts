@@ -7,11 +7,15 @@
  * `root` and `skill` all reported `true`, and `root` collided with the `(root)` sentinel itself.
  * Match ids structurally instead.
  *
- * The selector is a bare skill-directory NAME by construction: `resolveCritiquedSkillDir` refuses
- * anything with a separator, a colon or a dot-dir (`safePathSegment`) before this module sees it, so
- * there is no normalisation to do here — and none is attempted, because a second copy of the rule is
- * how the two would drift.
+ * The selector is a skill name: a `skills/<dir>` directory name from critique and eval (a `--skill` value
+ * passes `safePathSegment`: no separator, colon or dot-dir), or the name the agent registers (hillclimb, and
+ * critique's root-SKILL.md case). A directory name can hold characters the agent rewrites when it registers
+ * the skill (`my.skill` registers as `<plugin>:my-skill`), so a qualified id is matched against the name as
+ * the agent writes it, through the one copy of that rule in `src/skill-id.ts` — applying it to an already
+ * registered name changes nothing.
  */
+
+import { sanitizeSkillName } from "../skill-id.js";
 
 /** The two sentinels `TimelineWriter`/`foldSkillActivity` emit for un-attributed activity
  *  (`src/agent/timeline.ts`, `src/run/timeline-fold.ts`). Parenthesized precisely so they cannot
@@ -20,16 +24,18 @@ const SENTINELS = new Set(["(root)", "(unknown)"]);
 
 /** Does an observed skill id name the selected skill? An id is either bare (`deck-review`) or
  *  plugin-qualified (`founder-skills:deck-review`) — both forms occur in the corpus. A bare id must equal
- *  the selector; a qualified id must match the name AND, when the graded plugin's name is known, the
- *  qualifier. `deck-review-lite` must NOT match `deck-review` (what a substring test got wrong), and
+ *  the selector (as written or as the agent rewrites it); a qualified id must match the name as the agent
+ *  registers it (`sanitizeSkillName`) AND, when the graded plugin's name is known, the qualifier.
+ *  `deck-review-lite` must NOT match `deck-review` (what a substring test got wrong), and
  *  `anthropic-skills:skill-creator` must NOT match a critique of `skill-creator:skill-creator` — on
  *  `hostloop`/`protocol` the host's own plugins are in the inventory, and a same-named skill from
  *  another plugin is exactly the kind of thing that is installed on a maintainer's machine. */
 export function matchesSkillId(observedId: string, selector: string, pluginName?: string): boolean {
   if (SENTINELS.has(observedId)) return false;
+  const registered = sanitizeSkillName(selector);
   const colon = observedId.lastIndexOf(":");
-  if (colon === -1) return observedId === selector;
-  if (observedId.slice(colon + 1) !== selector) return false;
+  if (colon === -1) return observedId === selector || observedId === registered;
+  if (observedId.slice(colon + 1) !== registered) return false;
   return pluginName === undefined || observedId.slice(0, colon) === pluginName;
 }
 

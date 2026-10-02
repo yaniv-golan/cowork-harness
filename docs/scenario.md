@@ -1214,6 +1214,11 @@ as `authored: true` does: a `--resume` turn, a hard-linked file, a symlink at th
 symlinked directory, a missing pre-run manifest or hash, and a path outside the folders the pre-run manifest walks.
 So a metric should read a file under `outputs/` or a connected folder.
 
+**In `hillclimb`** each metric is a grade key on every row, `<id>` beside `<id>_present`, with the reason an
+unmeasured one was unavailable in `meta.metrics_unavailable`. Adding or removing a metric mid-flow is allowed; changing
+one's declaration is refused, since the flow's rows were graded under the old one. See
+[cli.md → Numeric metrics in hillclimb](./cli.md#numeric-metrics-in-hillclimb).
+
 **Replay** measures the frozen declaration against the cassette's manifest, so it needs the body inline. A metric the
 recording cannot support — no artifact manifest, a body over the inline cap or unreadable at record time, a missing
 pre- or post-run hash — is reported unavailable and named once in a `::warning::`, with a remedy where a re-record

@@ -12,7 +12,7 @@ import { isolationRefusal } from "../decide/llm-transport.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
 import { HILLCLIMB_RUN_DEFAULTS, parseHillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
-import { headroom, pairwiseHints, pairwiseRefFindings, stateMetricFindings } from "./check.js";
+import { headroom, metricRangeWarnings, pairwiseHints, pairwiseRefFindings, stateMetricFindings } from "./check.js";
 import { prepareCases } from "./command.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
@@ -34,6 +34,7 @@ import { regradeFlow } from "./regrade.js";
 import { freezeRefCommand } from "./freeze-ref.js";
 import { flowHasPairwise } from "./grade-keys.js";
 import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
+import { flowMetricUnion } from "./metric-keys.js";
 
 const CMD = "hillclimb";
 
@@ -48,7 +49,8 @@ export interface HillclimbCliDeps<F extends JobFlags> {
   };
 }
 
-/** `hillclimb check`: our schema reading (harness profile) plus `_state.json`'s metric rule; headroom only warns. */
+/** `hillclimb check`: our schema reading (harness profile) plus `_state.json`'s metric rule; headroom and a float
+ *  outside its declared range only warn. */
 export function checkReport(flowArg: string, cwd: string): { report: SchemaCheckReport; warnings: string[]; exitCode: 0 | 1 } {
   const flowAbs = resolve(cwd, normalizeRootArg(flowArg));
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
@@ -58,7 +60,7 @@ export function checkReport(flowArg: string, cwd: string): { report: SchemaCheck
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
   return {
     report,
-    warnings: [...headroom(snap).warnings, ...pairwiseHints(snap, normalizeRootArg(flowArg))],
+    warnings: [...headroom(snap).warnings, ...metricRangeWarnings(snap), ...pairwiseHints(snap, normalizeRootArg(flowArg))],
     exitCode: report.errors ? 1 : 0,
   };
 }
@@ -105,12 +107,35 @@ export function stateTemplateFor(
     }
   }
   const t = stateTemplate({
-    cases: assertions,
+    cases: cases.map((c) => ({ name: c.id, assertions: c.scenario.assert ?? [], metrics: c.scenario.metrics })),
     harnessPaths: prep.derivedPaths(cases).map((p) => relative(cwd, p)),
     decider: false,
     ...(pairwiseRefs ? { pairwiseRefs } : {}),
     skillInvoked: tracked.name !== undefined,
   });
+  // With --flow: a float the flow's _state.json still declares that no scenario declares any more. Only here are both
+  // the scenarios and the flow at hand (`check` reads the flow alone), so this is where a removal's leftover is named.
+  if (opts.flow !== undefined) {
+    const flowAbs = resolve(cwd, normalizeRootArg(opts.flow));
+    if (lexists(flowAbs)) {
+      const now = new Set(t.state.metrics.map((m) => m.id));
+      let declared: unknown[] = [];
+      try {
+        const st = JSON.parse(loadFlowSnapshot(flowAbs).state ?? "{}");
+        if (Array.isArray(st?.metrics)) declared = st.metrics;
+      } catch {
+        // An unreadable _state.json is `check`'s finding, not this note's.
+      }
+      for (const m of declared) {
+        if (!m || typeof m !== "object") continue;
+        const { id, kind } = m as { id?: unknown; kind?: unknown };
+        if (kind === "float" && typeof id === "string" && !now.has(id))
+          t.notes.push(
+            `no scenario declares metric ${id} any more; remove its entries (${id} and ${id}_present) from _state.json's metrics`,
+          );
+      }
+    }
+  }
   return tracked.name === undefined ? { ...t, notes: [...t.notes, tracked.note] } : t;
 }
 
@@ -282,7 +307,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       else {
         writeAllSync(1, JSON.stringify(t.state, null, 2) + "\n");
         err(
-          `save this as ${flow}/_state.json; on a re-run, merge by adding NEW metrics entries only (the loop owns the rest).` +
+          `save this as ${flow}/_state.json; on a re-run, merge by adding NEW metrics entries only (the loop owns the rest), and remove the entries (<id> and <id>_present) of a metric no scenario declares any more.` +
             (md
               ? ""
               : ` The metrics legend (metrics.md) was not written: pass --flow ${HILLCLIMB_RUN_DEFAULTS.flow} (or your flow dir) to write it, or read metrics_md under --output-format json.`),
@@ -337,10 +362,13 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         secrets: [...secrets],
         stderr: (l) => err(l, secrets),
         isolationCheck: () => isolationRefusal(),
+        // The metric columns `run` grades rows with: a rebuilt row keeps only declared keys.
+        metricDecls: flowMetricUnion,
       },
     );
     const payload = { flow: p.options["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow, variants: out.variants, exitCode: out.exitCode };
-    if (out.error)
+    // A refusal's text already went to stderr through `stderr` above, so only JSON output prints it again.
+    if (json && out.error)
       return fail(
         `${CMD} regrade`,
         out.error.category,

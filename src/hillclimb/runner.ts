@@ -21,6 +21,7 @@ import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { approvedHarnessSkill, flowHarnessDigest, gateDecision, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
+import { flowMetricUnion, refuseChangedMetrics, removedMetrics, undeclaredRowMetrics } from "./metric-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
 import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
@@ -161,6 +162,11 @@ async function run(
   // The whole case set: the id space, the split ids and the gate are judged on it, whatever --case selects.
   const { cases: all, skipped } = loadCases(resolve(deps.cwd, args.target));
   if (skipped.length) say(`[${v}] skipped ${skipped.length} non-scenario file(s): ${skipped.join(", ")}`);
+  // The flow's metric columns: the union over every case, refused here — before any write — when one id is declared two ways.
+  const metrics = flowMetricUnion(all);
+  // ...and against the rows already in the flow, in every variant, before the gate can record an approval.
+  const existing = existingFlowSnapshot(flowArg, deps.cwd);
+  if (existing) refuseChangedMetrics(existing, metrics);
 
   // Writes only when this run may write: a pass, or the human's --approve-harness. A plain --dry-run
   // creates nothing.
@@ -173,6 +179,17 @@ async function run(
     all.map((c) => c.id),
   ))
     say(note);
+
+  if (existing)
+    for (const [id, vs] of removedMetrics(existing, metrics))
+      say(
+        `warning: metric ${id} is no longer declared by any scenario: the rows in ${vs.join(", ")} keep its values, but new rows will not carry it — remove its entries (${id} and ${id}_present) from _state.json's metrics (declaring it again with a different declaration is refused while any row still carries the old declaration)`,
+      );
+  if (existing)
+    for (const [id, vs] of undeclaredRowMetrics(existing, state.metrics))
+      say(
+        `warning: rows in ${vs.join(", ")} carry metric ${id}, which _state.json's metrics does not declare — re-run \`hillclimb state-template\` and merge its new metrics entries, or the report cannot show it`,
+      );
 
   const cases = selectCases(all, args.cases);
   const sigOf = (c: HillclimbCase) => deps.expectedContentSig?.(c);
@@ -201,18 +218,18 @@ async function run(
       .filter((p) => !hiddenSet.has(p)),
   );
   const listed = listedRaw.map((p) => resolve(deps.cwd, p)).filter((p) => !inputs.has(p) && lexists(p));
-  // Over EVERY case, whatever --case selects: a sibling scenario reachable through a selected case's mount is
-  // still the flow's answer key.
-  const exposed = pathsInsideMounts([flowAbs, ...hidden, ...listed], deps.mountRoots(all));
+  // The hidden files are EVERY case's, whatever --case selects: a sibling scenario reachable through a selected case's
+  // mount is still the flow's answer key. The mounts are the selected cases': only theirs exist in this pass.
+  const exposed = pathsInsideMounts([flowAbs, ...hidden, ...listed], deps.mountRoots(cases));
   if (exposed.length)
     throw new UsageError(
       `refusing to run: the agent could read ${exposed.map((x) => `${x.path} (through the mount ${x.mount})`).join("; ")} — prior rounds' grades, judge rationales and the rubric must stay outside every folder the session mounts`,
     );
 
   // A null (--ablate) run belongs in its own flow: mixed into a scored flow it would enter the trajectory.
-  if (lexists(flowAbs)) {
-    const snap = loadFlowSnapshot(flowAbs);
-    const mixed = ablationMix(snap, args.ablate);
+  // The rows read once, before any write (a flow dir created since has no rows).
+  if (existing) {
+    const mixed = ablationMix(existing, args.ablate);
     if (mixed)
       throw new UsageError(
         `--ablate ${args.ablate ? "into a flow that holds scored rows" : "rows are in this flow"}: ${mixed} — run the null baseline into a sibling flow (e.g. <flow>-null)`,
@@ -221,7 +238,7 @@ async function run(
     // variants a switch is allowed (re-approved through the gate) but said, as the report puts them in one column.
     // A row with no `meta.skill_tracked` does not say what it tracked (none, or a row written before the field
     // existed, whose skill_invoked was measured): only a recorded skill is held against this pass.
-    const tracked = skillTrackedByVariant(snap);
+    const tracked = skillTrackedByVariant(existing);
     const mine: Tracked = deps.skillTracked ?? NONE;
     const own = tracked.get(v);
     if (own !== undefined && [...own].some((t) => t !== UNRECORDED && t !== mine))
@@ -391,6 +408,7 @@ async function run(
         scenarioName: c.name,
         prompt: c.scenario.prompt,
         assertions: c.scenario.assert,
+        metrics,
         ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
         rep,
         pin: deps.pin(c),
@@ -537,6 +555,13 @@ async function run(
   } finally {
     release();
   }
+}
+
+/** The flow's files as they stand, read without following a link (undefined when there is no flow dir yet). The
+ *  root goes through the same hygiene every flow reader applies, so a planted link there is refused, not entered. */
+export function existingFlowSnapshot(flowArg: string, cwd: string): ReturnType<typeof loadFlowSnapshot> | undefined {
+  if (!lexists(resolve(cwd, flowArg))) return undefined;
+  return loadFlowSnapshot(NoFollowRoot.existing(flowArg, { cwd }).root);
 }
 
 export function readStateIfPresent(flowArg: string, cwd: string): Record<string, unknown> {
