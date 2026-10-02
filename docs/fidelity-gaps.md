@@ -40,13 +40,14 @@ bridge. **No setting reliably decides which lane a real session gets.** As of De
 (2026-10-02), the composer shows no per-session lane picker, on desktop or on the web, in the two
 organizations checked. Cowork has an "Only on this computer" option, at Settings → Cowork in the older
 composer and at Settings → General → Tasks in the merged interface, and sessions still ran in the cloud
-with it **on** (13+ runs on the merged interface, 2026-10-02), while on Desktop 2.16120.0 some new
-sessions ran locally. Anthropic's
+with it **on** (13+ runs on the merged interface, 2026-10-02). Separately, on Desktop 2.16120.0 some new
+sessions ran locally; the setting's state for those runs is not recorded. Anthropic's
 [architecture overview](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) describes
 the cloud as Cowork's default, with local execution remaining available for existing desktop
 deployments. Its [web, desktop and mobile article](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) adds,
-for Pro and Max plans, that new tasks run in the cloud from 2026-10-06 and the "Only on your computer"
-option is removed, while tasks already started on the computer stay there until they are done. So
+for Pro and Max plans, Anthropic's announcement that from 2026-10-06 new tasks run in the cloud and the
+"Only on your computer" option is removed, and that tasks started before that date stay local until they
+are done. So
 establish the lane from the session itself: see
 [Which lane a session actually ran on](#which-lane-a-session-actually-ran-on).
 
@@ -91,14 +92,17 @@ its apt doc stack, `pdfplumber` in pip).
 ### Which lane a session actually ran on
 
 No setting reliably decides the lane (see above), so check the session itself before comparing it to a
-run here. This is the one place these checks are listed; any one positive signal is enough to place a
-session:
+run here. This is the one place these checks are listed. Each of these places a session when it is
+present. `CLAUDE_CODE_ENTRYPOINT` and report paths point both ways; the environment heading and the
+Desktop log lines are positive signals only, and their absence proves nothing.
 
 - **The agent's environment.** `CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and
-  `remote_cowork` on the cloud lane. A hook runs with the agent's own environment, so a hook that prints
-  it is the most direct reading; a `Bash` call in the session shows it too. Do not read it through
-  `device_bash`: on the cloud lane that tool runs on the user's device, not in the session's container,
-  so what it prints says nothing about the session's lane. The entrypoint is a reliable lane marker; the
+  `remote_cowork` on the cloud lane. Read it from a hook that prints its environment: hooks run in the
+  agent's own process environment. From the shell it is weaker evidence. On the pinned baseline the local
+  lane runs the agent loop on the host and the shell in the VM, and spawn-env variables are not set in
+  that VM shell, so `remote_cowork` from a shell places a session on the cloud lane, but an empty value
+  from a local-lane VM shell is not evidence of anything. Do not read it through `device_bash` either: on
+  the cloud lane that tool runs on the user's device, not in the session's container. The entrypoint is a reliable lane marker; the
   next section is about something else, why remote-only *features* should not be described as gated on
   it.
 - **A sub-agent's environment section.** A dispatched sub-agent that reports a section headed
@@ -1662,7 +1666,7 @@ nests one level deeper, as `mcp__remote-devices__<server>__<tool>`. Agent-facing
 `device_request_folder_access`, `get_device_info`, and device-artifact tools. `device_commit_files` is the
 remote lane's write-to-disk leg. Each file it writes names a destination inside a connected folder
 (`devicePath`) and a source, which is one of two things: the file id from an earlier `SendUserFile`
-(`fileUuid`), which the tool prefers when the file has one, or an absolute staged path under the
+(`fileUuid`), which its description marks as preferred when the file has one, or an absolute staged path under the
 container's outputs root, `/mnt/user-data/outputs/` (`stagedPath`), for an output that was never shared.
 Both source fields are optional in its schema (Desktop 2.19675.0), and a session-host variant of its
 description asks for the staged path only. Desktop 1.37937.0
@@ -1673,8 +1677,8 @@ feature-gating note below), so it is not kept exhaustive; it is updated when a r
 these *outward* to a cloud session over a device-OAuth bridge, and Desktop's own telemetry tags these
 calls `session_type: "cowork-remote"`. None of these tools is in the local spawn's tool list.
 
-`device_bash`'s own tool description draws the same line: its commands execute in the Cowork workspace
-VM on the user's device, while the ordinary `Bash` tool executes in the cloud container. So a remote session reaches back into a
+`device_bash`'s tool description places it on the user's machine, in the local sandbox VM, and separates
+it from the container that hosts the ordinary `Bash` tool. So a remote session reaches back into a
 local VM (process namespace `rcw-<session>`, which the disk janitor's orphan cleanup deliberately skips).
 
 **Deliberately unmodeled.** Emulating it faithfully would mean real command execution and real writes on

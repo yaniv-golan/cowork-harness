@@ -758,7 +758,7 @@ All notable changes to this project are documented here. The format is based on
   `docs/fidelity-gaps.md`, `docs/scenario.md`, `docs/maintenance.md` and the companion skill described the lane
   as picked per session or by the "Only on this computer" setting; sessions have run in the cloud with that
   setting on, and Desktop 2.19675.0 shows no per-session lane picker. The docs cite Anthropic's Help Center for
-  the cloud being Cowork's default and for new Pro and Max tasks running in the cloud from 2026-10-06, in place
+  the cloud being Cowork's default and for its announcement that new Pro and Max tasks run in the cloud from 2026-10-06, in place
   of an unsourced "default since 2026-07-07". A new `docs/fidelity-gaps.md` section, "Which lane a session
   actually ran on", lists the checks that settle it. The `lane` description in `schema/run-result.json` drops
   "a per-session human choice", and the note `sync` prints when the sub-agent-override gate is on states the

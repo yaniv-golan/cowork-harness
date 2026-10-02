@@ -738,9 +738,9 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "`Only on this computer` setting (localAgentMode; Settings → Cowork, or Settings → General → Tasks) " +
       "does not reliably select it — sessions have run in the cloud with it ON. A cloud session's prompt is " +
       "server-authored and has no `## Cowork environment` section at all. Confirm the lane first " +
-      "(CLAUDE_CODE_ENTRYPOINT=local-agent, or a `Starting local session local_<id>` line in Desktop's " +
-      'main.log; see docs/fidelity-gaps.md, "Which lane a session actually ran on"), or you will probe a ' +
-      "lane this harness does not model.",
+      "(a hook-printed CLAUDE_CODE_ENTRYPOINT=local-agent, or a `Starting local session local_<id>` line in " +
+      "Desktop's main.log; an empty value from the VM shell is not evidence; see docs/fidelity-gaps.md, " +
+      '"Which lane a session actually ran on"), or you will probe a lane this harness does not model.',
   ];
 }
 
@@ -4021,9 +4021,10 @@ function enclosingFunctionName(chunk: string, at: number): string | null {
  *     s.stepStarted("download_and_sdk_prepare");let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);
  *
  * reached from the `startVM` export (`startVM:()=>KJ`, whose body calls the function holding that step).
- * On this account (late 2026-09) the local VM often boots only because a cloud session's device_bash starts
- * it, so this is the harness's sole agent supply — if Desktop drops the call or moves it off the startVM
- * path, the agent stops being staged with nothing else noticing. Fail closed.
+ * On this account the local VM has been observed booting because a cloud session's `device_bash`, a scheduled
+ * task, or a local-lane session started it, so this staging path is the harness's agent supply — if Desktop
+ * drops the call or moves it off the startVM path, the agent stops being staged with nothing else noticing.
+ * Fail closed.
  */
 export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];

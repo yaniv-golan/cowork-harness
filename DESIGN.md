@@ -49,7 +49,7 @@ sandbox-centric description here. The **remote** lane runs the agent in an Anthr
 Anthropic [documents the cloud as Cowork's default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview),
 with local execution remaining available for existing desktop deployments, and for Pro and Max plans
 [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new tasks run in
-the cloud from 2026-10-06, with tasks already started staying local. Both lanes are in active use, and no
+the cloud from 2026-10-06, with tasks started before that date staying local. Both lanes are in active use, and no
 setting reliably decides which one a session gets (see
 [docs/fidelity-gaps.md → Which lane a session actually ran on](./docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)). The lanes differ
 in how a file reaches the user, which is what changes skill behaviour: see

@@ -238,8 +238,8 @@ and the rest of the `mcp__remote-devices__*` tools) is deliberately not modeled:
 mean real command execution and real writes on the operator's machine on behalf of a simulated session.
 See [fidelity-gaps.md](./fidelity-gaps.md).
 
-**When to reach for it.** Set `lane: remote` to check whether a skill's delivery survives the cloud lane,
-where new Pro and Max tasks run from 2026-10-06. A skill that delivers by writing into `outputs/` and nothing else will fail
+**When to reach for it.** Set `lane: remote` to check whether a skill's delivery survives the cloud lane
+(Anthropic announces that from 2026-10-06 new Pro and Max tasks run in the cloud). A skill that delivers by writing into `outputs/` and nothing else will fail
 there — that is the finding, not a harness bug.
 
 ## Fidelity tiers (`fidelity:`)
