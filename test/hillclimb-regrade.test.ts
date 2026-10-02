@@ -1218,6 +1218,58 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(rows("v1")[0]!.grade).toMatchObject({ pass: 0, a2: 0 });
   }, 300_000);
 
+  // A fill copies every judged outcome it does not add. Over a rubric changed since the row was graded it would stamp
+  // the current assertion set on an old rubric's outcome — listed before any judge call, nothing written.
+  it.each([
+    ["semantic_pairwise", "rubric: ['answers']", "rubric: ['answers in French']"],
+    ["semantic_matches", "rubric: ['matches']", "rubric: ['matches', 'and more']"],
+  ] as const)(
+    "--fill-refs over a %s rubric changed since the run: listed before any judge call",
+    async (kind, from, to) => {
+      const { cli, flow, rows, evals } = buildFlow();
+      const sc = join(evals, "alpha.yaml");
+      if (kind === "semantic_matches") {
+        // The fixture's judge answers only pairwise: the runs are given the entry a judged run persists for it.
+        appendFileSync(sc, "  - semantic_matches:\n      rubric: ['matches']\n      judge_model: claude-haiku-4-5-20251001\n");
+        for (const v of ["baseline", "v1"]) {
+          const file = join(runDirOf(rows(v)[0]!), "turns", "1", "result.json");
+          const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: unknown[] };
+          r.assertions.push({
+            assertion: parseScenarioFile(sc).assert.at(-1),
+            pass: true,
+            judgeModel: "claude-haiku-4-5",
+            judgePromptHash: JUDGE_PROMPT_HASH,
+            semanticClaims: [{ index: 0, pass: true, rationale: "ok" }],
+          });
+          writeFileSync(file, JSON.stringify(r));
+        }
+      }
+      expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+      edit(evals, from, to);
+      const before = {
+        b: readFileSync(join(flow, "baseline", "results.jsonl"), "utf8"),
+        v1: readFileSync(join(flow, "v1", "results.jsonl"), "utf8"),
+      };
+      const { seen, deps } = counting();
+      const out = await regradeFlow(ARGS({ fillRefs: true, approveHarness: true }), deps);
+      expect(out.exitCode, JSON.stringify(out)).toBe(1);
+      expect(seen.calls).toBe(0);
+      // The baseline row lacks v1's comparison (it would be judged); the v1 row lacks only its own (no judge call). Both
+      // are listed with the same remedy, decided before any spend.
+      for (const v of out.variants)
+        expect(v.listed).toEqual([
+          {
+            prompt_id: "alpha",
+            rep: 0,
+            why: expect.stringMatching(/^the rubric changed since the run .*run a default `hillclimb regrade` first, then --fill-refs/),
+          },
+        ]);
+      expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before.b);
+      expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before.v1);
+    },
+    240_000,
+  );
+
   it("an assert the recorded workspace fixture satisfies on its own is listed before any judge call (verify-run's refusal)", async () => {
     f.cleanup();
     f = makeStubFixture(`mkdir -p outputs && printf '%s' '{"words":1200}' > outputs/m.json\n${STUB}`);
