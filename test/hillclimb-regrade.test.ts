@@ -1323,6 +1323,52 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
   }, 240_000);
 });
 
+// An agent that failed scores 0 whatever its asserts say. A row whose kept run cannot be re-evaluated (an unanswered
+// gate leaves a PARTIAL run) is not listed for good: only its meta is brought current.
+describe.runIf(POSIX)("hillclimb regrade: an agent-failed row whose run cannot be re-evaluated", () => {
+  const ASKS = [
+    line({ type: "system", subtype: "init", session_id: "stub", model: MODEL, tools: [], cwd: "/tmp" }),
+    line({
+      type: "control_request",
+      request_id: "q-1",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        tool_use_id: "toolu_stub",
+        input: { questions: [{ question: "Pick one", header: "Pick", options: [{ label: "A" }, { label: "B" }], multiSelect: false }] },
+      },
+    }),
+    "sleep 1",
+    ...STUB.split("\n").slice(1),
+  ].join("\n");
+  it("an unanswered-gate row: never listed, its meta (assert_sig, metric_sigs) rewritten, its grade all 0, counted apart", async () => {
+    f.cleanup();
+    f = makeStubFixture(ASKS);
+    const { rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const old = rows("v1")[0]!;
+    // Precondition: the slot is scored as an agent failure, all 0.
+    expect(old.meta.failure_class).toBe("errored_agent");
+    expect(old.grade.pass).toBe(0);
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(
+      sc,
+      readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: Nope") +
+        "metrics:\n  - { id: words, artifact: outputs/m.json, path: words, better: higher, scale: 2000 }\n",
+    );
+    const lines: string[] = [];
+    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ stderr: (l) => lines.push(l) }));
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    for (const v of out.variants) expect(v).toMatchObject({ listed: [], rewritten: 1, agentFailed: 1, reevaluated: 0, remeasured: 0 });
+    const row = rows("v1")[0]!;
+    expect(row.meta.assert_sig).not.toBe(old.meta.assert_sig);
+    expect(Object.keys(row.meta.metric_sigs as object)).toEqual(["words"]);
+    expect(row.meta).not.toHaveProperty("metrics_unavailable");
+    expect(Object.entries(row.grade).filter(([k, x]) => !k.endsWith("_present") && x !== 0)).toEqual([]);
+    expect(row.grade).toMatchObject({ pass: 0, a0: 0, a1: 0, words_present: 0 });
+    expect(lines.join("\n")).toMatch(/1 agent failure\(s\): meta updated/);
+  }, 240_000);
+});
+
 // `meta.assert_sig`: the assertion set a row was graded under. A pass resumed after a scenario edit (approved) writes new
 // rows beside old ones graded by the old asserts; `run` warns, `check` flags the mix, and a regrade brings them current.
 describe.runIf(POSIX)("hillclimb rows record their assertion set (meta.assert_sig)", () => {

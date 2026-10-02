@@ -97,6 +97,10 @@ export interface RegradeFlowVariant {
    *  agent-failed row, a fill row that needed no comparison). A row whose re-measure changed nothing is counted here
    *  but not rewritten. */
   remeasured: number;
+  /** Agent-failed rows (`meta.failure_class: errored_agent`) whose kept run cannot be re-evaluated (a partial run, an
+   *  unanswered gate): such a row scores 0 whatever its asserts say, so only its meta is brought current
+   *  (`assert_sig`, `metric_sigs`), its grade all 0 as `run` writes it — never listed. */
+  agentFailed: number;
   regradeFiles: string[];
   backup?: string;
 }
@@ -900,6 +904,8 @@ async function regradeFlowInner(
     // Rows rebuilt with no judge call — a case with no judged assert (re-evaluated and re-measured; in a fill, also given
     // its columns), an agent failure, a fill row lacking only its own variant's outcome — each from its kept run.
     const plain: Target[] = [];
+    // Agent-failed rows whose kept run cannot be re-evaluated: rebuilt with no evidence read (see `agentFailed`).
+    const metaOnly: Array<{ variant: string; c: HillclimbCase; line: Line; result: RunResult }> = [];
     const perVariant = new Map<string, { lines: Line[]; old: string; v: RegradeFlowVariant }>();
     for (const v of variants) {
       const old = writers.get(v)!.readVariantFile("results.jsonl") ?? "";
@@ -914,7 +920,15 @@ async function regradeFlowInner(
             return { raw }; // a torn line is kept as it is
           }
         });
-      const vr: RegradeFlowVariant = { variant: v, rewritten: 0, listed: [], reevaluated: 0, remeasured: 0, regradeFiles: [] };
+      const vr: RegradeFlowVariant = {
+        variant: v,
+        rewritten: 0,
+        listed: [],
+        reevaluated: 0,
+        remeasured: 0,
+        agentFailed: 0,
+        regradeFiles: [],
+      };
       perVariant.set(v, { lines, old, v: vr });
       outcome.variants.push(vr);
       const groups = new Map<string, Batch>();
@@ -966,7 +980,10 @@ async function regradeFlowInner(
         // rebuilt is listed, never re-measured as unavailable.
         const re = reevaluateFromRun(runDir, c);
         if ("listed" in re) {
-          vr.listed.push({ prompt_id: id, rep, why: shownMessage(re.listed, deps.secrets) });
+          // An agent failure scores 0 whatever its asserts say: a run that cannot be re-evaluated changes nothing a row
+          // grades, so only the row's meta is brought current — never listed (no command would clear it).
+          if (row.meta?.failure_class === "errored_agent") metaOnly.push({ variant: v, c, line, result });
+          else vr.listed.push({ prompt_id: id, rep, why: shownMessage(re.listed, deps.secrets) });
           continue;
         }
         // Decided here, before batching: a row listed by the deterministic step costs no judge call.
@@ -1280,6 +1297,38 @@ async function regradeFlowInner(
       }
     }
 
+    for (const m of metaOnly) {
+      const vr = perVariant.get(m.variant)!.v;
+      // Every authored entry unevaluated: the row scores 0 by rule, so its grade is what `run` writes for it.
+      const authored: Entry[] = authoredNow(m.c).map((a) => ({
+        assertion: a as never,
+        pass: false,
+        message: "not evaluated: the agent failed",
+      }));
+      const result = { ...m.result, assertions: [...authored, ...(m.result.assertions ?? []).filter((e) => e.source !== undefined)] };
+      const got = rebuiltRow(
+        m.line.row!,
+        result,
+        m.c,
+        shape,
+        { regraded_at: at, regrade_harness_version: harnessVersion },
+        undefined,
+        shape.metrics.length ? {} : undefined,
+      );
+      if ("why" in got) {
+        vr.listed.push({ prompt_id: m.c.id, rep: Number(m.line.row?.rep), why: got.why });
+        continue;
+      }
+      vr.agentFailed++;
+      if (
+        JSON.stringify(got.row.grade) === JSON.stringify(m.line.row!.grade) &&
+        (["metric_sigs", "assert_sig"] as const).every((k) => JSON.stringify(got.row.meta?.[k]) === JSON.stringify(m.line.row!.meta?.[k]))
+      )
+        continue;
+      before.set(m.line, m.line.row!.grade);
+      rebuilt.set(m.line, got.row);
+    }
+
     // Write each variant atomically; untouched lines byte for byte.
     const report: string[] = [];
     for (const v of variants) {
@@ -1303,7 +1352,7 @@ async function regradeFlowInner(
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
-        `rewritten ${pv.v.rewritten}${pv.v.reevaluated ? `, re-evaluated ${pv.v.reevaluated} (no judge call)` : ""}${pv.v.remeasured ? `, re-measured ${pv.v.remeasured} (no judge call)` : ""}, listed ${pv.v.listed.length}; mean pass before ${mean(changed.map((l) => before.get(l)))}, after ${mean(changed.map((l) => rebuilt.get(l)!.grade))}`,
+        `rewritten ${pv.v.rewritten}${pv.v.reevaluated ? `, re-evaluated ${pv.v.reevaluated} (no judge call)` : ""}${pv.v.remeasured ? `, re-measured ${pv.v.remeasured} (no judge call)` : ""}${pv.v.agentFailed ? `, ${pv.v.agentFailed} agent failure(s): meta updated` : ""}, listed ${pv.v.listed.length}; mean pass before ${mean(changed.map((l) => before.get(l)))}, after ${mean(changed.map((l) => rebuilt.get(l)!.grade))}`,
         ...(moved.length ? ["", "| case | rep | moved |", "|---|---|---|"] : []),
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
@@ -1339,7 +1388,7 @@ async function regradeFlowInner(
       `hillclimb regrade: ${outcome.variants
         .map(
           (v) =>
-            `${v.variant} ${v.rewritten} rewritten${v.reevaluated ? `, ${v.reevaluated} re-evaluated` : ""}${v.remeasured ? `, ${v.remeasured} re-measured` : ""}${v.listed.length ? `, ${v.listed.length} listed` : ""}`,
+            `${v.variant} ${v.rewritten} rewritten${v.reevaluated ? `, ${v.reevaluated} re-evaluated` : ""}${v.remeasured ? `, ${v.remeasured} re-measured` : ""}${v.agentFailed ? `, ${v.agentFailed} agent failure(s): meta updated` : ""}${v.listed.length ? `, ${v.listed.length} listed` : ""}`,
         )
         .join("; ")}`,
     );
