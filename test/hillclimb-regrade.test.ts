@@ -467,6 +467,15 @@ describe.runIf(POSIX)("hillclimb regrade's judge isolation preflight", () => {
     180_000,
   );
 
+  it("--rejudge with --fill-refs is a usage error (a fill re-judges nothing), nothing written", () => {
+    const { cli, flow } = buildFlow();
+    const before = tree(flow);
+    const r = cli("regrade", "evals", "--flow", "flow", "--rejudge", "--fill-refs");
+    expect(r.status, r.stderr).toBe(2);
+    expect(r.stderr).toMatch(/--rejudge and --fill-refs exclude each other/);
+    expect(tree(flow)).toEqual(before);
+  }, 180_000);
+
   it("the CLI refuses with the usage envelope when the host claude is too old (no judge call, nothing written)", () => {
     const { cli, flow } = buildFlow();
     const before = tree(flow);
