@@ -4,6 +4,8 @@
 // version's builds next to a new path (every hostloop host then classifies `kind:"build"` and fails), and a carried
 // channel would hide a stable<->RC flip from `sync --diff`. Dropping the override line is silent everywhere else.
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { buildNextAgentBinary } from "../src/baseline.js";
 
 const NEW_PATH = "~/Library/Application Support/Claude/claude-code/2.1.290/aaaaaaaaaaaa/claude.app/Contents/MacOS/claude";
@@ -70,4 +72,17 @@ describe("buildNextAgentBinary — the fields sync re-derives are never carried 
     });
     expect(withSha).toMatchObject({ sha256: "new", shaProvenance: "measured-local", manifestChecksumMatch: "unknown" });
   });
+});
+
+// The helper is only a guarantee if cmdSync uses it. Going back to a hand-written `{...baseAgentBinary, …}` would make a
+// dropped override silent again, and neither tsc nor the suite would notice, so pin the call site in the source text.
+describe("cmdSync builds the next agentBinary through buildNextAgentBinary", () => {
+  const cli = readFileSync(join(import.meta.dirname, "..", "src", "cli.ts"), "utf8");
+  const start = cli.indexOf("async function cmdSync(");
+  const end = cli.indexOf("\n}\n", start);
+  const body = cli.slice(start, end);
+  it("finds cmdSync", () => expect(start).toBeGreaterThan(-1));
+  it("calls buildNextAgentBinary(baseAgentBinary, …) for nextAgentBinary", () =>
+    expect(body).toMatch(/const nextAgentBinary = buildNextAgentBinary\(baseAgentBinary,/));
+  it("has no hand-written spread of the base agentBinary", () => expect(body).not.toContain("...baseAgentBinary"));
 });

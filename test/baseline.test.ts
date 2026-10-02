@@ -483,6 +483,12 @@ describe("checkMountModeFacts — the outputs mount mode (outputsMountMode)", ()
       expect(mutated).not.toBe(SPAWN);
       expect(run(files(mutated)).some((f) => f.includes("call site"))).toBe(true);
     });
+    // Only a MOUNT site counts (`mode:<ns>.<alias>(`): an unrelated call of the same alias must not mask a builder
+    // that stopped using it.
+    it("an unrelated call of the alias does not stand in for a dropped builder", () => {
+      const mutated = SPAWN.replace("mode:C.p(c)", 'mode:"rw"') + "let unrelated=C.p(q);";
+      expect(run(files(mutated)).some((f) => f.includes("call site"))).toBe(true);
+    });
     it("in a chunk that DOES require the exporting chunk, a same-named alias on another namespace does not count", () => {
       const mixed = SPAWN.replace(
         'var C=require("./index.chunk-MOUNT.js");',

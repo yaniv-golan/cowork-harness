@@ -1671,18 +1671,20 @@ export function checkMountModeFacts(bundle: string, files: Map<string, string>):
     // another chunk and call it through the module's re-export alias — `defineProperty(exports,"<a>",…return <B>)`,
     // `<ns>=require("./<exporting chunk>")`, then `<ns>.<a>(` — 3 sites in 2.16120.0 and 2.19675.0 (host-loop
     // computeBashMounts, the VM-loop builder, the shares builder). Direct calls of <B> inside its own chunk count
-    // too. A FLOOR, as for the resolver below: a builder going back to a hardcoded mode for outputs must flag, a
-    // fourth caller is benign.
+    // too. Only a MOUNT site counts — the call must be the `mode:` value — so an unrelated call of the same alias
+    // cannot stand in for a builder that stopped using it. A FLOOR, as for the resolver below: a builder going back
+    // to a hardcoded mode for outputs must flag, a fourth caller is benign. The real 2.16120.0 and 2.19675.0 asars
+    // each have exactly 3 such `mode:` sites.
     let callSites = 0;
     if (exporting && local) {
       const [chunkName, chunk] = exporting;
-      callSites += (chunk.match(new RegExp(`(?<![\\w$.])${reEsc(local)}\\(`, "g")) ?? []).length - (header ? 1 : 0);
+      callSites += (chunk.match(new RegExp(`mode:${reEsc(local)}\\(`, "g")) ?? []).length;
       const alias = new RegExp(`defineProperty\\(exports,"([\\w$]+)",\\{[^}]*?return ${reEsc(local)}\\}`).exec(chunk)?.[1];
       if (alias)
         for (const [name, other] of files) {
           if (name === chunkName) continue;
           for (const m of other.matchAll(new RegExp(`(?<![\\w$.])([\\w$]+)=require\\("\\./${reEsc(chunkName)}"\\)`, "g")))
-            callSites += (other.match(new RegExp(`(?<![\\w$.])${reEsc(m[1])}\\.${reEsc(alias)}\\(`, "g")) ?? []).length;
+            callSites += (other.match(new RegExp(`mode:${reEsc(m[1])}\\.${reEsc(alias)}\\(`, "g")) ?? []).length;
         }
     }
     const why = !local
