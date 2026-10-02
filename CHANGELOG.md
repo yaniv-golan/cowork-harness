@@ -18,6 +18,15 @@ All notable changes to this project are documented here. The format is based on
   recording, `--no-redact` included. Nothing in replay, the verdict, staleness or the fingerprint reads it, and the
   write is held to the same verdict-preservation check as policy redaction. A cassette recorded by an older harness
   may still carry it; re-record to drop it. The committed cassettes are scrubbed.
+- **`record` also drops a subscription account's `rate_limit_info` and the agent's hand-back frame from every
+  cassette.** A recorded `rate_limit_event` carried the account's usage (utilization, reset times, overage state); it
+  is now emptied to `{}`. The agent binary's own frame around a sub-agent's report (the hand-back line before the
+  report, and the "use SendMessage" continuation hint after it) is replaced by `[subagent report]`, with the report
+  body and `agentId` kept. Nothing in `src` reads either. `rehash` and `replay --reassert --write` apply the same
+  scrub when they rewrite a cassette. If the scrub's verdict-preservation check cannot pass, `record` writes the
+  cassette unscrubbed with a warning naming the scrub, instead of refusing and losing the paid run. The committed
+  cassettes are scrubbed. The pre-commit hook and the repo guard now refuse a staged or committed `*.cassette.json`
+  carrying the agent's hand-back frame or other agent-binary text, as they already did for `.jsonl` transcripts.
 
 ### Upgrade notes
 
@@ -28,13 +37,20 @@ All notable changes to this project are documented here. The format is based on
   - At `container`, `microvm` and `hostloop`, re-record. A re-stamp clears the finding but leaves an `agent-version:` note,
     because the recording ran 2.1.284. Agent 2.1.286 also renames its builtin plugins in the init event (`agents-md` →
     `cc-plugin-agents-md`, `telemetry` → `cc-plugin-telemetry`) and lists a `plugin-types` slash command, so an
-    assertion on those names needs updating.
+    assertion on those names needs updating. At `hostloop` the native binary also loads a builtin
+    `cc-plugin-sec-default`, which the container ELF does not list. The init event's `capabilities[]` gains
+    `sdk_mcp_manifests`, `sdk_mcp_tools_list_changed` and `ui_surface_v1`.
   - At `protocol` a re-stamp is sound: the agent there is the `claude` on your `PATH`, and the first-party spawn env, the
     Cowork system prompt, the sub-agent append, the egress allowlist and the spawn tools are unchanged.
   - The committed cassettes: `example-pdf-skill`, `dispatch-shell` and `hostloop-computer-links` are re-recorded, and
     `example-multiselect-gate` is re-stamped.
 - **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
   the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
+- **`hostloop` on an Intel (x64) Mac: the native build pin is per architecture.** `desktop-2.19675.0` records the
+  native build for each arch (`agentBinary.nativeBuilds`), and the harness holds the staged binary to the entry for
+  the host's arch, so an x64 Mac runs its own x64 build of 2.1.286 with no env var. A baseline with the map but no
+  entry for your arch matches by version, with a stderr note. If you hand-edit a baseline's `nativeStagedPath`, keep
+  `nativeBuilds` consistent with it, or drop the map to fall back to the build in the path.
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
   `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
@@ -412,7 +428,7 @@ All notable changes to this project are documented here. The format is based on
 - **New baseline `desktop-2.19675.0`** (agent **2.1.286**, stable channel), which `latest` resolves to.
   - Recorded changes: `spawnEnvKeys` gains `CLAUDE_CODE_HOST_SCHEDULED_RUN` (see below), `asarGateIds` gains 18 ids and
     loses 2, and the native agent pin names its per-build directory (`claude-code/2.1.286/<build>/…`), which Desktop
-    2.19675.0 introduced.
+    2.19675.0 introduced, with the build for each CPU arch in the new `agentBinary.nativeBuilds` (see Upgrade notes).
   - Unchanged from `desktop-2.16120.0`: the Cowork system prompt, the sub-agent append fingerprints, the egress
     contract, the model/effort config and the first-party `spawn.env`.
   - The Desktop init surface was read from 3 local frames. Desktop's `cowork` server declares `send_user_message` in
@@ -422,11 +438,14 @@ All notable changes to this project are documented here. The format is based on
   Desktop sets it to `"1"` only on scheduled-task runs (`sessionType === "scheduled"`). The harness models an
   interactive session, so the key is allowlisted and does not enter `spawn.env`. A new check keeps that honest:
   `sync` refuses if any construction of the key is not guarded by exactly that condition (unconditional, a widened
-  or negated predicate, a second construction elsewhere).
+  or negated predicate, a second construction elsewhere, a quoted key, a predicate called on something other than the
+  session), resolving each guard in its own bundle chunk. It also refuses when the bundle still names the key but
+  constructs it nowhere it can count. A minifier reshape of the predicate fails closed on purpose.
 - **`sync` pins the server config of Cowork's send-message tool (gate `3045399524`) as a tripwire.** The baseline
-  records only whether it is served (`on`, `source`) and its `alwaysLoad` flag; the list of models it is enabled for
-  is reduced away before anything is written, so a change in how the tool is served is a `sync --diff` line
-  without the served value being committed. The tool itself is not modeled (see Documentation).
+  records whether it is served (`on`, `source`), its `alwaysLoad` flag and `enabledDigest`, a digest of which models
+  it is enabled for. The model list itself is never written. A model added to or removed from that set, or the tool
+  enabled for every model, changes the digest and shows up as a `sync --diff` line. The tool itself is not modeled
+  (see Documentation).
 - **`eval` no longer makes a row of an assertion whose only keys are verdict modifiers** (`allow_stall`,
   `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
   constant across both arms and only enlarged the correction family, which weakened the correction for the
@@ -681,8 +700,9 @@ All notable changes to this project are documented here. The format is based on
 
 - `docs/fidelity-gaps.md` documents Cowork's send-message tool (`mcp__cowork__send_user_message`), which the harness
   does not serve. Desktop offers it, pre-approved, to ordinary sessions on the models a server config enables
-  (observed on Opus 5.5 sessions on Desktop 2.16120.0 and 2.19675.0, not on Opus 5). This gap already applies to
-  `desktop-2.16120.0`: no Desktop release introduced it.
+  (observed on Opus 5.5 sessions on Desktop 2.16120.0 and 2.19675.0, not on Opus 5). No Desktop release introduced
+  this gap: the tool's registration is in every Desktop on record, gated server-side, so it applies to every shipped
+  baseline.
 - The companion skill has a `hillclimb` reference (`references/hillclimb.md`, indexed in `SKILL.md` and
   `llms.txt`) for driving a `/claude-api hillclimb` loop with `hillclimb run`, `check`, `state-template`,
   `freeze-ref` and `regrade`: the flags, the snapshot and harness gate, refusals, exit codes, pairwise references,

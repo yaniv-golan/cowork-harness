@@ -1054,13 +1054,6 @@ spreadsheet, an image or a PDF is embedded just as literally as a `.json` (names
 counts). Uploads and `mode:r` connected folders are hash-only, and a file over the body cap carries
 `truncationReason: "size"` instead of its contents. That is the committed PII surface. Two layers, distinct from secret-scrub (which only strips auth tokens):
 
-> **Always removed, with no policy and under `--no-redact` too: the account's model menu.** The agent's
-> `initialize` response lists the models the recording account is offered, with their display copy and, on a
-> pay-per-token account, per-Mtok pricing. `record` empties that `models` array before writing; every other
-> field of the response is kept. Nothing in replay, the verdict, staleness or the fingerprint reads it, and the
-> write is still held to the same verdict-preservation check as redaction. A cassette recorded by an older
-> harness may still carry it; re-record to drop it.
-
 - **Opt-in redaction** (the mutation). Drop a `.cowork-redact.json` next to your scenarios, or set
   `COWORK_HARNESS_REDACT_PATTERNS` / `COWORK_HARNESS_REDACT_KEYS`. The policy file is searched in
   **cwd → the scenario file's dir → the cassette's dir** (each dir's file merges once; the env vars
@@ -1323,6 +1316,17 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
 ```bash
 cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 ```
+
+> **Always removed, with no policy and under `--no-redact` too.** `record` drops, before writing:
+> the account's **model menu** (the `models` array of the agent's `initialize` response: the models the recording
+> account is offered, their display copy and, on a pay-per-token account, per-Mtok pricing); a subscription
+> account's **`rate_limit_info`** (utilization, reset times, overage state), emptied to `{}`; and the agent's own
+> **frame around a sub-agent's report** (the hand-back line before the report, and the "use SendMessage" continuation
+> hint after it), replaced by `[subagent report]` with the report body and `agentId` kept. Nothing in replay, the
+> verdict, staleness or the fingerprint reads any of it. The write is still held to the same verdict-preservation
+> check as redaction; if that check cannot pass, the cassette is written unscrubbed with a warning rather than
+> losing the run. `rehash` and `replay --reassert --write` apply the same scrub when they rewrite a cassette. A
+> cassette recorded by an older harness may still carry these; re-record (or run either rewrite) to drop them.
 
 ### Reading the result
 
