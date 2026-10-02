@@ -112,6 +112,12 @@ export const DESKTOP_APP_VERSION_MIN_VERSION = "2.2553.1";
  *  outputs, as those releases did. */
 export const HOSTLOOP_SYSTEM_EMPTY_CWD_MIN_VERSION = "2.7032.0";
 
+/** First Desktop whose host-loop workspace bash rewrites a plugin's host path, written into the command, to
+ *  the plugin's VM mount before running it (see src/hostloop/plugin-path-rewrite.ts). Absent from every
+ *  backed-up asar through 1.37937.3 and present, with the same rules, in 1.40609.0, 1.40609.1, 1.44121.1,
+ *  2.16120.0 and 2.19675.0. Below it the command runs as written. */
+export const PLUGIN_PATH_VM_REWRITE_MIN_VERSION = "1.40609.0";
+
 /** True iff `found` is a same-major.minor, different-patch bump over `pinned` (both dotted version
  *  strings). The single definition of "patch-only" shared by the native-binary drift classifier and the
  *  VM-ELF parity-mount tolerance, so the two never diverge on what counts as a safe patch bump. */
@@ -987,5 +993,3 @@ export function recordedLayoutDivergence(baseline: PlatformBaseline): { recorded
   if (sessionRoot.endsWith(`/${GUEST_MNT_SEGMENT}`)) return { recorded: sessionRoot, staged };
   return undefined;
 }
-
-export const PLUGIN_PATH_VM_REWRITE_MIN_VERSION = "";

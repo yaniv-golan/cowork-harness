@@ -4249,7 +4249,7 @@ export function scanEvents(
     out.sidecarMissing = true;
     return out;
   }
-  const selfHealRe = /\/sessions\/[^\s"]*\/mnt\/\.local-plugins/;
+  const selfHealRe = /\/sessions\/[^\s"]*\/mnt\/\.(?:local|remote)-plugins/;
   // A text leaks iff it carries a host-path token that did NOT come from the user's inputs.
   const exempted = new Set<string>();
   const leaks = (text: string): boolean => {
