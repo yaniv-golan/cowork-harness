@@ -212,9 +212,14 @@ All notable changes to this project are documented here. The format is based on
   and `run` warns on a removed one and on row metrics `_state.json` does not declare. `hillclimb check` notes rows
   that predate a declared metric instead of failing them, warns about a float outside `[min, scale]`, refuses a
   non-numeric `min`, and its headroom reads a lower-is-better float's good end from `min`, 0 when absent.
-  `hillclimb regrade` keeps the metric keys on every row it rebuilds, re-measures them on a row it re-grades (which
-  gains the signatures of metrics added since, and loses an unavailable reason for one now measured), and refuses a
-  changed declaration before any judge call, as `run` does. See docs/cli.md → Numeric metrics in hillclimb.
+  `hillclimb regrade` keeps the metric keys on every row it rebuilds and re-measures them on every selected row from
+  its kept run, before any judge call (a row gains the signatures of metrics added since, and loses an unavailable
+  reason for one now measured). A row no judge re-grades is re-measured too: a case with no judged assert (in a
+  default re-grade, whenever the flow declares a metric), an agent-failed row (signatures and `<id>_present: 0`,
+  never a value) and a fill row that needs no comparison. Each gains `meta.regrade_remeasured: true`, and each
+  variant reports a `remeasured` count (`regrade.md`, stderr, the JSON payload). A row whose kept run dir is gone or
+  refused, or whose kept work dir is gone, is listed (exit 1). It refuses a changed declaration before any judge
+  call, as `run` does. See docs/cli.md → Numeric metrics in hillclimb.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb

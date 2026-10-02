@@ -173,13 +173,18 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   `<variant>/regrade-<sha16>.bak.jsonl`; `<variant>/regrade.md` and stderr show which rows' `pass`, `claims` or
   `win` keys moved. A row a judge re-graded gains `meta.regrade_doc_matches_live`, `meta.regrade_unchecked`,
   `meta.regrade_file` and `meta.regraded_at`; in a fill also `meta.regrade_fill`, `meta.regrade_judge_usd` and
-  `meta.regrade_judge_model`. A fill row rebuilt with no judge call gains only `meta.regraded_at` and
-  `meta.regrade_fill`.
+  `meta.regrade_judge_model`.
+- **Every selected row's metrics are re-measured** from its kept run, before any judge call and in either mode. A
+  row no judge re-grades is re-measured too: a case with no judged assert (in a default re-grade, whenever the flow
+  declares a metric), an agent-failed row (it gains the signature and `<id>_present: 0`, never a value), and a fill
+  row that needs no comparison. Such a row gains `meta.regrade_remeasured: true` and `meta.regraded_at` (plus
+  `meta.regrade_fill` in a fill); `regrade.md`, stderr and each variant's `remeasured` count report them.
 - **What it never touches:** the agent (it never runs), `result.json`, the lines it did not rewrite (kept byte for
-  byte), in a default re-grade a case with no judged assert, and an open `judge_invalid` slot in `errors.jsonl`,
+  byte), in a default re-grade a case with no judged assert when the flow declares no metric, and an open `judge_invalid` slot in `errors.jsonl`,
   which is never moved into `results.jsonl`: the summary names, per case, the `run` that re-runs it.
 - **Listed, not re-graded (exit 1):** a row with no scenario file for its case in the target (without `--case`),
-  one whose kept run dir is gone or refused (multi-turn, partial, replay), one whose re-grade is judge-invalid or
+  one whose kept run dir is gone or refused (multi-turn, partial, replay), one whose kept work dir is gone while
+  its case declares a metric, one whose re-grade is judge-invalid or
   does not line up with the scenario, in a fill one whose kept outcome was judged against a reference that has
   changed since, and an open `judge_invalid` slot.
 
@@ -227,7 +232,7 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
   - `<id>_present` is 1 when measured and 0 otherwise. When the metric was unavailable,
     `meta.metrics_unavailable` names the reason.
   - Adding a metric mid-flow is allowed. Older rows predate it and do not carry it, and `check` says so in a note.
-    A regrade that re-judges a row re-measures the metric from the kept run.
+    `regrade` re-measures it on every selected row from the kept run, a row no judge re-grades included.
   - Changing a declaration is refused (artifact, path, direction, `scale`, `unbounded` or `min`; an omitted `min` is `min: 0`). Start a new flow,
     or give the metric a new id.
   - Removing a metric is allowed. Also remove its entries from `_state.json`.
