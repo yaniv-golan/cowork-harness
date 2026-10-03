@@ -371,6 +371,7 @@ describe("END TO END: the real hook, the real CLI, the real unscannable cassette
     mkdirSync(join(dir, ".githooks"), { recursive: true });
     cpSync(HOOK, join(dir, ".githooks", "pre-commit"));
     symlinkSync(resolve("dist"), join(dir, "dist"));
+    symlinkSync(resolve("src"), join(dir, "src")); // the hook reads the source's RECORDED_SCRUB_VERSION
     symlinkSync(resolve("node_modules"), join(dir, "node_modules"));
 
     // A clean fixture so the DIRECTORY scan passes; the unscannable one staged alongside it, so the only
@@ -420,6 +421,7 @@ describe("END TO END: a shape-invalid but SCANNABLE cassette must not block", ()
     mkdirSync(join(dir, ".githooks"), { recursive: true });
     cpSync(HOOK, join(dir, ".githooks", "pre-commit"));
     symlinkSync(resolve("dist"), join(dir, "dist"));
+    symlinkSync(resolve("src"), join(dir, "src")); // the hook reads the source's RECORDED_SCRUB_VERSION
     symlinkSync(resolve("node_modules"), join(dir, "node_modules"));
     stageCleanReplays(dir);
     mkdirSync(join(dir, "evals"), { recursive: true });

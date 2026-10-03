@@ -12,10 +12,18 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUILTIN_DESCRIPTION_PLACEHOLDER, freezeRecordedRun, scrubRecordedAgentData, scrubVerification } from "../src/run/cassette.js";
+import {
+  BUILTIN_DESCRIPTION_PLACEHOLDER,
+  BUILTIN_HINT_PLACEHOLDER,
+  RECORDED_SCRUB_VERSION,
+  freezeRecordedRun,
+  scrubRecordedAgentData,
+  scrubVerification,
+} from "../src/run/cassette.js";
 import { KNOWN_BUILTIN_SKILLS } from "../src/scan.js";
 import { loadBaseline } from "../src/baseline.js";
 import { ScenarioObject } from "../src/types.js";
@@ -65,7 +73,7 @@ const REGISTRY = line({
     request_id: "init-1",
     response: {
       commands: [
-        { name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE ONE", argumentHint: "", builtin: true },
+        { name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE ONE", argumentHint: "[SYNTHETIC BUILT-IN HINT]", builtin: true },
         { name: "my-plugin:code-review", description: PLUGIN_DESC, argumentHint: "[pr]", aliases: ["code-review"] },
         { name: "compact", description: "SYNTHETIC BUILT-IN PROSE TWO", argumentHint: "", builtin: true },
         { name: "my-local-skill", description: LOCAL_SKILL_DESC, argumentHint: "" },
@@ -89,6 +97,42 @@ const INIT_WITH_PLUGINS = line({
   ],
 });
 const W = BUILTIN_DESCRIPTION_PLACEHOLDER;
+const MENU = line({
+  type: "control_response",
+  response: { request_id: "init-1", response: { commands: [], agents: [], models: [{ value: "m", description: "· $1/$2 per Mtok" }] } },
+});
+
+// The pre-commit hook trusts the BUILT scrub only when its RECORDED_SCRUB_VERSION matches the source's. This pins the
+// version to what the scrub removes: change either and this fails until you change both — and a bump is what makes a
+// stale dist block at commit time.
+it("RECORDED_SCRUB_VERSION is pinned to what the scrub removes (bump it with any change to the scrub)", () => {
+  expect({
+    version: RECORDED_SCRUB_VERSION,
+    kinds: ["model-menu", "rate-limit-info", "subagent-hand-back-frame", "builtin-description"],
+    placeholders: [BUILTIN_DESCRIPTION_PLACEHOLDER, BUILTIN_HINT_PLACEHOLDER],
+  }).toEqual({
+    version: 2,
+    kinds: scrubRecordedAgentData(cassetteOf([REGISTRY, INIT_WITH_PLUGINS, RATE, HANDBACK, MENU])).kinds,
+    placeholders: ["[built-in description withheld]", "[built-in hint withheld]"],
+  });
+});
+
+// The version is bumped BY HAND, so a scrub that widens an existing kind (e.g. starts withholding `aliases` under
+// builtin-description) would keep its version and a stale dist would still pass. Pin a hash of the scrub's own
+// source next to the version: any edit to that region fails here until it is re-pinned on purpose. If what the scrub
+// removes changed, bump RECORDED_SCRUB_VERSION too; a comment-only edit just needs the new hash.
+it("the scrub's source is pinned next to RECORDED_SCRUB_VERSION (an edit forces a deliberate re-pin)", () => {
+  const src = readFileSync("src/run/cassette.ts", "utf8");
+  const start = src.indexOf("/** The agent's `initialize` registry response, matched exactly");
+  const end = src.indexOf("export const scrubVerification");
+  expect(start, "scrub region start marker").toBeGreaterThan(0);
+  expect(end, "scrub region end marker").toBeGreaterThan(start);
+  const sha = createHash("sha256").update(src.slice(start, end)).digest("hex");
+  expect(
+    { version: RECORDED_SCRUB_VERSION, sha },
+    "the scrub changed: if what it removes changed, bump RECORDED_SCRUB_VERSION; then re-pin this hash",
+  ).toEqual({ version: 2, sha: "6ca29dce0e5949bbf38ce8d01cf8427389d5fe78dc7712c469d7667fce7aa9bb" });
+});
 
 describe("scrubRecordedAgentData", () => {
   it("withholds every built-in agent, command and skill description; the plugin under test's own entries keep theirs", () => {
@@ -99,9 +143,9 @@ describe("scrubRecordedAgentData", () => {
     const bc = before.response.response.commands;
     const ba = before.response.response.agents;
     expect(ev.response.response.commands).toEqual([
-      { ...bc[0], description: W },
-      bc[1], // the plugin under test's own skill: untouched, though its alias is a built-in name
-      { ...bc[2], description: W }, // a built-in command that is not a skill
+      { ...bc[0], description: W, argumentHint: BUILTIN_HINT_PLACEHOLDER }, // its usage hint is the agent's text too
+      bc[1], // the plugin under test's own skill: untouched (its "[pr]" hint too), though its alias is a built-in name
+      { ...bc[2], description: W }, // a built-in command that is not a skill; its EMPTY hint stays empty
       bc[3], // a scenario's config-dir skill: bare, but unmarked
       { ...bc[4], description: W }, // from a plugin the recording marks built-in
     ]);
@@ -116,7 +160,7 @@ describe("scrubRecordedAgentData", () => {
       response: { ...x.response, response: { ...x.response.response, commands: [], agents: [] } },
     });
     expect(strip(ev)).toEqual(strip(before));
-    expect(cassette.events[0]).not.toMatch(/SYNTHETIC BUILT-IN PROSE/);
+    expect(cassette.events[0]).not.toMatch(/SYNTHETIC BUILT-IN (PROSE|HINT)/);
     for (const d of [PLUGIN_DESC, PLUGIN_AGENT_DESC, LOCAL_SKILL_DESC]) expect(cassette.events[0]).toContain(d);
     expect(cassette.events[1]).toBe(INIT_WITH_PLUGINS);
   });
@@ -218,6 +262,7 @@ const tracked = execFileSync("git", ["ls-files", "*.cassette.json"], { encoding:
 // Built-in registry entries seen across the committed cassettes; the guard below must have looked at some.
 let builtinEntriesSeen = 0;
 let pluginEntriesKept = 0;
+let builtinHintsSeen = 0;
 describe("committed cassettes carry no account data, agent hand-back frame or built-in agent/command description", () => {
   it("there are committed cassettes to check (not vacuous)", () => expect(tracked.length).toBeGreaterThanOrEqual(4));
   it.each(tracked)("%s", (file) => {
@@ -234,7 +279,7 @@ describe("committed cassettes carry no account data, agent hand-back frame or bu
           request_id?: string;
           response?: {
             models?: unknown[];
-            commands?: Array<{ name?: unknown; description?: unknown; builtin?: unknown }>;
+            commands?: Array<{ name?: unknown; description?: unknown; argumentHint?: unknown; builtin?: unknown }>;
             agents?: Array<{ name?: unknown; description?: unknown }>;
           };
         };
@@ -255,6 +300,10 @@ describe("committed cassettes carry no account data, agent hand-back frame or bu
           if (c.builtin === true || KNOWN_BUILTIN_SKILLS.has(c.name)) {
             builtinEntriesSeen++;
             expect(c.description, `${file}: built-in command ${c.name} description`).toBe(BUILTIN_DESCRIPTION_PLACEHOLDER);
+            if (typeof c.argumentHint === "string" && c.argumentHint !== "") {
+              builtinHintsSeen++;
+              expect(c.argumentHint, `${file}: built-in command ${c.name} argumentHint`).toBe(BUILTIN_HINT_PLACEHOLDER);
+            }
           } else if (c.name.includes(":")) {
             pluginEntriesKept++;
             expect(c.description, `${file}: plugin command ${c.name} description`).not.toBe(BUILTIN_DESCRIPTION_PLACEHOLDER);
@@ -274,6 +323,7 @@ describe("committed cassettes carry no account data, agent hand-back frame or bu
   it("the built-in description check saw built-in registry entries and a kept plugin entry (not vacuous)", () => {
     expect(builtinEntriesSeen).toBeGreaterThan(0);
     expect(pluginEntriesKept).toBeGreaterThan(0);
+    expect(builtinHintsSeen).toBeGreaterThan(0);
   });
   it("the plugin under test keeps its own description in example-pdf-skill", () => {
     const c = JSON.parse(readFileSync("examples/replays/example-pdf-skill.cassette.json", "utf8")) as { events: string[] };

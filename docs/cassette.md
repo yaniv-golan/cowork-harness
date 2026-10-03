@@ -1263,7 +1263,8 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   it would fail a legitimate fixture.
   **What it does NOT cover.** Only the name fields above are checked. The catalogs — `slash_commands[]`,
   `skills[]`, `plugins[]`, and command *descriptions* — are **not** gated by this scan (the recorder separately
-  withholds the descriptions of Claude Code's built-in agents and commands; see "Always removed" below): `slash_commands` legitimately
+  withholds the descriptions and argument hints of Claude Code's built-in agents and commands; see "Always removed"
+  below): `slash_commands` legitimately
   varies between clean fixtures and descriptions are unbounded free text, so there is no clean predicate,
   only an arbitrary threshold. In the leak that actually shipped, the gated fields were about **11% of the
   removed bytes** and the ungated catalogs about **89%** (the registry command catalog alone ~80%);
@@ -1327,16 +1328,31 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 > **frame around a sub-agent's report** (the hand-back line before the report, and the "use SendMessage" continuation
 > hint after it), replaced by `[subagent report]` with the report body and `agentId` kept; and the **description of
 > each Claude Code built-in agent, command and skill** in that `initialize` response's `agents` and `commands` lists
-> (Anthropic's text), replaced by `[built-in description withheld]` with the name and every other field kept.
-> Built-in is read from the recording, not from a list: a command the agent marks `builtin: true`, an agent with no
-> `<plugin>:` prefix, or an entry from a plugin the recording marks built-in (only a recording from an agent too old
-> to mark its commands falls back to the known built-in skill names). The plugin under test's own agents, commands
-> and skills, and a scenario's own skills, keep theirs. Nothing in replay, the verdict, staleness or the fingerprint
-> reads any of it. The write is still held to the same verdict-preservation check as redaction; if that check cannot pass, the cassette is written unscrubbed with a warning rather than
-> losing the run. `rehash` and `replay --reassert --write` apply the same scrub when they rewrite a cassette, and
-> `replay --reassert --write` rewrites the events alone when the assert block is already current but the events
-> still carry something the recorder removes. A cassette recorded by an older harness may still carry these;
-> re-record (or run `replay --reassert --write`) to drop them.
+> (Anthropic's text), replaced by `[built-in description withheld]`, plus a built-in command's non-empty
+> **`argumentHint`** (its usage syntax), replaced by `[built-in hint withheld]`; the name and every other field are
+> kept. Built-in is read from the recording, not from a list: a command the agent marks `builtin: true`, an agent
+> with no `<plugin>:` prefix, or an entry from a plugin the recording marks built-in. The plugin under test's own
+> agents, commands and skills, and a scenario's own skills, keep theirs.
+>
+> Two limits of that rule. **An agent too old to mark its commands** gets a fallback to the known built-in *skill*
+> names, so on such a recording a built-in command that is not a skill (`compact`, `init`, …) keeps its text.
+> **A bare-named agent is always withheld, and it is never the plugin under test's**: every plugin agent is named
+> `<plugin>:<agent>`. A bare name is the agent's own or a *user* agent from the config dir: the `agents/` of a
+> session's pinned `plugins.config_dir` (which load bare under `settingSources: ["user"]`), or, at a tier that
+> inherits the host's config dir (`protocol`/`hostloop`), the operator's own. Their descriptions are withheld too.
+> No verdict reads a registry description, so this costs nothing but the text. (Project agents in a working
+> directory's `.claude/agents/` never load: `settingSources` is pinned to `user` by the baseline.)
+>
+> Nothing in replay, the verdict, staleness or the fingerprint reads a registry description or hint, the model
+> menu, or `rate_limit_info`. The **hand-back frame is different**: it sits in the model-visible transcript, so an
+> assert such as `transcript_contains` can read it — which is what the check below exists to catch.
+> **Every path that writes it is held to the same verdict-preservation check as redaction**: `record`, `rehash` (both
+> of its rewriting branches) and
+> `replay --reassert --write` (when it rewrites the assert block, and when the block is already current and it
+> rewrites the events alone). When that check cannot pass, the file is still written (or, for an already-current
+> block, left as it was) with the events UNSCRUBBED and a warning naming the scrub, rather than losing the run or the
+> migration. A cassette recorded by an older harness may still carry these; re-record (or run
+> `replay --reassert --write`) to drop them.
 
 ### Reading the result
 

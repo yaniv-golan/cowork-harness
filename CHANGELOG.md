@@ -39,6 +39,14 @@ All notable changes to this project are documented here. The format is based on
   --write` now also rewrites a cassette whose assert block is already current when its events still carry something
   the recorder removes, so an existing cassette can adopt a newer scrub without a re-record. The committed cassettes
   are scrubbed, and the pre-commit hook and the repo guard refuse a cassette that carries a built-in description.
+- **`record` also withholds a built-in command's `argumentHint`, and every rewrite is now verdict-checked.** A
+  built-in command's non-empty usage hint (its syntax string, the agent's own text) is replaced by
+  `[built-in hint withheld]`, decided the same way as its description; the plugin under test's own hints are kept.
+  `rehash` and `replay --reassert --write` now hold the recorder's scrub to the same verdict-preservation check as
+  `record`: if it cannot pass, the rewrite still lands with the events unscrubbed and a warning naming the scrub,
+  instead of being applied unchecked. The pre-commit hook now also refuses to vouch for a staged cassette from a
+  stale build: when `dist/`'s scrub version differs from the source's, it blocks with "run npm run build". The
+  committed cassettes are rescrubbed.
 
 ### Upgrade notes
 
