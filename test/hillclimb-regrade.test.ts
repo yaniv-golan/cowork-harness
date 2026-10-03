@@ -2004,18 +2004,19 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(v1.meta).not.toHaveProperty("judge_unpriced");
     const summary = (v: string) => JSON.parse(readFileSync(join(flow, v, "summary.json"), "utf8"));
     // The stub agent reports no total_cost_usd: its rows record no cost, counted as such and never as $0.
+    // The baseline's neutral rows: no judge ran, so neither unpriced nor unrecorded.
     expect(summary("baseline")).toMatchObject({
       judge_rows_unpriced: 0,
+      judge_rows_unrecorded: 0,
       cost_rows: 0,
       cost_rows_unrecorded: 2,
       billing_rows_unrecorded: 2,
     });
     expect(summary("baseline")).not.toHaveProperty("judge_usd_total");
-    expect(summary("v1")).toMatchObject({
-      judge_usd_total: expect.closeTo(2 * 0.051539, 10),
-      judge_usd_mean: 0.051539,
-      judge_rows_unpriced: 0,
-    });
+    expect(summary("v1")).toMatchObject({ judge_usd_total: 0.103078, judge_rows_unpriced: 0, judge_rows_unrecorded: 0 });
+    // judge_usd_mean shares cost_usd_mean's rows (scored, with a cost): the stub's rows have none, so neither is written.
+    expect(summary("v1")).not.toHaveProperty("judge_usd_mean");
+    expect(summary("v1")).not.toHaveProperty("cost_usd_mean");
   }, 240_000);
 
   // A re-judge keeps the row's `judge_usd` (what the live judge spent) and recomputes the variant's spend keys at its end.
