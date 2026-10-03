@@ -54,7 +54,7 @@ import { judgedOpts, sharedCaptureWarning } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
 import { flowMetricUnion, metricSigs, refuseChangedMetrics } from "./metric-keys.js";
 import { existingFlowSnapshot, readStateIfPresent, readVariantFileIfPresent } from "./runner.js";
-import { VARIANT_DIR_RE } from "./schema-check.js";
+import { compareVariants, VARIANT_DIR_RE } from "./schema-check.js";
 
 export interface HillclimbRegradeArgs {
   target: string;
@@ -1028,7 +1028,7 @@ async function regradeFlowInner(
           .filter((d) => d.isDirectory() && VARIANT_DIR_RE.test(d.name))
           .map((d) => d.name)
           .filter((v) => readVariantFileIfPresent(flowArg, v, "results.jsonl", deps.cwd) !== null)
-          .sort((a, b) => (a === "baseline" ? -1 : b === "baseline" ? 1 : Number(a.slice(1)) - Number(b.slice(1))))
+          .sort(compareVariants)
       : [args.variant];
   if (args.variant !== "all" && !VARIANT_DIR_RE.test(args.variant))
     throw new UsageError(`--variant must be 'all', 'baseline' or 'v<N>' (got ${JSON.stringify(args.variant)})`);
