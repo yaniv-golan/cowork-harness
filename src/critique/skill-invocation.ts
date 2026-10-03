@@ -56,6 +56,12 @@ export type SlashInvocation = { kind: "skill"; id: string } | { kind: "none" } |
  *   - a BARE name resolves to the plugin skill (`/deck-review` → `founder-skills:deck-review`), while
  *     the inventory spells every plugin skill qualified — so a bare token is matched by suffix, and one
  *     that more than one staged skill answers to is `unobservable`, never `none`.
+ *  This is the AGENT's resolver, and it is more permissive than real Cowork's: the Desktop app resolves a
+ *  typed slash command before any agent runs and answers a refusal with "Unknown skill", creating no task.
+ *  Observed on Desktop 2.19675.0, 2026-10-03, 4 runs: a bare name differing from its plugin's name was
+ *  refused, as were the bare and the qualified forms with two copies of the plugin installed; picking from
+ *  the slash menu always worked. That refusal never reaches the agent, so no run record can show it — a
+ *  `skill` result here says the agent expanded the prompt, not that Cowork would have let it through.
  *  The match is against the init frame's SKILL inventory, never against `slash_commands` — that list
  *  mixes plugin commands with auto-registered skills and carries no distinguisher, so keying off it
  *  accepts `founder-skills:feedback` and `creative-problem-solving:ideas` (both verified real, both
