@@ -284,11 +284,14 @@ that the loop and the lite report builder read, with these differences:
   the rows already written (a value already measured is kept when the kept file cannot be read);
 - when a harness upgrade changes how an unchanged assertion evaluates, it keeps the recorded outcome and notes
   it; edit the assertion, or re-run the case, to re-grade it;
+- an assertion whose text contains a value the secret scrub removes keeps its graded outcome (named on stderr):
+  it is never re-evaluated or re-judged over scrubbed evidence;
 - it re-judges a judged assertion when something the judge sees changed (its rubric or claims, its judge model or
   prompt template, or a `semantic_pairwise` assertion's references), recording why in
   `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
 - it recomputes `pass`;
-- `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot move. After a grader edit, run
+- `--fill-refs` judges only the pairwise comparisons a row lacks and never moves `pass`: a row whose fill would
+  is listed instead. After a grader edit, run
   a default re-grade first: a fill lists the rows whose grader changed instead of filling them. `--rejudge` does not
   combine with `--fill-refs`.
 
