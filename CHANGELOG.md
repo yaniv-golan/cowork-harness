@@ -972,6 +972,34 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   They used `!command.includes('rm')`, which also matched "normalize", "format" or "confirm". They now use the word
   match the other examples and the scenario docs use, `!/\brm\b/.test(command)`, and the example cassette is
   re-recorded with it.
+- **`host_path_leak` no longer fires on host-shaped literals in the skill under test's own files.** At `container`
+  and `microvm`, an agent that Read a reference file from its own plugin (a catalog row listing roots such as
+  `/Users/` or `/opt/cowork/`, say) failed the run, though no host path had leaked. The staged copy of every declared
+  plugin (`local_plugins`, `remote_plugins`, marketplace plugins) and of every `skills.local` skill is now scanned
+  before the agent runs, the same way uploads and connected folders already were, and a literal the agent shows
+  verbatim from it is exempt. The same rules apply: first turn only, links not followed, the same size, binary and
+  file-count bounds (plugins and skills are scanned after the inputs, so they never use up the inputs' share), and
+  nothing under a location the harness created for the run. For a local skill only its own staged directory is
+  scanned, never the rest of the config dir. A plugin's or skill's own files never exempt a path at or under its
+  host source location (compared by path segment), since the agent sees it only under `/sessions/…`; a path the
+  user's uploads, folders or prompt name stays exempt, as before. When a large plugin exceeds the scan's bounds, the
+  notice saying so is printed once per process. A result that relied on the exemption counts those paths in `scan.hostPathsFromInputs`,
+  and the verdict notice now says "inputs, prompt, plugin or skill files".
+- **A signal no longer leaks the `hostloop` workspace sidecar.** After a Ctrl-C (or SIGTERM, or SIGHUP) during a
+  `hostloop` `run` or `chat`, the harness exited 130 but left the `cowork-hl-*` container, its `docker run` client
+  and the `cowork-int-*` network running. This happened on every mid-run signal: the signal stops the agent, which
+  sends the run into its normal teardown, and that teardown dropped its signal-time container cleanup before
+  waiting seconds for the agent to stop. The signal's own cleanup then found only the network, whose `network rm`
+  fails while a container is attached, and the process exited before the teardown reached its own `docker rm -f`.
+  - The container cleanup now stays registered until the teardown has removed the container successfully, at
+    every tier. If the removal fails, or the teardown throws before it, a later signal or the process exit
+    removes the container and then its network. The egress network cleanup likewise stays registered until its
+    networks are gone.
+  - The sidecar registers its own cleanup, which removes the container and kills the `docker run` client before
+    the network is removed. The client has to be killed explicitly: a signal to the whole process group reaches
+    it, and it forwards the signal to a container that ignores it.
+  - If starting the `hostloop` agent fails after the sidecar or the native agent is up, both are now stopped
+    before the error is raised. Before, neither was handed back, so neither was stopped.
 
 ### Documentation
 
