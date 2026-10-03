@@ -335,8 +335,17 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
 
   it("run --dry-run with no credential source at all refuses (exit 2), naming what is missing and doctor", () => {
     setup();
-    const env: NodeJS.ProcessEnv = { ...process.env, COWORK_HARNESS_RUNS_DIR: join(cwd, "runs"), COWORK_MANAGED_CONFIG: "" };
-    for (const k of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) delete env[k];
+    // Each credential is set EMPTY, not deleted: a .env never overrides a variable the environment defines, so neither
+    // a ./.env nor the install's own .env (dist/../.env, present in a developer's checkout) can supply one, and an empty
+    // value is no credential. The test does not depend on whether the checkout has a .env.
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      COWORK_HARNESS_RUNS_DIR: join(cwd, "runs"),
+      COWORK_MANAGED_CONFIG: "",
+      CLAUDE_CODE_OAUTH_TOKEN: "",
+      ANTHROPIC_API_KEY: "",
+      ANTHROPIC_AUTH_TOKEN: "",
+    };
     const r = spawnSync("node", [CLI, "hillclimb", "run", "evals", "--flow", "flow", "--dry-run", "--output-format", "json"], {
       cwd,
       encoding: "utf8",
