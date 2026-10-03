@@ -89,6 +89,17 @@ describe("variantSnapshot", () => {
     expect(() => variantSnapshot(live, opts({ variantRan: true }))).toThrow(/snapshot .* is missing/);
   });
 
+  it("the missing-snapshot refusal names a copied or moved flow as the likely cause, and the way through", () => {
+    let msg = "";
+    try {
+      variantSnapshot(live, opts({ variantRan: true }));
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    expect(msg).toContain("Snapshots are kept per flow dir path, so a flow dir copied or moved keeps its rows but not its snapshots");
+    expect(msg).toContain("run a new variant instead (approve the harness through it: `--dry-run --approve-harness --variant v<N>`)");
+  });
+
   it("an interrupted snapshot (no completion marker) is never used", () => {
     mkdirSync(join(root, "f00d", "v1", "my-plugin"), { recursive: true });
     expect(() => variantSnapshot(live, opts({ variantRan: true }))).toThrow(/incomplete/);

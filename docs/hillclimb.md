@@ -190,7 +190,9 @@ Three things live outside the flow dir, and the loop needs all three for the who
   runs root, live ones included.
 - **The per-variant snapshots** in `~/.cowork-harness/hillclimb-snapshots` (`COWORK_HARNESS_HILLCLIMB_SNAPSHOTS`
   moves them). A resumed or appended rep runs its variant's snapshot. They are keyed by the flow dir's real path,
-  so moving or renaming the flow dir orphans them.
+  so moving, renaming or copying the flow dir orphans them: on the copy, a pass of a variant that already has rows
+  is refused (it would measure the live plugin), and so is a `--dry-run --approve-harness` through that variant.
+  Approve and run through a new variant instead (`--dry-run --approve-harness --variant v<N>`).
 - **The working directory and target spelling.** The harness gate hashes path names relative to the current
   directory, and the lockfiles found there. Running a command from somewhere else, or naming the target through
   another path, changes the sha and refuses the pass.
