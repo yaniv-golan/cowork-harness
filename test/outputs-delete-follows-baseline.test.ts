@@ -328,3 +328,151 @@ describe("wiring (source pin)", () => {
     expect(src).toMatch(/outputsMountMode: args\.outputsMountMode,/);
   });
 });
+
+describe("an authored no_delete_in_mounts arms the outputs check on rwd (it covers outputs on every baseline)", () => {
+  const FS_ONLY = {
+    // A delete the filesystem diff proved but no bash command shows (a script file, a non-bash tool): mountDeletes is
+    // empty, so the assertion itself cannot see it; the armed default check must.
+    scan: {
+      outputsDeletes: [FINDING],
+      outputsDeleteBasis: ["fs-diff" as const],
+      mountDeletes: [],
+      hostPathLeaked: false,
+      selfHealRan: false,
+    },
+    fsDiff: { status: "findings" as const, findings: [FINDING] },
+  };
+
+  it("rwd + a diff-only outputs delete + no_delete_in_mounts authored: fails outputs_delete, roster fired", () => {
+    const v = computeVerdict(
+      rr({ ...FS_ONLY, outputsMountMode: "rwd", assertions: [assn({ no_delete_in_mounts: true }, true)] } as Partial<RunResult>),
+      "live",
+    );
+    expect(v.pass).toBe(false);
+    expect(codes(v)).toContain("outputs_delete:fail");
+    expect(roster(v)).toBe("fired");
+  });
+
+  it("rwd + an unverifiable diff + no_delete_in_mounts authored: outputs_diff_unavailable is raised", () => {
+    const v = computeVerdict(
+      rr({ ...diffUnavailable, outputsMountMode: "rwd", assertions: [assn({ no_delete_in_mounts: true }, true)] } as Partial<RunResult>),
+      "live",
+    );
+    expect(codes(v)).toContain("outputs_diff_unavailable:warn");
+  });
+
+  it("with outputs waived by allow_delete_in the check stays off on rwd", () => {
+    const v = computeVerdict(
+      rr({
+        ...FS_ONLY,
+        outputsMountMode: "rwd",
+        assertions: [assn({ no_delete_in_mounts: true }, true), assn({ allow_delete_in: ["outputs"] })],
+      } as Partial<RunResult>),
+      "live",
+    );
+    expect(v.pass).toBe(true);
+    expect(outputsCodes(v)).toEqual([]);
+    expect(roster(v)).toBe("na");
+  });
+
+  it("the failure message names outputs only when outputs is covered", () => {
+    const base = {
+      transcript: "",
+      toolsCalled: new Set(),
+      subagentTools: new Set(),
+      egress: [],
+      result: "success",
+      workRoot: "/nonexistent",
+      userVisiblePrefixes: ["outputs"],
+      outputsDeletes: [],
+      mountDeletes: [{ mount: "reports", command: "rm mnt/reports/a" }],
+      questions: [],
+      hostPathLeaked: false,
+      selfHealRan: false,
+      subagents: [],
+      gateDeliveries: [],
+      toolResultTexts: [],
+      skillsInvoked: [],
+      skillToolAvailable: true,
+      slashInvokedSkills: [],
+    } as unknown as AssertContext;
+    const waived = evaluate([{ no_delete_in_mounts: true }, { allow_delete_in: ["outputs"] }], base)[0];
+    expect(waived.pass).toBe(false);
+    expect(String(waived.message)).not.toMatch(/\boutputs\b/);
+    const covered = evaluate([{ no_delete_in_mounts: true }], base)[0];
+    expect(String(covered.message)).toMatch(/\boutputs\b/);
+  });
+});
+
+describe("rwd leaves the other signals alone", () => {
+  it("mount_delete still warns for a rw connected-folder delete", () => {
+    const scan = {
+      outputsDeletes: [],
+      mountDeletes: [{ mount: "reports", command: "rm mnt/reports/a.md" }],
+      hostPathLeaked: false,
+      selfHealRan: false,
+    };
+    const v = computeVerdict(rr({ scan, fsDiff: clean, outputsMountMode: "rwd" } as Partial<RunResult>), "live");
+    expect(codes(v)).toContain("mount_delete:warn");
+  });
+
+  it("scan_unavailable is still raised when the scan is missing", () => {
+    const v = computeVerdict(rr({ scan: undefined, fsDiff: clean, outputsMountMode: "rwd" } as Partial<RunResult>), "live");
+    expect(codes(v)).toContain("scan_unavailable:warn");
+  });
+
+  it("deleting a workspace_fixture file (a turn-start file the diff reports) passes by default", () => {
+    const f = "[fs-diff] output file removed post-run: outputs/fixture/deck.md";
+    const v = computeVerdict(
+      rr({
+        scan: { outputsDeletes: [f], outputsDeleteBasis: ["fs-diff"], hostPathLeaked: false, selfHealRan: false },
+        fsDiff: { status: "findings", findings: [f] },
+        outputsMountMode: "rwd",
+      } as Partial<RunResult>),
+      "live",
+    );
+    expect(v.pass).toBe(true);
+    expect(outputsCodes(v)).toEqual([]);
+  });
+});
+
+describe("edge cases, pinned as they behave today", () => {
+  it("an overwrite-by-rename of a file that existed at turn start onto another turn-start file IS reported by the diff", () => {
+    // Only a rename to a NEW path (or a turn-created file moved onto an existing one) is cleared. This one fails
+    // no_delete_in_outputs on every baseline and the default verdict on rw.
+    const d = outputsFsDiff(
+      {
+        complete: true,
+        paths: ["outputs", "outputs/a.md", "outputs/b.md"],
+        hashes: { outputs: null, "outputs/a.md": "HA", "outputs/b.md": "HB" },
+      },
+      { entries: [{ path: "outputs" }, { path: "outputs/b.md" }], complete: true, containmentSkips: [] },
+      (p) => (p === "outputs/b.md" ? "HA" : null),
+    );
+    expect(d.findings).toEqual(["[fs-diff] output file removed post-run: outputs/a.md"]);
+  });
+
+  it("removing the outputs directory itself is an outputs delete; on rwd it passes by default", () => {
+    // In production outputs is a mountpoint (its contents go, the rmdir of the mountpoint itself fails); the harness
+    // does not model that difference. See docs/fidelity-gaps.md.
+    expect(isOutputsDelete("rm -rf mnt/outputs")).toBe(true);
+    const v = computeVerdict(rr({ ...named("rm -rf mnt/outputs"), outputsMountMode: "rwd" } as Partial<RunResult>), "live");
+    expect(v.pass).toBe(true);
+  });
+
+  it("a connected folder whose name starts with outputs- is not outputs", () => {
+    expect(isOutputsDelete("rm -f mnt/outputs-archive/x.md")).toBe(false);
+    const dir = mkdtempSync(join(tmpdir(), "cwh-odfb-"));
+    const f = join(dir, "events.jsonl");
+    writeFileSync(
+      f,
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name: "Bash", input: { command: "rm -f mnt/outputs-archive/x.md" } }] },
+      }) + "\n",
+    );
+    const s = scanEvents(f, ["outputs-archive"]);
+    expect(s.outputsDeletes).toEqual([]);
+    expect(s.mountDeletes.map((d) => d.mount)).toEqual(["outputs-archive"]);
+  });
+});
