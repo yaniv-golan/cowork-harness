@@ -100,17 +100,21 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
   it is outside the harness sha. The staircase: `--model` per variant for the main loop's model, `--effort` per
   variant for its effort, and a sub-agent's model and effort in the plugin's `agents/*.md` frontmatter, which each
   variant's snapshot carries (not yet verified live). Levels are per model: one the model does not offer, any
-  `--effort` on a model with no selector (`claude-haiku-4-5`, `claude-sonnet-4-5`), and `xhigh`/`max` with
-  `extended_thinking: false` are refused before spend.
+  effort on a model with no selector (the baseline's no-level models and the ones the agent never sends an effort
+  for — `claude-3-*`, `claude-opus-4-0`/`4-1`, `claude-sonnet-4-0`/`4-5`, `claude-haiku-4-5`, dated or not), and
+  `xhigh`/`max` with `extended_thinking: false` are refused before spend.
 - **Requested vs sent.** Each row records `meta.model_requested` and `meta.effort` (requested) beside `model` and
   `meta.effort_sent` (what the main loop was served and sent, the effort read from the agent's own session
-  transcript). Another effort sent, or none when one was requested, is an `errors.jsonl` row
-  (`serving_substitution`, `meta.failure_rule: "effort_not_sent"`), so a comparison over effort compares efforts
-  actually sent; how the server treats an accepted level stays unobserved. `summary.json` records
-  `model_requested`, `effort` and `effort_sent` when the pass had one value of each.
+  transcript). A row whose agent did not send the requested effort is an `errors.jsonl` row (`serving_substitution`,
+  `meta.failure_rule: "effort_not_sent"`): a main-loop message with another effort, an invalid one or none (even if
+  the agent then failed), or no main-loop message at all on an otherwise valid run. So a comparison over effort
+  compares efforts actually sent; how the server treats an accepted level stays unobserved. A no-selector model's
+  rows carry `meta.effort_selector: false`. `summary.json` records `model_requested`, `effort` and `effort_sent`
+  over the variant's whole `results.jsonl` (`"mixed"` when its rows differ), and `effort_selector: false` (or
+  `"mixed"`) when the variant's models have no selector.
 - **A variant keeps one model and effort per case.** A pass asking for another than the variant's rows for a case
   ran is refused before spend: run it as a new variant. Rows from before these fields were recorded are held to
-  their served model, and warn when they have none (their effort warns only under `--effort`).
+  their served model, and warn when they have none; their unknown effort always warns.
 - **`model:` / `effort:` in the tuned skill's own `SKILL.md` frontmatter move the main loop**, not a sub-agent. An
   `effort:` that changes it makes the rows `effort_not_sent` errors (seen for a slash-command invocation); a
   `model:` is expected to make every row `serving_substitution` (inferred). Put sub-agent settings in `agents/*.md`.

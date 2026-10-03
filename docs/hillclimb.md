@@ -227,10 +227,13 @@ variant: a pass that would run a case at another model or effort than the varian
 refused before spending (see [Guardrails](#guardrails-the-harness-adds)).
 
 **Effort levels are per model.** A level the model does not offer is refused before spending (`claude-sonnet-4-6`
-has no `xhigh`), and so is any `--effort` on a model with no effort selector (`claude-haiku-4-5`,
-`claude-sonnet-4-5`). `xhigh` or `max` with the session's `extended_thinking: false` is refused too, since the agent
-lowers its effort when thinking is off, and so is thinking off on a model that does not allow it. For a model the
-baseline lists no levels for, the pass prints a note and the sent-effort check below decides.
+has no `xhigh`), and so is any effort, from `--effort` or the session, on a model with no effort selector. Those are
+the models the baseline lists with no levels and the ones the agent itself never sends an effort for (any
+`claude-3-*`, `claude-opus-4-0`, `claude-opus-4-1`, `claude-sonnet-4-0`, `claude-sonnet-4-5`, `claude-haiku-4-5`, read
+from agent 2.1.286), matched with or without a snapshot date (`claude-haiku-4-5-20251001`). `xhigh` or `max` with
+the session's `extended_thinking: false` is refused too, since the agent lowers its effort when thinking is off, and
+so is thinking off on a model that does not allow it. For a model the baseline lists no levels for, the pass prints
+a note and the sent-effort check below decides.
 
 **Requested and sent.** Every row records what it asked for and what the agent sent:
 
@@ -239,12 +242,22 @@ baseline lists no levels for, the pass prints a note and the sent-effort check b
   agent writes that effort into its own session transcript for every main-loop call, after its own overrides,
   caps and clamps, and the run dir keeps the transcript; `meta.effort_sent` is read from there.
 
-A main-loop call sent with another effort than requested is an `errors.jsonl` row (`serving_substitution`,
-`meta.failure_rule: "effort_not_sent"`), never a scored one, and so is a requested effort no call confirms. A
-model with no effort selector may send none. A comparison over effort therefore compares efforts the agent sent.
-What remains unobserved is how the server treats a level it accepted.
+A row whose agent did not send the requested effort is an `errors.jsonl` row (`serving_substitution`,
+`meta.failure_rule: "effort_not_sent"`), never a scored one:
 
-`summary.json` records the pass's `model_requested`, `effort` and `effort_sent` when each is a single value.
+- a main-loop assistant message sent with another effort, with a value that is not an effort level (never
+  recorded), or with none: an error row even when the agent then failed;
+- no main-loop assistant message in the agent's transcript (or no transcript), on a run whose main loop answered:
+  an error row unless the agent failed first, which stays a scored agent failure.
+
+A model with no effort selector may send none: its rows record `meta.effort` (what the harness passed) beside
+`meta.effort_selector: false`, and no `meta.effort_sent`. A comparison over effort therefore compares efforts the
+agent sent. What remains unobserved is how the server treats a level it accepted.
+
+`summary.json` records `model_requested`, `effort` and `effort_sent` over the variant's whole `results.jsonl`,
+recomputed after every pass: the one value its rows carry, or `"mixed"` when they carry more than one (a `--case`
+pass at another effort makes it mixed). It records `effort_selector: false` when every row's model has no effort
+selector, `"mixed"` when only some do.
 
 **A skill's own frontmatter moves the main loop.** `model:` or `effort:` in the tuned skill's `SKILL.md`
 frontmatter applies to the main loop while the skill runs, not to a sub-agent. An `effort:` that changes the main
@@ -444,7 +457,7 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   spending, naming the case, what the rows ran and what the pass would run: run the change as a new variant, or
   keep the setting the rows ran with. Rows written before those fields existed are held to the model that served
   them (a dated snapshot of the pin counts as the pin), and warn when they record none; their effort is unknown,
-  which warns only when the pass sets `--effort`. Another variant is free to differ: that is the lever. A `--case`
+  which always warns. Another variant is free to differ: that is the lever. A `--case`
   pass whose flag value differs from what the variant's other cases ran warns once.
 - **No answer key in reach.** A pass is refused when the agent could read the flow dir, a scenario or session
   file, a `harness_paths` file or the runs root through a mount, a workspace fixture or the plugin. A file

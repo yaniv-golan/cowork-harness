@@ -191,23 +191,26 @@ All notable changes to this project are documented here. The format is based on
 
 - **`hillclimb run --effort LEVEL`** sets the main loop's effort for a pass (`low`, `medium`, `high`, `xhigh`, `max`;
   `extra` is read as `xhigh`), so a variant can step effort without editing the gated session file. Without it each
-  case runs its session's `effort:`, else the baseline default. It is outside the harness sha, like `--model`. A
-  level the pinned model does not offer, any `--effort` on a model with no effort selector, `xhigh` or `max` with
-  `extended_thinking: false`, and thinking off on a model that does not allow it are refused before spend.
+  case runs its session's `effort:`, else the baseline default. It is outside the harness sha, like `--model`. Refused
+  before spend: a level the pinned model does not offer; any effort on a model with no effort selector (the
+  baseline's no-level models and the ones the agent never sends an effort for, `claude-3-*`, `claude-opus-4-0`/`4-1`,
+  `claude-sonnet-4-0`/`4-5` and `claude-haiku-4-5`, dated ids included); `xhigh` or `max` with
+  `extended_thinking: false`; and thinking off on a model that does not allow it. The dry run prints each case's
+  requested model and effort, and says its estimate ignores both.
 - **hillclimb rows record the requested model and effort beside what the agent was served and sent.**
   `meta.model_requested` and `meta.effort` hold the request; `meta.effort_sent` holds the effort the main loop's
-  calls went out with, read from the agent's own session transcript in the kept run dir. A main-loop call sent with
-  another effort is an `errors.jsonl` row (`serving_substitution`, `meta.failure_rule: "effort_not_sent"`), as is a
-  requested effort that no call confirms on an otherwise valid run. `summary.json` gains `model_requested`,
-  `effort` and `effort_sent` when the pass had one value of each, and `hillclimb check` validates them. `hillclimb
-  regrade` keeps all three on the rows it rebuilds. The dry run prints each case's requested model and effort, and
-  says its estimate ignores both.
-- **A variant keeps one requested model and effort per case.** A resumed pass that would run a case at another
-  model or effort than the variant's rows for it ran is refused before spend; before this, the remaining slots
-  silently ran the new setting. Rows written before the requested fields existed are held to their served model,
-  and warn when they record none. Different values across variants are allowed.
-- **The LLM decider's effort is recorded.** A gate it answers carries `effort` beside `model` in `decisions[]` and
-  `gateProvenance.gates[]` of `result.json`: the effort its host `claude` call was pinned to.
+  assistant messages went out with, read from the agent's own session transcript in the kept run dir (a value outside
+  the effort levels is never recorded). A row whose agent did not send the requested effort is an error row,
+  `effort_not_sent` (`serving_substitution`): a main-loop message with another effort, an invalid one or none, even
+  when the agent then failed, or no main-loop message at all on an otherwise valid run. A model with no effort
+  selector may send none; its rows carry `meta.effort_selector: false`. `summary.json` records `model_requested`,
+  `effort`, `effort_sent` and `effort_selector` over the variant's whole `results.jsonl`, `"mixed"` when its rows
+  differ, and `hillclimb check` validates them. `hillclimb regrade` keeps the row fields on the rows it rebuilds.
+- **A variant keeps one requested model and effort per case.** A pass that would run a case at another model or
+  effort than the variant's rows for that case recorded is refused before spend, naming both. Rows that record no
+  requested model are held to the model that served them (a dated snapshot of the pin counts as the pin) and warn
+  when they record none; rows that record no requested effort warn. Different values across variants are allowed;
+  a `--case` pass whose flag value differs from what the variant's other cases ran warns.
 - **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
   When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
   (`plugins.local_plugins` or `remote_plugins`), and the plugin's name differs, the run works here but real Cowork's
@@ -808,8 +811,10 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `effortLevel`: `high` for the judge and the evaluator, `medium` for the decider. Each is the default effort of
   that role's default model (`claude-opus-4-8`, and `sonnet`, which resolves to `claude-sonnet-5-5`), so those run as
   before. A role pointed at a model with another default (`claude-opus-4-7` defaults to `xhigh`) now runs at the pin.
-  The effort is recorded as `effort` in `judgeTransport` (and `judge_transport`) and in a critique's
-  `evaluatorTransport`. A grade that records no effort (one made by 4.2.x included) triggers no re-judge in
+  The effort is recorded as `effort` in `judgeTransport` (and `judge_transport`), in a critique's
+  `evaluatorTransport`, and beside `model` on each gate the LLM decider answers (`decisions[]`,
+  `gateProvenance.gates[]` and `nonReproducibleAnswers[]` in `result.json`, a web_fetch approval included; `trace
+  --view questions` shows it). A grade that records no effort (one made by 4.2.x included) triggers no re-judge in
   `hillclimb regrade` and no `eval` exclusion. Before the first call, the harness reads your user settings (`settings.json` and
   `.claude.json` under `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json` and `~/.claude.json`). If an `env` block sets
   one of the three keys, it warns, naming the keys (never their values), and records them as `settingsEnvOverride`.
