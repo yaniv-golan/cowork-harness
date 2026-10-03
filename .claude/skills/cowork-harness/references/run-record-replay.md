@@ -20,9 +20,9 @@ reworded gate or a `choose:` the run never offered fails here in ~1s instead of 
 never calls the semantic judge, so a `semantic_matches` or `semantic_pairwise` assert is not re-graded by it; after a rubric change,
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` re-grades those against the kept run (the judge call
 is the only spend) and reports whether the judge read the same document the live judge did (widening the evidence
-scope needs `--allow-unchecked`: content the live judge never read is refused otherwise). Both read the run dir
-where it ran: a copied or moved run dir is refused (its `result.json` still names the original's files), so grade
-the original, or re-run the scenario. Or skip
+scope needs `--allow-unchecked`: content the live judge never read is refused otherwise). A run dir moved or
+downloaded from where it ran is read from where it is; a COPY beside its still-present original is refused (its
+`result.json` names the original's files), so grade the original, or re-run the scenario. Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
 `record --decider-dir`/`--decider-llm` (the cassette is flagged non-deterministic but replays deterministically).
 `run` takes no `--dry-run`: to check that a scenario **loads** without spending, `cowork-harness lint

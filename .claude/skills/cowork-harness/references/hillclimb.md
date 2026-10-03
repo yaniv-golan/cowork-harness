@@ -241,7 +241,9 @@ cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow --fill-ref
 
 It re-grades the flow's scored rows from their kept run dirs (found by `meta.run_id` under the current runs root)
 and rewrites each row through the same producer `run` writes it with. Pass the same `--run-dir` /
-`COWORK_HARNESS_RUNS_DIR` the runs were written with, or every row is listed as having no kept run dir. A bare
+`COWORK_HARNESS_RUNS_DIR` the runs were written with, or every row is listed as having no kept run dir. A runs root
+moved to where `--run-dir` now points is read from there; a COPY of it while the original still exists is refused
+row by row (point `--run-dir` at the original root instead). A bare
 `prune` keeps hillclimb-labelled runs; `prune --include-hillclimb` deletes them for every flow under the runs root,
 a loop still running included, and `freeze-ref` re-reads a frozen reference's source run, so pass it only once
 every climb there is finished.
@@ -350,7 +352,7 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   is never moved into `results.jsonl`: the summary names, per case, the `run` that re-runs it.
 - **Listed, not re-graded (exit 1), decided before any judge call where it can be (a listed row costs no judge
   call):** a row with no scenario file for its case in the target (without `--case`); one whose kept run dir is
-  gone or refused (multi-turn, partial, replay, a work dir gone while a filesystem assert needs it; an agent-failed
+  gone or refused (multi-turn, partial, replay, copied beside its original, a work dir gone while a filesystem assert needs it; an agent-failed
   one aside); one whose kept
   work dir is gone while its case declares a metric; one with an assert the recorded `workspace_fixture` would
   satisfy on its own (`verify-run`'s refusal: state `authored:`); without `--rejudge`, one whose judged evidence
