@@ -169,7 +169,17 @@ export const AUTO_MEMORY_ENV_KEY = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
  *   the gate records it off, and no saved asar older than 1.18286.2 exists, so this is an assumption for those
  *   releases, chosen because it matches the nearest observed one.
  * - ONLY the no-`sessionType` arm. Production returns null for chat / scheduled / dispatch_child sessions
- *   whatever the gate says, so a future model of one of those must not reuse this as is.
+ *   outside a Space, whatever the gate says, so a future model of one of those must not reuse this as is.
+ * - A custom baseline with no `provenance` (e.g. a hand-written `--baseline` file) → disabled, by the same rule.
+ * - `lane: remote` gets the same rule. The evidence (the asar resolver, the measured sessions) is local-lane; the
+ *   cloud lane's memory behaviour is unmeasured.
+ * - There is deliberately no knob to turn memory on: the `agent_env` session field cannot carry the key.
+ * - NOT applied to the LLM judge / decider / critique-evaluator spawns (`spawnOnce`): those always pass
+ *   `--safe-mode`, and the agent turns memory off on safe mode before it reads this key. They are harness
+ *   machinery with no production counterpart. Nor to `chat --raw`, which is not a fidelity tier.
+ *
+ * Precedence: the gate wins over a baseline `spawn.env` — the builders drop this key from the baseline's
+ * `spawn.env` before overlaying this (no baseline carries it today; `sync` cannot see it in that ternary).
  *
  * `readGateBool`, never `readGateFlag`: this is a bare-boolean gate (see readGateBool's doc).
  */

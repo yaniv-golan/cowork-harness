@@ -629,7 +629,7 @@ describe.skipIf(!ASAR_BACKUPS)("checkAutoMemoryFacts oracle over saved Desktop a
     ["2.19675.0", true],
   ])("%s: anchor clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
-    if (!existsSync(asar)) return;
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
     expect(files.size).toBeGreaterThan(100);
     expect(checkAutoMemoryFacts(files).length === 0).toBe(clean);
@@ -642,7 +642,7 @@ describe.skipIf(!ASAR_BACKUPS)("checkAutoMemoryFacts oracle over saved Desktop a
     ["the gate call replaced with !0", (m: RegExpExecArray) => `${m[1]}!0?`],
   ])("2.19675.0 with %s flags", (_n, rewrite) => {
     const asar = join(ASAR_BACKUPS!, "2.19675.0", "app.asar");
-    if (!existsSync(asar)) return;
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
     const hits = [...files].filter(([, c]) => ARM.test(c));
     expect(hits).toHaveLength(1); // exactly one arm to mutate

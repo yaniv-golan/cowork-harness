@@ -4,7 +4,7 @@ import type { PlatformBaseline } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { SECRET_ENV_KEYS } from "./host-env.js";
-import { autoMemoryEnv } from "../loop-decision.js";
+import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 
 /**
  * Pure contract layer — builds the agent CLI args, the spawn env, and the full
@@ -223,12 +223,20 @@ export function proxyEnvVars(proxyHost: string): Record<string, string> {
   };
 }
 
+/** The baseline's `spawn.env` (or the minimal cowork marker), minus the auto-memory key: that key is owned by
+ *  `autoMemoryEnv`, so the recorded gate decides it even if a baseline ever carried it in `spawn.env`. */
+function baselineSpawnEnv(baseline: PlatformBaseline): Record<string, string> {
+  const env: Record<string, string> = { ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }) };
+  delete env[AUTO_MEMORY_ENV_KEY];
+  return env;
+}
+
 export function spawnEnv(
   baseline: PlatformBaseline,
   opts: { configGuest: string; proxyHost: string; extra?: Record<string, string> },
 ): Record<string, string> {
   return {
-    ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
+    ...baselineSpawnEnv(baseline),
     // Desktop's auto-memory switch for the modeled session, from the recorded gate 123929380 (see autoMemoryEnv).
     ...autoMemoryEnv(baseline),
     CLAUDE_CONFIG_DIR: opts.configGuest,
@@ -277,7 +285,7 @@ export function hostNativeSpawnEnv(
   },
 ): Record<string, string> {
   return {
-    ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
+    ...baselineSpawnEnv(baseline),
     // Desktop's auto-memory switch for the modeled session, from the recorded gate 123929380 (see autoMemoryEnv).
     // The operator's own export of the key is deleted by buildHostLoopNativeEnv before this overlay.
     ...autoMemoryEnv(baseline),

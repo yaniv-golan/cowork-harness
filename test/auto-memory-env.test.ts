@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { initMemoryPaths } from "./helpers/init-memory-paths.js";
 import { buildHostLoopNativeEnv } from "../src/runtime/hostloop.js";
 import { buildProtocolEnv } from "../src/runtime/protocol.js";
 import { spawnEnv, dockerRunArgv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
-import { autoMemoryEnv, AUTO_MEMORY_GATE } from "../src/loop-decision.js";
+import { autoMemoryEnv, AUTO_MEMORY_GATE, readGateBool } from "../src/loop-decision.js";
 import type { LaunchPlan } from "../src/session.js";
 import type { PlatformBaseline } from "../src/types.js";
 
@@ -81,6 +82,19 @@ describe("auto-memory env follows the recorded gate 123929380 — every tier", (
   });
 });
 
+describe("the recorded gate wins over a baseline spawn.env that carries the key", () => {
+  const carrying = (b: PlatformBaseline) =>
+    ({ ...b, spawn: { ...b.spawn, env: { ...(b.spawn?.env ?? {}), [KEY]: "1" } } }) as unknown as PlatformBaseline;
+  it("gate on: absent on container/microvm and hostloop", () => {
+    expect(spawnEnv(carrying(ON), { configGuest: "/mnt/.claude", proxyHost: "http://p" })[KEY]).toBeUndefined();
+    expect(buildHostLoopNativeEnv(carrying(ON), { configDir: "/tmp/cfg" })[KEY]).toBeUndefined();
+  });
+  it('gate off: still "1"', () => {
+    expect(spawnEnv(carrying(OFF), { configGuest: "/mnt/.claude", proxyHost: "http://p" })[KEY]).toBe("1");
+    expect(buildHostLoopNativeEnv(carrying(OFF), { configDir: "/tmp/cfg" })[KEY]).toBe("1");
+  });
+});
+
 describe("autoMemoryEnv", () => {
   const g = (gates: Record<string, unknown>) => ({ provenance: { gates } }) as unknown as PlatformBaseline;
   it("reads the prefixed row and the bare id", () => {
@@ -93,15 +107,29 @@ describe("autoMemoryEnv", () => {
     expect(autoMemoryEnv({} as PlatformBaseline)).toEqual({ [KEY]: "1" });
     expect(autoMemoryEnv(g({ [AUTO_MEMORY_GATE]: { value: true } }))).toEqual({ [KEY]: "1" });
   });
-  it("every committed baseline resolves to disabled (none records the gate on)", () => {
-    for (const b of [OFF, OLD, loadBaseline("desktop-2.16120.0"), loadBaseline("latest")]) expect(autoMemoryEnv(b)).toEqual({ [KEY]: "1" });
+  // Every committed baseline, not a sample: 31 record the gate off and 9 predate it (no row). A future sync that
+  // legitimately records the gate ON turns this red — next to sync's WARNING note, that is the point.
+  it("every committed baseline resolves to disabled: 31 rows off, 9 with no row", () => {
+    const dir = join(import.meta.dirname, "..", "baselines");
+    let off = 0;
+    let noRow = 0;
+    for (const f of readdirSync(dir).filter((n) => /^desktop-.*\.json$/.test(n))) {
+      const b = JSON.parse(readFileSync(join(dir, f), "utf8")) as PlatformBaseline;
+      expect(autoMemoryEnv(b), f).toEqual({ [KEY]: "1" });
+      if (readGateBool(b, AUTO_MEMORY_GATE) === false) off++;
+      else noRow++;
+    }
+    expect({ off, noRow }).toEqual({ off: 31, noRow: 9 });
   });
 });
 
 // The end-to-end witness, BEFORE half: every committed cassette that carries an init frame was recorded with
 // auto-memory ON (pre-fix), so the instrument must see `memory_paths` in it. The AFTER half — a fresh run's init
 // frame carries none — is test/live-auto-memory.test.ts, a billed live run, and a RELEASING.md live-gate step.
-// The cassettes are deliberately NOT re-recorded.
+// WHEN THESE CASSETTES ARE RE-RECORDED (planned once, later in this release) they lose `memory_paths` and this
+// block goes red — by design. Keep the instrument check by pointing it at a frozen pre-fix init frame (one
+// `system`/`init` line with `memory_paths` copied into a small fixture), and add the opposite assertion — no
+// `memory_paths` — over the re-recorded cassettes, which then become the committed AFTER half.
 describe("initMemoryPaths sees memory_paths in the committed pre-fix cassettes", () => {
   it.each([
     "examples/replays/example-multiselect-gate.cassette.json",
