@@ -63,7 +63,7 @@ export interface HillclimbCliDeps<F extends JobFlags> {
 }
 
 /** The scenarios `check` compares the rows' `meta.assert_sig` with, and the target its remedies name: the target passed,
- *  else the scenario files the flow's `_state.json` records: `harness_scenarios` (written by each harness approval),
+ *  else the scenario files the flow's `_state.json` records: `harness_files` (written by each harness approval),
  *  else `harness_paths` (as state-template writes them). Both are cwd-relative; a file there is a case's when its
  *  stem's id is a row's `prompt_id` (the session files and uploads in `harness_paths` match none). The rows themselves record only the scenario's name, never its file. A recorded file that is gone
  *  or does not parse is named in a note and its case left uncompared; with nothing recorded, one note says to pass the
@@ -78,15 +78,17 @@ function assertSigScenarios(
   const ids = [...new Set(rowAssertSigs(snap).map((r) => r.promptId))];
   if (!ids.length) return { cases: [], notes: [] };
   const pass = `pass the target (\`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\`)`;
-  // The scenario files the last approval hashed (`harness_scenarios`, the runner's own record), else the
-  // measurement files state-template listed (`harness_paths`).
+  // The files the last approval hashed (`harness_files`, keyed by cwd-relative path — the runner's own record), else
+  // the measurement files state-template listed (`harness_paths`). Either mixes scenarios with session files, uploads
+  // and fixtures: only a `.yaml` whose stem's id is a row's case counts.
   let yaml: string[] = [];
   let key = "harness_paths";
   try {
     const st = JSON.parse(snap.state ?? "{}") as Record<string, unknown>;
     const yamlOf = (v: unknown) => (Array.isArray(v) ? v.filter((p): p is string => typeof p === "string" && /\.ya?ml$/i.test(p)) : []);
-    yaml = yamlOf(st?.harness_scenarios);
-    if (yaml.length) key = "harness_scenarios";
+    const files = st?.harness_files;
+    yaml = yamlOf(files && typeof files === "object" && !Array.isArray(files) ? Object.keys(files) : undefined);
+    if (yaml.length) key = "harness_files";
     else yaml = yamlOf(st?.harness_paths);
   } catch {
     // An unreadable _state.json is check's finding: nothing is recorded.
@@ -95,7 +97,7 @@ function assertSigScenarios(
     return {
       cases: [],
       notes: [
-        `note: _state.json records no scenario files (harness_scenarios, harness_paths), so the rows' assertion sets were not compared with the scenarios' current ones — pass the target: \`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\``,
+        `note: _state.json records no scenario files (harness_files, harness_paths), so the rows' assertion sets were not compared with the scenarios' current ones — pass the target: \`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\``,
       ],
     };
   const cases: Array<{ id: string; scenario: Scenario }> = [];

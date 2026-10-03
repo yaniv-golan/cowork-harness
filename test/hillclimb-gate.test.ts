@@ -53,11 +53,11 @@ describe("harnessDigest", () => {
     expect(harnessDigest({ ...base(), tags: [] }).sha).toBe("d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71");
   });
 
-  it("the keys an approval records beside the sha (harness_skill, harness_scenarios) are not hashed: the pinned sha holds", () => {
+  it("the keys an approval records beside the sha (harness_skill, harness_files) are not hashed: the pinned sha holds", () => {
     const flow = (state: Record<string, unknown>) =>
       flowHarnessDigest({ cwd, state, derived: base().derived, harnessVersion: "4.3.0", baselineId: "2.9939.4" }).sha;
     expect(flow({})).toBe("d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71");
-    expect(flow({ harness_sha: "x", harness_scenarios: ["evals/a.yaml"], harness_skill: "s" })).toBe(
+    expect(flow({ harness_sha: "x", harness_files: { "evals/a.yaml": "0".repeat(64) }, harness_skill: "s" })).toBe(
       "d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71",
     );
   });

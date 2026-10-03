@@ -44,8 +44,8 @@ time:
   ceiling or the floor of the headline metric). It also warns about a case whose rows were graded under
   another assertion set than its scenario's now, naming the `hillclimb regrade <target> --flow <dir> --case <id>`
   that re-evaluates them. It compares with the scenario target when you pass one
-  (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last `--approve-harness` recorded
-  (`_state.json` `harness_scenarios`), else those `harness_paths` lists, and says so in a note when nothing is
+  (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last `--approve-harness` hashed
+  (`_state.json` `harness_files`), else those `harness_paths` lists, and says so in a note when nothing is
   recorded or a recorded file is gone. No warning changes the exit code.
   Exit `1` is an error finding (a malformed row or `_state.json`, or a float metric declared with no `better`):
   fix it before the loop reads the flow.

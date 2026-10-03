@@ -336,12 +336,12 @@ All notable changes to this project are documented here. The format is based on
   sigs). A `hillclimb run` resumed after an approved scenario edit warns, naming the rows the old asserts graded and
   the `hillclimb regrade <target> --flow <dir> --case <id>` that re-evaluates them; `hillclimb check` warns per case
   whose rows carry more than one, naming the same command, so a comparison over them never silently mixes two
-  graders. `hillclimb check [<scenario.yaml | dir/>]` also warns about a case whose rows were all graded under an
-  older set than its scenario's now, comparing with the target when given, else with the scenario files the last
-  approval recorded, else those `harness_paths` lists; a note says when nothing is recorded or a recorded file is
-  gone. `--approve-harness` (on `run` and `regrade`) records every case's scenario file, cwd-relative, in
-  `_state.json` `harness_scenarios` beside `harness_sha`; it is not hashed, so the sha does not move. Both say that a scenario edited since the flow's last approval also needs `--approve-harness`, the
-  user's to give.
+  graders. Both say that a scenario edited since the flow's last approval also needs `--approve-harness`, the
+  user's to give. `hillclimb check [<scenario.yaml | dir/>]` also warns about a case whose rows were all graded
+  under an older set than its scenario's now, comparing with the target when given, else with the scenario files
+  the last `--approve-harness` hashed (`_state.json` `harness_files`), else those `harness_paths` lists, so a plain
+  `hillclimb check --flow <dir>` on an approved flow catches them; a note says when nothing is recorded or a
+  recorded file is gone.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb

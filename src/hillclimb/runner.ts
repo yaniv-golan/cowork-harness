@@ -9,7 +9,7 @@
 // The job runner is injected: this module never spawns an agent. The CLI's real runner builds each JobReport
 // from a kept run dir; tests pass recorded excerpts.
 
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { UsageError } from "../errors.js";
 import { pMapBounded } from "../async-pool.js";
@@ -314,7 +314,7 @@ async function run(
   } else if (decision.kind !== "ok") {
     if (!digest.lockfiles.length) say("note: no lockfile in the current directory - dependency changes are outside the harness sha");
     if (decision.kind === "approve") {
-      w!.approveHarness(digest.sha, { skill: args.skill, scenarios: all.map((c) => relative(deps.cwd, resolve(c.file))) });
+      w!.approveHarness(digest.sha, args.skill);
       say(`harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${statePathShown}`);
     } else if (decision.kind === "absent") {
       const m = `no approved harness sha in ${statePathShown} (computed ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}).`;

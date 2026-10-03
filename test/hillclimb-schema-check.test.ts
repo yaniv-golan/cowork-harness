@@ -837,13 +837,6 @@ describe("schema-check: _state.json", () => {
     expect(ok.findings).toEqual([]);
     expectOnly(check(withState((st) => (st.harness_skill = 3))), "error", "state.harness_skill");
   });
-
-  it("harness_scenarios (the scenario files an approval hashed, written by the runner) is accepted as a list of paths, an error otherwise", () => {
-    const ok = check(withState((st) => ((st.harness_sha = "a".repeat(64)), (st.harness_scenarios = ["evals/a.yaml"]))));
-    expect(ok.findings).toEqual([]);
-    expectOnly(check(withState((st) => (st.harness_scenarios = "evals/a.yaml"))), "error", "state.harness_scenarios");
-    expectOnly(check(withState((st) => (st.harness_scenarios = [3]))), "error", "state.harness_scenarios");
-  });
 });
 
 describe("schema-check: summary.json", () => {
