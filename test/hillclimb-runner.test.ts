@@ -92,7 +92,7 @@ function deps(over: Partial<RunnerDeps> = {}): RunnerDeps {
         children: [],
         attemptS: 12,
         runnerTimeout: false,
-        runDir: `/tmp/runs/${j.c.id}/${j.rep}`,
+        runDir: `/tmp/runs/${j.c.id}/local_${j.c.id}_${j.rep}`,
         ...b,
       };
     },
@@ -693,6 +693,11 @@ describe("the cost path: per-row judge spend and billing, the variant's spend in
     expect(err.join("\n")).toContain(
       "[baseline] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $0.6000 over 2 row(s)",
     );
+    // before the pass's done line, which stays its last
+    const at = (p: string) => err.findIndex((l) => l.startsWith(p));
+    expect(at("[baseline] cost (")).toBeGreaterThan(-1);
+    expect(at("[baseline] cost (")).toBeLessThan(at("[baseline] done - "));
+    expect(err.at(-1)).toMatch(/^\[baseline\] done - /);
   });
 
   it("warns once per variant when other models carry more than 25% of its cost_usd", async () => {
@@ -709,10 +714,16 @@ describe("the cost path: per-row judge spend and billing, the variant's spend in
 
   it("no row or summary.json ever holds an account's identity keys or values", async () => {
     await approved();
-    behave = () => ({ result: judged(0.01), events: withFrames(...fr("account_login", "rate_limit_seven_day")) });
+    // alpha is scored, beta an error row (the runner's timeout): both carry meta.billing.
+    behave = (id) => ({
+      result: judged(0.01),
+      events: withFrames(...fr("account_login", "rate_limit_seven_day")),
+      ...(id === "beta" ? { runnerTimeout: true } : {}),
+    });
     await runHillclimb(args(), deps());
-    const written = [vfile("baseline", "results.jsonl"), vfile("baseline", "summary.json")].map((p) => readFileSync(p, "utf8")).join("\n");
+    const written = ["results.jsonl", "errors.jsonl", "summary.json"].map((f) => readFileSync(vfile("baseline", f), "utf8")).join("\n");
     expect(rows("baseline")[0].meta.billing.basis).toBe("subscription");
+    expect(rows("baseline", "errors.jsonl")[0].meta.billing.basis).toBe("subscription");
     for (const leak of ["subscriptionType", "organization", "email", "user@example.invalid", "Example Org", "example-plan"])
       expect(written).not.toContain(leak);
   });

@@ -357,8 +357,8 @@ the formula undercounts nearly every row. So:
   - `decider_usd_total`;
   - `billing_basis` and `billing_rows_unrecorded` (see below).
   A sum with nothing to sum is left out, never written as 0.
-- **The pass prints the same figures** after its `done` line:
-  `[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $X over N row(s) (U without a cost), $Y/run over K scored row(s); judge $Z (J row(s) with an unpriced judge call — a floor); decider $W`.
+- **The pass prints the same figures** just before its `done` line, which stays its last line:
+  `[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $X over N row(s) (U without a cost), $Y/run over K scored row(s); judge $Z (J row(s) with an unpriced judge call — a floor); regrade judge $R; decider $W`.
   The list-price clause appears only on `subscription`; the line also names `cost basis managed` or
   `cost basis unknown` when a row records one, and leaves out a part with nothing recorded.
 - **Other models' share.** When models other than each row's main-loop model carry more than 25% of a variant's
