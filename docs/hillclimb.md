@@ -360,12 +360,12 @@ the formula undercounts nearly every row. So:
     the variant whose ROWS it re-judged: a `--fill-refs` that judges baseline rows against v1's reference is the
     baseline's spend. It is only the LAST re-grade of each row, so it is a floor; for every re-grade, sum the
     re-grade files (see the full ledger below);
-  - `decider_usd_total`;
+  - `decider_usd_total`: a floor, always: a decider call that failed is never priced;
   - `billing_basis` and `billing_rows_unrecorded` (see below).
   A sum with nothing to sum is left out, never written as 0. When `cost_rows_unrecorded`, `judge_rows_unpriced` or
   `judge_rows_unrecorded` is not 0, the figure it belongs to is a floor.
 - **The pass prints the same figures** just before its `done` line, which stays its last line:
-  `[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $X over N row(s) (U without a cost — a floor), $Y/run over K scored row(s); judge $Z (J row(s) with an unpriced judge call, O row(s) whose judge cost was not recorded — a floor); regrade judge $R (the last regrade per row — a floor); decider $W`.
+  `[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $X over N row(s) (U without a cost — a floor), $Y/run over K scored row(s); judge $Z (J row(s) with an unpriced judge call, O row(s) whose judge cost was not recorded — a floor); regrade judge $R (the last regrade per row — a floor); decider $W (a floor)`.
   The list-price clause appears only on `subscription`; on `mixed` the line says to compare cost only between rows
   of the same basis; it counts the rows that record no basis, names `cost basis managed` or `cost basis unknown`
   when a row records one, and leaves out a part with nothing recorded.
@@ -410,11 +410,14 @@ levels:
    `meta.billing.basis` is one of `api_key`, `subscription`, `third_party` or `ambiguous`. The key is absent
    (omitted) when the run recorded no credential frames; it is never guessed.
    - `third_party`: a provider other than Anthropic's own API served the run (Bedrock, Vertex and others).
-   - `subscription`: an OAuth token or a claude.ai login. When an API key and an OAuth token are both set, which
-     one the agent uses depends on the tier: at hostloop, container and microvm the agent runs under the
-     `local-agent` entrypoint, where the OAuth token wins, so the row says `subscription` when the run reported a
-     subscription rate-limit window and `ambiguous` when it did not; at protocol the API key wins (`api_key`).
-   - `api_key`: an API key and no token.
+   - `subscription`: an OAuth token or a claude.ai login. When an API key and an OAuth token are both set, the row
+     says `subscription` whenever the run reported a subscription rate-limit window (five-hour or seven-day), on any
+     tier. Without one, it depends on the env the agent was spawned with: when that env carries none of
+     `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE` or `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, the API key wins (`api_key`);
+     otherwise the row says `ambiguous`. At hostloop, container and microvm the baseline sets the `local-agent`
+     entrypoint, so those rows say `ambiguous`; at protocol the agent gets your own environment, so it depends on
+     what you export (a shell inside a Claude Code session exports `CLAUDE_CODE_ENTRYPOINT`).
+   - `api_key`: an API key and no token (a token source of `none`, or `apiKeyHelper`, the key's own helper).
    - `ambiguous`: anything else (a bearer `ANTHROPIC_AUTH_TOKEN`, no credential recorded, account frames that
      disagree).
    `cost_basis` is `list` (the agent's built-in list prices; also when the agent did not say), `managed` (an

@@ -222,8 +222,10 @@ All notable changes to this project are documented here. The format is based on
   but recorded no cost, which `meta.judge_unpriced` marks by counting those assertions; error rows carry `meta.judge_usd`, `meta.judge_unpriced` and `meta.decider_usd` beside
   `meta.cost_usd`. `meta.models` gives each model's `provider` and `cost_basis` (`list`, `managed` or `unknown`).
   Billing basis is recorded at two levels. Row: `meta.billing` holds the credential source names the agent's own
-  frames report and `basis`, one of `api_key`, `subscription`, `third_party` or `ambiguous`, decided with the tier's
-  entrypoint (an OAuth token wins over an API key at hostloop, container and microvm, the key at protocol); the key
+  frames report and `basis`, one of `api_key`, `subscription`, `third_party` or `ambiguous`, decided with the spawn env
+  (with an API key and an OAuth token both set, `subscription` when a five-hour or seven-day rate limit was
+  reported, on any tier; otherwise `api_key` when the spawn env carries none of `CLAUDE_CODE_ENTRYPOINT`,
+  `CLAUDE_CODE_REMOTE` or `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, else `ambiguous`); the key
   is absent when the run recorded no credential frames, and an account's email, organization and plan are never
   copied. Summary: `summary.json`'s `billing_basis` is always present, the single recorded value, `"mixed"` when rows
   differ, or `"unrecorded"` when no row records one. `summary.json` also carries the variant's spend over its whole
@@ -231,7 +233,7 @@ All notable changes to this project are documented here. The format is based on
   regrade` that rewrites its rows: `cost_usd_mean` (`$/run`), `cost_usd_total`, `cost_rows`, `cost_rows_unrecorded`,
   `judge_usd_mean` (over the same rows and count as `cost_usd_mean`, so the two add up to `$/run`),
   `judge_usd_total`, `judge_rows_unpriced`, `judge_rows_unrecorded` (rows whose judge ran but that record none of its
-  spend), `regrade_judge_usd_total`, `decider_usd_total` and `billing_rows_unrecorded`, each sum and mean rounded to
+  spend), `regrade_judge_usd_total`, `decider_usd_total` (a floor: a failed decider call is never priced) and `billing_rows_unrecorded`, each sum and mean rounded to
   6 decimal places; a row with no cost is counted, never read as $0, and a figure with such rows is called a floor. The pass prints the figures on one line
   per variant, and warns once per variant when models other than the main loop's carry more than 25% of its
   `cost_usd` (`usage` covers the main model only); `hillclimb check` repeats that as a note and checks the new keys'

@@ -136,13 +136,15 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
   `cost_usd_mean` (`$/run`), `cost_usd_total`, `cost_rows`, `cost_rows_unrecorded`, `judge_usd_mean` (same
   denominator as `cost_usd_mean`), `judge_usd_total`, `judge_rows_unpriced`, `judge_rows_unrecorded` (judge ran,
   no spend recorded), `regrade_judge_usd_total` (last regrade per row, on the variant whose rows were re-judged: a
-  floor), `decider_usd_total`; a sum with nothing to sum is left out, and unrecorded or unpriced rows make a figure
+  floor), `decider_usd_total` (always a floor: a failed decider call is never priced); a sum with nothing to sum is left out, and unrecorded or unpriced rows make a figure
   a floor. The pass prints them as one `[<variant>] cost (…)` line, and warns once per
   variant (`check` notes it) when other models than the main loop's carry over 25% of its `cost_usd`.
 - **Billing basis, two levels.** Row: `meta.billing` (`api_key_source`, `token_source`, `provider`, `cost_basis`,
   `basis`), with `meta.billing.basis` one of `api_key`, `subscription`, `third_party`, `ambiguous`, read from the
-  agent's own frames and the tier's entrypoint (OAuth wins over an API key at hostloop, container and microvm;
-  the key wins at protocol); the key is absent when the run recorded no credential frames. Summary:
+  agent's own frames and the spawn env (API key and OAuth token both set: `subscription` when a five-hour or
+  seven-day rate limit was reported, on any tier; else `api_key` when the spawn env carries none of
+  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, else `ambiguous` — the baseline
+  sets the entrypoint at hostloop, container and microvm); the key is absent when the run recorded no credential frames. Summary:
   `billing_basis` is always present: the single recorded value, `"mixed"` when rows differ, or `"unrecorded"`
   when no row records one, beside `billing_rows_unrecorded`. Names only, never an account's identity. On
   `subscription`, `cost_usd` is a list-price estimate, not a charge.

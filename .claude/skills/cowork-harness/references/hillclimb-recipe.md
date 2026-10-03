@@ -123,7 +123,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   run history is listed as unpriced).
 - **Copy the variant's spend from `F/vN/summary.json`**, recomputed after every pass: `cost_usd_mean` is `$/run`
   (add `judge_usd_mean`, which shares its denominator, when `$/run` includes the judge); `cost_usd_total` +
-  `judge_usd_total` + `decider_usd_total` is the round's spend (judge spend from the live judge).
+  `judge_usd_total` + `decider_usd_total` is the round's spend (judge spend from the live judge;
+  `decider_usd_total` is always a floor, as a failed decider call is never priced).
   `regrade_judge_usd_total` is re-grade spend, on the variant whose ROWS were re-judged (a `--fill-refs` judging
   baseline rows against v1's reference is the baseline's), and only the last re-grade per row, so a floor; for every
   re-grade, sum the top-level `judgeCostUsd` of the re-grade files (`turns/<N>/regrade/*.json`) as above.
