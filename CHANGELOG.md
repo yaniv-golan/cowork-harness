@@ -324,8 +324,12 @@ All notable changes to this project are documented here. The format is based on
   payload). A row whose kept run dir is gone or refused, or whose kept work dir is gone, is listed (exit 1). It
   refuses a changed declaration before any judge call, as `run` does. `hillclimb check`'s note on rows that lack a
   metric says whether they predate it (a later row carries it) or come after the last row that does (no scenario
-  declares it any more, or a regrade limited by `--variant` / `--case` did not re-measure them). See docs/cli.md →
-  Numeric metrics in hillclimb.
+  declares it any more, or a regrade limited by `--variant` / `--case` did not re-measure them). Every `hillclimb run`
+  attempt records the pre-run manifest, whatever its scenario asserts (a plain `run` keeps recording it only when
+  something needs it), so a metric added mid-loop is measured by `regrade` from the kept run instead of reading
+  `no_manifest`; the cost is a pre-spawn walk of the run's work roots on every attempt. A row run before this, of a
+  case that declared no metric and no judged assert, keeps `no_manifest`: only re-running the case (or re-recording a
+  cassette) measures it. See docs/cli.md → Numeric metrics in hillclimb.
 
 - **Hillclimb rows record the assertion set they were graded under** (`meta.assert_sig`, a hash of the case's
   `assert` and `expect_denied`, `semantic_pairwise.refs` left out so a flow moved to another checkout keeps its

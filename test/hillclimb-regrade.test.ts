@@ -800,10 +800,49 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
     );
   }, 240_000);
 
+  // A hillclimb attempt always records the pre-run manifest, so a metric added mid-loop can be filled from any kept run.
+  it("a case with no metric and no judged assert still records the manifest: a metric added mid-flow is filled", async () => {
+    writing();
+    const { rows, evals } = buildFlow({ noPairwise: true });
+    const file = join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json");
+    expect(JSON.parse(readFileSync(file, "utf8"))).toHaveProperty("preRunHashes");
+    addMetrics(evals, "metrics:", WORDS);
+    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS());
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    for (const v of ["baseline", "v1"]) {
+      const row = rows(v)[0]!;
+      expect(row.grade).toMatchObject({ words: 1200, words_present: 1 });
+      expect(row.meta).not.toHaveProperty("metrics_unavailable");
+    }
+  }, 240_000);
+
+  it("only hillclimb arms it so: a plain `run` of the same scenario records no pre-run manifest", () => {
+    writing();
+    const { rows } = buildFlow({ noPairwise: true });
+    const kept = new Set(["baseline", "v1"].map((v) => rows(v)[0]!.meta.run_id as string));
+    const r = spawnSync(process.execPath, [CLI, "run", "evals/alpha.yaml"], {
+      cwd: f.cwd,
+      env: { ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    expect(r.status, r.stderr).toBe(0);
+    const plain = readdirSync(join(f.runsDir, "alpha")).filter((d) => d.startsWith("local_") && !kept.has(d));
+    expect(plain).toHaveLength(1);
+    const result = JSON.parse(readFileSync(join(f.runsDir, "alpha", plain[0]!, "turns", "1", "result.json"), "utf8"));
+    expect(result).not.toHaveProperty("preRunHashes");
+  }, 240_000);
+
   it("a metric added to a case whose run recorded no pre-run manifest: `_present: 0`, reason no_manifest (never pre_run)", async () => {
     writing();
-    // No metric and no judged assert: nothing armed the run's pre-run manifest.
+    // A row run before hillclimb armed the manifest on every attempt: its kept run records none.
     const { rows, evals } = buildFlow({ noPairwise: true });
+    for (const v of ["baseline", "v1"]) {
+      const file = join(runDirOf(rows(v)[0]!), "turns", "1", "result.json");
+      const r = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      for (const k of ["preRunHashes", "preRunPaths", "preRunLinkAware", "preRunOrigin"]) delete r[k];
+      writeFileSync(file, JSON.stringify(r));
+    }
     addMetrics(evals, "metrics:", WORDS);
     const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS());
     expect(out.exitCode, JSON.stringify(out)).toBe(0);

@@ -70,7 +70,9 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
         scenario,
         label: `${spec.variant} ${spec.c.id} r${spec.rep}`,
         flags: { ...deps.flags, label: spec.runLabel, ablateSkill: spec.ablate },
-        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...(deps.extra?.(spec) ?? {}) },
+        // Every attempt records the pre-run manifest, whatever its scenario asserts now: a metric or an authorship
+        // assert added later in the loop is decided against it when `hillclimb regrade` re-measures the kept run.
+        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...(deps.extra?.(spec) ?? {}), armPreRunManifest: true },
         rethrowUnanswered: true,
       });
     } catch (e) {

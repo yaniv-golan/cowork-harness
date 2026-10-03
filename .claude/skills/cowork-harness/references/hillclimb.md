@@ -248,9 +248,11 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
 - **An agent-failed row whose kept run cannot be re-evaluated** (a partial run: an unanswered gate) scores 0
   whatever its asserts say, so only its meta is brought current (`assert_sig`, `metric_sigs`), its grade all 0. It
   is never listed; each variant's `agentFailed` count reports it.
-- **A metric added to a case whose run recorded no pre-run manifest** (it declared no metric and no judged assert)
-  reads `no_manifest` on those rows: whether the run wrote the file cannot be decided. Re-running the case measures
-  it (a re-recorded cassette does too); declaring a metric before the baseline pass avoids it.
+- **Every `hillclimb run` attempt records the pre-run manifest**, so a metric added mid-loop is measured by
+  `regrade` from the kept run (the cost: a pre-spawn walk of the work roots on every attempt). A row run before
+  that, of a case that declared no metric and no judged assert, has no manifest: the metric reads `no_manifest` on
+  it (whether the run wrote the file cannot be decided). Only re-running the case measures it (a re-recorded
+  cassette does too).
 - **What it never touches:** the agent (it never runs), `result.json`, the lines it did not rewrite (kept byte for
   byte), a row whose rebuild changed nothing (counted as re-evaluated, its bytes kept; a row with no
   `meta.assert_sig` is stamped only when its run's assert list is not the scenario's now), and an open `judge_invalid` slot in `errors.jsonl`, which
