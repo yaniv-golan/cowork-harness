@@ -98,8 +98,16 @@ function installSignalHandlerOnce() {
 }
 
 /** Is `rm -f` / `network rm` output saying the target is already gone (Docker and Podman spellings)? */
-function alreadyGone(r: { status: number | null; stdout?: string | null; stderr?: string | null }): boolean {
-  return r.status === 0 || /no such (container|network)|not found|no container with name or id/i.test(`${r.stderr ?? ""}${r.stdout ?? ""}`);
+export function alreadyGone(r: { status: number | null; stdout?: string | null; stderr?: string | null }): boolean {
+  // Only the runtime's own word about THIS container or network: Docker's "No such container" / "network <name>
+  // not found", Podman's "no container with name or ID" / "network not found". A bare "not found" is not enough —
+  // a missing docker context ("context not found") or endpoint fails the command with the target still in place.
+  return (
+    r.status === 0 ||
+    /no such (container|network)|\bnetwork \S+ not found|\bnetwork not found|no container with name or id/i.test(
+      `${r.stderr ?? ""}${r.stdout ?? ""}`,
+    )
+  );
 }
 
 /** `rm -f` a container. True when it is gone afterwards — removed now, or already absent. */
