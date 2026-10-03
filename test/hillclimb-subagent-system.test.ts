@@ -54,7 +54,7 @@ describe("sub-agent system turns", () => {
     expect(t[i + 2].content).toBe("[sub-agent general-purpose#1] child says hi");
   });
 
-  it("fork: the child's snapshot ends with something else → none received, never the session's append stamped on it", () => {
+  it("the child's snapshot ends with something else → none received, never the session's append stamped on it (a forked skill is judged the same way: by its own snapshot)", () => {
     const t = trace(child([snapshotLine("SOMETHING ELSE"), childText]), APPEND).turns;
     const sys = t.filter((x) => x.role === "system");
     expect(sys).toEqual([{ role: "system", content: "[sub-agent general-purpose#1 system — harness append: none received]" }]);

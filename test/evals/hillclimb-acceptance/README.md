@@ -15,5 +15,10 @@ the example `metrics.py` (also bundled with the showcase skill), a synthetic `or
 | `showcase/` | A worked example for the hillclimb loop: a deliberately weak `sales-brief` skill (its own `plugin/`), a synthetic `orders.csv`, and four cases with deterministic assertions, a metric, a pointwise rubric and a pairwise comparison. |
 | `operator/` | One-off checks outside any flow: refusals before spend (a mount that exposes the flow dir or a reference store; a presence assert on a fixture file without `authored:`) and the `authored` semantics on fixture files. |
 
+The operator checks expect the flow dirs under `hc-flows/` at the repo root (`hc-flows/acceptance-a`,
+`hc-flows/acceptance-b`, …), outside `.claude/`, as `docs/hillclimb.md` advises for flow dirs:
+`operator/o-mount-session.yaml` mounts that folder, and `o-ref-in-mount` names a reference store inside it.
+`hc-flows/` is git-ignored.
+
 The fixture files under `flow-b/fixtures/` must stay tracked by git: `workspace_fixture` stages tracked
 files only.

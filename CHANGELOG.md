@@ -546,7 +546,8 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `reevaluated` count. `regrade.md`, stderr and the closing summary break each variant's rewritten rows down into
   parts that sum to it: `rewritten 4: 1 re-judged ($0.0515 judge), 2 rebuilt without a judge call, 1 agent-failed
   (meta only); listed 0`. The judge figure is this regrade's whole judge spend, rows judged and then listed included
-  (`, incl. 1 row judged then listed`), marked `— a floor, N unpriced` when some grades reported no cost, `— a floor, N run's regrade stopped
+  (`, incl. 1 row judged then listed`), marked `— a floor, N unpriced` when some judge calls reported no cost (a row whose judged asserts all refused
+  their evidence called no judge: it is rebuilt, never re-judged or unpriced), `— a floor, N run's regrade stopped
   after its judge calls` when a core regrade failed after judging and returned no report for a run, and `judge cost
   unknown` when no grade was priced; a fill notes rows that lacked only their own reference (`(only their own reference was
   missing: neutral 0.5)`), and the re-measured count shows where it differs from the rebuilt one. The JSON payload
@@ -706,8 +707,9 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
     experimental), scrubbed as a whole document and stamped with `harnessVersion` and `scenarioSha256`.
     `result.json` is never modified and no run-index row is added. The same run dir named twice, or through a
     symlink, is graded once. The JSON envelope, the text report and refusal messages are scrubbed too.
-  - Judge spend is reported per run and in total (`judgeCostUsd`, with `unpricedGrades` counting grades that
-    had no price — the total is then a floor). Grades the judge could not produce are counted as
+  - Judge spend is reported per run and in total (`judgeCostUsd`, with `unpricedGrades` counting judge calls
+    that had no price — the total is then a floor). An assert that refused its evidence called no judge and is
+    neither, and the total never counts an entry a fill kept from the live run. Grades the judge could not produce are counted as
     `invalidGrades`, apart from failures.
   - `--judge-model` grades every assert with one model; an alias such as `opus` is refused. An entry a judge read
     records `judgeModelRequested`, the model the re-grade asked for, beside the `judgeModel` that answered.

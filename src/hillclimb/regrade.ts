@@ -106,12 +106,14 @@ export interface RegradeFlowVariant {
   /** This regrade's judge spend, summed over every row a judge read (`listedAfterJudge` included); absent when no grade
    *  was priced. A floor when `judgeUnpriced` > 0. */
   judgeUsd?: number;
-  /** Judged grades that reported no cost. */
+  /** Judge calls that reported no cost (a grade no judge was called for, e.g. one that refused its evidence, is not
+   *  one). */
   judgeUnpriced: number;
   /** Rows of a core regrade that stopped after its judge calls began and returned no report for them: whatever their
    *  judge calls spent is not in `judgeUsd`, which is then a floor. */
   judgeStopped: number;
-  /** Rows rebuilt with no judge call and rewritten. */
+  /** Rows rebuilt with no judge call and rewritten — a row sent to a re-grade whose every judged assert refused its
+   *  evidence before a judge was called included. */
   rebuilt: number;
   /** Of `rebuilt`, the fill rows that lacked only their own variant's reference (neutral, 0.5). */
   ownRefOnly: number;
@@ -119,11 +121,12 @@ export interface RegradeFlowVariant {
   listed: Array<{ prompt_id: string; rep: number; why: string }>;
   /** Rows whose deterministic asserts (every assert no judge grades, and each `expect_denied` host) were re-evaluated
    *  from their kept run with no judge call (a case with no judged assert, an agent-failed row, a fill row that needed
-   *  no comparison). A row whose re-evaluation changed nothing is counted here but not rewritten. A re-judged row's
+   *  no comparison, a row whose judged asserts all refused their evidence). A row whose re-evaluation changed nothing is counted here but not rewritten. A re-judged row's
    *  deterministic asserts are re-evaluated too; it is counted in `rewritten`. */
   reevaluated: number;
   /** Rows whose metrics were re-measured from their kept run with no judge call (a case with no judged assert, an
-   *  agent-failed row, a fill row that needed no comparison). A row whose re-measure changed nothing is counted here
+   *  agent-failed row, a fill row that needed no comparison, a row whose judged asserts all refused their evidence). A
+   *  row whose re-measure changed nothing is counted here
    *  but not rewritten. */
   remeasured: number;
   /** Agent-failed rows (`meta.failure_class: errored_agent`) whose kept run cannot be re-evaluated (a partial run, an
@@ -1598,11 +1601,14 @@ async function regradeFlowInner(
           continue;
         }
         vr.regradeFiles.push(shownRunPath(report.regradeFile, deps.secrets));
+        // Whether a judge was called for this row: an assert that refused its evidence (or a fill that kept every
+        // outcome) records no judge model, and its row is rebuilt without a judge call.
+        const called = regradeModel(report) !== undefined;
         // The judge already ran for this row: its spend counts whether the row is written or listed below. Counted as
         // listed after its judge call until it is written (then moved to `judged`).
         if (report.judgeCostUsd !== undefined) vr.judgeUsd = (vr.judgeUsd ?? 0) + report.judgeCostUsd;
         vr.judgeUnpriced += report.unpricedGrades;
-        vr.listedAfterJudge++;
+        if (called) vr.listedAfterJudge++;
         // A fill keeps every outcome it did not judge: one copied against a reference that has since changed (re-frozen
         // by hand) would mix two references in one row — listed, never written.
         const stale = args.fillRefs ? staleCopied(report.assertions as never, b.c, refs) : [];
@@ -1664,8 +1670,16 @@ async function regradeFlowInner(
         }
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
-        vr.listedAfterJudge--;
-        vr.judged++;
+        if (called) {
+          vr.listedAfterJudge--;
+          vr.judged++;
+        } else {
+          // Rebuilt with no judge call, as a row no judge reads is: its deterministic asserts re-evaluated and its
+          // metrics re-measured from the kept run (the re-grade's own measure), counted the same way.
+          vr.rebuilt++;
+          if (shape.metrics.length && declaresMetrics(b.c)) vr.remeasured++;
+          if (deterministicIndexes(b.c).length) vr.reevaluated++;
+        }
         if (!aIndexAligned(t.line.row!, t.result, b.c)) misaligned.add(t.line);
       }
     }
