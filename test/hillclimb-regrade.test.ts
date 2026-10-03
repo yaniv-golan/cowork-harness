@@ -418,6 +418,23 @@ describe.runIf(POSIX)("hillclimb rows: structured per-order outcomes (meta.pairw
 });
 
 describe.runIf(POSIX)("hillclimb regrade: the judge spend and the breakdown", () => {
+  it("a core regrade that stopped after its judge calls leaves a run without a report: the figure is a floor", async () => {
+    buildFlow({ reps: 2 });
+    const lines: string[] = [];
+    // The core judges both runs, then fails writing the second's regrade file: only the first report comes back.
+    const regrade = (async (o: RegradeOptions) => {
+      const real = await regradeRuns({ ...o, pairwiseComplete: priced("A", 0.0123) });
+      if ((o as { checkOnly?: boolean }).checkOnly || !real.ok) return real;
+      return { ok: false, kind: "runtime", message: "could not write a regrade file", completed: real.runs.slice(0, 1) };
+    }) as typeof regradeRuns;
+    const out = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), DEPS({ stderr: (l) => lines.push(l), regrade }));
+    expect(out.variants[0]).toMatchObject({ judged: 1, judgeUsd: 0.0123, judgeStopped: 1 });
+    expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: expect.any(Number), why: expect.stringMatching(/^stopped: /) }]);
+    expect(lines.find((l) => l.startsWith("  [v1] rewritten"))).toMatch(
+      /^  \[v1\] rewritten 1: 1 re-judged \(\$0\.0123 judge — a floor, 1 run's regrade stopped after its judge calls\), /,
+    );
+  }, 300_000);
+
   it("unpriced judge calls: (judge cost unknown); partly priced: the figure is a floor", async () => {
     buildFlow({ reps: 2 });
     const lines: string[] = [];
@@ -455,6 +472,27 @@ describe.runIf(POSIX)("hillclimb regrade: the judge spend and the breakdown", ()
       /^  \[v1\] rewritten 1: 0 re-judged, 1 rebuilt without a judge call \(only their own reference was missing: neutral 0\.5\), 0 agent-failed \(meta only\); listed 0; /,
     );
   }, 240_000);
+});
+
+describe.runIf(POSIX)("hillclimb rows: meta.pairwise_orders across a fill", () => {
+  it("a fill keeps the copied comparison's per-order outcomes and records the judged one's fresh", async () => {
+    const { cli, rows } = buildFlow({ orderBoth: true });
+    const v2 = cli("run", "evals", "--flow", "flow", "--variant", "v2", "--concurrency", "1");
+    expect(v2.status, v2.stderr).toBe(0);
+    // Live: only the baseline comparison (the stub judge always answers "A").
+    expect(rows("v2")[0]!.meta.pairwise_orders).toEqual({ "a1/baseline": { candidate_first: "win", ref_first: "loss" } });
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    // The fill judges v1 alone, answering "B": the baseline entry is copied as it was, the v1 entry is fresh.
+    const out = await regradeFlow(
+      ARGS({ variant: "v2", fillRefs: true }),
+      DEPS({ regradeOptions: { pairwiseComplete: priced("B", 0.01) } }),
+    );
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(rows("v2")[0]!.meta.pairwise_orders).toEqual({
+      "a1/baseline": { candidate_first: "win", ref_first: "loss" },
+      "a1/v1": { candidate_first: "loss", ref_first: "win" },
+    });
+  }, 300_000);
 });
 
 describe.runIf(POSIX)("the baseline ceiling on a pairwise case", () => {
@@ -2504,6 +2542,15 @@ describe.runIf(POSIX)("hillclimb regrade: an agent-failed row whose run cannot b
     // The breakdown sums to rewritten: the meta-only row is its own part.
     expect(lines.join("\n")).toMatch(
       /rewritten 1: 0 re-judged, 0 rebuilt without a judge call, 1 agent-failed \(meta only\); re-measured 1 without a judge call; listed 0/,
+    );
+    // Again: the row is current, so nothing is rewritten — the breakdown's meta-only part is the rewritten ones, not
+    // every agent-failed row (the JSON's agentFailed still counts it).
+    const again: string[] = [];
+    const out2 = await regradeFlow(ARGS({}), DEPS({ stderr: (l) => again.push(l) }));
+    expect(out2.exitCode, JSON.stringify(out2)).toBe(0);
+    for (const v of out2.variants) expect(v).toMatchObject({ rewritten: 0, agentFailed: 1 });
+    expect(again.at(-1)).toMatch(
+      /^hillclimb regrade: baseline rewritten 0: 0 re-judged, 0 rebuilt without a judge call, 0 agent-failed \(meta only\);/,
     );
   }, 240_000);
 

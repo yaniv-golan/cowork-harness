@@ -108,6 +108,9 @@ export interface RegradeFlowVariant {
   judgeUsd?: number;
   /** Judged grades that reported no cost. */
   judgeUnpriced: number;
+  /** Rows of a core regrade that stopped after its judge calls began and returned no report for them: whatever their
+   *  judge calls spent is not in `judgeUsd`, which is then a floor. */
+  judgeStopped: number;
   /** Rows rebuilt with no judge call and rewritten. */
   rebuilt: number;
   /** Of `rebuilt`, the fill rows that lacked only their own variant's reference (neutral, 0.5). */
@@ -989,11 +992,15 @@ const changedKeys = (
  *  rebuilt one. */
 const counters = (v: RegradeFlowVariant): string => {
   const metaOnly = v.rewritten - v.judged - v.rebuilt;
-  const spent = v.judged || v.listedAfterJudge;
+  const spent = v.judged || v.listedAfterJudge || v.judgeStopped;
+  const floor = [
+    ...(v.judgeUnpriced ? [`${v.judgeUnpriced} unpriced`] : []),
+    ...(v.judgeStopped ? [`${v.judgeStopped} run${v.judgeStopped === 1 ? "'s" : "s'"} regrade stopped after its judge calls`] : []),
+  ];
   const cost =
     v.judgeUsd === undefined
       ? "judge cost unknown"
-      : `$${v.judgeUsd.toFixed(4)} judge${v.judgeUnpriced ? ` — a floor, ${v.judgeUnpriced} unpriced` : ""}`;
+      : `$${v.judgeUsd.toFixed(4)} judge${floor.length ? ` — a floor, ${floor.join(", ")}` : ""}`;
   const usd = spent
     ? ` (${cost}${v.listedAfterJudge ? `, incl. ${v.listedAfterJudge} row${v.listedAfterJudge === 1 ? "" : "s"} judged then listed` : ""})`
     : "";
@@ -1217,6 +1224,7 @@ async function regradeFlowInner(
         judged: 0,
         listedAfterJudge: 0,
         judgeUnpriced: 0,
+        judgeStopped: 0,
         rebuilt: 0,
         ownRefOnly: 0,
         listed: [],
@@ -1569,6 +1577,9 @@ async function regradeFlowInner(
         const rep = Number(t.line.row?.rep);
         const report = reports.find((x) => real(x.runDir) === real(t.runDir));
         if (!report) {
+          // A regrade that stopped may have judged this run before failing (writing its regrade file): its spend is
+          // unknown, so the figure becomes a floor.
+          if (!r.ok) vr.judgeStopped++;
           vr.listed.push({
             prompt_id: b.c.id,
             rep,

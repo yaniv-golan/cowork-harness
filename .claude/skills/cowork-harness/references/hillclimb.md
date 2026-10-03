@@ -44,7 +44,8 @@ time:
   ceiling or the floor of the headline metric). A `semantic_pairwise` case with `pass` at the ceiling gets a note
   instead: its pairwise assert cannot fail on baseline (neutral against its own reference), so `pass` cannot show a
   pairwise gain; that shows in `win`. Without the scenario target, `check` finds such a case by the `a<i>_win_present`
-  key its rows carry.
+  key its rows carry (from its rows' keys, so a case whose pairwise assert was since removed still reads as pairwise
+  until it is re-run).
   It also warns about a case whose rows were graded under
   another assertion set than its scenario's now, naming the `hillclimb regrade <target> --flow <dir> --case <id>`
   that re-evaluates them. It compares with the scenario target when you pass one
@@ -310,9 +311,10 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   rebuilt) gains `meta.regrade_remeasured: true`. `regrade.md` and stderr break the rewritten rows down into parts
   that sum to it (`rewritten 4: 1 re-judged ($0.0515 judge), 2 rebuilt without a judge call, 1 agent-failed (meta
   only); listed 0`). The judge figure is this regrade's whole spend, rows judged then listed included (`incl. N row(s)
-  judged then listed`), marked `— a floor, N unpriced` when some grades reported no cost; a fill notes rows whose only
+  judged then listed`), marked `— a floor, N unpriced` when some grades reported no cost (or `— a floor, N run's regrade stopped after its judge
+  calls` when a core regrade failed after judging and returned no report for a run); a fill notes rows whose only
   missing reference was their own (neutral 0.5). The JSON carries the same parts (`judged`, `rebuilt`, `ownRefOnly`,
-  `listedAfterJudge`, `judgeUsd`, `judgeUnpriced`) beside `reevaluated` / `remeasured` / `agentFailed`.
+  `listedAfterJudge`, `judgeUsd`, `judgeUnpriced`, `judgeStopped`) beside `reevaluated` / `remeasured` / `agentFailed`.
 - **An agent-failed row whose kept run cannot be re-evaluated** (a partial run: an unanswered gate) scores 0
   whatever its asserts say, so only its meta is brought current (`assert_sig`, `metric_sigs`), its grade all 0. It
   is never listed; each variant's `agentFailed` count reports it.

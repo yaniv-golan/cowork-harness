@@ -416,7 +416,8 @@ All notable changes to this project are documented here. The format is based on
   changes it). A `semantic_pairwise` case with `pass` at the ceiling gets a note instead of that warning, on `check`
   and at the end of a baseline pass: its pairwise assert cannot fail on baseline (neutral against its own reference),
   so `pass` cannot show a pairwise gain; that shows in `win`. Without the scenario target, `check` finds such a case
-  by the `a<i>_win_present` key its rows carry. The floor warning is the same for every case; `hillclimb state-template` prints a `_state.json` skeleton and, with `--flow`, writes the metrics
+  by the `a<i>_win_present` key its rows carry (from its rows' keys, so a case whose pairwise assert was since removed
+  still reads as pairwise until it is re-run). The floor warning is the same for every case; `hillclimb state-template` prints a `_state.json` skeleton and, with `--flow`, writes the metrics
   legend to `<flow>/metrics.md` (an edited copy is kept, and the new legend goes to `metrics.md.new`). Every `hillclimb`
   subcommand takes `--flow <dir>` (default `.claude/hillclimb/flow`), and `--help` and `docs/cli.md` show it on each: a loop whose
   flow dir is not the default passes the same dir to every one.
@@ -523,10 +524,12 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `reevaluated` count. `regrade.md`, stderr and the closing summary break each variant's rewritten rows down into
   parts that sum to it: `rewritten 4: 1 re-judged ($0.0515 judge), 2 rebuilt without a judge call, 1 agent-failed
   (meta only); listed 0`. The judge figure is this regrade's whole judge spend, rows judged and then listed included
-  (`, incl. 1 row judged then listed`), marked `— a floor, N unpriced` when some grades reported no cost and `judge
-  cost unknown` when none did; a fill notes rows that lacked only their own reference (`(only their own reference was
+  (`, incl. 1 row judged then listed`), marked `— a floor, N unpriced` when some grades reported no cost, `— a floor, N run's regrade stopped
+  after its judge calls` when a core regrade failed after judging and returned no report for a run, and `judge cost
+  unknown` when no grade was priced; a fill notes rows that lacked only their own reference (`(only their own reference was
   missing: neutral 0.5)`), and the re-measured count shows where it differs from the rebuilt one. The JSON payload
-  carries the same parts (`judged`, `rebuilt`, `ownRefOnly`, `listedAfterJudge`, `judgeUsd`, `judgeUnpriced`) beside
+  carries the same parts (`judged`, `rebuilt`, `ownRefOnly`, `listedAfterJudge`, `judgeUsd`, `judgeUnpriced`,
+  `judgeStopped`) beside
   the other counts. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
   no judge call. An agent-failed row whose kept run cannot be re-evaluated (an unanswered gate) only has its meta
   brought current, its grade all 0, and is counted as `agentFailed`, never listed. Rewritten rows record
