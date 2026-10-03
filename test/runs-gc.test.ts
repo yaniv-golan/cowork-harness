@@ -754,7 +754,7 @@ describe.skipIf(!can)("prune refuses a root at the wrong level", () => {
           make(d);
           return { top: R, args: [d] };
         },
-        new RegExp(`looks like a run dir.*\\(it has [^)]*${marker.replace(/[.]/g, "\\.")}`),
+        new RegExp(`looks like a run dir.*\\(it has [^)]*${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
       );
     }
   });
