@@ -372,7 +372,8 @@ All notable changes to this project are documented here. The format is based on
   regrade judged is never judged again, and copied outcomes keep their judge's provenance), so `pass` cannot move
   and every row gains the `win_<vN>` columns of references frozen after it (a row whose deterministic outcome or
   judged rubric changed since it was graded is listed before any judge call: run a default regrade first; compared with
-  what the row carries, never its run's `result.json`, so a change a default regrade applied is not listed again). A row a
+  what the row carries, never its run's `result.json`, so a change a default regrade applied is not listed again; as a
+backstop, any row whose rebuilt `pass` would differ from its own is listed and left as it is). A row a
   judge re-graded records this regrade's own spend and model (`meta.regrade_judge_usd`,
   `meta.regrade_judge_model`); its `judge_usage` / `judge_model` describe every entry it is graded with. A later
   rebuild with no judge call drops both (they were that regrade's, not its own) and keeps `meta.regrade_file`. Every selected row is re-evaluated before any judge call, a case with

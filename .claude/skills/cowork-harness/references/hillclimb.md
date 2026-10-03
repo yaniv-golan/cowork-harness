@@ -215,7 +215,9 @@ every climb there is finished.
   instead, before any judge call: run a default `regrade` first, then `--fill-refs`. "Since it was graded" is what
   the row carries, not its run's `result.json` (which no regrade touches): a change a default regrade already applied
   is not listed again. Until then that row lacks the
-  new `win_<vN>` column, and `check` reports it missing once `_state.json` declares it.
+  new `win_<vN>` column, and `check` reports it missing once `_state.json` declares it. As a backstop, a row whose
+  rebuilt `pass` would differ from its own for any reason (an `expect_denied` host has no `a<i>` to compare) is
+  listed and left as it is; a row judged for the fill has spent its judge call by then.
 
 Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant with rows), `--case ID`
 (repeatable), `--judge-model ID`, `--fill-refs`, `--rejudge`, `--reevaluate`, `--approve-harness`, `--allow-doc-drift`, `--allow-unchecked`,

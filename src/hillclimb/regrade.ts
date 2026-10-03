@@ -680,6 +680,16 @@ function gradedPass(row: Row, live: RunResult, c: HillclimbCase, i: number): boo
 
 const outcomeOf = (p: boolean) => (p ? "passes" : "fails");
 
+/** The fill's backstop: a fill never moves `pass`, whatever the cause. The per-assert checks compare each outcome with
+ *  the one the row was graded with, but not every outcome is recorded on the row (an `expect_denied` host has no
+ *  `a<i>`), so the rebuilt row's `pass` is compared with the row's own: a difference lists the row. */
+function fillMovesPass(row: Row, rebuilt: Row): string | undefined {
+  const was = row.grade?.pass;
+  const now = rebuilt.grade?.pass;
+  if (was === now) return undefined;
+  return `a fill never moves pass, and this row's would: ${String(was)} as graded, ${String(now)} rebuilt (an outcome it was graded with re-evaluates differently now) — run a default \`hillclimb regrade\` first, then --fill-refs`;
+}
+
 /** An authored index as messages name it. */
 function labelOf(c: HillclimbCase, i: number): string {
   const now = authoredNow(c);
@@ -1584,6 +1594,11 @@ async function regradeFlowInner(
           vr.listed.push({ prompt_id: b.c.id, rep, why: got.why });
           continue;
         }
+        const moves = args.fillRefs ? fillMovesPass(t.line.row!, got.row) : undefined;
+        if (moves !== undefined) {
+          vr.listed.push({ prompt_id: b.c.id, rep, why: moves });
+          continue;
+        }
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
         if (!aIndexAligned(t.line.row!, t.result, b.c)) misaligned.add(t.line);
@@ -1641,6 +1656,11 @@ async function regradeFlowInner(
         undefined,
         re,
       );
+      const moves = args.fillRefs && !("why" in got) ? fillMovesPass(t.line.row!, got.row) : undefined;
+      if (moves !== undefined) {
+        vr.listed.push({ prompt_id: t.c.id, rep, why: moves });
+        continue;
+      }
       if (!("why" in got)) {
         if (re && declaresMetrics(t.c)) vr.remeasured++;
         if (deterministicIndexes(t.c).length) vr.reevaluated++;

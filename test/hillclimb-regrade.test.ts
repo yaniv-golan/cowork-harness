@@ -1403,12 +1403,14 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
 
   it("expect_denied: a judged case's rows are re-judged, a fill's filled — never listed for the trailing egress_denied entries", async () => {
     // `expect_denied` needs a sandboxed tier, which the stub agent cannot run: the kept runs are given the shape a sandboxed
-    // run persists — one trailing `egress_denied` entry per host after the asserts' — and the scenario declares the host.
+    // run persists — one trailing `egress_denied` entry per host after the asserts', and the egress log it was graded
+    // on — and the scenario declares the host. The host passed, as the rows' `pass: 1` says it did.
     const { cli, rows, evals } = buildFlow();
     for (const v of ["baseline", "v1"]) {
       const file = join(runDirOf(rows(v)[0]!), "turns", "1", "result.json");
-      const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: unknown[] };
-      r.assertions.push({ assertion: { egress_denied: "blocked.example" }, pass: false, message: "expected blocked.example to be denied" });
+      const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: unknown[]; egress?: unknown[] };
+      r.assertions.push({ assertion: { egress_denied: "blocked.example" }, pass: true, message: "expected blocked.example to be denied" });
+      r.egress = [{ host: "blocked.example", decision: "deny" }];
       writeFileSync(file, JSON.stringify(r));
     }
     const sc = join(evals, "alpha.yaml");
@@ -1530,6 +1532,45 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
       ]);
     expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before.b);
     expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before.v1);
+  }, 240_000);
+
+  // A fill never moves `pass`, whatever the cause: the per-assert checks compare each outcome with what the row was
+  // graded with, but an `expect_denied` host has no `a<i>` key to compare. The backstop compares the rebuilt `pass`.
+  it("a fill whose rebuild would move pass is listed, nothing written (an expect_denied host, which no a<i> records)", async () => {
+    const { cli, flow, rows, evals } = buildFlow();
+    for (const v of ["baseline", "v1"]) expect(rows(v)[0]!.grade.pass, JSON.stringify(rows(v)[0])).toBe(1);
+    edit(evals, "assert:\n", "expect_denied: [blocked.example]\nassert:\n");
+    const { seen, deps } = counting();
+    // A default regrade applies the host added since the run: no denial was recorded, so it fails, and pass with it.
+    expect((await regradeFlow(ARGS({ approveHarness: true }), deps)).exitCode).toBe(0);
+    for (const v of ["baseline", "v1"]) expect(rows(v)[0]!.grade.pass, v).toBe(0);
+    // The kept runs now read the host denied (as an evaluator change since the default regrade would): the host's
+    // outcome would move, and with it pass.
+    for (const v of ["baseline", "v1"]) {
+      const file = join(runDirOf(rows(v)[0]!), "turns", "1", "result.json");
+      const r = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      writeFileSync(file, JSON.stringify({ ...r, egress: [{ host: "blocked.example", decision: "deny" }] }));
+    }
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const before = {
+      baseline: readFileSync(join(flow, "baseline", "results.jsonl"), "utf8"),
+      v1: readFileSync(join(flow, "v1", "results.jsonl"), "utf8"),
+    };
+    const fill = await regradeFlow(ARGS({ fillRefs: true }), deps);
+    expect(fill.exitCode, JSON.stringify(fill)).toBe(1);
+    // Both rebuild paths: baseline's row is judged (it lacks win_v1), v1's is rebuilt with no judge call.
+    for (const v of fill.variants)
+      expect(v.listed, `${v.variant} ${JSON.stringify(rows(v.variant)[0])} ${JSON.stringify(fill)}`).toEqual([
+        {
+          prompt_id: "alpha",
+          rep: 0,
+          why: expect.stringMatching(
+            /^a fill never moves pass, and this row's would: 0 as graded, 1 rebuilt .*run a default `hillclimb regrade` first/,
+          ),
+        },
+      ]);
+    for (const v of ["baseline", "v1"] as const) expect(readFileSync(join(flow, v, "results.jsonl"), "utf8"), v).toBe(before[v]);
+    expect(seen.calls).toBeGreaterThan(0);
   }, 240_000);
 
   // result.json is written through the secret scrub, so an assert whose literal holds a scrubbed value is stored as
