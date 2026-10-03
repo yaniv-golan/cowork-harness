@@ -352,6 +352,10 @@ export interface LaunchPlan {
    *  the inverse of the failure this harness exists to catch. Absent ⇒ local. */
   lane?: "local" | "remote";
   configDir: string; // materialized CLAUDE_CONFIG_DIR (host path)
+  /** The `skills.local` skills staged into `configDir/skills/<dest>` on this (fresh) build, with their host
+   *  sources. Read by the host-path input provenance, which treats a staged skill as input and its source
+   *  location as never exempt. Absent when none were staged (and on resume, which stages nothing). */
+  stagedSkills?: { src: string; dest: string }[];
   mcpConfig: string | null; // host path to --mcp-config file, if any
   model?: string;
   // Already validated against the resolved model's per-model config (see `validateEffort`) but NOT
@@ -1212,6 +1216,7 @@ export function buildLaunchPlan(
     pluginDirs,
     egressAllow,
     ...(sources.workspaceFixture ? { workspaceFixture: sources.workspaceFixture } : {}),
+    ...(skills.length ? { stagedSkills: skills.map(({ src, dest }) => ({ src, dest })) } : {}),
   };
 }
 
