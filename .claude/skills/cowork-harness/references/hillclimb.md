@@ -244,7 +244,10 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   One unchanged since the run keeps the run's own outcome even when the kept run re-evaluates differently (its
   grader is unchanged, so the difference is the reconstruction's — e.g. a `computer://` link into a connected
   folder, whose host path no run dir records): the row records `meta.regrade_kept_live` and stderr names the assert
-  with both outcomes. A row no judge re-grades is re-evaluated too: a case with no judged assert, a row whose judged
+  with both outcomes. An assert whose literal holds a scrubbed secret is recorded `[REDACTED]` in `result.json`;
+  it is matched under this process's scrub (`COWORK_HARNESS_SCRUB_VALUES` / `_KEYS`), and one this process cannot
+  reproduce is kept unchanged too — never re-evaluated over scrubbed evidence — and named on stderr (an edited one
+  takes a re-run). A row no judge re-grades is re-evaluated too: a case with no judged assert, a row whose judged
   asserts all keep their entries, an agent-failed row (it gains the metric signature and `<id>_present: 0`, never a
   value), and a fill row that needs no comparison. Such a row keeps the judge-side keys of the re-grade whose entries
   it carries (`meta.regrade_file` and the doc-match keys — not that regrade's `regrade_judge_usd` /

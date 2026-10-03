@@ -32,6 +32,8 @@ import {
   type RegradeRunReport,
 } from "../run/regrade.js";
 import { KEPT_WORK_DIR_KEYS, reevaluateRun } from "../run/verify-context.js";
+import { scrub } from "../secrets.js";
+import { hasRedactionToken, REDACTION_TOKEN_RE } from "../redactable-literal.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { computeVerdict } from "../run/verdict.js";
@@ -299,29 +301,77 @@ const deterministicIndexes = (c: HillclimbCase): number[] =>
 
 const keysOf = (a: object): string => Object.keys(a).sort().join(",");
 
-/** The run's entry for each authored index, matched by IDENTITY (`assertIdentities`: the assertion as written, refs
- *  left out, with what it reads from its siblings — each side's from its OWN list, the run's from the run's), never by
- *  position: adding or removing an assert leaves every other one matched. With multiplicity — each run entry answers
- *  one index; the same index first, then the first unused one — so a second copy of an assert is new. */
-function liveByIdentity(live: RunResult, c: HillclimbCase): Array<Entry | undefined> {
-  const was = authoredOf(live);
-  const ids = assertIdentities(was.map((e) => e.assertion));
+/** Whether a run-recorded identity may be `now` with secrets scrubbed out of it: it carries a redaction token, and
+ *  replacing each token with some non-empty text can give `now`. Only ever a POSSIBLE match — what the run scrubbed
+ *  is not recorded. */
+function mayBeScrubbedFrom(was: string, now: string): boolean {
+  if (!hasRedactionToken(was)) return false;
+  const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${was.split(REDACTION_TOKEN_RE).map(esc).join("[\\s\\S]+?")}$`).test(now);
+}
+
+/** Each current index matched to an index of a run-recorded list by IDENTITY (`assertIdentities`: the assertion as
+ *  written, refs left out, with what it reads from its siblings — each side's from its OWN list), never by position:
+ *  adding or removing an assert leaves every other one matched. With multiplicity — each recorded entry answers one
+ *  index; the same index first, then the first unused one — so a second copy of an assert is new. `only` limits the
+ *  current indexes matched (the rest stay undefined).
+ *
+ *  A run's result.json is written through the secret scrub, so an assert whose literal holds a secret is recorded
+ *  scrubbed (`[REDACTED]`). It is matched against the current list scrubbed with this process's secrets, as the run
+ *  scrubbed it. One still unmatched whose recorded identity carries a redaction token that the current assert could
+ *  have been scrubbed to (this process does not know the run's secrets) is matched too — the run's entry is kept, never
+ *  re-evaluated over scrubbed evidence — and named in `scrubbedOnly`: whether it is really unchanged is unknowable. */
+function matchByIdentity(
+  wasIds: readonly string[],
+  nowList: readonly unknown[],
+  secrets: readonly string[],
+  only: (i: number) => boolean = () => true,
+): { at: Array<number | undefined>; scrubbedOnly: number[] } {
+  const raw = assertIdentities(nowList);
+  let scrubbed: string[] | undefined;
+  if (secrets.length)
+    try {
+      scrubbed = assertIdentities(JSON.parse(scrub(JSON.stringify(nowList), [...secrets])) as unknown[]);
+    } catch {
+      scrubbed = undefined; // a secret that breaks the JSON: only the loose match below can pair it
+    }
+  const exact = (i: number, k: number) => wasIds[k] === raw[i] || (scrubbed !== undefined && wasIds[k] === scrubbed[i]);
+  const loose = (i: number, k: number) => mayBeScrubbedFrom(wasIds[k]!, raw[i]!);
+  const at: Array<number | undefined> = raw.map(() => undefined);
   const used = new Set<number>();
-  const now = assertIdentities(authoredNow(c));
-  const out: Array<Entry | undefined> = now.map((id, i) => {
-    if (ids[i] !== id) return undefined;
-    used.add(i);
-    return was[i];
-  });
-  for (const [i, id] of now.entries()) {
-    if (out[i] !== undefined) continue;
-    const k = ids.findIndex((x, j) => x === id && !used.has(j));
-    if (k >= 0) {
+  const scrubbedOnly: number[] = [];
+  for (const [ok, isLoose] of [
+    [exact, false],
+    [loose, true],
+  ] as const) {
+    for (let i = 0; i < raw.length; i++)
+      if (only(i) && at[i] === undefined && i < wasIds.length && !used.has(i) && ok(i, i)) {
+        at[i] = i;
+        used.add(i);
+        if (isLoose) scrubbedOnly.push(i);
+      }
+    for (let i = 0; i < raw.length; i++) {
+      if (!only(i) || at[i] !== undefined) continue;
+      const k = wasIds.findIndex((_, j) => !used.has(j) && ok(i, j));
+      if (k < 0) continue;
+      at[i] = k;
       used.add(k);
-      out[i] = was[k];
+      if (isLoose) scrubbedOnly.push(i);
     }
   }
-  return out;
+  return { at, scrubbedOnly: scrubbedOnly.sort((a, b) => a - b) };
+}
+
+/** The run's entry for each authored index, matched by identity (`matchByIdentity`), and the indexes matched only as
+ *  possibly scrubbed. */
+function liveByIdentity(
+  live: RunResult,
+  c: HillclimbCase,
+  secrets: readonly string[],
+): { entries: Array<Entry | undefined>; scrubbedOnly: number[] } {
+  const was = authoredOf(live);
+  const m = matchByIdentity(assertIdentities(was.map((e) => e.assertion)), authoredNow(c), secrets);
+  return { entries: m.at.map((k) => (k === undefined ? undefined : was[k])), scrubbedOnly: m.scrubbedOnly };
 }
 
 /** A regrade file's name as `regradeFileStem` writes it: never a path. */
@@ -385,6 +435,8 @@ export interface JudgedPlan {
    *  list it was graded under. Empty when that is unknown (`graded_entry_unavailable`). */
   pool: Entry[];
   poolAt: number[];
+  /** The judged indexes matched to their graded entry only as possibly scrubbed (`matchByIdentity`). */
+  scrubbedOnly: number[];
 }
 
 /** Which of a row's judged asserts a regrade re-judges, decided from the row, its kept run and the flow's reference
@@ -397,27 +449,32 @@ export function judgedPlan(
   c: HillclimbCase,
   runDir: string,
   result: RunResult,
-  o: { rejudge: boolean; judgeModel?: string; fill: boolean; variant: string; refs: readonly PairwiseRef[] },
+  o: {
+    rejudge: boolean;
+    judgeModel?: string;
+    fill: boolean;
+    variant: string;
+    refs: readonly PairwiseRef[];
+    /** This process's secrets: the graded entries may record an assert scrubbed with them. */
+    secrets?: readonly string[];
+  },
 ): JudgedPlan {
   const src = gradedSource(row, runDir, result);
   const entries = new Map<number, Entry>();
   const rejudge = new Map<number, RejudgeTrigger[]>();
   const pool = src?.entries ?? [];
   // The same identity rule as the deterministic step's (a judged assert reads nothing from its siblings, so here it is
-  // `assertIdentity`'s).
-  const ids = assertIdentities(pool.map((e) => e.assertion));
-  const nowIds = assertIdentities(c.scenario.assert);
-  const used = new Set<number>();
+  // `assertIdentity`'s), a scrubbed rubric included.
+  const judgedAt = (i: number) => judgedOpts(c.scenario.assert[i] as never) !== undefined;
+  const m = matchByIdentity(assertIdentities(pool.map((e) => e.assertion)), c.scenario.assert, o.secrets ?? [], judgedAt);
   const refNames = o.refs.map((r) => r.name).filter((n) => n !== o.variant);
   for (const [i, a] of c.scenario.assert.entries()) {
     if (judgedOpts(a) === undefined) continue;
     const why: RejudgeTrigger[] = [];
-    const id = nowIds[i]!;
-    const k = src ? ids.findIndex((x, j) => x === id && !used.has(j)) : -1;
+    const k = src ? (m.at[i] ?? -1) : -1;
     if (!src) why.push("graded_entry_unavailable");
     else if (k < 0) why.push("assert_changed");
     else {
-      used.add(k);
       const e = pool[k]!;
       entries.set(i, e);
       if (o.rejudge) why.push("rejudge");
@@ -452,7 +509,14 @@ export function judgedPlan(
     }
     if (why.length) rejudge.set(i, why);
   }
-  return { entries, rejudge, fromFile: src?.file ?? false, pool, poolAt: src?.at ?? [] };
+  return {
+    entries,
+    rejudge,
+    fromFile: src?.file ?? false,
+    pool,
+    poolAt: src?.at ?? [],
+    scrubbedOnly: src ? m.scrubbedOnly : [],
+  };
 }
 
 /** One judged entry whose evidence changed since it was graded: the document it records and the one the current
@@ -653,7 +717,13 @@ function reevaluatedResult(
     authored.push(e);
   }
   for (let i = c.scenario.assert.length; i < re.deterministic.length; i++) authored.push(entryAt(i));
-  return { result: { ...live, assertions: [...authored, ...(live.assertions ?? []).filter((e) => e.source !== undefined)] } };
+  // Each entry carries its assert as the scenario writes it: a kept entry matched by identity may record it scrubbed
+  // (result.json is written through the secret scrub), and the row's grade lines its entries up with the scenario.
+  const now = authoredNow(c);
+  const aligned = authored.map((e, i) =>
+    JSON.stringify(e.assertion) === JSON.stringify(now[i]) ? e : { ...e, assertion: now[i] as never },
+  );
+  return { result: { ...live, assertions: [...aligned, ...(live.assertions ?? []).filter((e) => e.source !== undefined)] } };
 }
 
 /** Whether a rebuilt result's authored entries are exactly the run's (then the run's own verdict stands). */
@@ -1028,6 +1098,7 @@ async function regradeFlowInner(
           fill: args.fillRefs,
           variant: v,
           refs,
+          secrets: deps.secrets,
         });
         if (args.fillRefs ? missingRefs(plan, c, refNames).some((r) => r !== v) : plan.rejudge.size > 0) return true;
       }
@@ -1178,7 +1249,8 @@ async function regradeFlowInner(
           continue;
         }
         // Decided here, before batching: a row listed by the deterministic step costs no judge call.
-        const matched = liveByIdentity(result, c);
+        const byIdentity = liveByIdentity(result, c, deps.secrets);
+        const matched = byIdentity.entries;
         const det = deterministicCheck(row, result, c, re, matched, args.fillRefs, args.reevaluate === true);
         if ("listed" in det) {
           vr.listed.push({ prompt_id: id, rep, why: det.listed });
@@ -1199,7 +1271,14 @@ async function regradeFlowInner(
           fill: args.fillRefs,
           variant: v,
           refs,
+          secrets: deps.secrets,
         });
+        // An assert the run recorded scrubbed that this process's secrets do not reproduce: taken as unchanged (its
+        // live outcome kept, never re-evaluated or re-judged over scrubbed evidence), and said, since that is unknowable.
+        for (const i of [...new Set([...byIdentity.scrubbedOnly, ...plan.scrubbedOnly])].sort((a, b) => a - b))
+          say(
+            `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it, so whether it changed since the run is unknowable — its graded outcome kept, never re-evaluated over the scrubbed evidence (an unchanged assert matches exactly under the run's COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS; an edited one takes a re-run of the case)`,
+          );
         // A fill keeps every outcome the row was graded with: one judged against a reference that has since changed
         // (re-frozen by hand) would mix two references in one row — listed before any spend, never written. Read from
         // the graded entries by the assert each grades now (`plan.entries`), never by its index in the run's list.

@@ -27,6 +27,7 @@ import type { CompleteStructured } from "../src/decide/pairwise-judge.js";
 import { checkReport, stateTemplateFor } from "../src/hillclimb/cli.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
+import { collectSecrets } from "../src/secrets.js";
 
 const MODEL = "claude-sonnet-5";
 const line = (o: unknown) => `printf '%s\\n' '${JSON.stringify(o)}'`;
@@ -1530,6 +1531,130 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before.b);
     expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before.v1);
   }, 240_000);
+
+  // result.json is written through the secret scrub, so an assert whose literal holds a scrubbed value is stored as
+  // `[REDACTED]` there. It is still the assert the run graded: a default regrade of an unchanged scenario must match it,
+  // keep its live outcome, and never re-evaluate it over the scrubbed transcript.
+  const SCRUBBED = { COWORK_HARNESS_SCRUB_VALUES: "All done" };
+  const resultOf = (row: { meta: Record<string, unknown> }) =>
+    JSON.parse(readFileSync(join(runDirOf(row), "turns", "1", "result.json"), "utf8")) as {
+      assertions: Array<{ assertion: Record<string, unknown>; pass: boolean }>;
+    };
+
+  it("a scrubbed assert literal, scenario unchanged: matched under this process's scrub, live outcome kept, grade byte for byte", async () => {
+    const { flow, rows } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"], env: SCRUBBED });
+    // Precondition: the live run passed it on the raw transcript, and its result.json holds the assert scrubbed.
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a1: 1 });
+    expect(resultOf(rows("v1")[0]!).assertions[1]!.assertion).toEqual({ transcript_contains: "[REDACTED]" });
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const lines: string[] = [];
+    const out = await regradeFlow(
+      ARGS({ variant: "v1", approveHarness: true }),
+      DEPS({ secrets: collectSecrets(), stderr: (l) => lines.push(l) }),
+    );
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(out.variants[0]!.listed).toEqual([]);
+    const row = rows("v1")[0]!;
+    const was = JSON.parse(before.trim()) as { grade: unknown; explanation: unknown };
+    expect(row.grade).toEqual(was.grade);
+    expect((row as unknown as { explanation: unknown }).explanation).toEqual(was.explanation);
+    // Unchanged, so the scrubbed re-evaluation (it fails: the kept transcript reads `[REDACTED].`) is not the grade.
+    expect(row.meta.regrade_kept_live).toEqual([1]);
+    expect(lines.join("\n")).not.toMatch(/All done/);
+    // Matched exactly under this process's scrub: nothing unknowable to name.
+    expect(lines.join("\n")).not.toMatch(/is scrubbed in the run's result\.json/);
+  }, 240_000);
+
+  it("a scrubbed assert literal this process cannot reproduce (no secrets): kept live and named, never re-evaluated", async () => {
+    const { rows } = buildFlow({
+      noPairwise: true,
+      extra: ["  - transcript_contains: All done", "  - transcript_not_contains: All done"],
+      env: SCRUBBED,
+    });
+    // Live: the transcript contains it, so the leak-style assert failed.
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 0, a1: 1, a2: 0 });
+    const lines: string[] = [];
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), DEPS({ secrets: [], stderr: (l) => lines.push(l) }));
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    // Over the scrubbed transcript a2 would pass: a fail on a leak turned green. It keeps its live fail.
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 0, a1: 1, a2: 0 });
+    for (const i of [1, 2])
+      expect(lines.join("\n")).toMatch(
+        new RegExp(`alpha rep0: assertion ${i} \\(\`transcript_\\w+\`\\) is scrubbed in the run's result\\.json`),
+      );
+  }, 240_000);
+
+  it("a scrubbed assert literal under this process's scrub: a leak-style fail is kept, never turned green", async () => {
+    const { rows } = buildFlow({
+      noPairwise: true,
+      extra: ["  - transcript_contains: All done", "  - transcript_not_contains: All done"],
+      env: SCRUBBED,
+    });
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 0, a1: 1, a2: 0 });
+    const lines: string[] = [];
+    const out = await regradeFlow(
+      ARGS({ variant: "v1", approveHarness: true }),
+      DEPS({ secrets: collectSecrets(), stderr: (l) => lines.push(l) }),
+    );
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 0, a1: 1, a2: 0 });
+    expect(rows("v1")[0]!.meta.regrade_kept_live).toEqual([1, 2]);
+    expect(lines.join("\n")).not.toMatch(/is scrubbed in the run's result\.json/);
+  }, 240_000);
+
+  it.each([
+    ["a value edit the scrubbed form could hide", "transcript_contains: Nope", { pass: 1, a1: 1 }, true],
+    ["a key edit", "transcript_matches: Nope", { pass: 0, a1: 0 }, false],
+  ] as const)(
+    "a scrubbed assert literal edited since the run (%s)",
+    async (_n, to, grade, named) => {
+      // A scrubbed literal that this process's scrub does not reproduce may be any value: the edit cannot be told from a
+      // run scrubbed with other secrets, so the graded outcome is kept and the row named. A key edit is a changed assert.
+      const { rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"], env: SCRUBBED });
+      edit(evals, "transcript_contains: All done", to);
+      const lines: string[] = [];
+      const out = await regradeFlow(
+        ARGS({ variant: "v1", approveHarness: true }),
+        DEPS({ secrets: collectSecrets(), stderr: (l) => lines.push(l) }),
+      );
+      expect(out.exitCode, JSON.stringify(out)).toBe(0);
+      expect(rows("v1")[0]!.grade).toMatchObject(grade);
+      expect(
+        /assertion 1 \(`\w+`\) is scrubbed in the run's result\.json.*an edited one takes a re-run of the case/.test(lines.join("\n")),
+      ).toBe(named);
+    },
+    240_000,
+  );
+
+  it.each([
+    ["this process's scrub reproduces it", true],
+    ["this process cannot reproduce it (no secrets)", false],
+  ] as const)(
+    "a judged assert whose rubric holds a scrubbed value, scenario unchanged (%s): kept, no judge call",
+    async (_n, withSecrets) => {
+      const judged = ["  - semantic_pairwise:", "      rubric: ['says All done']", "      judge_model: claude-haiku-4-5-20251001"];
+      const { flow, rows } = buildFlow({ extra: judged, env: SCRUBBED });
+      expect(JSON.stringify(resultOf(rows("v1")[0]!).assertions[1]!.assertion)).toContain("[REDACTED]");
+      const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+      const { seen, deps } = counting();
+      const lines: string[] = [];
+      const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), {
+        ...deps,
+        secrets: withSecrets ? collectSecrets() : [],
+        stderr: (l) => lines.push(l),
+      });
+      expect(out.exitCode, JSON.stringify(out)).toBe(0);
+      expect(out.variants[0]!.listed).toEqual([]);
+      expect(seen.calls).toBe(0);
+      const was = JSON.parse(before.trim()) as { grade: unknown };
+      expect(rows("v1")[0]!.grade).toEqual(was.grade);
+      // Named only when this process's scrub cannot reproduce it (then whether it changed is unknowable).
+      expect(/alpha rep0: assertion 1 \(`semantic_pairwise`\) is scrubbed in the run's result\.json/.test(lines.join("\n"))).toBe(
+        !withSecrets,
+      );
+    },
+    240_000,
+  );
 
   // A default regrade re-judges a judged assert only when something its judge reads or grades with changed: a
   // deterministic fix costs no judge call and re-rolls no verdict.
