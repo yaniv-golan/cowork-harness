@@ -4,7 +4,7 @@ model: claude-sonnet-5
 uploads:
   - ../../../../examples/data/sales.csv
 folders:
-  - { from: ../../../../.claude/hillclimb, mode: r }
+  - { from: ../../../../hc-flows, mode: r }
 plugins:
   local_plugins:
     - ../plugin
