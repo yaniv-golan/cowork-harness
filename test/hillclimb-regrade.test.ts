@@ -61,6 +61,20 @@ cat >/dev/null
 cat "${ENVELOPE}"
 `;
 
+/** The same judge answering `tie`, for a test whose precondition needs the live rows to pass. The judge sees the
+ *  candidate and the reference byte-identical (the stub agent says the same thing every run), so no judge could tell
+ *  the candidate's slot; and with the order a seeded coin over a random run id, the captured envelope's fixed "A" is a
+ *  loss about half the time. A tie is the same outcome in either order, and passes the default `pass_if: not_worse`. */
+function tieJudge(dir: string): string {
+  const env = JSON.parse(readFileSync(ENVELOPE, "utf8")) as Record<string, unknown>;
+  const structured = { verdict: "tie", rationale: "Output A and Output B are the same answer; neither is better." };
+  const envelope = join(dir, "judge-tie-envelope.json");
+  writeFileSync(envelope, JSON.stringify({ ...env, result: JSON.stringify(structured), structured_output: structured }));
+  const script = join(dir, "judge-tie.sh");
+  writeFileSync(script, JUDGE.replace(`cat "${ENVELOPE}"`, `cat "${envelope}"`), { mode: 0o755 });
+  return script;
+}
+
 let f: StubFixture;
 let work: string;
 const saved: Record<string, string | undefined> = {};
@@ -95,6 +109,8 @@ function buildFlow(
     judgeModel?: null;
     /** Extra environment for the CLI passes and the in-process calls. */
     env?: Record<string, string>;
+    /** The fake judge answers `tie` (see `tieJudge`): the live rows pass whatever order the comparison was in. */
+    judgeTies?: boolean;
   } = {},
 ) {
   const plugin = join(work, "plugin", "my-plugin");
@@ -120,8 +136,9 @@ function buildFlow(
       metrics,
   );
   if (opts.withBeta) writeFileSync(join(evals, "beta.yaml"), `name: beta\n${head}`);
-  const judge = join(work, "judge.sh");
+  let judge = join(work, "judge.sh");
   writeFileSync(judge, JUDGE, { mode: 0o755 });
+  if (opts.judgeTies) judge = tieJudge(work);
   const env = {
     ...f.env,
     COWORK_MANAGED_CONFIG: "1",
@@ -1383,7 +1400,8 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
   // A fill never moves `pass`, whatever the cause: the per-assert checks compare each outcome with what the row was
   // graded with, but an `expect_denied` host has no `a<i>` key to compare. The backstop compares the rebuilt `pass`.
   it("a fill whose rebuild would move pass is listed, nothing written (an expect_denied host, which no a<i> records)", async () => {
-    const { cli, flow, rows, evals } = buildFlow();
+    // A tying judge: v1's live pass would otherwise turn on the order its comparison was in.
+    const { cli, flow, rows, evals } = buildFlow({ judgeTies: true });
     for (const v of ["baseline", "v1"]) expect(rows(v)[0]!.grade.pass, JSON.stringify(rows(v)[0])).toBe(1);
     edit(evals, "assert:\n", "expect_denied: [blocked.example]\nassert:\n");
     const { seen, deps } = counting();
