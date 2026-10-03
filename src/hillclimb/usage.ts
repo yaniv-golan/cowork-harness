@@ -40,7 +40,8 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --reps N                reps per case (default 1)
   --concurrency N         jobs in flight (default 4; a decider needs --concurrency 1)
   --timeout-s N           per-case wall-clock ceiling in seconds (default 1800; 0 = none)
-  --approve-harness       record the harness sha in _state.json (yours to pass, never the loop's)
+  --approve-harness       record the harness sha, and a sha256 per hashed file, in _state.json (yours to
+                          pass, never the loop's)
   --case ID               run only this case (file stem or scenario name); repeatable
   --ablate                run with the skill removed (the null run); use a sibling flow dir
   --dry-run               print the resolved scope, gate status and estimate; spend nothing

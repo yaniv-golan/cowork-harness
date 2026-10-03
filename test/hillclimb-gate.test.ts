@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync } from "nod
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { flowHarnessDigest, harnessDigest, gateDecision, listedInside } from "../src/hillclimb/gate.js";
+import { flowHarnessDigest, harnessDigest, gateDecision, listedInside, harnessChangeText } from "../src/hillclimb/gate.js";
 
 let cwd: string;
 const put = (rel: string, body: string) => {
@@ -128,4 +128,47 @@ describe("gateDecision (runner-scaffold.mjs l.259-276)", () => {
   it("--approve-harness records the new sha", () => expect(gateDecision({ harness_sha: "b" }, sha, true)).toEqual({ kind: "approve" }));
   it("absent sha refuses, telling the user to approve", () => expect(gateDecision({}, sha, false)).toEqual({ kind: "absent" }));
   it("a different sha refuses", () => expect(gateDecision({ harness_sha: "b".repeat(64) }, sha, false)).toEqual({ kind: "mismatch" }));
+});
+
+describe("per-entry hashes: what an approval records, so a refusal can name what changed", () => {
+  it("every hashed entry gets its own sha256 (files, virtual entries, tags); editing one file moves only its entry", () => {
+    const before = harnessDigest({ ...base(), tags: ["skill:a"] });
+    expect(Object.keys(before.entries)).toEqual(before.hashed);
+    for (const v of Object.values(before.entries)) expect(v).toMatch(/^[0-9a-f]{64}$/);
+    put("evals/a.yaml", "prompt: b\n");
+    const after = harnessDigest({ ...base(), tags: ["skill:a"] });
+    const moved = Object.keys(after.entries).filter((k) => after.entries[k] !== before.entries[k]);
+    expect(moved).toEqual(["evals/a.yaml"]);
+  });
+
+  it("names the changed entries first and counts the unchanged ones, never listing them", () => {
+    const approved = harnessDigest(base());
+    const state = { harness_sha: approved.sha, harness_files: approved.entries };
+    put("evals/a.yaml", "prompt: b\n");
+    expect(harnessChangeText(state, harnessDigest(base()))).toBe("changed: evals/a.yaml; and 3 unchanged");
+  });
+
+  it("an entry that appeared or went away is named as new or removed", () => {
+    const approved = harnessDigest({ ...base(), tags: ["skill:a"] });
+    const state = { harness_sha: approved.sha, harness_files: approved.entries };
+    put("evals/b.yaml", "prompt: b\n");
+    const now = harnessDigest({ ...base(), derived: [...base().derived, join(cwd, "evals/b.yaml")] });
+    expect(harnessChangeText(state, now)).toBe("changed: evals/b.yaml (new), skill:a (removed); and 4 unchanged");
+  });
+
+  it("an approval that recorded no per-entry hashes (an older one) says so and lists every file, as before", () => {
+    const now = harnessDigest(base());
+    const text = "changed: unknown (older approval); files: evals/_session.yaml, evals/a.yaml, <baseline>, <cowork-harness-version>";
+    expect(harnessChangeText({ harness_sha: "b".repeat(64) }, now)).toBe(text);
+    // A value that is not a name -> sha map is read as no record, never trusted.
+    expect(harnessChangeText({ harness_sha: "b".repeat(64), harness_files: ["evals/a.yaml"] }, now)).toBe(text);
+    expect(harnessChangeText({ harness_sha: "b".repeat(64), harness_files: { "evals/a.yaml": 3 } }, now)).toBe(text);
+  });
+
+  it("recorded hashes that all still match a sha that moved name no culprit, and list every file", () => {
+    const now = harnessDigest(base());
+    expect(harnessChangeText({ harness_sha: "b".repeat(64), harness_files: now.entries }, now)).toBe(
+      "changed: none identified; files: evals/_session.yaml, evals/a.yaml, <baseline>, <cowork-harness-version>",
+    );
+  });
 });

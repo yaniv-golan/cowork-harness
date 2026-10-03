@@ -35,6 +35,9 @@ export interface Digest {
   sha: string;
   /** What was hashed, in order: cwd-relative paths, then `<name>` virtual entries, then the tags as written. */
   hashed: string[];
+  /** Each hashed entry's own sha256, keyed by its name in `hashed` (a file's bytes, a virtual entry's value, a tag's
+   *  text). `--approve-harness` records it as `_state.json` `harness_files`, so a later refusal can name what changed. */
+  entries: Record<string, string>;
   skipped: Array<{ path: string; code: string }>;
   lockfiles: string[];
 }
@@ -46,6 +49,8 @@ export function harnessDigest(input: DigestInput): Digest {
   const all = [...new Set([...derived, ...lockfiles.map((f) => resolve(cwd, f)), ...input.listed.map((p) => resolve(cwd, p))])].sort();
   const h = createHash("sha256");
   const hashed: string[] = [];
+  const entries: Record<string, string> = {};
+  const one = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
   const skipped: Digest["skipped"] = [];
   for (const p of all) {
     const rel = relative(cwd, p);
@@ -59,17 +64,20 @@ export function harnessDigest(input: DigestInput): Digest {
     }
     h.update(rel).update("\0").update(buf).update("\0");
     hashed.push(rel);
+    entries[rel] = one(buf);
   }
   for (const k of Object.keys(input.virtual).sort()) {
     const name = `<${k}>`;
     h.update(name).update("\0").update(input.virtual[k]).update("\0");
     hashed.push(name);
+    entries[name] = one(input.virtual[k]);
   }
   for (const t of input.tags ?? []) {
     h.update(t).update("\0");
     hashed.push(t);
+    entries[t] = one(t);
   }
-  return { sha: h.digest("hex"), hashed, skipped, lockfiles };
+  return { sha: h.digest("hex"), hashed, entries, skipped, lockfiles };
 }
 
 /** What a flow's harness sha covers, whichever command computes it (`run`, `regrade`): one function, so the two can
@@ -123,4 +131,31 @@ export function gateDecision(state: { harness_sha?: unknown }, sha: string, appr
   if (state.harness_sha === sha) return { kind: "ok" };
   if (approve) return { kind: "approve" };
   return state.harness_sha == null ? { kind: "absent" } : { kind: "mismatch" };
+}
+
+/** The per-entry hashes an approval recorded (`_state.json` `harness_files`), or undefined when it recorded none
+ *  (an approval from before they existed) or the value is not a name → sha map — never trusted half-read. */
+function recordedEntries(state: Readonly<Record<string, unknown>>): Record<string, string> | undefined {
+  const f = state.harness_files;
+  if (f === null || typeof f !== "object" || Array.isArray(f)) return undefined;
+  return Object.values(f).every((v) => typeof v === "string") ? (f as Record<string, string>) : undefined;
+}
+
+/** What a refusal (or the dry run's gate line) says changed since the approval: the changed entries first (a new one
+ *  marked `(new)`, a gone one `(removed)`), then how many are unchanged, never their names. An approval that recorded
+ *  no per-entry hashes says so and lists every hashed entry, as before; so do recorded hashes that all still match. */
+export function harnessChangeText(state: Readonly<Record<string, unknown>>, digest: Digest): string {
+  const all = `files: ${digest.hashed.join(", ")}`;
+  const before = recordedEntries(state);
+  if (before === undefined) return `changed: unknown (older approval); ${all}`;
+  const changed: string[] = [];
+  let unchanged = 0;
+  for (const name of digest.hashed) {
+    if (!(name in before)) changed.push(`${name} (new)`);
+    else if (before[name] !== digest.entries[name]) changed.push(name);
+    else unchanged++;
+  }
+  for (const name of Object.keys(before)) if (!(name in digest.entries)) changed.push(`${name} (removed)`);
+  if (!changed.length) return `changed: none identified; ${all}`;
+  return `changed: ${changed.join(", ")}${unchanged ? `; and ${unchanged} unchanged` : ""}`;
 }
