@@ -202,7 +202,7 @@ in the environment the harness inherits.
   operator env (scrubbed)**.
 
 Every tier also sets one baseline-derived key, `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, from the recorded auto-memory gate
-(see [fidelity-gaps](./fidelity-gaps.md#auto-memory-four-env-delivered-keys-the-harness-never-sets)). `agent_env`
+(see [fidelity-gaps](./fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not)). `agent_env`
 cannot set it, and on `hostloop`/`protocol` the operator's own export of it is ignored.
 
 An unset `agent_env` field emits no key at all (never an empty string) — the agent falls back to its own

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { initMemoryPaths } from "./helpers/init-memory-paths.js";
+import { parseDotenv } from "../src/dotenv.js";
 
 /**
  * Live, AFTER half of the auto-memory witness (the BEFORE half is in test/auto-memory-env.test.ts: every committed
@@ -25,15 +26,39 @@ const CLI = resolve("dist/cli.js");
 const cliOk = existsSync(CLI);
 // Only protocol needs the host CLI; the other tiers' own prerequisites fail the run loudly if missing.
 const hostClaudeOk = FIDELITY !== "protocol" || spawnSync("claude", ["--version"], { stdio: "ignore" }).status === 0;
-const TOKEN =
-  process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-  (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "");
+// Credential, first hit wins (the value is never printed, only where it came from):
+//   1. CLAUDE_CODE_OAUTH_TOKEN exported in the environment
+//   2. COWORK_LIVE_DOTENV=<path> — the live-lane spelling of the CLI's `--dotenv <path>`; unreadable = no credential
+//   3. ~/.cowork-harness-token (the other live suites' file)
+//   4. this repo's .env (the CLI's own `<install>/.env` fallback)
+function resolveToken(): { token: string; source: string } {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return { token: process.env.CLAUDE_CODE_OAUTH_TOKEN, source: "environment" };
+  const fromDotenv = (path: string): string => {
+    try {
+      return parseDotenv(readFileSync(path, "utf8")).get("CLAUDE_CODE_OAUTH_TOKEN") ?? "";
+    } catch {
+      return "";
+    }
+  };
+  const explicit = process.env.COWORK_LIVE_DOTENV;
+  if (explicit) return { token: fromDotenv(explicit), source: `COWORK_LIVE_DOTENV (${explicit})` };
+  const file = `${homedir()}/.cowork-harness-token`;
+  if (existsSync(file)) {
+    const t = readFileSync(file, "utf8").trim();
+    if (t) return { token: t, source: file };
+  }
+  const repoEnv = resolve(".env");
+  return { token: fromDotenv(repoEnv), source: repoEnv };
+}
+const { token: TOKEN, source: TOKEN_SOURCE } = resolveToken();
 const CAN = cliOk && hostClaudeOk && !!TOKEN;
-const why = `dist/cli.js:${cliOk} host-claude:${hostClaudeOk} token:${!!TOKEN}`;
+const why = `dist/cli.js:${cliOk} host-claude:${hostClaudeOk} token:${!!TOKEN} (looked up: ${TOKEN_SOURCE})`;
 if (!CAN) process.stderr.write(`::warning:: live-auto-memory (${FIDELITY}) SKIPPED — ${why}.\n`);
 
-describe.runIf(REQUIRE && !CAN)("live-auto-memory prerequisites (COWORK_LIVE_REQUIRE=1)", () => {
-  it("are present", () => expect(CAN, `missing prerequisite — ${why}`).toBe(true));
+// Under COWORK_LIVE_REQUIRE=1 this always RUNS, so a green run prints `2 passed (2)` with nothing skipped, and a
+// missing prerequisite is a visible failure rather than a skip.
+it.runIf(REQUIRE)(`live-auto-memory prerequisites are present (${FIDELITY})`, () => {
+  expect(CAN, `missing prerequisite — ${why}`).toBe(true);
 });
 
 describe.skipIf(!CAN)(`live: the init frame carries no memory_paths when the recorded gate is off (${FIDELITY})`, () => {

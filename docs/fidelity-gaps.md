@@ -28,7 +28,7 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 36 o
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
-- **Identity & environment** — [Auto-memory: four env-delivered keys the harness never sets](#auto-memory-four-env-delivered-keys-the-harness-never-sets) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
+- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
 - **Permissions & limits** — [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
@@ -177,7 +177,7 @@ versus a plugin's. Re-measure before relying on any row.
 
 ---
 
-## Auto-memory: four env-delivered keys the harness never sets
+## Auto-memory: the off switch is modeled, the memory keys are not
 
 **Real Cowork behaviour.** When a session has an auto-memory directory, Desktop ships it to the agent
 through the environment: `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`, `CLAUDE_COWORK_MEMORY_INDEX_CONTENT`,
@@ -238,10 +238,11 @@ resolver returns a directory with `123929380` off — such a session receives al
 prompt text, and the harness models none of it. A scenario that grows a `spaceId` or a session type
 walks out of the modeled configuration without any signal.
 
-**Why it is not modeled.** Reproducing it means inventing a memory directory, an index snapshot and a
-guidelines template the harness has no source for — authoring an environment rather than reproducing
-one. The honest position is this entry plus the gate pins, which make a production flip visible as a
-`provenance.gates` diff.
+**Why only the off switch is modeled.** The off switch is a recorded fact: the gate row in the baseline,
+read from the same resolver Desktop uses. The memory keys are not. Reproducing them means inventing a memory
+directory, an index snapshot and a guidelines template the harness has no source for, which would be authoring an
+environment rather than reproducing one. So the honest position has three parts: the off switch, this entry, and
+the gate pins. The pins make a production flip visible as a `provenance.gates` diff and as sync's WARNING note.
 
 ---
 

@@ -45,11 +45,12 @@ All notable changes to this project are documented here. The format is based on
     the egress allowlist and the spawn tools as they were. This release still changes the spawn env on every tier,
     protocol included, through the auto-memory switch (next bullet). A protocol re-stamp therefore keeps the
     verdict but freezes a recording that ran with memory on.
-  - **Auto-memory: re-record, at every tier, protocol included; do not re-stamp.** The agent now starts with
-    auto-memory off on every tier (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, see Fixed). A cassette recorded before this
-    release ran with memory on: its init frame carries `memory_paths`, and the agent's system prompt had a memory
-    section that Cowork's agent never gets. Replay is unaffected and keeps its verdict. A re-stamp, though, would
-    present that memory-on recording as current. Re-record if your scenario:
+  - **Auto-memory: re-record any cassette you keep, at every tier, protocol included; never re-stamp it.** The agent
+    now starts with auto-memory off on every tier (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, see Fixed). A cassette
+    recorded before this release ran with memory on: its init frame carries `memory_paths`, and the agent's system
+    prompt had a memory section that Cowork's agent never gets. Replay is unaffected and keeps its verdict, so
+    nothing breaks if you wait. A re-stamp, though, would present that memory-on recording as current. Re-recording
+    matters most if your scenario:
     - runs a plugin agent that declares `memory:`, which no longer gets Read/Write/Edit added;
     - asserts on `memory_paths`;
     - sets a cost budget, since the post-turn memory forks no longer run and their sub-agent spend disappears.
@@ -69,7 +70,8 @@ All notable changes to this project are documented here. The format is based on
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
   `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
-  `tool_called` / `tool_not_called`), so no re-record or re-stamp is needed. v14 is one bump shared with the
+  `tool_called` / `tool_not_called`), so the format change alone needs no re-record or re-stamp (the auto-memory
+  bullet above still applies). v14 is one bump shared with the
   other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
   schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
   assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
@@ -817,7 +819,7 @@ All notable changes to this project are documented here. The format is based on
     a warning note when the gate reads on, a mode the harness models only in part.
   - **Wording.** The L0 contamination warning and the `l0_host_config_contamination` message no longer list
     auto-memory.
-  - See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#auto-memory-four-env-delivered-keys-the-harness-never-sets).
+  - See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not).
 
 ### Documentation
 

@@ -231,14 +231,18 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       is billed: three short runs.
       ```
       npm run build    # the test spawns dist/cli.js
-      export CLAUDE_CODE_OAUTH_TOKEN=$(cat ~/.cowork-harness-token)   # or keep the token in that file
       for f in protocol container hostloop; do
         COWORK_LIVE_REQUIRE=1 COWORK_LIVE_AUTO_MEMORY_FIDELITY=$f \
           npx vitest run --config vitest.config.live.ts test/live-auto-memory.test.ts
       done
       ```
-      - **Each run must print `Tests  1 passed (1)`.** `COWORK_LIVE_REQUIRE=1` turns a missing token, `dist/cli.js` or
-        host `claude` into a failure, but any `skipped` count still means that tier was not checked.
+      - The `CLAUDE_CODE_OAUTH_TOKEN` comes from the first of these that has it: the exported variable;
+        `COWORK_LIVE_DOTENV=<path>` (this suite's equivalent of the CLI's `--dotenv <path>`); `~/.cowork-harness-token`;
+        the repo's `.env`. The suite prints where it looked, never the value. A worktree has no `.env`, so from a
+        worktree use `COWORK_LIVE_DOTENV=<primary checkout>/.env`.
+      - **Each run must print `Tests  2 passed (2)`**: the prerequisites check, then the run. `COWORK_LIVE_REQUIRE=1`
+        makes a missing token, `dist/cli.js` or host `claude` fail the prerequisites check instead of skipping. Any
+        `skipped` or `failed` count means that tier was not checked.
       - Each run prints the `events.jsonl` it checked (`<outDir>/events.jsonl`). The test fails if that file has no
         `system`/`init` frame, or if the frame has a `memory_paths` key.
       - `protocol` runs the HOST `claude` on your `PATH`, not the staged agent. `container` (Docker, the agent image,
