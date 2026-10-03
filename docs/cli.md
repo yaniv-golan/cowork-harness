@@ -826,6 +826,22 @@ quietly. Its `events.jsonl`/`egress.log` still fully support `trace`, which neve
 every refusal points there. Convert one in place with `cowork-harness migrate-run-dir` (dry-run by
 default), which preserves the file timestamps `stats` and `status --latest-for` rank by.
 
+A run dir is also tied to where it ran. `result.json` names the run's evidence by absolute path (`outDir`, the
+run dir itself; `workDir`, `outputsDir` and `stderrLogPath` inside it), and a copy or a move keeps those paths,
+so they still name the original. Every command that grades or verifies a kept run therefore REFUSES one whose
+recorded `outDir` does not resolve to the dir it was given (exit `2`, naming both dirs), or whose other recorded
+paths sit outside it: `regrade`, `verify-run`, `hillclimb regrade` (the row is listed as refused),
+`hillclimb freeze-ref` and `--fill-refs`, `ref freeze`, and `diff`. Without the refusal a copy whose authored
+files you edited would be graded on the original's files, with no drift reported. The comparison resolves both
+paths on disk (`realpath`), so the same dir reached through a symlinked parent, or macOS's `/var` and
+`/private/var`, is not refused, and the filesystem decides what is the same name; a string that merely starts
+with the run dir's path never counts. A `result.json` that records none of these paths is read from the dir
+given; one that records evidence paths but no `outDir` is refused. `inspect` is a view of the run's own
+record: on a copied or moved dir it warns and skips the artifact previews (which it would read through the
+recorded work dir) instead of refusing. `trace` and `scaffold` read only the dir's own `events.jsonl`, and
+`fixture export` reads the outputs under the dir given, so a copy is safe there. To grade a copy, re-run the
+scenario, or grade the original (move a moved dir back where it ran).
+
 Secrets (the injected OAuth token / API key) are scrubbed from every persisted log by value.
 
 **Observability fields** — `result.json` (i.e. **the turn's own** `turns/<N>/result.json`, or a

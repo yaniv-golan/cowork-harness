@@ -846,6 +846,14 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
 
 ### Fixed
 
+- **A copied or moved run dir is refused by `regrade`, `verify-run`, `hillclimb regrade`, `hillclimb freeze-ref`,
+  `--fill-refs`, `ref freeze` and `diff`.** Its `result.json` still names the original's evidence by absolute path
+  (`outDir`, `workDir`, `outputsDir`), so grading it would judge the original's files while reporting, and writing
+  its regrade file into, the copy: a deliverable edited in a copy was graded as the original with no drift reported.
+  Each now exits 2 when the recorded run dir does not resolve to the dir given (compared on disk, so a symlinked
+  parent or `/var` and `/private/var` still match), or a recorded evidence path sits outside it, naming both dirs
+  and the way out: re-run the scenario, or grade the original. `hillclimb regrade` lists the row as refused.
+  `inspect` warns and skips its artifact previews instead.
 - **The judge, the LLM decider and the `critique` evaluator no longer inherit an exported effort or thinking setting,
   and pin their effort.** Their host `claude` calls ran at whatever `CLAUDE_CODE_EFFORT_LEVEL`,
   `CLAUDE_CODE_DISABLE_THINKING` or `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` the shell exported, or at a user-settings
