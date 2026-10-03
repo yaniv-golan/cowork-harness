@@ -33,6 +33,8 @@ import {
   decodeFcacheProvenance,
   checkSyspromptMapFacts,
   checkSubagentOverrideGate,
+  checkAutoMemoryFacts,
+  checkAutoMemoryGate,
   checkCodeTripwires,
   PINNED_GATES,
 } from "../src/sync/cowork-sync.js";
@@ -538,6 +540,117 @@ describe.skipIf(!ASAR_BACKUPS)("outputsMountMode oracle over saved Desktop asars
     expect(files.size).toBeGreaterThan(100); // the bundle was actually read
     const flags = checkMountModeFacts([...files.values()].join(""), files).filter((f) => f.includes("outputsMountMode"));
     expect(flags.length === 0).toBe(present);
+  });
+});
+
+// The auto-memory switch the harness models (autoMemoryEnv): Desktop's spawn ternary, the resolver delegation, the
+// resolver's ordinary-task arm gated on 123929380 with a null else, and the two places null becomes
+// CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1". Shape transcribed from app.asar 2.19675.0 (normalized).
+describe("checkAutoMemoryFacts (auto-memory anchor)", () => {
+  const SPAWN =
+    "let gt=s.memoryEnabled===!1?null:r.getAutoMemoryDirForSession(a),_t=g&&gt?t.Dz(gt):gt;" +
+    '...R?(()=>{return{CLAUDE_COWORK_MEMORY_PATH_OVERRIDE:R}})():{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"},' +
+    'e.env?.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE||(e.env={...e.env,CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"});';
+  const RESOLVER =
+    "getAutoMemoryDirForSession(e){return this.resolveAutoMemoryDir(e,!1)}getAutoMemoryDirForDisplay(e){return this.resolveAutoMemoryDir(e,!0)}" +
+    "resolveAutoMemoryDir(e,n){if(!this.currentAccountId||!this.currentOrgId)return null;let r=this.sessions.get(e);" +
+    "if(r?.spaceId){return t.$I(this.currentAccountId,this.currentOrgId,r.spaceId)}" +
+    'return r?.sessionType==="agent"?t.zI(this.currentAccountId,this.currentOrgId):r&&!r?.sessionType&&t.ZW("123929380")?t.BI(this.currentAccountId,this.currentOrgId):null}' +
+    "buildMountedProjects(e){return 1}";
+  const files = (spawn = SPAWN, resolver = RESOLVER) =>
+    new Map([
+      ["index.chunk-SPAWN.js", spawn],
+      ["index.chunk-RESOLVER.js", resolver],
+    ]);
+
+  it("the current shape is clean", () => {
+    expect(checkAutoMemoryFacts(files())).toEqual([]);
+  });
+  it.each([
+    ["a different gate id in the ordinary arm", () => files(SPAWN, RESOLVER.replace('"123929380"', '"123929381"'))],
+    ["the ordinary arm no longer gated", () => files(SPAWN, RESOLVER.replace('&&t.ZW("123929380")?', "?"))],
+    [
+      "the else arm is no longer null",
+      () => files(SPAWN, RESOLVER.replace("):null}buildMountedProjects", "):t.BI(1)}buildMountedProjects")),
+    ],
+    ["the memoryEnabled ternary is gone", () => files(SPAWN.replace("s.memoryEnabled===!1?null:", ""), RESOLVER)],
+    ["the delegation is gone", () => files(SPAWN, RESOLVER.replace("return this.resolveAutoMemoryDir(e,!1)", "return this.other(e,!1)"))],
+    ["the host-loop disable arm is gone", () => files(SPAWN.replace('})():{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"}', "})():{}"), RESOLVER)],
+    ["the VM-loop fallback is gone", () => files(SPAWN.replace(',CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"})', "})"), RESOLVER)],
+  ])("flags: %s", (_n, make) => {
+    const f = make();
+    expect([...f.values()].join("")).not.toBe(SPAWN + RESOLVER); // the mutation applied
+    const flags = checkAutoMemoryFacts(f);
+    expect(flags.length).toBeGreaterThan(0);
+    expect(flags[0]).toMatch(/^auto-memory: /);
+  });
+  it("a gated resolver in a chunk that does not hold the delegation does not satisfy it", () => {
+    const decoy = RESOLVER.replace("getAutoMemoryDirForSession(e){return this.resolveAutoMemoryDir(e,!1)}", "");
+    const f = new Map([
+      ["index.chunk-SPAWN.js", SPAWN],
+      ["index.chunk-DELEGATE.js", "getAutoMemoryDirForSession(e){return this.resolveAutoMemoryDir(e,!1)}"],
+      ["index.chunk-DECOY.js", decoy],
+    ]);
+    expect(checkAutoMemoryFacts(f).join("\n")).toMatch(/does not resolve/);
+  });
+  it("structural regression: the REAL asar is clean", () => {
+    const real = readRealBundleFilesOrSkip();
+    if (!real) return;
+    expect(checkAutoMemoryFacts(real)).toEqual([]);
+  });
+});
+
+describe("checkAutoMemoryGate (gate 123929380 now has a runtime consumer)", () => {
+  const gate = (on: boolean) => ({
+    "123929380": { id: "123929380", name: "autoMemoryStandardSessions", on, source: "defaultValue", value: on },
+  });
+  it("OFF (the recorded state) or absent → no note", () => {
+    expect(checkAutoMemoryGate(gate(false))).toEqual([]);
+    expect(checkAutoMemoryGate(null)).toEqual([]);
+    expect(checkAutoMemoryGate({})).toEqual([]);
+  });
+  it("ON → one loud WARNING note naming the half-modeled mode", () => {
+    const n = checkAutoMemoryGate(gate(true));
+    expect(n).toHaveLength(1);
+    expect(n[0]).toMatch(/^WARNING: gate autoMemoryStandardSessions:123929380 reads ON/);
+    expect(n[0]).toMatch(/HALF-modeled/);
+  });
+});
+
+describe.skipIf(!ASAR_BACKUPS)("checkAutoMemoryFacts oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  // Clean from 2.2553.1 (the resolveAutoMemoryDir indirection); the two older asars carry the same behaviour in
+  // an older code form, so the current-shape anchor must flag them — the negatives that make this oracle able to fail.
+  it.each([
+    ["1.24012.11", false],
+    ["1.46388.4", false],
+    ["2.2553.1", true],
+    ["2.9939.4", true],
+    ["2.16120.0", true],
+    ["2.19675.0", true],
+  ])("%s: anchor clean = %s", (version, clean) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100);
+    expect(checkAutoMemoryFacts(files).length === 0).toBe(clean);
+  });
+
+  // Meaning-changed mutations of the REAL bundle, not only the shape-changed negatives above.
+  const ARM = /(([\w$]+)&&!\2\?\.sessionType&&)([\w$.]+)\("123929380"\)\?/;
+  it.each([
+    ["a different gate id in the arm", (m: RegExpExecArray) => `${m[1]}${m[3]}("123929381")?`],
+    ["the gate call replaced with !0", (m: RegExpExecArray) => `${m[1]}!0?`],
+  ])("2.19675.0 with %s flags", (_n, rewrite) => {
+    const asar = join(ASAR_BACKUPS!, "2.19675.0", "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    const hits = [...files].filter(([, c]) => ARM.test(c));
+    expect(hits).toHaveLength(1); // exactly one arm to mutate
+    const [name, chunk] = hits[0];
+    const mutated = chunk.replace(ARM, (...a) => rewrite(a as unknown as RegExpExecArray));
+    expect(mutated).not.toBe(chunk);
+    files.set(name, mutated);
+    expect(checkAutoMemoryFacts(files).join("\n")).toMatch(/ordinary-task arm gated on exactly "123929380"/);
   });
 });
 

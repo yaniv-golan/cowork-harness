@@ -40,10 +40,26 @@ All notable changes to this project are documented here. The format is based on
     assertion on those names needs updating. At `hostloop` the native binary also loads a builtin
     `cc-plugin-sec-default`, which the container ELF does not list. The init event's `capabilities[]` gains
     `sdk_mcp_manifests`, `sdk_mcp_tools_list_changed` and `ui_surface_v1`.
-  - At `protocol` a re-stamp is sound: the agent there is the `claude` on your `PATH`, and the first-party spawn env, the
-    Cowork system prompt, the sub-agent append, the egress allowlist and the spawn tools are unchanged.
+  - At `protocol` the baseline move alone does not need a re-record. The agent there is the `claude` on your
+    `PATH`, and the baseline move leaves the first-party spawn env, the Cowork system prompt, the sub-agent append,
+    the egress allowlist and the spawn tools as they were. This release still changes the spawn env on every tier,
+    protocol included, through the auto-memory switch (next bullet). A protocol re-stamp therefore keeps the
+    verdict but freezes a recording that ran with memory on.
+  - **Auto-memory: re-record any cassette you keep, at every tier, protocol included; never re-stamp it.** The agent
+    now starts with auto-memory off on every tier (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, see Fixed). A cassette
+    recorded before this release ran with memory on: its init frame carries `memory_paths`, and the agent's system
+    prompt had a memory section that Cowork's agent never gets. Replay is unaffected and keeps its verdict, so
+    nothing breaks if you wait. A re-stamp, though, would present that memory-on recording as current. Re-recording
+    matters most if your scenario:
+    - runs a plugin agent that declares `memory:`, which no longer gets Read/Write/Edit added;
+    - asserts on `memory_paths`;
+    - sets a cost budget, since the post-turn memory forks no longer run and their sub-agent spend disappears.
+
+    The same applies to `stats` trends and `eval`/`hillclimb` comparisons that span this release: spend and
+    transcripts on either side of it are not like-for-like.
   - The committed cassettes: `example-pdf-skill`, `dispatch-shell` and `hostloop-computer-links` are re-recorded, and
-    `example-multiselect-gate` is re-stamped.
+    `example-multiselect-gate` is re-stamped. Those four recordings predate the auto-memory switch. The committed
+    example cassettes are re-recorded with it in this same release, so the shipped ones run with memory off.
 - **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
   the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
 - **`hostloop` on an Intel (x64) Mac: the native build pin is per architecture.** `desktop-2.19675.0` records the
@@ -54,7 +70,8 @@ All notable changes to this project are documented here. The format is based on
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
   `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
-  `tool_called` / `tool_not_called`), so no re-record or re-stamp is needed. v14 is one bump shared with the
+  `tool_called` / `tool_not_called`), so the format change alone needs no re-record or re-stamp (the auto-memory
+  bullet above still applies). v14 is one bump shared with the
   other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
   schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
   assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
@@ -124,9 +141,11 @@ All notable changes to this project are documented here. The format is based on
   (`{id, artifact, path, better, scale | unbounded, min?}`; `scale` is the upper bound of the range, `min` the floor, default 0) reads one number from a JSON file the run wrote and is
   reported in `RunResult.metrics` as `{id, value}` or `{id, unavailable: <reason>}` — one per declared id, in order,
   never a `0` for a missing value and never a converted string. Reasons: `missing_artifact`, `missing_path`,
-  `not_json`, `not_a_number`, `readonly`, `size`, `remote`, `pruned`, `pre_run`. A file the run did not write is
-  `pre_run`, decided as `authored: true` decides it (content hash against the pre-run manifest), so a file the run
-  rewrote unchanged is treated as untouched. `replay` re-measures from the cassette manifest and warns once about
+  `not_json`, `not_a_number`, `readonly`, `size`, `remote`, `pruned`, `pre_run`, `no_manifest`. A file the run did
+  not write is `pre_run`, decided as `authored: true` decides it (content hash against the pre-run manifest), so a
+  file the run rewrote unchanged is treated as untouched. A kept run or cassette recorded with no pre-run manifest at
+  all is `no_manifest` (whether the run wrote the file cannot be decided; re-running or re-recording the case with the metric declared measures it), never
+  `pre_run`. `replay` re-measures from the cassette manifest and warns once about
   metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration and `--write`
   freezes it; a plain replay notices an on-disk `metrics:` drift. `verify-run` re-measures the current declaration
   from the kept work dir — no judge, no spend. The published scenario schema mirrors every other load rule.
@@ -296,23 +315,84 @@ All notable changes to this project are documented here. The format is based on
   and `run` warns on a removed one and on row metrics `_state.json` does not declare. `hillclimb check` notes rows
   that predate a declared metric instead of failing them, warns about a float outside `[min, scale]`, refuses a
   non-numeric `min`, and its headroom reads a lower-is-better float's good end from `min`, 0 when absent.
-  `hillclimb regrade` keeps the metric keys on every row it rebuilds, re-measures them on a row it re-grades (which
-  gains the signatures of metrics added since, and loses an unavailable reason for one now measured), and refuses a
-  changed declaration before any judge call, as `run` does. See docs/cli.md → Numeric metrics in hillclimb.
+  `hillclimb regrade` keeps the metric keys on every row it rebuilds and re-measures them on every selected row from
+  its kept run, before any judge call (a row gains the signatures of metrics added since, and loses an unavailable
+  reason for one now measured). A row no judge re-grades is re-measured too: a case with no judged assert, a row
+  whose judged asserts all keep their entries, an agent-failed row (signatures and `<id>_present: 0`, never a value)
+  and a fill row that needs no comparison. A row of a case that declares a metric gains
+  `meta.regrade_remeasured: true`, and each variant reports a `remeasured` count (`regrade.md`, stderr, the JSON
+  payload). A row whose kept run dir is gone or refused, or whose kept work dir is gone, is listed (exit 1). It
+  refuses a changed declaration before any judge call, as `run` does. `hillclimb check`'s note on rows that lack a
+  metric says whether they predate it (a later row carries it) or come after the last row that does (no scenario
+  declares it any more, or a regrade limited by `--variant` / `--case` did not re-measure them). Every `hillclimb run`
+  attempt records the pre-run manifest, whatever its scenario asserts (a plain `run` keeps recording it only when
+  something needs it), so a metric added mid-loop is measured by `regrade` from the kept run instead of reading
+  `no_manifest`; the cost is a pre-spawn walk of the run's work roots on every attempt. A row run before this, of a
+  case that declared no metric and no judged assert, keeps `no_manifest`: only re-running the case (or re-recording a
+  cassette) measures it. See docs/cli.md → Numeric metrics in hillclimb.
+
+- **Hillclimb rows record the assertion set they were graded under** (`meta.assert_sig`, a hash of the case's
+  `assert` and `expect_denied`, `semantic_pairwise.refs` left out so a flow moved to another checkout keeps its
+  sigs). A `hillclimb run` resumed after an approved scenario edit warns, naming the rows the old asserts graded and
+  the `hillclimb regrade <target> --flow <dir> --case <id>` that re-evaluates them; `hillclimb check` warns per case
+  whose rows carry more than one, naming the same command, so a comparison over them never silently mixes two
+  graders. Both say that a scenario edited since the flow's last approval also needs `--approve-harness`, the
+  user's to give.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
-  run` writes rows with, without running the agent: by default every judged assert is graded again (a judge or rubric
-  change) and `pass` is recomputed; `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot
-  move and every row gains the `win_<vN>` columns of references frozen after it. It is gated like `run`, under the
-  `--skill` the flow was approved with (`harness_skill`, which its `--approve-harness` keeps), refuses up
-  front (exit 2) when the host `claude` cannot run the judge isolated, takes every selected variant's lock, and
-  preflights every batch's evidence before any judge call (a refusal writes nothing).
+  run` writes rows with, without running the agent, from the scenario as it is now (a changed, added or removed
+  assert is applied). Every assert no judge grades and every `expect_denied` host is re-evaluated from the kept run
+  with `verify-run`'s own evaluation, matched to the run's by identity, not position (`no_delete_in_mounts`'s
+  identity includes the mounts its list's `allow_delete_in` waives); one unchanged since the run
+  keeps the run's own outcome even when the kept run re-evaluates differently (its grader is unchanged, so the
+  difference is the reconstruction's), recorded in `meta.regrade_kept_live` and named on stderr. An assert whose
+  literal holds a scrubbed secret, recorded `[REDACTED]` in `result.json`, is matched under this process's scrub; one
+  this process cannot reproduce is kept unchanged as well (never re-evaluated or re-judged over scrubbed evidence: a re-judge it
+  would need lists the row, with `--allow-doc-drift` the only override — under it the judge sees the raw rubric against
+  the scrubbed evidence, so its grade may not match the live run's) and named on stderr, since whether it was edited
+  cannot be known. An edit inside a literal this process's scrub reproduces (one scrubbed value for another) cannot be
+  told from no edit either: on a row whose `meta.assert_sig` moved, it lists the row, untouched, until the case is re-run. **The default
+  regrade re-judges only what changed:** a judged assert is re-judged only when the assert itself, the judge model
+  a re-judge would ask for (`--judge-model`, else the assert's own `judge_model` — so a row re-judged under an
+  override goes back to its pin — else `COWORK_HARNESS_JUDGE_MODEL` or the harness default), the judge prompt template, a `semantic_pairwise` assert's
+  references or their gating, or a reference document's content changed since the entry the row carries (its last
+  re-grade's, else its run's); every other judged entry is kept, at no judge cost, and a re-judged row records why in
+  `meta.regrade_rejudged_because`. `--rejudge` re-judges every judged assert. **Changed evidence is always named:**
+  every judged entry a row is graded with is recomposed from its kept run by the current harness (no judge call) and
+  compared with the document it records; a difference (an edited kept run, a harness change to composition, caps or
+  scrubbing) lists the row and keeps it as it is, whatever else changed for it, until `--rejudge` grades it on the
+  current evidence, recording `evidence_changed` and both hashes in `meta.regrade_evidence`. Each variant reports
+  those rows in `evidenceChanged`. `--rejudge` never sends a judge a document less redacted than the graded one: a
+  row whose authored file would carry fewer secret-scrub markers now (or whose graded fingerprint records no count)
+  is listed by path in either mode until the run's scrub settings are restored, or `--rejudge --allow-doc-drift`
+  grades it anyway. A judged-document fingerprint section now records `redactions`, its count of scrub markers. `pass` is recomputed whenever an entry is not the run's own. `--fill-refs` judges
+  only the pairwise comparisons a row lacks, read from the entries it is graded with (a comparison an earlier
+  regrade judged is never judged again, and copied outcomes keep their judge's provenance), so `pass` cannot move
+  and every row gains the `win_<vN>` columns of references frozen after it (a row whose deterministic outcome or
+  judged rubric changed since it was graded is listed before any judge call: run a default regrade first; compared with
+  what the row carries, never its run's `result.json`, so a change a default regrade applied is not listed again; as a
+backstop, any row whose rebuilt `pass` would differ from its own is listed and left as it is). A row a
+  judge re-graded records this regrade's own spend and model (`meta.regrade_judge_usd`,
+  `meta.regrade_judge_model`); its `judge_usage` / `judge_model` describe every entry it is graded with. A later
+  rebuild with no judge call drops both (they were that regrade's, not its own) and keeps `meta.regrade_file`. Every selected row is re-evaluated before any judge call, a case with
+  no judged assert included; a row whose rebuild changes nothing stays byte for byte, and each variant reports a
+  `reevaluated` count. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
+  no judge call. An agent-failed row whose kept run cannot be re-evaluated (an unanswered gate) only has its meta
+  brought current, its grade all 0, and is counted as `agentFailed`, never listed. Rewritten rows record
+  `meta.regrade_reevaluated` and `meta.regrade_harness_version`. It is gated like `run`, under the `--skill` the flow
+  was approved with (`harness_skill`, which its `--approve-harness` keeps), refuses up front (exit 2) when it would
+  call the judge and the host `claude` cannot run it isolated (asked again under the locks when a reference changed
+  in between), takes every selected variant's lock, and preflights
+  every batch's evidence before any judge call (a refusal writes nothing).
   `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
-  `<variant>/regrade.md`, and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1). `regrade`
+  `<variant>/regrade.md` (per-assert and metric columns included; `a<i>` is not compared across two assertion lists),
+  and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1). `regrade`
   now re-grades `semantic_pairwise` asserts in the live run's comparison order, checks their references before any
   spend, and drift-checks an all-neutral run against its `composedDoc`; `no_semantic_asserts` now means the scenario has
   neither judged key. A re-grade that only adds comparisons records the outcomes it kept as `pairwise[].copied: true`.
+  A `regrade` entry a judge read records `judgeModelRequested`, the model the re-grade asked for, beside the
+  `judgeModel` that answered.
 
 - **`semantic_pairwise` inside a hillclimb flow, and `hillclimb freeze-ref`.** Under `hillclimb run` every pairwise
   assert is judged against the flow's own references — `<flow>/baseline/ref`, then each later variant's — instead of
@@ -842,6 +922,25 @@ All notable changes to this project are documented here. The format is based on
   is an unknown delta; the delete-deny resolver's site count could not see this. No cassette goes stale. The default
   outputs-delete verdict now follows the recorded mode (see Changed); see
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-follow-the-baselines-recorded-mount-mode).
+- **The agent now runs with auto-memory off, as Cowork does.** For an ordinary task Desktop gives the agent an
+  auto-memory directory only when server gate `123929380` is on. Otherwise it sends
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. The gate is off in all 31 committed baselines that record it; the other 9, which
+  predate the gate, have no row. The harness set nothing, so
+  the agent loaded a memory section into its system prompt that Cowork's agent never sees. Every tier (protocol,
+  container, microvm, hostloop) now sets the key from the baseline's recorded gate row. A baseline with no row
+  counts as off. On hostloop and protocol the operator's own export of the key is ignored.
+  - **What changes for a run.** The same switch gates two more things in the agent:
+    - a sub-agent's `memory:` frontmatter. A plugin agent that declares it no longer gets Read/Write/Edit appended
+      to its tools or the memory prompt.
+    - the background memory forks after a turn. They no longer run, and their sub-agent spend stops.
+
+    A fresh run, or a re-record, can produce a different transcript. Replaying an existing cassette is unchanged.
+    For fidelity, though, re-record rather than re-stamp: see Upgrade notes.
+  - **sync changes.** It now checks the shape of Desktop's memory resolver; a change is an unknown delta. It prints
+    a warning note when the gate reads on, a mode the harness models only in part.
+  - **Wording.** The L0 contamination warning and the `l0_host_config_contamination` message no longer list
+    auto-memory.
+  - See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not).
 
 ### Documentation
 

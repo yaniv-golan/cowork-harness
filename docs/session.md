@@ -198,8 +198,12 @@ in the environment the harness inherits.
 
 - `hostloop` / `container` / `microvm` (each layers a baseline `spawn.env`): **knob > baseline spawn.env
   > operator env (scrubbed)**.
-- `protocol` (no baseline-env overlay — it spawns from `{...plan.baseEnv}` only): the two-layer **knob >
+- `protocol` (no baseline `spawn.env` overlay — it spawns from `{...plan.baseEnv}`): the two-layer **knob >
   operator env (scrubbed)**.
+
+Every tier also sets one baseline-derived key, `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, from the recorded auto-memory gate
+(see [fidelity-gaps](./fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not)). `agent_env`
+cannot set it, and on `hostloop`/`protocol` the operator's own export of it is ignored.
 
 An unset `agent_env` field emits no key at all (never an empty string) — the agent falls back to its own
 default for that key. Setting any `agent_env` field moves the session-**shape** fingerprint (the

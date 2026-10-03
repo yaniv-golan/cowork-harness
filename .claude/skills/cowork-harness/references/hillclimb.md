@@ -62,6 +62,12 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
 - **Resume is by slot.** A re-run of the same variant runs only the (case, rep) slots with no row in
   `results.jsonl`. A slot with only an `errors.jsonl` row re-runs on every pass, so a permanent fault re-runs
   forever; the scope line names those slots. Raising `--reps` adds reps.
+- **Each row records the assertion set it was graded under** (`meta.assert_sig`, a hash of the case's `assert` and
+  `expect_denied`). A pass resumed after an approved scenario edit warns, naming the rows (any variant) the old
+  asserts graded and the `hillclimb regrade <target> --flow <dir> --case <id>` that re-evaluates them (a scenario
+  edited since the flow's last approval also needs `--approve-harness` on it, which is yours); `check` warns per case
+  whose rows carry more than one. A row written before the sig existed is never called stale. The sig leaves out
+  `semantic_pairwise.refs` (hillclimb ignores them), so a flow moved to another checkout keeps its sigs.
 - **Each variant runs from a snapshot** of the plugin taken on its first run, so a resumed or appended rep
   measures that variant, not the plugin the loop has since edited. Snapshots live in
   `~/.cowork-harness/hillclimb-snapshots` (`COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` moves them: an absolute path
@@ -153,7 +159,8 @@ Rows written before the freeze lack its `win_<vN>` column; `regrade --fill-refs`
 ## `regrade` — re-grade the rows without re-running the agent
 
 ```bash
-cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow   # after a rubric or judge change
+cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow   # after an assert, rubric or metric change
+cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow --rejudge   # re-judge everything (a judge change)
 cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow --fill-refs   # after freeze-ref
 ```
 
@@ -164,34 +171,112 @@ and rewrites each row through the same producer `run` writes it with. Pass the s
 a loop still running included, and `freeze-ref` re-reads a frozen reference's source run, so pass it only once
 every climb there is finished.
 
-- **Default:** every judged assert is graded again, with the flow's references as they are now, and `pass` is
-  recomputed. Use it after a judge or rubric change. A rubric fix is gated (see the harness gate above).
+- **Default:** the row is rebuilt from the scenario as it is now, so a changed value, an added or a removed assert
+  is applied. Every assert no judge grades and each `expect_denied` host is re-evaluated from the kept run (as
+  `verify-run` re-evaluates it). A judged assert is re-judged only when something its judge reads or grades with
+  changed: the assert itself, the judge model a re-judge would ask for (`--judge-model`, else the assert's own
+  `judge_model`, else `COWORK_HARNESS_JUDGE_MODEL` or the harness default — so a row re-judged under an override goes
+  back to its pin) other than the one that graded it (exactly the model its last regrade asked for, else the id the
+  judge answered as, a dated id and its undated form reading as one), the judge prompt template, a `semantic_pairwise` assert's references or their
+  gating, or a reference document's content. Every other judged
+  entry is kept, so a deterministic fix or an added metric costs no judge call and re-rolls no verdict. A re-judged
+  row records why (`meta.regrade_rejudged_because`). `pass` is recomputed whenever an entry is not the run's own. A
+  grader fix is gated (see the harness gate above).
+- **Changed evidence is always named.** Every judged entry a row is graded with is recomposed from its kept run by
+  the current harness (the core `regrade` drift check, no judge call) and compared with the document it records. A
+  difference — a kept run edited since, a harness change to composition, caps or scrubbing — lists the row without
+  `--rejudge`: "the evidence the judge would see changed since this grade (assert i): pass --rejudge to grade the
+  current evidence". The row is kept as it is, whatever else changed for it (an assert changed over drifted evidence
+  included). With `--rejudge` the row is graded on the current evidence: stderr notes it with both hashes, the row
+  records `evidence_changed` and `meta.regrade_evidence` (`[{assert, gradedDocSha, currentDocSha}]`), and no
+  `--allow-doc-drift` is needed. Each variant's `evidenceChanged` names those rows in either mode. A judged entry
+  that recorded no document, or graded comparisons with no judge recorded, counts changed (one `--rejudge` fixes it). The run's recorded capture budget is what a
+  re-judge composes under, so a changed `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` is not a trigger. `check` cannot see
+  it: it reads the flow, not the kept runs.
+- **Never less redacted.** A row whose current document would carry an authored file with fewer `[REDACTED…`
+  markers than the graded one (a secret the run scrubbed that this process does not), or a changed authored file
+  whose graded fingerprint has no marker count, is listed even under `--rejudge`, by path only, with no judge call.
+  Set the run's `COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS` and regrade again, or, after checking
+  them, `--rejudge --allow-doc-drift` grades it anyway.
+- **`--rejudge`:** every judged assert of every selected row is re-judged, with the flow's references as they are
+  now. Use it after a judge change the triggers above do not see. Not with `--fill-refs`.
 - **`--fill-refs`:** only the `semantic_pairwise` comparisons a row lacks are judged (a reference frozen after the
-  row was written; a row lacking only its own variant's gets the neutral outcome, no judge call). Every other
-  outcome and every `semantic_matches` grade stays the live one, so `pass` cannot move. Every scored row then
-  carries every `win_<vN>` column, so `state-template --flow` can declare it: merge the new `metrics` entry.
+  row was written; a row lacking only its own variant's gets the neutral outcome, no judge call). What a row lacks is
+  read from the entries it is graded with, so a comparison an earlier regrade judged is never judged again, and
+  copied outcomes keep their judge's provenance. Every other
+  outcome and every `semantic_matches` grade stays the one the row carries, so `pass` cannot move. Every scored row
+  then carries every `win_<vN>` column, so `state-template --flow` can declare it: merge the new `metrics` entry. A
+  row whose assert list, deterministic outcome or judged assert (a rubric) changed since it was graded is listed
+  instead, before any judge call: run a default `regrade` first, then `--fill-refs`. "Since it was graded" is what
+  the row carries, not its run's `result.json` (which no regrade touches): a change a default regrade already applied
+  is not listed again. Until then that row lacks the
+  new `win_<vN>` column, and `check` reports it missing once `_state.json` declares it. As a backstop, a row whose
+  rebuilt `pass` would differ from its own for any reason (an `expect_denied` host has no `a<i>` to compare) is
+  listed and left as it is; a row judged for the fill has spent its judge call by then.
 
 Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant with rows), `--case ID`
-(repeatable), `--judge-model ID`, `--fill-refs`, `--approve-harness`, `--allow-doc-drift`, `--allow-unchecked`,
+(repeatable), `--judge-model ID`, `--fill-refs`, `--rejudge`, `--approve-harness`, `--allow-doc-drift`, `--allow-unchecked`,
 `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
 - **Everything that can refuse does so before the first judge call**, and then writes nothing: a host `claude`
-  that cannot run the judge isolated, the harness gate, a lock held on any selected variant, and drifted or
-  unchecked evidence in any batch (the refusal names every affected row; `--allow-doc-drift` /
-  `--allow-unchecked` accept it).
+  that cannot run the judge isolated (asked only when a judge would be called — again under the locks when a
+  reference changed in between), the harness gate, a lock held on any selected variant, and unchecked evidence in
+  any batch (the refusal names every affected row; `--allow-unchecked` accepts it). Drifted evidence is named per
+  row above, never refused.
 - **What it writes:** `results.jsonl`, replaced atomically, the prior bytes kept as
-  `<variant>/regrade-<sha16>.bak.jsonl`; `<variant>/regrade.md` and stderr show which rows' `pass`, `claims` or
-  `win` keys moved. A row a judge re-graded gains `meta.regrade_doc_matches_live`, `meta.regrade_unchecked`,
-  `meta.regrade_file` and `meta.regraded_at`; in a fill also `meta.regrade_fill`, `meta.regrade_judge_usd` and
-  `meta.regrade_judge_model`. A fill row rebuilt with no judge call gains only `meta.regraded_at` and
-  `meta.regrade_fill`.
+  `<variant>/regrade-<sha16>.bak.jsonl`; `<variant>/regrade.md` and stderr show which rows' `pass`, `claims`,
+  `win`, per-assert (`a<i>…`) or metric keys moved (a row whose `a<i>` keys name other asserts than before is
+  compared on everything else, and says so). Every rewritten row gains `meta.regraded_at`,
+  `meta.regrade_harness_version` (the harness that re-evaluated it; `meta.env.harnessVersion` stays the run's) and
+  the scenario's current `meta.assert_sig`, plus `meta.regrade_reevaluated: true` when its case has an assert no
+  judge grades. A row a judge re-graded also gains `meta.regrade_doc_matches_live`, `meta.regrade_unchecked` and
+  `meta.regrade_file`, `meta.regrade_judge_usd` (this regrade's own spend) and `meta.regrade_judge_model`; in a
+  fill also `meta.regrade_fill`. On a partly re-judged row, `judge_usage` and `judge_model` describe the judges
+  behind every entry it is graded with (kept ones included), so sum `meta.regrade_judge_usd` for a regrade's cost.
+- **Every selected row is re-evaluated from its kept run**, before any judge call and in either mode: its
+  deterministic asserts and `expect_denied` hosts with `verify-run`'s own evaluation (without its answer-coverage
+  and skill-drift checks), and its metrics re-measured. Asserts are matched to the run's by identity, not position
+  (`no_delete_in_mounts`'s identity includes the mounts its list's `allow_delete_in` waives, since it grades with
+  them: adding or removing that waiver re-evaluates it).
+  One unchanged since the run keeps the run's own outcome even when the kept run re-evaluates differently (its
+  grader is unchanged, so the difference is the reconstruction's — e.g. a `computer://` link into a connected
+  folder, whose host path no run dir records): the row records `meta.regrade_kept_live` and stderr names the assert
+  with both outcomes. An assert whose literal holds a scrubbed secret is recorded `[REDACTED]` in `result.json`;
+  it is matched under this process's scrub (`COWORK_HARNESS_SCRUB_VALUES` / `_KEYS`). Matched that way, an edit inside
+  its literal (one scrubbed value for another) cannot be told from no edit: on a row whose `meta.assert_sig` is not
+  the scenario's now, it lists the row, untouched, on every regrade until the case is re-run. One this process cannot
+  reproduce is kept unchanged too — never re-evaluated or re-judged over scrubbed evidence; a re-judge it would need
+  lists the row (same scrub settings, or `--allow-doc-drift` after checking — then the judge sees the RAW rubric
+  against the scrubbed evidence, so its grade may not match the live run's) — and named on stderr (an edited one
+  takes a re-run). A row no judge re-grades is re-evaluated too: a case with no judged assert, a row whose judged
+  asserts all keep their entries, an agent-failed row (it gains the metric signature and `<id>_present: 0`, never a
+  value), and a fill row that needs no comparison. Such a row keeps the judge-side keys of the re-grade whose entries
+  it carries (`meta.regrade_file` and the doc-match keys — not that regrade's `regrade_judge_usd` /
+  `regrade_judge_model`, which would read as this rebuild's own), and gains `meta.regrade_remeasured: true` when its case declares a metric (plus `meta.regrade_fill` in
+  a fill); `regrade.md`, stderr and each variant's `reevaluated` and `remeasured` counts report them.
+- **An agent-failed row whose kept run cannot be re-evaluated** (a partial run: an unanswered gate) scores 0
+  whatever its asserts say, so only its meta is brought current (`assert_sig`, `metric_sigs`), its grade all 0. It
+  is never listed; each variant's `agentFailed` count reports it.
+- **Every hillclimb attempt records the pre-run manifest**, so a metric added mid-loop is measured by
+  `regrade` from the kept run (the cost: a pre-spawn walk of the work roots on every attempt). A row run before
+  that, of a case that declared no metric and no judged assert, has no manifest: the metric reads `no_manifest` on
+  it (whether the run wrote the file cannot be decided). Only re-running the case measures it (a re-recorded
+  cassette does too).
 - **What it never touches:** the agent (it never runs), `result.json`, the lines it did not rewrite (kept byte for
-  byte), in a default re-grade a case with no judged assert, and an open `judge_invalid` slot in `errors.jsonl`,
-  which is never moved into `results.jsonl`: the summary names, per case, the `run` that re-runs it.
-- **Listed, not re-graded (exit 1):** a row with no scenario file for its case in the target (without `--case`),
-  one whose kept run dir is gone or refused (multi-turn, partial, replay), one whose re-grade is judge-invalid or
-  does not line up with the scenario, in a fill one whose kept outcome was judged against a reference that has
-  changed since, and an open `judge_invalid` slot.
+  byte), a row whose rebuild changed nothing (counted as re-evaluated, its bytes kept; a row with no
+  `meta.assert_sig` is stamped only when its run's assert list is not the scenario's now), and an open `judge_invalid` slot in `errors.jsonl`, which
+  is never moved into `results.jsonl`: the summary names, per case, the `run` that re-runs it.
+- **Listed, not re-graded (exit 1), decided before any judge call where it can be (a listed row costs no judge
+  call):** a row with no scenario file for its case in the target (without `--case`); one whose kept run dir is
+  gone or refused (multi-turn, partial, replay, a work dir gone while a filesystem assert needs it; an agent-failed
+  one aside); one whose kept
+  work dir is gone while its case declares a metric; one with an assert the recorded `workspace_fixture` would
+  satisfy on its own (`verify-run`'s refusal: state `authored:`); without `--rejudge`, one whose judged evidence
+  changed since its grade; in a fill, one whose assert list or judged
+  assert does not line up with the scenario or whose deterministic outcome changed (run a default `regrade` first;
+  an agent-failed row aside); one whose
+  re-grade is judge-invalid; in a fill one whose kept outcome was judged against a reference that has changed
+  since; and an open `judge_invalid` slot.
 
 ## Exit codes
 
@@ -239,7 +324,10 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
   - `<id>_present` is 1 when measured and 0 otherwise. When the metric was unavailable,
     `meta.metrics_unavailable` names the reason.
   - Adding a metric mid-flow is allowed. Older rows predate it and do not carry it, and `check` says so in a note.
-    A regrade that re-judges a row re-measures the metric from the kept run.
+    `regrade` re-measures it on every selected row from the kept run, a row no judge re-grades included. The note
+    goes by where the rows that lack it sit among those that carry it (variants in order, then file order): before
+    the last carrier they predate it; after it, either no scenario declares it any more or a partial re-measure (a
+    regrade limited by `--variant`/`--case`, or rows it listed) left them behind; with no carrier, it cannot tell.
   - Changing a declaration is refused (artifact, path, direction, `scale`, `unbounded` or `min`; an omitted `min` is `min: 0`). Start a new flow,
     or give the metric a new id.
   - Removing a metric is allowed. Also remove its entries from `_state.json`.

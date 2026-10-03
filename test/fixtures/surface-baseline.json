@@ -2538,6 +2538,9 @@
       "definitions.RegradedAssertion.judgeModel": {
         "type": "string"
       },
+      "definitions.RegradedAssertion.judgeModelRequested": {
+        "type": "string"
+      },
       "definitions.RegradedAssertion.pass": {
         "type": "boolean",
         "required": true
@@ -2625,7 +2628,18 @@
       },
       "definitions.Run.metrics[].unavailable": {
         "type": "string",
-        "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run"]
+        "enum": [
+          "missing_artifact",
+          "missing_path",
+          "not_json",
+          "not_a_number",
+          "readonly",
+          "size",
+          "remote",
+          "pruned",
+          "pre_run",
+          "no_manifest"
+        ]
       },
       "definitions.Run.metrics[].value": {
         "type": "number"
@@ -3181,7 +3195,18 @@
       },
       ".metrics[].unavailable": {
         "type": "string",
-        "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run"]
+        "enum": [
+          "missing_artifact",
+          "missing_path",
+          "not_json",
+          "not_a_number",
+          "readonly",
+          "size",
+          "remote",
+          "pruned",
+          "pre_run",
+          "no_manifest"
+        ]
       },
       ".metrics[].value": {
         "type": "number"

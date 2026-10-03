@@ -7,33 +7,50 @@
 //                   written); every other outcome and every semantic_matches grade is the live one, so `pass` cannot
 //                   move. Every scored row is re-graded through the same producer, so each carries every win column.
 //
+// In both modes every selected row's metrics are re-measured from its kept run: by the core re-grade for a row a judge
+// re-grades, and by `reevaluateFromRun` — no judge call — for every other row (a case with no judged assert, an agent
+// failure, a fill row that needs no comparison), so a metric added mid-flow is filled on every row.
+//
 // A row is rewritten by the SAME producer `run` writes it with (`gradeFor` over the result with the re-graded entries
 // substituted), never patched key by key. `result.json` is never touched (`regrade`'s own invariant). Everything that
 // can refuse is decided before the first judge call, over every selected variant: the host-`claude` isolation check,
 // the gate, the locks, and each batch's evidence preflight.
 
-import { realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
 import { classifyRep } from "../eval/classify.js";
 import { pkgVersion } from "../run/envelope.js";
 import { runOutDir } from "../run/execute.js";
-import { regradeRuns, type RegradeOptions, type RegradeOutcome, type RegradeRunReport } from "../run/regrade.js";
+import {
+  gradedDocDrift,
+  regradeRuns,
+  type RedactionLoss,
+  type RegradeOptions,
+  type RegradeOutcome,
+  type RegradeRunReport,
+} from "../run/regrade.js";
+import { reevaluateRun } from "../run/verify-context.js";
+import { scrub } from "../secrets.js";
+import { hasRedactionToken, REDACTION_TOKEN_RE } from "../redactable-literal.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { computeVerdict } from "../run/verdict.js";
 import type { RunResult } from "../types.js";
+import type { AssertContext } from "../assert.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
 import { lexists, normalizeRootArg, NoFollowRoot } from "./fs.js";
 import { approvedHarnessSkill, flowHarnessDigest, gateDecision } from "./gate.js";
-import { flowHasPairwise, type MetricDecl } from "./grade-keys.js";
-import { discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
+import { assertIdentities, assertSig, canonicalJson, flowHasPairwise, type MetricDecl } from "./grade-keys.js";
+import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
-import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
-import { judgedOpts } from "../assert.js";
+import { pairwiseComposeKey, sameModelKey, type PairwiseRef } from "../run/pairwise-prepass.js";
+import { defaultJudgeModel, JUDGE_PROMPT_HASH } from "../decide/semantic-judge.js";
+import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
+import { judgedOpts, sharedCaptureWarning } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
 import { flowMetricUnion, metricSigs, refuseChangedMetrics } from "./metric-keys.js";
 import { existingFlowSnapshot, readStateIfPresent, readVariantFileIfPresent } from "./runner.js";
@@ -51,6 +68,8 @@ export interface HillclimbRegradeArgs {
   allowDocDrift: boolean;
   /** Forwarded to `regrade` only when the user passed it. */
   allowUnchecked: boolean;
+  /** Re-judge every judged assert, changed or not (default: only one whose judge inputs changed — `judgedPlan`). */
+  rejudge?: boolean;
 }
 
 export interface RegradeFlowDeps {
@@ -64,6 +83,8 @@ export interface RegradeFlowDeps {
   harnessVersion?: string;
   /** Test seams, forwarded to `regradeRuns`. */
   regradeOptions?: Pick<RegradeOptions, "makeJudge" | "pairwiseComplete" | "now">;
+  /** Test seam: called after the pre-lock judge decision, right before the locks are taken. */
+  beforeLock?: () => void;
   /** Test seam: the core re-grade (default `regradeRuns`). */
   regrade?: typeof regradeRuns;
   /** Test seam: the metrics merge (default `mergeMetrics`). */
@@ -78,6 +99,23 @@ export interface RegradeFlowVariant {
   rewritten: number;
   /** Rows not re-graded, with why. Nothing was written for them. */
   listed: Array<{ prompt_id: string; rep: number; why: string }>;
+  /** Rows whose deterministic asserts (every assert no judge grades, and each `expect_denied` host) were re-evaluated
+   *  from their kept run with no judge call (a case with no judged assert, an agent-failed row, a fill row that needed
+   *  no comparison). A row whose re-evaluation changed nothing is counted here but not rewritten. A re-judged row's
+   *  deterministic asserts are re-evaluated too; it is counted in `rewritten`. */
+  reevaluated: number;
+  /** Rows whose metrics were re-measured from their kept run with no judge call (a case with no judged assert, an
+   *  agent-failed row, a fill row that needed no comparison). A row whose re-measure changed nothing is counted here
+   *  but not rewritten. */
+  remeasured: number;
+  /** Agent-failed rows (`meta.failure_class: errored_agent`) whose kept run cannot be re-evaluated (a partial run, an
+   *  unanswered gate): such a row scores 0 whatever its asserts say, so only its meta is brought current
+   *  (`assert_sig`, `metric_sigs`), its grade all 0 as `run` writes it — never listed. */
+  agentFailed: number;
+  /** Rows a judged entry of which the current harness would show its judge different evidence than it was graded on
+   *  (`evidenceDrift`): without --rejudge each is also listed, its grade kept; under --rejudge each is re-judged on the
+   *  current evidence. Each change names the assert and both document hashes. */
+  evidenceChanged: Array<{ prompt_id: string; rep: number; evidence: EvidenceChange[] }>;
   regradeFiles: string[];
   backup?: string;
 }
@@ -88,10 +126,10 @@ export interface RegradeFlowOutcome {
   error?: { category: "usage" | "runtime"; message: string };
 }
 
-/** The metrics seam: a re-measure's row metadata merges here into every row rebuilt FROM A RE-GRADE REPORT, after its
- *  grade is rebuilt and before its keys are ordered (a row rebuilt with no judge call has no report, so no re-measure to
- *  merge). The values and `_present` keys are already in `row.grade` — `gradeFor` read them from the result the report's
- *  metrics were merged into — so this sets only what the row's meta says about them, the way `run` writes it:
+/** The metrics seam: a re-measure's row metadata merges here into every row rebuilt from a re-measure — a re-grade
+ *  report's, or the one `reevaluateFromRun` makes for a row no judge re-grades — after its grade is rebuilt and before
+ *  its keys are ordered. The values and `_present` keys are already in `row.grade` — `gradeFor` read them from the result
+ *  the re-measured metrics were merged into — so this sets only what the row's meta says about them, the way `run` writes it:
  *  `meta.metric_sigs` is exactly the declarations' signatures (a row that predated a metric gains its sig; a removed
  *  metric's sig goes with its column, which the rebuilt grade no longer carries; omitted when none is declared), and
  *  `meta.metrics_unavailable` by id — a reason the re-measure gives is added or replaced, an id the grade now reads
@@ -99,7 +137,7 @@ export interface RegradeFlowOutcome {
  *  no metric, so it gains no reason. Mutates in place. */
 export function mergeMetrics(
   row: { grade: Record<string, number>; meta: Record<string, unknown> },
-  report: RegradeRunReport,
+  report: Remeasure,
   decls: readonly MetricDecl[],
 ): void {
   if (decls.length) row.meta.metric_sigs = metricSigs(decls);
@@ -121,6 +159,41 @@ export function mergeMetrics(
   }
   if (Object.keys(unavailable).length) row.meta.metrics_unavailable = unavailable;
   else delete row.meta.metrics_unavailable;
+}
+
+/** What a re-measure of one kept run produced: the case's declared metrics, read from the kept work dir (absent when
+ *  the case declares none). A re-grade report is one. */
+export type Remeasure = Pick<RegradeRunReport, "metrics">;
+
+/** One row re-evaluated from its kept run: the context the kept-run builder rebuilt, and the products read from it. */
+export interface Reevaluation {
+  /** What `verify-run` evaluates a scenario against, rebuilt from the kept run dir. */
+  ctx: AssertContext;
+  /** The case's authored entries re-evaluated from the kept run: one per scenario assert (a judged one reads
+   *  unevaluated — no judge is called), then one per `expect_denied` host. */
+  deterministic: RunResult["assertions"];
+  /** The case's declared metrics, re-measured from the kept work dir (absent when the case declares none). */
+  metrics?: NonNullable<RunResult["metrics"]>;
+}
+
+/** Re-evaluate one selected row from its kept run dir: the one per-row step every selected row goes through, in every
+ *  mode, before any judge call. It is `verify-run`'s own evaluation (`reevaluateRun`: the kept-run context, the
+ *  recorded-fixture refusal, `evaluate` + `expandExpectDenied`, and the metrics re-measured on the same context — a
+ *  file read only while its bytes still equal the run's recorded post-run hash), without `verify-run`'s
+ *  answer-coverage and skill-drift checks (every variant ran another snapshot of the skill). `listed` (never a zeroed
+ *  value) when the run cannot be re-evaluated — a run dir the builder refuses (multi-turn, partial, replay, chat, no
+ *  result, a work dir a filesystem assert needs gone), an assert the recorded fixture would satisfy on its own — or
+ *  when the case declares a metric and the kept work dir it would be read from is gone. */
+export function reevaluateFromRun(runDir: string, c: HillclimbCase): Reevaluation | { listed: string } {
+  // The shared-capture warning is the regrade's to say, once per case (`regradeFlow`), never once per row.
+  const built = reevaluateRun(runDir, c.scenario, { command: "hillclimb regrade", quietSharedCapture: true });
+  if (!built.ok) {
+    if (built.kind === "scenario") throw new Error("unreachable: the scenario was passed as an object");
+    return { listed: `refused: ${built.message.split("\n")[0]}` };
+  }
+  if (c.scenario.metrics?.length && !existsSync(built.ctx.workRoot))
+    return { listed: `its kept work dir is gone (${built.ctx.workRoot || "<unset>"}) — its metrics cannot be re-measured` };
+  return { ctx: built.ctx, deterministic: built.deterministic, ...(built.metrics !== undefined ? { metrics: built.metrics } : {}) };
 }
 
 /** The row's `meta.metrics_unavailable` reasons for the declared ids only. */
@@ -146,6 +219,17 @@ interface Target {
   result: RunResult;
   /** The references this row's comparisons lack (fill mode); empty when it needs no judge call. */
   missing: string[];
+  /** The row re-evaluated from its kept run, before any judge call. */
+  re: Reevaluation;
+  /** Per authored index (scenario asserts, then `expect_denied` hosts): the run's entry for the same assertion, matched
+   *  by identity (`liveByIdentity`), or undefined for an assertion the run did not grade. */
+  live: Array<Entry | undefined>;
+  /** The deterministic indexes whose live entry was kept although the kept run re-evaluates them differently. */
+  keptLive: number[];
+  /** The row's judged entries now, and which of them are re-judged and why. */
+  plan: JudgedPlan;
+  /** Under --rejudge: the entries re-judged over evidence that changed since their grade (`meta.regrade_evidence`). */
+  evidence: EvidenceChange[];
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -157,9 +241,12 @@ function shownRunPath(p: string, secrets: readonly string[]): string {
   return redactDeep(tildeify(p), secrets);
 }
 
-/** The judge model that made a fill's comparisons (the row's own judge fields stay the live ones). */
-const fillModel = (report: RegradeRunReport): string | undefined =>
-  report.assertions.find((a) => a.assertion.semantic_pairwise !== undefined && a.judgeModel !== undefined)?.judgeModel;
+/** The judge model this regrade's own calls were answered by — never a kept entry's: one id, `mixed` for several,
+ *  undefined when no judge was called. A fill's are its comparisons' (the row's own judge fields stay the live ones). */
+const regradeModel = (report: RegradeRunReport): string | undefined => {
+  const models = [...new Set(report.assertions.flatMap((a) => (a.copied !== true && a.judgeModel !== undefined ? [a.judgeModel] : [])))];
+  return models.length === 0 ? undefined : models.length === 1 ? models[0] : "mixed";
+};
 
 /** A core message as the flow, the JSON envelope and stderr show it: no secret, no host path. */
 const shownMessage = (m: string, secrets: readonly string[]): string => redactDeep(m, secrets);
@@ -191,35 +278,454 @@ const real = (p: string): string => {
   }
 };
 
-/** The result with the re-graded entries substituted by scenario index, and the verdict recomputed from them (a
- *  persisted verdict would otherwise win in `gradeFor` and hide every change). */
-function regradedResult(live: RunResult, report: RegradeRunReport, keepVerdict: boolean): RunResult {
-  const byIndex = new Map(report.assertions.map((a) => [a.assertionIndex, a]));
-  let k = 0;
-  const assertions = (live.assertions ?? []).map((e) => {
-    if (e.source !== undefined) return e;
-    const g = byIndex.get(k++);
-    if (!g) return e;
-    const { assertionIndex: _i, docMatchesLive: _d, ...entry } = g as typeof g & { docMatchesLive?: unknown };
-    void _i;
-    void _d;
-    return entry as unknown as typeof e;
-  });
-  const copy = { ...live, assertions } as RunResult;
-  // A fill re-judged no gating comparison: the live verdict stands, so `pass` cannot move by construction.
-  if (!keepVerdict) copy.verdict = computeVerdict(copy, "live") as RunResult["verdict"];
-  // The metrics as the re-grade re-measured them, id by id: a re-measure with no finite value (a pruned or changed file)
-  // never replaces a value the run measured.
-  if (report.metrics !== undefined) {
-    const byId = new Map((live.metrics ?? []).map((m) => [m.id, m]));
-    for (const m of report.metrics) {
-      const prev = byId.get(m.id);
-      const fresh = typeof (m as { value?: unknown }).value === "number" && Number.isFinite((m as { value: number }).value);
-      if (fresh || prev === undefined || typeof (prev as { value?: unknown }).value !== "number") byId.set(m.id, m);
+type Entry = RunResult["assertions"][number];
+
+/** A run's authored entries (no `source`): one per scenario assert, then one per `expect_denied` host. */
+const authoredOf = (r: RunResult): Entry[] => (r.assertions ?? []).filter((e) => e.source === undefined);
+
+/** The scenario's authored list as a live run grades it: its asserts, then one `egress_denied` per `expect_denied` host. */
+const authoredNow = (c: HillclimbCase): object[] => [
+  ...c.scenario.assert,
+  ...(c.scenario.expect_denied ?? []).map((host) => ({ egress_denied: host })),
+];
+
+/** The authored indexes no judge grades: every assert without a judged key, then every `expect_denied` host. */
+const deterministicIndexes = (c: HillclimbCase): number[] =>
+  authoredNow(c).flatMap((a, i) => (i >= c.scenario.assert.length || judgedOpts(a as never) === undefined ? [i] : []));
+
+const keysOf = (a: object): string => Object.keys(a).sort().join(",");
+
+/** Whether a run-recorded identity may be `now` with secrets scrubbed out of it: it carries a redaction token, and
+ *  replacing each token with some non-empty text can give `now`. Only ever a POSSIBLE match — what the run scrubbed
+ *  is not recorded. */
+function mayBeScrubbedFrom(was: string, now: string): boolean {
+  if (!hasRedactionToken(was)) return false;
+  const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${was.split(REDACTION_TOKEN_RE).map(esc).join("[\\s\\S]+?")}$`).test(now);
+}
+
+/** Each current index matched to an index of a run-recorded list by IDENTITY (`assertIdentities`: the assertion as
+ *  written, refs left out, with what it reads from its siblings — each side's from its OWN list), never by position:
+ *  adding or removing an assert leaves every other one matched. With multiplicity — each recorded entry answers one
+ *  index; the same index first, then the first unused one — so a second copy of an assert is new. `only` limits the
+ *  current indexes matched (the rest stay undefined).
+ *
+ *  A run's result.json is written through the secret scrub, so an assert whose literal holds a secret is recorded
+ *  scrubbed (`[REDACTED]`). It is matched against the current list scrubbed with this process's secrets, as the run
+ *  scrubbed it. One still unmatched whose recorded identity carries a redaction token that the current assert could
+ *  have been scrubbed to (this process does not know the run's secrets) is matched too — the run's entry is kept, never
+ *  re-evaluated over scrubbed evidence — and named in `scrubbedOnly`: whether it is really unchanged is unknowable.
+ *  One matched exactly only once scrubbed (not as written) is named in `scrubbedExact`: an edit inside its scrubbed
+ *  literal (one secret for another) scrubs to the same form, so it is unchanged only if the row's list is. */
+function matchByIdentity(
+  wasIds: readonly string[],
+  nowList: readonly unknown[],
+  secrets: readonly string[],
+  only: (i: number) => boolean = () => true,
+): { at: Array<number | undefined>; scrubbedOnly: number[]; scrubbedExact: number[] } {
+  const raw = assertIdentities(nowList);
+  let scrubbed: string[] | undefined;
+  if (secrets.length)
+    try {
+      scrubbed = assertIdentities(JSON.parse(scrub(JSON.stringify(nowList), [...secrets])) as unknown[]);
+    } catch {
+      scrubbed = undefined; // a secret that breaks the JSON: only the loose match below can pair it
     }
-    copy.metrics = [...byId.values()] as RunResult["metrics"];
+  const exact = (i: number, k: number) => wasIds[k] === raw[i] || (scrubbed !== undefined && wasIds[k] === scrubbed[i]);
+  const loose = (i: number, k: number) => mayBeScrubbedFrom(wasIds[k]!, raw[i]!);
+  const at: Array<number | undefined> = raw.map(() => undefined);
+  const used = new Set<number>();
+  const scrubbedOnly: number[] = [];
+  const scrubbedExact: number[] = [];
+  const note = (i: number, k: number, isLoose: boolean) => {
+    if (isLoose) scrubbedOnly.push(i);
+    else if (wasIds[k] !== raw[i]) scrubbedExact.push(i);
+  };
+  for (const [ok, isLoose] of [
+    [exact, false],
+    [loose, true],
+  ] as const) {
+    for (let i = 0; i < raw.length; i++)
+      if (only(i) && at[i] === undefined && i < wasIds.length && !used.has(i) && ok(i, i)) {
+        at[i] = i;
+        used.add(i);
+        note(i, i, isLoose);
+      }
+    for (let i = 0; i < raw.length; i++) {
+      if (!only(i) || at[i] !== undefined) continue;
+      const k = wasIds.findIndex((_, j) => !used.has(j) && ok(i, j));
+      if (k < 0) continue;
+      at[i] = k;
+      used.add(k);
+      note(i, k, isLoose);
+    }
   }
-  return copy;
+  const byIndex = (a: number, b: number) => a - b;
+  return { at, scrubbedOnly: scrubbedOnly.sort(byIndex), scrubbedExact: scrubbedExact.sort(byIndex) };
+}
+
+/** The run's entry for each authored index, matched by identity (`matchByIdentity`), and the indexes matched only as
+ *  possibly scrubbed. */
+function liveByIdentity(
+  live: RunResult,
+  c: HillclimbCase,
+  secrets: readonly string[],
+): { entries: Array<Entry | undefined>; scrubbedOnly: number[]; scrubbedExact: number[] } {
+  const was = authoredOf(live);
+  const m = matchByIdentity(assertIdentities(was.map((e) => e.assertion)), authoredNow(c), secrets);
+  return {
+    entries: m.at.map((k) => (k === undefined ? undefined : was[k])),
+    scrubbedOnly: m.scrubbedOnly,
+    scrubbedExact: m.scrubbedExact,
+  };
+}
+
+/** A regrade file's name as `regradeFileStem` writes it: never a path. */
+const REGRADE_FILE_RE = /^[A-Za-z0-9._-]+\.json$/;
+
+/** The judged entries a row is graded with now: those of the re-grade that last rewrote it (`meta.regrade_file` — a
+ *  re-grade never touches result.json, so after one the run's own judged entries are no longer the row's), else the
+ *  run's own. `undefined` when the row names a regrade file that cannot be read: what it was graded with is unknown. */
+function gradedSource(row: Row, runDir: string, result: RunResult): { entries: Entry[]; at: number[]; file: boolean } | undefined {
+  const named = row.meta?.regrade_file;
+  if (typeof named !== "string" || named === "") {
+    const judged = authoredOf(result).flatMap((e, i) => (judgedOpts(e.assertion) !== undefined ? [{ e, i }] : []));
+    return { entries: judged.map((x) => x.e), at: judged.map((x) => x.i), file: false };
+  }
+  try {
+    const turn = latestTurn(runDir);
+    const name = basename(named);
+    if (turn === undefined || !REGRADE_FILE_RE.test(name)) return undefined;
+    const file = join(dirname(turnArtifactPath(runDir, turn, "result.json")), "regrade", name);
+    const doc = JSON.parse(NoFollowRoot.existing(runDir).readFile(file)) as { assertions?: RegradeRunReport["assertions"] };
+    if (!Array.isArray(doc.assertions)) return undefined;
+    return { entries: doc.assertions.map(reportEntry), at: doc.assertions.map((a) => a.assertionIndex), file: true };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Why a judged assert is re-judged. Everything that changes what its judge reads or how it grades:
+ *  - `assert_changed`: no entry the row is graded with is this assertion (`assertIdentity`: its rubric, claims, judge
+ *    model, `pass_if`, evidence scope — `include_subagent_text`, `evidence_files`, `include_fork_results` — and so the
+ *    pairwise compose key are all part of it); an added assert is one;
+ *  - `graded_entry_unavailable`: the regrade file the row names cannot be read;
+ *  - `rejudge`: `--rejudge`;
+ *  - `judge_model`: the model a re-judge would ask for (`--judge-model`, else the assert's `judge_model`, else the
+ *    env/default chain) is not the one it was graded by (exactly the model its regrade asked for when recorded, else
+ *    the served id, a dated id and its undated form read as one);
+ *  - `judge_prompt`: it was graded under another judge prompt template (`judgePromptHash`);
+ *  - `opponents_changed`: a pairwise assert's references (its own variant's aside: neutral, never judged) or their
+ *    gating are not the flow's now;
+ *  - `reference_changed`: a reference document it was judged against is not the one the flow's store holds now;
+ *  - `evidence_changed` (`--rejudge` only — without it such a row is listed, never re-judged): the document the
+ *    current harness composes from the kept run is not the one its entry was graded on (`evidenceDrift`). */
+export type RejudgeTrigger =
+  | "assert_changed"
+  | "graded_entry_unavailable"
+  | "rejudge"
+  | "judge_model"
+  | "judge_prompt"
+  | "opponents_changed"
+  | "reference_changed"
+  | "evidence_changed";
+
+export interface JudgedPlan {
+  /** Per judged scenario index: the entry the row is graded with now, matched by identity. */
+  entries: Map<number, Entry>;
+  /** The judged indexes to re-judge, each with the triggers that fired, in order. */
+  rejudge: Map<number, RejudgeTrigger[]>;
+  /** The entries came from the row's regrade file (its judge-side meta then describes them). */
+  fromFile: boolean;
+  /** Every judged entry the row is graded with (an assert changed since included), and each one's index in the
+   *  list it was graded under. Empty when that is unknown (`graded_entry_unavailable`). */
+  pool: Entry[];
+  poolAt: number[];
+  /** The judged indexes matched to their graded entry only as possibly scrubbed (`matchByIdentity`). */
+  scrubbedOnly: number[];
+  /** The judged indexes matched exactly only once scrubbed with this process's secrets (`matchByIdentity`). */
+  scrubbedExact: number[];
+}
+
+/** Which of a row's judged asserts a regrade re-judges, decided from the row, its kept run and the flow's reference
+ *  stores — no judge call, nothing written (it also runs before the locks, to decide whether a judge will run at all).
+ *  A judged assert whose inputs are all unchanged keeps the entry the row is graded with: re-judging it would only
+ *  re-roll the judge's noise. A fill re-judges nothing (its references and gating are what it fills), so only identity
+ *  is decided there. */
+export function judgedPlan(
+  row: Row,
+  c: HillclimbCase,
+  runDir: string,
+  result: RunResult,
+  o: {
+    rejudge: boolean;
+    judgeModel?: string;
+    fill: boolean;
+    variant: string;
+    refs: readonly PairwiseRef[];
+    /** This process's secrets: the graded entries may record an assert scrubbed with them. */
+    secrets?: readonly string[];
+  },
+): JudgedPlan {
+  const src = gradedSource(row, runDir, result);
+  const entries = new Map<number, Entry>();
+  const rejudge = new Map<number, RejudgeTrigger[]>();
+  const pool = src?.entries ?? [];
+  // The same identity rule as the deterministic step's (a judged assert reads nothing from its siblings, so here it is
+  // `assertIdentity`'s), a scrubbed rubric included.
+  const judgedAt = (i: number) => judgedOpts(c.scenario.assert[i] as never) !== undefined;
+  const m = matchByIdentity(assertIdentities(pool.map((e) => e.assertion)), c.scenario.assert, o.secrets ?? [], judgedAt);
+  const refNames = o.refs.map((r) => r.name).filter((n) => n !== o.variant);
+  for (const [i, a] of c.scenario.assert.entries()) {
+    if (judgedOpts(a) === undefined) continue;
+    const why: RejudgeTrigger[] = [];
+    const k = src ? (m.at[i] ?? -1) : -1;
+    if (!src) why.push("graded_entry_unavailable");
+    else if (k < 0) why.push("assert_changed");
+    else {
+      const e = pool[k]!;
+      entries.set(i, e);
+      if (o.rejudge) why.push("rejudge");
+      // A judge read it only when it recorded a model: an entry no judge read (every comparison neutral, or its
+      // evidence refused) has no model or prompt to differ.
+      if (e.judgeModel !== undefined) {
+        // The model a re-judge would ask for, resolved as the core resolves it (`--judge-model`, else the assert's own
+        // `judge_model`, else the env/default chain) — so a row re-judged under an override goes back to its pin.
+        // Compared exactly with the model the last regrade ASKED for when it recorded one; else (a live entry, which
+        // records only the id that answered) with that id, a dated id and its undated form read as one model.
+        const wanted = o.judgeModel ?? judgedOpts(a)!.judgeModel ?? defaultJudgeModel();
+        const requested = (e as { judgeModelRequested?: string }).judgeModelRequested;
+        if (requested !== undefined ? requested !== wanted : sameModelKey(e.judgeModel) !== sameModelKey(wanted)) why.push("judge_model");
+        const prompt = a.semantic_pairwise !== undefined ? PAIRWISE_PROMPT_HASH : JUDGE_PROMPT_HASH;
+        if (e.judgePromptHash !== prompt) why.push("judge_prompt");
+      }
+      if (!o.fill && a.semantic_pairwise !== undefined && e.pairwise !== undefined) {
+        const had = e.pairwise.map((x) => x.ref).filter((n) => n !== o.variant);
+        const gating = e.pairwise.some((x) => (x.gate === false) !== (x.ref !== BASELINE_REF));
+        if (gating || had.length !== refNames.length || !refNames.every((n) => had.includes(n))) why.push("opponents_changed");
+        const key = pairwiseComposeKey(a);
+        for (const x of e.pairwise) {
+          if (x.refDocSha256 === undefined) continue;
+          const store = o.refs.find((r) => r.name === x.ref)?.store;
+          const now = store ? readRefDoc(store, c.id, key) : undefined;
+          if (now?.status !== "ok" || now.sha256 !== x.refDocSha256) {
+            why.push("reference_changed");
+            break;
+          }
+        }
+      }
+    }
+    if (why.length) rejudge.set(i, why);
+  }
+  return {
+    entries,
+    rejudge,
+    fromFile: src?.file ?? false,
+    pool,
+    poolAt: src?.at ?? [],
+    scrubbedOnly: src ? m.scrubbedOnly : [],
+    scrubbedExact: src ? m.scrubbedExact : [],
+  };
+}
+
+/** One judged entry whose evidence changed since it was graded: the document it records and the one the current
+ *  harness composes from the kept run (absent when the entry records none — a judge read it, but no fingerprint
+ *  was kept, so the two cannot be compared). */
+export interface EvidenceChange {
+  /** The assert's index now (the index it was graded under, for an assert changed since). */
+  assert: number;
+  gradedDocSha?: string;
+  currentDocSha?: string;
+  /** Authored sections the current document would carry less redacted than the graded one (`RedactionLoss`: by
+   *  path, never by content). Such a row is never re-judged unless --allow-doc-drift is also given. */
+  lessRedacted?: RedactionLoss[];
+}
+
+/** The judged entries of a row whose evidence the current harness would show a judge differently: each entry the
+ *  row is graded with is recomposed from the kept run (`gradedDocDrift`: the same check, and the same code, the
+ *  core re-grade runs before any judge call — its own assert, its list's capture inputs, the run's recorded budget,
+ *  this process's secrets) and compared with the document it records. An entry a judge read that records no
+ *  document cannot be compared: counted changed (one re-judge records it), as is a pairwise entry holding graded
+ *  comparisons with no judge recorded (an older fill dropped its provenance). An entry no judge read and that records
+ *  no document (an evidence refusal) is not compared. A run that records no capture budget is not checked (the core
+ *  refuses to re-grade it). `refusal` when the kept run cannot be recomposed. */
+function evidenceDrift(
+  plan: JudgedPlan,
+  c: HillclimbCase,
+  runDir: string,
+  result: RunResult,
+  secrets: readonly string[],
+): { changes: EvidenceChange[] } | { refusal: string } {
+  const budget = result.authoredCapture;
+  if (!plan.pool.length || !budget) return { changes: [] };
+  const indexOf = (k: number): number => {
+    for (const [i, e] of plan.entries) if (e === plan.pool[k]) return i;
+    return plan.poolAt[k]!;
+  };
+  const got = gradedDocDrift(runDir, c.scenario, plan.pool, {
+    secrets: [...secrets],
+    budget: { totalBytes: budget.totalBytes, ...(budget.perFileBytes !== undefined ? { perFileBytes: budget.perFileBytes } : {}) },
+  });
+  if ("refusal" in got) return got;
+  const changes = new Map<number, EvidenceChange>();
+  for (const d of got.drift)
+    changes.set(d.index, {
+      assert: indexOf(d.index),
+      gradedDocSha: d.recordedSha256,
+      currentDocSha: d.currentSha256,
+      ...(d.redaction.length ? { lessRedacted: d.redaction } : {}),
+    });
+  plan.pool.forEach((e, k) => {
+    if (e.judgeModel !== undefined && e.judgedDoc === undefined && e.composedDoc === undefined) changes.set(k, { assert: indexOf(k) });
+    // Graded comparisons with no judge recorded (an older fill copied them and dropped their judge's provenance):
+    // what graded them, and on what, is unknown — named too, never kept unseen by every trigger.
+    else if (e.judgeModel === undefined && (e.pairwise ?? []).some((o) => o.status === "graded")) changes.set(k, { assert: indexOf(k) });
+  });
+  return { changes: [...changes].sort(([a], [b]) => a - b).map(([, x]) => x) };
+}
+
+/** The deterministic step, decided for every selected row before any judge call, over its re-evaluation:
+ *  - an assert UNCHANGED since the run (matched by identity) keeps the run's own entry: its grader is the one the run
+ *    used, so a re-evaluation that differs is a difference in our reconstruction from the kept run (a changed sidecar,
+ *    an evaluator fixed since, evidence a kept run does not record) — `keptLive` names those, never listed, never
+ *    written as a moved outcome;
+ *  - an assert CHANGED or added since the run is always the re-evaluation's; in a fill, one whose outcome differs from
+ *    the outcome the row was GRADED with (`gradedPass`) is LISTED: a fill never moves `pass`, so a grader change waits
+ *    for a default regrade — and one a default regrade already applied is not listed again. */
+function deterministicCheck(
+  row: Row,
+  live: RunResult,
+  c: HillclimbCase,
+  re: Reevaluation,
+  matched: ReadonlyArray<Entry | undefined>,
+  fill: boolean,
+): { listed: string } | { keptLive: number[] } {
+  const keptLive: number[] = [];
+  for (const i of deterministicIndexes(c)) {
+    const fresh = re.deterministic[i]!;
+    const prev = matched[i];
+    if (prev !== undefined) {
+      if (prev.pass !== fresh.pass) keptLive.push(i);
+      continue;
+    }
+    const graded = fill ? gradedPass(row, live, c, i) : undefined;
+    if (graded !== undefined && graded !== fresh.pass)
+      return {
+        listed: `the grader changed since the row was graded (${labelOf(c, i)} ${outcomeOf(fresh.pass)} now, ${outcomeOf(graded)} when graded): run a default \`hillclimb regrade\` first, then --fill-refs (a fill never moves pass; until then this row lacks the new win column)`,
+      };
+  }
+  return { keptLive };
+}
+
+/** Whether the row was graded under the scenario's assertion list as it is now (`meta.assert_sig`): then its `a<i>`
+ *  keys name the current asserts — a default regrade rebuilt it, or `run` wrote it under this list. */
+const gradedUnderNow = (row: Row, c: HillclimbCase): boolean => row.meta?.assert_sig === assertSig(c.scenario);
+
+/** The outcome the row was GRADED with for authored index `i` — what a fill must not move. A row graded under the
+ *  current list records it as its `a<i>` key (`expect_denied` hosts have none: undefined, nothing to compare); any
+ *  other row was graded from its run, so it is the run's entry at that index (undefined when the run had none). A
+ *  regrade never touches result.json, so after a default regrade the run's list is not what the row was graded with. */
+function gradedPass(row: Row, live: RunResult, c: HillclimbCase, i: number): boolean | undefined {
+  if (gradedUnderNow(row, c)) {
+    const v = i < c.scenario.assert.length ? row.grade?.[`a${i}`] : undefined;
+    return typeof v === "number" ? v === 1 : undefined;
+  }
+  return authoredOf(live)[i]?.pass;
+}
+
+const outcomeOf = (p: boolean) => (p ? "passes" : "fails");
+
+/** The fill's backstop: a fill never moves `pass`, whatever the cause. The per-assert checks compare each outcome with
+ *  the one the row was graded with, but not every outcome is recorded on the row (an `expect_denied` host has no
+ *  `a<i>`), so the rebuilt row's `pass` is compared with the row's own: a difference lists the row. */
+function fillMovesPass(row: Row, rebuilt: Row): string | undefined {
+  const was = row.grade?.pass;
+  const now = rebuilt.grade?.pass;
+  if (was === now) return undefined;
+  return `a fill never moves pass, and this row's would: ${String(was)} as graded, ${String(now)} rebuilt (an outcome it was graded with re-evaluates differently now) — run a default \`hillclimb regrade\` first, then --fill-refs`;
+}
+
+/** An authored index as messages name it. */
+function labelOf(c: HillclimbCase, i: number): string {
+  const now = authoredNow(c);
+  return i < c.scenario.assert.length
+    ? `assertion ${i} (\`${keysOf(now[i]!)}\`)`
+    : `expect_denied ${String((now[i] as { egress_denied: string }).egress_denied)}`;
+}
+
+/** The result rebuilt from the CURRENT scenario: a judged assert's entry from `judged(i)`, every other assert's and
+ *  each `expect_denied` host's re-evaluated from the kept run, then the run's own non-authored entries. `why` when a
+ *  judged assert has no entry to take (no re-grade, and the run graded another assert at that index). The verdict is
+ *  left as the run's; the caller recomputes it when an outcome may have moved. */
+function reevaluatedResult(
+  live: RunResult,
+  c: HillclimbCase,
+  re: Reevaluation,
+  matched: ReadonlyArray<Entry | undefined>,
+  judged: (i: number) => Entry | undefined,
+): { result: RunResult } | { why: string } {
+  const authored: Entry[] = [];
+  for (const [i, a] of c.scenario.assert.entries()) {
+    if (judgedOpts(a) === undefined) {
+      // An assert unchanged since the run keeps the run's own entry; a changed or added one is re-evaluated.
+      authored.push(matched[i] ?? re.deterministic[i]!);
+      continue;
+    }
+    const e = judged(i);
+    if (e === undefined)
+      return {
+        why: `assertion ${i} (\`${keysOf(a)}\`) was not re-graded and is not the assert its run graded — run a default \`hillclimb regrade\``,
+      };
+    authored.push(e);
+  }
+  for (let i = c.scenario.assert.length; i < re.deterministic.length; i++) authored.push(matched[i] ?? re.deterministic[i]!);
+  // Each entry carries its assert as the scenario writes it: a kept entry matched by identity may record it scrubbed
+  // (result.json is written through the secret scrub), and the row's grade lines its entries up with the scenario.
+  const now = authoredNow(c);
+  const aligned = authored.map((e, i) =>
+    JSON.stringify(e.assertion) === JSON.stringify(now[i]) ? e : { ...e, assertion: now[i] as never },
+  );
+  return { result: { ...live, assertions: [...aligned, ...(live.assertions ?? []).filter((e) => e.source !== undefined)] } };
+}
+
+/** Whether a rebuilt result's authored entries are exactly the run's (then the run's own verdict stands). */
+const sameAuthored = (a: RunResult, b: RunResult): boolean => canonicalJson(authoredOf(a)) === canonicalJson(authoredOf(b));
+
+/** A re-grade report's entry as a result entry. */
+function reportEntry(g: RegradeRunReport["assertions"][number]): Entry {
+  const { assertionIndex: _i, docMatchesLive: _d, ...entry } = g as typeof g & { docMatchesLive?: unknown };
+  void _i;
+  void _d;
+  return entry as unknown as Entry;
+}
+
+/** A judged assert's entry on an agent-failed row the scenario changed since the run: no judge reads it, and the row
+ *  scores 0 whatever it says. */
+const notJudged = (a: object): Entry => ({ assertion: a as never, pass: false, message: "not judged: the agent failed" });
+
+/** The keys a re-grade wrote about the judged entries it produced, kept on a row rebuilt with those entries (no judge
+ *  call). Not its spend or its judge (`regrade_judge_usd`, `regrade_judge_model`): those say what THAT regrade did,
+ *  and beside this rebuild's own `regraded_at` they would read as this one's — `regrade_file` still names it. */
+const JUDGE_SIDE_META = ["regrade_file", "regrade_doc_matches_live", "regrade_unchecked", "regrade_fill"] as const;
+const carriedJudgeMeta = (row: Row): Record<string, unknown> =>
+  Object.fromEntries(JUDGE_SIDE_META.flatMap((k) => (row.meta && k in row.meta ? [[k, row.meta[k]]] : [])));
+
+/** A case that declares a metric of its own (a row of another case carries the flow's columns unmeasured). */
+const declaresMetrics = (c: HillclimbCase): boolean => (c.scenario.metrics?.length ?? 0) > 0;
+
+const withVerdict = (r: RunResult): RunResult => ({ ...r, verdict: computeVerdict(r, "live") as RunResult["verdict"] });
+
+/** The result with its metrics as a re-measure measured them, id by id: a re-measure with no finite value (a pruned or
+ *  changed file) never replaces a value the run measured. One rule for a re-graded row and a re-measured-only one. */
+function withRemeasured(live: RunResult, re: Remeasure): RunResult {
+  if (re.metrics === undefined) return live;
+  const byId = new Map((live.metrics ?? []).map((m) => [m.id, m]));
+  for (const m of re.metrics) {
+    const prev = byId.get(m.id);
+    const fresh = typeof (m as { value?: unknown }).value === "number" && Number.isFinite((m as { value: number }).value);
+    if (fresh || prev === undefined || typeof (prev as { value?: unknown }).value !== "number") byId.set(m.id, m);
+  }
+  return { ...live, metrics: [...byId.values()] as RunResult["metrics"] };
 }
 
 /** Rebuild one scored row from a result: grade, explanation, claim texts, reference shas and judge fields through the
@@ -233,7 +739,9 @@ function rebuiltRow(
   shape: { pairwise?: { metricRefs: readonly string[] }; metrics: readonly MetricDecl[]; merge: typeof mergeMetrics },
   extraMeta: Record<string, unknown>,
   judgeFieldsFrom: RunResult | undefined,
-  report: RegradeRunReport | undefined,
+  /** The row's re-measure (a re-grade report, or `reevaluateFromRun`'s); undefined when its metrics were not re-measured
+   *  (a flow that declares none). */
+  report: Remeasure | undefined,
 ): { row: Row } | { why: string } {
   const rep = classifyRep({ result: result as never }, {});
   if (rep.bucket === "judge_invalid")
@@ -265,13 +773,19 @@ function rebuiltRow(
     "regrade_doc_matches_live",
     "regrade_unchecked",
     "regrade_file",
+    "regrade_remeasured",
+    "regrade_reevaluated",
+    "regrade_harness_version",
+    "regrade_kept_live",
+    "regrade_rejudged_because",
+    "regrade_evidence",
     "regraded_at",
   ];
   const grade = { ...g.grade };
   if (report) shape.merge({ grade, meta }, report, shape.metrics);
   else {
-    // Not re-measured, so the row stays as `run` left it. A removed metric's sig and unavailable reason go with its
-    // column (the ordered grade no longer carries it). A metric the row predates (no sig) gains neither a sig nor the
+    // Not re-measured (only a flow that declares no metric), so the row stays as `run` left it. A removed metric's sig
+    // and unavailable reason go with its column (the ordered grade no longer carries it). A metric the row predates (no sig) gains neither a sig nor the
     // `<id>` / `<id>_present` keys `gradeFor` emits for every declared metric — a `_present: 0` would read as
     // "measured: no", and `check` would no longer count the row as predating the metric.
     const sigs = meta.metric_sigs;
@@ -324,6 +838,8 @@ function rebuiltRow(
     repl.judge_model = row.judge_model;
     repl.judge_usage = row.judge_usage;
   }
+  // Rebuilt from the scenario as it is now: the assertion set the row is graded under now.
+  put("assert_sig", assertSig(c.scenario));
   for (const [k, v] of Object.entries(extraMeta)) put(k, v);
   for (const k of clear) if (!set.has(k)) delete meta[k];
   repl.meta = meta;
@@ -355,6 +871,9 @@ function withOwnNeutral(result: RunResult, c: HillclimbCase, variant: string, re
   return { ...result, assertions };
 }
 
+/** The pairwise outcomes a row is graded with, by the scenario index of the assert each grades now. */
+const gradedPairwise = (plan: JudgedPlan) => [...plan.entries].map(([assertionIndex, e]) => ({ assertionIndex, pairwise: e.pairwise }));
+
 /** The references whose COPIED outcome (kept from the live run by a fill) recorded a document other than the one the
  *  flow's store holds now. */
 function staleCopied(
@@ -377,37 +896,73 @@ function staleCopied(
   return [...out];
 }
 
-/** The references a row's pairwise asserts have no live outcome against (its own variant's included: neutral, no
- *  judge call, but the column must be there). An outcome that exists but could not be compared live (`missing`,
- *  `integrity`) counts as present: re-judging it could move a gating comparison, which a fill never does — a full
- *  re-grade is the tool for that. */
-/** Why a row's live result no longer lines up with the scenario's assertion list — a different count, a different
- *  key at an index, or a pairwise assert with another evidence scope — decided before any judge call (a re-grade
- *  substitutes entries by index, so a shifted list would grade one assert into another's place). */
-function shapeMismatch(result: RunResult, c: HillclimbCase): string | undefined {
-  const live = (result.assertions ?? []).filter((e) => e.source === undefined);
+/** Why the list a row was GRADED under no longer lines up with the scenario's assertion list — a different count, a
+ *  different key at an index, or a pairwise assert with another evidence scope — decided before any judge call (a fill
+ *  copies what it does not judge, so a shifted list would carry one assert's outcome into another's place). A row
+ *  graded under the current list (`gradedUnderNow`: a default regrade applied the change, or `run` wrote it so) lines
+ *  up whatever its run's result.json says — no regrade touches that file; any other row was graded under its run's. */
+function shapeMismatch(row: Row, result: RunResult, c: HillclimbCase): string | undefined {
+  if (gradedUnderNow(row, c)) return undefined;
+  const live = authoredOf(result);
   const now = c.scenario.assert;
-  if (live.length !== now.length) return `the scenario now has ${now.length} assertion(s), its run graded ${live.length}`;
+  const hosts = c.scenario.expect_denied?.length ?? 0;
+  // The run graded each `expect_denied` host as a trailing `egress_denied` entry.
+  if (live.length !== now.length + hosts)
+    return `the scenario now has ${now.length} assertion(s)${hosts ? ` and ${hosts} expect_denied host(s)` : ""}, its run graded ${live.length}`;
   for (let i = 0; i < now.length; i++) {
-    const keys = (a: object) => Object.keys(a).sort().join(",");
-    if (keys(live[i]!.assertion) !== keys(now[i]!))
-      return `assertion ${i} is \`${keys(now[i]!)}\` now, \`${keys(live[i]!.assertion)}\` in its run`;
+    if (keysOf(live[i]!.assertion) !== keysOf(now[i]!))
+      return `assertion ${i} is \`${keysOf(now[i]!)}\` now, \`${keysOf(live[i]!.assertion)}\` in its run`;
     if (now[i]!.semantic_pairwise && pairwiseComposeKey(now[i]!) !== pairwiseComposeKey(live[i]!.assertion))
       return `assertion ${i} (semantic_pairwise) has another evidence scope than in its run`;
   }
   return undefined;
 }
 
-function missingRefs(result: RunResult, c: HillclimbCase, refNames: readonly string[]): string[] {
+/** The references a row's pairwise asserts have no outcome against (its own variant's included: neutral, no judge
+ *  call, but the column must be there). An outcome that exists but could not be compared (`missing`, `integrity`)
+ *  counts as present: re-judging it could move a gating comparison, which a fill never does — a full re-grade is the
+ *  tool for that. Read from the entries the row is GRADED with (`judgedPlan`: its last regrade file, else its run's
+ *  result), never the run's result.json alone: a comparison an earlier regrade judged is the row's, not missing. */
+function missingRefs(plan: JudgedPlan, c: HillclimbCase, refNames: readonly string[]): string[] {
   const pairwiseIdx = c.scenario.assert.map((a, i) => (a.semantic_pairwise !== undefined ? i : -1)).filter((i) => i >= 0);
   if (!pairwiseIdx.length) return [];
-  const authored = (result.assertions ?? []).filter((e) => e.source === undefined);
-  return refNames.filter((ref) => pairwiseIdx.some((i) => !(authored[i]?.pairwise ?? []).some((o) => o.ref === ref)));
+  return refNames.filter((ref) => pairwiseIdx.some((i) => !(plan.entries.get(i)?.pairwise ?? []).some((o) => o.ref === ref)));
 }
 
-const changedKeys = (before: Record<string, number> | undefined, after: Record<string, number> | undefined): string[] => {
+/** The pairwise asserts a fill would judge: each lacking an outcome against a reference other than its own variant's
+ *  (that one is neutral, never judged). Per index, the form of `missingRefs`. */
+function fillJudged(plan: JudgedPlan, c: HillclimbCase, variant: string, refNames: readonly string[]): number[] {
+  return c.scenario.assert.flatMap((a, i) =>
+    a.semantic_pairwise !== undefined &&
+    refNames.some((ref) => ref !== variant && !(plan.entries.get(i)?.pairwise ?? []).some((o) => o.ref === ref))
+      ? [i]
+      : [],
+  );
+}
+
+/** Whether a row's `a<i>` keys before and after a rebuild name the same asserts: its assertion set is the scenario's
+ *  now (same `assert_sig`), or — a row no regrade rewrote, so graded under its run's list — the run's list has the same
+ *  length and the same keys at every index (a value edit keeps the alignment; an inserted or removed assert breaks it).
+ *  A row an earlier regrade rewrote under another set has a list nothing here records: not aligned. */
+function aIndexAligned(row: Row, result: RunResult, c: HillclimbCase): boolean {
+  const sig = row.meta?.assert_sig;
+  if (sig !== undefined && sig === assertSig(c.scenario)) return true;
+  if (row.meta?.regraded_at !== undefined) return false;
+  const was = authoredOf(result).map((e) => keysOf(e.assertion));
+  const now = authoredNow(c).map(keysOf);
+  return was.length === now.length && was.every((k, i) => k === now[i]);
+}
+
+/** The grade keys a rebuild moved: the verdict, each assert's (`a<i>`, its claims and companions), the claims and win
+ *  roll-ups, and the flow's metric columns. */
+const changedKeys = (
+  before: Record<string, number> | undefined,
+  after: Record<string, number> | undefined,
+  metricIds: readonly string[],
+): string[] => {
   const keys = new Set([...Object.keys(before ?? {}), ...Object.keys(after ?? {})]);
-  return [...keys].filter((k) => /^(pass|claims|win|both_bad)/.test(k) && before?.[k] !== after?.[k]);
+  const metric = (k: string) => metricIds.some((id) => k === id || k === `${id}_present`);
+  return [...keys].filter((k) => (/^(pass|claims|win|both_bad|a\d+)/.test(k) || metric(k)) && before?.[k] !== after?.[k]);
 };
 
 export async function regradeFlow(args: HillclimbRegradeArgs, deps: RegradeFlowDeps): Promise<RegradeFlowOutcome> {
@@ -447,6 +1002,7 @@ async function regradeFlowInner(
   const byId = new Map(cases.map((c) => [c.id, c]));
   // No agent runs here, so no agent model needs resolving (a flow run with --model would otherwise be refused).
   // `run --case`'s rule: the per-case checks cover the selected cases; the gate below covers every case.
+  const harnessVersion = deps.harnessVersion ?? pkgVersion();
   const prep = prepareCases(
     all,
     {
@@ -482,13 +1038,44 @@ async function regradeFlowInner(
   if (!variants.length) throw new UsageError(`${flowArg} has no variant with rows to re-grade`);
 
   // Every judge (semantic_matches, semantic_pairwise) runs the host `claude` isolated and tool-less, as `hillclimb run`
-  // requires: a CLI that cannot is refused here, before any lock or write, instead of grading every row judge-invalid.
-  // A fill judges only the pairwise comparisons a row lacks, so only a selected pairwise assert needs the check there.
-  if (
-    cases.some((c) =>
-      (c.scenario.assert ?? []).some((a) => (args.fillRefs ? a.semantic_pairwise !== undefined : judgedOpts(a) !== undefined)),
-    )
-  ) {
+  // requires: a CLI that cannot is refused here, before any lock or write, instead of grading every row judge-invalid —
+  // but only when a judge would run. That is decided from the rows as they are now (read-only), with the rules the
+  // regrade applies under its locks: a row whose judged asserts all keep their entries costs no judge call; a fill
+  // judges only the comparisons a row lacks (its own variant's aside). The rows are read again under the locks and a
+  // change in between is refused, so the decision cannot be made over rows the regrade does not see.
+  const refs = discoverFlowRefs(flowAbs);
+  const refNames = refs.map((r) => r.name);
+  const preLock = new Map(variants.map((v) => [v, readVariantFileIfPresent(flowArg, v, "results.jsonl", deps.cwd) ?? ""]));
+  const willJudge = (): boolean => {
+    for (const [v, text] of preLock)
+      for (const raw of text.split("\n")) {
+        let row: Row | undefined;
+        try {
+          row = raw.trim() ? (JSON.parse(raw) as Row) : undefined;
+        } catch {
+          row = undefined;
+        }
+        const c = row ? byId.get(String(row.prompt_id)) : undefined;
+        if (!row || !c || !c.scenario.assert.some((a) => (args.fillRefs ? a.semantic_pairwise !== undefined : judgedOpts(a) !== undefined)))
+          continue;
+        const runDir = runDirOf(row, c);
+        const result = runDir ? readResult(runDir) : undefined;
+        if (!runDir || !result || classifyRep({ result: result as never }, {}).bucket === "errored_agent") continue;
+        if (!args.fillRefs && args.rejudge === true) return true;
+        const plan = judgedPlan(row, c, runDir, result, {
+          rejudge: false,
+          ...(args.judgeModel !== undefined ? { judgeModel: args.judgeModel } : {}),
+          fill: args.fillRefs,
+          variant: v,
+          refs,
+          secrets: deps.secrets,
+        });
+        if (args.fillRefs ? missingRefs(plan, c, refNames).some((r) => r !== v) : plan.rejudge.size > 0) return true;
+      }
+    return false;
+  };
+  const judgesPreLock = willJudge();
+  if (judgesPreLock) {
     const iso = deps.isolationCheck();
     if (iso) return refuse(iso);
   }
@@ -503,7 +1090,7 @@ async function regradeFlowInner(
     state,
     derived: prep.derivedPaths(all),
     derivedValues: prep.derivedValues(all),
-    harnessVersion: deps.harnessVersion ?? pkgVersion(),
+    harnessVersion,
     baselineId: baselineIds.join(","),
     ...(approvedSkill !== undefined ? { skill: approvedSkill } : {}),
   });
@@ -517,6 +1104,7 @@ async function regradeFlowInner(
       `harness changed since last approved run (files: ${digest.hashed.join(", ")}); approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}. Re-run with --approve-harness after reviewing the diff.`,
     );
 
+  deps.beforeLock?.();
   // Lock every selected variant (sorted), all or nothing.
   const writers = new Map<string, FlowWriter>();
   const releases: Array<() => void> = [];
@@ -526,7 +1114,12 @@ async function regradeFlowInner(
       releases.push(w.lock());
       writers.set(v, w);
     }
-    const refs = discoverFlowRefs(flowAbs);
+    // The rows the judge decision above was made over: a change since (a concurrent pass) is refused, nothing written.
+    for (const v of variants)
+      if ((writers.get(v)!.readVariantFile("results.jsonl") ?? "") !== preLock.get(v))
+        return refuse(
+          `${join(flowArg, v, "results.jsonl")} changed while regrade was starting (a concurrent pass?) — nothing was written; run it again`,
+        );
     const regrade = deps.regrade ?? regradeRuns;
     const shape = {
       ...(flowHasPairwise(all.map((c) => ({ assertions: c.scenario.assert ?? [] })))
@@ -535,8 +1128,14 @@ async function regradeFlowInner(
       metrics: union,
       merge: deps.mergeMetrics ?? mergeMetrics,
     };
-    const refNames = refs.map((r) => r.name);
     const outcome: RegradeFlowOutcome = { exitCode: 0, variants: [] };
+    // Said on every rewritten row: its deterministic asserts were re-evaluated from its kept run (only a case that has
+    // one), and which harness version evaluated it (`meta.env.harnessVersion` is the run's).
+    const reevaluatedMeta = (c: HillclimbCase, t: Target): Record<string, unknown> => ({
+      ...(deterministicIndexes(c).length ? { regrade_reevaluated: true } : {}),
+      regrade_harness_version: harnessVersion,
+      ...(t.keptLive.length ? { regrade_kept_live: t.keptLive } : {}),
+    });
 
     // Rows, grouped into batches: one regrade call per (variant, case, references to fill).
     interface Batch {
@@ -546,7 +1145,11 @@ async function regradeFlowInner(
       targets: Target[];
     }
     const batches: Batch[] = [];
-    const plain: Target[] = []; // rows re-graded with no judge call (fill mode: nothing missing, or an agent failure)
+    // Rows rebuilt with no judge call — a case with no judged assert (re-evaluated and re-measured; in a fill, also given
+    // its columns), an agent failure, a fill row lacking only its own variant's outcome — each from its kept run.
+    const plain: Target[] = [];
+    // Agent-failed rows whose kept run cannot be re-evaluated: rebuilt with no evidence read (see `agentFailed`).
+    const metaOnly: Array<{ variant: string; c: HillclimbCase; line: Line; result: RunResult }> = [];
     const perVariant = new Map<string, { lines: Line[]; old: string; v: RegradeFlowVariant }>();
     for (const v of variants) {
       const old = writers.get(v)!.readVariantFile("results.jsonl") ?? "";
@@ -561,7 +1164,16 @@ async function regradeFlowInner(
             return { raw }; // a torn line is kept as it is
           }
         });
-      const vr: RegradeFlowVariant = { variant: v, rewritten: 0, listed: [], regradeFiles: [] };
+      const vr: RegradeFlowVariant = {
+        variant: v,
+        rewritten: 0,
+        listed: [],
+        reevaluated: 0,
+        remeasured: 0,
+        agentFailed: 0,
+        evidenceChanged: [],
+        regradeFiles: [],
+      };
       perVariant.set(v, { lines, old, v: vr });
       outcome.variants.push(vr);
       const groups = new Map<string, Batch>();
@@ -576,28 +1188,105 @@ async function regradeFlowInner(
           continue;
         }
         const judged = c.scenario.assert.some((a) => judgedOpts(a) !== undefined);
-        // Nothing to re-grade: the row stands — except in a fill, which rebuilds EVERY scored row (no judge call for
-        // this one) so a later reference's win column is on every row of the flow.
-        if (!judged && !args.fillRefs) continue;
+        // Every selected row is re-evaluated from its kept run, a case with no judged assert included: a grader fix to
+        // a deterministic assert is applied to every row, never left stale.
         const runDir = runDirOf(row, c);
         const result = runDir ? readResult(runDir) : undefined;
         if (!runDir || !result) {
           vr.listed.push({ prompt_id: id, rep, why: "its kept run dir is gone (evidence unavailable)" });
           continue;
         }
-        const mismatch = judged ? shapeMismatch(result, c) : undefined;
+        // A fill copies every outcome it does not judge by index, so the run's list must line up with the scenario's. A
+        // default regrade rebuilds the list from the scenario (each deterministic assert re-evaluated, each judged one
+        // re-judged), so an added or removed assert is applied there, not listed.
+        // An agent-failed row scores 0 whatever lines up (a partial run graded no assert at all), so neither fill check
+        // has anything to protect on it.
+        const failedAgent = row.meta?.failure_class === "errored_agent";
+        const mismatch = args.fillRefs && !failedAgent ? shapeMismatch(row, result, c) : undefined;
         if (mismatch) {
-          vr.listed.push({ prompt_id: id, rep, why: `${mismatch} — re-run the variant for the new assertions` });
+          vr.listed.push({ prompt_id: id, rep, why: `${mismatch} — run a default \`hillclimb regrade\` first, then --fill-refs` });
           continue;
         }
-        // A fill keeps every live outcome: one judged against a reference that has since changed (re-frozen by hand)
-        // would mix two references in one row — listed before any spend, never written.
-        if (args.fillRefs) {
-          let k = 0;
-          const entries = (result.assertions ?? []).flatMap((e) =>
-            e.source === undefined ? [{ assertionIndex: k++, pairwise: e.pairwise }] : [],
+        // Every selected row is re-evaluated from its kept run here, before any judge call: a row whose context cannot be
+        // rebuilt is listed, never re-measured as unavailable.
+        const re = reevaluateFromRun(runDir, c);
+        if ("listed" in re) {
+          // An agent failure scores 0 whatever its asserts say: a run that cannot be re-evaluated changes nothing a row
+          // grades, so only the row's meta is brought current — never listed (no command would clear it).
+          if (row.meta?.failure_class === "errored_agent") metaOnly.push({ variant: v, c, line, result });
+          else vr.listed.push({ prompt_id: id, rep, why: shownMessage(re.listed, deps.secrets) });
+          continue;
+        }
+        // Decided here, before batching: a row listed by the deterministic step costs no judge call.
+        const byIdentity = liveByIdentity(result, c, deps.secrets);
+        const matched = byIdentity.entries;
+        const det = deterministicCheck(row, result, c, re, matched, args.fillRefs);
+        if ("listed" in det) {
+          vr.listed.push({ prompt_id: id, rep, why: det.listed });
+          continue;
+        }
+        // An assert matched exactly only once scrubbed, on a row graded under another assertion list: an edit inside
+        // its scrubbed literal (one secret for another) scrubs to the form the run recorded, so whether it changed
+        // cannot be told. Rewriting the row would record the current assert_sig over the old outcome, and every later
+        // regrade would take it as unchanged: the row is listed instead, untouched — by every regrade until a re-run.
+        const cannotApply = (at: readonly number[]): boolean => {
+          if (gradedUnderNow(row, c) || !at.length) return false;
+          vr.listed.push({
+            prompt_id: id,
+            rep,
+            why: `${[...at]
+              .sort((a, b) => a - b)
+              .map((i) => labelOf(c, i))
+              .join(", ")}: its literal is scrubbed in the run's result.json, so an edit to it cannot be applied — re-run the case`,
+          });
+          return true;
+        };
+        if (cannotApply(byIdentity.scrubbedExact)) continue;
+        for (const i of det.keptLive)
+          say(
+            `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} ${outcomeOf(matched[i]!.pass)} in the run, ${outcomeOf(re.deterministic[i]!.pass)} re-evaluated now — unchanged since the run, so it kept its live outcome (the kept evidence or the evaluator differs, not the grader; harness ${harnessVersion})`,
           );
-          const stale = staleCopied(entries, c, refs, false);
+        const agentFailed = classifyRep({ result: result as never }, {}).bucket === "errored_agent";
+        const plan = judgedPlan(row, c, runDir, result, {
+          rejudge: args.rejudge === true,
+          ...(args.judgeModel !== undefined ? { judgeModel: args.judgeModel } : {}),
+          fill: args.fillRefs,
+          variant: v,
+          refs,
+          secrets: deps.secrets,
+        });
+        // An assert the run recorded scrubbed that this process's secrets do not reproduce: taken as unchanged, and
+        // said, since that is unknowable. Its live judge read the rubric and the document both scrubbed; a re-judge here
+        // would send the rubric as written against the scrubbed evidence (for a negative claim, a leak turned green no
+        // live run could produce). So any re-judge such an assert would need lists the row — no judge call, nothing
+        // written — unless the operator, having checked the scrub settings, passes --allow-doc-drift. One matched
+        // exactly under this process's scrub is re-judged with its rubric scrubbed as the run sent it.
+        if (cannotApply(plan.scrubbedExact)) continue;
+        const unknowable = [...new Set([...byIdentity.scrubbedOnly, ...plan.scrubbedOnly])].sort((a, b) => a - b);
+        const toJudge = agentFailed ? [] : args.fillRefs ? fillJudged(plan, c, v, refNames) : [...plan.rejudge.keys()];
+        const rawRubric = unknowable.filter((i) => toJudge.includes(i));
+        if (rawRubric.length && !args.allowDocDrift) {
+          vr.listed.push({
+            prompt_id: id,
+            rep,
+            why: shownMessage(
+              `${rawRubric.map((i) => labelOf(c, i)).join(", ")} ${rawRubric.length === 1 ? "is" : "are"} scrubbed in the run's result.json and this process's secrets do not reproduce ${rawRubric.length === 1 ? "it" : "them"}: a re-judge would send the rubric as written against the scrubbed evidence the run's judge read — run with the same scrub settings the run used (COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS), or pass --allow-doc-drift explicitly after checking them`,
+              deps.secrets,
+            ),
+          });
+          continue;
+        }
+        for (const i of unknowable)
+          say(
+            rawRubric.includes(i)
+              ? `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it — re-judged anyway (--allow-doc-drift): its rubric is sent as written against the scrubbed evidence`
+              : `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it, so whether it changed since the run is unknowable — its graded outcome kept, never re-evaluated over the scrubbed evidence (an unchanged assert matches exactly under the run's COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS; an edited one takes a re-run of the case)`,
+          );
+        // A fill keeps every outcome the row was graded with: one judged against a reference that has since changed
+        // (re-frozen by hand) would mix two references in one row — listed before any spend, never written. Read from
+        // the graded entries by the assert each grades now (`plan.entries`), never by its index in the run's list.
+        if (args.fillRefs && !agentFailed) {
+          const stale = staleCopied(gradedPairwise(plan), c, refs, false);
           if (stale.length) {
             vr.listed.push({
               prompt_id: id,
@@ -607,15 +1296,95 @@ async function regradeFlowInner(
             continue;
           }
         }
-        const agentFailed = classifyRep({ result: result as never }, {}).bucket === "errored_agent";
-        const t: Target = { variant: v, c, line, runDir, result, missing: args.fillRefs ? missingRefs(result, c, refNames) : [] };
-        if (args.fillRefs ? agentFailed || !t.missing.filter((r) => r !== v).length : agentFailed) {
-          // No comparison to judge: an agent failure scores 0 whatever the judge says, and a row lacking only its own
-          // variant's (neutral) outcome needs no judge call. A fill still rebuilds it, so it carries every column.
+        // A fill copies every judged outcome it does not add: one whose assert changed since it was graded would be
+        // stamped with the current assertion set over an old rubric's outcome — listed before any judge call.
+        if (args.fillRefs && !agentFailed) {
+          const changed = [...plan.rejudge].find(([, why]) => why.includes("assert_changed") || why.includes("graded_entry_unavailable"));
+          if (changed) {
+            vr.listed.push({
+              prompt_id: id,
+              rep,
+              why: changed[1].includes("assert_changed")
+                ? `the rubric changed since the run (${labelOf(c, changed[0])} is not the assert it was graded with): run a default \`hillclimb regrade\` first, then --fill-refs`
+                : `the regrade file it was graded with cannot be read: run a default \`hillclimb regrade\` first, then --fill-refs`,
+            });
+            continue;
+          }
+        }
+        // Evidence the current harness would show a judge differently than an entry the row is graded with was graded
+        // on is always said, never silently kept or silently re-graded: without --rejudge the row is listed and kept as
+        // it is, whatever else changed for it; --rejudge grades it on the current evidence (recording both hashes).
+        const drift = agentFailed ? { changes: [] } : evidenceDrift(plan, c, runDir, result, deps.secrets);
+        if ("refusal" in drift) {
+          vr.listed.push({
+            prompt_id: id,
+            rep,
+            why: shownMessage(`its judged evidence cannot be recomposed: ${drift.refusal.split("\n")[0]}`, deps.secrets),
+          });
+          continue;
+        }
+        if (drift.changes.length) {
+          vr.evidenceChanged.push({ prompt_id: id, rep, evidence: drift.changes });
+          const asserts = [...new Set(drift.changes.map((x) => x.assert))].join(", ");
+          // Never a judge call over a document less redacted than the graded one (a secret the run scrubbed, not
+          // scrubbed by this process): listed in either mode — by path, never by content — unless the operator,
+          // having checked the scrub settings, passes --allow-doc-drift.
+          const lossy = drift.changes.flatMap((x) => (x.lessRedacted ?? []).map((r) => ({ assert: x.assert, ...r })));
+          if (lossy.length && !args.allowDocDrift) {
+            const known = lossy.every((r) => r.kind === "less");
+            const where = lossy
+              .map((r) => `assert ${r.assert}: ${r.path}${r.kind === "unknown" ? " — its graded document records no redaction count" : ""}`)
+              .join("; ");
+            vr.listed.push({
+              prompt_id: id,
+              rep,
+              why: shownMessage(
+                `the current evidence ${known ? "is" : "may be"} less redacted than the graded document (${where}): a secret the run scrubbed is not scrubbed now — set the same scrub settings as the run (COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS) and regrade again, or, after checking them, pass --rejudge --allow-doc-drift to grade it anyway`,
+                deps.secrets,
+              ),
+            });
+            continue;
+          }
+          if (!args.rejudge) {
+            const why = `the evidence the judge would see changed since this grade (assert ${asserts}): ${
+              args.fillRefs
+                ? "run `hillclimb regrade --rejudge` first to grade the current evidence, then --fill-refs"
+                : "pass --rejudge to grade the current evidence"
+            }`;
+            vr.listed.push({ prompt_id: id, rep, why });
+            continue;
+          }
+          for (const x of drift.changes) plan.rejudge.get(x.assert)?.push("evidence_changed");
+          const shas = drift.changes
+            .map((x) => `assert ${x.assert}: ${x.gradedDocSha?.slice(0, 12) ?? "unrecorded"} → ${x.currentDocSha?.slice(0, 12) ?? "?"}`)
+            .join(", ");
+          say(
+            `  [${v}] ${id} rep${rep}: the evidence the judge would see changed since its grade (assert ${asserts}) — re-judged on the current evidence (--rejudge; ${shas})`,
+          );
+        }
+        const t: Target = {
+          variant: v,
+          c,
+          line,
+          runDir,
+          result,
+          missing: args.fillRefs ? missingRefs(plan, c, refNames) : [],
+          re,
+          live: matched,
+          keptLive: det.keptLive,
+          plan,
+          evidence: args.rejudge ? drift.changes : [],
+        };
+        if (!judged || (args.fillRefs ? agentFailed || !t.missing.filter((r) => r !== v).length : agentFailed || !plan.rejudge.size)) {
+          // No comparison to judge: a case with no judged assert, an agent failure (it scores 0 whatever the judge
+          // says), a row whose judged asserts all keep what they were graded with, and a fill row lacking only its own
+          // variant's (neutral) outcome. Rebuilt with no judge call, so it is re-measured and, in a fill, carries every
+          // column.
           plain.push(t);
           continue;
         }
-        const key = `${id}\0${args.fillRefs ? t.missing.join(",") : ""}`;
+        // One batch per set of asserts to re-judge (the rest are kept): every run in a core re-grade keeps the same ones.
+        const key = `${id}\0${args.fillRefs ? t.missing.join(",") : [...plan.rejudge.keys()].join(",")}`;
         const b = groups.get(key) ?? { variant: v, c, ...(args.fillRefs ? { onlyRefs: t.missing } : {}), targets: [] };
         b.targets.push(t);
         groups.set(key, b);
@@ -644,14 +1413,33 @@ async function regradeFlowInner(
       }
     }
 
+    // The rows are the ones the pre-lock decision read, but what else it read (a reference store) can have changed
+    // since: a judge the rows need now that it did not foresee is preceded by the same isolation check, before any
+    // spend and before anything is written.
+    if (batches.length && !judgesPreLock) {
+      const iso = deps.isolationCheck();
+      if (iso) return refuse(iso);
+    }
+
     const optsFor = (b: Batch, checkOnly: boolean) => ({
       runDirs: b.targets.map((t) => t.runDir),
       scenarioFile: b.c.file,
       secrets: [...deps.secrets],
       ...(args.judgeModel !== undefined ? { judgeModel: args.judgeModel } : {}),
-      ...(args.allowDocDrift ? { allowDocDrift: true } : {}),
+      // --rejudge grades a row whose evidence changed on the current evidence (each such row is named above): the
+      // drift is accepted for it, by that flag.
+      ...(args.allowDocDrift || args.rejudge ? { allowDocDrift: true } : {}),
+      ...(args.rejudge && !args.allowDocDrift ? { driftAcceptedBy: "--rejudge" } : {}),
       ...(args.allowUnchecked ? { allowUnchecked: true } : {}),
       pairwise: { ...flowPairwiseOptions(b.c.id, b.variant, refs), ...(b.onlyRefs ? { onlyRefs: b.onlyRefs } : {}) },
+      // What each row is graded with now, and (default mode) the judged asserts it keeps: never sent to a judge.
+      graded: (dir: string) => {
+        const t = b.targets.find((x) => real(x.runDir) === real(dir));
+        if (!t) return undefined;
+        const keep = new Set(args.fillRefs ? [] : [...t.plan.entries.keys()].filter((i) => !t.plan.rejudge.has(i)));
+        return { entries: t.plan.entries, keep, ...(t.plan.pool.length ? { pool: t.plan.pool } : {}) };
+      },
+      quietSharedCapture: true,
       ...(deps.regradeOptions ?? {}),
       ...(checkOnly ? { checkOnly: true as const } : {}),
     });
@@ -706,9 +1494,17 @@ async function regradeFlowInner(
       );
     }
 
+    // The shared-capture hazard, said once per case a judge reads (each re-grade and re-evaluation is told not to).
+    for (const id of new Set(batches.filter((b) => !skip.has(b)).map((b) => b.c.id))) {
+      const hazard = sharedCaptureWarning(byId.get(id)!.scenario.assert);
+      if (hazard) say(hazard.trimEnd());
+    }
+
     // The spend.
     const rebuilt = new Map<Line, Row>();
     const before = new Map<Line, Record<string, number> | undefined>();
+    // Rebuilt rows whose a<i> keys name other asserts than before (`aIndexAligned`): the moved table leaves them out.
+    const misaligned = new Set<Line>();
     const at = new Date().toISOString();
     for (const b of batches) {
       if (skip.has(b)) continue;
@@ -740,7 +1536,21 @@ async function regradeFlowInner(
           });
           continue;
         }
-        const copy = regradedResult(t.result, report, args.fillRefs);
+        const byIndex = new Map(report.assertions.map((a) => [a.assertionIndex, a]));
+        const built = reevaluatedResult(t.result, b.c, t.re, t.live, (i) => {
+          const g = byIndex.get(i);
+          return g !== undefined ? reportEntry(g) : t.plan.entries.get(i);
+        });
+        if ("why" in built) {
+          vr.listed.push({ prompt_id: b.c.id, rep, why: built.why });
+          continue;
+        }
+        const remeasured = withRemeasured(built.result, report);
+        // A fill re-judged no gating comparison and moved no deterministic outcome from the one the row was GRADED with
+        // (`deterministicCheck`): the live verdict stands when its authored entries are still the run's, else it is
+        // recomputed over the entries the row was graded with — either way `pass` is the graded row's. A full re-grade
+        // recomputes it (a persisted verdict would otherwise win in `gradeFor` and hide every change).
+        const copy = args.fillRefs && sameAuthored(remeasured, t.result) ? remeasured : withVerdict(remeasured);
         const got = rebuiltRow(
           t.line.row!,
           copy,
@@ -751,13 +1561,16 @@ async function regradeFlowInner(
             regrade_unchecked: report.uncheckedCount,
             regrade_file: shownRunPath(report.regradeFile, deps.secrets),
             regraded_at: at,
-            ...(args.fillRefs
-              ? {
-                  regrade_fill: b.onlyRefs,
-                  ...(report.judgeCostUsd !== undefined ? { regrade_judge_usd: report.judgeCostUsd } : {}),
-                  ...(fillModel(report) ? { regrade_judge_model: fillModel(report) } : {}),
-                }
+            ...reevaluatedMeta(b.c, t),
+            ...(t.plan.rejudge.size
+              ? { regrade_rejudged_because: [...t.plan.rejudge].map(([i, because]) => ({ assert: i, because })) }
               : {}),
+            ...(t.evidence.length ? { regrade_evidence: t.evidence } : {}),
+            ...(args.fillRefs ? { regrade_fill: b.onlyRefs } : {}),
+            // This regrade's own spend and judge, apart from the row's `judge_usage` / `judge_model` (the judges behind
+            // every entry it is graded with, a kept one included).
+            ...(report.judgeCostUsd !== undefined ? { regrade_judge_usd: report.judgeCostUsd } : {}),
+            ...(regradeModel(report) !== undefined ? { regrade_judge_model: regradeModel(report) } : {}),
           },
           args.fillRefs ? undefined : copy,
           report,
@@ -766,18 +1579,21 @@ async function regradeFlowInner(
           vr.listed.push({ prompt_id: b.c.id, rep, why: got.why });
           continue;
         }
+        const moves = args.fillRefs ? fillMovesPass(t.line.row!, got.row) : undefined;
+        if (moves !== undefined) {
+          vr.listed.push({ prompt_id: b.c.id, rep, why: moves });
+          continue;
+        }
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
+        if (!aIndexAligned(t.line.row!, t.result, b.c)) misaligned.add(t.line);
       }
     }
     for (const t of plain) {
-      // A fill keeps every live outcome of a row it does not judge: the same changed-reference rule applies.
-      if (args.fillRefs) {
-        let k = 0;
-        const entries = (t.result.assertions ?? []).flatMap((e) =>
-          e.source === undefined ? [{ assertionIndex: k++, pairwise: e.pairwise }] : [],
-        );
-        const stale = staleCopied(entries, t.c, refs, false);
+      // A fill keeps every live outcome of a row it does not judge: the same changed-reference rule applies (an
+      // agent-failed row aside: it scores 0 whatever it carries).
+      if (args.fillRefs && t.line.row?.meta?.failure_class !== "errored_agent") {
+        const stale = staleCopied(gradedPairwise(t.plan), t.c, refs, false);
         if (stale.length) {
           perVariant.get(t.variant)!.v.listed.push({
             prompt_id: t.c.id,
@@ -787,26 +1603,105 @@ async function regradeFlowInner(
           continue;
         }
       }
+      const vr = perVariant.get(t.variant)!.v;
+      const rep = Number(t.line.row?.rep);
+      // No judge reads this row: a judged assert keeps the run's grade (an agent-failed row scores 0 whatever it says).
+      const agentFailed = classifyRep({ result: t.result as never }, {}).bucket === "errored_agent";
+      const built = reevaluatedResult(
+        t.result,
+        t.c,
+        t.re,
+        t.live,
+        (i) => t.plan.entries.get(i) ?? (agentFailed ? notJudged(t.c.scenario.assert[i]!) : undefined),
+      );
+      if ("why" in built) {
+        vr.listed.push({ prompt_id: t.c.id, rep, why: built.why });
+        continue;
+      }
+      // Its re-evaluation's metrics, when the flow declares any (a flow that declares none carries no metric column).
+      const re: Remeasure | undefined = shape.metrics.length ? t.re : undefined;
+      const remeasured = re ? withRemeasured(built.result, re) : built.result;
+      // The verdict moves only when an authored entry is not the run's own (an assert changed, added or removed since
+      // the run): otherwise the persisted verdict stands (as in a fill, which never moves it).
+      const live = sameAuthored(remeasured, t.result) ? remeasured : withVerdict(remeasured);
       const got = rebuiltRow(
         t.line.row!,
-        withOwnNeutral(t.result, t.c, t.variant, refNames),
+        withOwnNeutral(live, t.c, t.variant, refNames),
         t.c,
         shape,
-        { regraded_at: at, ...(args.fillRefs ? { regrade_fill: t.missing } : {}) },
+        {
+          // The judged entries kept from the row's last re-grade: that re-grade's own keys describe them still.
+          ...(t.plan.fromFile ? carriedJudgeMeta(t.line.row!) : {}),
+          regraded_at: at,
+          ...reevaluatedMeta(t.c, t),
+          ...(re && declaresMetrics(t.c) ? { regrade_remeasured: true } : {}),
+          ...(args.fillRefs ? { regrade_fill: t.missing } : {}),
+        },
         undefined,
-        undefined,
+        re,
       );
-      if ("why" in got) perVariant.get(t.variant)!.v.listed.push({ prompt_id: t.c.id, rep: Number(t.line.row?.rep), why: got.why });
-      // Nothing to add (every column already there, nothing re-judged): the row stays byte for byte.
+      const moves = args.fillRefs && !("why" in got) ? fillMovesPass(t.line.row!, got.row) : undefined;
+      if (moves !== undefined) {
+        vr.listed.push({ prompt_id: t.c.id, rep, why: moves });
+        continue;
+      }
+      if (!("why" in got)) {
+        if (re && declaresMetrics(t.c)) vr.remeasured++;
+        if (deterministicIndexes(t.c).length) vr.reevaluated++;
+      }
+      if ("why" in got) vr.listed.push({ prompt_id: t.c.id, rep, why: got.why });
+      // Nothing to add (every column already there, nothing re-judged, the metrics re-measured as they were): the row
+      // stays byte for byte.
       else if (
-        JSON.stringify(got.row.grade) === JSON.stringify(t.line.row!.grade) &&
-        JSON.stringify(got.row.explanation) === JSON.stringify(t.line.row!.explanation)
+        (["grade", "explanation"] as const).every((k) => JSON.stringify(got.row[k]) === JSON.stringify(t.line.row![k])) &&
+        (["metric_sigs", "metrics_unavailable", "regrade_kept_live"] as const).every(
+          (k) => JSON.stringify(got.row.meta?.[k]) === JSON.stringify(t.line.row!.meta?.[k]),
+        ) &&
+        // A row that records another assertion set is brought current. One that records none (written before the sig
+        // existed) was graded under its run's list: it is stamped when that list is not the scenario's now.
+        (t.line.row!.meta?.assert_sig === undefined
+          ? authoredOf(t.result).length === authoredNow(t.c).length && t.live.every((e) => e !== undefined)
+          : t.line.row!.meta.assert_sig === got.row.meta?.assert_sig)
       )
         continue;
       else {
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
+        if (!aIndexAligned(t.line.row!, t.result, t.c)) misaligned.add(t.line);
       }
+    }
+
+    for (const m of metaOnly) {
+      const vr = perVariant.get(m.variant)!.v;
+      // Every authored entry unevaluated: the row scores 0 by rule, so its grade is what `run` writes for it.
+      const authored: Entry[] = authoredNow(m.c).map((a) => ({
+        assertion: a as never,
+        pass: false,
+        message: "not evaluated: the agent failed",
+      }));
+      const result = { ...m.result, assertions: [...authored, ...(m.result.assertions ?? []).filter((e) => e.source !== undefined)] };
+      const got = rebuiltRow(
+        m.line.row!,
+        result,
+        m.c,
+        shape,
+        { regraded_at: at, regrade_harness_version: harnessVersion },
+        undefined,
+        shape.metrics.length ? {} : undefined,
+      );
+      if ("why" in got) {
+        vr.listed.push({ prompt_id: m.c.id, rep: Number(m.line.row?.rep), why: got.why });
+        continue;
+      }
+      vr.agentFailed++;
+      if (
+        JSON.stringify(got.row.grade) === JSON.stringify(m.line.row!.grade) &&
+        (["metric_sigs", "assert_sig"] as const).every((k) => JSON.stringify(got.row.meta?.[k]) === JSON.stringify(m.line.row!.meta?.[k]))
+      )
+        continue;
+      before.set(m.line, m.line.row!.grade);
+      rebuilt.set(m.line, got.row);
+      if (!aIndexAligned(m.line.row!, m.result, m.c)) misaligned.add(m.line);
     }
 
     // Write each variant atomically; untouched lines byte for byte.
@@ -821,7 +1716,14 @@ async function regradeFlowInner(
         pv.v.rewritten = changed.length;
         progress.written.push(v);
       }
-      const moved = changed.map((l) => ({ l, keys: changedKeys(before.get(l), rebuilt.get(l)!.grade) })).filter((x) => x.keys.length);
+      const metricIds = shape.metrics.map((m) => m.id);
+      // A row whose a<i> keys name other asserts than before is compared on everything but them, and says so.
+      const moved = changed
+        .map((l) => ({
+          l,
+          keys: changedKeys(before.get(l), rebuilt.get(l)!.grade, metricIds).filter((k) => !misaligned.has(l) || !/^a\d+/.test(k)),
+        }))
+        .filter((x) => x.keys.length || misaligned.has(x.l));
       const mean = (rows: Array<Record<string, number> | undefined>) => {
         const xs = rows.map((g) => g?.pass).filter((x): x is number => typeof x === "number");
         return xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(2) : "n/a";
@@ -829,12 +1731,14 @@ async function regradeFlowInner(
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
-        `rewritten ${pv.v.rewritten}, listed ${pv.v.listed.length}; mean pass before ${mean(changed.map((l) => before.get(l)))}, after ${mean(changed.map((l) => rebuilt.get(l)!.grade))}`,
+        `rewritten ${pv.v.rewritten}${pv.v.reevaluated ? `, re-evaluated ${pv.v.reevaluated} (no judge call)` : ""}${pv.v.remeasured ? `, re-measured ${pv.v.remeasured} (no judge call)` : ""}${pv.v.agentFailed ? `, ${pv.v.agentFailed} agent failure(s): meta updated` : ""}, listed ${pv.v.listed.length}; mean pass before ${mean(changed.map((l) => before.get(l)))}, after ${mean(changed.map((l) => rebuilt.get(l)!.grade))}`,
         ...(moved.length ? ["", "| case | rep | moved |", "|---|---|---|"] : []),
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
           const a = rebuilt.get(l)!.grade ?? {};
-          return `| ${String(l.row!.prompt_id)} | ${String(l.row!.rep)} | ${keys.map((k) => `${k} ${b[k] ?? "—"}→${a[k] ?? "—"}`).join(", ")} |`;
+          const note = misaligned.has(l) ? "(a<i> not compared: the assertion list changed)" : "";
+          const cell = [keys.map((k) => `${k} ${b[k] ?? "—"}→${a[k] ?? "—"}`).join(", "), note].filter(Boolean).join(" ");
+          return `| ${String(l.row!.prompt_id)} | ${String(l.row!.rep)} | ${cell} |`;
         }),
         ...(pv.v.listed.length ? ["", "Not re-graded:", ...pv.v.listed.map((x) => `- ${x.prompt_id} rep${x.rep}: ${x.why}`)] : []),
         "",
@@ -862,7 +1766,12 @@ async function regradeFlowInner(
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;
     say(
-      `hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${v.rewritten} rewritten${v.listed.length ? `, ${v.listed.length} listed` : ""}`).join("; ")}`,
+      `hillclimb regrade: ${outcome.variants
+        .map(
+          (v) =>
+            `${v.variant} ${v.rewritten} rewritten${v.reevaluated ? `, ${v.reevaluated} re-evaluated (no judge call)` : ""}${v.remeasured ? `, ${v.remeasured} re-measured (no judge call)` : ""}${v.agentFailed ? `, ${v.agentFailed} agent failure(s): meta updated` : ""}${v.listed.length ? `, ${v.listed.length} listed` : ""}`,
+        )
+        .join("; ")}`,
     );
     return outcome;
   } finally {

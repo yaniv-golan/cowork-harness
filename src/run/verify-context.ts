@@ -9,7 +9,9 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "../agent/session.js";
-import { budgetFields, judgedOpts, toolResultEvidence, type AssertContext } from "../assert.js";
+import { budgetFields, evaluate, expandExpectDenied, judgedOpts, toolResultEvidence, type AssertContext } from "../assert.js";
+import { recordedFixtureFileSigs, recordedFixtureRefusal } from "../fixture/workspace.js";
+import { remeasureMetrics } from "../metrics.js";
 import type { Assertion, RunResult, Scenario } from "../types.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./artifacts.js";
 import { readPreRunManifestOrigin } from "./pre-run-manifest.js";
@@ -100,6 +102,9 @@ export function parseGatesFromEvents(file: string): { gates: DecisionRequest[]; 
 export type RecomputeAuthored = "no_lost_write_back" | "semantic" | "both";
 
 export interface AssertContextFromRunDirOpts {
+  /** `reevaluateRun` only: leave `evaluate`'s shared-capture warning to the caller (one that re-evaluates a scenario over
+   *  many kept runs says it once — `sharedCaptureWarning`). */
+  quietSharedCapture?: boolean;
   /** Put on the ctx as `secrets`, so the judged document scrubs every section (authored files included)
    *  before capping — exactly what the live run does. Omitted ⇒ no `secrets` on the ctx (verify-run). */
   secrets?: string[];
@@ -475,14 +480,59 @@ export function assertContextFromRunDir(
     evidenceErrors: result.evidenceErrors,
     effectiveFidelity: result.effectiveFidelity,
     // A kept run dir is re-checked on the SAME machine that ran it — grouped with the live
-    // execute.ts lane (both check a host-shaped computer:// link's path directly). result.json doesn't
-    // persist each connected folder's real host source path, so `workRoot` (the run's own mnt root,
-    // already required above for FS-class asserts) is the only host root this can reconstruct —
-    // a host-shaped link pointing outside it (or with workRoot unset) resolves as evidence-unavailable
-    // rather than falling back to an unconstrained existsSync (see computer-links.ts).
+    // execute.ts lane (both check a host-shaped computer:// link's path directly). Neither result.json
+    // nor any other file in the run dir records each connected folder's real host source path (the live
+    // lane's extra host roots, `plan.mounts[].hostPath`), so `workRoot` (the run's own mnt root, already
+    // required above for FS-class asserts) is the only host root this can reconstruct — a host-shaped link
+    // into a connected folder (hostloop bind-mounts folders at their real host path) or with workRoot unset
+    // resolves as evidence-unavailable rather than falling back to an unconstrained existsSync (see
+    // computer-links.ts). Reconstructing the roots from the scenario's session file now would name today's
+    // folders, not the run's; persisting the folders' host paths in result.json is what would close it.
     linkResolution: { mode: "live", hostRoots: workRoot ? [workRoot] : [] },
     ...budgetFields(result),
   };
 
   return { ok: true, ctx, result, scenario, turn: vrTurn, sidecarTranscript, sidecarQuestions };
+}
+
+/** A kept run re-evaluated against a scenario: the rebuilt context, and what it yields. */
+export type ReevaluateRunResult =
+  | (Extract<AssertContextFromRunDirResult, { ok: true }> & {
+      /** `evaluate(scenario.assert)` — every assert, a judged one included (with no judge result in the context it
+       *  reads unevaluated; no judge is called) — then one `egress_denied` entry per `expect_denied` host, in that
+       *  order: the authored entries a live run persists. */
+      deterministic: RunResult["assertions"];
+      /** The scenario's declared metrics, re-measured from the kept work dir (absent when it declares none). */
+      metrics: RunResult["metrics"];
+    })
+  | Exclude<AssertContextFromRunDirResult, { ok: true }>;
+
+/**
+ * Re-evaluate a kept run against a scenario with no live agent and no judge: the evaluation half of `verify-run`,
+ * shared with every consumer that rebuilds a run's outcome from its kept run dir (`hillclimb regrade`).
+ *
+ * The context is `assertContextFromRunDir`'s; then the pre-spawn refusal a live run makes against the fixture files
+ * this run recorded (an on-disk presence/body assert on one of them with no `authored:` would pass on the fixture
+ * alone — refused `usage`); then `evaluate` and `expandExpectDenied` (the live run's own helper, which `evaluate`
+ * does not cover; passing `ctx.egressMissing` tells a missing `egress` field from a run that made no calls); then
+ * `remeasureMetrics` on the same context — each metric file read only while its bytes still equal the run's recorded
+ * post-run hash, never the live run's values.
+ *
+ * Not here: `verify-run`'s answer-coverage and skill-drift checks, which judge the kept run against the CURRENT
+ * skill's gates — a caller that compares runs of different skill snapshots (hillclimb's variants) must not inherit
+ * them.
+ */
+export function reevaluateRun(
+  runDir: string,
+  scenarioOrLoader: Scenario | (() => Scenario),
+  opts: AssertContextFromRunDirOpts = {},
+): ReevaluateRunResult {
+  const loaded = assertContextFromRunDir(runDir, scenarioOrLoader, opts);
+  if (!loaded.ok) return loaded;
+  const { ctx, result, scenario } = loaded;
+  const vacuousFixture = recordedFixtureRefusal(scenario, recordedFixtureFileSigs(runDir) ?? result.fingerprint?.workspaceFixtureFileSigs);
+  if (vacuousFixture) return { ok: false, kind: "usage", message: `${opts.command ?? "verify-run"}: ${vacuousFixture}` };
+  const deterministic = evaluate(scenario.assert, ctx, { quietSharedCapture: opts.quietSharedCapture === true });
+  deterministic.push(...expandExpectDenied(scenario.expect_denied, ctx.egress, ctx.egressMissing));
+  return { ...loaded, deterministic, metrics: remeasureMetrics(ctx, result, scenario.metrics) };
 }

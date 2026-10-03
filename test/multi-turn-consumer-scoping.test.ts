@@ -65,7 +65,11 @@ describe("verify-run refuses a multi-turn dir", () => {
 
   it("found the builder (an anchor matching nothing would slice the whole file)", () => {
     expect(start, "assertContextFromRunDir moved or was renamed — re-anchor").toBeGreaterThan(-1);
-    expect(readFileSyncSafe("src/cli.ts"), "verify-run no longer calls the builder").toMatch(/assertContextFromRunDir\(runDir,/);
+    // verify-run reaches the builder through the shared kept-run re-evaluation (which hillclimb regrade uses too).
+    expect(readFileSyncSafe("src/cli.ts"), "verify-run no longer calls the shared re-evaluation").toMatch(/reevaluateRun\(runDir,/);
+    expect(FULL, "the shared re-evaluation no longer calls the builder").toMatch(
+      /export function reevaluateRun\([\s\S]*?assertContextFromRunDir\(runDir,/,
+    );
   });
 
   it("has a turn>1 refusal at all", () => {

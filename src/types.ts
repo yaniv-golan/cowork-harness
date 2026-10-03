@@ -1066,7 +1066,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/auto-memory/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
+      "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
     ),
   allow_missing_capability: z
     .literal(true)
@@ -1278,6 +1278,7 @@ export const METRIC_UNAVAILABLE = [
   "remote",
   "pruned",
   "pre_run",
+  "no_manifest",
 ] as const;
 export type MetricUnavailable = (typeof METRIC_UNAVAILABLE)[number];
 
@@ -1773,6 +1774,10 @@ export interface JudgedDocFingerprint {
     path?: string;
     sha256: string;
     chars: number;
+    /** How many secret-scrub markers (`[REDACTED…`) the section carries as sent. Absent on a fingerprint recorded
+     *  before it was counted (unknown, never 0). `hillclimb regrade` compares it to never re-judge on a document
+     *  less redacted than the graded one. */
+    redactions?: number;
   }>;
 }
 
@@ -2602,7 +2607,7 @@ export interface RunResult {
    *  the same inputs `events.jsonl` already carries, secret-scrubbed the same way. */
   toolCalls?: ToolCallRecord[];
   /** true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
-   *  the operator's REAL config dir, so their installed plugins/skills/auto-memory/MCP servers were visible
+   *  the operator's REAL config dir, so their installed plugins/skills/MCP servers were visible
    *  to the agent and may have answered instead of the thing under test. computeVerdict fails on this unless
    *  allow_l0_host_config_contamination is asserted — a warn-only was insufficient since the run could still appear
    *  green. (Pre-`--plugin-dir` this field meant "plugins were not delivered at L0"; delivery is fixed, the

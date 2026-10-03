@@ -172,9 +172,12 @@ describe("pre_run: the run did not write the file", () => {
     put("outputs/m.json", '{"n":1}');
     expect(one(ctx({ resume: true }), m("outputs/m.json")).unavailable).toBe("pre_run");
   });
-  it("no pre-run manifest", () => {
+  it("no pre-run manifest: no_manifest (authorship cannot be decided), evidence-limited, the remedy a re-run or re-record", () => {
     put("outputs/m.json", '{"n":1}');
-    expect(one(ctx({ preRunHashes: undefined }), m("outputs/m.json")).unavailable).toBe("pre_run");
+    expect(one(ctx({ preRunHashes: undefined }), m("outputs/m.json"))).toEqual({ id: "n", unavailable: "no_manifest" });
+    const x = measureMetrics(ctx({ preRunHashes: undefined }), [m("outputs/m.json")])[0]!;
+    expect([x.unavailable, x.evidenceLimited]).toEqual(["no_manifest", true]);
+    expect(x.remedy).toMatch(/^re-run or re-record the case with the metric declared: declaring a metric arms the pre-run manifest/);
   });
   it("a null pre-run hash", () => {
     put("outputs/m.json", '{"n":1}');

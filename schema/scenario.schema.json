@@ -1193,7 +1193,7 @@
             }
           },
           "allow_l0_host_config_contamination": {
-            "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/auto-memory/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
+            "description": "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
             "type": "boolean",
             "const": true
           },
