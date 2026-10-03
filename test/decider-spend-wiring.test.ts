@@ -119,6 +119,7 @@ describe.runIf(can)("the LLM decider's spend reaches result.json on both lanes",
       const llm = res.decisions.find((d: { by: string }) => d.by === "llm");
       expect(llm).toMatchObject({ model: "claude-sonnet-5", effort: "medium" });
       expect(res.gateProvenance.gates[0]).toMatchObject({ answeredBy: "llm", model: "claude-sonnet-5", effort: "medium" });
+      expect(res.nonReproducibleAnswers[0]).toMatchObject({ by: "llm", model: "claude-sonnet-5", effort: "medium" });
       expect(res.deciderCostUsd).toBeCloseTo(0.0125, 10);
       expect(res.deciderUsage).toEqual({
         input_tokens: 1200,

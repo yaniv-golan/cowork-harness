@@ -835,6 +835,7 @@ describe("buildGateTrace — provenance annotation", () => {
             decision: "answered",
             by: "llm",
             model: "claude-sonnet-4-5",
+            effort: "medium",
             detail: { "Stage?": "Series B+" },
           },
         ],
@@ -842,8 +843,8 @@ describe("buildGateTrace — provenance annotation", () => {
     );
     const rows = buildGateTrace(f);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ question: "Stage?", answeredBy: "llm", model: "claude-sonnet-4-5" });
-    expect(formatGateTrace(rows)).toContain("by: decided(llm) (claude-sonnet-4-5)");
+    expect(rows[0]).toMatchObject({ question: "Stage?", answeredBy: "llm", model: "claude-sonnet-4-5", effort: "medium" });
+    expect(formatGateTrace(rows)).toContain("by: decided(llm) (claude-sonnet-4-5, effort medium)");
   });
 
   it("on a genuinely MULTI-turn dir, pairs against the LATEST turn's decisions, not turn 1's", () => {

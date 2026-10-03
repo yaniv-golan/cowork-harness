@@ -2401,7 +2401,7 @@ export interface RunResult {
    * human, or the `first`-option fallback). Scripted answers (by:"scripted") are excluded because
    * they are authoritative and deterministic.
    */
-  nonReproducibleAnswers?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
+  nonReproducibleAnswers?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string; effort?: string }>;
   usage?: UsageInfo;
   cost?: CostInfo;
   /** USD the LLM decider (`on_unanswered: llm` / `--decider-llm`) spent answering this run's gates: the sum,

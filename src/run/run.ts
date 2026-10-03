@@ -476,7 +476,7 @@ export interface RunRecord {
   /** Question batches the scripted rules answered only part of — the whole batch went to the fallback.
    *  Filled by `ScriptedDecider` through `RunContext.notePartlyScripted` (report-only). */
   partlyScriptedGates: PartlyScriptedGate[];
-  unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
+  unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string; effort?: string }[];
   toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string; assertTextTruncated?: boolean }[]; // captured tool OUTCOMES
   // requestId (the decision's `id`) rides along so post-loop reconciliation (drive()'s gateDeliveries
   // build below) can consult `session.hasUndeliveredReconciliation?.(requestId)` for ground truth on a
@@ -1680,7 +1680,8 @@ export class Run {
       // verify the answer actually reached the model. Independent of `by` — delivery ≠ attribution.
       this.rec.gateAnswers.push({ question: label, toolUseId: req.toolUseId, requestId: req.id, answers });
       for (const [question, chosen] of Object.entries(answers)) {
-        if (by !== "scripted") this.rec.unanswered.push({ question, chosen: String(chosen), by, rationale, model });
+        if (by !== "scripted")
+          this.rec.unanswered.push({ question, chosen: String(chosen), by, rationale, model, ...(effort !== undefined ? { effort } : {}) });
       }
     } else if (req.kind === "permission") {
       const behavior = resp.kind === "permission" ? resp.behavior : undefined;
@@ -1688,7 +1689,18 @@ export class Run {
       // name. The input rides through the same record-time scrub as every other captured value; cap it so
       // a large input can't bloat the record. Allow keeps detail unset (the input isn't diagnostic there).
       const detail = behavior === "deny" ? { input: capDecisionInput(req.input) } : undefined;
-      this.rec.decisions.push({ kind: "tool", name: req.tool, decision: behavior ?? "?", by, requestId: req.id, rationale, detail });
+      this.rec.decisions.push({
+        kind: "tool",
+        name: req.tool,
+        decision: behavior ?? "?",
+        by,
+        requestId: req.id,
+        // The LLM decider's model and effort, as on a question gate (absent for every other source).
+        ...(model !== undefined ? { model } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        rationale,
+        detail,
+      });
       // A cowork-parity off-registry auto-allow is a SILENT false-green risk — real Cowork blocks for the
       // user. Make it loud (stderr) AND machine-distinguishable (rec.permissiveAutoAllow → the envelope),
       // so a green carrying one isn't mistaken for a faithful pass.

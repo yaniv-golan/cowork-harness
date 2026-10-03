@@ -322,3 +322,38 @@ describe("F4 — gate-delivery reconciliation (respond()'s optimistic delivered:
     expect(rec.gateDeliveries.find((g) => g.question === "Proceed?")!.delivered).toBe(true);
   });
 });
+
+describe("recordDecision — the LLM decider's effort", () => {
+  // A decider answering as the LLM decider does: by "llm", with the model and the effort its transport reported.
+  const llm = {
+    async decide(req: { kind: string; questions?: Array<{ question: string; options: Array<{ label: string }> }> }) {
+      if (req.kind === "question")
+        return {
+          response: { kind: "question" as const, answers: { [req.questions![0].question]: req.questions![0].options[0].label } },
+          by: "llm" as const,
+          model: "m",
+          effort: "medium",
+        };
+      return {
+        response: { kind: "permission" as const, behavior: "allow" as const, updatedInput: {} },
+        by: "llm" as const,
+        model: "m",
+        effort: "medium",
+      };
+    },
+  };
+  it("records it on a question gate, its unanswered[] entry, and a permission gate", async () => {
+    const ev: AgentEvent[] = [
+      {
+        type: "decision",
+        request: { id: "q1", kind: "question", toolUseId: "t1", questions: [{ question: "Pick?", options: [{ label: "A" }] }] },
+      },
+      { type: "decision", request: { id: "p1", kind: "permission", tool: "Write", input: { path: "o.txt" } } },
+      { type: "result", isError: false },
+    ];
+    const rec = await new Run(new MockSession(ev), llm as never).drive("go");
+    expect(rec.decisions.find((d) => d.kind === "question")).toMatchObject({ by: "llm", model: "m", effort: "medium" });
+    expect(rec.decisions.find((d) => d.kind === "tool")).toMatchObject({ by: "llm", model: "m", effort: "medium" });
+    expect(rec.unanswered[0]).toMatchObject({ by: "llm", model: "m", effort: "medium" });
+  });
+});
