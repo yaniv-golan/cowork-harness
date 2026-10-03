@@ -226,6 +226,15 @@ export const KNOWN_BUILTIN_SKILLS: ReadonlySet<string> = new Set([
   // in `skills[]` — an axis this scan treats more strictly than slash_commands — so allowlisting it
   // publishes nothing that the cassette on main did not already carry.
   "design",
+  // EXTENDED 2026-10-03 (host CLI 2.1.287): surfaced on the first fresh `protocol` recording on that CLI, as
+  // `plugin-authoring` in skills[] and slash_commands[], from the builtin plugin `cc-plugin-plugin-authoring`.
+  // Product built-in by the same three criteria: (1) recorded on the MANAGED config dir (ANTHROPIC_API_KEY set;
+  // the run dir held its own claude-config/, apiKeySource ANTHROPIC_API_KEY, nothing new under the operator's
+  // projects dir) with a session that stages no plugins or skills; (2) `"plugin-authoring"` is a bare quoted
+  // literal 3x in each of the staged agent ELF 2.1.286, the staged native agent 2.1.286 and the host CLI
+  // 2.1.287; (3) negative control: plaud-digest, overcut, docsend-to-pdf, skill-packager and proof-engine are
+  // 0 in all three. The container and hostloop recordings on agent 2.1.286 do not list it.
+  "plugin-authoring",
   "design-sync",
   "doctor",
   "fewer-permission-prompts",

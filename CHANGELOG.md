@@ -879,6 +879,11 @@ All notable changes to this project are documented here. The format is based on
   - **Wording.** The L0 contamination warning and the `l0_host_config_contamination` message no longer list
     auto-memory.
   - See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not).
+- **A `protocol` recording on host `claude` 2.1.287 is no longer refused as host contamination.** That CLI ships a
+  built-in `plugin-authoring` skill (from its builtin plugin `cc-plugin-plugin-authoring`), which the host-inventory
+  scan did not know, so `record` quarantined a clean recording and `verify-cassettes` failed it. The name is now on
+  the scan's list of agent built-ins: it is a bare literal in the staged agent 2.1.286 (ELF and native) and in host
+  CLI 2.1.287, and the recording that surfaced it was made on a managed config dir.
 - **`example-pdf-skill` and its CI self-test sibling no longer deny a harmless command in their Bash `allow_if`.**
   They used `!command.includes('rm')`, which also matched "normalize", "format" or "confirm". They now use the word
   match the other examples and the scenario docs use, `!/\brm\b/.test(command)`, and the example cassette is
