@@ -776,7 +776,7 @@ same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `targ
 `skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
 `inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`; an `eval` refusal
 carries the `plan` when one was computed before it (on a dry run, or a real eval with `--max-budget-usd`, whose
-plan is cost-only), and a dry run's refusal always carries `dryRun: true`. (Through 4.2.0
+plan is cost-only), and a dry run's refusal always carries `dryRun: true`. (Through 4.2.1
 these went to stderr only, and the message prose was the only discriminator.)
 On `run <dir/>` each scenario is pre-flighted on its own, so the top-level `budget` (merged across every
 scenario checked so far) can differ from `error.budget`, which describes the refused scenario only.
@@ -1199,7 +1199,7 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   too new rather than as an unrecognized assertion. Also **v14**: a scenario declaring `workspace_fixture` (a v13
   reader would replay it without the fixture staleness check), and an `assert` entry using the object form of
   `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a
-  `question_option_count` entry. The minimum supported read version is **v9**
+  `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry. The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`
