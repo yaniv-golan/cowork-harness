@@ -6,8 +6,10 @@
 //   1. the runner's own wall-clock ceiling fired           → errors, `timeout`
 //   2. infrastructure (classifyTermination errored_infra)   → errors, `error` (rule in meta)
 //   3. positive served-model mismatch (runner-scaffold.mjs l.476-494)         → errors, `serving_substitution`
+//   3b. a main-loop call sent with another effort than requested             → errors, `serving_substitution` (effort_not_sent)
 //   4. the agent's own failure (errored_agent)              → SCORED: every graded key 0, reason in meta
 //   5. no model evidence on an otherwise-valid run     → errors, `serving_substitution`
+//   5b. the requested effort not confirmed on an otherwise-valid run        → errors, `serving_substitution` (effort_not_sent)
 //   6. a run built from another snapshot than the variant's → errors, `error` + meta.arm_source_drift
 //   7. an invalid judge grade                               → errors, `judge_invalid` (regrade lists it with the `run` that re-runs it)
 //   8. a grade that does not line up with the scenario      → errors, `error` (never a guessed value)
@@ -35,7 +37,7 @@ import { assertSig, caseKeyDecls, refusableAssertion, type MetricDecl, type Pair
 import { metricEntries, metricSigs } from "./metric-keys.js";
 import { pairwiseRowValues } from "./pairwise.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
-import { mainLoopModels, servedModelMismatch } from "./served-model.js";
+import { mainLoopModels, sentEffort, servedModelMismatch } from "./served-model.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
 import { UNTRUSTED_JUDGE_PREFIX } from "./schema-check.js";
@@ -62,6 +64,9 @@ export interface AttemptContext {
   /** The effort the agent was asked for, and whether its model has no effort selector. Recorded as `meta.effort`;
    *  absent ⇒ nothing was requested (a caller outside `hillclimb run`). */
   requestedEffort?: { effort: string; noSelector: boolean };
+  /** The agent's own main session transcript (`<config>/projects/<cwd>/<session>.jsonl`), the evidence of the effort
+   *  each main-loop call went out with; undefined when the run kept none. */
+  transcript?: readonly string[];
   /** The variant snapshot's content signature; a run whose fingerprint differs is not this variant. */
   expectedContentSig?: string;
   /** `events.jsonl` lines of the attempt's run dir (readers scope to the current turn). */
@@ -286,9 +291,11 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   }
   const retriesUnrecorded = r?.apiRetries === undefined;
   // What the attempt asked for, beside the evidence of what it got (`model`, `meta.effort_sent`).
+  const sent = sentEffort(ctx.transcript ?? []);
   const requested = {
     ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
     ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
+    ...(sent.values.length === 1 ? { effort_sent: sent.values[0] } : {}),
   };
   const errorRow = (failure_class: string, error: string, metaExtra: Record<string, unknown>): RowOut => ({
     dest: "errors",
@@ -337,12 +344,29 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       failure_rule: "model_pin_not_honored",
     });
 
+  // 3b. Positive evidence of another effort: the agent's transcript shows a main-loop call sent with an effort other
+  // than the one requested (an env override, a cap, a clamp). Like a served-model mismatch, it outranks an agent error.
+  const want = ctx.requestedEffort?.effort;
+  const otherEffort = want !== undefined ? sent.values.find((e) => e !== want) : undefined;
+  if (otherEffort !== undefined)
+    return errorRow("serving_substitution", `sent effort ${otherEffort} != requested ${want}`, { failure_rule: "effort_not_sent" });
+
   const rep = classifyRep(evidence, ctx.expectedContentSig !== undefined ? { contentSig: ctx.expectedContentSig } : {});
   const agentFailed = rep.bucket === "errored_agent";
   if (!agentFailed) {
     // 5. No model evidence on a success-shaped run.
     if (rep.bucket === "model_mismatch")
       return errorRow("serving_substitution", "no evidence the requested model served this run", { failure_rule: "model_pin_unverified" });
+    // 5b. The requested effort not confirmed on a run whose main loop answered: a call that went out with no effort
+    // (the agent retried without it), or no transcript to read. A model with no effort selector may send none.
+    if (want !== undefined && mains.length > 0 && !ctx.requestedEffort!.noSelector && (sent.calls === 0 || sent.unsent > 0))
+      return errorRow(
+        "serving_substitution",
+        sent.calls === 0
+          ? `the requested effort ${want} is not confirmed: the agent's session transcript records no main-loop call`
+          : `the requested effort ${want} was not sent on ${sent.unsent} of ${sent.calls} main-loop call(s)`,
+        { failure_rule: "effort_not_sent" },
+      );
     // 6. Another snapshot's run.
     if (rep.bucket === "arm_source_drift")
       return errorRow("error", "the run's skill content differs from this variant's snapshot", {

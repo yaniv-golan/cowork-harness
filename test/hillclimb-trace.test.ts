@@ -10,7 +10,13 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unli
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { turnsFromEvents, readChildTranscripts, keptChildTranscripts, type ChildTranscript } from "../src/hillclimb/trace.js";
+import {
+  turnsFromEvents,
+  readChildTranscripts,
+  keptChildTranscripts,
+  keptMainTranscript,
+  type ChildTranscript,
+} from "../src/hillclimb/trace.js";
 
 const DIR = join(import.meta.dirname, "fixtures", "hillclimb-runs", "fanout-probe");
 const events = readFileSync(join(DIR, "events.jsonl"), "utf8").trim().split("\n");
@@ -292,5 +298,49 @@ describe("a transcript that dispatches itself (agent-writable on container/micro
     const { turns } = turnsFromEvents({ events: ev, prompt: "p", children: [child], sidecarPrefix: "b/", redact: (t) => t });
     expect(turns.filter((t) => t.role === "tool_call")).toHaveLength(2);
     expect(turns.some((t) => /transcript not captured|already inlined/.test(t.content))).toBe(true);
+  });
+});
+
+describe("keptMainTranscript — the agent's own session transcript, by the same per-tier root", () => {
+  const line = JSON.stringify({ type: "assistant", isSidechain: false, effort: "high", message: { model: "claude-sonnet-5" } });
+  const layouts: Array<[string, (out: string) => string]> = [
+    ["hostloop", (out) => join(out, "claude-config")],
+    ["protocol", (out) => join(out, "claude-config")],
+    ["container", (out) => join(out, "work", "session", "mnt", ".claude")],
+    ["microvm", (out) => join(out, "work", "session", "mnt", ".claude")],
+  ];
+  for (const [tier, root] of layouts)
+    it(`${tier}: reads <root>/projects/<cwd>/<session>.jsonl, picked by the session id`, () => {
+      const out = mkdtempSync(join(tmpdir(), `hc-main-${tier}-`));
+      try {
+        const dir = join(root(out), "projects", "-enc-cwd");
+        mkdirSync(join(dir, "sess-a", "subagents"), { recursive: true });
+        writeFileSync(join(dir, "sess-a.jsonl"), line + "\n");
+        writeFileSync(join(dir, "sess-b.jsonl"), "other\n");
+        const run = { outDir: out, fidelity: tier, workDir: join(out, "work", "session", "mnt") };
+        expect(keptMainTranscript(run, "sess-a")).toEqual([line]);
+        // two sessions and no id: no guess
+        expect(keptMainTranscript(run, undefined)).toBeUndefined();
+        // an id with no file is none
+        expect(keptMainTranscript(run, "sess-z")).toBeUndefined();
+        // one session and no id: that one
+        rmSync(join(dir, "sess-b.jsonl"));
+        expect(keptMainTranscript(run, undefined)).toEqual([line]);
+      } finally {
+        rmSync(out, { recursive: true, force: true });
+      }
+    });
+
+  it("a symlinked transcript planted in the session mount is not read", () => {
+    const out = mkdtempSync(join(tmpdir(), "hc-main-link-"));
+    try {
+      const dir = join(out, "work", "session", "mnt", ".claude", "projects", "-cwd");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(out, "host.jsonl"), line + "\n");
+      symlinkSync(join(out, "host.jsonl"), join(dir, "sess.jsonl"));
+      expect(keptMainTranscript({ outDir: out, fidelity: "container" }, "sess")).toBeUndefined();
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
   });
 });

@@ -35,6 +35,8 @@ const frames = readFileSync(join(FX, "hillclimb-runs", "result-event-pair.jsonl"
   .split("\n");
 const MODEL = "claude-sonnet-5";
 const events = [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }), frames[1]];
+// The agent's own session transcript: its one main-loop call went out at the requested effort.
+const transcript = [JSON.stringify({ type: "assistant", isSidechain: false, effort: "medium", message: { model: MODEL } })];
 
 const SCENARIO = (name: string) => `name: ${name}
 fidelity: protocol
@@ -81,7 +83,16 @@ function deps(over: Partial<RunnerDeps> = {}): RunnerDeps {
       jobs.push({ id: j.c.id, rep: j.rep, runLabel: j.runLabel });
       const b = behave(j.c.id, j.rep);
       if (b === "throw") throw new Error("runner crashed");
-      return { result: excerpt, events, children: [], attemptS: 12, runnerTimeout: false, runDir: `/tmp/runs/${j.c.id}/${j.rep}`, ...b };
+      return {
+        result: excerpt,
+        events,
+        transcript,
+        children: [],
+        attemptS: 12,
+        runnerTimeout: false,
+        runDir: `/tmp/runs/${j.c.id}/${j.rep}`,
+        ...b,
+      };
     },
     ...over,
   };

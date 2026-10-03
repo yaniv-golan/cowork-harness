@@ -15,7 +15,7 @@ import type { RunResult, Scenario } from "../types.js";
 import type { ExecuteOptions } from "../run/execute.js";
 import { salvagedResult, type ScenarioRunner } from "../eval/job-runner.js";
 import type { JobReport, JobSpec } from "./runner.js";
-import { keptChildTranscripts, mainSystemTurn, sentSubagentAppend } from "./trace.js";
+import { keptChildTranscripts, keptMainTranscript, mainSystemTurn, sentSubagentAppend } from "./trace.js";
 
 export interface JobDeps<F extends { label?: string; ablateSkill?: boolean }> {
   runScenario: ScenarioRunner<F>;
@@ -39,6 +39,21 @@ function attemptRunId(spec: HillclimbJobSpec): string {
   return `local_${BigInt(`0x${h.slice(0, 16)}`)
     .toString(36)
     .padStart(13, "0")}`;
+}
+
+/** The agent session's id: the last event that names one (the result frame, else an earlier one on a run that ended
+ *  without it). It names the session's transcript file. */
+function sessionIdOf(events: readonly string[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (!events[i].includes('"session_id"')) continue;
+    try {
+      const sid = (JSON.parse(events[i]) as { session_id?: unknown }).session_id;
+      if (typeof sid === "string" && sid) return sid;
+    } catch {
+      /* not a frame */
+    }
+  }
+  return undefined;
 }
 
 const lines = (p: string): string[] =>
@@ -83,12 +98,15 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
     const outDir = result?.outDir ?? (existsSync(expectedDir) ? expectedDir : undefined);
     const fidelity = result?.effectiveFidelity ?? result?.fidelity;
     const subagentAppend = outDir ? sentSubagentAppend(outDir) : undefined;
+    const events = outDir ? lines(join(outDir, "events.jsonl")) : [];
+    const kept = outDir && fidelity ? { outDir, fidelity, ...(result?.workDir ? { workDir: result.workDir } : {}) } : undefined;
+    const transcript = kept ? keptMainTranscript(kept, sessionIdOf(events)) : undefined;
     return {
       ...(result !== undefined ? { result } : { result: undefined }),
       ...(thrown !== undefined ? { thrown } : {}),
-      events: outDir ? lines(join(outDir, "events.jsonl")) : [],
-      children:
-        outDir && fidelity ? keptChildTranscripts({ outDir, fidelity, ...(result?.workDir ? { workDir: result.workDir } : {}) }) : [],
+      events,
+      ...(transcript !== undefined ? { transcript } : {}),
+      children: kept ? keptChildTranscripts(kept) : [],
       ...(subagentAppend !== undefined ? { subagentAppend } : {}),
       ...(outDir !== undefined ? { system: mainSystemTurn(outDir) } : {}),
       attemptS,

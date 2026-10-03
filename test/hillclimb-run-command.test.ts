@@ -69,6 +69,8 @@ let skillActivity: Array<{ skillId: string }> | undefined;
 let inventory: string[];
 let authored: Record<string, string> | undefined;
 let judgeTransport: object | undefined;
+/** The effort the fake agent's transcript says it sent: undefined = the requested one, null = none at all. */
+let sentEffortOverride: string | null | undefined;
 const rows = () =>
   readFileSync(join(cwd, "flow", "baseline", "results.jsonl"), "utf8")
     .trim()
@@ -93,6 +95,19 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
         join(outDir, "events.jsonl"),
         [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }), frames[1]].join("\n"),
       );
+      // The agent's own session transcript, where a container run keeps it, stamped with the effort it sent: the
+      // session's (the requested one) unless a test makes the agent send another.
+      const sentLine = JSON.stringify({
+        type: "assistant",
+        isSidechain: false,
+        message: { model: MODEL },
+        ...(sentEffortOverride !== null ? { effort: sentEffortOverride ?? (a.extra.session as SessionConfig).effort ?? "medium" } : {}),
+        perTurnEffort: null,
+      });
+      const sid = JSON.parse(frames[0]).session_id as string;
+      const projects = join(authored ? join(outDir, "work") : join(outDir, "work", "session", "mnt"), ".claude", "projects", "-sessions-x");
+      mkdirSync(projects, { recursive: true });
+      writeFileSync(join(projects, `${sid}.jsonl`), sentLine + "\n");
       // A real run stamps the signature of the session it staged; so does this fake.
       const b = loadBaseline(a.scenario.baseline);
       const fp = buildFingerprint(a.scenario.session, b.appVersion, undefined, a.scenario.skills, b, a.extra.session as SessionConfig);
@@ -115,6 +130,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
       return {
         ...excerpt,
         ...authoredFields,
+        fidelity: a.scenario.fidelity,
         outDir,
         assertions,
         ...(skillActivity
@@ -147,6 +163,7 @@ beforeEach(() => {
   inventory = ["my-plugin:x"];
   authored = undefined;
   judgeTransport = undefined;
+  sentEffortOverride = undefined;
 });
 afterEach(() => {
   for (const d of [cwd, join(plugin, ".."), snaps]) rmSync(d, { recursive: true, force: true });
@@ -1738,5 +1755,39 @@ describe("--effort: the requested effort reaches the agent and every row", () =>
     expect(err.filter((l) => l.includes("lists no effort levels"))).toEqual([
       "[baseline] note: the baseline lists no effort levels for claude-opus-5-5, so the requested effort is not checked against the model before spend; each row's sent-effort check (meta.effort_sent) decides",
     ]);
+  });
+});
+
+describe("the sent effort, read from the agent's own transcript, decides whether a row is scored", () => {
+  const errs = () =>
+    readFileSync(join(cwd, "flow", "baseline", "errors.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, any>);
+
+  it("sent as requested: a scored row with meta.effort_sent", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    expect((await runHillclimbCommand(args("--effort", "high"), deps())).exitCode).toBe(0);
+    expect(rows()[0].meta).toMatchObject({ effort: "high", effort_sent: "high" });
+  });
+
+  it("the agent sent another effort than requested: an error row (effort_not_sent), never a scored one", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    sentEffortOverride = "medium";
+    const r = await runHillclimbCommand(args("--effort", "high"), deps());
+    expect(r.exitCode).toBe(1);
+    expect(existsSync(join(cwd, "flow", "baseline", "results.jsonl"))).toBe(false);
+    expect(errs()[0]).toMatchObject({
+      failure_class: "serving_substitution",
+      error: "sent effort medium != requested high",
+      meta: { failure_rule: "effort_not_sent", effort: "high", effort_sent: "medium", model_requested: MODEL },
+    });
+  });
+
+  it("the agent sent no effort though one was requested: an error row", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    sentEffortOverride = null;
+    expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(1);
+    expect(errs()[0]).toMatchObject({ error: "the requested effort medium was not sent on 1 of 1 main-loop call(s)" });
   });
 });

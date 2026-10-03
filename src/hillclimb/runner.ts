@@ -35,6 +35,9 @@ export interface JobReport {
   thrown?: unknown;
   /** The run's events.jsonl lines. */
   events: string[];
+  /** The agent's own main session transcript lines (the effort each main-loop call was sent with); absent when the
+   *  run kept none. */
+  transcript?: string[];
   children: ChildTranscript[];
   /** The trace's system turn (marker + the append as sent); absent ⇒ no system turn. */
   system?: string;
@@ -443,6 +446,7 @@ async function run(
         requestedEffort: deps.requestedEffort(c),
         ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
         events: report.events,
+        ...(report.transcript !== undefined ? { transcript: report.transcript } : {}),
         attemptS: report.attemptS,
         runnerTimeout: report.runnerTimeout,
         tags: [basename(dirname(c.file))],

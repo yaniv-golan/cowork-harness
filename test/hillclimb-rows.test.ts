@@ -577,3 +577,74 @@ describe("attemptRow — a refused single-key semantic_pairwise assert is not me
     expect(row.grade.a1_present).toBe(1);
   });
 });
+
+// The effort the agent's own session transcript says each main-loop call went out with, against the requested one.
+// Lines shaped as real kept transcripts (see test/hillclimb-served-model.test.ts).
+describe("requested vs sent effort", () => {
+  const t = (effort: string | undefined, model = "claude-sonnet-5") =>
+    JSON.stringify({ type: "assistant", isSidechain: false, message: { model }, ...(effort ? { effort } : {}), perTurnEffort: null });
+  const req = (effort: string, noSelector = false) => ({ requestedEffort: { effort, noSelector } });
+
+  it("sent as requested: scored, with meta.effort, meta.effort_sent and meta.model_requested", () => {
+    const r = fixture("success-semantic");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("high"), transcript: [t("high"), t("high")] }));
+    expect(out.dest).toBe("results");
+    expect(out.row.meta).toMatchObject({ effort: "high", effort_sent: "high", model_requested: "claude-sonnet-5" });
+  });
+
+  it("a different effort sent is an error row, never a scored one", () => {
+    const r = fixture("success-semantic");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("high"), transcript: [t("high"), t("medium")] }));
+    expect(out.dest).toBe("errors");
+    expect(out.row).toMatchObject({ failure_class: "serving_substitution", error: "sent effort medium != requested high" });
+    expect(out.row.meta).toMatchObject({ failure_rule: "effort_not_sent", effort: "high" });
+  });
+
+  it("a different effort outranks the agent's own failure, as a served-model mismatch does", () => {
+    const r = fixture("exit-agent");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("high"), transcript: [t("low")] }));
+    expect(out.dest).toBe("errors");
+    expect((out.row.meta as Record<string, unknown>).failure_rule).toBe("effort_not_sent");
+  });
+
+  it("an effort requested but absent on a main-loop call is an error row", () => {
+    const r = fixture("success-semantic");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("high"), transcript: [t("high"), t(undefined)] }));
+    expect(out.dest).toBe("errors");
+    expect(out.row).toMatchObject({
+      failure_class: "serving_substitution",
+      error: "the requested effort high was not sent on 1 of 2 main-loop call(s)",
+    });
+    expect((out.row.meta as Record<string, unknown>).failure_rule).toBe("effort_not_sent");
+  });
+
+  it("no transcript to confirm it, though the main loop answered, is an error row", () => {
+    const r = fixture("success-semantic");
+    for (const transcript of [undefined, []]) {
+      const out = attemptRow({ result: r }, ctx(r, { ...req("medium"), ...(transcript ? { transcript } : {}) }));
+      expect(out.dest).toBe("errors");
+      expect(out.row.error).toBe("the requested effort medium is not confirmed: the agent's session transcript records no main-loop call");
+    }
+  });
+
+  it("absence does not outrank the agent's own failure: an agent that failed is still scored", () => {
+    const r = fixture("exit-agent");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("high"), transcript: [] }));
+    expect(out.dest).toBe("results");
+    expect(out.row.meta).toMatchObject({ effort: "high" });
+    expect(out.row.meta).not.toHaveProperty("effort_sent");
+  });
+
+  it("a model with no effort selector may send none: scored", () => {
+    const r = fixture("success-semantic");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("medium", true), transcript: [t(undefined)] }));
+    expect(out.dest).toBe("results");
+  });
+
+  it("nothing requested (a caller outside hillclimb run) checks nothing", () => {
+    const r = fixture("success-semantic");
+    const out = attemptRow({ result: r }, ctx(r, { transcript: [t("low")] }));
+    expect(out.dest).toBe("results");
+    expect(out.row.meta).not.toHaveProperty("effort");
+  });
+});

@@ -176,3 +176,14 @@ export function readStatus(f: StubFixture): Record<string, unknown> | undefined 
     return undefined;
   }
 }
+
+/** One shell line for a stub agent body: append a main-loop assistant line to the agent's own session transcript
+ *  (`$CLAUDE_CONFIG_DIR/projects/-stub-cwd/<session>.jsonl`), stamped with the `--effort` the stub was launched with,
+ *  as the real agent stamps the effort each call went out with. The stub's events must name the same session id. */
+export function stubSessionTranscript(model: string, sessionId = "stub"): string {
+  const json = `{"type":"assistant","isSidechain":false,"effort":"%s","message":{"model":"${model}","role":"assistant","content":[]}}`;
+  return (
+    `E=; P=; for a in "$@"; do [ "$P" = "--effort" ] && E="$a"; P="$a"; done; ` +
+    `mkdir -p "$CLAUDE_CONFIG_DIR/projects/-stub-cwd" && printf '${json}\\n' "$E" >> "$CLAUDE_CONFIG_DIR/projects/-stub-cwd/${sessionId}.jsonl"`
+  );
+}

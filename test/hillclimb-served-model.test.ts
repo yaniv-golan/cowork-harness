@@ -6,7 +6,7 @@
 // rule fails the attempt when ANY response model differs beyond a documented alias→snapshot resolution.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { mainLoopModels, servedModelMismatch } from "../src/hillclimb/served-model.js";
+import { mainLoopModels, sentEffort, servedModelMismatch } from "../src/hillclimb/served-model.js";
 import { deriveModelProvenance } from "../src/run/model-provenance.js";
 
 const fanout = readFileSync("test/fixtures/hillclimb-runs/assistant-models-fanout.jsonl", "utf8").trim().split("\n");
@@ -59,5 +59,49 @@ describe("servedModelMismatch (runner-scaffold.mjs l.485-494)", () => {
   it("no pin ⇒ no check (S skips it when --model is absent); no observed model ⇒ nothing to refuse", () => {
     expect(servedModelMismatch(undefined, ["anything"])).toBeUndefined();
     expect(servedModelMismatch("claude-x", [])).toBeUndefined();
+  });
+});
+
+// The agent's own session transcript (`<config>/projects/<cwd>/<session>.jsonl`). The lines below keep the shape of
+// real kept transcripts (agent 2.1.229–2.1.286): the effort a main-loop call went out with is the line's top-level
+// `effort`, overridden by `perTurnEffort` when that is set (it is null or absent on most lines); main-loop lines have
+// `isSidechain: false`; an API-error line carries `message.model: "<synthetic>"` and no effort.
+const tline = (o: { effort?: string; perTurnEffort?: string | null; model?: string; sidechain?: boolean }) =>
+  JSON.stringify({
+    type: "assistant",
+    isSidechain: o.sidechain ?? false,
+    message: { model: o.model ?? "claude-sonnet-5", role: "assistant", content: [{ type: "text", text: "<trimmed>" }] },
+    ...(o.effort !== undefined ? { effort: o.effort } : {}),
+    ...("perTurnEffort" in o ? { perTurnEffort: o.perTurnEffort } : {}),
+  });
+const userLine = JSON.stringify({ type: "user", isSidechain: false, message: { role: "user", content: "do the thing" } });
+
+describe("sentEffort", () => {
+  it("reads each main-loop call's effort: perTurnEffort when set, else effort", () => {
+    expect(sentEffort([userLine, tline({ effort: "high", perTurnEffort: null }), tline({ effort: "high" })])).toEqual({
+      values: ["high"],
+      unsent: 0,
+      calls: 2,
+    });
+    expect(sentEffort([tline({ effort: "medium", perTurnEffort: "max" })])).toEqual({ values: ["max"], unsent: 0, calls: 1 });
+  });
+  it("counts a call with no effort as unsent (the agent retried without one)", () => {
+    expect(sentEffort([tline({ effort: "high" }), tline({ perTurnEffort: null })])).toEqual({ values: ["high"], unsent: 1, calls: 2 });
+  });
+  it("keeps every distinct value, in first-seen order", () => {
+    expect(sentEffort([tline({ effort: "low" }), tline({ effort: "high" }), tline({ effort: "low" })]).values).toEqual(["low", "high"]);
+  });
+  it("skips <synthetic> API-error lines, sidechain lines and non-assistant lines", () => {
+    const lines = [
+      tline({ model: "<synthetic>", perTurnEffort: null }),
+      tline({ effort: "low", sidechain: true }),
+      userLine,
+      "not json",
+      tline({ effort: "medium" }),
+    ];
+    expect(sentEffort(lines)).toEqual({ values: ["medium"], unsent: 0, calls: 1 });
+  });
+  it("no transcript is no calls", () => {
+    expect(sentEffort([])).toEqual({ values: [], unsent: 0, calls: 0 });
   });
 });
