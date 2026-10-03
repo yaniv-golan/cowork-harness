@@ -4,7 +4,7 @@
 // location is gone (moved, a downloaded CI artifact) has nothing there to read: it is read from where it now is.
 // Built over run dirs the real producer wrote (the stub `claude` on PATH stands in for the agent and the live judge —
 // no agent, no spend).
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   cpSync,
   existsSync,
@@ -260,14 +260,22 @@ describe.runIf(can)("(C) a run dir whose recorded location is gone is read from 
     }
   }, 60_000);
 
-  it("an unedited moved run regrades with docMatchesLive true", async () => {
+  it("an unedited moved run regrades with docMatchesLive true, noting the move once though it opens the dir several times", async () => {
     const { f, dir } = await runAndCopy();
     try {
       const moved = moveAway(f, dir);
       const calls: string[] = [];
-      const out = await regradeRuns({ runDirs: [moved], scenarioFile: f.scenario, makeJudge: judgeDouble(calls), judgeModel: JUDGE_MODEL });
+      const written: string[] = [];
+      const spy = vi.spyOn(process.stderr, "write").mockImplementation((c: string | Uint8Array) => (written.push(String(c)), true));
+      let out;
+      try {
+        out = await regradeRuns({ runDirs: [moved], scenarioFile: f.scenario, makeJudge: judgeDouble(calls), judgeModel: JUDGE_MODEL });
+      } finally {
+        spy.mockRestore();
+      }
       if (!out.ok) throw new Error(out.message);
       expect(out.runs[0].docMatchesLive).toBe(true);
+      expect(written.join("").match(/no longer there\); reading its evidence from /g)).toHaveLength(1);
     } finally {
       f.cleanup();
     }
