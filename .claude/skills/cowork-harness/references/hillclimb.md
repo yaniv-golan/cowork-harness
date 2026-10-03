@@ -174,10 +174,10 @@ every climb there is finished.
 - **Default:** the row is rebuilt from the scenario as it is now, so a changed value, an added or a removed assert
   is applied. Every assert no judge grades and each `expect_denied` host is re-evaluated from the kept run (as
   `verify-run` re-evaluates it). A judged assert is re-judged only when something its judge reads or grades with
-  changed: the assert itself, the judge model a re-judge would ask for (`--judge-model`, else — for an assert that
-  pins no `judge_model` — `COWORK_HARNESS_JUDGE_MODEL` or the harness default) other than the one that graded it
-  (an exact compare with the model its last regrade asked for, else the id the judge answered as, so a judge served
-  under another id is re-judged once), the judge prompt template, a `semantic_pairwise` assert's references or their
+  changed: the assert itself, the judge model a re-judge would ask for (`--judge-model`, else the assert's own
+  `judge_model`, else `COWORK_HARNESS_JUDGE_MODEL` or the harness default — so a row re-judged under an override goes
+  back to its pin) other than the one that graded it (exactly the model its last regrade asked for, else the id the
+  judge answered as, a dated id and its undated form reading as one), the judge prompt template, a `semantic_pairwise` assert's references or their
   gating, or a reference document's content. Every other judged
   entry is kept, so a deterministic fix or an added metric costs no judge call and re-rolls no verdict. A re-judged
   row records why (`meta.regrade_rejudged_because`). `pass` is recomputed whenever an entry is not the run's own. A
@@ -193,6 +193,11 @@ every climb there is finished.
   that recorded no document, or graded comparisons with no judge recorded, counts changed (one `--rejudge` fixes it). The run's recorded capture budget is what a
   re-judge composes under, so a changed `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` is not a trigger. `check` cannot see
   it: it reads the flow, not the kept runs.
+- **Never less redacted.** A row whose current document would carry an authored file with fewer `[REDACTED…`
+  markers than the graded one (a secret the run scrubbed that this process does not), or a changed authored file
+  whose graded fingerprint has no marker count, is listed even under `--rejudge`, by path only, with no judge call.
+  Set the run's `COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS` and regrade again, or, after checking
+  them, `--rejudge --allow-doc-drift` grades it anyway.
 - **`--rejudge`:** every judged assert of every selected row is re-judged, with the flow's references as they are
   now. Use it after a judge change the triggers above do not see. Not with `--fill-refs`.
 - **`--fill-refs`:** only the `semantic_pairwise` comparisons a row lacks are judged (a reference frozen after the

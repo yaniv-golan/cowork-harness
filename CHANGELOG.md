@@ -287,8 +287,8 @@ All notable changes to this project are documented here. The format is based on
   keeps the run's own outcome even when the kept run re-evaluates differently (its grader is unchanged, so the
   difference is the reconstruction's), recorded in `meta.regrade_kept_live` and named on stderr. **The default
   regrade re-judges only what changed:** a judged assert is re-judged only when the assert itself, the judge model
-  a re-judge would ask for (`--judge-model`, else — for an assert that pins no `judge_model` —
-  `COWORK_HARNESS_JUDGE_MODEL` or the harness default), the judge prompt template, a `semantic_pairwise` assert's
+  a re-judge would ask for (`--judge-model`, else the assert's own `judge_model` — so a row re-judged under an
+  override goes back to its pin — else `COWORK_HARNESS_JUDGE_MODEL` or the harness default), the judge prompt template, a `semantic_pairwise` assert's
   references or their gating, or a reference document's content changed since the entry the row carries (its last
   re-grade's, else its run's); every other judged entry is kept, at no judge cost, and a re-judged row records why in
   `meta.regrade_rejudged_because`. `--rejudge` re-judges every judged assert. **Changed evidence is always named:**
@@ -296,7 +296,10 @@ All notable changes to this project are documented here. The format is based on
   compared with the document it records; a difference (an edited kept run, a harness change to composition, caps or
   scrubbing) lists the row and keeps it as it is, whatever else changed for it, until `--rejudge` grades it on the
   current evidence, recording `evidence_changed` and both hashes in `meta.regrade_evidence`. Each variant reports
-  those rows in `evidenceChanged`. `pass` is recomputed whenever an entry is not the run's own. `--fill-refs` judges
+  those rows in `evidenceChanged`. `--rejudge` never sends a judge a document less redacted than the graded one: a
+  row whose authored file would carry fewer secret-scrub markers now (or whose graded fingerprint records no count)
+  is listed by path in either mode until the run's scrub settings are restored, or `--rejudge --allow-doc-drift`
+  grades it anyway. A judged-document fingerprint section now records `redactions`, its count of scrub markers. `pass` is recomputed whenever an entry is not the run's own. `--fill-refs` judges
   only the pairwise comparisons a row lacks, read from the entries it is graded with (a comparison an earlier
   regrade judged is never judged again, and copied outcomes keep their judge's provenance), so `pass` cannot move
   and every row gains the `win_<vN>` columns of references frozen after it (a row whose deterministic outcome or

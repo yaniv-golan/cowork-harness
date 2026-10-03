@@ -81,9 +81,10 @@ export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml 
        Every row is re-evaluated first, with no judge call: its deterministic asserts and expect_denied hosts with
        verify-run's evaluation (an assert unchanged since the run keeps its live outcome), its metrics re-measured from
        the kept work dir. Default: a judged assert is re-judged only when its judge's inputs changed (the assert, the
-       judge prompt, the judge model it would ask for — --judge-model or the env/default — a pairwise reference or its
+       judge prompt, the judge model it would ask for — --judge-model, the pin, or the env/default — a pairwise reference or its
        content); the rest keep their entries, at no judge cost. A row whose judged evidence the current harness
-       composes differently than it was graded on is listed and kept (--rejudge grades it on the current evidence).
+       composes differently than it was graded on is listed and kept (--rejudge grades it on the current evidence,
+       unless it is less redacted: then only --rejudge --allow-doc-drift).
        --rejudge: re-judge every judged assert. --fill-refs: only the pairwise comparisons a row lacks are judged (a
        reference frozen after it), so pass cannot move and every row carries every win column. Gated like run. Exit 0
        rewritten or nothing to do, 1 some rows listed (not re-graded) or a failure after the first judge call, 2 refused
