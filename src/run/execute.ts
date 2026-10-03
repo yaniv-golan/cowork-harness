@@ -5,7 +5,13 @@ import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
 import { hostPathTokens, hostPathTokenOccurrences } from "./host-path-tokens.js";
-import { isInputBorneHostPath, readInputHostPathCorpus, type InputHostPathCorpus } from "./input-host-paths.js";
+import {
+  isInputBorneHostPath,
+  readInputHostPathCorpus,
+  readSourcedHostPathCorpus,
+  corpusTokenCount,
+  type InputHostPathCorpus,
+} from "./input-host-paths.js";
 import { hasTurnDirs, currentTurnFromDirs, turnWriteDir, classifyRunDir, preLayoutMessage } from "./turn-layout.js";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -71,7 +77,7 @@ import { assertSpawnAllowed } from "../spawn-guard.js";
 import { decideLoopFromBaseline, readGateFlag, readGateNumber, resolveSkillDiscoveryGates } from "../loop-decision.js";
 import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
-import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
+import { startEgressSidecar, registerCleanup, removeContainerThenRelease, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
 import {
   evaluate,
@@ -1086,6 +1092,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
   let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
+  let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
   let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
   // Where the protocol agent's child transcripts land — the managed config dir, or undefined when it read the
   // operator's real one (see resolveSubagentConfigRoot). Set by spawnProtocol, never re-derived.
@@ -1298,6 +1305,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         hostloopPathGateFired = hl.pathGateFired;
         hostloopInfraErrors = hl.infraErrors;
         hostloopMarkTearingDown = hl.markTearingDown;
+        deregisterHostLoopSidecarReap = hl.deregisterSidecarReap;
         spawnedSessionRoot = hl.sessionRoot; // HOST tree — the native agent's file paths live there
         spawnedAgentCwd = hl.agentProcessCwd; // from Desktop 2.7032.0: /var/empty (or a per-run dir), outside it
         logHostWriteNotice(
@@ -1451,7 +1459,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
       // orphan a running container holding the network. On the success path the child has already
       // exited (--rm), so these are no-ops.
-      deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
+      // The signal-time container thunks stay registered until the `rm -f` below has run: the agent stop
+      // awaited next takes seconds at hostloop, and a signal landing in it drains the registry and exits
+      // before this path reaches its own removal — a thunk dropped here would never run (the hostloop sidecar,
+      // its client and its network all leaked that way). A double reap is harmless: each step is idempotent.
       agentStopMs = await reapAgentOnTeardown({
         microvm: effectiveFidelity === "microvm",
         agent: signalAgent,
@@ -1462,7 +1473,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra failure
       // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
       hostloopMarkTearingDown?.();
-      if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
+      // Drops the signal-time thunks only once the container is gone; a failed `rm -f` keeps them for a signal
+      // or the process exit.
+      removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);
       if (sidecar) {
         const eg = sidecar.collect();
         egress = eg.entries;
@@ -2230,7 +2243,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             hostPathLeaked: scan.hostPathLeaked,
             // Input provenance, omitted when zero (byte-identical result.json for a run with no such inputs):
             // how many host-path tokens the inputs carried, and how many matches that exempted.
-            ...(inputCorpus?.tokens.size ? { inputHostPathTokens: inputCorpus.tokens.size } : {}),
+            ...(inputCorpus && corpusTokenCount(inputCorpus) ? { inputHostPathTokens: corpusTokenCount(inputCorpus) } : {}),
             ...(scan.hostPathsFromInputs ? { hostPathsFromInputs: scan.hostPathsFromInputs } : {}),
             selfHealRan: scan.selfHealRan,
           },
@@ -4194,9 +4207,10 @@ export function ownHostRoots(outDir: string, sessionId: string, baseline: Platfo
 }
 
 /** The input-provenance corpus the post-run scan exempts against: the host-path tokens the first turn's
- *  staged inputs carried (persisted by the runtime), plus this turn's prompt, with this run's own roots
- *  never exempt. Only at container/microvm: those are the tiers that stage inputs and arm the
- *  `host_path_leak` signal; elsewhere nothing is exempted (and nothing is reported). */
+ *  staged inputs carried (persisted by the runtime) plus this turn's prompt, and apart from them the staged
+ *  plugins' and local skills' tokens with their host source locations, which those tokens never exempt. This
+ *  run's own roots are never exempt. Only at container/microvm: those are the tiers that stage inputs and arm
+ *  the `host_path_leak` signal; elsewhere nothing is exempted (and nothing is reported). */
 export function inputProvenanceCorpus(
   outDir: string,
   sessionId: string,
@@ -4210,6 +4224,7 @@ export function inputProvenanceCorpus(
     tokens: new Set([...readInputHostPathCorpus(outDir), ...hostPathTokens(prompt ?? "")]),
     neverExemptRoots: subtree,
     neverExemptExact: exact,
+    sourced: readSourcedHostPathCorpus(outDir),
   };
 }
 

@@ -1215,7 +1215,7 @@
         "inputHostPathTokens": {
           "type": "integer",
           "minimum": 1,
-          "description": "Distinct host-path tokens the scenario's inputs carried (staged uploads and connected folders, captured before the agent ran, plus the prompt). The tokens themselves are never written. Omitted when zero."
+          "description": "Distinct host-path tokens the scenario's inputs carried (staged uploads, connected folders, declared plugins and local skills, captured before the agent ran, plus the prompt). The tokens themselves are never written. Omitted when zero."
         },
         "hostPathsFromInputs": {
           "type": "integer",

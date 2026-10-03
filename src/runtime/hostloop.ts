@@ -1,5 +1,6 @@
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
+import { registerCleanup, removeContainer } from "../egress/sidecar.js";
 import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,7 +32,7 @@ import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchP
 import type { WebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars, pluginDirArgs } from "./argv.js";
 import { buildPluginPathRewrites, type PluginPathRewrite } from "../hostloop/plugin-path-rewrite.js";
-import { agentSpawnOptions } from "./agent-tree.js";
+import { agentSpawnOptions, agentTreeAgent } from "./agent-tree.js";
 import { AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
@@ -226,32 +227,73 @@ export function hostLoopSidecarEnv(egressProxy?: string): Record<string, string>
   return egressProxy ? proxyEnvVars(egressProxy) : {};
 }
 
+/** spawnHostLoop's options. */
+export interface HostLoopSpawnOpts {
+  systemPromptAppend?: string;
+  runToken?: string;
+  egressProxy?: string;
+  dockerNetwork?: string;
+  provenanceRef?: { current?: WebFetchProvenance }; // filled by execute.ts/chat.ts (Run-backed)
+  // coworkWebFetchViaApi (readGateFlag, execute.ts/chat.ts) — when on, web_fetch is gated through
+  // can_use_tool (production shape: bash pre-approved, web_fetch is not) instead of pre-approved
+  // alongside bash (the allowlist-fallback shape, gate off).
+  webFetchViaApi?: boolean;
+  /** coworkWebFetchDedup per-session cache (execute.ts/chat.ts build it only when the gate is on). */
+  dedup?: WebFetchDedupCache;
+  /** Resolved gate 245679952 (execute.ts/chat.ts — readGateBool ▸ session knob ▸ default true). Gates
+   *  the `skills` server's `suggest_skills` tool (see hostloop/skills-handler.ts). */
+  suggestSkillsEnabled?: boolean;
+  /** Resolved proactive suggest mode (`resolveSkillDiscoveryGates`: session knob ▸ for a baseline from
+   *  1.46388.3, always true — Desktop reads no gate there ▸ for an older baseline gate 1598976391, on from
+   *  1.24012.11, false when absent). Only consulted when `suggestSkillsEnabled` is true. */
+  proactiveSkillSuggestEnabled?: boolean;
+}
+
+/** Something spawnHostLoop started that it must reap itself if it throws before returning it. */
+export interface HostLoopSidecarHandle {
+  reapNow(): boolean;
+}
+
+/**
+ * Run `spawn`, and if it throws after starting things it handed to `track` (the native agent, the workspace
+ * sidecar), reap them, newest first, before rethrowing. The caller never got them back, so its own teardown
+ * cannot stop them; without this the agent would run on and the sidecar container, its client and (through
+ * them) its network would wait for a signal or the process exit.
+ */
+export function reapSidecarOnThrow<T>(spawn: (track: (s: HostLoopSidecarHandle) => void) => T): T {
+  const started: HostLoopSidecarHandle[] = [];
+  try {
+    return spawn((s) => void started.push(s));
+  } catch (e) {
+    for (const s of started.reverse())
+      try {
+        s.reapNow();
+      } catch {
+        /* best-effort: the original error is the one to surface */
+      }
+    throw e;
+  }
+}
+
 export function spawnHostLoop(
+  scenario: Scenario,
+  baseline: PlatformBaseline,
+  plan: LaunchPlan,
+  outDir: string,
+  sessionId: string,
+  opts: HostLoopSpawnOpts = {},
+) {
+  return reapSidecarOnThrow((track) => spawnHostLoopTracked(scenario, baseline, plan, outDir, sessionId, opts, track));
+}
+
+function spawnHostLoopTracked(
   _scenario: Scenario,
   baseline: PlatformBaseline,
   plan: LaunchPlan,
   outDir: string,
   sessionId: string,
-  opts: {
-    systemPromptAppend?: string;
-    runToken?: string;
-    egressProxy?: string;
-    dockerNetwork?: string;
-    provenanceRef?: { current?: WebFetchProvenance }; // filled by execute.ts/chat.ts (Run-backed)
-    // coworkWebFetchViaApi (readGateFlag, execute.ts/chat.ts) — when on, web_fetch is gated through
-    // can_use_tool (production shape: bash pre-approved, web_fetch is not) instead of pre-approved
-    // alongside bash (the allowlist-fallback shape, gate off).
-    webFetchViaApi?: boolean;
-    /** coworkWebFetchDedup per-session cache (execute.ts/chat.ts build it only when the gate is on). */
-    dedup?: WebFetchDedupCache;
-    /** Resolved gate 245679952 (execute.ts/chat.ts — readGateBool ▸ session knob ▸ default true). Gates
-     *  the `skills` server's `suggest_skills` tool (see hostloop/skills-handler.ts). */
-    suggestSkillsEnabled?: boolean;
-    /** Resolved proactive suggest mode (`resolveSkillDiscoveryGates`: session knob ▸ for a baseline from
-     *  1.46388.3, always true — Desktop reads no gate there ▸ for an older baseline gate 1598976391, on from
-     *  1.24012.11, false when absent). Only consulted when `suggestSkillsEnabled` is true. */
-    proactiveSkillSuggestEnabled?: boolean;
-  } = {},
+  opts: HostLoopSpawnOpts,
+  trackOnThrow: (s: HostLoopSidecarHandle) => void,
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
   const sessionRoot = m.cwd;
@@ -411,11 +453,19 @@ export function spawnHostLoop(
   // Detached, as Desktop spawns its agent, and tagged with the run's token: both are how a teardown finds
   // every host process the agent starts — hooks, MCP servers (see agent-tree.ts). Returned, never re-derived.
   const runTag = opts.runToken ?? sessionId;
+  const agentStartMs = Date.now();
   const child = spawn(
     agentNativeHost,
     nativeArgs,
     agentSpawnOptions({ cwd: cwds.agentProcessCwd, env: nativeEnv, stdio: ["pipe", "pipe", "pipe"] as const }, runTag),
   );
+  // The caller never sees this agent if a later step throws, so it is force-killed (its whole tree) then.
+  trackOnThrow({
+    reapNow: () => {
+      agentTreeAgent(child, { runTag, runStartMs: agentStartMs }).forceKill();
+      return true;
+    },
+  });
 
   // The VM sidecar container: bash/web_fetch's `docker exec` target. No agent inside it (the agent is
   // the native `child` above) — it runs a keep-alive command (dockerRunArgv's default when `agentArgv` is
@@ -441,7 +491,6 @@ export function spawnHostLoop(
     readOnlyMountPaths: plan.mounts.filter((mt) => mt.mode === "r" && mt.kind !== "folder").map((mt) => mt.mountPath),
     extraBinds: resolveHostLoopBindMounts(plan, sessionRoot),
   });
-  const sidecarChild = spawn(runner, sidecarArgs, { stdio: ["ignore", "ignore", "pipe"] });
   // Two emitters, not one: this sidecar DYING and a single `docker exec` FAILING are different events with
   // different blast radii, and collapsing them into one sink made every failed exec contaminate the whole
   // run. Both still append the out-of-band `infra_error` row to events.jsonl (so a cassette recorded from
@@ -452,7 +501,14 @@ export function spawnHostLoop(
   // `fatalError` pattern (src/egress/sidecar.ts) so a genuine sidecar crash still hard-fails the verdict.
   const infraErrors: { source: InfraErrorSource; message: string }[] = [];
   const { logSidecarInfra, logExecInfra } = makeInfraEmitters(outDir, infraErrors);
-  const { markTearingDown } = watchHostLoopSidecar(sidecarChild, logSidecarInfra);
+  const hlSidecar = startHostLoopSidecar({
+    runner,
+    argv: sidecarArgs,
+    containerName,
+    logInfra: logSidecarInfra,
+  });
+  trackOnThrow(hlSidecar);
+  const { markTearingDown, deregister: deregisterSidecarReap } = hlSidecar;
 
   // Every `mcp__workspace__bash` call starts at the bare SESSION ROOT — not a connected folder, not
   // outputs. MEASURED on desktop-local Cowork 2026-08-27, twice: `pwd` returned `/sessions/<id>` with no
@@ -540,6 +596,7 @@ export function spawnHostLoop(
     hostEgress,
     infraErrors,
     markTearingDown,
+    deregisterSidecarReap,
     runTag,
     sessionRoot: sessionHost,
     /** The `--append-system-prompt` this spawn passed: the session's append plus the host-loop shell section. */
@@ -571,6 +628,67 @@ export interface SidecarWatchTarget {
   stderr?: { on(event: "data", listener: (chunk: Buffer) => void): unknown } | null;
   on(event: "error", listener: (err: unknown) => void): unknown;
   on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+}
+
+/**
+ * Start the workspace sidecar (`docker run` attached, a keep-alive container) and register its signal-time
+ * reap in the egress registry's "container" phase, so it runs BEFORE the egress sidecar's "network" phase
+ * removes the `cowork-int-*` network the container is attached to (`network rm` fails while it is). Returns
+ * the de-register for the normal path, which must call it only AFTER its own `rm -f` of the container has
+ * succeeded (`removeContainerThenRelease`): until then a signal, or the process exit, must still find it.
+ */
+export function startHostLoopSidecar(p: { runner: string; argv: string[]; containerName: string; logInfra: (message: string) => void }): {
+  child: ReturnType<typeof spawn>;
+  markTearingDown: () => void;
+  deregister: () => void;
+  /** Reap now (mark, `rm -f`, kill the client); de-registers only when the container is gone. */
+  reapNow: () => boolean;
+} {
+  const child = spawn(p.runner, p.argv, { stdio: ["ignore", "ignore", "pipe"] });
+  const { markTearingDown } = watchHostLoopSidecar(child, p.logInfra);
+  let removed = false;
+  const reap = makeHostLoopSidecarReap({
+    markTearingDown,
+    containerName: p.containerName,
+    rm: (name) => {
+      removed = removeContainer(p.runner, name);
+    },
+    kill: (sig) => {
+      if (child.exitCode === null && child.signalCode === null) child.kill(sig);
+    },
+  });
+  const deregister = registerCleanup({ phase: "container", run: reap });
+  const reapNow = (): boolean => {
+    reap();
+    if (removed) deregister();
+    return removed;
+  };
+  return { child, markTearingDown, deregister, reapNow };
+}
+
+/** The signal-time reap of the workspace sidecar: mark it as tearing down (its exit is then not an infra
+ *  failure), remove the container, then SIGKILL the `docker run` client. The client must be killed
+ *  explicitly: a SIGINT to the process group reaches it, it forwards the signal to a keep-alive PID 1 that
+ *  ignores it, and it outlives the harness. Each step tolerates an already-gone target. */
+export function makeHostLoopSidecarReap(p: {
+  markTearingDown: () => void;
+  containerName: string;
+  rm: (name: string) => void;
+  kill: (sig: NodeJS.Signals) => void;
+}): () => void {
+  return () => {
+    p.markTearingDown();
+    try {
+      p.rm(p.containerName);
+    } catch {
+      /* already gone */
+    }
+    try {
+      p.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  };
 }
 
 /**

@@ -271,11 +271,12 @@ Recognize these before "fixing" a non-bug:
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
   `transcript_no_host_path`. At `fidelity: cowork` the skip follows the **resolved** tier, so a `cowork`
   run that lands on `container` is armed. Author `transcript_no_host_path` to enforce cleanliness where
-  it's valid. A host path that came verbatim from the scenario's own uploads, connected folders or prompt
-  is not a leak (whole-token match; a token cut short where the path goes on, or one naming a location the
-  harness created for the run, is never exempt); `scan.inputHostPathTokens` counts the host-path tokens the
-  inputs carried, `scan.hostPathsFromInputs` the ones exempted, and a non-zero exemption prints a
-  `::notice::` so a clean scan that relied on it is never silent.
+  it's valid. A host path that came verbatim from the scenario's own uploads, connected folders, prompt or
+  declared plugins' or local skills' files is not a leak (whole-token match; a token cut short where the path
+  goes on, or one naming a location the harness created for the run, is never exempt, and a plugin's or
+  skill's own files never exempt a path under its host source); `scan.inputHostPathTokens` counts the
+  host-path tokens the inputs carried, `scan.hostPathsFromInputs` the ones exempted, and a non-zero exemption
+  prints a `::notice::` so a clean scan that relied on it is never silent.
 - **`exec_infra_error`** (`WARN`, host-loop) — one or more container `exec` calls failed for
   infrastructure reasons (daemon/container-level), so those tool calls returned an error to the agent
   rather than the command's own output. Warn-severity because the run's other evidence is intact — unlike

@@ -900,7 +900,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if a host path (/Users, /opt) leaked into model-visible text (post-run scan); a path that came verbatim from the scenario's own input files or prompt is not a leak. Only `true` is valid (writing `false` is a rejected footgun — omit to allow or use allow_stall)",
+      "fails if a host path (/Users, /opt) leaked into model-visible text (post-run scan); a path that came verbatim from the scenario's own input files, prompt, or declared plugins' or local skills' files is not a leak. Only `true` is valid (writing `false` is a rejected footgun — omit to allow or use allow_stall)",
     ),
   computer_links_resolve: z
     .literal(true)
@@ -2524,9 +2524,9 @@ export interface RunResult {
     mountDeletes?: { mount: string; command: string }[];
     /** A host path that did NOT come from the scenario's inputs appeared in model-visible text. */
     hostPathLeaked: boolean;
-    /** How many distinct host-path tokens the scenario's inputs carried — the staged uploads and connected
-     *  folders (captured before the agent ran, on the first turn) plus the turn's prompt. The tokens
-     *  themselves are private paths and are never written here. Omitted when zero. */
+    /** How many distinct host-path tokens the scenario's inputs carried — the staged uploads, connected
+     *  folders, declared plugins and local skills (captured before the agent ran, on the first turn) plus the
+     *  turn's prompt. The tokens themselves are private paths and are never written here. Omitted when zero. */
     inputHostPathTokens?: number;
     /** How many distinct host-path tokens in model-visible text were exempted from `hostPathLeaked` because
      *  they came verbatim from those inputs. Omitted when zero; non-zero means a clean scan relied on it. */

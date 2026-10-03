@@ -52,6 +52,7 @@ interface CleanupEntry {
 }
 const cleanupRegistry = new Set<CleanupEntry>();
 let signalHandlerInstalled = false;
+let drainedOnSignal = false;
 
 /** Register a signal-time cleanup thunk; returns a de-register fn to call from the normal `finally` path
  *  (so a clean exit doesn't double-run it — and `teardown()`/`rm -f` are idempotent regardless). */
@@ -82,9 +83,46 @@ function installSignalHandlerOnce() {
     // already de-registered its thunks — the count can be lower (even 0) than what was in flight at the signal.
     const n = cleanupRegistry.size;
     if (n) warn(`::warning:: [cleanup] ${sig} — reaping ${n} in-flight egress resource(s) before exit\n`);
+    drainedOnSignal = true;
+    drainCleanups();
+  });
+  // A thunk still registered at a NORMAL exit is a resource whose teardown failed (an `rm -f` that did not
+  // succeed, a teardown that threw before reaching it): the normal path de-registers only after a successful
+  // removal. Reap it here rather than leave it running. Skipped after a signal, whose step already drained.
+  process.on("exit", () => {
+    if (drainedOnSignal || cleanupRegistry.size === 0) return;
+    warn(`::warning:: [cleanup] reaping ${cleanupRegistry.size} egress resource(s) left registered at exit\n`);
     drainCleanups();
   });
   installTerminationHandler();
+}
+
+/** Is `rm -f` / `network rm` output saying the target is already gone (Docker and Podman spellings)? */
+function alreadyGone(r: { status: number | null; stdout?: string | null; stderr?: string | null }): boolean {
+  return r.status === 0 || /no such (container|network)|not found|no container with name or id/i.test(`${r.stderr ?? ""}${r.stdout ?? ""}`);
+}
+
+/** `rm -f` a container. True when it is gone afterwards — removed now, or already absent. */
+export function removeContainer(runner: string, name: string): boolean {
+  return alreadyGone(spawnSync(runner, ["rm", "-f", name], { encoding: "utf8" }));
+}
+
+/**
+ * The normal-path container removal, shared by `run` and `chat`: `rm -f` the container, and only once it is
+ * gone drop the signal-time thunks that would otherwise reap it. A failed removal keeps them registered, so a
+ * later signal, or the process exit, still removes the container (and then its network). Returns success.
+ */
+export function removeContainerThenRelease(
+  runner: string,
+  containerName: string | undefined,
+  deregisters: ReadonlyArray<(() => void) | undefined>,
+  rm: (runner: string, name: string) => boolean = removeContainer,
+): boolean {
+  const removed = containerName === undefined || rm(runner, containerName);
+  if (removed) for (const d of deregisters) d?.();
+  else
+    warn(`::warning:: [cleanup] could not remove container ${containerName} — it stays registered and is removed on a signal or at exit\n`);
+  return removed;
 }
 
 function tryRun(fn: () => void) {
@@ -149,13 +187,15 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
   }
 
   let fatalError: string | undefined;
-  const reap = () => {
+  const reap = (): boolean => {
     // Read the proxy's exit before `rm -f` erases it — a non-zero exit means the fatal-error channel
     // in proxy.ts fired (structured stderr + non-zero exit) and nothing else would have surfaced it.
     fatalError = detectProxyFatalError(runner, proxyName) ?? fatalError;
     d(runner, ["rm", "-f", proxyName], true); // proxy container before its networks (attached)
-    d(runner, ["network", "rm", intNet], true);
-    d(runner, ["network", "rm", outNet], true);
+    // Each network goes only once nothing is attached; report whether both are gone.
+    const intGone = alreadyGone(spawnSync(runner, ["network", "rm", intNet], { encoding: "utf8" }));
+    const outGone = alreadyGone(spawnSync(runner, ["network", "rm", outNet], { encoding: "utf8" }));
+    return intGone && outGone;
   };
   // Cover Ctrl-C — reap this run's proxy+networks on a signal too. Registered as the "network" phase so a
   // caller-registered agent-container reap ("container" phase) runs first (network rm needs the container gone).
@@ -176,8 +216,9 @@ export function startEgressSidecar(allow: string[], outDir: string, runId: strin
       return fatalError;
     },
     teardown() {
-      deregister();
-      reap();
+      // De-register only once the networks are gone: one still held by a container whose removal failed stays
+      // registered, so the agent container's thunk and then this one reap both at a signal or at exit.
+      if (reap()) deregister();
     },
   };
 }
