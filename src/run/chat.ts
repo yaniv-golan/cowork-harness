@@ -355,6 +355,7 @@ export async function cmdChat(args: string[]) {
   // the sidecar container so that forced exit isn't misreported as a mid-run infra failure.
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined;
   let hostloopMarkTearingDown: (() => void) | undefined;
+  let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
   // Sampled for the container/hostloop branches only (mirrors execute.ts) — protocol runs the host
   // binary directly with no container/process id to probe, so it legitimately never gets one.
   let resourceSampler: ResourceSampler | undefined;
@@ -470,6 +471,7 @@ export async function cmdChat(args: string[]) {
       containerName = hl.containerName;
       hostloopInfraErrors = hl.infraErrors;
       hostloopMarkTearingDown = hl.markTearingDown;
+      deregisterHostLoopSidecarReap = hl.deregisterSidecarReap;
       // Same ResourceSampler lifecycle execute.ts uses for hostloop: sample the native agent process by
       // pid on an interval so buildChatResult's foldResources() call (chat-result.ts) has something to
       // fold — previously no sampler was ever started here, so a hostloop chat's resources.jsonl never
@@ -580,7 +582,8 @@ export async function cmdChat(args: string[]) {
     // `await` (stop() is async) also ensures a run shorter than one interval still has its immediate
     // first sample land in resources.jsonl before buildChatResult's foldResources() reads it, below.
     await resourceSampler?.stop();
-    deregisterContainerReap?.(); // normal path owns the reap below
+    // The signal-time container thunks stay registered until the `rm -f` below (see executeScenario): a
+    // signal landing in the agent stop awaited next would otherwise exit with the container still up.
     // Reap the agent first (mirrors execute.ts). protocol/hostloop: the host agent's whole process tree —
     // reached here after the last turn (a mid-turn Ctrl-C goes through the termination handler instead);
     // container: the docker client, then the container by name below.
@@ -590,6 +593,8 @@ export async function cmdChat(args: string[]) {
     // failure (see watchHostLoopSidecar's doc comment).
     hostloopMarkTearingDown?.();
     if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
+    deregisterContainerReap?.(); // the normal path has reaped the container; drop the signal-time thunks
+    deregisterHostLoopSidecarReap?.();
     sidecar?.teardown();
     rl.close(); // the one shared stdin interface — closed once, here
     // LAST in the teardown, unconditional on `record`: a chat that crashes before its first turn

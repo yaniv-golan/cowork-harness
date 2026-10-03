@@ -1,5 +1,6 @@
 import { warn } from "../io.js";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { registerCleanup } from "../egress/sidecar.js";
 import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -441,7 +442,6 @@ export function spawnHostLoop(
     readOnlyMountPaths: plan.mounts.filter((mt) => mt.mode === "r" && mt.kind !== "folder").map((mt) => mt.mountPath),
     extraBinds: resolveHostLoopBindMounts(plan, sessionRoot),
   });
-  const sidecarChild = spawn(runner, sidecarArgs, { stdio: ["ignore", "ignore", "pipe"] });
   // Two emitters, not one: this sidecar DYING and a single `docker exec` FAILING are different events with
   // different blast radii, and collapsing them into one sink made every failed exec contaminate the whole
   // run. Both still append the out-of-band `infra_error` row to events.jsonl (so a cassette recorded from
@@ -452,7 +452,12 @@ export function spawnHostLoop(
   // `fatalError` pattern (src/egress/sidecar.ts) so a genuine sidecar crash still hard-fails the verdict.
   const infraErrors: { source: InfraErrorSource; message: string }[] = [];
   const { logSidecarInfra, logExecInfra } = makeInfraEmitters(outDir, infraErrors);
-  const { markTearingDown } = watchHostLoopSidecar(sidecarChild, logSidecarInfra);
+  const { markTearingDown, deregister: deregisterSidecarReap } = startHostLoopSidecar({
+    runner,
+    argv: sidecarArgs,
+    containerName,
+    logInfra: logSidecarInfra,
+  });
 
   // Every `mcp__workspace__bash` call starts at the bare SESSION ROOT — not a connected folder, not
   // outputs. MEASURED on desktop-local Cowork 2026-08-27, twice: `pwd` returned `/sessions/<id>` with no
@@ -540,6 +545,7 @@ export function spawnHostLoop(
     hostEgress,
     infraErrors,
     markTearingDown,
+    deregisterSidecarReap,
     runTag,
     sessionRoot: sessionHost,
     /** The `--append-system-prompt` this spawn passed: the session's append plus the host-loop shell section. */
@@ -588,6 +594,59 @@ export interface SidecarWatchTarget {
  * as intentional shutdown rather than reported as a mid-run infra error — a naive fix that skips this
  * would red every hostloop run.
  */
+/**
+ * Start the workspace sidecar (`docker run` attached, a keep-alive container) and register its signal-time
+ * reap in the egress registry's "container" phase, so it runs BEFORE the egress sidecar's "network" phase
+ * removes the `cowork-int-*` network the container is attached to (`network rm` fails while it is). Returns
+ * the de-register for the normal path, which must call it only AFTER its own `rm -f` of the container: until
+ * then a signal must still find the reap registered.
+ */
+export function startHostLoopSidecar(p: { runner: string; argv: string[]; containerName: string; logInfra: (message: string) => void }): {
+  child: ReturnType<typeof spawn>;
+  markTearingDown: () => void;
+  deregister: () => void;
+} {
+  const child = spawn(p.runner, p.argv, { stdio: ["ignore", "ignore", "pipe"] });
+  const { markTearingDown } = watchHostLoopSidecar(child, p.logInfra);
+  const deregister = registerCleanup({
+    phase: "container",
+    run: makeHostLoopSidecarReap({
+      markTearingDown,
+      containerName: p.containerName,
+      rm: (name) => spawnSync(p.runner, ["rm", "-f", name], { stdio: "ignore" }),
+      kill: (sig) => {
+        if (child.exitCode === null && child.signalCode === null) child.kill(sig);
+      },
+    }),
+  });
+  return { child, markTearingDown, deregister };
+}
+
+/** The signal-time reap of the workspace sidecar: mark it as tearing down (its exit is then not an infra
+ *  failure), remove the container, then SIGKILL the `docker run` client. The client must be killed
+ *  explicitly: a SIGINT to the process group reaches it, it forwards the signal to a keep-alive PID 1 that
+ *  ignores it, and it outlives the harness. Each step tolerates an already-gone target. */
+export function makeHostLoopSidecarReap(p: {
+  markTearingDown: () => void;
+  containerName: string;
+  rm: (name: string) => void;
+  kill: (sig: NodeJS.Signals) => void;
+}): () => void {
+  return () => {
+    p.markTearingDown();
+    try {
+      p.rm(p.containerName);
+    } catch {
+      /* already gone */
+    }
+    try {
+      p.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  };
+}
+
 export function watchHostLoopSidecar(
   sidecarChild: SidecarWatchTarget,
   logInfra: (message: string) => void,

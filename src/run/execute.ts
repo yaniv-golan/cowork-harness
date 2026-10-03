@@ -1091,6 +1091,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
   let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
+  let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
   let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
   // Where the protocol agent's child transcripts land — the managed config dir, or undefined when it read the
   // operator's real one (see resolveSubagentConfigRoot). Set by spawnProtocol, never re-derived.
@@ -1303,6 +1304,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         hostloopPathGateFired = hl.pathGateFired;
         hostloopInfraErrors = hl.infraErrors;
         hostloopMarkTearingDown = hl.markTearingDown;
+        deregisterHostLoopSidecarReap = hl.deregisterSidecarReap;
         spawnedSessionRoot = hl.sessionRoot; // HOST tree — the native agent's file paths live there
         spawnedAgentCwd = hl.agentProcessCwd; // from Desktop 2.7032.0: /var/empty (or a per-run dir), outside it
         logHostWriteNotice(
@@ -1456,7 +1458,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Reap the agent container FIRST (before the sidecar networks), so a crashed/unanswered run can't
       // orphan a running container holding the network. On the success path the child has already
       // exited (--rm), so these are no-ops.
-      deregisterContainerReap?.(); // normal path owns the reap below; drop the signal-time thunk
+      // The signal-time container thunks stay registered until the `rm -f` below has run: the agent stop
+      // awaited next takes seconds at hostloop, and a signal landing in it drains the registry and exits
+      // before this path reaches its own removal — a thunk dropped here would never run (the hostloop sidecar,
+      // its client and its network all leaked that way). A double reap is harmless: each step is idempotent.
       agentStopMs = await reapAgentOnTeardown({
         microvm: effectiveFidelity === "microvm",
         agent: signalAgent,
@@ -1468,6 +1473,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
       hostloopMarkTearingDown?.();
       if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
+      deregisterContainerReap?.(); // the normal path has reaped the container; drop the signal-time thunks
+      deregisterHostLoopSidecarReap?.();
       if (sidecar) {
         const eg = sidecar.collect();
         egress = eg.entries;

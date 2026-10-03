@@ -964,6 +964,15 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   they never use up the inputs' share), and nothing under a location the harness created for the run. A plugin's
   host source location is never exempt, even when a plugin file names it. A result that relied on the exemption
   counts those paths in `scan.hostPathsFromInputs`, and the verdict notice now says "inputs, prompt or plugin files".
+- **A signal no longer leaks the `hostloop` workspace sidecar.** After a Ctrl-C (or SIGTERM, or SIGHUP) during a
+  `hostloop` `run` or `chat`, the harness exited 130 but left the `cowork-hl-*` container, its `docker run` client
+  and the `cowork-int-*` network running. The run's teardown dropped its signal-time container cleanup before
+  stopping the agent, which takes seconds at `hostloop`. A signal that landed in that window found only the network
+  cleanup, whose `network rm` fails while a container is attached, and the process exited before the teardown
+  reached its own `docker rm -f`. The cleanup now stays registered until the teardown has removed the container
+  itself, at every tier. The sidecar also registers its own cleanup, which removes the container and kills the
+  `docker run` client before the network is removed: a signal sent to the whole process group reaches the client,
+  which forwards it to a container that ignores it, so the client has to be killed explicitly.
 
 ### Documentation
 
