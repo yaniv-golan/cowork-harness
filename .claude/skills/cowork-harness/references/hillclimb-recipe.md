@@ -6,7 +6,9 @@ Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). It needs a `cowork
 row keys) is in [`hillclimb.md`](hillclimb.md); the setup and the full list of differences from the guide's own
 runner are in [docs/hillclimb.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/hillclimb.md).
 
-Throughout: `F` is the flow dir and `T` the scenario file or directory. Run every command from the same
+Throughout: `F` is the flow dir and `T` the scenario file or directory. Put `F` outside `.claude/`: Claude Code
+protects `.claude/`, so an allow rule does not cover your own writes there and each one asks for approval every round
+(the runner's writes are unaffected); use an absolute path outside it and exclude it from git. Run every command from the same
 directory, with the same `T` spelling and the same `--flow F`, and pass the same `--run-dir` (or none) every time.
 `F` must be absolute, or below the working directory with no `..` segment.
 

@@ -135,8 +135,8 @@ cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --variant baseline --ca
 6. Once the loop has run a round, `cowork-harness hillclimb check --flow ~/hc/my-skill` checks the flow against
    the loop's schema and warns about cases with no headroom.
 
-Every command defaults to `--flow .claude/hillclimb/flow`, inside your repo; the examples put it outside instead
-(see the next section).
+Every command defaults to `--flow .claude/hillclimb/flow`, inside your repo; the examples put it outside instead,
+and outside `.claude/` (see the next section).
 
 Requirements:
 
@@ -154,6 +154,12 @@ Requirements:
   rounds by the model that served them).
 
 ## Where the flow dir goes
+
+Put the flow dir outside `.claude/`. Claude Code treats `.claude/` as a protected path: an allow rule does not
+pre-approve the loop's own Edit or Write there (its `_state.json`, `change.md`, `change.patch`, `narrative.md`), so
+in an interactive session each of those writes asks for approval, every round, and in a headless (`-p`) run it is
+refused. The runner's own writes are unaffected: it writes from its own process. Use an absolute `--flow` path
+outside `.claude/` and exclude it from git; allow rules for that path then cover the loop's writes.
 
 Keep the flow dir out of your repo, or ignore most of it. Rows, traces and the copies under `<variant>/out/`
 hold the run's outputs and judge rationales (secret-scrubbed and host-path-redacted text; binary files copied as
