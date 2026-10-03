@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import * as hostloop from "../src/runtime/hostloop.js";
+import * as sidecarMod from "../src/egress/sidecar.js";
 
 // The hostloop tier runs a workspace sidecar: a `cowork-hl-*` container started by an attached `docker run`
 // client, on the egress sidecar's `cowork-int-*` network. A signal must reap all three. The network can only go
@@ -256,6 +257,51 @@ describe("makeHostLoopSidecarReap — the signal-time thunk", () => {
   });
 });
 
+// "Gone" means docker said so about the container or network itself. Any other failure that happens to say
+// "not found" — a missing docker CONTEXT, an endpoint — leaves the thing in place, so the cleanup must stay.
+describe("alreadyGone — what counts as removed", () => {
+  const gone = (status: number, stderr: string) => (sidecarMod as any).alreadyGone({ status, stderr, stdout: "" });
+  it("exit 0, and docker's or podman's own container/network not-found messages, are gone", () => {
+    expect(gone(0, "")).toBe(true);
+    expect(gone(1, "Error response from daemon: No such container: cowork-hl-x")).toBe(true);
+    expect(gone(1, "Error response from daemon: network cowork-int-x not found")).toBe(true);
+    expect(gone(1, 'Error: no container with name or ID "cowork-hl-x" found: no such container')).toBe(true);
+    expect(gone(1, "Error: unable to find network with name or ID cowork-int-x: network not found")).toBe(true);
+  });
+  it("a docker context error, an endpoint error or an attached network are NOT gone", () => {
+    expect(gone(1, 'context "x": context not found: open /Users/a/.docker/contexts/meta/x/meta.json: no such file or directory')).toBe(
+      false,
+    );
+    expect(gone(1, "error during connect: endpoint not found")).toBe(false);
+    expect(gone(1, "Error response from daemon: error while removing network: network cowork-int-x has active endpoints")).toBe(false);
+  });
+});
+
+describe.runIf(POSIX)("a context error on removal keeps the cleanup registered", () => {
+  it("removeContainerThenRelease reports failure and does not de-register", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hl-ctx-"));
+    try {
+      const runtime = join(dir, "fake-runtime");
+      writeFileSync(
+        runtime,
+        `#!/bin/sh\necho 'context "gone": context not found: open /Users/a/.docker/contexts/meta/x/meta.json: no such file or directory' >&2\nexit 1\n`,
+      );
+      chmodSync(runtime, 0o755);
+      let dropped = 0;
+      const orig = process.stderr.write;
+      (process.stderr as any).write = () => true;
+      try {
+        expect((sidecarMod as any).removeContainerThenRelease(runtime, "cowork-hl-x", [() => void dropped++])).toBe(false);
+      } finally {
+        (process.stderr as any).write = orig;
+      }
+      expect(dropped).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("removeContainerThenRelease", () => {
   it("de-registers only after a successful removal; nothing to remove counts as success", async () => {
     const { removeContainerThenRelease } = await import("../src/egress/sidecar.js");
@@ -306,28 +352,78 @@ describe("wiring", () => {
       /deregisterHostLoopSidecarReap = hl\.deregisterSidecarReap;/g,
     ],
   };
-  for (const file of ["run/execute.ts", "run/chat.ts"])
+  /** Every way `code` breaks the rule, or [] when it holds. Comments are blanked IN PLACE (block and line,
+   *  outside string literals), not dropped by the line: `/* early *\/ deregisterContainerReap?.();` is code. */
+  const handleUseProblems = (raw: string, file: string): string[] => {
+    const code = stripComments(raw);
+    const problems: string[] = [];
+    const reap = code.indexOf("await reapAgentOnTeardown(");
+    const release = code.indexOf(RELEASE);
+    if (reap < 0) problems.push("no agent stop");
+    if (release < 0 || release < reap) problems.push("the release call is missing or before the agent stop");
+    if (code.split(RELEASE).length !== 2) problems.push("not exactly one release call");
+    let rest = code.replace(RELEASE, "");
+    for (const re of allowed[file]) {
+      const before = rest;
+      rest = rest.replace(re, "");
+      if (rest === before) problems.push(`missing declaration/assignment ${re}`);
+    }
+    for (const l of rest.split("\n"))
+      if (/\bderegister(ContainerReap|HostLoopSidecarReap)\b/.test(l)) problems.push(`stray use: ${l.trim()}`);
+    return problems;
+  };
+  for (const file of ["run/execute.ts", "run/chat.ts"]) {
     it(`${file} uses the de-register handles only in the release call, after the agent stop`, () => {
-      const code = src(file)
-        .split("\n")
-        .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)) // comments may mention them
-        .join("\n");
-      const reap = code.indexOf("await reapAgentOnTeardown(");
-      const release = code.indexOf(RELEASE);
-      expect(reap).toBeGreaterThan(-1);
-      expect(release, "the release call").toBeGreaterThan(reap);
-      expect(code.split(RELEASE)).toHaveLength(2); // exactly one release call
-      let rest = code.replace(RELEASE, "");
-      for (const re of allowed[file]) {
-        const before = rest;
-        rest = rest.replace(re, "");
-        expect(rest, `expected declaration/assignment ${re}`).not.toBe(before);
-      }
-      // strip trailing line comments before looking for stray uses
-      const stray = rest
-        .split("\n")
-        .map((l) => l.replace(/\/\/.*$/, ""))
-        .filter((l) => /\bderegister(ContainerReap|HostLoopSidecarReap)\b/.test(l));
-      expect(stray, "a use of a de-register handle outside the release call").toEqual([]);
+      expect(handleUseProblems(src(file), file)).toEqual([]);
     });
+    for (const [name, dodge] of [
+      ["a block comment leading the line", "/* early */ deregisterContainerReap?.();"],
+      ["a line comment above it", "// early\n deregisterContainerReap?.();"],
+      ["a guarded call", "if (deregisterContainerReap) deregisterContainerReap();"],
+      ["an alias", "const d = deregisterHostLoopSidecarReap; d?.();"],
+    ] as const)
+      it(`${file}: an early de-register behind ${name} is caught`, () => {
+        const s = src(file);
+        const at = s.indexOf("await reapAgentOnTeardown(");
+        const lineStart = s.lastIndexOf("\n", at) + 1;
+        const mutated = s.slice(0, lineStart) + dodge + "\n" + s.slice(lineStart);
+        expect(handleUseProblems(mutated, file).some((p) => p.startsWith("stray use"))).toBe(true);
+      });
+  }
+  it("stripComments blanks comments in place and leaves strings alone", () => {
+    expect(stripComments("a /* x */ b // y\nc \"/* not */\" '// no' `/*t*/`")).toBe("a         b     \nc \"/* not */\" '// no' `/*t*/`");
+    expect(stripComments("a /* multi\nline */ b")).toBe("a         \n        b");
+  });
 });
+
+/** Replace every comment (block or line, outside a string or template literal) with spaces, keeping newlines,
+ *  so positions and line structure survive. A test-side helper: good enough for this repo's sources. */
+function stripComments(code: string): string {
+  let out = "";
+  let quote: string | undefined;
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (quote) {
+      out += c;
+      if (c === "\\") {
+        out += code[++i] ?? "";
+      } else if (c === quote) quote = undefined;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      out += c;
+    } else if (c === "/" && code[i + 1] === "*") {
+      const end = code.indexOf("*/", i + 2);
+      const stop = end < 0 ? code.length : end + 2;
+      out += code.slice(i, stop).replace(/[^\n]/g, " ");
+      i = stop - 1;
+    } else if (c === "/" && code[i + 1] === "/") {
+      const end = code.indexOf("\n", i);
+      const stop = end < 0 ? code.length : end;
+      out += " ".repeat(stop - i);
+      i = stop - 1;
+    } else out += c;
+  }
+  return out;
+}

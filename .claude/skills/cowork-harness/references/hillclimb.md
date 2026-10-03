@@ -41,9 +41,17 @@ time:
   `--output-format json`); progress goes to stderr every 30 s and to `progress.txt`.
 - **`hillclimb check --flow <dir>`** checks the flow dir against our reading of the published hillclimb schema
   and the `_state.json` metric declarations, and warns when a baseline case has no headroom (every rep at the
-  ceiling or the floor of the headline metric). The warning never changes the exit code. Exit `1` is an error
-  finding (a malformed row or `_state.json`, or a float metric declared with no `better`): fix it before the
-  loop reads the flow.
+  ceiling or the floor of the headline metric). It also warns about a case whose rows were graded under
+  another assertion set than its scenario's now, naming the `hillclimb regrade <target> --flow <dir> --case <id>`
+  that re-evaluates them. It compares with the scenario target when you pass one
+  (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last `--approve-harness` hashed
+  (`_state.json` `harness_files`), else those `harness_paths` lists, and says so in a note when nothing is
+  recorded, a recorded scenario is not found from the current directory (run `check` where the flow was
+  approved), or a target holds no scenario for a case. The remedy names a `regrade` target that hashes exactly the files
+  the flow was approved over (the scenarios' directory, else the case's own file), so it runs as printed. No
+  warning changes the exit code.
+  Exit `1` is an error finding (a malformed row or `_state.json`, or a float metric declared with no `better`):
+  fix it before the loop reads the flow.
 
 A case is one scenario file. Its id is the file stem, made path-safe; `--case <id>` (repeatable) runs one case
 by its stem or its scenario `name:` (a name two cases share is refused: use the stem). In a directory, YAML

@@ -965,6 +965,12 @@ const changedKeys = (
   return [...keys].filter((k) => (/^(pass|claims|win|both_bad|a\d+)/.test(k) || metric(k)) && before?.[k] !== after?.[k]);
 };
 
+/** A variant's counters, one fixed set in one order with every count shown (zero included), wherever they are printed:
+ *  its `regrade.md` line, its stderr line and the closing summary. */
+const counters = (v: RegradeFlowVariant): string =>
+  `rewritten ${v.rewritten}, re-evaluated ${v.reevaluated} (no judge call), re-measured ${v.remeasured} (no judge call), ` +
+  `agent-failed ${v.agentFailed} (meta updated), listed ${v.listed.length}`;
+
 export async function regradeFlow(args: HillclimbRegradeArgs, deps: RegradeFlowDeps): Promise<RegradeFlowOutcome> {
   const say = (l: string) => deps.stderr(l);
   const refuse = (m: string): RegradeFlowOutcome => {
@@ -1724,14 +1730,19 @@ async function regradeFlowInner(
           keys: changedKeys(before.get(l), rebuilt.get(l)!.grade, metricIds).filter((k) => !misaligned.has(l) || !/^a\d+/.test(k)),
         }))
         .filter((x) => x.keys.length || misaligned.has(x.l));
-      const mean = (rows: Array<Record<string, number> | undefined>) => {
-        const xs = rows.map((g) => g?.pass).filter((x): x is number => typeof x === "number");
-        return xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(2) : "n/a";
-      };
+      // The mean pass over the variant's scored rows (every row with a numeric pass), before and after: a row not
+      // rewritten counts with its own grade on both sides, so nothing rewritten reads the real mean twice.
+      const scored = pv.lines.filter((l) => typeof l.row?.grade?.pass === "number");
+      const mean = (xs: number[]) => (xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(2) : "n/a");
+      const passOf = (g: Record<string, number> | undefined) => (typeof g?.pass === "number" ? [g.pass] : []);
+      const means =
+        `mean pass before ${mean(scored.flatMap((l) => passOf(l.row!.grade)))}, ` +
+        `after ${mean(scored.flatMap((l) => passOf(rebuilt.get(l)?.grade ?? l.row!.grade)))} over ${scored.length} scored row(s)` +
+        (changed.length ? "" : "; unchanged (no rows rewritten)");
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
-        `rewritten ${pv.v.rewritten}${pv.v.reevaluated ? `, re-evaluated ${pv.v.reevaluated} (no judge call)` : ""}${pv.v.remeasured ? `, re-measured ${pv.v.remeasured} (no judge call)` : ""}${pv.v.agentFailed ? `, ${pv.v.agentFailed} agent failure(s): meta updated` : ""}, listed ${pv.v.listed.length}; mean pass before ${mean(changed.map((l) => before.get(l)))}, after ${mean(changed.map((l) => rebuilt.get(l)!.grade))}`,
+        `${counters(pv.v)}; ${means}`,
         ...(moved.length ? ["", "| case | rep | moved |", "|---|---|---|"] : []),
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
@@ -1765,14 +1776,7 @@ async function regradeFlowInner(
       );
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;
-    say(
-      `hillclimb regrade: ${outcome.variants
-        .map(
-          (v) =>
-            `${v.variant} ${v.rewritten} rewritten${v.reevaluated ? `, ${v.reevaluated} re-evaluated (no judge call)` : ""}${v.remeasured ? `, ${v.remeasured} re-measured (no judge call)` : ""}${v.agentFailed ? `, ${v.agentFailed} agent failure(s): meta updated` : ""}${v.listed.length ? `, ${v.listed.length} listed` : ""}`,
-        )
-        .join("; ")}`,
-    );
+    say(`hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${counters(v)}`).join("; ")}`);
     return outcome;
   } finally {
     for (const r of releases.reverse()) r();
