@@ -22,6 +22,7 @@ import type { RunRecord } from "../src/run/run.js";
 import { appendIndexRow, CRITIQUE_SESSION_PREFIX, type RunIndexRow } from "../src/run/run-index.js";
 import { jobRunId } from "../src/eval/schedule.js";
 import * as gc from "../src/run/runs-gc.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
@@ -754,7 +755,7 @@ describe.skipIf(!can)("prune refuses a root at the wrong level", () => {
           make(d);
           return { top: R, args: [d] };
         },
-        new RegExp(`looks like a run dir.*\\(it has [^)]*${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
+        new RegExp(`looks like a run dir.*\\(it has [^)]*${escapeRegExp(marker)}`),
       );
     }
   });
