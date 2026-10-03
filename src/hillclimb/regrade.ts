@@ -106,12 +106,14 @@ export interface RegradeFlowVariant {
   /** This regrade's judge spend, summed over every row a judge read (`listedAfterJudge` included); absent when no grade
    *  was priced. A floor when `judgeUnpriced` > 0. */
   judgeUsd?: number;
-  /** Judged grades that reported no cost. */
+  /** Judge calls that reported no cost (a grade no judge was called for, e.g. one that refused its evidence, is not
+   *  one). */
   judgeUnpriced: number;
   /** Rows of a core regrade that stopped after its judge calls began and returned no report for them: whatever their
    *  judge calls spent is not in `judgeUsd`, which is then a floor. */
   judgeStopped: number;
-  /** Rows rebuilt with no judge call and rewritten. */
+  /** Rows rebuilt with no judge call and rewritten — a row sent to a re-grade whose every judged assert refused its
+   *  evidence before a judge was called included. */
   rebuilt: number;
   /** Of `rebuilt`, the fill rows that lacked only their own variant's reference (neutral, 0.5). */
   ownRefOnly: number;
@@ -1598,11 +1600,14 @@ async function regradeFlowInner(
           continue;
         }
         vr.regradeFiles.push(shownRunPath(report.regradeFile, deps.secrets));
+        // Whether a judge was called for this row: an assert that refused its evidence (or a fill that kept every
+        // outcome) records no judge model, and its row is rebuilt without a judge call.
+        const called = regradeModel(report) !== undefined;
         // The judge already ran for this row: its spend counts whether the row is written or listed below. Counted as
         // listed after its judge call until it is written (then moved to `judged`).
         if (report.judgeCostUsd !== undefined) vr.judgeUsd = (vr.judgeUsd ?? 0) + report.judgeCostUsd;
         vr.judgeUnpriced += report.unpricedGrades;
-        vr.listedAfterJudge++;
+        if (called) vr.listedAfterJudge++;
         // A fill keeps every outcome it did not judge: one copied against a reference that has since changed (re-frozen
         // by hand) would mix two references in one row — listed, never written.
         const stale = args.fillRefs ? staleCopied(report.assertions as never, b.c, refs) : [];
@@ -1664,8 +1669,10 @@ async function regradeFlowInner(
         }
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
-        vr.listedAfterJudge--;
-        vr.judged++;
+        if (called) {
+          vr.listedAfterJudge--;
+          vr.judged++;
+        } else vr.rebuilt++;
         if (!aIndexAligned(t.line.row!, t.result, b.c)) misaligned.add(t.line);
       }
     }

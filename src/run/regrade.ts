@@ -88,8 +88,9 @@ export interface RegradedAssertion {
   copied?: true;
 }
 
-/** Judge spend over a set of grades: the sum of the priced ones (`undefined` when none was priced — unpriced
- *  is not $0), and how many were unpriced. With `unpricedGrades > 0` the sum is a FLOOR. */
+/** Judge spend over a set of grades: the sum of the priced judge calls (`undefined` when none was priced — unpriced
+ *  is not $0), and how many judge calls were unpriced (a grade no judge was called for is neither). With
+ *  `unpricedGrades > 0` the sum is a FLOOR. */
 export interface JudgeSpend {
   judgeCostUsd?: number;
   unpricedGrades: number;
@@ -251,14 +252,21 @@ export interface RegradeCheckOptions extends RegradeOptions {
 
 const sha256Hex = (b: Buffer | string): string => createHash("sha256").update(b).digest("hex");
 
-/** Same basis as the run index's `judgeCostUsd` and `stats`' `unpricedRuns`. */
-export function judgeSpend(grades: ReadonlyArray<{ judgeCostUsd?: number }>): JudgeSpend {
-  const priced = grades.flatMap((g) => (typeof g.judgeCostUsd === "number" ? [g.judgeCostUsd] : []));
+/** Judge spend over the grades a judge was called for: those that record a `judgeModel` (a call that threw still
+ *  records one, so it stays unpriced — a floor). A grade that refused its evidence, or a pairwise assert every
+ *  comparison of which was neutral, called no judge: neither priced nor unpriced. The same rule as hillclimb's
+ *  `judgeSpendOf`. */
+export function judgeSpend(grades: ReadonlyArray<{ judgeModel?: string; judgeCostUsd?: number }>): JudgeSpend {
+  const judged = grades.filter((g) => g.judgeModel !== undefined);
+  const priced = judged.flatMap((g) => (typeof g.judgeCostUsd === "number" ? [g.judgeCostUsd] : []));
   return {
     ...(priced.length ? { judgeCostUsd: priced.reduce((sum, c) => sum + c, 0) } : {}),
-    unpricedGrades: grades.length - priced.length,
+    unpricedGrades: judged.length - priced.length,
   };
 }
+
+/** What this re-grade judged across its runs: never an entry a fill kept from the live run (`copied`). */
+const rejudgedOf = (runs: ReadonlyArray<RegradeRunReport>) => runs.flatMap((r) => r.assertions.filter((a) => a.copied !== true));
 
 /** What the judged document depends on besides the shared capture: an assert's own sub-agent and Skill-result
  *  opt-ins and its `evidence_files` scope (order-free; an empty list is unscoped, as `scopeAuthoredEvidence`
@@ -1144,10 +1152,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
 /** The `--output-format json` document for a completed re-grade (payload-shaped: `runs[]`, not `results[]`),
  *  scrubbed as a whole with `secrets` — pass the set the re-grade used. */
 export function regradeEnvelope(outcome: Extract<RegradeOutcome, { ok: true }>, secrets: string[] = collectSecrets()): string {
-  return scrub(
-    jsonPayloadEnvelope(CMD, outcome.exitCode === 0, { ...judgeSpend(outcome.runs.flatMap((r) => r.assertions)), runs: outcome.runs }),
-    secrets,
-  );
+  return scrub(jsonPayloadEnvelope(CMD, outcome.exitCode === 0, { ...judgeSpend(rejudgedOf(outcome.runs)), runs: outcome.runs }), secrets);
 }
 
 /** The `--output-format json` error document for a re-grade that did not complete: the shared error envelope, plus
@@ -1168,7 +1173,9 @@ export function regradeErrorEnvelope(outcome: Extract<RegradeOutcome, { ok: fals
 
 const usd = (s: JudgeSpend): string =>
   s.judgeCostUsd === undefined
-    ? "unpriced"
+    ? s.unpricedGrades === 0
+      ? "none (no judge call)"
+      : "unpriced"
     : `$${s.judgeCostUsd.toFixed(4)}${s.unpricedGrades > 0 ? ` (${s.unpricedGrades} unpriced — a floor)` : ""}`;
 
 function docMatchLine(r: RegradeRunReport): string {
@@ -1219,7 +1226,7 @@ export function regradeTextReport(outcome: Extract<RegradeOutcome, { ok: true }>
   const total = outcome.runs.flatMap((r) => r.assertions);
   const invalid = total.filter((a) => a.judgeInvalid === true).length;
   const failed = total.filter((a) => !a.pass && a.judgeInvalid !== true).length;
-  const spend = `judge spend ${usd(judgeSpend(total))}`;
+  const spend = `judge spend ${usd(judgeSpend(rejudgedOf(outcome.runs)))}`;
   log(
     failed === 0 && invalid === 0
       ? `✓ regrade: all ${total.length} re-graded assertion(s) pass · ${spend}`

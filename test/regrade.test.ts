@@ -11,6 +11,7 @@ import {
   regradeFileStem,
   regradeTextReport,
   regradeErrorEnvelope,
+  judgeSpend,
   type RegradeOptions,
 } from "../src/run/regrade.js";
 import Ajv from "ajv";
@@ -968,6 +969,35 @@ describe("regrade: secrets", () => {
   });
 });
 
+describe("judgeSpend: only a grade a judge was called for is judged, priced or not", () => {
+  // `judgeModel` is the call's evidence: a judge that threw still records one ("unknown"), an assert that refused its
+  // evidence (no call) and an all-neutral pairwise assert (no comparison) record none.
+  type Grade = { pass: boolean; judgeModel?: string; judgeCostUsd?: number; pairwise?: unknown[] };
+  const refused: Grade = { pass: false };
+  const priced = { judgeModel: "claude-opus-4-8", judgeCostUsd: 0.01 };
+  const unpricedCall = { judgeModel: "claude-opus-4-8" };
+  const threw = { judgeModel: "unknown" };
+  const neutralOwnRef: Grade = { pass: true, pairwise: [{ ref: "v1", status: "neutral" }] };
+
+  it("a refusal (no judge call): nothing unpriced, no cost", () => {
+    expect(judgeSpend([refused])).toEqual({ unpricedGrades: 0 });
+  });
+  it("a judge call that reported no cost: one unpriced", () => {
+    expect(judgeSpend([unpricedCall])).toEqual({ unpricedGrades: 1 });
+  });
+  it("a call that threw before it was priced stays unpriced (the floor)", () => {
+    expect(judgeSpend([threw])).toEqual({ unpricedGrades: 1 });
+  });
+  it("mixed: a priced call, an unpriced call and a refusal count only the two calls", () => {
+    expect(judgeSpend([priced, unpricedCall, refused])).toEqual({ judgeCostUsd: 0.01, unpricedGrades: 1 });
+    expect(judgeSpend([priced, refused])).toEqual({ judgeCostUsd: 0.01, unpricedGrades: 0 });
+  });
+  it("an all-neutral own-reference pairwise entry (no comparison judged) is excluded", () => {
+    expect(judgeSpend([neutralOwnRef])).toEqual({ unpricedGrades: 0 });
+    expect(judgeSpend([neutralOwnRef, priced])).toEqual({ judgeCostUsd: 0.01, unpricedGrades: 0 });
+  });
+});
+
 describe("regrade: spend, provenance and invalid grades", () => {
   it("the regrade file carries harnessVersion, the per-run judge spend, and the counts", async () => {
     const k = await keptRun({ author: writeReport, assertYaml: `${SCOPED}  - semantic_matches:\n      rubric: ["another claim"]\n` });
@@ -1014,6 +1044,37 @@ describe("regrade: spend, provenance and invalid grades", () => {
     const env = JSON.parse(regradeEnvelope(unpriced));
     expect(env.judgeCostUsd).toBeUndefined();
     expect(env.unpricedGrades).toBe(2);
+  });
+
+  it("an assert whose evidence_files scope matches nothing calls no judge: regraded, nothing unpriced, no cost", async () => {
+    const NOWHERE = `  - semantic_matches:\n      rubric: ["the report names the risk"]\n      evidence_files: ["outputs/nowhere.md"]\n`;
+    const throwing = () => {
+      const make = (o?: { model?: string }): SemanticJudge => {
+        const j: SemanticJudge = async () => {
+          throw new Error("no judge may be called for an assert that refused its evidence");
+        };
+        j.model = o?.model ?? "claude-opus-4-8";
+        j.promptHash = JUDGE_PROMPT_HASH;
+        return j;
+      };
+      return { make };
+    };
+    const k = await keptRun({ author: writeReport, assertYaml: NOWHERE, liveJudge: throwing() as ReturnType<typeof judgeFactory> });
+    const out = await regradeRuns(opts(k, { makeJudge: throwing().make }));
+    if (!out.ok) throw new Error(out.message);
+    const a = out.runs[0].assertions[0];
+    expect(a.semanticEvidence?.reason).toBe("scope_matched_nothing");
+    expect(a).not.toHaveProperty("judgeModel");
+    const file = JSON.parse(readFileSync(out.runs[0].regradeFile, "utf8"));
+    expect(file).toMatchObject({ regraded: 1, unpricedGrades: 0 });
+    expect(file).not.toHaveProperty("judgeCostUsd");
+    const env = JSON.parse(regradeEnvelope(out));
+    expect(env.unpricedGrades).toBe(0);
+    expect(env).not.toHaveProperty("judgeCostUsd");
+    // The text report never calls a run no judge was asked about "unpriced".
+    const text = regradeTextReport(out).join("\n");
+    expect(text).not.toContain("unpriced");
+    expect(text).toContain("judge spend: none (no judge call)");
   });
 
   it("the envelope carries the overall spend across run dirs", async () => {

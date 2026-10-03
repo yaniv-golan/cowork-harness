@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
 import { candidateFirst, type CompleteStructured } from "../src/decide/pairwise-judge.js";
-import { regradeRuns } from "../src/run/regrade.js";
+import { regradeEnvelope, regradeRuns, regradeTextReport } from "../src/run/regrade.js";
+import type { SemanticJudge } from "../src/assert.js";
 import { freezeCaseRef } from "../src/hillclimb/freeze-ref.js";
 import { discoverFlowRefs, flowPairwiseOptions } from "../src/hillclimb/pairwise.js";
 import { latestTurn, turnArtifactPath } from "../src/run/turn-layout.js";
@@ -336,7 +337,11 @@ describe.runIf(POSIX)("regrade: a fill over semantic_matches + semantic_pairwise
     const sc = parseScenarioFile(file);
     const flow = join(dir, "flow");
     mkdirSync(join(flow, "baseline"), { recursive: true });
-    const smJudge = (async (rubric: string[]) => rubric.map((claim, index) => ({ index, claim, pass: true }))) as never;
+    // The live semantic_matches grade is priced, so a re-grade that summed its kept (copied) entry would show it.
+    const smJudge: SemanticJudge = async (rubric) => {
+      smJudge.lastCostUsd = 0.5;
+      return rubric.map((claim, index) => ({ index, claim, pass: true }));
+    };
     const base = await executeScenario(sc, {
       pairwise: flowPairwiseOptions("alpha", "baseline", discoverFlowRefs(flow)),
       semanticJudge: smJudge,
@@ -390,7 +395,17 @@ describe.runIf(POSIX)("regrade: a fill over semantic_matches + semantic_pairwise
     expect(sm).toMatchObject({ copied: true, docMatchesLive: "not_graded", pass: true });
     // Only the pairwise assert was re-judged: one entry, priced by the fill's own call alone.
     expect(run.unpricedGrades).toBe(1);
+    expect(run).not.toHaveProperty("judgeCostUsd");
+    expect(sm.judgeCostUsd).toBe(0.5); // the live grade's spend, kept with the entry
     expect(run.invalidGrades).toBe(0);
     expect(run.docMatchesLive).toBe(true);
+    // The envelope and the text report total what this re-grade spent, as the run's report does: never the live
+    // judge's spend on a kept entry.
+    const env = JSON.parse(regradeEnvelope(r, []));
+    expect(env.unpricedGrades).toBe(1);
+    expect(env).not.toHaveProperty("judgeCostUsd");
+    const text = regradeTextReport(r, []);
+    expect(text.at(-1)).toContain("judge spend unpriced");
+    expect(text.join("\n")).not.toContain("$0.5000");
   });
 });
