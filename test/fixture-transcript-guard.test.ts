@@ -106,7 +106,7 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
   // The built-in description check runs the recorder's own scrub, so it needs the REAL built module.
   const REAL_SCRUB = join(REPO, "dist", "run", "cassette.js");
   const realScrub = `export * from ${JSON.stringify(REAL_SCRUB)};\n`;
-  const registry = (description: string) =>
+  const registry = (description: string, argumentHint?: string) =>
     JSON.stringify(
       {
         generator: "cowork-harness",
@@ -117,7 +117,7 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
               request_id: "init-1",
               response: {
                 commands: [
-                  { name: "claude-api", description, builtin: true },
+                  { name: "claude-api", description, ...(argumentHint !== undefined ? { argumentHint } : {}), builtin: true },
                   { name: "my-plugin:my-skill", description: "the plugin's own text" },
                 ],
                 agents: [{ name: "my-plugin:my-agent", description: "the plugin's own agent text" }],
@@ -142,6 +142,13 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
     const r = run(registry(BUILTIN_DESCRIPTION_PLACEHOLDER), realScrub);
     expect(r.out).not.toMatch(/built-in agent or command/);
     expect(r.code).toBe(0);
+  });
+  it("blocks a staged cassette whose ONLY built-in text is a command's argument hint", async () => {
+    if (!statSync(REAL_SCRUB, { throwIfNoEntry: false })) throw new Error("dist/run/cassette.js missing — run `npm run build`");
+    const { BUILTIN_DESCRIPTION_PLACEHOLDER } = await import("../src/run/cassette.js");
+    const r = run(registry(BUILTIN_DESCRIPTION_PLACEHOLDER, "[SYNTHETIC BUILT-IN HINT]"), realScrub);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/carries the description or argument hint of a Claude Code built-in agent or command/);
   });
   // A STALE dist: built before the scrub learned something new, it would pass what the current recorder removes.
   // The hook compares the built RECORDED_SCRUB_VERSION with the source's and blocks on any mismatch.

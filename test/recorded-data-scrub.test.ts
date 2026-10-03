@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -114,6 +115,23 @@ it("RECORDED_SCRUB_VERSION is pinned to what the scrub removes (bump it with any
     kinds: scrubRecordedAgentData(cassetteOf([REGISTRY, INIT_WITH_PLUGINS, RATE, HANDBACK, MENU])).kinds,
     placeholders: ["[built-in description withheld]", "[built-in hint withheld]"],
   });
+});
+
+// The version is bumped BY HAND, so a scrub that widens an existing kind (e.g. starts withholding `aliases` under
+// builtin-description) would keep its version and a stale dist would still pass. Pin a hash of the scrub's own
+// source next to the version: any edit to that region fails here until it is re-pinned on purpose. If what the scrub
+// removes changed, bump RECORDED_SCRUB_VERSION too; a comment-only edit just needs the new hash.
+it("the scrub's source is pinned next to RECORDED_SCRUB_VERSION (an edit forces a deliberate re-pin)", () => {
+  const src = readFileSync("src/run/cassette.ts", "utf8");
+  const start = src.indexOf("/** The agent's `initialize` registry response, matched exactly");
+  const end = src.indexOf("export const scrubVerification");
+  expect(start, "scrub region start marker").toBeGreaterThan(0);
+  expect(end, "scrub region end marker").toBeGreaterThan(start);
+  const sha = createHash("sha256").update(src.slice(start, end)).digest("hex");
+  expect(
+    { version: RECORDED_SCRUB_VERSION, sha },
+    "the scrub changed: if what it removes changed, bump RECORDED_SCRUB_VERSION; then re-pin this hash",
+  ).toEqual({ version: 2, sha: "6ca29dce0e5949bbf38ce8d01cf8427389d5fe78dc7712c469d7667fce7aa9bb" });
 });
 
 describe("scrubRecordedAgentData", () => {

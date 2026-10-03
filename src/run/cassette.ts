@@ -1741,8 +1741,10 @@ function recordedBuiltinPlugins(events: readonly string[]): Set<string> {
  *     `KNOWN_BUILTIN_SKILLS` names — which list skills only, so on such an agent a built-in command that is not a
  *     skill (`compact`, `init`, …) keeps its text.
  *   - `agents[]`: no marker exists (rows are `{name, description, model}`), but every plugin agent is namespaced
- *     `<plugin>:<agent>` and the harness stages no bare-named agent, so a bare name is the agent's own (or, at a
- *     host-inheriting tier, the operator's — not the plugin under test's either).
+ *     `<plugin>:<agent>`, so a bare name is never the plugin under test's. It is the agent's own, or a USER agent
+ *     from the config dir: a session's pinned `plugins.config_dir` (its `agents/` load bare under
+ *     `settingSources: ["user"]`), or the operator's own at a host-inheriting tier. Those are withheld too — a
+ *     deliberate over-reach on text that is not the plugin under test's and that no verdict reads.
  *   - either list: a `<plugin>:<name>` whose plugin the recording marks built-in (see recordedBuiltinPlugins).
  *  So the plugin under test's own agents, commands and skills (`<plugin>:<name>`, unmarked) and a scenario's
  *  config-dir skills (bare, unmarked) keep their descriptions. Every other field stays. Returns the SAME object
@@ -1863,6 +1865,12 @@ export const scrubVerification = {
     assertRedactionVerdictPreserved(base, scrubbed, cassetteDir),
 };
 
+/** Why the scrub's verdict check can trip, for its warning. Not always a harness bug: a scenario may assert on text
+ *  the scrub rewrites (the hand-back frame is in the model-visible transcript), and refusing is then correct. */
+const SCRUB_TRIP_CAUSE =
+  "The usual cause is an assert that reads text the scrub rewrites (e.g. a `transcript_contains` on the sub-agent " +
+  "hand-back frame): assert on the report itself instead. If no assert reads that text, it is a harness bug — please report it.";
+
 /** The recorder's scrub for a REWRITE path (`rehash`, `replay --reassert --write`), held to the same
  *  verdict-preservation check as `record`. Returns the scrubbed cassette and its kinds when the check passes; when it
  *  throws or trips, warns (naming the path, the file and the kinds) and returns the input UNSCRUBBED with no kinds,
@@ -1881,7 +1889,7 @@ export async function verifiedRescrub(
     warn(
       `::warning:: ${where}: the recorder's scrub (${scrub.kinds.join(", ")}) could not be verified as verdict-preserving — ` +
         `${(e as Error).message.split("\n")[0]}. Its events are left UNSCRUBBED, so they still carry that data; do not commit ` +
-        `it as is. This is a harness bug (the scrub touches nothing a verdict reads) — please report it.\n`,
+        `it as is. ${SCRUB_TRIP_CAUSE}\n`,
     );
     return { cassette, kinds: [] };
   }
@@ -5974,8 +5982,7 @@ export async function freezeRecordedRun(
       warn(
         `::warning:: record: the recorder's account-data scrub (${scrub.kinds.join(", ")}) could not be verified as ` +
           `verdict-preserving — ${(e as Error).message.split("\n")[0]}. The cassette is written UNSCRUBBED so this paid run ` +
-          `is not lost; it still carries that data, so do not commit it as is. This is a harness bug (the scrub ` +
-          `touches nothing a verdict reads) — please report it.\n`,
+          `is not lost; it still carries that data, so do not commit it as is. ${SCRUB_TRIP_CAUSE}\n`,
       );
     }
   }

@@ -1336,15 +1336,18 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 >
 > Two limits of that rule. **An agent too old to mark its commands** gets a fallback to the known built-in *skill*
 > names, so on such a recording a built-in command that is not a skill (`compact`, `init`, …) keeps its text.
-> **A bare-named agent is always treated as not the plugin under test's**, and that holds for anything a scenario
-> can declare: the agent runs with `settingSources: ["user"]` (pinned by the baseline), so project agents
-> (`.claude/agents/` in the working directory) never load, a `workspace_fixture` lands in `outputs/` rather than
-> the working directory anyway, and a session stages skills, never agents. Every agent a scenario supplies comes
-> through a plugin and is named `<plugin>:<agent>`. The only bare names are the agent's own and, at a tier that
-> inherits the host's config dir (`protocol`/`hostloop`), the operator's own agents, which are withheld too.
+> **A bare-named agent is always withheld, and it is never the plugin under test's**: every plugin agent is named
+> `<plugin>:<agent>`. A bare name is the agent's own or a *user* agent from the config dir: the `agents/` of a
+> session's pinned `plugins.config_dir` (which load bare under `settingSources: ["user"]`), or, at a tier that
+> inherits the host's config dir (`protocol`/`hostloop`), the operator's own. Their descriptions are withheld too.
+> No verdict reads a registry description, so this costs nothing but the text. (Project agents in a working
+> directory's `.claude/agents/` never load: `settingSources` is pinned to `user` by the baseline.)
 >
-> Nothing in replay, the verdict, staleness or the fingerprint reads any of it. **Every path that writes it is held to
-> the same verdict-preservation check as redaction**: `record`, `rehash` (both of its rewriting branches) and
+> Nothing in replay, the verdict, staleness or the fingerprint reads a registry description or hint, the model
+> menu, or `rate_limit_info`. The **hand-back frame is different**: it sits in the model-visible transcript, so an
+> assert such as `transcript_contains` can read it — which is what the check below exists to catch.
+> **Every path that writes it is held to the same verdict-preservation check as redaction**: `record`, `rehash` (both
+> of its rewriting branches) and
 > `replay --reassert --write` (when it rewrites the assert block, and when the block is already current and it
 > rewrites the events alone). When that check cannot pass, the file is still written (or, for an already-current
 > block, left as it was) with the events UNSCRUBBED and a warning naming the scrub, rather than losing the run or the
