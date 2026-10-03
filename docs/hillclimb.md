@@ -333,34 +333,42 @@ the formula undercounts nearly every row. So:
   run called (main loop, sub-agents, auxiliary calls). The judge is not in it. `meta.models` lists each model's
   share (`cost_usd`), with the `provider` that served it and the `cost_basis` its price came from.
 - **`judge_usd` on a row is what the live judge spent grading it**: the sum of every judged assertion's recorded
-  cost. It is absent when no assertion called the judge (a `semantic_pairwise` assertion whose every comparison
-  was neutral, such as a baseline row against its own reference, never calls it). A judged assertion with no
-  recorded cost is counted in `meta.judge_unpriced`, never as $0. `decider_usd` is the LLM decider's spend. On an
+  cost. It is absent in two cases: when no assertion called the judge (a `semantic_pairwise` assertion whose every
+  comparison was neutral, such as a baseline row against its own reference, never calls it), and when the judge
+  was called but recorded no cost. `meta.judge_unpriced` marks the second case: it counts the judged assertions
+  with no recorded cost, which are never counted as $0. `decider_usd` is the LLM decider's spend. On an
   `errors.jsonl` row these are `meta.cost_usd`, `meta.judge_usd`, `meta.judge_unpriced` and `meta.decider_usd`.
   After a `hillclimb regrade`, `judge_model` and `judge_usage` describe the judges behind the current grade (the
   regrade's, after a full re-judge), while `judge_usd` stays the live judge's; the regrade's own spend is
   `meta.regrade_judge_usd`.
 - **`summary.json` carries the variant's spend**, recomputed over its whole `results.jsonl` and `errors.jsonl`
   after every pass and after every `hillclimb regrade` that rewrites its rows. A run is counted once (by
-  `meta.run_dir`). Copy these for the loop's `$/run` and `spend`:
+  `meta.run_id`). Every sum and mean is rounded to 6 decimal places. Copy these for the loop's `$/run` and `spend`:
   - `cost_usd_mean`: the mean `cost_usd` over the scored rows that record one (this is `$/run`; agent failures and
     truncated rows are scored rows, so they count);
   - `cost_usd_total`: `cost_usd` summed over every row, scored and error rows alike (failed attempts are billed);
   - `cost_rows` / `cost_rows_unrecorded`: how many rows record a cost and how many do not (a row with no cost is
     never counted as $0);
-  - `judge_usd_mean` (over the scored rows that record a `judge_usd`) and `judge_usd_total` (every row); add
-    `judge_usd_mean` to `cost_usd_mean` when your `$/run` includes the judge;
-  - `judge_rows_unpriced`: rows with a judged assertion that recorded no cost. When it is not 0, the judge figures
-    are floors;
-  - `regrade_judge_usd_total`: the sum of the rows' current `meta.regrade_judge_usd`, which is only the LAST
-    re-grade of each row, so it is a floor of what re-grading spent;
+  - `judge_usd_mean`: `judge_usd` summed over the same scored rows as `cost_usd_mean` (those that record a cost),
+    divided by the same count, a row with no `judge_usd` adding 0; so `cost_usd_mean` + `judge_usd_mean` is
+    `$/run` with the judge;
+  - `judge_usd_total`: `judge_usd` over every row;
+  - `judge_rows_unpriced`: rows with a judged assertion that recorded no cost (`meta.judge_unpriced`);
+  - `judge_rows_unrecorded`: rows whose judge ran (`judge_model` or `judge_usage`) but that record no `judge_usd`,
+    no `meta.judge_unpriced` and no `meta.regrade_judge_usd`: rows written before judge spend was recorded;
+  - `regrade_judge_usd_total`: the sum of the rows' current `meta.regrade_judge_usd`. A re-grade's spend lands on
+    the variant whose ROWS it re-judged: a `--fill-refs` that judges baseline rows against v1's reference is the
+    baseline's spend. It is only the LAST re-grade of each row, so it is a floor; for every re-grade, sum the
+    re-grade files (see the full ledger below);
   - `decider_usd_total`;
   - `billing_basis` and `billing_rows_unrecorded` (see below).
-  A sum with nothing to sum is left out, never written as 0.
+  A sum with nothing to sum is left out, never written as 0. When `cost_rows_unrecorded`, `judge_rows_unpriced` or
+  `judge_rows_unrecorded` is not 0, the figure it belongs to is a floor.
 - **The pass prints the same figures** just before its `done` line, which stays its last line:
-  `[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $X over N row(s) (U without a cost), $Y/run over K scored row(s); judge $Z (J row(s) with an unpriced judge call — a floor); regrade judge $R; decider $W`.
-  The list-price clause appears only on `subscription`; the line also names `cost basis managed` or
-  `cost basis unknown` when a row records one, and leaves out a part with nothing recorded.
+  `[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $X over N row(s) (U without a cost — a floor), $Y/run over K scored row(s); judge $Z (J row(s) with an unpriced judge call, O row(s) whose judge cost was not recorded — a floor); regrade judge $R (the last regrade per row — a floor); decider $W`.
+  The list-price clause appears only on `subscription`; on `mixed` the line says to compare cost only between rows
+  of the same basis; it counts the rows that record no basis, names `cost basis managed` or `cost basis unknown`
+  when a row records one, and leaves out a part with nothing recorded.
 - **Other models' share.** When models other than each row's main-loop model carry more than 25% of a variant's
   `cost_usd`, the pass warns once for that variant, and `hillclimb check` repeats it as a note: `usage` covers the
   main model and its same-model sub-agents only, `cost_usd` covers every model. A small auxiliary helper (a few
@@ -433,7 +441,7 @@ that the loop and the lite report builder read, with these differences:
   The full viewer is not in every install and has not been run against these flows; it may expect a single
   leading system turn where sub-agents add more, and it may draw a float with no `scale` on a 0-10 axis.
 - **`cost_usd` is the agent's reported total, not a derivation** from `model` × `usage`, and it excludes the
-  judge. Judge spend has to be read from the kept run dirs (see [Cost and spend](#cost-and-spend)).
+  judge. The judge's spend is on the row beside it, as `judge_usd` (see [Cost and spend](#cost-and-spend)).
 - **The kept runs and snapshots live outside the flow dir** (see [Where the flow dir goes](#where-the-flow-dir-goes)).
   Copying a round's directory is not enough to keep it re-gradable.
 - **Inside a git work tree, each variant runs a snapshot of the plugin's git-tracked files.** A file the loop adds is left out until it is
