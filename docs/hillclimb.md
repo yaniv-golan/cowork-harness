@@ -222,8 +222,8 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
     with no judge call (deterministic assertions and metrics only) writes none, and a file with no top-level
     `judgeCostUsd` recorded no judge spend, so the sum counts every judge call once. Unpriced judge grades and
     failed decider calls are not counted, so the total is a floor.
-    Find each run dir the way `hillclimb regrade` does, by the row's `meta.run_id`: the runs root's
-    `index.jsonl` maps each `runId` to its `outDir` (the root is `~/.cowork-harness/runs`, or `--run-dir` /
+    Find each run dir by the row's `meta.run_id`: the runs root's `index.jsonl` maps each `runId` to its
+    `outDir` (`<runs root>/<scenario slug>/<run_id>`, the dir `hillclimb regrade` reads; the root is `~/.cowork-harness/runs`, or `--run-dir` /
     `COWORK_HARNESS_RUNS_DIR`). A row's `meta.run_dir` is a pointer for reading one rep, and it is redacted
     when the runs root is outside your home directory.
     This needs the kept run dirs: the rows alone cannot rebuild judge spend, so a loop that sums only
@@ -281,15 +281,16 @@ that the loop and the lite report builder read, with these differences:
 
 - it re-evaluates a deterministic assertion (`file_exists`, `tool_called`, …) whose definition changed against
   the kept run, and re-measures every declared metric, so an assertion fix or a metric added mid-climb reaches
-  the rows already written (a value already measured is kept when the kept file cannot be read);
+  the rows already written (a value the run itself measured is kept when the kept file cannot be read);
 - when a harness upgrade changes how an unchanged assertion evaluates, it keeps the recorded outcome and notes
   it; edit the assertion, or re-run the case, to re-grade it;
-- an assertion whose text contains a value the secret scrub removes keeps its graded outcome (named on stderr):
-  it is never re-evaluated or re-judged over scrubbed evidence;
+- an assertion whose text contains a value the secret scrub removes is matched under this process's scrub, so an
+  unchanged one keeps its graded outcome; one this process's scrub cannot reproduce is kept as unchanged and
+  named on stderr. Neither is re-evaluated over scrubbed evidence, nor re-judged without `--rejudge`;
 - it re-judges a judged assertion when something the judge sees changed (its rubric or claims, its judge model or
   prompt template, or a `semantic_pairwise` assertion's references), recording why in
   `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
-- it recomputes `pass`;
+- it recomputes `pass` whenever an outcome it is graded with is not the run's own;
 - `--fill-refs` judges only the pairwise comparisons a row lacks and never moves `pass`: a row whose fill would
   is listed instead. After a grader edit, run
   a default re-grade first: a fill lists the rows whose grader changed instead of filling them. `--rejudge` does not
