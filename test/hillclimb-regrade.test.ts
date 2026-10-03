@@ -548,6 +548,18 @@ describe.runIf(POSIX)("hillclimb regrade's judge isolation preflight", () => {
     expect(tree(flow)).toEqual(before);
   }, 180_000);
 
+  it("--reevaluate with --fill-refs is a usage error (a fill never moves pass), nothing written", async () => {
+    const { cli, flow } = buildFlow();
+    const before = tree(flow);
+    const r = cli("regrade", "evals", "--flow", "flow", "--reevaluate", "--fill-refs");
+    expect(r.status, r.stderr).toBe(2);
+    expect(r.stderr).toMatch(/--reevaluate and --fill-refs exclude each other/);
+    const out = await regradeFlow(ARGS({ reevaluate: true, fillRefs: true }), DEPS());
+    expect(out.exitCode).toBe(2);
+    expect(out.error?.message).toMatch(/--reevaluate and --fill-refs exclude each other/);
+    expect(tree(flow)).toEqual(before);
+  }, 180_000);
+
   it("the CLI refuses with the usage envelope when the host claude is too old (no judge call, nothing written)", () => {
     const { cli, flow } = buildFlow();
     const before = tree(flow);
@@ -1144,6 +1156,57 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     },
     240_000,
   );
+
+  // --reevaluate: a fix in the harness's evaluator changes an unchanged assert's outcome over the same records. The
+  // edited sidecar stands in for it here (the evaluator reads the transcript the kept run recorded).
+  it("--reevaluate takes an unchanged assert's re-evaluated outcome (pass moves), says so per row, no judge call", async () => {
+    const { rows } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const old = rows("v1")[0]!;
+    expect(old.grade).toMatchObject({ pass: 1, a1: 1 });
+    const sidecar = join(runDirOf(old), "turns", "1", "run.jsonl");
+    writeFileSync(sidecar, readFileSync(sidecar, "utf8").replaceAll("All done.", "Something else."));
+    const lines: string[] = [];
+    const out = await regradeFlow(ARGS({ variant: "v1", reevaluate: true }), DEPS({ stderr: (l) => lines.push(l) }));
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(lines.filter((l) => /re-evaluated outcome taken \(--reevaluate/.test(l))).toEqual([
+      expect.stringMatching(/\[v1\] alpha rep0: assertion 1 \(`transcript_contains`\) passes in the run, fails re-evaluated now/),
+    ]);
+    expect(lines.filter((l) => /kept its live outcome/.test(l))).toEqual([]);
+    const row = rows("v1")[0]!;
+    expect(row.grade).toMatchObject({ pass: 0, a0: 1, a1: 0 });
+    expect(row.meta.regrade_reevaluated_because).toEqual([{ assert: 1, because: ["reevaluate"] }]);
+    expect(row.meta).not.toHaveProperty("regrade_kept_live");
+    // A later default regrade: the row records no re-evaluation of its own any more (a later regrade replaces it).
+    const again = await regradeFlow(ARGS({ variant: "v1" }), DEPS());
+    expect(again.exitCode, JSON.stringify(again)).toBe(0);
+  }, 240_000);
+
+  it("--reevaluate lists a row whose differing assert reads the kept work dir (it may have changed since the run)", async () => {
+    f.cleanup();
+    f = makeStubFixture(`mkdir -p outputs && printf x > outputs/a.txt\n${STUB}`);
+    const { flow, rows } = buildFlow({ noPairwise: true, extra: ["  - file_exists: outputs/a.txt"] });
+    const old = rows("v1")[0]!;
+    expect(old.grade).toMatchObject({ pass: 1, a1: 1 });
+    const result = JSON.parse(readFileSync(join(runDirOf(old), "turns", "1", "result.json"), "utf8")) as { workDir: string };
+    rmSync(join(result.workDir, "outputs", "a.txt"));
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const out = await regradeFlow(ARGS({ variant: "v1", reevaluate: true }), DEPS());
+    expect(out.exitCode).toBe(1);
+    expect(out.variants[0]!.listed).toEqual([
+      {
+        prompt_id: "alpha",
+        rep: 0,
+        why: expect.stringMatching(
+          /^--reevaluate: assertion 1 \(`file_exists`\) passes in the run, fails re-evaluated now, but `file_exists` reads the kept work dir as it is now/,
+        ),
+      },
+    ]);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+    // Without --reevaluate the unchanged assert keeps its live outcome, as before.
+    const plain = await regradeFlow(ARGS({ variant: "v1" }), DEPS());
+    expect(plain.exitCode, JSON.stringify(plain)).toBe(0);
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a1: 1 });
+  }, 240_000);
 
   it("an assert added beside an unchanged one that re-evaluates differently: the added one is evaluated, the unchanged one keeps its live outcome", async () => {
     const { rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });

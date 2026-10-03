@@ -31,7 +31,7 @@ import {
   type RegradeOutcome,
   type RegradeRunReport,
 } from "../run/regrade.js";
-import { reevaluateRun } from "../run/verify-context.js";
+import { KEPT_WORK_DIR_KEYS, reevaluateRun } from "../run/verify-context.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { computeVerdict } from "../run/verdict.js";
@@ -68,6 +68,10 @@ export interface HillclimbRegradeArgs {
   allowUnchecked: boolean;
   /** Re-judge every judged assert, changed or not (default: only one whose judge inputs changed — `judgedPlan`). */
   rejudge?: boolean;
+  /** Take the re-evaluated outcome of a deterministic assert UNCHANGED since the run too (default: it keeps the run's
+   *  own — `deterministicCheck`): for a grader fix that lives in the harness's evaluator. No judge call. Not with
+   *  `fillRefs` (a fill never moves pass). */
+  reevaluate?: boolean;
 }
 
 export interface RegradeFlowDeps {
@@ -224,6 +228,8 @@ interface Target {
   live: Array<Entry | undefined>;
   /** The deterministic indexes whose live entry was kept although the kept run re-evaluates them differently. */
   keptLive: number[];
+  /** Under --reevaluate: the deterministic indexes unchanged since the run whose re-evaluated outcome was taken. */
+  taken: number[];
   /** The row's judged entries now, and which of them are re-judged and why. */
   plan: JudgedPlan;
   /** Under --rejudge: the entries re-judged over evidence that changed since their grade (`meta.regrade_evidence`). */
@@ -520,13 +526,26 @@ function deterministicCheck(
   re: Reevaluation,
   matched: ReadonlyArray<Entry | undefined>,
   fill: boolean,
-): { listed: string } | { keptLive: number[] } {
+  reevaluate = false,
+): { listed: string } | { keptLive: number[]; taken: number[] } {
   const keptLive: number[] = [];
+  const taken: number[] = [];
   for (const i of deterministicIndexes(c)) {
     const fresh = re.deterministic[i]!;
     const prev = matched[i];
     if (prev !== undefined) {
-      if (prev.pass !== fresh.pass) keptLive.push(i);
+      if (prev.pass === fresh.pass) continue;
+      if (!reevaluate) {
+        keptLive.push(i);
+        continue;
+      }
+      // --reevaluate takes the fresh outcome only where the kept run is a faithful record of what the assert reads.
+      const why = unfaithful(authoredNow(c)[i]!, fresh);
+      if (why !== undefined)
+        return {
+          listed: `--reevaluate: ${labelOf(c, i)} ${outcomeOf(prev.pass)} in the run, ${outcomeOf(fresh.pass)} re-evaluated now, but ${why} — its re-evaluation is not known to be faithful, so the row is kept as it is`,
+        };
+      taken.push(i);
       continue;
     }
     const graded = fill ? gradedPass(row, live, c, i) : undefined;
@@ -535,7 +554,23 @@ function deterministicCheck(
         listed: `the grader changed since the row was graded (${labelOf(c, i)} ${outcomeOf(fresh.pass)} now, ${outcomeOf(graded)} when graded): run a default \`hillclimb regrade\` first, then --fill-refs (a fill never moves pass; until then this row lacks the new win column)`,
       };
   }
-  return { keptLive };
+  return { keptLive, taken };
+}
+
+/** Why a kept run's re-evaluation of an assert cannot be trusted to be the grader's answer (undefined when it can): it
+ *  reads something the run did not record — the kept work dir as it is now (`KEPT_WORK_DIR_KEYS`: a file edited,
+ *  added or removed since the run changes it), or a `computer://` link's host folder (no run dir records a connected
+ *  folder's host path) — or it found the evidence unavailable (a gap in the kept run, not a grade). Every other
+ *  deterministic key reads only what the run recorded (result.json, its sidecars, events.jsonl), so a different
+ *  outcome over the same records is the evaluator's. */
+function unfaithful(a: object, fresh: Entry): string | undefined {
+  const keys = Object.keys(a);
+  const fsKey = keys.find((k) => (KEPT_WORK_DIR_KEYS as readonly string[]).includes(k));
+  if (fsKey !== undefined) return `\`${fsKey}\` reads the kept work dir as it is now, which may have changed since the run`;
+  const link = keys.find((k) => k === "computer_links_resolve" || k === "computer_links_resolve_if_present");
+  if (link !== undefined) return `\`${link}\` resolves links against host folders no run dir records`;
+  if (/evidence unavailable/i.test(fresh.message ?? "")) return `the kept run cannot show it (${(fresh.message ?? "").slice(0, 160)})`;
+  return undefined;
 }
 
 /** Whether the row was graded under the scenario's assertion list as it is now (`meta.assert_sig`): then its `a<i>`
@@ -574,12 +609,15 @@ function reevaluatedResult(
   re: Reevaluation,
   matched: ReadonlyArray<Entry | undefined>,
   judged: (i: number) => Entry | undefined,
+  taken: readonly number[] = [],
 ): { result: RunResult } | { why: string } {
   const authored: Entry[] = [];
+  // An assert unchanged since the run keeps the run's own entry (unless --reevaluate took its re-evaluation); a
+  // changed or added one is re-evaluated.
+  const entryAt = (i: number): Entry => (taken.includes(i) ? re.deterministic[i]! : (matched[i] ?? re.deterministic[i]!));
   for (const [i, a] of c.scenario.assert.entries()) {
     if (judgedOpts(a) === undefined) {
-      // An assert unchanged since the run keeps the run's own entry; a changed or added one is re-evaluated.
-      authored.push(matched[i] ?? re.deterministic[i]!);
+      authored.push(entryAt(i));
       continue;
     }
     const e = judged(i);
@@ -589,7 +627,7 @@ function reevaluatedResult(
       };
     authored.push(e);
   }
-  for (let i = c.scenario.assert.length; i < re.deterministic.length; i++) authored.push(matched[i] ?? re.deterministic[i]!);
+  for (let i = c.scenario.assert.length; i < re.deterministic.length; i++) authored.push(entryAt(i));
   return { result: { ...live, assertions: [...authored, ...(live.assertions ?? []).filter((e) => e.source !== undefined)] } };
 }
 
@@ -682,6 +720,7 @@ function rebuiltRow(
     "regrade_reevaluated",
     "regrade_harness_version",
     "regrade_kept_live",
+    "regrade_reevaluated_because",
     "regrade_rejudged_because",
     "regrade_evidence",
     "regraded_at",
@@ -888,6 +927,8 @@ async function regradeFlowInner(
   refuse: (m: string) => RegradeFlowOutcome,
   progress: { spent: boolean; written: string[] },
 ): Promise<RegradeFlowOutcome> {
+  if (args.reevaluate === true && args.fillRefs)
+    throw new UsageError(`--reevaluate and --fill-refs exclude each other (a fill never moves pass; --reevaluate can)`);
   const flowArg = normalizeRootArg(args.flow);
   const flowAbs = resolve(deps.cwd, flowArg);
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
@@ -1028,6 +1069,7 @@ async function regradeFlowInner(
       ...(deterministicIndexes(c).length ? { regrade_reevaluated: true } : {}),
       regrade_harness_version: harnessVersion,
       ...(t.keptLive.length ? { regrade_kept_live: t.keptLive } : {}),
+      ...(t.taken.length ? { regrade_reevaluated_because: t.taken.map((i) => ({ assert: i, because: ["reevaluate"] })) } : {}),
     });
 
     // Rows, grouped into batches: one regrade call per (variant, case, references to fill).
@@ -1112,7 +1154,7 @@ async function regradeFlowInner(
         }
         // Decided here, before batching: a row listed by the deterministic step costs no judge call.
         const matched = liveByIdentity(result, c);
-        const det = deterministicCheck(row, result, c, re, matched, args.fillRefs);
+        const det = deterministicCheck(row, result, c, re, matched, args.fillRefs, args.reevaluate === true);
         if ("listed" in det) {
           vr.listed.push({ prompt_id: id, rep, why: det.listed });
           continue;
@@ -1120,6 +1162,10 @@ async function regradeFlowInner(
         for (const i of det.keptLive)
           say(
             `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} ${outcomeOf(matched[i]!.pass)} in the run, ${outcomeOf(re.deterministic[i]!.pass)} re-evaluated now — unchanged since the run, so it kept its live outcome (the kept evidence or the evaluator differs, not the grader; harness ${harnessVersion})`,
+          );
+        for (const i of det.taken)
+          say(
+            `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} ${outcomeOf(matched[i]!.pass)} in the run, ${outcomeOf(re.deterministic[i]!.pass)} re-evaluated now — unchanged since the run, re-evaluated outcome taken (--reevaluate; harness ${harnessVersion})`,
           );
         const agentFailed = classifyRep({ result: result as never }, {}).bucket === "errored_agent";
         const plan = judgedPlan(row, c, runDir, result, {
@@ -1219,6 +1265,7 @@ async function regradeFlowInner(
           re,
           live: matched,
           keptLive: det.keptLive,
+          taken: det.taken,
           plan,
           evidence: args.rejudge ? drift.changes : [],
         };
@@ -1384,10 +1431,17 @@ async function regradeFlowInner(
           continue;
         }
         const byIndex = new Map(report.assertions.map((a) => [a.assertionIndex, a]));
-        const built = reevaluatedResult(t.result, b.c, t.re, t.live, (i) => {
-          const g = byIndex.get(i);
-          return g !== undefined ? reportEntry(g) : t.plan.entries.get(i);
-        });
+        const built = reevaluatedResult(
+          t.result,
+          b.c,
+          t.re,
+          t.live,
+          (i) => {
+            const g = byIndex.get(i);
+            return g !== undefined ? reportEntry(g) : t.plan.entries.get(i);
+          },
+          t.taken,
+        );
         if ("why" in built) {
           vr.listed.push({ prompt_id: b.c.id, rep, why: built.why });
           continue;
@@ -1455,6 +1509,7 @@ async function regradeFlowInner(
         t.re,
         t.live,
         (i) => t.plan.entries.get(i) ?? (agentFailed ? notJudged(t.c.scenario.assert[i]!) : undefined),
+        t.taken,
       );
       if ("why" in built) {
         vr.listed.push({ prompt_id: t.c.id, rep, why: built.why });
@@ -1491,7 +1546,7 @@ async function regradeFlowInner(
       // stays byte for byte.
       else if (
         (["grade", "explanation"] as const).every((k) => JSON.stringify(got.row[k]) === JSON.stringify(t.line.row![k])) &&
-        (["metric_sigs", "metrics_unavailable", "regrade_kept_live"] as const).every(
+        (["metric_sigs", "metrics_unavailable", "regrade_kept_live", "regrade_reevaluated_because"] as const).every(
           (k) => JSON.stringify(got.row.meta?.[k]) === JSON.stringify(t.line.row!.meta?.[k]),
         ) &&
         // A row that records another assertion set is brought current. One that records none (written before the sig

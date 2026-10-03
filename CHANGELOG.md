@@ -352,7 +352,11 @@ All notable changes to this project are documented here. The format is based on
   override goes back to its pin — else `COWORK_HARNESS_JUDGE_MODEL` or the harness default), the judge prompt template, a `semantic_pairwise` assert's
   references or their gating, or a reference document's content changed since the entry the row carries (its last
   re-grade's, else its run's); every other judged entry is kept, at no judge cost, and a re-judged row records why in
-  `meta.regrade_rejudged_because`. `--rejudge` re-judges every judged assert. **Changed evidence is always named:**
+  `meta.regrade_rejudged_because`. `--rejudge` re-judges every judged assert. `--reevaluate` (no judge call; not with
+  `--fill-refs`) is for an evaluator fix shipped in a harness upgrade: an unchanged deterministic assert takes its
+  re-evaluated outcome too, named on stderr and recorded in `meta.regrade_reevaluated_because`; a row whose differing
+  assert reads what the kept run did not record (the kept work dir as it is now, a `computer://` link's connected
+  folder, unavailable evidence) is listed and kept instead. **Changed evidence is always named:**
   every judged entry a row is graded with is recomposed from its kept run by the current harness (no judge call) and
   compared with the document it records; a difference (an edited kept run, a harness change to composition, caps or
   scrubbing) lists the row and keeps it as it is, whatever else changed for it, until `--rejudge` grades it on the

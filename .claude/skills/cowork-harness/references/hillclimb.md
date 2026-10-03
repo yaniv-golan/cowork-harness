@@ -200,6 +200,11 @@ every climb there is finished.
   them, `--rejudge --allow-doc-drift` grades it anyway.
 - **`--rejudge`:** every judged assert of every selected row is re-judged, with the flow's references as they are
   now. Use it after a judge change the triggers above do not see. Not with `--fill-refs`.
+- **`--reevaluate`:** after a harness upgrade that fixed a deterministic assert's evaluator, an unchanged assert
+  takes its re-evaluated outcome too (no judge call; stderr names it per row; the row records
+  `meta.regrade_reevaluated_because`). A row whose differing assert reads the kept work dir (`file_exists`,
+  `artifact_text`, …), resolves a `computer://` link, or finds its evidence unavailable is listed instead: the kept
+  run is not a faithful record of what it reads. Not with `--fill-refs` (run it as a default regrade first).
 - **`--fill-refs`:** only the `semantic_pairwise` comparisons a row lacks are judged (a reference frozen after the
   row was written; a row lacking only its own variant's gets the neutral outcome, no judge call). What a row lacks is
   read from the entries it is graded with, so a comparison an earlier regrade judged is never judged again, and
@@ -213,7 +218,7 @@ every climb there is finished.
   new `win_<vN>` column, and `check` reports it missing once `_state.json` declares it.
 
 Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant with rows), `--case ID`
-(repeatable), `--judge-model ID`, `--fill-refs`, `--rejudge`, `--approve-harness`, `--allow-doc-drift`, `--allow-unchecked`,
+(repeatable), `--judge-model ID`, `--fill-refs`, `--rejudge`, `--reevaluate`, `--approve-harness`, `--allow-doc-drift`, `--allow-unchecked`,
 `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
 - **Everything that can refuse does so before the first judge call**, and then writes nothing: a host `claude`

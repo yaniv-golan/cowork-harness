@@ -137,6 +137,24 @@ export type AssertContextFromRunDirResult =
   /** The scenario loader threw. Returned (not formatted) because only the caller knows what it loaded. */
   | { ok: false; kind: "scenario"; error: unknown };
 
+/** The assertion keys that read the run's kept work dir (`workRoot`) as it is NOW, not a record the run wrote: a work
+ *  dir gone refuses them, and one changed since the run changes what they see. */
+export const KEPT_WORK_DIR_KEYS: readonly (keyof Assertion)[] = [
+  "file_exists",
+  // Both read the run's real tree: artifact_text scans a body, file_absent proves a path is not there.
+  // file_absent is the one that MUST be here — with no work dir, existsSync returns false for every
+  // path and it would pass vacuously, the same false-green no_unexpected_files is listed for.
+  "artifact_text",
+  "file_absent",
+  "user_visible_artifact",
+  "artifact_json",
+  "no_unexpected_files",
+  "input_unmodified",
+  // no_lost_write_back re-reads the run's authored sources from workRoot (recomputed below) — a missing
+  // work dir can't be faithfully re-checked, so refuse rather than false-fail.
+  "no_lost_write_back",
+];
+
 /**
  * Rebuild the `AssertContext` a live run would have evaluated, from the run dir's persisted `result.json` +
  * the `run.jsonl`/`trace.json`/`events.jsonl` sidecars + the kept work dir.
@@ -268,21 +286,7 @@ export function assertContextFromRunDir(
   // rather than report a false fail. Content-only re-asserts stay valid without it. no_unexpected_files
   // belongs here too: on a missing workRoot its post-run walk returns [] → zero created files → a vacuous
   // PASS (the other FS keys false-FAIL safe-direction; this one false-GREENS, the worse failure mode).
-  const FS_KEYS: (keyof Assertion)[] = [
-    "file_exists",
-    // Both read the run's real tree: artifact_text scans a body, file_absent proves a path is not there.
-    // file_absent is the one that MUST be here — with no work dir, existsSync returns false for every
-    // path and it would pass vacuously, the same false-green no_unexpected_files is listed for.
-    "artifact_text",
-    "file_absent",
-    "user_visible_artifact",
-    "artifact_json",
-    "no_unexpected_files",
-    "input_unmodified",
-    // no_lost_write_back re-reads the run's authored sources from workRoot (recomputed below) — a missing
-    // work dir can't be faithfully re-checked, so refuse rather than false-fail.
-    "no_lost_write_back",
-  ];
+  const FS_KEYS = KEPT_WORK_DIR_KEYS;
   const hasFsAssert = scenario.assert.some((a) => FS_KEYS.some((k) => a[k] !== undefined));
   if (hasFsAssert && !existsSync(workRoot)) {
     return refuse(
