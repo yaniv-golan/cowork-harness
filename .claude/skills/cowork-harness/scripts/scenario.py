@@ -850,10 +850,59 @@ def _session_host_path(raw, base):
     return p if p.is_absolute() else base / p
 
 
-def _skill_names_in(skill_dir, yaml_mod):
-    """The names a skill directory answers to: its directory name (what the agent registers a plugin
-    skill under) and its SKILL.md frontmatter `name:` when that differs."""
-    names = {skill_dir.name}
+def _sanitize_skill_name(name):
+    """A skill name as the agent's plugin-skill loader writes it into the id (mirrors `sanitizeSkillName`
+    in src/skill-id.ts): every UTF-16 code unit outside [a-zA-Z0-9_-] becomes "-", so a character outside
+    the BMP becomes two."""
+    out = []
+    for ch in name:
+        if re.match(r"[a-zA-Z0-9_-]$", ch):
+            out.append(ch)
+        else:
+            out.append("--" if ord(ch) > 0xFFFF else "-")
+    return "".join(out)
+
+
+def _binary_plugin_identity(plugin_dir):
+    """The plugin name and skills directory exactly as the agent derives them (mirrors
+    `binaryPluginIdentity` in src/session.ts): `.claude-plugin/plugin.json`'s `name` and `skills` when
+    present and non-empty, else the directory name and `skills`. A root-level `plugin.json` is NOT read —
+    the agent does not read it. Never raises."""
+    name, skills_subdir = plugin_dir.name, "skills"
+    try:
+        data = json.loads((plugin_dir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        if isinstance(data.get("name"), str) and data["name"]:
+            name = data["name"]
+        if isinstance(data.get("skills"), str) and data["skills"]:
+            skills_subdir = re.sub(r"^\./", "", data["skills"])
+    return name, plugin_dir / skills_subdir
+
+
+def _plugin_skill_names(plugin_name, skills_dir, yaml_mod):
+    """The bare names the agent registers for a plugin's skills path (mirrors `registeredSkillId` in
+    src/skill-id.ts): each skill DIRECTORY registers under its sanitized directory name; a SKILL.md
+    directly in the skills path registers under its frontmatter `name` (minus a leading `<plugin>:`) or
+    the path's basename, sanitized the same way."""
+    names = set()
+    if (skills_dir / "SKILL.md").is_file():
+        fm = _agent_name_from_frontmatter(skills_dir / "SKILL.md", yaml_mod) or skills_dir.name
+        if fm.startswith(plugin_name + ":"):
+            fm = fm[len(plugin_name) + 1 :]
+        names.add(_sanitize_skill_name(fm))
+        return names
+    for sd in sorted(skills_dir.iterdir()):
+        if (sd / "SKILL.md").is_file():
+            names.add(_sanitize_skill_name(sd.name))
+    return names
+
+
+def _user_skill_names(skill_dir, yaml_mod):
+    """Names a `skills.local` user skill might answer to — its directory name and its frontmatter `name:`.
+    Generous on purpose: a match here only SILENCES the warning."""
+    names = {skill_dir.name, _sanitize_skill_name(skill_dir.name)}
     fm = _agent_name_from_frontmatter(skill_dir / "SKILL.md", yaml_mod)
     if fm:
         names.add(fm)
@@ -870,8 +919,9 @@ def _lint_slash_skill_plugin_name(doc, path):
 
     Best effort, and silent whenever it cannot tell: the scenario's `session:` must be a readable file on
     this machine, and only its `plugins.local_plugins` / `plugins.remote_plugins` directories are read
-    (marketplace-delivered plugins are not resolved). A `skills.local` skill answering to the same name
-    also silences it — that route is not a plugin skill.
+    (marketplace-delivered plugins are not resolved), so an inline session is silent too. Plugin and skill
+    names follow the agent's own derivation (`_binary_plugin_identity`, `_plugin_skill_names`). A
+    `skills.local` skill answering to the same name also silences it — that route is not a plugin skill.
     """
     prompt = doc.get("prompt")
     if not isinstance(prompt, str):
@@ -896,23 +946,22 @@ def _lint_slash_skill_plugin_name(doc, path):
 
     for raw in skills.get("local") or []:
         d = _session_host_path(raw, base)
-        if d is not None and d.is_dir() and token in _skill_names_in(d, yaml_mod):
+        if d is not None and d.is_dir() and token in _user_skill_names(d, yaml_mod):
             return []
 
     hits = []
     for key in ("local_plugins", "remote_plugins"):
         for raw in plugins.get(key) or []:
             d = _session_host_path(raw, base)
-            if d is None or not (d / "skills").is_dir():
+            if d is None or not d.is_dir():
                 continue
-            plugin_name = _read_plugin_name(d) or d.name
-            for sd in sorted((d / "skills").iterdir()):
-                if not (sd / "SKILL.md").is_file() or token not in _skill_names_in(sd, yaml_mod):
-                    continue
-                if plugin_name == token:
-                    return []  # the shape that resolved in Cowork with one copy installed
-                if plugin_name not in hits:
-                    hits.append(plugin_name)
+            plugin_name, skills_dir = _binary_plugin_identity(d)
+            if not skills_dir.is_dir() or token not in _plugin_skill_names(plugin_name, skills_dir, yaml_mod):
+                continue
+            if plugin_name == token:
+                return []  # the shape that resolved in Cowork with one copy installed
+            if plugin_name not in hits:
+                hits.append(plugin_name)
     if not hits:
         return []
     plugin_name = hits[0]
@@ -924,8 +973,9 @@ def _lint_slash_skill_plugin_name(doc, path):
             "name differs. Real Cowork's app resolves a typed slash command before the agent runs and has "
             "refused a bare skill name that differs from its plugin's name (\"Unknown skill\", no task); "
             "this runs in the harness, because the agent expands the bare name, but may not in Cowork.",
-            f"Use `/{plugin_name}:{token}`, or pick the skill from Cowork's slash menu. Do not install two "
-            "copies of one plugin: Cowork refused even the qualified form then.",
+            "Pick the skill from Cowork's slash menu, or name the skill like its plugin. The qualified "
+            f"`/{plugin_name}:{token}` is an option, but it was not measured with a single copy installed (it "
+            "was refused with two copies). Do not install two copies of one plugin.",
             path,
         )
     ]

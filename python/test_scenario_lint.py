@@ -2298,15 +2298,64 @@ def test_slash_skill_differs_flagged_for_remote_plugins_and_bare_prompt(tmp_path
     assert len(_slash_findings(tmp_path, "/deck-review", key="remote_plugins")) == 1
 
 
-def test_slash_skill_flagged_on_frontmatter_name(tmp_path):
-    _make_plugin(tmp_path, "pkg", "dir-name", fm_name="fm-name")
-    (tmp_path / "session.yaml").write_text("plugins:\n  local_plugins: [./plugin-pkg]\n", encoding="utf-8")
+def _lint_slash_with(tmp_path, plugin_dir_name, prompt):
+    (tmp_path / "session.yaml").write_text(f"plugins:\n  local_plugins: [./{plugin_dir_name}]\n", encoding="utf-8")
     f = tmp_path / "sc.yaml"
     f.write_text(
-        "name: t\nbaseline: latest\nsession: session.yaml\nfidelity: container\nprompt: /fm-name go\n",
+        f"name: t\nbaseline: latest\nsession: session.yaml\nfidelity: container\nprompt: {json.dumps(prompt)}\n",
         encoding="utf-8",
     )
-    assert [x.rule for x in scenario.lint_file(str(f)) if x.rule == _SLASH_RULE] == [_SLASH_RULE]
+    return [x for x in scenario.lint_file(str(f)) if x.rule == _SLASH_RULE]
+
+
+def _write_skill(sd, fm_name=None):
+    sd.mkdir(parents=True)
+    (sd / "SKILL.md").write_text(f"---\nname: {fm_name or sd.name}\ndescription: x\n---\nbody\n", encoding="utf-8")
+
+
+def test_slash_skill_quiet_on_frontmatter_name(tmp_path):
+    # A plugin skill registers under its DIRECTORY name; a frontmatter `name:` that differs is not what
+    # the agent registers, so `/fm-name` names no staged plugin skill.
+    _make_plugin(tmp_path, "pkg", "dir-name", fm_name="fm-name")
+    assert _lint_slash_with(tmp_path, "plugin-pkg", "/fm-name go") == []
+    assert len(_lint_slash_with(tmp_path, "plugin-pkg", "/dir-name go")) == 1
+
+
+def test_slash_skill_root_plugin_json_is_ignored_when_it_would_match(tmp_path):
+    # A root-level plugin.json is not read by the agent: the plugin is named after its directory.
+    d = tmp_path / "deck-review"
+    d.mkdir()
+    (d / "plugin.json").write_text(json.dumps({"name": "founder-skills"}), encoding="utf-8")
+    _write_skill(d / "skills" / "deck-review")
+    assert _lint_slash_with(tmp_path, "deck-review", "/deck-review x") == []
+
+
+def test_slash_skill_root_plugin_json_is_ignored_when_it_would_hide(tmp_path):
+    d = tmp_path / "founder-skills"
+    d.mkdir()
+    (d / "plugin.json").write_text(json.dumps({"name": "deck-review"}), encoding="utf-8")
+    _write_skill(d / "skills" / "deck-review")
+    found = _lint_slash_with(tmp_path, "founder-skills", "/deck-review x")
+    assert len(found) == 1
+    assert "`founder-skills`" in found[0].message
+
+
+def test_slash_skill_honours_custom_skills_path(tmp_path):
+    d = tmp_path / "plugin-pkg"
+    (d / ".claude-plugin").mkdir(parents=True)
+    (d / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "pkg", "skills": "./my-skills"}), encoding="utf-8")
+    _write_skill(d / "my-skills" / "deck-review")
+    _write_skill(d / "skills" / "decoy")
+    assert len(_lint_slash_with(tmp_path, "plugin-pkg", "/deck-review x")) == 1
+    assert _lint_slash_with(tmp_path, "plugin-pkg", "/decoy x") == []
+
+
+def test_slash_skill_matches_sanitized_directory_name(tmp_path):
+    d = tmp_path / "plugin-pkg"
+    (d / ".claude-plugin").mkdir(parents=True)
+    (d / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "pkg"}), encoding="utf-8")
+    _write_skill(d / "skills" / "my.skill")
+    assert len(_lint_slash_with(tmp_path, "plugin-pkg", "/my-skill x")) == 1
 
 
 def test_slash_skill_quiet_when_plugin_name_equals_skill(tmp_path):
