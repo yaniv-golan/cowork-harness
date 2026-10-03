@@ -2245,3 +2245,97 @@ def test_hook_output_yaml11_booleans_are_not_a_contradiction(tmp_path):
     assert "assert-contradiction" not in _rules(body, tmp_path)
     same = 'assert:\n  - hook_output_not_contains: { event: Stop, text: "x" }\n  - hook_output_contains: { event: Stop, text: "x" }\n'
     assert "assert-contradiction" in _rules(same, tmp_path)
+
+
+# --- slash-skill-name-differs-from-plugin ----------------------------------------------------------
+#
+# Real Cowork's app resolves a typed slash command before the agent and refused a bare skill name that
+# differs from its plugin's name. The rule reads the scenario's session file and its plugin directories.
+
+_SLASH_RULE = "slash-skill-name-differs-from-plugin"
+
+
+def _make_plugin(root, plugin_name, skill_dir, fm_name=None, manifest=True):
+    d = root / f"plugin-{plugin_name}"
+    if manifest:
+        (d / ".claude-plugin").mkdir(parents=True)
+        (d / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": plugin_name}), encoding="utf-8")
+    sd = d / "skills" / skill_dir
+    sd.mkdir(parents=True)
+    (sd / "SKILL.md").write_text(
+        f"---\nname: {fm_name or skill_dir}\ndescription: x\n---\nbody\n", encoding="utf-8"
+    )
+    return d
+
+
+def _slash_findings(tmp_path, prompt, plugin_name="founder-skills", skill="deck-review", local_skill=None, key="local_plugins"):
+    _make_plugin(tmp_path, plugin_name, skill)
+    session = f"plugins:\n  {key}: [./plugin-{plugin_name}]\n"
+    if local_skill:
+        sd = tmp_path / "user-skills" / local_skill
+        sd.mkdir(parents=True)
+        (sd / "SKILL.md").write_text(f"---\nname: {local_skill}\n---\nbody\n", encoding="utf-8")
+        session += f"skills:\n  local: [./user-skills/{local_skill}]\n"
+    (tmp_path / "session.yaml").write_text(session, encoding="utf-8")
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: session.yaml\nfidelity: container\n"
+        f"prompt: {json.dumps(prompt)}\n",
+        encoding="utf-8",
+    )
+    return [x for x in scenario.lint_file(str(f)) if x.rule == _SLASH_RULE]
+
+
+def test_slash_skill_differs_from_plugin_is_flagged(tmp_path):
+    found = _slash_findings(tmp_path, "/deck-review deck.pdf")
+    assert len(found) == 1
+    assert found[0].severity == "WARN"
+    assert "`/founder-skills:deck-review`" in found[0].fix
+    assert "may not in Cowork" in found[0].message
+
+
+def test_slash_skill_differs_flagged_for_remote_plugins_and_bare_prompt(tmp_path):
+    assert len(_slash_findings(tmp_path, "/deck-review", key="remote_plugins")) == 1
+
+
+def test_slash_skill_flagged_on_frontmatter_name(tmp_path):
+    _make_plugin(tmp_path, "pkg", "dir-name", fm_name="fm-name")
+    (tmp_path / "session.yaml").write_text("plugins:\n  local_plugins: [./plugin-pkg]\n", encoding="utf-8")
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: session.yaml\nfidelity: container\nprompt: /fm-name go\n",
+        encoding="utf-8",
+    )
+    assert [x.rule for x in scenario.lint_file(str(f)) if x.rule == _SLASH_RULE] == [_SLASH_RULE]
+
+
+def test_slash_skill_quiet_when_plugin_name_equals_skill(tmp_path):
+    assert _slash_findings(tmp_path, "/deck-review deck.pdf", plugin_name="deck-review") == []
+
+
+def test_slash_skill_quiet_when_qualified(tmp_path):
+    assert _slash_findings(tmp_path, "/founder-skills:deck-review deck.pdf") == []
+
+
+def test_slash_skill_quiet_for_user_skill(tmp_path):
+    # A `skills.local` user skill of that name is not a plugin skill.
+    assert _slash_findings(tmp_path, "/deck-review deck.pdf", local_skill="deck-review") == []
+
+
+def test_slash_skill_quiet_when_no_staged_skill_matches(tmp_path):
+    assert _slash_findings(tmp_path, "/other-skill go") == []
+
+
+@pytest.mark.parametrize("prompt", ["Review the deck with deck-review", "Use /deck-review on it", "/deck-review.", "/deck-reviewer x"])
+def test_slash_skill_quiet_without_a_leading_bare_match(tmp_path, prompt):
+    assert _slash_findings(tmp_path, prompt) == []
+
+
+@pytest.mark.parametrize("session", ["(inline)", "missing.yaml"])
+def test_slash_skill_quiet_when_session_unreadable(tmp_path, session):
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        f"name: t\nbaseline: latest\nsession: {json.dumps(session)}\nfidelity: container\nprompt: /deck-review x\n",
+        encoding="utf-8",
+    )
+    assert [x for x in scenario.lint_file(str(f)) if x.rule == _SLASH_RULE] == []

@@ -785,9 +785,10 @@ def _lint_prompt_slash(doc, path):
     auto-trigger a slash is normally used to bypass. The scenario still runs and can still pass, so the
     failure mode is a scenario that silently tests something other than what it reads as.
 
-    Deliberately silent when the prompt DOES start with `/`: that is the working case. Registration is not
-    checkable statically (it depends on how the skill is staged), so an unresolvable leading name is left
-    to the run itself, where it shows up as `Unknown command: /x` with `num_turns: 0`.
+    Deliberately silent when the prompt DOES start with `/`: that is the working case for the agent.
+    Registration is not checked here (it depends on how the skill is staged), so an unresolvable leading
+    name is left to the run itself, where it shows up as `Unknown command: /x` with `num_turns: 0`. The
+    one staging-aware check on a leading slash is `_lint_slash_skill_plugin_name`.
     """
     findings = []
     prompt = doc.get("prompt")
@@ -817,6 +818,117 @@ def _lint_prompt_slash(doc, path):
             )
         )
     return findings
+
+
+# A prompt that STARTS with a bare (unqualified) slash name: `/<name>` then whitespace or end of prompt.
+_BARE_LEADING_SLASH_RE = re.compile(r"^/([A-Za-z][A-Za-z0-9_-]*)(?:\s|$)")
+
+
+def _session_path_for_lint(doc, path):
+    """The scenario's `session:` file as a Path, or None when there is none to read (inline, absent, or
+    missing on this machine). `session:` resolves relative to the scenario file, as the loader does."""
+    sess = doc.get("session")
+    if not isinstance(sess, str) or not sess.strip() or sess.strip().startswith("("):
+        return None
+    p = Path(os.path.expanduser(sess.strip()))
+    if not p.is_absolute():
+        p = Path(path).parent / p
+    return p if p.is_file() else None
+
+
+def _session_host_path(raw, base):
+    """One session-declared host path, resolved like `resolveSessionPaths`: `~`/`~/x` expand to home,
+    an absolute path stays, anything else is relative to the session file's directory."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    if raw == "~" or raw.startswith("~/"):
+        return Path(os.path.expanduser(raw))
+    if raw.startswith("~"):
+        return None  # `~<user>` — the loader refuses it; nothing to resolve here
+    p = Path(raw)
+    return p if p.is_absolute() else base / p
+
+
+def _skill_names_in(skill_dir, yaml_mod):
+    """The names a skill directory answers to: its directory name (what the agent registers a plugin
+    skill under) and its SKILL.md frontmatter `name:` when that differs."""
+    names = {skill_dir.name}
+    fm = _agent_name_from_frontmatter(skill_dir / "SKILL.md", yaml_mod)
+    if fm:
+        names.add(fm)
+    return names
+
+
+def _lint_slash_skill_plugin_name(doc, path):
+    """W: a leading BARE `/<name>` that names a staged plugin's skill whose plugin is named differently.
+
+    The harness hands `prompt:` to the agent, which expands a bare plugin-skill name to `plugin:skill`.
+    Real Cowork resolves a TYPED slash command in the Desktop app before any agent runs, and refused this
+    shape with "Unknown skill" and no task (observed on Desktop 2.19675.0, 2026-10-03, 4 runs). The refusal
+    never reaches the agent, so no run can catch it — only the static shape can.
+
+    Best effort, and silent whenever it cannot tell: the scenario's `session:` must be a readable file on
+    this machine, and only its `plugins.local_plugins` / `plugins.remote_plugins` directories are read
+    (marketplace-delivered plugins are not resolved). A `skills.local` skill answering to the same name
+    also silences it — that route is not a plugin skill.
+    """
+    prompt = doc.get("prompt")
+    if not isinstance(prompt, str):
+        return []
+    m = _BARE_LEADING_SLASH_RE.match(prompt.lstrip())
+    if not m:
+        return []
+    token = m.group(1)
+    sess_path = _session_path_for_lint(doc, path)
+    if sess_path is None:
+        return []
+    yaml_mod = _require_yaml()
+    try:
+        sess = yaml_mod.safe_load(sess_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(sess, dict):
+        return []
+    base = sess_path.parent
+    plugins = sess.get("plugins") if isinstance(sess.get("plugins"), dict) else {}
+    skills = sess.get("skills") if isinstance(sess.get("skills"), dict) else {}
+
+    for raw in skills.get("local") or []:
+        d = _session_host_path(raw, base)
+        if d is not None and d.is_dir() and token in _skill_names_in(d, yaml_mod):
+            return []
+
+    hits = []
+    for key in ("local_plugins", "remote_plugins"):
+        for raw in plugins.get(key) or []:
+            d = _session_host_path(raw, base)
+            if d is None or not (d / "skills").is_dir():
+                continue
+            plugin_name = _read_plugin_name(d) or d.name
+            for sd in sorted((d / "skills").iterdir()):
+                if not (sd / "SKILL.md").is_file() or token not in _skill_names_in(sd, yaml_mod):
+                    continue
+                if plugin_name == token:
+                    return []  # the shape that resolved in Cowork with one copy installed
+                if plugin_name not in hits:
+                    hits.append(plugin_name)
+    if not hits:
+        return []
+    plugin_name = hits[0]
+    return [
+        Finding(
+            "WARN",
+            "slash-skill-name-differs-from-plugin",
+            f"`prompt:` starts with the bare `/{token}`, a skill of the staged plugin `{plugin_name}`, whose "
+            "name differs. Real Cowork's app resolves a typed slash command before the agent runs and has "
+            "refused a bare skill name that differs from its plugin's name (\"Unknown skill\", no task); "
+            "this runs in the harness, because the agent expands the bare name, but may not in Cowork.",
+            f"Use `/{plugin_name}:{token}`, or pick the skill from Cowork's slash menu. Do not install two "
+            "copies of one plugin: Cowork refused even the qualified form then.",
+            path,
+        )
+    ]
 
 
 _TOOL_RESULT_KEYS = ("tool_result_contains", "tool_result_not_contains", "tool_result_matches", "tool_result_not_matches")
@@ -1215,6 +1327,8 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
 
     # W: a slash command named mid-prompt is never expanded — see _lint_prompt_slash.
     findings.extend(_lint_prompt_slash(doc, path))
+    # W: a bare leading `/<skill>` whose staged plugin is named differently — see _lint_slash_skill_plugin_name.
+    findings.extend(_lint_slash_skill_plugin_name(doc, path))
 
     # W: unknown assertion keys inside assert items (e.g. invented file_not_empty, kind, path)
     unknown_assert = sorted(assert_keys - ASSERT_KEYS)
@@ -2092,6 +2206,7 @@ LINT_RULES = {
     "regex-double-quoted": "WARN",
     "replay-noop": "WARN",
     "slash-prompt-forked-result-anchor": "WARN",
+    "slash-skill-name-differs-from-plugin": "WARN",
     "tool-called-always-passes": "INFO",
     "tool-input-regex-redactable": "WARN",
     "tool-input-shell-tier": "INFO",
