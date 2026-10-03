@@ -71,6 +71,8 @@ let authored: Record<string, string> | undefined;
 let judgeTransport: object | undefined;
 /** The effort the fake agent's transcript says it sent: undefined = the requested one, null = none at all. */
 let sentEffortOverride: string | null | undefined;
+/** Credential frames the fake run's events.jsonl carries after its init frame (account-frames.json). */
+let credentialFrames: string[];
 const rows = () =>
   readFileSync(join(cwd, "flow", "baseline", "results.jsonl"), "utf8")
     .trim()
@@ -93,7 +95,12 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
       mkdirSync(outDir, { recursive: true });
       writeFileSync(
         join(outDir, "events.jsonl"),
-        [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }), frames[1]].join("\n"),
+        [
+          frames[0],
+          ...credentialFrames,
+          JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }),
+          frames[1],
+        ].join("\n"),
       );
       // The agent's own session transcript, where a container run keeps it, stamped with the effort it sent: the
       // session's (the requested one) unless a test makes the agent send another.
@@ -170,6 +177,7 @@ beforeEach(() => {
   authored = undefined;
   judgeTransport = undefined;
   sentEffortOverride = undefined;
+  credentialFrames = [];
 });
 afterEach(() => {
   for (const d of [cwd, join(plugin, ".."), snaps]) rmSync(d, { recursive: true, force: true });
@@ -2044,6 +2052,42 @@ describe("a session that pins plugins.config_dir", () => {
       expect(rows()[0].meta).toMatchObject({ effort: "high", effort_sent: "high" });
     } finally {
       rmSync(join(cfg, ".."), { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the billing basis follows the case's tier, from its baseline's spawn env", () => {
+  // Real frame shape (account-frames.json): an API key AND an OAuth token, no rate-limit frame. Under the baseline's
+  // local-agent entrypoint (container) the token wins and nothing says which billed; at protocol the key wins.
+  const acct = JSON.parse(readFileSync(join(FX, "hillclimb-runs", "account-frames.json"), "utf8")) as Record<string, object>;
+  beforeEach(() => {
+    credentialFrames = [JSON.stringify(acct.account_oauth_and_key)];
+  });
+
+  it("container (the baseline spawns local-agent): ambiguous", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const r = await runHillclimbCommand(args(), deps());
+    expect(r.exitCode, err.join("\n")).toBe(0);
+    expect((rows()[0].meta as Record<string, any>).billing).toMatchObject({ token_source: "CLAUDE_CODE_OAUTH_TOKEN", basis: "ambiguous" });
+  });
+
+  it("protocol (no baseline spawn env): api_key, whatever this process's own env says", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: protocol"));
+    const saved = { m: process.env.COWORK_MANAGED_CONFIG, e: process.env.CLAUDE_CODE_ENTRYPOINT };
+    process.env.COWORK_MANAGED_CONFIG = "1";
+    process.env.CLAUDE_CODE_ENTRYPOINT = "local-agent"; // the harness's own env is never a stand-in for the tier's
+    try {
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      const r = await runHillclimbCommand(args(), deps());
+      expect(r.exitCode, err.join("\n")).toBe(0);
+      expect((rows()[0].meta as Record<string, any>).billing.basis).toBe("api_key");
+    } finally {
+      for (const [k, v] of [
+        ["COWORK_MANAGED_CONFIG", saved.m],
+        ["CLAUDE_CODE_ENTRYPOINT", saved.e],
+      ] as const)
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
     }
   });
 });

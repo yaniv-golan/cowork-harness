@@ -1,0 +1,171 @@
+{
+ "_comment": "See README.md: account-frames.json. Real frame shapes, identity values replaced.",
+ "init_none": {
+  "type": "system",
+  "subtype": "init",
+  "cwd": "/sessions/local_3h1z67lhbu",
+  "session_id": "a9997992-62b9-4795-9b94-b7fc106bce6f",
+  "model": "claude-opus-4-8",
+  "permissionMode": "default",
+  "apiKeySource": "none",
+  "claude_code_version": "2.1.280",
+  "output_style": "default",
+  "analytics_disabled": false,
+  "product_feedback_disabled": true,
+  "uuid": "4b3ee25f-ee11-447f-aa4d-724cbdc6fd04",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required"
+ },
+ "init_api_key": {
+  "type": "system",
+  "subtype": "init",
+  "cwd": "/sessions/local_3h1z67lhbu",
+  "session_id": "a9997992-62b9-4795-9b94-b7fc106bce6f",
+  "model": "claude-opus-4-8",
+  "permissionMode": "default",
+  "apiKeySource": "ANTHROPIC_API_KEY",
+  "claude_code_version": "2.1.280",
+  "output_style": "default",
+  "analytics_disabled": false,
+  "product_feedback_disabled": true,
+  "uuid": "4b3ee25f-ee11-447f-aa4d-724cbdc6fd04",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required"
+ },
+ "account_oauth": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "tokenSource": "CLAUDE_CODE_OAUTH_TOKEN",
+     "apiProvider": "firstParty"
+    },
+    "pid": 12345,
+    "current_permission_mode": "default",
+    "fast_mode_state": "off"
+   }
+  }
+ },
+ "account_oauth_and_key": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "tokenSource": "CLAUDE_CODE_OAUTH_TOKEN",
+     "apiKeySource": "ANTHROPIC_API_KEY",
+     "apiProvider": "firstParty"
+    },
+    "pid": 12345,
+    "current_permission_mode": "default",
+    "fast_mode_state": "off"
+   }
+  }
+ },
+ "account_key": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "tokenSource": "none",
+     "apiKeySource": "ANTHROPIC_API_KEY",
+     "apiProvider": "firstParty"
+    },
+    "pid": 12345,
+    "current_permission_mode": "default",
+    "fast_mode_state": "off"
+   }
+  }
+ },
+ "account_none": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "tokenSource": "none",
+     "apiProvider": "firstParty"
+    },
+    "pid": 12345,
+    "current_permission_mode": "default",
+    "fast_mode_state": "off"
+   }
+  }
+ },
+ "account_login": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "email": "user@example.invalid",
+     "organization": "Example Org",
+     "subscriptionType": "example-plan",
+     "apiProvider": "firstParty"
+    },
+    "pid": 12345,
+    "fast_mode_state": "off"
+   }
+  }
+ },
+ "account_auth_token": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "tokenSource": "ANTHROPIC_AUTH_TOKEN",
+     "apiProvider": "firstParty"
+    },
+    "pid": 12345,
+    "current_permission_mode": "default",
+    "fast_mode_state": "off"
+   }
+  }
+ },
+ "account_bedrock": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "apiProvider": "bedrock"
+    },
+    "pid": 12345,
+    "current_permission_mode": "default",
+    "fast_mode_state": "off"
+   }
+  }
+ },
+ "rate_limit_five_hour": {
+  "type": "rate_limit_event",
+  "rate_limit_info": {
+   "status": "allowed_warning",
+   "resetsAt": 1785380400,
+   "rateLimitType": "five_hour",
+   "isUsingOverage": false
+  },
+  "uuid": "00000000-0000-4000-8000-000000000001",
+  "session_id": "00000000-0000-4000-8000-000000000002"
+ },
+ "rate_limit_seven_day": {
+  "type": "rate_limit_event",
+  "rate_limit_info": {
+   "status": "rejected",
+   "resetsAt": 1785380400,
+   "rateLimitType": "seven_day",
+   "isUsingOverage": false
+  },
+  "uuid": "00000000-0000-4000-8000-000000000001",
+  "session_id": "00000000-0000-4000-8000-000000000002"
+ }
+}

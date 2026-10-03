@@ -53,7 +53,7 @@ import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
 import { judgedOpts, sharedCaptureWarning } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
 import { flowMetricUnion, metricSigs, refuseChangedMetrics } from "./metric-keys.js";
-import { existingFlowSnapshot, readStateIfPresent, readVariantFileIfPresent } from "./runner.js";
+import { existingFlowSnapshot, readStateIfPresent, readVariantFileIfPresent, writeCostSummary } from "./runner.js";
 import { compareVariants, VARIANT_DIR_RE } from "./schema-check.js";
 
 export interface HillclimbRegradeArgs {
@@ -982,6 +982,16 @@ const changedKeys = (
   return [...keys].filter((k) => (/^(pass|claims|win|both_bad|a\d+)/.test(k) || metric(k)) && before?.[k] !== after?.[k]);
 };
 
+/** The variant's spend keys in summary.json, recomputed over its rewritten rows (their `regrade_judge_usd` moved). The
+ *  rows are already written: a summary that cannot be written is said, never a failed re-grade. */
+function refreshCostSummary(w: FlowWriter, variant: string, say: (line: string) => void): void {
+  try {
+    writeCostSummary(w, variant);
+  } catch (e) {
+    say(`  [${variant}] rows rewritten, but summary.json's cost keys could not be updated: ${message(e)}`);
+  }
+}
+
 /** A variant's counters, one fixed set in one order, wherever they are printed: its `regrade.md` line, its stderr
  *  line and the closing summary. `rewritten` is broken down into parts that sum to it: the rows a judge re-graded
  *  (with this regrade's whole judge spend, a row judged and then listed included), those rebuilt with no judge call,
@@ -1783,6 +1793,7 @@ async function regradeFlowInner(
         pv.v.backup = w.rewriteResults(text, pv.old);
         pv.v.rewritten = changed.length;
         progress.written.push(v);
+        refreshCostSummary(w, v, say);
       }
       const metricIds = shape.metrics.map((m) => m.id);
       // A row whose a<i> keys name other asserts than before is compared on everything but them, and says so.

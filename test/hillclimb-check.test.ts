@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadFlowSnapshot, type FlowSnapshot } from "../src/hillclimb/schema-check.js";
 import { headroom, metricRangeWarnings, stateMetricFindings } from "../src/hillclimb/check.js";
+import { otherModelShareNotes } from "../src/hillclimb/cost.js";
 
 const FIXTURE = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "test", "fixtures", "hillclimb-flow");
 const snap = (): FlowSnapshot => structuredClone(loadFlowSnapshot(FIXTURE));
@@ -202,5 +203,25 @@ describe("stateMetricFindings (a float must say which way is better)", () => {
 
   it("the fixture's declarations are clean", () => {
     expect(stateMetricFindings(snap())).toEqual([]);
+  });
+});
+
+describe("otherModelShareNotes (check repeats the pass's different-model warning)", () => {
+  const priced = (s: FlowSnapshot, v: string, other: number) =>
+    editRows(s, v, (r) => {
+      r.model = "claude-opus-5";
+      r.cost_usd = 1;
+      r.meta = { ...(r.meta as Row), models: { "claude-opus-5": { cost_usd: 1 - other }, "claude-sonnet-5": { cost_usd: other } } };
+    });
+  it("a note per variant whose other models carry more than 25% of its cost_usd; none at or below", () => {
+    const s = snap();
+    priced(s, "baseline", 0.25);
+    priced(s, "v1", 0.4);
+    expect(otherModelShareNotes(s)).toEqual([
+      expect.stringMatching(/^note: v1: models other than the main loop's carry 40% of this variant's cost_usd/),
+    ]);
+  });
+  it("the fixture, which records no per-model cost, has none", () => {
+    expect(otherModelShareNotes(snap())).toEqual([]);
   });
 });
