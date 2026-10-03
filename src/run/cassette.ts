@@ -165,6 +165,7 @@ import {
   DEFAULT_SCAN_PATTERNS,
   MANIFEST_SCAN_PATTERNS,
   HOST_INVENTORY_CLS,
+  KNOWN_BUILTIN_SKILLS,
   type ScanFinding,
   type AllowInput,
   type AllowPattern,
@@ -1700,7 +1701,31 @@ function mapStrings(v: unknown, f: (s: string) => string): unknown {
   return v;
 }
 
-export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame";
+/** What replaces a BUILT-IN skill's description in the registry's `commands[]`. Exported so the committed-cassette
+ *  guard compares against it exactly. */
+export const BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER = "[built-in skill description withheld]";
+
+/** Replace the description of every BUILT-IN skill (a `KNOWN_BUILTIN_SKILLS` name) in the `commands[]` of the
+ *  agent's `initialize` registry response — the agent's own text, not ours to publish. Matched on `name` alone, so
+ *  a plugin skill (`plugin:skill`, the user's own text) is never touched; the name-collision cost of a bare name
+ *  (a user skill literally named `run`) is the one documented on `KNOWN_BUILTIN_SKILLS`. Every other field
+ *  (name, argumentHint, aliases, builtin, …) stays. Returns the SAME object when nothing changes. */
+function scrubBuiltinSkillDescriptions(m: { response?: { response?: Record<string, unknown> } }): unknown {
+  const body = m.response?.response;
+  if (!body || !Array.isArray(body.commands)) return m;
+  let changed = false;
+  const commands = body.commands.map((c: unknown) => {
+    if (c === null || typeof c !== "object") return c;
+    const cmd = c as { name?: unknown; description?: unknown };
+    if (typeof cmd.name !== "string" || !KNOWN_BUILTIN_SKILLS.has(cmd.name)) return c;
+    if (cmd.description === undefined || cmd.description === BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER) return c;
+    changed = true;
+    return { ...cmd, description: BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER };
+  });
+  return changed ? { ...m, response: { ...m.response, response: { ...body, commands } } } : m;
+}
+
+export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame" | "builtin-skill-description";
 
 /** What the recorder removes from EVERY cassette before writing it (`--no-redact` included — none of it is
  *  policy content):
@@ -1710,8 +1735,12 @@ export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-han
  *   - `subagent-hand-back-frame`: the agent binary's frame line around a sub-agent's report ("[Subagent
  *     hand-back] …") replaced by a neutral placeholder, and the "(use SendMessage with to: …)" continuation hint
  *     dropped, wherever they occur in an event. The report body (indented below the frame), the agentId and the
- *     usage block stay.
- *  Safe for replay by construction: nothing in `src` reads the menu, `rate_limit*`, or the frame/hint text; the
+ *     usage block stay;
+ *   - `builtin-skill-description`: the description of each BUILT-IN skill (a `KNOWN_BUILTIN_SKILLS` name) in the
+ *     `initialize` registry response's `commands[]`, replaced by BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER; the name and
+ *     every other field stay, and a plugin's own skills are untouched (see scrubBuiltinSkillDescriptions).
+ *  Safe for replay by construction: nothing in `src` reads the menu, `rate_limit*`, the frame/hint text, or a
+ *  registry command's description; the
  *  fingerprint never reads `events`; no hash covers `events`. The record path still holds the result to the
  *  verdict-preservation check. Pure; returns the SAME cassette and no kinds when there is nothing to remove. */
 export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette; kinds: RecordedScrubKind[] } {
@@ -1722,7 +1751,8 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
   const events = (menu.events ?? []).map((l) => {
     const hasRate = l.includes('"rate_limit_info"');
     const hasFrame = l.includes("[Subagent hand-back]") || l.includes("use SendMessage with to:");
-    if (!hasRate && !hasFrame) return l;
+    const hasCommands = l.includes('"commands"');
+    if (!hasRate && !hasFrame && !hasCommands) return l;
     let e: unknown;
     try {
       e = JSON.parse(l);
@@ -1744,11 +1774,18 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
         kinds.add("subagent-hand-back-frame");
       }
     }
+    if (hasCommands && isInitializeRegistryResponse(next as Parameters<typeof isInitializeRegistryResponse>[0])) {
+      const described = scrubBuiltinSkillDescriptions(next as Parameters<typeof scrubBuiltinSkillDescriptions>[0]);
+      if (described !== next) {
+        next = described;
+        kinds.add("builtin-skill-description");
+      }
+    }
     if (next === e) return l;
     changed = true;
     return JSON.stringify(next);
   });
-  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame"];
+  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame", "builtin-skill-description"];
   return { cassette: changed ? { ...menu, events } : menu, kinds: order.filter((k) => kinds.has(k)) };
 }
 
@@ -6515,6 +6552,18 @@ async function writeReassertedAssertBlock(
   const expectSame = JSON.stringify(scn.expect_denied ?? []) === JSON.stringify(nextExpectDenied);
   const metricsSame = JSON.stringify(scn.metrics ?? null) === JSON.stringify(nextMetrics ?? null);
   if (assertSame && expectSame && metricsSame) {
+    // The block is current, but the events may still carry what a NEWER recorder removes (scrubRecordedAgentData):
+    // rewrite the events alone, so this stays the way to bring a committed cassette up to the current scrub
+    // without a paid re-record. Nothing else changes — no restamp, the frozen block and controlOut untouched.
+    const rescrubbed = scrubRecordedAgentData(rawCassette);
+    if (rescrubbed.kinds.length) {
+      (rawCassette as unknown as { events: string[] }).events = rescrubbed.cassette.events;
+      writeFileAtomic(cassetteFile, JSON.stringify(rawCassette, null, 2));
+      warn(
+        `::notice:: [replay --write] ${cassetteFile}: the assert block already matches the on-disk scenario; removed from its events what the recorder no longer keeps (${rescrubbed.kinds.join(", ")}); controlOut unchanged\n`,
+      );
+      return;
+    }
     warn(`::notice:: [replay --write] ${cassetteFile}: assert, expect_denied and metrics already match the on-disk scenario — no write\n`);
     return;
   }
@@ -6603,7 +6652,7 @@ export const REPLAY_USAGE =
   "       --explain: after the footer, print the evidence trail for each PASSING assert (which link resolved, which file matched, which value satisfied a bound) — text mode; json already carries assertions[].evidence.\n" +
   "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
   `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
-  "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.\n" +
+  "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical, except that what the recorder no longer keeps is removed from the events (done even when the block is already current).\n" +
   "       --allow-failing waives that verdict gate WHOLESALE — including the skill-drift failure --assert-from forces on. So `--assert-from --write --allow-failing` will persist an assert block validated against a recording whose skill sources have since changed. Re-record instead when the drift is real; the flag is for a verdict you have read and understood.\n" +
   "       text mode writes the footer to STDERR and nothing to stdout (a passing replay is 0 bytes): text is for humans and not a contract, and the exit code is its only signal. Machine output needs --output-format json, or COWORK_HARNESS_OUTPUT_FORMAT=json to set it for a whole CI job; gate on the envelope with jq -e '.ok'. To tell YOUR failing asserts from injected drift/corruption findings, read verdict.failures[].kind (`assertion` vs `staleness`/`cassette-format`), not the exit code, which collapses them: jq '[.results[]? | .verdict.failures[]? | select(.kind==\"assertion\")] | length'.\n" +
   '       --best-effort-future-cassette: override the refusal to replay a cassette recorded by a NEWER format version and attempt it anyway. `verify-cassettes` deliberately does NOT accept this flag — a verification gate has no "read it anyway" path. Cost: an older CLI reading a newer cassette can silently misread a scenario key it does not recognize — this is a best-effort escape hatch, not a safe one.';

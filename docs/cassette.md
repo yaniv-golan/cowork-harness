@@ -1322,11 +1322,15 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 > account is offered, their display copy and, on a pay-per-token account, per-Mtok pricing); a subscription
 > account's **`rate_limit_info`** (utilization, reset times, overage state), emptied to `{}`; and the agent's own
 > **frame around a sub-agent's report** (the hand-back line before the report, and the "use SendMessage" continuation
-> hint after it), replaced by `[subagent report]` with the report body and `agentId` kept. Nothing in replay, the
-> verdict, staleness or the fingerprint reads any of it. The write is still held to the same verdict-preservation
+> hint after it), replaced by `[subagent report]` with the report body and `agentId` kept; and the **description of
+> each Claude Code built-in skill** in that `initialize` response's `commands` list (Anthropic's text), replaced by
+> `[built-in skill description withheld]` with the name and every other field kept — the plugin under test's own
+> skills keep theirs. Nothing in replay, the verdict, staleness or the fingerprint reads any of it. The write is still held to the same verdict-preservation
 > check as redaction; if that check cannot pass, the cassette is written unscrubbed with a warning rather than
-> losing the run. `rehash` and `replay --reassert --write` apply the same scrub when they rewrite a cassette. A
-> cassette recorded by an older harness may still carry these; re-record (or run either rewrite) to drop them.
+> losing the run. `rehash` and `replay --reassert --write` apply the same scrub when they rewrite a cassette, and
+> `replay --reassert --write` rewrites the events alone when the assert block is already current but the events
+> still carry something the recorder removes. A cassette recorded by an older harness may still carry these;
+> re-record (or run `replay --reassert --write`) to drop them.
 
 ### Reading the result
 

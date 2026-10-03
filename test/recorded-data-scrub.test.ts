@@ -3,7 +3,9 @@
 //    nothing in the harness;
 //  - the agent binary's own frame around a sub-agent's report (the "[Subagent hand-back]" line and the
 //    "use SendMessage with to:" continuation hint) — agent-binary text that is not ours to publish. The report body
-//    and the agentId stay.
+//    and the agentId stay;
+//  - the description of each Claude Code BUILT-IN skill (a KNOWN_BUILTIN_SKILLS name) in the registry's `commands[]`
+//    — the agent's own text — replaced by a placeholder; a plugin's own skills keep theirs.
 // Plus the wiring: the scrub is held to the verdict-preservation check, and if that check cannot pass, the paid
 // run is still written (unscrubbed, with a warning naming the scrub) rather than lost.
 // The frame text below is SYNTHETIC: only the two sentinel markers are real, because they are what is matched.
@@ -13,7 +15,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { freezeRecordedRun, scrubRecordedAgentData, scrubVerification } from "../src/run/cassette.js";
+import {
+  BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER,
+  freezeRecordedRun,
+  scrubRecordedAgentData,
+  scrubVerification,
+} from "../src/run/cassette.js";
+import { KNOWN_BUILTIN_SKILLS } from "../src/scan.js";
 import { loadBaseline } from "../src/baseline.js";
 import { ScenarioObject } from "../src/types.js";
 import type { Cassette } from "../src/run/cassette.js";
@@ -48,7 +56,52 @@ const HANDBACK = line({
   tool_use_result: { content: [{ type: "text", text: HANDBACK_TEXT }] },
 });
 
+// A registry response with built-in skills, a plugin's own skill (same bare name after the colon as a built-in), a
+// built-in command that is not in the skill roster, and a model menu. Descriptions are SYNTHETIC.
+const PLUGIN_DESC = "(my-plugin) The plugin's own description, which assertions may read.";
+const REGISTRY = line({
+  type: "control_response",
+  response: {
+    subtype: "success",
+    request_id: "init-1",
+    response: {
+      commands: [
+        { name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE ONE", argumentHint: "", builtin: true },
+        { name: "my-plugin:code-review", description: PLUGIN_DESC, argumentHint: "[pr]", aliases: ["code-review"] },
+        { name: "code-review", description: "SYNTHETIC BUILT-IN PROSE TWO", argumentHint: "[target]", builtin: true },
+        { name: "compact", description: "SYNTHETIC NON-SKILL COMMAND PROSE", argumentHint: "", builtin: true },
+      ],
+      agents: [{ name: "general-purpose", description: "agent prose" }],
+    },
+  },
+});
+
 describe("scrubRecordedAgentData", () => {
+  it("withholds a built-in skill's description in the registry and keeps the name, every other field, and a plugin's own skill", () => {
+    const { cassette, kinds } = scrubRecordedAgentData(cassetteOf([REGISTRY]));
+    expect(kinds).toEqual(["builtin-skill-description"]);
+    const ev = JSON.parse(cassette.events[0]);
+    const before = JSON.parse(REGISTRY);
+    expect(ev.response.response.commands).toEqual([
+      { name: "claude-api", description: BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER, argumentHint: "", builtin: true },
+      before.response.response.commands[1], // the plugin's skill: untouched, though its alias is a built-in name
+      { name: "code-review", description: BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER, argumentHint: "[target]", builtin: true },
+      before.response.response.commands[3], // a built-in command outside the skill roster: out of scope here
+    ]);
+    expect({ ...ev, response: { ...ev.response, response: { ...ev.response.response, commands: [] } } }).toEqual({
+      ...before,
+      response: { ...before.response, response: { ...before.response.response, commands: [] } },
+    });
+    expect(cassette.events[0]).not.toMatch(/SYNTHETIC BUILT-IN PROSE/);
+  });
+
+  it("touches a built-in name only inside the initialize registry response", () => {
+    const elsewhere = line({ type: "user", commands: [{ name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE ONE" }] });
+    const r = scrubRecordedAgentData(cassetteOf([elsewhere]));
+    expect(r.kinds).toEqual([]);
+    expect(r.cassette.events[0]).toBe(elsewhere);
+  });
+
   it("empties rate_limit_info and keeps the event's shape and every other line byte-identical", () => {
     const other = line({ type: "assistant", message: { content: [{ type: "text", text: "hi" }] } });
     const { cassette, kinds } = scrubRecordedAgentData(cassetteOf([RATE, other]));
@@ -81,10 +134,11 @@ describe("scrubRecordedAgentData", () => {
       type: "control_response",
       response: { request_id: "init-1", response: { commands: [], agents: [], models: [{ value: "m", description: "· $1/$2 per Mtok" }] } },
     });
-    expect(scrubRecordedAgentData(cassetteOf([init, RATE, HANDBACK])).kinds).toEqual([
+    expect(scrubRecordedAgentData(cassetteOf([init, RATE, HANDBACK, REGISTRY])).kinds).toEqual([
       "model-menu",
       "rate-limit-info",
       "subagent-hand-back-frame",
+      "builtin-skill-description",
     ]);
     const clean = cassetteOf([line({ type: "system", subtype: "init" })]);
     const r = scrubRecordedAgentData(clean);
@@ -93,7 +147,7 @@ describe("scrubRecordedAgentData", () => {
   });
 
   it("is idempotent", () => {
-    const once = scrubRecordedAgentData(cassetteOf([RATE, HANDBACK])).cassette;
+    const once = scrubRecordedAgentData(cassetteOf([RATE, HANDBACK, REGISTRY])).cassette;
     expect(scrubRecordedAgentData(once).cassette).toBe(once);
   });
 });
@@ -101,7 +155,9 @@ describe("scrubRecordedAgentData", () => {
 // Every COMMITTED cassette must already be clean: this is what stops a hand re-stamp, an older recording or a
 // rewrite path from re-publishing any of it.
 const tracked = execFileSync("git", ["ls-files", "*.cassette.json"], { encoding: "utf8" }).split("\n").filter(Boolean);
-describe("committed cassettes carry no account data or agent hand-back frame", () => {
+// Built-in registry entries seen across the committed cassettes; the guard below must have looked at some.
+let builtinSkillEntriesSeen = 0;
+describe("committed cassettes carry no account data, agent hand-back frame or built-in skill description", () => {
   it("there are committed cassettes to check (not vacuous)", () => expect(tracked.length).toBeGreaterThanOrEqual(4));
   it.each(tracked)("%s", (file) => {
     const raw = readFileSync(file, "utf8");
@@ -113,7 +169,10 @@ describe("committed cassettes carry no account data or agent hand-back frame", (
       let e: {
         type?: string;
         rate_limit_info?: object;
-        response?: { request_id?: string; response?: { models?: unknown[]; commands?: unknown; agents?: unknown } };
+        response?: {
+          request_id?: string;
+          response?: { models?: unknown[]; commands?: Array<{ name?: unknown; description?: unknown }>; agents?: unknown };
+        };
       };
       try {
         e = JSON.parse(l);
@@ -122,12 +181,21 @@ describe("committed cassettes carry no account data or agent hand-back frame", (
       }
       if (e.rate_limit_info !== undefined) expect(e.rate_limit_info, `${file}: rate_limit_info`).toEqual({});
       const body = e.type === "control_response" ? e.response?.response : undefined;
-      if (body && (e.response?.request_id === "init-1" || ("commands" in body && "agents" in body)))
+      if (body && (e.response?.request_id === "init-1" || ("commands" in body && "agents" in body))) {
         expect(body.models ?? [], `${file}: initialize models`).toEqual([]);
+        for (const c of Array.isArray(body.commands) ? body.commands : []) {
+          if (typeof c?.name !== "string" || !KNOWN_BUILTIN_SKILLS.has(c.name) || c.description === undefined) continue;
+          builtinSkillEntriesSeen++;
+          expect(c.description, `${file}: built-in skill ${c.name} description`).toBe(BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER);
+        }
+      }
     }
     // ...and a re-scrub finds nothing left to remove
     expect(scrubRecordedAgentData(c as unknown as Cassette).kinds).toEqual([]);
   });
+  // Runs after the per-file cases (vitest runs a describe's tests in order): the built-in branch actually executed.
+  it("the built-in skill description check saw built-in registry entries (not vacuous)", () =>
+    expect(builtinSkillEntriesSeen).toBeGreaterThan(0));
 });
 
 // The record tail: wired through scrubVerification.verify, and a failing verification never loses the paid run.
@@ -138,6 +206,7 @@ describe("freezeRecordedRun and the scrub's verdict-preservation check", () => {
     writeFileSync(
       join(outDir, "events.jsonl"),
       [
+        REGISTRY,
         line({ type: "system", subtype: "init", tools: [], skills: [] }),
         RATE,
         HANDBACK,
@@ -175,7 +244,9 @@ describe("freezeRecordedRun and the scrub's verdict-preservation check", () => {
     const [base, scrubbed] = verify.mock.calls[0] as [Cassette, Cassette];
     expect(JSON.stringify(base.events)).toContain("utilization");
     expect(JSON.stringify(scrubbed.events)).not.toContain("utilization");
-    expect(raw).not.toMatch(/utilization|\[Subagent hand-back\]/);
+    expect(raw).not.toMatch(/utilization|\[Subagent hand-back\]|SYNTHETIC BUILT-IN PROSE/);
+    expect(raw).toContain(BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER);
+    expect(raw).toContain(PLUGIN_DESC);
   });
 
   it.each([
@@ -186,7 +257,7 @@ describe("freezeRecordedRun and the scrub's verdict-preservation check", () => {
     const { raw, stderr } = await freeze();
     expect(raw).toContain("utilization"); // unscrubbed — the run is kept, not silently altered
     expect(stderr).toMatch(
-      /::warning:: record: the recorder's account-data scrub \(rate-limit-info, subagent-hand-back-frame\) could not be verified/,
+      /::warning:: record: the recorder's account-data scrub \(rate-limit-info, subagent-hand-back-frame, builtin-skill-description\) could not be verified/,
     );
     expect(stderr).toMatch(/written UNSCRUBBED/);
     expect(stderr).not.toMatch(/narrow the redaction policy/);
