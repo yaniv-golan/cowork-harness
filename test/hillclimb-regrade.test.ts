@@ -1027,17 +1027,30 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
       const lines: string[] = [];
       const { seen, deps } = counting();
       const out = await regradeFlow(ARGS({ variant: "v1" }), { ...deps, stderr: (l) => lines.push(l) });
-      expect(out.exitCode, JSON.stringify(out)).toBe(0);
-      // Nothing a judge reads changed: no judge call (the changed sidecar is never sent).
+      // No judge call either way. The transcript is also a section of the judged document: in a judged case the
+      // evidence its judge would see changed, so the row is listed and kept as it is (--rejudge grades it).
       expect(seen.calls).toBe(0);
+      expect(lines.filter((l) => /kept its live outcome/.test(l))).toEqual([
+        expect.stringMatching(/\[v1\] alpha rep0: assertion 1 \(`transcript_contains`\) passes in the run, fails re-evaluated now/),
+      ]);
+      if (!noPairwise) {
+        expect(out.exitCode, JSON.stringify(out)).toBe(1);
+        expect(out.variants[0]!.listed).toEqual([
+          {
+            prompt_id: "alpha",
+            rep: 0,
+            why: expect.stringMatching(/^the evidence the judge would see changed since this grade \(assert 2\)/),
+          },
+        ]);
+        expect(rows("v1")[0]).toEqual(old);
+        return;
+      }
+      expect(out.exitCode, JSON.stringify(out)).toBe(0);
       expect(out.variants[0]!.listed).toEqual([]);
       const row = rows("v1")[0]!;
       expect(row.grade.a1).toBe(1);
       expect(row.grade.pass).toBe(old.grade.pass);
       expect(row.meta.regrade_kept_live).toEqual([1]);
-      expect(lines.filter((l) => /kept its live outcome/.test(l))).toEqual([
-        expect.stringMatching(/\[v1\] alpha rep0: assertion 1 \(`transcript_contains`\) passes in the run, fails re-evaluated now/),
-      ]);
     },
     240_000,
   );
@@ -1417,6 +1430,111 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     },
     240_000,
   );
+
+  // The evidence a judged entry was graded on is recomposed from the kept run by the current harness (no judge call)
+  // and compared with the document the entry records. A difference is never silent: without --rejudge the row is
+  // listed and kept as it is, whatever else changed; with --rejudge it is graded on the current evidence, saying so.
+  const editFinal = (row: { meta: Record<string, unknown> }) => {
+    const file = join(runDirOf(row), "turns", "1", "result.json");
+    const r = JSON.parse(readFileSync(file, "utf8")) as { finalMessage?: string };
+    expect(r.finalMessage).toBeTruthy();
+    writeFileSync(file, JSON.stringify({ ...r, finalMessage: `${r.finalMessage} (edited)` }));
+  };
+  const EVIDENCE = /^the evidence the judge would see changed since this grade \(assert 1\): pass --rejudge to grade the current evidence$/;
+
+  it("evidence_changed: a kept run edited since its grade is listed by a default regrade (no judge call, untouched)", async () => {
+    const { flow, rows } = buildFlow();
+    editFinal(rows("v1")[0]!);
+    const before = {
+      b: readFileSync(join(flow, "baseline", "results.jsonl"), "utf8"),
+      v1: readFileSync(join(flow, "v1", "results.jsonl"), "utf8"),
+    };
+    const said: string[] = [];
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS(), { ...deps, stderr: (l) => said.push(l) });
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(seen.calls).toBe(0);
+    const [b, v1] = out.variants;
+    expect(v1!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(EVIDENCE) }]);
+    expect(v1!.evidenceChanged).toEqual([
+      {
+        prompt_id: "alpha",
+        rep: 0,
+        evidence: [
+          { assert: 1, gradedDocSha: expect.stringMatching(/^[0-9a-f]{64}$/), currentDocSha: expect.stringMatching(/^[0-9a-f]{64}$/) },
+        ],
+      },
+    ]);
+    // A drift-free row is unaffected.
+    expect(b!.listed).toEqual([]);
+    expect(b!.evidenceChanged).toEqual([]);
+    expect(said.join("\n")).toMatch(/\[v1\].*alpha rep0: the evidence the judge would see changed/);
+    expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before.b);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before.v1);
+  }, 240_000);
+
+  it("evidence_changed: an assert changed over drifted evidence is listed too (drift wins), never re-judged silently", async () => {
+    const { flow, rows, evals } = buildFlow();
+    editFinal(rows("v1")[0]!);
+    edit(evals, "rubric: ['answers']", "rubric: ['answers in French']");
+    const v1Before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(seen.calls).toBe(0);
+    expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(EVIDENCE) }]);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(v1Before);
+  }, 240_000);
+
+  it("evidence_changed: a judged entry that recorded no document cannot be compared — listed (err toward re-judging)", async () => {
+    const { rows } = buildFlow();
+    const file = join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json");
+    const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: Array<Record<string, unknown>> };
+    expect(r.assertions[1]!.judgedDoc).toBeDefined();
+    delete r.assertions[1]!.judgedDoc;
+    delete r.assertions[1]!.composedDoc;
+    writeFileSync(file, JSON.stringify(r));
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(seen.calls).toBe(0);
+    expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(EVIDENCE) }]);
+    expect(out.variants[0]!.evidenceChanged).toEqual([{ prompt_id: "alpha", rep: 0, evidence: [{ assert: 1 }] }]);
+  }, 240_000);
+
+  it("evidence_changed: --rejudge grades the current evidence, records both hashes, says so; the next regrade keeps it", async () => {
+    const { rows, evals } = buildFlow();
+    const graded = rows("v1")[0]!;
+    editFinal(graded);
+    const said: string[] = [];
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), { ...deps, stderr: (l) => said.push(l) });
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(seen.calls).toBe(1);
+    const after = rows("v1")[0]!;
+    expect(after.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["rejudge", "evidence_changed"] }]);
+    const ev = after.meta.regrade_evidence as Array<{ assert: number; gradedDocSha: string; currentDocSha: string }>;
+    expect(ev).toEqual([
+      { assert: 1, gradedDocSha: expect.stringMatching(/^[0-9a-f]{64}$/), currentDocSha: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    ]);
+    expect(ev[0]!.gradedDocSha).not.toBe(ev[0]!.currentDocSha);
+    expect(out.variants[0]!.evidenceChanged).toHaveLength(1);
+    expect(said.join("\n")).toMatch(
+      /\[v1\] alpha rep0: the evidence the judge would see changed since its grade \(assert 1\) — re-judged on the current evidence/,
+    );
+    // The re-judged entry recorded the current document: a default regrade now finds nothing changed.
+    const again = await regradeFlow(ARGS({ variant: "v1" }), deps);
+    expect(again.exitCode, JSON.stringify(again)).toBe(0);
+    expect(again.variants[0]!.listed).toEqual([]);
+    expect(seen.calls).toBe(1);
+    // A rubric edit next: re-judged over the evidence the row was last graded on, never refused for the run's own
+    // result.json still recording the old document.
+    edit(evals, "rubric: ['answers']", "rubric: ['answers in French']");
+    const edited = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
+    expect(edited.exitCode, JSON.stringify(edited)).toBe(0);
+    expect(seen.calls).toBe(2);
+    expect(rows("v1")[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["assert_changed"] }]);
+  }, 300_000);
 
   it("an assert the recorded workspace fixture satisfies on its own is listed before any judge call (verify-run's refusal)", async () => {
     f.cleanup();

@@ -400,22 +400,50 @@ cat "${ENVELOPE}"
     expect(readFileSync(calls, "utf8")).toBe("x\n"); // only v1's live comparison
   }, 120_000);
 
-  it("a changed kept run is refused before any spend, everywhere; nothing is written", () => {
-    const { cli, flow, results, runDir, calls } = setup();
-    const before = { baseline: results("baseline"), v1: results("v1") };
-    // The judged document's final answer is the run's recorded one: edit it after the run.
-    const turns = join(runDir("v1"), "turns");
+  /** Edit the judged document's final answer (the run's recorded one) after the run. */
+  const editFinal = (runDir: string) => {
+    const turns = join(runDir, "turns");
     const rj = join(turns, readdirSync(turns).sort().pop()!, "result.json");
     const res = JSON.parse(readFileSync(rj, "utf8")) as { finalMessage?: string };
     expect(res.finalMessage).toBeTruthy();
     writeFileSync(rj, JSON.stringify({ ...res, finalMessage: `${res.finalMessage} (edited)` }));
-    // Only a re-judge reads the evidence again: a default regrade keeps the judged entries and never sends it.
-    const r = cli("regrade", "evals", "--flow", "flow", "--rejudge");
-    expect(r.status, r.stderr).toBe(2);
-    expect(r.stderr).toMatch(/nothing was re-graded or written[\s\S]*v1 alpha rep0: doc_drift/);
+  };
+
+  it("a changed kept run is listed before any spend by a default regrade; nothing is written", () => {
+    const { cli, flow, results, runDir, calls } = setup();
+    const before = { baseline: results("baseline"), v1: results("v1") };
+    editFinal(runDir("v1"));
+    const r = cli("regrade", "evals", "--flow", "flow", "--output-format", "json");
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/\[v1\] - alpha rep0: the evidence the judge would see changed since this grade \(assert 1\): pass --rejudge/);
+    const env = JSON.parse(r.stdout) as {
+      variants: Array<{ variant: string; evidenceChanged: Array<{ prompt_id: string; rep: number }> }>;
+    };
+    expect(env.variants.map((v) => [v.variant, v.evidenceChanged.map((x) => `${x.prompt_id}/${x.rep}`)])).toEqual([
+      ["baseline", []],
+      ["v1", ["alpha/0"]],
+    ]);
     expect({ baseline: results("baseline"), v1: results("v1") }).toEqual(before);
     expect(readdirSync(join(flow, "v1")).some((n) => n.endsWith(".bak.jsonl"))).toBe(false);
     expect(readFileSync(calls, "utf8")).toBe("x\n");
+  }, 120_000);
+
+  it("a changed kept run under --rejudge is graded on the current evidence, saying so, with both hashes recorded", () => {
+    const { cli, results, runDir, calls } = setup();
+    editFinal(runDir("v1"));
+    const r = cli("regrade", "evals", "--flow", "flow", "--rejudge");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(
+      /\[v1\] alpha rep0: the evidence the judge would see changed since its grade \(assert 1\) — re-judged on the current evidence \(--rejudge/,
+    );
+    expect(r.stderr).toMatch(/grading anyway \(--rejudge\)/);
+    const meta = (JSON.parse(results("v1").trim()) as { meta: Record<string, unknown> }).meta;
+    expect(meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["rejudge", "evidence_changed"] }]);
+    expect(meta.regrade_evidence).toEqual([
+      { assert: 1, gradedDocSha: expect.stringMatching(/^[0-9a-f]{64}$/), currentDocSha: expect.stringMatching(/^[0-9a-f]{64}$/) },
+    ]);
+    // v1 against the baseline (the baseline row is its own reference's: neutral, no call).
+    expect(readFileSync(calls, "utf8")).toBe("x\nx\n");
   }, 120_000);
 
   it("a pruned run dir and an open judge_invalid slot are listed (exit 1); the rest is rewritten", () => {
@@ -435,6 +463,22 @@ cat "${ENVELOPE}"
       }) + "\n",
     );
     const before = results("baseline");
+    // A default regrade first: the same rows listed, and the unchanged v1 row left byte for byte (nothing re-judged).
+    const v1Before = results("v1");
+    const d = cli("regrade", "evals", "--flow", "flow", "--output-format", "json");
+    expect(d.status, d.stderr).toBe(1);
+    const denv = JSON.parse(d.stdout) as {
+      variants: Array<{ variant: string; rewritten: number; listed: Array<{ rep: number; why: string }> }>;
+    };
+    expect(denv.variants.find((v) => v.variant === "baseline")!.listed).toMatchObject([
+      { rep: 0, why: expect.stringMatching(/run dir is gone/) },
+    ]);
+    expect(denv.variants.find((v) => v.variant === "v1")).toMatchObject({
+      rewritten: 0,
+      listed: [{ rep: 1, why: expect.stringMatching(/judge_invalid/) }],
+    });
+    expect(results("v1")).toBe(v1Before);
+    expect(results("baseline")).toBe(before);
     const r = cli("regrade", "evals", "--flow", "flow", "--rejudge", "--output-format", "json");
     expect(r.status, r.stderr).toBe(1);
     const env = JSON.parse(r.stdout) as {

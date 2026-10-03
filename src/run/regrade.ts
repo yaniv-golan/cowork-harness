@@ -221,7 +221,20 @@ export interface RegradeOptions {
    *  is copied into the report as it is (`copied: true`, `docMatchesLive: "not_graded"`), no document is composed for
    *  it and no judge is called. In a fill these entries are also what every kept outcome is copied from. Default (or
    *  undefined for a run dir): the run's own result.json entries, nothing kept. */
-  graded?: (runDir: string) => { entries: ReadonlyMap<number, RunResult["assertions"][number]>; keep: ReadonlySet<number> } | undefined;
+  /** `pool`: every judged entry the row was graded with, whatever the scenario says now (a changed assert's old entry
+   *  included). When given, the drift check compares the documents THESE recorded — not the run's result.json — with
+   *  their recomposition from the kept run: after a re-grade over accepted drift, the row's entries record the current
+   *  document while result.json still records the old one. */
+  graded?: (runDir: string) =>
+    | {
+        entries: ReadonlyMap<number, RunResult["assertions"][number]>;
+        keep: ReadonlySet<number>;
+        pool?: ReadonlyArray<RunResult["assertions"][number]>;
+      }
+    | undefined;
+  /** The flag named in the warning when a drift is accepted (default `--allow-doc-drift`): a caller that accepts it
+   *  for its own reason names that. */
+  driftAcceptedBy?: string;
 }
 
 /** `RegradeOptions` for an evidence preflight. Kept out of `RegradeOptions` itself so a caller that never asks for
@@ -388,17 +401,20 @@ export function compareWithLive(
  */
 function liveDocDrift(
   runDir: string,
-  result: RunResult,
+  entries: readonly LiveResult[],
   sc: Scenario,
   secrets: string[],
   budget: { totalBytes: number; perFileBytes?: number },
   sameInputs: AssertContext | undefined,
 ):
-  | { drift: Array<{ liveIndex: number; sections: DifferingSection[] }>; rebuilt: JudgedDocFingerprint[] }
+  | {
+      drift: Array<{ liveIndex: number; sections: DifferingSection[]; recordedSha256: string; currentSha256: string }>;
+      rebuilt: JudgedDocFingerprint[];
+    }
   | { refusal: { kind: "usage" | "runtime"; message: string } } {
   // The capture is built from EVERY live semantic assert (its priority globs are their union, as execute.ts
   // builds it), but only those that recorded a `judgedDoc` have anything to be compared with.
-  const allLive = (result.assertions ?? [])
+  const allLive = entries
     .map((r, liveIndex) => ({ r, liveIndex }))
     .filter(({ r }) => r.assertion !== undefined && judgedOpts(r.assertion) !== undefined);
   // Only an assert with a recorded document can be checked (see `comparable`).
@@ -426,7 +442,7 @@ function liveDocDrift(
     ctx = built.ctx;
   }
   const cache = new Map<string, JudgedDocFingerprint>();
-  const drift: Array<{ liveIndex: number; sections: DifferingSection[] }> = [];
+  const drift: Array<{ liveIndex: number; sections: DifferingSection[]; recordedSha256: string; currentSha256: string }> = [];
   for (const { r, liveIndex } of live) {
     const o = judgedOpts(r.assertion)!;
     const key = ownScopeKey(r.assertion);
@@ -437,9 +453,38 @@ function liveDocDrift(
     }
     const recorded = liveDoc(r)!;
     const sections = diffSections(recorded, fp, liveIndex);
-    if (sections.length || recorded.sha256 !== fp.sha256) drift.push({ liveIndex, sections });
+    if (sections.length || recorded.sha256 !== fp.sha256)
+      drift.push({ liveIndex, sections, recordedSha256: recorded.sha256, currentSha256: fp.sha256 });
   }
   return { drift, rebuilt: [...cache.values()] };
+}
+
+/** One judged entry whose recorded document is not what the current harness composes from the kept run. */
+export interface GradedDocDrift {
+  /** The entry's position in the list passed in. */
+  index: number;
+  /** The document the entry records (`judgedDoc`, else a pairwise entry's `composedDoc`). */
+  recordedSha256: string;
+  /** The same document recomposed now from the kept run: the entry's own assert and scope, the capture its list's
+   *  `evidence_files` union and `budget` build, this process's secrets — what a re-judge of it would be handed. */
+  currentSha256: string;
+}
+
+/** The drift check a re-grade runs before any judge call, over any list of judged entries a row was graded with
+ *  (the run's result.json entries, or a later re-grade's): each entry that recorded a document is recomposed from
+ *  the kept run with the current harness and compared with it. No judge call. An entry that recorded no document
+ *  (an evidence refusal, a run older than the fingerprint) is not compared. */
+export function gradedDocDrift(
+  runDir: string,
+  scenario: Scenario,
+  entries: ReadonlyArray<RunResult["assertions"][number]>,
+  o: { secrets: string[]; budget: { totalBytes: number; perFileBytes?: number } },
+): { drift: GradedDocDrift[] } | { refusal: string } {
+  const checked = liveDocDrift(runDir, entries, scenario, o.secrets, o.budget, undefined);
+  if ("refusal" in checked) return { refusal: checked.refusal.message };
+  return {
+    drift: checked.drift.map((d) => ({ index: d.liveIndex, recordedSha256: d.recordedSha256, currentSha256: d.currentSha256 })),
+  };
 }
 
 /** A section of a graded document that no live `judgedDoc` vouches for. */
@@ -743,7 +788,12 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     // under --allow-doc-drift too: an accepted drift is reported, and the rebuilt documents are what the unchecked
     // content is measured against.
     const liveBudget = { totalBytes: persisted?.totalBytes ?? totalBytes, perFileBytes: persisted?.perFileBytes };
-    const checked = liveDocDrift(dir, second.result, sc, secrets, liveBudget, live.captureMoved ? undefined : second.ctx);
+    // A caller's row graded with other entries than the run's (a re-grade rewrote it) is checked against what those
+    // entries recorded: their capture inputs are their own list's, so the context is rebuilt for them.
+    const pool = opts.graded?.(runDir)?.pool;
+    const checked = pool
+      ? liveDocDrift(dir, pool, sc, secrets, liveBudget, undefined)
+      : liveDocDrift(dir, second.result.assertions ?? [], sc, secrets, liveBudget, live.captureMoved ? undefined : second.ctx);
     if ("refusal" in checked) return refuse(checked.refusal.kind, checked.refusal.message);
     const drift: LiveDocDrift[] = checked.drift.map(({ liveIndex, sections }) => ({
       liveAssertionIndex: liveIndex,
@@ -862,7 +912,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       warn(
         scrub(
           `::warning:: ${CMD}: ${p.dirAsGiven}: the kept evidence differs from what the live judge read (${liveDriftLabel(p.drift)}) — ` +
-            `grading anyway (--allow-doc-drift); the run is reported docMatchesLive: false.`,
+            `grading anyway (${opts.driftAcceptedBy ?? "--allow-doc-drift"}); the run is reported docMatchesLive: false.`,
           secrets,
         ),
       );

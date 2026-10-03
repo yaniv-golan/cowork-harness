@@ -23,7 +23,7 @@ import { tildeify } from "../io.js";
 import { classifyRep } from "../eval/classify.js";
 import { pkgVersion } from "../run/envelope.js";
 import { runOutDir } from "../run/execute.js";
-import { regradeRuns, type RegradeOptions, type RegradeOutcome, type RegradeRunReport } from "../run/regrade.js";
+import { gradedDocDrift, regradeRuns, type RegradeOptions, type RegradeOutcome, type RegradeRunReport } from "../run/regrade.js";
 import { reevaluateRun } from "../run/verify-context.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
@@ -101,6 +101,10 @@ export interface RegradeFlowVariant {
    *  unanswered gate): such a row scores 0 whatever its asserts say, so only its meta is brought current
    *  (`assert_sig`, `metric_sigs`), its grade all 0 as `run` writes it — never listed. */
   agentFailed: number;
+  /** Rows a judged entry of which the current harness would show its judge different evidence than it was graded on
+   *  (`evidenceDrift`): without --rejudge each is also listed, its grade kept; under --rejudge each is re-judged on the
+   *  current evidence. Each change names the assert and both document hashes. */
+  evidenceChanged: Array<{ prompt_id: string; rep: number; evidence: EvidenceChange[] }>;
   regradeFiles: string[];
   backup?: string;
 }
@@ -213,6 +217,8 @@ interface Target {
   keptLive: number[];
   /** The row's judged entries now, and which of them are re-judged and why. */
   plan: JudgedPlan;
+  /** Under --rejudge: the entries re-judged over evidence that changed since their grade (`meta.regrade_evidence`). */
+  evidence: EvidenceChange[];
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -305,10 +311,12 @@ const REGRADE_FILE_RE = /^[A-Za-z0-9._-]+\.json$/;
 /** The judged entries a row is graded with now: those of the re-grade that last rewrote it (`meta.regrade_file` — a
  *  re-grade never touches result.json, so after one the run's own judged entries are no longer the row's), else the
  *  run's own. `undefined` when the row names a regrade file that cannot be read: what it was graded with is unknown. */
-function gradedSource(row: Row, runDir: string, result: RunResult): { entries: Entry[]; file: boolean } | undefined {
+function gradedSource(row: Row, runDir: string, result: RunResult): { entries: Entry[]; at: number[]; file: boolean } | undefined {
   const named = row.meta?.regrade_file;
-  if (typeof named !== "string" || named === "")
-    return { entries: authoredOf(result).filter((e) => judgedOpts(e.assertion) !== undefined), file: false };
+  if (typeof named !== "string" || named === "") {
+    const judged = authoredOf(result).flatMap((e, i) => (judgedOpts(e.assertion) !== undefined ? [{ e, i }] : []));
+    return { entries: judged.map((x) => x.e), at: judged.map((x) => x.i), file: false };
+  }
   try {
     const turn = latestTurn(runDir);
     const name = basename(named);
@@ -316,7 +324,7 @@ function gradedSource(row: Row, runDir: string, result: RunResult): { entries: E
     const file = join(dirname(turnArtifactPath(runDir, turn, "result.json")), "regrade", name);
     const doc = JSON.parse(NoFollowRoot.existing(runDir).readFile(file)) as { assertions?: RegradeRunReport["assertions"] };
     if (!Array.isArray(doc.assertions)) return undefined;
-    return { entries: doc.assertions.map(reportEntry), file: true };
+    return { entries: doc.assertions.map(reportEntry), at: doc.assertions.map((a) => a.assertionIndex), file: true };
   } catch {
     return undefined;
   }
@@ -334,9 +342,18 @@ function gradedSource(row: Row, runDir: string, result: RunResult): { entries: E
  *  - `judge_prompt`: it was graded under another judge prompt template (`judgePromptHash`);
  *  - `opponents_changed`: a pairwise assert's references (its own variant's aside: neutral, never judged) or their
  *    gating are not the flow's now;
- *  - `reference_changed`: a reference document it was judged against is not the one the flow's store holds now. */
+ *  - `reference_changed`: a reference document it was judged against is not the one the flow's store holds now;
+ *  - `evidence_changed` (`--rejudge` only — without it such a row is listed, never re-judged): the document the
+ *    current harness composes from the kept run is not the one its entry was graded on (`evidenceDrift`). */
 export type RejudgeTrigger =
-  "assert_changed" | "graded_entry_unavailable" | "rejudge" | "judge_model" | "judge_prompt" | "opponents_changed" | "reference_changed";
+  | "assert_changed"
+  | "graded_entry_unavailable"
+  | "rejudge"
+  | "judge_model"
+  | "judge_prompt"
+  | "opponents_changed"
+  | "reference_changed"
+  | "evidence_changed";
 
 export interface JudgedPlan {
   /** Per judged scenario index: the entry the row is graded with now, matched by identity. */
@@ -345,6 +362,10 @@ export interface JudgedPlan {
   rejudge: Map<number, RejudgeTrigger[]>;
   /** The entries came from the row's regrade file (its judge-side meta then describes them). */
   fromFile: boolean;
+  /** Every judged entry the row is graded with (an assert changed since included), and each one's index in the
+   *  list it was graded under. Empty when that is unknown (`graded_entry_unavailable`). */
+  pool: Entry[];
+  poolAt: number[];
 }
 
 /** Which of a row's judged asserts a regrade re-judges, decided from the row, its kept run and the flow's reference
@@ -412,7 +433,51 @@ export function judgedPlan(
     }
     if (why.length) rejudge.set(i, why);
   }
-  return { entries, rejudge, fromFile: src?.file ?? false };
+  return { entries, rejudge, fromFile: src?.file ?? false, pool, poolAt: src?.at ?? [] };
+}
+
+/** One judged entry whose evidence changed since it was graded: the document it records and the one the current
+ *  harness composes from the kept run (absent when the entry records none — a judge read it, but no fingerprint
+ *  was kept, so the two cannot be compared). */
+export interface EvidenceChange {
+  /** The assert's index now (the index it was graded under, for an assert changed since). */
+  assert: number;
+  gradedDocSha?: string;
+  currentDocSha?: string;
+}
+
+/** The judged entries of a row whose evidence the current harness would show a judge differently: each entry the
+ *  row is graded with is recomposed from the kept run (`gradedDocDrift`: the same check, and the same code, the
+ *  core re-grade runs before any judge call — its own assert, its list's capture inputs, the run's recorded budget,
+ *  this process's secrets) and compared with the document it records. An entry a judge read that records no
+ *  document cannot be compared: counted changed (one re-judge records it). An entry no judge read and that records
+ *  no document (an evidence refusal) is not compared. A run that records no capture budget is not checked (the core
+ *  refuses to re-grade it). `refusal` when the kept run cannot be recomposed. */
+function evidenceDrift(
+  plan: JudgedPlan,
+  c: HillclimbCase,
+  runDir: string,
+  result: RunResult,
+  secrets: readonly string[],
+): { changes: EvidenceChange[] } | { refusal: string } {
+  const budget = result.authoredCapture;
+  if (!plan.pool.length || !budget) return { changes: [] };
+  const indexOf = (k: number): number => {
+    for (const [i, e] of plan.entries) if (e === plan.pool[k]) return i;
+    return plan.poolAt[k]!;
+  };
+  const got = gradedDocDrift(runDir, c.scenario, plan.pool, {
+    secrets: [...secrets],
+    budget: { totalBytes: budget.totalBytes, ...(budget.perFileBytes !== undefined ? { perFileBytes: budget.perFileBytes } : {}) },
+  });
+  if ("refusal" in got) return got;
+  const changes = new Map<number, EvidenceChange>();
+  for (const d of got.drift)
+    changes.set(d.index, { assert: indexOf(d.index), gradedDocSha: d.recordedSha256, currentDocSha: d.currentSha256 });
+  plan.pool.forEach((e, k) => {
+    if (e.judgeModel !== undefined && e.judgedDoc === undefined && e.composedDoc === undefined) changes.set(k, { assert: indexOf(k) });
+  });
+  return { changes: [...changes].sort(([a], [b]) => a - b).map(([, x]) => x) };
 }
 
 /** The deterministic step, decided for every selected row before any judge call, over its re-evaluation:
@@ -580,6 +645,7 @@ function rebuiltRow(
     "regrade_harness_version",
     "regrade_kept_live",
     "regrade_rejudged_because",
+    "regrade_evidence",
     "regraded_at",
   ];
   const grade = { ...g.grade };
@@ -952,6 +1018,7 @@ async function regradeFlowInner(
         reevaluated: 0,
         remeasured: 0,
         agentFailed: 0,
+        evidenceChanged: [],
         regradeFiles: [],
       };
       perVariant.set(v, { lines, old, v: vr });
@@ -1048,6 +1115,38 @@ async function regradeFlowInner(
             continue;
           }
         }
+        // Evidence the current harness would show a judge differently than an entry the row is graded with was graded
+        // on is always said, never silently kept or silently re-graded: without --rejudge the row is listed and kept as
+        // it is, whatever else changed for it; --rejudge grades it on the current evidence (recording both hashes).
+        const drift = agentFailed ? { changes: [] } : evidenceDrift(plan, c, runDir, result, deps.secrets);
+        if ("refusal" in drift) {
+          vr.listed.push({
+            prompt_id: id,
+            rep,
+            why: shownMessage(`its judged evidence cannot be recomposed: ${drift.refusal.split("\n")[0]}`, deps.secrets),
+          });
+          continue;
+        }
+        if (drift.changes.length) {
+          vr.evidenceChanged.push({ prompt_id: id, rep, evidence: drift.changes });
+          const asserts = [...new Set(drift.changes.map((x) => x.assert))].join(", ");
+          if (!args.rejudge) {
+            const why = `the evidence the judge would see changed since this grade (assert ${asserts}): ${
+              args.fillRefs
+                ? "run `hillclimb regrade --rejudge` first to grade the current evidence, then --fill-refs"
+                : "pass --rejudge to grade the current evidence"
+            }`;
+            vr.listed.push({ prompt_id: id, rep, why });
+            continue;
+          }
+          for (const x of drift.changes) plan.rejudge.get(x.assert)?.push("evidence_changed");
+          const shas = drift.changes
+            .map((x) => `assert ${x.assert}: ${x.gradedDocSha?.slice(0, 12) ?? "unrecorded"} → ${x.currentDocSha?.slice(0, 12) ?? "?"}`)
+            .join(", ");
+          say(
+            `  [${v}] ${id} rep${rep}: the evidence the judge would see changed since its grade (assert ${asserts}) — re-judged on the current evidence (--rejudge; ${shas})`,
+          );
+        }
         const t: Target = {
           variant: v,
           c,
@@ -1059,6 +1158,7 @@ async function regradeFlowInner(
           live: matched,
           keptLive: det.keptLive,
           plan,
+          evidence: args.rejudge ? drift.changes : [],
         };
         if (!judged || (args.fillRefs ? agentFailed || !t.missing.filter((r) => r !== v).length : agentFailed || !plan.rejudge.size)) {
           // No comparison to judge: a case with no judged assert, an agent failure (it scores 0 whatever the judge
@@ -1103,7 +1203,10 @@ async function regradeFlowInner(
       scenarioFile: b.c.file,
       secrets: [...deps.secrets],
       ...(args.judgeModel !== undefined ? { judgeModel: args.judgeModel } : {}),
-      ...(args.allowDocDrift ? { allowDocDrift: true } : {}),
+      // --rejudge grades a row whose evidence changed on the current evidence (each such row is named above): the
+      // drift is accepted for it, by that flag.
+      ...(args.allowDocDrift || args.rejudge ? { allowDocDrift: true } : {}),
+      ...(args.rejudge && !args.allowDocDrift ? { driftAcceptedBy: "--rejudge" } : {}),
       ...(args.allowUnchecked ? { allowUnchecked: true } : {}),
       pairwise: { ...flowPairwiseOptions(b.c.id, b.variant, refs), ...(b.onlyRefs ? { onlyRefs: b.onlyRefs } : {}) },
       // What each row is graded with now, and (default mode) the judged asserts it keeps: never sent to a judge.
@@ -1111,7 +1214,7 @@ async function regradeFlowInner(
         const t = b.targets.find((x) => real(x.runDir) === real(dir));
         if (!t) return undefined;
         const keep = new Set(args.fillRefs ? [] : [...t.plan.entries.keys()].filter((i) => !t.plan.rejudge.has(i)));
-        return { entries: t.plan.entries, keep };
+        return { entries: t.plan.entries, keep, ...(t.plan.pool.length ? { pool: t.plan.pool } : {}) };
       },
       quietSharedCapture: true,
       ...(deps.regradeOptions ?? {}),
@@ -1238,6 +1341,7 @@ async function regradeFlowInner(
             ...(t.plan.rejudge.size
               ? { regrade_rejudged_because: [...t.plan.rejudge].map(([i, because]) => ({ assert: i, because })) }
               : {}),
+            ...(t.evidence.length ? { regrade_evidence: t.evidence } : {}),
             ...(args.fillRefs
               ? {
                   regrade_fill: b.onlyRefs,
