@@ -16,7 +16,7 @@ import { spawnProtocol } from "../runtime/protocol.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan, linkifyForTerminal, shouldLinkify } from "./display-translate.js";
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
-import { startEgressSidecar, registerCleanup } from "../egress/sidecar.js";
+import { startEgressSidecar, registerCleanup, removeContainerThenRelease } from "../egress/sidecar.js";
 import { Scenario } from "../types.js";
 import { LiveAgentSession, type AgentEvent, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { Run, type RunHooks } from "./run.js";
@@ -592,9 +592,8 @@ export async function cmdChat(args: string[]) {
     // sidecar exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra
     // failure (see watchHostLoopSidecar's doc comment).
     hostloopMarkTearingDown?.();
-    if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
-    deregisterContainerReap?.(); // the normal path has reaped the container; drop the signal-time thunks
-    deregisterHostLoopSidecarReap?.();
+    // Drops the signal-time thunks only once the container is gone (see executeScenario).
+    removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);
     sidecar?.teardown();
     rl.close(); // the one shared stdin interface — closed once, here
     // LAST in the teardown, unconditional on `record`: a chat that crashes before its first turn
