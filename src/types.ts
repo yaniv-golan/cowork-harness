@@ -35,6 +35,24 @@ export const PlatformBaseline = z.looseObject({
     // baseline synced before this field existed has no native binary staged, so hostloop falls back to
     // resolveHostAgentBinary's loud failure (never a silent tier downgrade).
     nativeStagedPath: z.string().optional(),
+    // The native build PER CPU ARCHITECTURE (Desktop >= 2.19675.0 stages per build, and the darwin-arm64 and
+    // darwin-x64 bundles have different checksums, so one version has a different <build> on each). The 12-hex
+    // build dir name, from the asar's SDK descriptor at sync time, for the version nativeStagedPath pins. The
+    // resolver checks the build ONLY against the host arch's entry; with no entry for the host arch it matches
+    // by version alone (with a note). Absent on older baselines, which keep the pre-map rule (the build named in
+    // nativeStagedPath, if any). nativeStagedPath itself is unchanged: the syncing machine's own path.
+    nativeBuilds: z
+      .object({
+        arm64: z
+          .string()
+          .regex(/^[0-9a-f]{12}$/)
+          .optional(),
+        x64: z
+          .string()
+          .regex(/^[0-9a-f]{12}$/)
+          .optional(),
+      })
+      .optional(),
     // Provenance of the Linux/arm64 ELF at stagedPath — shared, non-secret (just hashes), improves
     // repro/fidelity. `sha256`: hex SHA-256 of the ELF. `shaProvenance`: "measured-local" = hashed from
     // the staged binary at sync time (the trustworthy point-of-truth); "official-manifest" = copied from

@@ -1,6 +1,7 @@
 {
   "$comment": "GOLDEN spawn.env cross-check oracle for deriveSpawnEnv. HAND-TRANSCRIBED by a human reading the live app.asar env windows (Desktop 1.18286.0) — NOT copied from deriveSpawnEnv output, so the cross-check stays a genuine two-source check rather than a circular one. Each value below was read directly from the W1/W2/W3 window text and resolved by hand against the live fcache gate states. Update this file each release by re-reading the asar, then reconcile any divergence from generator output BEFORE committing. Provenance per key is in the sibling comment keys.",
   "$provenance": {
+    "CLAUDE_CODE_HOST_SCHEDULED_RUN": "Desktop 2.19675.0, hand-read from W1: `...I&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:`1`},...Sd(a)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:`1`},...` with `function Sd(e){return e.sessionType===t.WR}` and `t.WR` the literal `scheduled` — set only on scheduled-task runs. ABSENT from `env` below on purpose: the modeled session has no sessionType, so the key is ALLOWLISTED (never pinned) and its construction is guarded by sentinel S6g. A W1 key this oracle saw and deliberately does not list.",
     "W1_env_literal": "env:{CLAUDE_CONFIG_DIR ... ,systemPrompt: — the local-agent spawn options env object",
     "W2_OnA": "return{CLAUDE_CODE_ENTRYPOINT ... .sessionEnvVars()} — the base-env helper",
     "W3_Zrn": "return{DISABLE_AUTOUPDATER:\"1\" ...} — the shared-env helper spread by OnA",

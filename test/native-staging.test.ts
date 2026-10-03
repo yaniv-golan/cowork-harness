@@ -10,6 +10,7 @@ import {
   resolveHostAgentBinary,
   deriveNativeStagedPath,
   nativeManifestBuild,
+  nativeBuildsForPin,
   compareNativeCandidates,
 } from "../src/baseline.js";
 import type { PlatformBaseline } from "../src/types.js";
@@ -667,5 +668,104 @@ describe("deriveNativeStagedPath (sync) — notes", () => {
     });
     expect(r.warnings.join("\n")).not.toMatch(/WARNING/);
     expect(r.warnings.join("\n")).toMatch(/^NOTE:.*no \.verified marker/);
+  });
+});
+
+// A per-build pin is per CPU ARCHITECTURE: the darwin-arm64 and darwin-x64 bundles have different checksums, so
+// the same version stages under a different <build> on each. `agentBinary.nativeBuilds` records the build per
+// arch (from the asar's SDK descriptor), and the resolver checks the build ONLY against the host arch's entry.
+// With no entry for the host arch it matches by version, with a note. A baseline without the map keeps the old
+// rule (the build in nativeStagedPath).
+describe("per-arch native build pin (agentBinary.nativeBuilds)", () => {
+  const X = "fda00b160da4"; // the x64 build of the same version
+  const withArch = (arch: string, fn: () => void) => {
+    const saved = Object.getOwnPropertyDescriptor(process, "arch")!;
+    Object.defineProperty(process, "arch", { value: arch, configurable: true });
+    try {
+      fn();
+    } finally {
+      Object.defineProperty(process, "arch", saved);
+    }
+  };
+  const pinned = (root: string, nativeBuilds?: Record<string, string>) =>
+    ({
+      agentBinary: { nativeStagedPath: nested(root, "2.1.286", A), ...(nativeBuilds ? { nativeBuilds } : {}) },
+    }) as unknown as PlatformBaseline;
+
+  it("x64 host, arm64-only map, the x64 build staged → resolves by version, with a note naming the missing entry", () =>
+    withArch("x64", () => {
+      const root = stage([{ ver: "2.1.286", build: X }]);
+      const spy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      expect(resolveHostAgentBinary(pinned(root, { arm64: A }))).toBe(nested(root, "2.1.286", X));
+      expect(stderrOf(spy)).toMatch(
+        /pins no native build for x64 \(only arm64\); matching 2\.1\.286 by version — running build fda00b160da4/,
+      );
+    }));
+
+  it("x64 host, map with an x64 entry, that build staged → exact, no note", () =>
+    withArch("x64", () => {
+      const root = stage([{ ver: "2.1.286", build: X }]);
+      const spy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+      expect(resolveHostAgentBinary(pinned(root, { arm64: A, x64: X }))).toBe(nested(root, "2.1.286", X));
+      expect(stderrOf(spy)).toBe("");
+    }));
+
+  it("x64 host, map with an x64 entry, only a DIFFERENT x64 build staged → refuses (kind build)", () =>
+    withArch("x64", () => {
+      const root = stage([{ ver: "2.1.286", build: C }]);
+      expect(() => resolveHostAgentBinary(pinned(root, { arm64: A, x64: X }))).toThrow(AgentBinaryError);
+      expect(classifyNativeStagingDrift(pinned(root, { arm64: A, x64: X }))).toMatchObject({ kind: "build", pinnedBuild: X });
+    }));
+
+  it("arm64 host, a different arm64 build of the same version staged → still refuses (the host entry is checked)", () =>
+    withArch("arm64", () => {
+      const root = stage([{ ver: "2.1.286", build: B }]);
+      expect(() => resolveHostAgentBinary(pinned(root, { arm64: A, x64: X }))).toThrow(/build f2326db61802 is not staged/);
+    }));
+
+  it("arm64 host, the arm64 build staged → exact", () =>
+    withArch("arm64", () => {
+      const root = stage([
+        { ver: "2.1.286", build: A },
+        { ver: "2.1.286", build: X },
+      ]);
+      expect(resolveHostAgentBinary(pinned(root, { arm64: A, x64: X }))).toBe(nested(root, "2.1.286", A));
+    }));
+
+  it("an old flat baseline (no map) is unchanged on either arch: version match, any build", () => {
+    for (const arch of ["arm64", "x64"])
+      withArch(arch, () => {
+        const root = stage([{ ver: "2.1.284", build: X }]);
+        vi.spyOn(process.stderr, "write").mockReturnValue(true);
+        expect(resolveHostAgentBinary(pin(flat(root, "2.1.284")))).toBe(nested(root, "2.1.284", X));
+      });
+  });
+
+  it("a nested pin WITHOUT a map keeps the path's build as the pin (pre-map behaviour)", () =>
+    withArch("x64", () => {
+      const root = stage([{ ver: "2.1.286", build: X }]);
+      expect(() => resolveHostAgentBinary(pinned(root))).toThrow(AgentBinaryError);
+    }));
+});
+
+describe("nativeBuildsForPin (sync's agentBinary.nativeBuilds)", () => {
+  const ch = { sdkVersion: "2.1.286", nativeBuilds: { "darwin-arm64": A, "darwin-x64": "fda00b160da4" } };
+  it("records both arches for the pinned version", () =>
+    expect(nativeBuildsForPin(ch, "/r/claude-code/2.1.286/" + A + "/claude.app/Contents/MacOS/claude")).toEqual({
+      arm64: A,
+      x64: "fda00b160da4",
+    }));
+  it("records nothing when the descriptor is for another version (after an auto-update)", () =>
+    expect(nativeBuildsForPin(ch, "/r/claude-code/2.1.287/" + A + "/claude.app/Contents/MacOS/claude")).toBeUndefined());
+  it("records only the arches the descriptor names, and nothing without a channel", () => {
+    expect(
+      nativeBuildsForPin(
+        { sdkVersion: "2.1.286", nativeBuilds: { "darwin-x64": "fda00b160da4" } },
+        "/r/claude-code/2.1.286/claude.app/Contents/MacOS/claude",
+      ),
+    ).toEqual({
+      x64: "fda00b160da4",
+    });
+    expect(nativeBuildsForPin(null, "/r/claude-code/2.1.286/claude.app/Contents/MacOS/claude")).toBeUndefined();
   });
 });

@@ -246,6 +246,15 @@ export const PINNED_GATES: Record<string, string> = {
   // (not a descriptor): the asar maps it positionally in a `Promise.all` destructure whose result object
   // is `{…, coworkArtifacts: <the 2940196192 result>, …}`.
   "2940196192": "coworkArtifacts",
+  // Server config for the `cowork` server's send-message tool (read as a dynamic config
+  // `{enabled: boolean | string[], prompt?, alwaysLoad?}`; the tool is served to sessions with no sessionType
+  // whose model the config enables). The id and the registration are present in every Desktop asar on record
+  // (back to 1.18286.2); the tool was first OBSERVED served on this account at 2.16120.0. NOT MODELED by the
+  // harness — see docs/fidelity-gaps.md, "Not served: `send_user_message`". Pinned as a TRIPWIRE only, and
+  // through GATE_VALUE_PROJECTIONS, so the baseline records presence (on/source), `alwaysLoad` and a digest of
+  // the enabled condition — NEVER the served model list or a replacement tool description, neither of which
+  // belongs in a committed baseline. Name is a descriptor (the asar reads it by id only).
+  "3045399524": "sendUserMessageConfig",
   // The Chrome/CIC permission handler's session flag — force/on, and NOT the auto-mode rubric gate
   // (that is 3424551112, above). Pinned alongside it so the pair cannot be confused again: an earlier
   // pass attributed the rubric to this id purely because the rubric arrays sit near its call site.
@@ -473,7 +482,14 @@ export function extractAsarGateIds(files: Map<string, string>): string[] {
   //
   // The lookbehind (rather than consuming `[{,]`) is load-bearing: entries are adjacent, so a
   // delimiter-consuming match eats the comma the NEXT entry needs and silently drops every other one.
-  const bareKeyRe = /(?<=[{,])(\d{5,13}):(?=[A-Za-z_$])/g;
+  //
+  // THIRD SHAPE (Desktop 2.19675.0): the defaults map became a declarative RULE TABLE —
+  // `pWt={147471044:{rule:"always",value:!0},…,4055864154:{rule:"remote"},…}` — whose entries open with
+  // `{`, so the identifier-only lookahead above missed all 136 of them (55 phantom removals, 2 hidden
+  // additions on that release). Widened to that exact `{rule:` opener only, never to `{` in general: any
+  // other object-valued numeric key is noise. The shape occurs 0 times in every earlier Desktop asar on
+  // record, so no committed list changes.
+  const bareKeyRe = /(?<=[{,])(\d{5,13}):(?=[A-Za-z_$]|\{rule:)/g;
   const out = new Set<string>();
   for (const text of files.values())
     for (const m of [...text.matchAll(re), ...text.matchAll(bareKeyRe)]) {
@@ -631,6 +647,24 @@ export function checkAgentReleaseChannel(channel: AgentReleaseChannel | null, ag
   ];
 }
 
+/** Per-gate REDUCTION of the served value before it is recorded. A pinned gate normally records its
+ *  value verbatim; an entry here replaces it with exactly the fields the tripwire needs, so a gate whose
+ *  value carries account-shaped detail (model lists, served prompt text) can still be pinned without
+ *  that detail ever reaching a committed baseline. Applied in `decodeFcacheGates`, the only reader. */
+const GATE_VALUE_PROJECTIONS: Record<string, (value: unknown) => unknown> = {
+  // `alwaysLoad` (production reads it as `alwaysLoad ?? false`, so absent and non-object both mean false) and a
+  // DIGEST of the `enabled` condition — which models the tool is served to — never the condition itself. The
+  // digest is what makes the tripwire see the change it exists for (a model added or removed, or `true`), and it
+  // is order-insensitive so a server-side reorder of the same set is not a diff. NOTE the limit of the privacy
+  // property: a digest of a short list of known model ids can be CONFIRMED by guessing candidate lists. It keeps
+  // the list out of the file, not out of reach of a determined reader.
+  "3045399524": (value) => {
+    const v = typeof value === "object" && value !== null ? (value as { alwaysLoad?: unknown; enabled?: unknown }) : {};
+    const enabled = Array.isArray(v.enabled) ? [...v.enabled].map(String).sort() : (v.enabled ?? null);
+    return { alwaysLoad: v.alwaysLoad === true, enabledDigest: fcacheContentHash({ enabled }) };
+  },
+};
+
 export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string, GateState> | null {
   if (!existsSync(path)) return null;
   let buf: Buffer;
@@ -657,7 +691,8 @@ export function decodeFcacheGates(path = join(SUPPORT, "fcache")): Record<string
       if (DARK_GATES.has(id)) out[id] = { id, name, on: false, source: "absent", value: undefined };
       continue;
     }
-    out[id] = { id, name, on: !!f.on, source: String(f.source ?? "defaultValue"), value: f.value };
+    const project = GATE_VALUE_PROJECTIONS[id];
+    out[id] = { id, name, on: !!f.on, source: String(f.source ?? "defaultValue"), value: project ? project(f.value) : f.value };
   }
   return out;
 }
@@ -1469,7 +1504,7 @@ function extractFromAsar(
     for (const f of checkEgressContractFacts(bundle, bundleFiles)) flag(unknown, f);
     // drift guard: mountLayout modes are hand-authored (not synced) — verify the binary-verified
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
-    for (const f of checkMountModeFacts(bundle)) flag(unknown, f);
+    for (const f of checkMountModeFacts(bundle, bundleFiles)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
@@ -1556,7 +1591,9 @@ function extractFromAsar(
  * see the baselines' `$comment_modes`). Pure over the bundle string → token-free unit-testable.
  *
  * Facts (app.asar 1.12603.1): uploads is mounted read-only (`mode:"ro"`); outputs + projects default to
- * `"rw"` (delete DENIED) via the `IX` resolver, whose delete-approved branch is `…?"rwd":"rw"`.
+ * `"rw"` (delete DENIED) via the `IX` resolver, whose delete-approved branch is `…?"rwd":"rw"`. From Desktop
+ * 2.16120.0 OUTPUTS no longer goes through that resolver: it is `outputsMountMode` ("rwd" for a normal session) —
+ * see the anchor at the top of checkMountModeFacts. Connected folders still use the resolver.
  */
 /**
  * Code-shape tripwires: string-occurrence counts over the asar bundle that watch a feature whose
@@ -1609,9 +1646,63 @@ export function checkCodeTripwires(bundle: string): string[] {
 /** Sites building the delete-deny resolver on the newest baseline (Desktop 1.37937.1): the VM-loop
  *  mount-set builder and host-loop `computeBashMounts`. A FLOOR, not an equality — see its use site. */
 const MOUNT_DELETE_DENY_MIN_SITES = 2;
+/** Call sites of `outputsMountMode` on the newest baselines (2.16120.0, 2.19675.0): the host-loop, VM-loop and shares
+ *  mount builders. A FLOOR — see its use in checkMountModeFacts. */
+const OUTPUTS_MODE_MIN_CALL_SITES = 3;
 
-export function checkMountModeFacts(bundle: string): string[] {
+export function checkMountModeFacts(bundle: string, files: Map<string, string>): string[] {
   const flags: string[] = [];
+  // The OUTPUTS mount (Desktop >= 2.16120.0). Its mode no longer goes through the delete-deny resolver below:
+  // all three mount builders (host-loop computeBashMounts, the VM-loop builder, the shares builder) call the
+  // exported `outputsMountMode`, `function <B>(<e>){return <e>?"rw":"rwd"}` with <e> = isBridgeSession — so
+  // deletes in outputs are ALLOWED for a normal session and denied only for a bridge session. The baselines
+  // record outputs as "rwd" on that basis. The resolver's floor cannot see this (its `?"rwd":"rw"` count is 2
+  // in 2.9939.4, 2.16120.0 and 2.19675.0 alike), so pin the export and its exact body. Resolved in the chunk
+  // that EXPORTS it — minified names repeat across chunks. Absent before 2.16120.0, where this flags, which is
+  // correct: that install does not build what the pinned baselines describe.
+  {
+    const exportRe = /(?<![\w$])outputsMountMode:\(\)=>([\w$]+)/;
+    const exporting = [...files].find(([, c]) => exportRe.test(c));
+    const site = exporting?.[1];
+    const local = site ? exportRe.exec(site)![1] : undefined;
+    const header = local && site ? new RegExp(`function ${reEsc(local)}\\(([\\w$]+)\\)\\{`).exec(site) : null;
+    const body = header && site ? braceBodyOf(site, header[0]) : null;
+    // The CALLERS, so "every mount builder uses it" is pinned and not just the function. The builders live in
+    // another chunk and call it through the module's re-export alias — `defineProperty(exports,"<a>",…return <B>)`,
+    // `<ns>=require("./<exporting chunk>")`, then `<ns>.<a>(` — 3 sites in 2.16120.0 and 2.19675.0 (host-loop
+    // computeBashMounts, the VM-loop builder, the shares builder). Direct calls of <B> inside its own chunk count
+    // too. Only a MOUNT site counts — the call must be the `mode:` value — so an unrelated call of the same alias
+    // cannot stand in for a builder that stopped using it. A FLOOR, as for the resolver below: a builder going back
+    // to a hardcoded mode for outputs must flag, a fourth caller is benign. The real 2.16120.0 and 2.19675.0 asars
+    // each have exactly 3 such `mode:` sites.
+    let callSites = 0;
+    if (exporting && local) {
+      const [chunkName, chunk] = exporting;
+      callSites += (chunk.match(new RegExp(`mode:${reEsc(local)}\\(`, "g")) ?? []).length;
+      const alias = new RegExp(`defineProperty\\(exports,"([\\w$]+)",\\{[^}]*?return ${reEsc(local)}\\}`).exec(chunk)?.[1];
+      if (alias)
+        for (const [name, other] of files) {
+          if (name === chunkName) continue;
+          for (const m of other.matchAll(new RegExp(`(?<![\\w$.])([\\w$]+)=require\\("\\./${reEsc(chunkName)}"\\)`, "g")))
+            callSites += (other.match(new RegExp(`mode:${reEsc(m[1])}\\.${reEsc(alias)}\\(`, "g")) ?? []).length;
+        }
+    }
+    const why = !local
+      ? "the outputsMountMode export is gone"
+      : body === null
+        ? `outputsMountMode's function ${local}() does not resolve in its chunk`
+        : body !== `return ${header![1]}?"rw":"rwd"`
+          ? `outputsMountMode no longer returns exactly \`<isBridgeSession>?"rw":"rwd"\` (body: \`${body.slice(0, 80)}\`)`
+          : callSites < OUTPUTS_MODE_MIN_CALL_SITES
+            ? `outputsMountMode is called at ${callSites} call site(s), below the floor of ${OUTPUTS_MODE_MIN_CALL_SITES} — ` +
+              "a mount builder no longer takes the outputs mode from it"
+            : undefined;
+    if (why)
+      flags.push(
+        `mountLayout: ${why} — the outputs mount mode the baselines record ("rwd" for a normal session, "rw" for a bridge ` +
+          "session) may have changed; re-derive the outputs entry of mountLayout.mounts (its purpose names the construct)",
+      );
+  }
   // The delete-deny resolver. A bare `.test()` was the same single-anchor hole the per-mount checks below
   // just closed: the resolver is now built on BOTH lanes (1 site in Desktop 1.34493.1, 2 from 1.37937.0),
   // so once one lane has it, `.test()` cannot see the other lane losing it. Guard a FLOOR rather than an
@@ -1623,7 +1714,7 @@ export function checkMountModeFacts(bundle: string): string[] {
   if (denySites < MOUNT_DELETE_DENY_MIN_SITES)
     flags.push(
       `mountLayout: the delete-deny resolver (IX \`…?"rwd":"rw"\`) is built at ${denySites} site(s), below the pinned floor of ` +
-        `${MOUNT_DELETE_DENY_MIN_SITES} — an execution lane lost delete-deny resolution, so outputs/projects default mode may have ` +
+        `${MOUNT_DELETE_DENY_MIN_SITES} — an execution lane lost delete-deny resolution, so the connected-folder default mode may have ` +
         "changed on that lane; re-derive mountLayout.mounts[].mode per lane (see baselines $comment_modes)",
     );
   // Every mount whose mode is HARDCODED at the mount-set builder, rather than resolved through
@@ -1632,7 +1723,8 @@ export function checkMountModeFacts(bundle: string): string[] {
   // with a live approved-list read. The hardcoded modes below are identical either way, which is why
   // one set of anchors covers both — but a reader reasoning about WHEN a mode is decided needs this.
   // the delete-deny resolver above. Read first-party from the builder, which assembles the whole set:
-  // outputs and each connected folder go through the resolver (`rw`, or `rwd` once approved) while these
+  // each connected folder goes through the resolver (`rw`, or `rwd` once approved; outputs has its own
+  // `outputsMountMode` from 2.16120.0, anchored above) while these
   // are pinned `"ro"`. Worth pinning individually because a mount silently moving from `ro` to a
   // writable mode is a containment change we would otherwise model wrongly with nothing failing.
   //
@@ -3257,6 +3349,15 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   // allowlist entry cannot silently start admitting an unconditional or re-keyed construction.
   CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:
     "frameArtifactsEnabled server-flag-conditional (default absent); shared-predicate conditionality asserted by S6d",
+  // Desktop 2.19675.0. One W1 construction site: `...Sd(a)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}`, with
+  // `function Sd(e){return e.sessionType===t.WR}` and `t.WR` resolving to the literal "scheduled" — set
+  // only for scheduled-task runs. The harness models an interactive session (no sessionType), so there is
+  // no value to pin; pinning would bake a scheduled-only "1" into every modeled spawn. Allowlisting is
+  // unconditional by construction (resolveInto returns on the hit), so S6g asserts that every construction
+  // stays guarded by exactly that predicate — without it, Desktop widening the condition would be admitted
+  // here in silence.
+  CLAUDE_CODE_HOST_SCHEDULED_RUN:
+    "scheduled-task sessionType-conditional (sessionType==='scheduled'); the modeled interactive session has no sessionType; guarded by S6g",
   CLAUDE_CODE_ATTRIBUTION_HEADER: "3p-provider-only branch; harness models 1p",
   // Doubly conditional, and TWO traps a future reader will hit in this order:
   // (1) The managed-settings UI copy for this key names Cowork explicitly ("Raises how long Cowork, Chat
@@ -4265,6 +4366,80 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
       miss(
         "S6f artifact host grant",
         `${GRANT_KEY} is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it`,
+      );
+  }
+  // S6g (Desktop 2.19675.0): CLAUDE_CODE_HOST_SCHEDULED_RUN is ALLOWLISTED as scheduled-run-only, and that
+  // claim rests entirely on this guard (the allowlist hit is unconditional). Same scoping rules as S6f, for
+  // the same reasons: a BUNDLE-WIDE COUNT (the key may move to another chunk; a second construction may
+  // appear beside the guarded one), with export-table declarations (`KEY:()=>local`) excluded and quoted
+  // keys (`"KEY":…`) counted. Every construction must be one of two guarded shapes:
+  //   call form   `...<P>(<s>)&&{KEY:…}` where `<P>` resolves, IN THE SPREAD'S OWN CHUNK, to EXACTLY
+  //               `function <P>(<e>){return <e>.sessionType===<C>}`, `<C>` is "scheduled" or a (namespace)
+  //               reference whose binding is the literal "scheduled", and `<s>` is the session object
+  //               (read as `<s>.sessionType` beside the spread);
+  //   inline form `...<s>.sessionType==="scheduled"&&{KEY:…}`.
+  // Matched PER CHUNK, never by searching for the spread text: minified names repeat across chunks, so two
+  // chunks can hold byte-identical spreads over different `<P>` bodies, and a text search would resolve both
+  // in whichever chunk comes first. An exact-body match is deliberate: a widened (`||…`), negated, re-keyed or
+  // constant predicate must fail. So must a minifier reshape — an arrow predicate (`const P=e=>…`) or optional
+  // chaining (`e?.sessionType`) fails closed ON PURPOSE, as S6d/S6f do; update the shapes here when it does.
+  // Zero constructions is a failure only while the bundle still names the key (the bundled CLI declares it). On
+  // an older Desktop (2.7032.0 to 2.16120.0) the CLI declares it but Desktop never built it, so a maintainer who
+  // syncs an un-updated Desktop sees this flag, and the message says so rather than claiming a removal. A bundle
+  // that never mentions the key has nothing to guard.
+  {
+    const SCHED_KEY = "CLAUDE_CODE_HOST_SCHEDULED_RUN";
+    const schedMiss = (why: string) => miss("S6g scheduled-run env key", why);
+    const chunks = files ? [...files.values()] : [bundle];
+    const ctorRe = new RegExp(`(?:"${SCHED_KEY}"|'${SCHED_KEY}'|(?<![\\w$"'])${SCHED_KEY}):(?!\\(\\)=>)`, "g");
+    const keyOpen = `\\{["']?${SCHED_KEY}["']?:`;
+    const callRe = new RegExp(`\\.\\.\\.([\\w$]+)\\(([\\w$]+)\\)&&${keyOpen}`, "g");
+    const inlineRe = new RegExp(`\\.\\.\\.[\\w$]+\\.sessionType==="scheduled"&&${keyOpen}`, "g");
+    let ctors = 0;
+    let guarded = 0;
+    for (const chunk of chunks) {
+      ctors += [...chunk.matchAll(ctorRe)].length;
+      const callSpreads = [...chunk.matchAll(callRe)];
+      guarded += callSpreads.length + [...chunk.matchAll(inlineRe)].length;
+      for (const s of callSpreads) {
+        const [, fn, arg] = s;
+        const at = s.index ?? 0;
+        if (!new RegExp(`(?<![\\w$.])${reEsc(arg)}\\.sessionType(?![\\w$])`).test(chunk.slice(Math.max(0, at - 3000), at + 3000))) {
+          schedMiss(`the spread's predicate ${fn}() is called on ${arg}, which is not read as the session's sessionType beside it`);
+          continue;
+        }
+        const header = new RegExp(`function ${reEsc(fn)}\\(([\\w$]+)\\)\\{`).exec(chunk);
+        const body = header ? braceBodyOf(chunk, header[0]) : null;
+        if (!header || body === null) {
+          schedMiss(`the spread's predicate ${fn}() does not resolve to a function in its chunk`);
+          continue;
+        }
+        const cmp = body.match(new RegExp(`^return ${reEsc(header[1])}\\.sessionType===("scheduled"|[\\w$]+(?:\\.[\\w$]+)?)$`));
+        if (!cmp) {
+          schedMiss(
+            `the predicate ${fn}() is no longer exactly \`return <s>.sessionType===<scheduled>\` — it may now admit other sessions`,
+          );
+          continue;
+        }
+        if (cmp[1] === '"scheduled"') continue;
+        const ref = resolveNamespaceRef(cmp[1], chunk, files);
+        if (!ref) schedMiss(`the predicate's comparand ${cmp[1]} could not be resolved`);
+        else if (!new RegExp(`(?<![\\w$.])${reEsc(ref.local)}="scheduled"(?![\\w$])`).test(ref.chunk))
+          schedMiss(`the predicate's comparand ${cmp[1]} no longer resolves to "scheduled"`);
+      }
+    }
+    if (ctors === 0 && bundle.includes(SCHED_KEY))
+      schedMiss(
+        `${SCHED_KEY} is named in the bundle (the bundled CLI's env schema declares it) but Desktop constructs it nowhere ` +
+          "the guard can count. On a Desktop before 2.19675.0 that is expected — the CLI knew the key before Desktop set " +
+          "it, and sync reads only the installed Desktop. On 2.19675.0 or later the construction was either dropped " +
+          "(remove the allowlist entry together with this check) or reshaped beyond the counter; reclassify",
+      );
+    else if (ctors !== guarded)
+      schedMiss(
+        `${ctors} construction(s) of ${SCHED_KEY} in the bundle but ${guarded} spread(s) guarded ` +
+          'on sessionType==="scheduled" — at least one construction is unguarded or newly shaped, so the allowlist\'s ' +
+          "'scheduled runs only' claim no longer holds; reclassify",
       );
   }
   // S8 (widened, Desktop 1.28929.0): pin the WHOLE tools[] tail through its closing bracket, not just the

@@ -1,9 +1,12 @@
 // A recorded transcript's non-assistant/user lines are never committed. Real runs' transcripts carry agent-binary
 // text that is not ours to publish: the built-in sub-agent prompt (a `prompt_snapshot` attachment), the tool and
 // agent listings, and the frame the binary wraps around a sub-agent's report. This guard covers every committed
-// transcript (.jsonl under test/fixtures/ and examples/); the pre-commit hook stops a new one at the door.
+// transcript (.jsonl under test/fixtures/ and examples/) AND every committed cassette (*.cassette.json, whose
+// `events` are the same transcript lines as escaped JSON strings); the pre-commit hook stops a new one at the door.
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
 const REPO = resolve(import.meta.dirname, "..");
@@ -22,6 +25,72 @@ const SENTINELS = [
 ];
 
 const files = [...jsonl(join(REPO, "test", "fixtures")), ...jsonl(join(REPO, "examples"))];
+
+// Every committed cassette, from git (a cassette can live outside test/fixtures and examples, e.g. test/evals).
+const cassettes = execFileSync("git", ["ls-files", "*.cassette.json"], { cwd: REPO, encoding: "utf8" }).split("\n").filter(Boolean);
+// In a cassette the transcript lines are JSON STRINGS, so an attachment line appears with escaped quotes.
+const ATTACHMENT = /"type":\s*"attachment"|\\"type\\":\s*\\"attachment\\"/;
+
+describe("committed cassettes carry no agent-binary text", () => {
+  it("there are cassettes to check (the guard is not vacuous)", () => {
+    expect(cassettes.length).toBeGreaterThanOrEqual(4);
+  });
+  for (const f of cassettes)
+    it(f, () => {
+      const text = readFileSync(join(REPO, f), "utf8");
+      expect(ATTACHMENT.test(text), `${f} has an attachment line`).toBe(false);
+      for (const s of SENTINELS) expect(text.includes(s), `${f} contains ${s}`).toBe(false);
+    });
+});
+
+// The hook half, end to end in a scratch repo (a stub CLI stands in for verify-cassettes, which is not what this
+// tests): a staged cassette carrying a sentinel is blocked; the same cassette without it is not blocked for it.
+describe("pre-commit hook: a staged cassette with agent-binary text is blocked", () => {
+  const run = (cassetteBody: string): { code: number; out: string } => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-transcript-hook-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
+    git("init", "-q");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "T");
+    mkdirSync(join(dir, ".githooks"), { recursive: true });
+    cpSync(join(REPO, ".githooks", "pre-commit"), join(dir, ".githooks", "pre-commit"));
+    chmodSync(join(dir, ".githooks", "pre-commit"), 0o755);
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    writeFileSync(
+      join(dir, "dist", "cli.js"),
+      'process.stdout.write(process.argv.includes("json") ? \'{"results":[]}\' : "stub\\n"); process.exit(0);',
+    );
+    mkdirSync(join(dir, "test", "evals"), { recursive: true });
+    writeFileSync(join(dir, "test", "evals", "x.cassette.json"), cassetteBody);
+    git("add", "test/evals/x.cassette.json");
+    try {
+      return { code: 0, out: execFileSync("bash", [join(dir, ".githooks", "pre-commit")], { cwd: dir, encoding: "utf8", stdio: "pipe" }) };
+    } catch (e) {
+      const err = e as { status?: number; stdout?: string; stderr?: string };
+      return { code: err.status ?? -1, out: `${err.stdout ?? ""}${err.stderr ?? ""}` };
+    }
+  };
+  const body = (text: string) =>
+    JSON.stringify(
+      { generator: "cowork-harness", events: [JSON.stringify({ type: "user", message: { content: [{ type: "text", text }] } })] },
+      null,
+      2,
+    );
+  it.each([["[Subagent hand-back] frame"], ["use SendMessage with to: 'x'"], ["prompt_snapshot"]])("blocks %s", (text) => {
+    const r = run(body(text));
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/carries agent-binary text/);
+  });
+  it("blocks an escaped attachment line inside a cassette", () => {
+    const r = run(
+      JSON.stringify({ generator: "cowork-harness", events: [JSON.stringify({ type: "attachment", attachment: {} })] }, null, 2),
+    );
+    expect(r.out).toMatch(/carries agent-binary text/);
+  });
+  it("control: a clean cassette is not blocked for agent-binary text", () => {
+    expect(run(body("[subagent report]\n  the body")).out).not.toMatch(/carries agent-binary text/);
+  });
+});
 
 describe("committed transcripts carry no agent-binary text", () => {
   it("there are transcripts to check (the guard is not vacuous)", () => {

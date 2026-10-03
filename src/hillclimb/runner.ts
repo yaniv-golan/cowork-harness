@@ -27,6 +27,7 @@ import { pathsInsideMounts } from "./answer-key.js";
 import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputCopy } from "./outputs.js";
 import { headroom, pairwiseHints } from "./check.js";
 import { loadFlowSnapshot } from "./schema-check.js";
+import { hillclimbRunLabel } from "../run/run-labels.js";
 
 /** What one job hands back. */
 export interface JobReport {
@@ -377,7 +378,7 @@ async function run(
       }
     };
     const tick = setInterval(progress, deps.tickMs ?? 30_000);
-    const runLabel = `hillclimb:${basename(flowArg)}:${v}`;
+    const runLabel = hillclimbRunLabel(flowArg, v);
     const flowHash = flowHashOf(flowAbs);
     const models = new Set<string>();
     markStarted();

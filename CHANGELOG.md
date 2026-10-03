@@ -12,9 +12,45 @@ All notable changes to this project are documented here. The format is based on
   before its manifest, instead of writing a report with every run errored, and `eval --dry-run` makes the same
   check. `regrade` makes it before its first grade. A `semantic_pairwise` assert graded by the host `claude`
   triggers it, as `semantic_matches` does. All exit 2, before any model call.
+- **`record` no longer writes the recording account's model menu into a cassette.** The agent's `initialize` response
+  lists the models the account is offered, with their display copy and, on a pay-per-token account, per-Mtok
+  pricing; a committed cassette published it. `record` now empties that `models` array before writing, on every
+  recording, `--no-redact` included. Nothing in replay, the verdict, staleness or the fingerprint reads it, and the
+  write is held to the same verdict-preservation check as policy redaction. A cassette recorded by an older harness
+  may still carry it; re-record to drop it. The committed cassettes are scrubbed.
+- **`record` also drops a subscription account's `rate_limit_info` and the agent's hand-back frame from every
+  cassette.** A recorded `rate_limit_event` carried the account's usage (utilization, reset times, overage state); it
+  is now emptied to `{}`. The agent binary's own frame around a sub-agent's report (the hand-back line before the
+  report, and the "use SendMessage" continuation hint after it) is replaced by `[subagent report]`, with the report
+  body and `agentId` kept. Nothing in `src` reads either. `rehash` and `replay --reassert --write` apply the same
+  scrub when they rewrite a cassette. If the scrub's verdict-preservation check cannot pass, `record` writes the
+  cassette unscrubbed with a warning naming the scrub, instead of refusing and losing the paid run. The committed
+  cassettes are scrubbed. The pre-commit hook and the repo guard now refuse a staged or committed `*.cassette.json`
+  carrying the agent's hand-back frame or other agent-binary text, as they already did for `.jsonl` transcripts.
 
 ### Upgrade notes
 
+- **Cassettes: re-record — the agent moved.** `latest` now resolves to `desktop-2.19675.0`, which pins agent **2.1.286**
+  (was 2.1.284). A cassette recorded through `baseline: latest` reports
+  `[stale] baseline moved 2.16120.0 → 2.19675.0 since record — re-record`: `verify-cassettes` and `replay --strict` exit
+  `1` on it, and a plain `replay` warns and keeps its exit code.
+  - At `container`, `microvm` and `hostloop`, re-record. A re-stamp clears the finding but leaves an `agent-version:` note,
+    because the recording ran 2.1.284. Agent 2.1.286 also renames its builtin plugins in the init event (`agents-md` →
+    `cc-plugin-agents-md`, `telemetry` → `cc-plugin-telemetry`) and lists a `plugin-types` slash command, so an
+    assertion on those names needs updating. At `hostloop` the native binary also loads a builtin
+    `cc-plugin-sec-default`, which the container ELF does not list. The init event's `capabilities[]` gains
+    `sdk_mcp_manifests`, `sdk_mcp_tools_list_changed` and `ui_surface_v1`.
+  - At `protocol` a re-stamp is sound: the agent there is the `claude` on your `PATH`, and the first-party spawn env, the
+    Cowork system prompt, the sub-agent append, the egress allowlist and the spawn tools are unchanged.
+  - The committed cassettes: `example-pdf-skill`, `dispatch-shell` and `hostloop-computer-links` are re-recorded, and
+    `example-multiselect-gate` is re-stamped.
+- **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
+  the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
+- **`hostloop` on an Intel (x64) Mac: the native build pin is per architecture.** `desktop-2.19675.0` records the
+  native build for each arch (`agentBinary.nativeBuilds`), and the harness holds the staged binary to the entry for
+  the host's arch, so an x64 Mac runs its own x64 build of 2.1.286 with no env var. A baseline with the map but no
+  entry for your arch matches by version, with a stderr note. If you hand-edit a baseline's `nativeStagedPath`, keep
+  `nativeBuilds` consistent with it, or drop the map to fall back to the build in the path.
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
   `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
@@ -31,6 +67,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`prune --include-hillclimb`.** It ranks hillclimb-labelled runs with every other run, so `--keep-last`
+  applies to them. It deletes the `hillclimb regrade` and `hillclimb freeze-ref` evidence of every flow under
+  the runs root, a loop still running included, and `freeze-ref` re-reads a frozen reference's source run: pass it
+  only once every climb there is finished, or scope it with the `<runs-dir>` the climb used.
 - **A question batch your `answers:` script only partly matches is now reported, not just warned about.**
   When one `AskUserQuestion` carries several sub-questions and the scripted rules match some but not all,
   the whole batch goes to the `on_unanswered` fallback, so the matched answers are not delivered. That stays
@@ -428,6 +468,27 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **New baseline `desktop-2.19675.0`** (agent **2.1.286**, stable channel), which `latest` resolves to.
+  - Recorded changes: `spawnEnvKeys` gains `CLAUDE_CODE_HOST_SCHEDULED_RUN` (see below), `asarGateIds` gains 18 ids and
+    loses 2, and the native agent pin names its per-build directory (`claude-code/2.1.286/<build>/…`), which Desktop
+    2.19675.0 introduced, with the build for each CPU arch in the new `agentBinary.nativeBuilds` (see Upgrade notes).
+  - Unchanged from `desktop-2.16120.0`: the Cowork system prompt, the sub-agent append fingerprints, the egress
+    contract, the model/effort config and the first-party `spawn.env`.
+  - The Desktop init surface was read from 3 local frames. Desktop's `cowork` server declares `send_user_message` in
+    some of them; it is model-gated and was already served on 2.16120.0 (see Documentation). None of the three
+    carried the `create_artifact` family; sessions that get the native `Artifact` tool never do.
+- **`sync` classifies `CLAUDE_CODE_HOST_SCHEDULED_RUN`, which Desktop 2.19675.0 adds to the Cowork spawn env.**
+  Desktop sets it to `"1"` only on scheduled-task runs (`sessionType === "scheduled"`). The harness models an
+  interactive session, so the key is allowlisted and does not enter `spawn.env`. A new check keeps that honest:
+  `sync` refuses if any construction of the key is not guarded by exactly that condition (unconditional, a widened
+  or negated predicate, a second construction elsewhere, a quoted key, a predicate called on something other than the
+  session), resolving each guard in its own bundle chunk. It also refuses when the bundle still names the key but
+  constructs it nowhere it can count. A minifier reshape of the predicate fails closed on purpose.
+- **`sync` pins the server config of Cowork's send-message tool (gate `3045399524`) as a tripwire.** The baseline
+  records whether it is served (`on`, `source`), its `alwaysLoad` flag and `enabledDigest`, a digest of which models
+  it is enabled for. The model list itself is never written. A model added to or removed from that set, or the tool
+  enabled for every model, changes the digest and shows up as a `sync --diff` line. The tool itself is not modeled
+  (see Documentation).
 - **`eval` no longer makes a row of an assertion whose only keys are verdict modifiers** (`allow_stall`,
   `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
   constant across both arms and only enlarged the correction family, which weakened the correction for the
@@ -458,6 +519,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`sync --diff` reported 57 gate ids as removed on Desktop 2.19675.0 where 2 were.** That release ships its gate
+  defaults as a rule table (`<id>:{rule:…}`), which `provenance.asarGateIds` did not read, so it also missed 2 new
+  ids. The table is now read. The shape occurs in no earlier Desktop release, so no committed baseline changes:
+  re-extracting `desktop-2.16120.0` reproduces its recorded 493 ids exactly.
+- **`prune` keeps hillclimb runs.** A run labelled `hillclimb:…` is not pruned and takes no `--keep-last` slot, so
+  a routine `prune` during a climb leaves the runs `hillclimb regrade` and `hillclimb freeze-ref` read. A run you
+  labelled `--label hillclimb:…` yourself is kept the same way. `prune` prints how many it kept per scenario and
+  label, and lists each one under `--dry-run`. A bare `prune` therefore deletes less than before. A `sess-*` dir
+  follows the pinned rule (`--pinned-older-than`) even when it carries a hillclimb label, and a run dir that is a
+  symlink is not read through, so it is an ordinary run (pruning it removes only the link). The eval note also
+  finds an eval's label in the latest turn's `result.json` when `status.json` is missing or unreadable.
+- **`prune` keeps a run whose `status.json` says `running` while it is still being updated or its process is
+  alive (up to 24h).** Such a run is skipped under every flag, and the final line counts it. "Still being
+  updated" uses the status staleness window (`COWORK_HARNESS_STATUS_STALE_MS`, default 15s, read from `prune`'s own
+  environment). A run frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json`
+  that is not a regular file is not read, so a FIFO there cannot hang `prune`.
 - **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
   registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
   so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a
@@ -682,9 +759,21 @@ All notable changes to this project are documented here. The format is based on
   does, and prints a stderr note naming the version the link points at. When that symlinked dir holds only an
   unfinished build or an unrecognised entry, the error names it with cause `unfinished` or `unknown-layout`,
   instead of reporting that nothing is staged.
+- **The `desktop-2.16120.0` and `desktop-2.19675.0` baselines record the `outputs` mount as `rwd`.** From Desktop
+  2.16120.0 every mount builder takes the outputs mode from one exported function, `outputsMountMode`, which allows
+  deletes for a normal session and denies them only for a bridge session. Both baselines said `rw` (delete denied).
+  Connected folders keep the approved-list rule. `sync` now pins that function and its non-bridge `"rwd"`, so a change
+  is an unknown delta; the delete-deny resolver's site count could not see this. Nothing the harness runs reads the
+  recorded mode, so no cassette goes stale. The harness's own outputs-delete check is unchanged; see
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them).
 
 ### Documentation
 
+- `docs/fidelity-gaps.md` documents Cowork's send-message tool (`mcp__cowork__send_user_message`), which the harness
+  does not serve. Desktop offers it, pre-approved, to ordinary sessions on the models a server config enables
+  (observed on Opus 5.5 sessions on Desktop 2.16120.0 and 2.19675.0, not on Opus 5). No Desktop release introduced
+  this gap: the tool's registration is in every Desktop on record, gated server-side, so it applies to every shipped
+  baseline.
 - The companion skill has a `hillclimb` reference (`references/hillclimb.md`, indexed in `SKILL.md` and
   `llms.txt`) for driving a `/claude-api hillclimb` loop with `hillclimb run`, `check`, `state-template`,
   `freeze-ref` and `regrade`: the flags, the snapshot and harness gate, refusals, exit codes, pairwise references,

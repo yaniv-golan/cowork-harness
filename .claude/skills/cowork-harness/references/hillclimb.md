@@ -1,6 +1,6 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`). It needs a `cowork-harness` whose `--help`
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). It needs a `cowork-harness` whose `--help`
 lists `hillclimb`. The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.
@@ -166,7 +166,10 @@ cowork-harness hillclimb regrade evals/ --flow .claude/hillclimb/flow --fill-ref
 
 It re-grades the flow's scored rows from their kept run dirs (found by `meta.run_id` under the current runs root)
 and rewrites each row through the same producer `run` writes it with. Pass the same `--run-dir` /
-`COWORK_HARNESS_RUNS_DIR` the runs were written with, or every row is listed as having no kept run dir.
+`COWORK_HARNESS_RUNS_DIR` the runs were written with, or every row is listed as having no kept run dir. A bare
+`prune` keeps hillclimb-labelled runs; `prune --include-hillclimb` deletes them for every flow under the runs root,
+a loop still running included, and `freeze-ref` re-reads a frozen reference's source run, so pass it only once
+every climb there is finished.
 
 - **Default:** the row is rebuilt from the scenario as it is now, so a changed value, an added or a removed assert
   is applied. Every assert no judge grades and each `expect_denied` host is re-evaluated from the kept run (as

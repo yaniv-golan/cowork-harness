@@ -1,17 +1,21 @@
 {
   "baselineVersion": 1,
-  "appVersion": "2.16120.0",
-  "agentVersion": "2.1.284",
+  "appVersion": "2.19675.0",
+  "agentVersion": "2.1.286",
   "agentBinary": {
-    "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.284/claude",
+    "stagedPath": "~/Library/Application Support/Claude/claude-code-vm/2.1.286/claude",
     "format": "elf-aarch64",
-    "nativeStagedPath": "~/Library/Application Support/Claude/claude-code/2.1.284/claude.app/Contents/MacOS/claude",
-    "sha256": "e242ab7f785347fcc5268b5ed19db824eceaef5ab88371ef10acff5dc91abf17",
-    "releaseBaseUrl": "https://downloads.claude.ai/claude-code-releases/rc/16cbb4ddeeb473f57fd8d5b713764903d7928e66",
+    "nativeStagedPath": "~/Library/Application Support/Claude/claude-code/2.1.286/f2326db61802/claude.app/Contents/MacOS/claude",
+    "sha256": "0292fa22ac2fd43e16be9d0e511ddd8347280d6e0ebaca744ef5b27e05d8d0f8",
+    "releaseBaseUrl": "https://downloads.claude.ai/claude-code-releases",
     "shaProvenance": "measured-local",
     "manifestChecksumMatch": true,
     "stringSentinels": {
       "tengu_saddle_lantern": 2
+    },
+    "nativeBuilds": {
+      "arm64": "f2326db61802",
+      "x64": "fda00b160da4"
     }
   },
   "guest": {
@@ -332,8 +336,8 @@
       "CLAUDE_CODE_SESSION_LOG"
     ]
   },
-  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-09-30 on macOS arm64.",
-  "capturedAt": "2026-09-30",
+  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-10-02 on macOS arm64.",
+  "capturedAt": "2026-10-02",
   "platform": "darwin-arm64",
   "settings": {
     "autoMountFolders": {
@@ -347,7 +351,7 @@
   },
   "provenance": {
     "asarPath": "/Applications/Claude.app/Contents/Resources/app.asar",
-    "asarFingerprint": "0044e3b13ee046cb",
+    "asarFingerprint": "7e517fa860ef6fcc",
     "gates": {
       "$comment": "Production GrowthBook gate states decoded from ~/Library/Application Support/Claude/fcache (standard interactive Anthropic account, 2026-06-13; binary-verified app.asar 1.12603.1). Pin per release. Behavior-affecting gates the harness models: 1143815894 (loop), 1648655587 (dispatch cap), 1978029737 (web_fetch routing). Telemetry/auth-internal gates omitted. Also pinned: 2614807392 (skeletonHome), 123929380 (autoMemoryStandardSessions), 1696890383 (memoryGuidelinesEnv), 2860753854 (memoryExtraGuidelines) — dormant drift-sentinels for dark-launched features (host-fs skeleton, auto-memory) the harness deliberately models as OFF (or, for memoryExtraGuidelines, as inert-default: on in production but its served value equals the hardcoded default); pinned so a production flip surfaces as a sync diff instead of silent drift. The skill-family gates are pinned on the same principle but are NOT all dormant: 245679952 (suggestSkillsEnabled) is modeled — it gates whether suggest_skills is declared. 3246569822 (canSaveSkill) is DEAD in Desktop code from 1.44121.1 (0 occurrences in every asar from 1.44121.1 through this one) although the fcache still serves it ON/force: its row is a record of what the server sends, not a sentinel, and a flip of it changes nothing. The mcp__cowork__save_skill tool it once gated is present in real sessions and is not modeled — see docs/fidelity-gaps.md. 1824824999 (canProposeSkills) is present-but-off, pinned so the same class of silent widening cannot land unnoticed. 1598976391 (proactiveSkillSuggestEnabled) flipped off/defaultValue -> ON/force by a SERVER-SIDE rollout observed 2026-08-04 — NOT a Desktop change: the gate id occurs exactly once in both the 1.24012.9 and 1.24012.11 asars and would read ON on .9 today, so this value is Desktop-version-INDEPENDENT despite living in a version-named file (same provenance class as canSaveSkill above). It is read from a SINGLE account's fcache; force rules are server-evaluated and can be segment-targeted, so whether the rollout is global is not determinable from anything on disk. Like canSaveSkill, this id is DEAD in Desktop code: 0 occurrences in every asar from 1.46388.3 through this one, where the proactive suggest_skills description and the trigger param are unconditional whenever suggest_skills is declared. The harness reads this row only for a baseline older than 1.46388.3; from there proactive mode is always on, as in production, so a flip of this row does not change a run. Override per-session with skills.proactive_suggest_enabled. 4074604942 (1p-direct-mcp) was NEW in 1.24012.11 and DARK (absent from a standard fcache, hence its DARK_GATES entry); it arms a Desktop-side direct-MCP pool for MDM-managed 1P servers, inert for an unmanaged account, pinned as a sentinel only. Observed 2026-08-05 SERVED rather than absent (source \"force\", value false) — the rollout reached this account with the gate OFF, so nothing it arms is reachable and no modeled surface changes. Same provenance class as canSaveSkill: read from a SINGLE account's fcache, and force rules are server-evaluated and segment-targetable, so its DARK_GATES entry is retained deliberately — another account may still see it absent, and that must stay tolerated rather than hard-failing their sync.",
       "emitToolUseSummaries:66187241": {
@@ -453,6 +457,7 @@
           "pluginsSyncIntervalMs": 1200000,
           "remoteBashVmStartHandling": true,
           "sessionsBridgePollBlockMs": 30,
+          "sessionsBridgePollIntervalMs": 60000,
           "skillsSyncIntervalMs": 1200000,
           "workspaceBashWaitLonger": true
         },
@@ -493,6 +498,14 @@
         "on": true,
         "source": "force",
         "value": true
+      },
+      "sendUserMessageConfig:3045399524": {
+        "on": true,
+        "source": "force",
+        "value": {
+          "alwaysLoad": true,
+          "enabledDigest": "4256447a8c80588d"
+        }
       },
       "canSaveSkill:3246569822": {
         "on": true,
@@ -562,6 +575,7 @@
       "CLAUDE_CODE_ENTRYPOINT",
       "CLAUDE_CODE_HOST_AUTH_ENV_VAR",
       "CLAUDE_CODE_HOST_PLATFORM",
+      "CLAUDE_CODE_HOST_SCHEDULED_RUN",
       "CLAUDE_CODE_IS_COWORK",
       "CLAUDE_CODE_MODEL_CATALOG",
       "CLAUDE_CODE_OAUTH_SCOPES",
@@ -600,17 +614,18 @@
       "USE_LOCAL_OAUTH",
       "USE_STAGING_OAUTH"
     ],
-    "spawnEnvSpreadCount": 34,
+    "spawnEnvSpreadCount": 35,
     "fcache": {
-      "content16": "5455ee345dae4b9e",
-      "embeddedTimestamp": 1790758917910,
-      "featureCount": 387
+      "content16": "0e1053626efc91e7",
+      "embeddedTimestamp": 1790938122771,
+      "featureCount": 391
     },
     "asarGateIds": [
       "17519066",
       "28927217",
       "30891128",
       "36693946",
+      "38349251",
       "40173473",
       "49458538",
       "66187241",
@@ -622,6 +637,7 @@
       "124685897",
       "126748301",
       "133902057",
+      "136539590",
       "144158705",
       "147471044",
       "151700879",
@@ -668,6 +684,7 @@
       "570403704",
       "574905726",
       "575160718",
+      "580613960",
       "581786799",
       "583857784",
       "599480072",
@@ -725,7 +742,6 @@
       "1061122496",
       "1085129406",
       "1093656152",
-      "1101873029",
       "1109029378",
       "1111144847",
       "1119418671",
@@ -741,6 +757,7 @@
       "1195339376",
       "1197768857",
       "1201318643",
+      "1209626463",
       "1215221242",
       "1229755686",
       "1234686386",
@@ -759,6 +776,7 @@
       "1294982044",
       "1308449919",
       "1310358601",
+      "1328180239",
       "1340622498",
       "1341990989",
       "1346958739",
@@ -782,6 +800,7 @@
       "1517059896",
       "1533587495",
       "1544796833",
+      "1548082979",
       "1549258603",
       "1552109632",
       "1569828280",
@@ -928,11 +947,13 @@
       "2767293802",
       "2768844978",
       "2774291247",
+      "2784298314",
       "2787764107",
       "2795002549",
       "2795595714",
       "2798169495",
       "2806360886",
+      "2818396951",
       "2825088777",
       "2831057674",
       "2833632524",
@@ -943,6 +964,7 @@
       "2862654137",
       "2864556627",
       "2877254163",
+      "2880683999",
       "2893011886",
       "2895944283",
       "2902719601",
@@ -972,6 +994,7 @@
       "3045399524",
       "3046457088",
       "3046702961",
+      "3052534774",
       "3059213726",
       "3067718716",
       "3076393065",
@@ -993,6 +1016,7 @@
       "3269331205",
       "3300773012",
       "3302457740",
+      "3310072118",
       "3315523143",
       "3348825467",
       "3353525254",
@@ -1017,6 +1041,7 @@
       "3527441323",
       "3531612483",
       "3531779070",
+      "3538168636",
       "3547093683",
       "3555657854",
       "3556866454",
@@ -1028,6 +1053,7 @@
       "3585327779",
       "3586389629",
       "3602629573",
+      "3603781487",
       "3608536666",
       "3633961296",
       "3634338308",
@@ -1038,6 +1064,7 @@
       "3671534883",
       "3676943315",
       "3691521536",
+      "3697006730",
       "3705360580",
       "3716359568",
       "3721849379",
@@ -1049,6 +1076,7 @@
       "3778108436",
       "3778159589",
       "3778508830",
+      "3780509438",
       "3791538283",
       "3796647113",
       "3807767338",
@@ -1072,10 +1100,10 @@
       "4039294468",
       "4041267332",
       "4044603026",
+      "4055864154",
       "4066504968",
       "4074604942",
       "4082309721",
-      "4085357330",
       "4092838515",
       "4100354330",
       "4108768567",
@@ -1085,9 +1113,11 @@
       "4141490266",
       "4153934152",
       "4156472024",
+      "4156848874",
       "4160352601",
       "4162776501",
       "4175551826",
+      "4175783504",
       "4185841952",
       "4200321681",
       "4202409342",
@@ -1102,8 +1132,8 @@
       "4293378213"
     ],
     "desktopInitSurface": {
-      "agentVersion": "2.1.284",
-      "appVersion": "2.16120.0",
+      "agentVersion": "2.1.286",
+      "appVersion": "2.19675.0",
       "observed": true,
       "servers": {
         "cowork": {
@@ -1117,11 +1147,7 @@
             "screenshot_file_preview"
           ],
           "toolsSome": [
-            "create_artifact",
-            "list_artifacts",
-            "screenshot_artifact",
-            "update_artifact",
-            "verify_artifact"
+            "send_user_message"
           ]
         },
         "plugins": {

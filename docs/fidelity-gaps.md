@@ -21,10 +21,10 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 35 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 36 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
-- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
+- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/`: the harness refuses them by default, real Cowork allows them](#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
@@ -236,6 +236,20 @@ or a plan the agent stated but never wrote down) cannot resume from a fixture th
 session — the fixture tests only the state the skill persisted to `outputs/`. A run that deletes a fixture
 file fails by default; that is the harness's own outputs-delete policy (`allow_outputs_delete: true` opts
 out), not production behaviour, which lets a skill delete in `outputs/` without asking.
+
+## Deletes in `outputs/`: the harness refuses them by default, real Cowork allows them
+
+**Real Cowork behaviour:** from Desktop 2.16120.0 the `outputs` mount is `rwd` (deletes allowed) for a normal
+session. Every mount builder (the host-loop shell's `computeBashMounts`, the VM-loop builder and the shares builder)
+sets its mode from one exported function, `outputsMountMode`, which returns `"rwd"` unless the session is a bridge
+session (`"rw"`, delete denied). Connected folders are different: they stay `rw` until the user approves deletes for
+that folder (`allow_cowork_file_delete`), as before. Both committed baselines that describe these releases
+(`desktop-2.16120.0`, `desktop-2.19675.0`) record `outputs` as `rwd`, and `sync` flags it if that function changes.
+
+**Harness behaviour:** a run whose agent deletes a file in `outputs/` still fails by default, through the harness's own
+outputs-delete check (`allow_outputs_delete: true` opts out). That check is a harness policy, not production
+behaviour. A skill that cleans up its own scratch files in `outputs/` works in real Cowork and goes red here unless the
+scenario opts out.
 
 ## Folder access in `chat` sessions
 
@@ -1580,6 +1594,27 @@ A skill that produces HTML or SVG and checks its own rendering with either tool 
 error here — a
 false red — and a skill that would have fixed a rendering bug after looking at the screenshot has no
 such loop in the harness, so a green run says nothing about how the page actually renders.
+
+### Not served: `send_user_message` (Cowork's send-message tool)
+
+**Real Cowork behaviour:** the `cowork` server can also declare `mcp__cowork__send_user_message`. It takes
+one Markdown `message`, which Desktop shows to the user verbatim while the agent keeps working, and the
+tool's result only acknowledges delivery. It is registered always-loaded and pre-approved (no permission
+prompt), like `present_files`. Whether a session gets it is decided by a server-delivered config (gate
+`3045399524`), not by the Desktop version: it is offered to ordinary sessions (no session type, so never
+scheduled-task or dispatch runs) **whose model the config enables**, and the enabled set is server-chosen
+and changes without a Desktop release. Observed on Desktop 2.16120.0 and 2.19675.0: Opus 5.5 sessions
+carry it and Opus 5 sessions do not. The builtin `SendUserMessage` tool of dispatch
+sessions is a different tool.
+
+**Harness behaviour:** not served at any tier; the harness's `cowork` server registers `present_files`
+only. A model that would have used it to relay a mid-task value or snippet writes it into its normal
+text instead, so assertions on the final reply or the transcript can read differently from a real
+session, and a skill whose instructions tell the agent to call it gets an unknown-tool error here, which
+is a false red. It has no file or network effect, so file, artifact and egress assertions are unaffected.
+`sync` pins the config as a tripwire. A baseline records whether it is served, the always-load flag, and a digest
+of its enabled-model condition, never the model list itself. A model added to or removed from the set, or the tool
+enabled for every model, therefore changes the digest and shows up as a `sync --diff` line.
 
 ### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
 
