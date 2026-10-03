@@ -279,15 +279,19 @@ that the loop and the lite report builder read, with these differences:
 
 `hillclimb regrade` re-grades the flow's rows from their kept run dirs, without running the agent:
 
-- it re-evaluates every deterministic assertion (`file_exists`, `tool_called`, …) against the kept run, and
-  re-measures every declared metric, so an assertion fix or a metric added mid-climb reaches the rows already
-  written;
+- it re-evaluates a deterministic assertion (`file_exists`, `tool_called`, …) whose definition changed against
+  the kept run, and re-measures every declared metric, so an assertion fix or a metric added mid-climb reaches
+  the rows already written;
+- `--reevaluate` (no judge, no agent cost) also takes the fresh outcome of every unchanged deterministic
+  assertion, for a fix in the harness's own evaluator; it lists a row whose kept run cannot be evaluated
+  faithfully;
 - it re-judges a judged assertion when something the judge sees changed (its rubric or claims, its judge model or
   prompt template, or a `semantic_pairwise` assertion's references), recording why in
   `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
 - it recomputes `pass`;
 - `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot move. After a grader edit, run
-  a default re-grade first: a fill lists the rows whose grader changed instead of filling them.
+  a default re-grade first: a fill lists the rows whose grader changed instead of filling them. `--rejudge` and
+  `--reevaluate` do not combine with `--fill-refs`.
 
 A row is listed instead of re-graded when, among other cases (see the reference), its kept run dir is gone, or
 when the evidence its judge read has changed since it was graded (an edited kept run, or a harness change to how
