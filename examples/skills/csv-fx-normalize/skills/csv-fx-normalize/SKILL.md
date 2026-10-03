@@ -31,8 +31,8 @@ to USD.
 
    In Cowork's default host-loop mode the bash tool rewrites the host path the agent writes in
    for `${CLAUDE_PLUGIN_ROOT}` to the plugin's mount inside the VM, so the first line finds the
-   script; the second line is the fallback for when it does not (a bare variable, or a plugin
-   whose mount the rewrite skips), and finds the script at that mount.
+   script; the second line is the fallback for a Desktop older than 1.40609.0, or a plugin whose
+   mount path the rewrite skips, and finds the script at that mount.
 
    It makes one outbound call — to a public FX API — to get the EUR→USD rate. If that
    call is blocked (as it is under Cowork's default-deny egress), it falls back to the

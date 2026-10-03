@@ -84,6 +84,8 @@ All notable changes to this project are documented here. The format is based on
 - **Verdict change: `self_heal_ran` also counts a `/sessions/<id>/mnt/.remote-plugins/…` path.** A run whose
   model located a remote plugin's files there read as not having self-healed; `self_heal_ran: true` now passes
   on it and `self_heal_ran: false` fails. It is a live-only assertion, so a replay is unaffected.
+- **`hostloop` runs workspace commands with `bash -c` instead of `sh -c`**, so a bash-only construct in a command
+  (process substitution, `[[ … ]]`) that failed under `hostloop` now runs, as it does in Cowork.
 
 ### Added
 
@@ -479,11 +481,12 @@ All notable changes to this project are documented here. The format is based on
   `${CLAUDE_PLUGIN_ROOT}` is replaced with a host path that the bash tool rewrites to the plugin's VM mount, so
   a step that opens it works, while the bare `$CLAUDE_PLUGIN_ROOT` is still empty there; one rule at one
   severity could not describe both. Old to new:
-  - bare `$CLAUDE_PLUGIN_ROOT` or `${CLAUDE_PLUGIN_ROOT:-…}`, and any form in a standalone skill with no
-    `plugin.json` above it → still `plugin-root-in-vm-bash` (WARN);
+  - bare `$CLAUDE_PLUGIN_ROOT` or `${CLAUDE_PLUGIN_ROOT:-…}`, a braced root glued to other text
+    (`${CLAUDE_PLUGIN_ROOT}-v2`, `x${CLAUDE_PLUGIN_ROOT}`, which the bash tool does not rewrite), and any form in a
+    standalone skill with no `plugin.json` above it → still `plugin-root-in-vm-bash` (WARN), once per line;
   - the whole braced root as the value of an option named for a location (`root`, `dir`, `path`, `plugin` or
-    `base` in its name: `--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, `--root=${CLAUDE_PLUGIN_ROOT}`), outside
-    quotes and not to `claude` itself, the shape that forwards it → `plugin-root-forwarded-from-vm-bash`
+    `base` in its name: `--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, `--root=${CLAUDE_PLUGIN_ROOT}`), not
+    inside an open quoted string (such as an echo'd sentence) and not to `claude` itself, the shape that forwards it → `plugin-root-forwarded-from-vm-bash`
     (WARN), reported even inside a block that self-heals;
   - any other braced use → `plugin-root-braced-in-vm-bash` (INFO), whose message says when the rewrite
     applies (the path as its own word) and that a value forwarded to a host-side reader arrives as a VM path.

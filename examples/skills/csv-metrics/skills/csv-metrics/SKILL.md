@@ -30,8 +30,8 @@ per-column statistics or a metrics report.
 
    In Cowork's default host-loop mode the bash tool rewrites the host path the agent writes in
    for `${CLAUDE_PLUGIN_ROOT}` to the plugin's mount inside the VM, so the first line finds the
-   script; the second line is the fallback for when it does not (a bare variable, or a plugin
-   whose mount the rewrite skips), and finds the script at that mount.
+   script; the second line is the fallback for a Desktop older than 1.40609.0, or a plugin whose
+   mount path the rewrite skips, and finds the script at that mount.
 
    It writes `outputs/metrics.json` and `outputs/summary.md` and prints a
    one-line summary.

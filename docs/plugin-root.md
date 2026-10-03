@@ -146,9 +146,10 @@ cowork-harness lint-skill path/to/skill/
 (also runnable directly as `python3 .claude/skills/cowork-harness/scripts/scenario.py lint-skill path/to/skill/`)
 
 It reports the plugin root in an in-VM bash context (fenced `bash`/`sh` blocks and `Bash(...)`
-directives): a bare `$CLAUDE_PLUGIN_ROOT`, or any form in a standalone skill with no `plugin.json` above it
-(nothing replaces the token there), as the WARN `plugin-root-in-vm-bash`; the whole braced root passed as
-the value of an option named for a location (`root`, `dir`, `path`, `plugin` or `base` in its name), outside quotes and not to `claude` itself, as the WARN
+directives): a bare `$CLAUDE_PLUGIN_ROOT`, a braced root glued to other text (`${CLAUDE_PLUGIN_ROOT}-v2`,
+`x${CLAUDE_PLUGIN_ROOT}`, which the bash tool does not rewrite), or any form in a standalone skill with no
+`plugin.json` above it (nothing replaces the token there), as the WARN `plugin-root-in-vm-bash`; the whole braced root passed as
+the value of an option named for a location (`root`, `dir`, `path`, `plugin` or `base` in its name), not inside an open quoted string (such as an echo'd sentence) and not to `claude` itself, as the WARN
 `plugin-root-forwarded-from-vm-bash`, the forwarding shape above;
 and any other braced use as the INFO `plugin-root-braced-in-vm-bash`, whose message says when the rewrite
 applies and when a forwarded value breaks. It also warns on a hook
