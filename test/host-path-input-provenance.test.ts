@@ -359,10 +359,13 @@ describe("the staged plugin's own files are input too", () => {
     expect(scanEvents(events(say(`reading ${src}/SKILL.md`)), ["outputs"], corpus).hostPathLeaked).toBe(false);
   });
 
-  it("the source rule compares on path segments: a sibling that shares a string prefix is not under it", () => {
-    stagePlugin("see /Users/alice/code/foo/x.md\n", "/Users/alice/code/foo-plugin");
-    expect(scanEvents(events(read("see /Users/alice/code/foo/x.md")), ["outputs"], corpusFor()).hostPathLeaked).toBe(false);
-    // and the other way round: a token under the real source is still refused
+  it("the source rule compares on path segments, not string prefixes", () => {
+    // a token that only shares a string prefix with the source is not under it, in either direction
+    stagePlugin("see /Users/alice/code/foo-plugin/x.md\n", "/Users/alice/code/foo");
+    expect(scanEvents(events(read("see /Users/alice/code/foo-plugin/x.md")), ["outputs"], corpusFor()).hostPathLeaked).toBe(false);
+    stagePlugin("see /Users/alice/code/foo\n", "/Users/alice/code/foo-plugin");
+    expect(scanEvents(events(read("see /Users/alice/code/foo")), ["outputs"], corpusFor()).hostPathLeaked).toBe(false);
+    // control: a token under the real source is still refused
     stagePlugin("see /Users/alice/code/foo-plugin/x.md\n", "/Users/alice/code/foo-plugin");
     expect(scanEvents(events(read("see /Users/alice/code/foo-plugin/x.md")), ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
   });
@@ -460,9 +463,10 @@ describe("the staged local skills' own files are input too", () => {
   it("only the declared skills are read — not the rest of the config dir", () => {
     put(".claude/skills/undeclared/SKILL.md", "/Users/alice/stray");
     put(".claude/settings.json", '{"p":"/Users/alice/cfg"}');
-    capture({ mounts: [], stagedSkills: [], resume: false } as any, mnt, outDir);
+    put(`${SKILL}/SKILL.md`, "/Users/alice/declared");
+    capture({ mounts: [], stagedSkills: [{ src: "/unused/my-skill", dest: "my-skill" }], resume: false } as any, mnt, outDir);
     expect(readCorpus(outDir).size).toBe(0);
-    expect(readSourced(outDir).size).toBe(0);
+    expect([...readSourced(outDir)]).toEqual(["/Users/alice/declared"]);
   });
 
   it("a staged skill spends the budget after the inputs", () => {
