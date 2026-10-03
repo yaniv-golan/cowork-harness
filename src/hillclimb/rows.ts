@@ -42,6 +42,7 @@ import { normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
 import { UNTRUSTED_JUDGE_PREFIX } from "./schema-check.js";
 import { computeVerdict } from "../run/verdict.js";
+import { billingOf, judgeSpendOf } from "./cost.js";
 
 export interface AttemptContext {
   caseId: string;
@@ -73,6 +74,9 @@ export interface AttemptContext {
   expectedContentSig?: string;
   /** `events.jsonl` lines of the attempt's run dir (readers scope to the current turn). */
   events: readonly string[];
+  /** The credential-precedence keys (CREDENTIAL_PRECEDENCE_ENV_KEYS) the case's TIER spawns the agent with: the
+   *  baseline's spawn env, or the operator's env at protocol — the billing basis depends on them. */
+  credentialEnv: Readonly<Record<string, string>>;
   /** Wall clock of the whole attempt, seconds. */
   attemptS: number;
   /** The runner's ceiling ended the attempt (not the scenario's own timeout_ms). */
@@ -301,9 +305,17 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
 
   const models: Record<string, unknown> = {};
   for (const [m, e] of Object.entries(r?.modelUsage ?? {})) {
-    const cost = (e as { costUSD?: unknown }).costUSD;
-    models[m] = { ...snake(e as Record<string, unknown>), ...(typeof cost === "number" ? { cost_usd: cost } : {}) };
+    const { costUSD: cost, provider, costBasis } = e as { costUSD?: unknown; provider?: unknown; costBasis?: unknown };
+    models[m] = {
+      ...snake(e as Record<string, unknown>),
+      ...(typeof cost === "number" ? { cost_usd: cost } : {}),
+      ...(typeof provider === "string" ? { provider } : {}),
+      ...(typeof costBasis === "string" ? { cost_basis: costBasis } : {}),
+    };
   }
+  // The judge's spend over the asserts that called it, and the credential the agent billed (names only).
+  const judgeSpend = judgeSpendOf(authored(r));
+  const billing = billingOf({ events: ctx.events, modelUsage: r?.modelUsage, credentialEnv: ctx.credentialEnv });
   const retriesUnrecorded = r?.apiRetries === undefined;
   // What the attempt asked for, beside the evidence of what it got (`model`, `meta.effort_sent`).
   const sent = sentEffort(ctx.transcript ?? []);
@@ -333,6 +345,10 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
         ...(ctx.meta.runDir !== undefined ? { run_dir: ctx.meta.runDir, run_id: basename(ctx.meta.runDir) } : {}),
         ...requested,
         ...(typeof r?.cost?.usd === "number" ? { cost_usd: r.cost.usd } : {}),
+        ...(judgeSpend.judge_usd !== undefined ? { judge_usd: judgeSpend.judge_usd } : {}),
+        ...(judgeSpend.judge_unpriced !== undefined ? { judge_unpriced: judgeSpend.judge_unpriced } : {}),
+        ...(typeof r?.deciderCostUsd === "number" ? { decider_usd: r.deciderCostUsd } : {}),
+        ...(billing !== undefined ? { billing } : {}),
         ...(Object.keys(models).length ? { models } : {}),
         ...(retriesUnrecorded ? { retries_unrecorded: true } : {}),
         ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
@@ -455,6 +471,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ? { tool_calls: toolCalls.length, web_searches: toolCalls.filter((t) => t.name === "WebSearch").length }
       : {}),
     ...(typeof r?.cost?.usd === "number" ? { cost_usd: r.cost.usd } : {}),
+    ...(judgeSpend.judge_usd !== undefined ? { judge_usd: judgeSpend.judge_usd } : {}),
     ...(typeof r?.deciderCostUsd === "number" ? { decider_usd: r.deciderCostUsd } : {}),
     ...(ctx.skillInvoked !== undefined ? { skill_invoked: ctx.skillInvoked ? 1 : 0 } : {}),
     grade: ordered,
@@ -477,6 +494,8 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(latencyBasisWall ? { latency_basis: "wall" } : {}),
       judge_retries: jr.judge_retries,
       ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
+      ...(judgeSpend.judge_unpriced !== undefined ? { judge_unpriced: judgeSpend.judge_unpriced } : {}),
+      ...(billing !== undefined ? { billing } : {}),
       ...(Object.keys(claims).length ? { claims } : {}),
       ...(Object.keys(metricsUnavailable).length ? { metrics_unavailable: metricsUnavailable } : {}),
       // Each flow metric's declaration as this row was graded under it: a later pass refuses a changed one.

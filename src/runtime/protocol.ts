@@ -36,7 +36,7 @@ export function buildProtocolEnv(plan: LaunchPlan, baseline: PlatformBaseline): 
 
 /** The operator, knob and credential layers of L0's env — everything `managedConfigMode` reads. Shared by
  *  `buildProtocolEnv` and `protocolReadsOperatorConfig`, which has no baseline in scope and needs none. */
-function protocolOperatorEnv(plan: LaunchPlan): NodeJS.ProcessEnv {
+export function protocolOperatorEnv(plan: Pick<LaunchPlan, "baseEnv" | "agentEnv">): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...plan.baseEnv };
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete env[k];
   Object.assign(env, plan.agentEnv ?? {});

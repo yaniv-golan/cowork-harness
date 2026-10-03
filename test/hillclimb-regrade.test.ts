@@ -1992,6 +1992,83 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(meta).not.toHaveProperty("regrade_fill");
   }, 240_000);
 
+  // The live rows a real CLI pass wrote: a pairwise assert judged against the baseline costs its judge call; the
+  // baseline's own assert against its own reference is neutral (no judge called) and is neither priced nor unpriced.
+  it("live rows: judge_usd on a judged row; the baseline's neutral own-reference pairwise is not unpriced", () => {
+    const { rows, flow } = buildFlow({ reps: 2 });
+    const base = rows("baseline")[0]! as Record<string, any>;
+    expect(base).not.toHaveProperty("judge_usd");
+    expect(base.meta).not.toHaveProperty("judge_unpriced");
+    const v1 = rows("v1")[0]! as Record<string, any>;
+    expect(v1.judge_usd).toBe(0.051539);
+    expect(v1.meta).not.toHaveProperty("judge_unpriced");
+    const summary = (v: string) => JSON.parse(readFileSync(join(flow, v, "summary.json"), "utf8"));
+    // The stub agent reports no total_cost_usd: its rows record no cost, counted as such and never as $0.
+    // The baseline's neutral rows: no judge ran, so neither unpriced nor unrecorded.
+    expect(summary("baseline")).toMatchObject({
+      judge_rows_unpriced: 0,
+      judge_rows_unrecorded: 0,
+      cost_rows: 0,
+      cost_rows_unrecorded: 2,
+      billing_rows_unrecorded: 2,
+    });
+    expect(summary("baseline")).not.toHaveProperty("judge_usd_total");
+    expect(summary("v1")).toMatchObject({ judge_usd_total: 0.103078, judge_rows_unpriced: 0, judge_rows_unrecorded: 0 });
+    // judge_usd_mean shares cost_usd_mean's rows (scored, with a cost): the stub's rows have none, so neither is written.
+    expect(summary("v1")).not.toHaveProperty("judge_usd_mean");
+    expect(summary("v1")).not.toHaveProperty("cost_usd_mean");
+  }, 240_000);
+
+  // A re-judge keeps the row's `judge_usd` (what the live judge spent) and recomputes the variant's spend keys at its end.
+  it("a re-judge keeps the live judge_usd and recomputes summary.json's spend keys (regrade_judge_usd_total)", async () => {
+    const { rows, evals, flow } = buildFlow({ extra: SECOND });
+    const live = rows("v1")[0]! as Record<string, any>;
+    expect(typeof live.judge_usd).toBe("number");
+    edit(evals, "rubric: ['second']", "rubric: ['second, edited']");
+    const deps = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => ({
+          structured: { rationale: "r", verdict: "A" },
+          model: "claude-haiku-4-5",
+          usage: { "claude-haiku-4-5": { inputTokens: 1, outputTokens: 1, costUSD: 0.25 } },
+          subtype: "success",
+        }),
+      },
+    });
+    expect((await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps)).exitCode).toBe(0);
+    expect((rows("v1")[0]! as Record<string, any>).judge_usd).toBe(live.judge_usd);
+    const summary = JSON.parse(readFileSync(join(flow, "v1", "summary.json"), "utf8"));
+    expect(summary).toMatchObject({ regrade_judge_usd_total: 0.25, judge_usd_total: live.judge_usd });
+  }, 240_000);
+
+  // A rebuilt row keeps what describes its LIVE run: the live judge's spend and the credential the agent billed.
+  it("a re-judged row keeps judge_usd, meta.billing and meta.judge_unpriced", async () => {
+    const { rows, evals, flow } = buildFlow({ extra: SECOND });
+    // The stub agent sends no account frame: put the live row's billing and an unpriced count on it as a pass writes them.
+    const file = join(flow, "v1", "results.jsonl");
+    const live = JSON.parse(readFileSync(file, "utf8").trim()) as Record<string, any>;
+    live.meta.billing = { api_key_source: "none", token_source: "CLAUDE_CODE_OAUTH_TOKEN", provider: "firstParty", basis: "subscription" };
+    live.meta.judge_unpriced = 1;
+    writeFileSync(file, JSON.stringify(live) + "\n");
+    edit(evals, "rubric: ['second']", "rubric: ['second, edited']");
+    const deps = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => ({
+          structured: { rationale: "r", verdict: "A" },
+          model: "claude-haiku-4-5",
+          usage: { "claude-haiku-4-5": { inputTokens: 1, outputTokens: 1, costUSD: 0.25 } },
+          subtype: "success",
+        }),
+      },
+    });
+    expect((await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps)).exitCode).toBe(0);
+    const after = rows("v1")[0]! as Record<string, any>;
+    expect(after.meta.regrade_judge_usd).toBe(0.25); // it was rebuilt
+    expect(after.judge_usd).toBe(live.judge_usd);
+    expect(after.meta.billing).toEqual(live.meta.billing);
+    expect(after.meta.judge_unpriced).toBe(1);
+  }, 240_000);
+
   // A rebuild with no judge call keeps the entries (and so `regrade_file`, which names them) of the regrade that judged
   // them, but none of that regrade's spend: beside a fresh `regraded_at` it would read as this rebuild's own.
   it("a later rebuild with no judge call drops the previous regrade's spend and model, keeps the file it is graded from", async () => {

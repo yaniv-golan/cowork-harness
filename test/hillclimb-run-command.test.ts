@@ -71,6 +71,8 @@ let authored: Record<string, string> | undefined;
 let judgeTransport: object | undefined;
 /** The effort the fake agent's transcript says it sent: undefined = the requested one, null = none at all. */
 let sentEffortOverride: string | null | undefined;
+/** Credential frames the fake run's events.jsonl carries after its init frame (account-frames.json). */
+let credentialFrames: string[];
 const rows = () =>
   readFileSync(join(cwd, "flow", "baseline", "results.jsonl"), "utf8")
     .trim()
@@ -93,7 +95,12 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
       mkdirSync(outDir, { recursive: true });
       writeFileSync(
         join(outDir, "events.jsonl"),
-        [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }), frames[1]].join("\n"),
+        [
+          frames[0],
+          ...credentialFrames,
+          JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }),
+          frames[1],
+        ].join("\n"),
       );
       // The agent's own session transcript, where a container run keeps it, stamped with the effort it sent: the
       // session's (the requested one) unless a test makes the agent send another.
@@ -170,6 +177,7 @@ beforeEach(() => {
   authored = undefined;
   judgeTransport = undefined;
   sentEffortOverride = undefined;
+  credentialFrames = [];
 });
 afterEach(() => {
   for (const d of [cwd, join(plugin, ".."), snaps]) rmSync(d, { recursive: true, force: true });
@@ -2045,5 +2053,45 @@ describe("a session that pins plugins.config_dir", () => {
     } finally {
       rmSync(join(cfg, ".."), { recursive: true, force: true });
     }
+  });
+});
+
+describe("the billing basis follows the env the case's tier spawns the agent with", () => {
+  // Real frame shape (account-frames.json): an API key AND an OAuth token, no rate-limit frame. The key wins only when
+  // the spawn env carries none of CLAUDE_CODE_ENTRYPOINT, CLAUDE_CODE_REMOTE, CLAUDE_CODE_HOST_AUTH_ENV_VAR: container
+  // gets the baseline's local-agent entrypoint; protocol gets the operator's env (`deps.env`), unscrubbed for these.
+  const acct = JSON.parse(readFileSync(join(FX, "hillclimb-runs", "account-frames.json"), "utf8")) as Record<string, object>;
+  beforeEach(() => {
+    credentialFrames = [JSON.stringify(acct.account_oauth_and_key)];
+  });
+
+  it("container (the baseline spawns local-agent): ambiguous", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const r = await runHillclimbCommand(args(), deps());
+    expect(r.exitCode, err.join("\n")).toBe(0);
+    expect((rows()[0].meta as Record<string, any>).billing).toMatchObject({ token_source: "CLAUDE_CODE_OAUTH_TOKEN", basis: "ambiguous" });
+  });
+
+  const protocolBasis = async (env: Record<string, string>): Promise<string> => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: protocol"));
+    const saved = process.env.COWORK_MANAGED_CONFIG;
+    process.env.COWORK_MANAGED_CONFIG = "1";
+    try {
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ env }));
+      const r = await runHillclimbCommand(args(), deps({ env }));
+      expect(r.exitCode, err.join("\n")).toBe(0);
+      return (rows()[0].meta as Record<string, any>).billing.basis;
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_MANAGED_CONFIG;
+      else process.env.COWORK_MANAGED_CONFIG = saved;
+    }
+  };
+
+  it("protocol over an operator env with none of the precedence keys: api_key (the key wins)", async () => {
+    expect(await protocolBasis({})).toBe("api_key");
+  });
+
+  it("protocol over an operator env that carries a precedence key: ambiguous", async () => {
+    expect(await protocolBasis({ CLAUDE_CODE_REMOTE: "1" })).toBe("ambiguous");
   });
 });

@@ -116,6 +116,21 @@ const ERROR_ROW_KEYS = new Set([
   "latency_s",
   "meta",
 ]);
+/** summary.json's spend keys (numbers) and `billing_basis`'s values: what the runner recomputes after every pass. */
+const SUMMARY_COST_KEYS = [
+  "cost_usd_mean",
+  "cost_usd_total",
+  "cost_rows",
+  "cost_rows_unrecorded",
+  "judge_usd_mean",
+  "judge_usd_total",
+  "judge_rows_unpriced",
+  "judge_rows_unrecorded",
+  "regrade_judge_usd_total",
+  "decider_usd_total",
+  "billing_rows_unrecorded",
+] as const;
+const SUMMARY_BILLING_BASES = new Set(["api_key", "subscription", "third_party", "ambiguous", "mixed", "unrecorded"]);
 /** cowork-harness convention: every judge rationale is prefixed so a reader never takes it as instructions. */
 export const UNTRUSTED_JUDGE_PREFIX = "[untrusted judge] ";
 const TRACE_NAME_RE = /^(.+)_rep(\d+)\.json$/;
@@ -418,8 +433,11 @@ function checkRow(
     if (r[k] !== undefined && typeof r[k] !== "string") c.error(`row.${k}`, file, `${k} must be a string`, line);
   if (r.usage !== undefined) checkUsage(c, file, "usage", r.usage, line);
   if (r.judge_usage !== undefined) checkUsage(c, file, "judge_usage", r.judge_usage, line);
-
   const perf = new Set<string>([...NUMERIC_PERF_KEYS, ...d.perfFields]);
+  // ours: the judge's and the LLM decider's spend beside the agent's cost_usd (a declared perf field is checked below)
+  for (const k of ["judge_usd", "decider_usd"] as const)
+    if (!perf.has(k) && r[k] !== undefined && !isFiniteNum(r[k]))
+      c.error(`row.${k}`, file, `${k} must be a finite number, got ${JSON.stringify(r[k])}`, line);
   for (const k of perf) {
     if (r[k] === undefined) continue;
     if (!isFiniteNum(r[k])) c.error("row.perf", file, `${k} must be a finite number, got ${JSON.stringify(r[k])}`, line);
@@ -678,6 +696,11 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
           if (s[k] !== undefined && typeof s[k] !== "string") c.error(`summary.${k}`, F, `${k} must be a string`);
         if (s.effort_selector !== undefined && s.effort_selector !== false && s.effort_selector !== "mixed")
           c.error("summary.effort_selector", F, 'effort_selector must be false or "mixed"');
+        // ours: the variant's spend over its rows, and the billing basis they record
+        for (const k of SUMMARY_COST_KEYS)
+          if (s[k] !== undefined && !isFiniteNum(s[k])) c.error(`summary.${k}`, F, `${k} must be a finite number`);
+        if (s.billing_basis !== undefined && !SUMMARY_BILLING_BASES.has(s.billing_basis as string))
+          c.error("summary.billing_basis", F, `billing_basis must be one of ${[...SUMMARY_BILLING_BASES].join(", ")}`);
       }
     }
 

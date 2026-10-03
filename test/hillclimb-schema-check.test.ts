@@ -484,6 +484,14 @@ describe("schema-check: row fields", () => {
     expectOnly(check(withRow((row) => (row.usage = { ...nulls, input_tokens: null }))), "error", "usage.value");
   });
 
+  it("judge_usd and decider_usd: finite numbers when present (row.perf when the flow declares it a perf field)", () => {
+    for (const k of ["judge_usd", "decider_usd"]) {
+      const declared = (JSON.parse(base().state!).perf_fields as Array<{ id: string }>).some((p) => p.id === k);
+      expectOnly(check(withRow((row) => (row[k] = "0.01"))), "error", declared ? "row.perf" : `row.${k}`);
+      expect(check(withRow((row) => (row[k] = 0.01))).findings).toEqual([]);
+    }
+  });
+
   it("perf fields: numeric when present; a declared one absent is a note", () => {
     expectOnly(check(withRow((row) => (row.cost_usd = "0.05"))), "error", "row.perf");
     expectOnly(check(withRow((row) => (row.in_tokens = null))), "error", "row.perf");
@@ -868,6 +876,35 @@ describe("schema-check: summary.json", () => {
     const ok = base();
     ok.variants.v1!.summary = JSON.stringify({ model: "m", model_requested: "m", effort: "mixed", effort_sent: "high" });
     expect(check(ok).findings.filter((f) => f.rule.startsWith("summary"))).toEqual([]);
+  });
+  it("the cost keys: numbers when present; billing_basis one of its six values", () => {
+    for (const k of [
+      "cost_usd_mean",
+      "cost_usd_total",
+      "cost_rows",
+      "cost_rows_unrecorded",
+      "judge_usd_mean",
+      "judge_usd_total",
+      "judge_rows_unpriced",
+      "judge_rows_unrecorded",
+      "regrade_judge_usd_total",
+      "decider_usd_total",
+      "billing_rows_unrecorded",
+    ]) {
+      const s = base();
+      s.variants.v1!.summary = JSON.stringify({ [k]: "1" });
+      expectOnly(check(s), "error", `summary.${k}`);
+    }
+    for (const v of ["api_key", "subscription", "third_party", "ambiguous", "mixed", "unrecorded"]) {
+      const s = base();
+      s.variants.v1!.summary = JSON.stringify({ billing_basis: v, cost_usd_total: 0.5, cost_rows: 2 });
+      expect(check(s).findings.filter((f) => f.rule.startsWith("summary"))).toEqual([]);
+    }
+    for (const v of ["absent", 3]) {
+      const s = base();
+      s.variants.v1!.summary = JSON.stringify({ billing_basis: v });
+      expectOnly(check(s), "error", "summary.billing_basis");
+    }
   });
   it("effort_selector, when present, is false or mixed", () => {
     for (const [v, bad] of [

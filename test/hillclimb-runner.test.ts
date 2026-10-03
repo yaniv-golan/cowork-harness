@@ -25,6 +25,7 @@ import type { RunResult } from "../src/types.js";
 import { stateTemplate } from "../src/hillclimb/state-template.js";
 import { metricSig } from "../src/hillclimb/grade-keys.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
+import { checkReport } from "../src/hillclimb/cli.js";
 import { hostPathTokens } from "../src/run/host-path-tokens.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 
@@ -76,6 +77,7 @@ function deps(over: Partial<RunnerDeps> = {}): RunnerDeps {
     virtual: { harnessVersion: "4.3.0", baselineId: "2.9939.4" },
     pin: () => MODEL,
     requestedEffort: () => ({ effort: "medium", noSelector: false }),
+    credentialEnv: () => ({ CLAUDE_CODE_ENTRYPOINT: "local-agent" }),
     derivedPaths: (cases) => cases.map((c) => c.file),
     mountRoots: () => [],
     tickMs: 1_000_000,
@@ -90,7 +92,7 @@ function deps(over: Partial<RunnerDeps> = {}): RunnerDeps {
         children: [],
         attemptS: 12,
         runnerTimeout: false,
-        runDir: `/tmp/runs/${j.c.id}/${j.rep}`,
+        runDir: `/tmp/runs/${j.c.id}/local_${j.c.id}_${j.rep}`,
         ...b,
       };
     },
@@ -321,6 +323,13 @@ describe("a pass", () => {
       model_requested: MODEL,
       effort: "medium",
       effort_sent: "medium",
+      // the excerpt records no cost and no credential frames: counted, never $0 or guessed
+      cost_rows: 0,
+      cost_rows_unrecorded: 2,
+      judge_rows_unpriced: 0,
+      judge_rows_unrecorded: 0,
+      billing_basis: "unrecorded",
+      billing_rows_unrecorded: 2,
     });
   });
 
@@ -606,13 +615,141 @@ describe("scenario metrics", () => {
   });
 });
 
+describe("the cost path: per-row judge spend and billing, the variant's spend in summary.json", () => {
+  // Real frames: the kept run's result-frame modelUsage (agent 2.1.280) and the credential frames of
+  // account-frames.json (identity values replaced). The judge cost sits where the live judge records it.
+  const resultFrame = JSON.parse(frames[1]!) as { modelUsage: Record<string, Record<string, unknown>> };
+  const acct = JSON.parse(readFileSync(join(FX, "hillclimb-runs", "account-frames.json"), "utf8")) as Record<string, object>;
+  const fr = (...n: string[]) => n.map((k) => JSON.stringify(acct[k]));
+  const judged = (cost?: number): RunResult => ({
+    ...excerpt,
+    cost: { usd: 0.3 },
+    modelUsage: {
+      [MODEL]: { ...resultFrame.modelUsage["claude-opus-4-8"], costUSD: 0.1 },
+      "claude-opus-4-8": { ...resultFrame.modelUsage["claude-opus-4-8"], costUSD: 0.2 },
+    } as never,
+    assertions: excerpt.assertions.map((a, i) =>
+      i === 3 ? { ...a, judgeModel: "claude-haiku-5", ...(cost !== undefined ? { judgeCostUsd: cost } : {}) } : a,
+    ),
+  });
+  const withFrames = (...extra: string[]) => [events[0]!, ...extra, ...events.slice(1)];
+
+  it("a scored row records judge_usd, meta.billing from the agent's own frames, and provider/cost_basis per model", async () => {
+    await approved();
+    behave = () => ({ result: judged(0.012), events: withFrames(...fr("account_oauth", "rate_limit_five_hour")) });
+    await runHillclimb(args(), deps());
+    const r = rows("baseline")[0];
+    expect(r.judge_usd).toBe(0.012);
+    expect(r.meta).not.toHaveProperty("judge_unpriced");
+    expect(r.meta.billing).toEqual({
+      api_key_source: "none",
+      token_source: "CLAUDE_CODE_OAUTH_TOKEN",
+      provider: "firstParty",
+      cost_basis: "list",
+      basis: "subscription",
+    });
+    expect(r.meta.models["claude-opus-4-8"]).toMatchObject({ cost_usd: 0.2, provider: "firstParty", cost_basis: "list" });
+    // `usage` is unchanged: the main model only.
+    expect(r.usage).toEqual({ input_tokens: 10, output_tokens: 914, cache_read_input_tokens: 97850, cache_creation_input_tokens: 14427 });
+  });
+
+  it("the basis follows the spawn env's precedence keys: the same frames are api_key without them, ambiguous with local-agent", async () => {
+    await approved();
+    behave = () => ({ result: judged(0.01), events: withFrames(...fr("account_oauth_and_key")) });
+    await runHillclimb(args(), deps({ credentialEnv: () => ({}) }));
+    expect(rows("baseline").map((r) => r.meta.billing.basis)).toEqual(["api_key", "api_key"]);
+    rmSync(join(flowDir(), "baseline"), { recursive: true });
+    await runHillclimb(args(), deps({ credentialEnv: () => ({ CLAUDE_CODE_ENTRYPOINT: "local-agent" }) }));
+    expect(rows("baseline").map((r) => r.meta.billing.basis)).toEqual(["ambiguous", "ambiguous"]);
+  });
+
+  it("a judged assert with no recorded cost is counted (meta.judge_unpriced), never $0", async () => {
+    await approved();
+    behave = () => ({ result: judged(undefined) });
+    await runHillclimb(args(), deps());
+    const r = rows("baseline")[0];
+    expect(r).not.toHaveProperty("judge_usd");
+    expect(r.meta.judge_unpriced).toBe(1);
+    expect(r.meta).not.toHaveProperty("billing"); // no account frame: absent, never guessed
+  });
+
+  it("summary.json carries the variant's spend over results + errors, and the pass prints it", async () => {
+    await approved();
+    behave = (id) =>
+      id === "alpha"
+        ? { result: judged(0.012), events: withFrames(...fr("account_oauth", "rate_limit_five_hour")) }
+        : { result: judged(0.02), events: withFrames(...fr("account_oauth")), runnerTimeout: true };
+    await runHillclimb(args(), deps());
+    expect(rows("baseline", "errors.jsonl")[0].meta).toMatchObject({ cost_usd: 0.3, judge_usd: 0.02, billing: { basis: "subscription" } });
+    const summary = JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"));
+    expect(summary).toMatchObject({
+      cost_usd_total: expect.closeTo(0.6, 10),
+      cost_rows: 2,
+      cost_rows_unrecorded: 0,
+      judge_usd_total: expect.closeTo(0.032, 10),
+      judge_rows_unpriced: 0,
+      billing_basis: "subscription",
+      billing_rows_unrecorded: 0,
+    });
+    expect(err.join("\n")).toContain(
+      "[baseline] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $0.6000 over 2 row(s)",
+    );
+    // before the pass's done line, which stays its last
+    const at = (p: string) => err.findIndex((l) => l.startsWith(p));
+    expect(at("[baseline] cost (")).toBeGreaterThan(-1);
+    expect(at("[baseline] cost (")).toBeLessThan(at("[baseline] done - "));
+    expect(err.at(-1)).toMatch(/^\[baseline\] done - /);
+  });
+
+  it("warns once per variant when other models carry more than 25% of its cost_usd", async () => {
+    await approved();
+    behave = () => ({ result: judged(0.01) });
+    await runHillclimb(args(), deps());
+    // claude-opus-4-8 carries 0.2 of each row's 0.3 (the main loop is claude-sonnet-5).
+    expect(err.filter((l) => l.includes("models other than the main loop's carry 67%"))).toHaveLength(1);
+    // `hillclimb check` repeats it as a note.
+    expect(checkReport(".claude/hillclimb/f", cwd).warnings).toContainEqual(
+      expect.stringContaining("note: baseline: models other than the main loop's carry 67%"),
+    );
+  });
+
+  it("no row or summary.json ever holds an account's identity keys or values", async () => {
+    await approved();
+    // alpha is scored, beta an error row (the runner's timeout): both carry meta.billing.
+    behave = (id) => ({
+      result: judged(0.01),
+      events: withFrames(...fr("account_login", "rate_limit_seven_day")),
+      ...(id === "beta" ? { runnerTimeout: true } : {}),
+    });
+    await runHillclimb(args(), deps());
+    // The files and the pass's own stderr.
+    const written = [
+      ...["results.jsonl", "errors.jsonl", "summary.json"].map((f) => readFileSync(vfile("baseline", f), "utf8")),
+      ...err,
+    ].join("\n");
+    expect(rows("baseline")[0].meta.billing.basis).toBe("subscription");
+    expect(rows("baseline", "errors.jsonl")[0].meta.billing.basis).toBe("subscription");
+    for (const leak of ["subscriptionType", "organization", "email", "user@example.invalid", "Example Org", "example-plan"])
+      expect(written).not.toContain(leak);
+  });
+});
+
 describe("failures inside the pool", () => {
   it("a row that cannot be built is that attempt's error row; the pass goes on", async () => {
     await approved();
     // SYNTHETIC: a result whose assertions field is not a list, so the row builder throws on it.
-    behave = (id) => (id === "alpha" ? { result: { ...excerpt, assertions: 5 as never, cost: { usd: 0.25 } } } : {});
-    const r = await runHillclimb(args(), deps());
+    // Its credential frames and decider spend are still read: they do not depend on what threw.
+    const acct = JSON.parse(readFileSync(join(FX, "hillclimb-runs", "account-frames.json"), "utf8")) as Record<string, object>;
+    behave = (id) =>
+      id === "alpha"
+        ? {
+            result: { ...excerpt, assertions: 5 as never, cost: { usd: 0.25 }, deciderCostUsd: 0.003 },
+            events: [events[0]!, JSON.stringify(acct.account_key), ...events.slice(1)],
+          }
+        : {};
+    const r = await runHillclimb(args(), deps({ credentialEnv: () => ({}) }));
     expect(r).toMatchObject({ exitCode: 1, ok: 1, failed: 1 });
+    expect(rows("baseline", "errors.jsonl")[0].meta).toMatchObject({ decider_usd: 0.003, billing: { basis: "api_key" } });
     expect(rows("baseline", "errors.jsonl")).toMatchObject([
       {
         prompt_id: "alpha",

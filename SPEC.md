@@ -1315,8 +1315,11 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `--max-budget-usd` included), its `--arm` source grammar, its exit codes (§11), the `budget` marker and
   `error.code` on it (§11), and `--fail-on`'s meaning — no gating unless it is given — are covered.
 - **The `hillclimb` flow files beyond the published runner-scaffold contract** — the harness's own row `meta`
-  keys (`meta.effort`, `meta.effort_sent`, `meta.effort_selector` and `meta.model_requested` among them, and
-  `summary.json`'s `model_requested`, `effort`, `effort_sent` and `effort_selector`), the `out/` copies and sidecars, the `metrics.md` wording and `hillclimb check`'s findings text — and the
+  keys (`meta.effort`, `meta.effort_sent`, `meta.effort_selector`, `meta.model_requested`, `meta.billing` and
+  `meta.judge_unpriced` among them), the rows' `judge_usd`, `summary.json`'s `model_requested`, `effort`,
+  `effort_sent` and `effort_selector` and its spend keys (`cost_usd_mean`, `cost_usd_total`, `cost_rows`,
+  `cost_rows_unrecorded`, `judge_usd_mean`, `judge_usd_total`, `judge_rows_unpriced`, `judge_rows_unrecorded`, `regrade_judge_usd_total`,
+  `decider_usd_total`, `billing_basis`, `billing_rows_unrecorded`), the end-of-pass cost line, the `out/` copies and sidecars, the `metrics.md` wording and `hillclimb check`'s findings text — and the
   experimental keys of the `--dry-run` `plan.cost` object (`budgetGateWorstUsd`, `judgeMeanUsd`, `judgeP50Usd`, `deciderMeanUsd`, `deciderP50Usd`, `items`).
   The command name, its flags and defaults, its exit codes (§11), the run envelope's fields and the covered
   `plan.cost` keys are covered, and so is `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` (an absolute snapshot root; a

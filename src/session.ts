@@ -40,8 +40,10 @@ export function expandHome<T extends string | undefined>(p: T): T {
 }
 
 /** Clone process env with Cowork's bg-env-strip applied. */
-function strippedEnv(baseline: PlatformBaseline): NodeJS.ProcessEnv {
-  const env = { ...process.env };
+/** The operator env with the baseline's bg-env-strip applied (`plan.baseEnv`); `from` is the process env unless a
+ *  caller holds another view of it (hillclimb's injected env). */
+export function strippedEnv(baseline: PlatformBaseline, from: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...from };
   for (const v of baseline.bgEnvStrip?.knownVars ?? []) delete env[v];
   return env;
 }

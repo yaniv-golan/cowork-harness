@@ -30,6 +30,7 @@ import { loadFlowSnapshot } from "./schema-check.js";
 import { hillclimbRunLabel } from "../run/run-labels.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { servedModelMismatch } from "./served-model.js";
+import { billingOf, costLine, costSummary, otherModelShareWarning, type Billing } from "./cost.js";
 
 /** What one job hands back. */
 export interface JobReport {
@@ -75,6 +76,9 @@ export interface RunnerDeps {
    *  whether its model has no effort selector (then the agent may send none). Required, so no caller skips the
    *  requested-vs-sent check by omission. */
   requestedEffort: (c: HillclimbCase) => { effort: string; noSelector: boolean };
+  /** The credential-precedence keys (CREDENTIAL_PRECEDENCE_ENV_KEYS) a case's tier spawns the agent with: its
+   *  baseline's spawn env, or the operator's env at protocol. Required: the row's billing basis depends on them. */
+  credentialEnv: (c: HillclimbCase) => Readonly<Record<string, string>>;
   /** Every file that defines the measurement (scenario, session, answers, uploads) — the gate's derived set. */
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
   /** Named values the gate hashes beside the derived files: what a file's bytes leave out (a fixture's exec bits). */
@@ -468,6 +472,7 @@ async function run(
         rep,
         pin: deps.pin(c),
         requestedEffort: deps.requestedEffort(c),
+        credentialEnv: deps.credentialEnv(c),
         ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
         events: report.events,
         ...(report.transcript !== undefined ? { transcript: report.transcript } : {}),
@@ -517,6 +522,8 @@ async function run(
               retries_unrecorded: true,
               judge_retries_unrecorded: true,
               ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
+              ...(typeof report.result?.deciderCostUsd === "number" ? { decider_usd: report.result.deciderCostUsd } : {}),
+              ...fallbackBilling(report, ctx),
               ...(report.runDir !== undefined ? { run_dir: report.runDir, run_id: basename(report.runDir) } : {}),
             },
           },
@@ -606,6 +613,8 @@ async function run(
       });
       // What the variant's rows asked for and were sent, over its whole results.jsonl (a --case pass adds to it).
       writer.setSummaryKeys(requestedSummary(writer.readVariantFile("results.jsonl")));
+      // The variant's spend: printed before the `done` line, which stays the pass's last line (the scaffold's).
+      for (const line of writeCostSummary(writer, v)) say(line);
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs), all).warnings) say(line);
     } catch (e) {
       stepFailures++;
@@ -623,6 +632,27 @@ async function run(
   } finally {
     release();
   }
+}
+
+/** The billing of an attempt whose row could not be built: read from its own frames, which do not depend on what threw;
+ *  nothing when they cannot be read either. */
+function fallbackBilling(report: JobReport, ctx: AttemptContext): { billing?: Billing } {
+  try {
+    const billing = billingOf({ events: report.events, modelUsage: report.result?.modelUsage, credentialEnv: ctx.credentialEnv });
+    return billing !== undefined ? { billing } : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Recompute the variant's spend keys in summary.json over its whole results.jsonl + errors.jsonl, and return the lines a
+ *  pass prints: the cost line, and the different-model warning when it fires. `hillclimb regrade` calls it too. */
+export function writeCostSummary(writer: FlowWriter, variant: string): string[] {
+  const results = writer.readVariantFile("results.jsonl");
+  const s = costSummary(results, writer.readVariantFile("errors.jsonl"));
+  writer.setSummaryKeys(s.keys);
+  const warning = otherModelShareWarning(variant, results);
+  return [costLine(variant, s), ...(warning !== undefined ? [warning] : [])];
 }
 
 /** The flow's files as they stand, read without following a link (undefined when there is no flow dir yet). The
