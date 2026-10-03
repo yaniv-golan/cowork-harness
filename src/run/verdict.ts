@@ -3,7 +3,7 @@ import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
 import { endsOnRequestForInput } from "./input-request.js";
-import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified } from "./outputs-delete-tier.js";
+import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified, outputsCheckArmed } from "./outputs-delete-tier.js";
 
 export interface VerdictSignal {
   code:
@@ -81,12 +81,6 @@ function quoteList(texts: string[]): string {
   return texts.map((t) => JSON.stringify(t.length > 60 ? `${t.slice(0, 60)}…` : t)).join(", ");
 }
 
-/** True when the run's baseline recorded outputs as `rwd` (Desktop 2.16120.0+): production allows an outputs
- *  delete in a normal session. Exact match only — absent or any other value keeps the delete-denied verdict. */
-function outputsDeleteAllowed(result: RunResult): boolean {
-  return result.outputsMountMode === "rwd";
-}
-
 /** build the "guards active this run" roster from the guards' INPUT PRECONDITIONS (lane + probe
  *  outcome), not from the signal list — a guard that ran clean pushes no signal, so absence is ambiguous. */
 function guardRoster(result: RunResult, lane: "live" | "replay", signals: VerdictSignal[]): GuardReport[] {
@@ -115,10 +109,14 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
   // `fired` for ANY outputs-delete evidence, warn-tier included — the roster reports what the guard saw,
   // the signals say what it weighs. A filesystem-proven delete is `fired` even when the text scan is
   // missing; a diff that could not verify is `unverified`, never `ok`.
-  // `na` on an rwd baseline with no authored `no_delete_in_outputs`: the guard's precondition, a delete-denied
-  // outputs mount, does not hold there (the evidence is still in `scan` / `fsDiff`). Authoring the key arms it.
+  // `na` when the outputs check is not armed (`outputsCheckArmed`): an rwd baseline where nothing authored asks for
+  // it, so the guard's precondition, a delete-denied outputs mount, does not hold (the evidence is still in
+  // `scan` / `fsDiff`). `no_delete_in_outputs`, or `no_delete_in_mounts` with outputs unwaived, arms it.
   const odTier = outputsDeleteTier(result.scan, result.fsDiff);
-  const odArmed = !outputsDeleteAllowed(result) || result.assertions.some((a) => a.assertion.no_delete_in_outputs !== undefined);
+  const odArmed = outputsCheckArmed(
+    result.outputsMountMode,
+    result.assertions.map((a) => a.assertion),
+  );
   roster.push({
     name: "outputs-delete",
     status:
@@ -517,12 +515,14 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     //
     // On a baseline that records outputs as `rwd` (Desktop 2.16120.0+, a normal session) production ALLOWS the
     // delete, so the default check is off: none of the three outputs signals below fires, and
-    // `allow_outputs_delete` has nothing left to waive. An authored `no_delete_in_outputs` arms it again exactly as
-    // on `rw` (the assertion fails, and both warns keep the evidence on stderr). Only an exact `"rwd"` counts — an
+    // `allow_outputs_delete` has nothing left to waive. `outputsCheckArmed` decides: an authored `no_delete_in_outputs`
+    // arms it exactly as on `rw` (the assertion fails, and both warns keep the evidence on stderr), and so does an
+    // authored `no_delete_in_mounts` with outputs unwaived (the default `outputs_delete` then catches a delete only
+    // the filesystem diff saw, which that key's bash-scan evidence cannot). Only an exact `"rwd"` disarms — an
     // absent field (a result written before it, replay, the remote lane) keeps the delete-denied behaviour.
     const authoredOutputsDelete = authored.some((a) => a.no_delete_in_outputs !== undefined);
     const optInOutputsDelete =
-      authored.some((a) => a.allow_outputs_delete === true) || (outputsDeleteAllowed(result) && !authoredOutputsDelete);
+      authored.some((a) => a.allow_outputs_delete === true) || !outputsCheckArmed(result.outputsMountMode, authored);
     const outputsTier = outputsDeleteTier(result.scan, result.fsDiff);
     const outputsEvidence = outputsDeleteEntries(result.scan, result.fsDiff).join("; ");
     if (outputsTier === "fail" && !authoredOutputsDelete && !optInOutputsDelete)

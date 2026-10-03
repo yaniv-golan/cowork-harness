@@ -43,6 +43,6 @@ describe("wiring (source pin)", () => {
   });
   it("verdict.ts reads it for both the signals and the roster", () => {
     const src = readFileSync(resolve("src/run/verdict.ts"), "utf8");
-    expect(src.match(/outputsCheckArmed\(result\.outputsMountMode, /g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    expect(src.match(/outputsCheckArmed\(\s*result\.outputsMountMode,/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
 });

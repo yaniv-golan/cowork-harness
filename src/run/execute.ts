@@ -31,6 +31,7 @@ import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { deriveOutcome } from "./outcome.js";
 import { loadBaseline, stampedOutputsMountMode } from "../baseline.js";
+import { outputsCheckArmed } from "./outputs-delete-tier.js";
 import {
   loadSession,
   resolveSessionPaths,
@@ -1615,10 +1616,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     scan.outputsDeleteBasis.push(...fsDiff.findings.map(() => "fs-diff" as const));
     // Only when the outputs check is armed: on an rwd run nothing authored reads the diff, so "a delete would go
     // undetected" would be noise about an operation production allows.
-    if (
-      fsDiff.status === "unavailable" &&
-      (outputsMountMode !== "rwd" || scenario.assert.some((a) => a.no_delete_in_outputs !== undefined))
-    )
+    if (fsDiff.status === "unavailable" && outputsCheckArmed(outputsMountMode, scenario.assert))
       warn(
         `::warning:: [scan] the outputs filesystem diff could not verify this turn (${fsDiff.reason}) — ` +
           `a delete made without a bash command would go undetected\n`,
@@ -3362,9 +3360,10 @@ const DELETE_TOKEN = {
  *  three matchers below are built per mount NAME rather than hardcoding the literal `outputs`.
  *
  *  The mount name is regex-escaped: names come from user-connected folder basenames and can contain `.`,
- *  `+`, `(` and friends. The right boundary `(?![\w.])` is kept exactly as-is and is correct for dotted
+ *  `+`, `(` and friends. The right boundary `(?![\w.-])` is correct for dotted
  *  names in BOTH directions: for a mount `v1.2`, `v1.2/x` matches (next char `/`) while `v1.2.3` does not
- *  (next char `.`, a different path); for a mount `data`, `data.json` correctly does not match. */
+ *  (next char `.`, a different path); for a mount `data`, `data.json` correctly does not match. `-` is excluded too, so a
+ *  sibling folder `outputs-archive` is not read as `outputs` (a folder basename can carry a hyphen). */
 type MountMatchers = { touches: RegExp; under: RegExp; cdInto: RegExp };
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const MOUNT_MATCHERS = new Map<string, MountMatchers>();
@@ -3374,12 +3373,12 @@ function mountMatchers(name: string): MountMatchers {
   const n = escapeRe(name);
   const m: MountMatchers = {
     // MENTIONED as a path segment — broad, used for the conservative rm co-occurrence + ambiguous-mv
-    // branch. The negative lookahead avoids `outputs.txt` / `myoutputs`.
-    touches: new RegExp(`(^|[\\s"'\`(/])(mnt/)?${n}(?![\\w.])`),
+    // branch. The negative lookahead avoids `outputs.txt` / `myoutputs` / a sibling folder `outputs-archive`.
+    touches: new RegExp(`(^|[\\s"'\`(/])(mnt/)?${n}(?![\\w.-])`),
     // A real path COMPONENT (preceded by start/`/`, followed by `/` or end) — used for mv direction so a
     // dst like `/tmp/outputs-backup` is NOT mistaken for being inside outputs/.
     under: new RegExp(`(^|/)(mnt/)?${n}(/|$)`),
-    cdInto: new RegExp(`\\b(cd|pushd)\\s+["']?(mnt/)?${n}(?![\\w.])`),
+    cdInto: new RegExp(`\\b(cd|pushd)\\s+["']?(mnt/)?${n}(?![\\w.-])`),
   };
   MOUNT_MATCHERS.set(name, m);
   return m;

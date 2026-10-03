@@ -3300,7 +3300,7 @@ function check(
           : fail(
               // Covers outputs on EVERY baseline, including those (Desktop 2.16120.0+) where production allows
               // an outputs delete, so the message claims nothing about production — only what the author asserted.
-              `delete op(s) touched mount(s) covered by no_delete_in_mounts (outputs, and every rw connected folder not waived by allow_delete_in): ` +
+              `delete op(s) touched mount(s) covered by no_delete_in_mounts (${waived.has("outputs") ? "" : "outputs, and "}every rw connected folder not waived by allow_delete_in): ` +
                 hits
                   .slice(0, 3)
                   .map((d) => `${d.mount}: ${d.command}`)
