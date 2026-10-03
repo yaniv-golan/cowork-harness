@@ -87,6 +87,25 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
   `plan.cost.unpriced`. A dry run writes nothing, unless `--approve-harness` is also given: then it records
   the harness sha.
 - One runner per variant: a `.lock` in the variant dir refuses a second live runner.
+- **`--effort LEVEL` sets the main loop's effort for the pass** (`low|medium|high|xhigh|max`; `extra` is read as
+  `xhigh`). Without it each case runs its session's `effort:`, else the baseline default (`medium`). Like `--model`
+  it is outside the harness sha. The staircase: `--model` per variant for the main loop's model, `--effort` per
+  variant for its effort, and a sub-agent's model and effort in the plugin's `agents/*.md` frontmatter, which each
+  variant's snapshot carries (not yet verified live). Levels are per model: one the model does not offer, any
+  `--effort` on a model with no selector (`claude-haiku-4-5`, `claude-sonnet-4-5`), and `xhigh`/`max` with
+  `extended_thinking: false` are refused before spend.
+- **Requested vs sent.** Each row records `meta.model_requested` and `meta.effort` (requested) beside `model` and
+  `meta.effort_sent` (what the main loop was served and sent, the effort read from the agent's own session
+  transcript). Another effort sent, or none when one was requested, is an `errors.jsonl` row
+  (`serving_substitution`, `meta.failure_rule: "effort_not_sent"`), so a comparison over effort compares efforts
+  actually sent; how the server treats an accepted level stays unobserved. `summary.json` records
+  `model_requested`, `effort` and `effort_sent` when the pass had one value of each.
+- **A variant keeps one model and effort per case.** A pass asking for another than the variant's rows for a case
+  ran is refused before spend: run it as a new variant. Rows from before these fields were recorded are held to
+  their served model, and warn when they have none (their effort warns only under `--effort`).
+- **`model:` / `effort:` in the tuned skill's own `SKILL.md` frontmatter move the main loop**, not a sub-agent. An
+  `effort:` that changes it makes the rows `effort_not_sent` errors (seen for a slash-command invocation); a
+  `model:` is expected to make every row `serving_substitution` (inferred). Put sub-agent settings in `agents/*.md`.
 - **`--skill NAME` picks the skill `skill_invoked` tracks** when the plugin registers more than one; a plugin
   with one skill (one `skills/<name>/`, or a root `SKILL.md`) is tracked without it. Every pass prints which
   skill it tracks, or why none. The selection is part of the harness sha, so the loop's command must pass the
@@ -352,8 +371,8 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
   skips it.
 - **`errors.jsonl` holds what is not the skill's score**, by `failure_class`: `timeout` (raise `--timeout-s` if
   it persists), `error` (an infrastructure fault, a run from another snapshot than the variant's, or a grade
-  that does not line up with the scenario), `serving_substitution` (the wrong model, or no evidence of the
-  pinned one: a serving problem, not the skill), `judge_invalid` (an unusable judge grade). An error row
+  that does not line up with the scenario), `serving_substitution` (the wrong model, no evidence of the
+  pinned one, or another effort sent than requested — `effort_not_sent`: a serving problem, not the skill), `judge_invalid` (an unusable judge grade). An error row
   never occupies its slot: the next pass re-runs it (see resume above).
 - **`meta.run_dir`** is one rep's kept run (`result.json`, transcript, events), outside the flow dir, for
   digging into a single rep.

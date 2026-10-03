@@ -113,6 +113,25 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`hillclimb run --effort LEVEL`** sets the main loop's effort for a pass (`low`, `medium`, `high`, `xhigh`, `max`;
+  `extra` is read as `xhigh`), so a variant can step effort without editing the gated session file. Without it each
+  case runs its session's `effort:`, else the baseline default. It is outside the harness sha, like `--model`. A
+  level the pinned model does not offer, any `--effort` on a model with no effort selector, `xhigh` or `max` with
+  `extended_thinking: false`, and thinking off on a model that does not allow it are refused before spend.
+- **hillclimb rows record the requested model and effort beside what the agent was served and sent.**
+  `meta.model_requested` and `meta.effort` hold the request; `meta.effort_sent` holds the effort the main loop's
+  calls went out with, read from the agent's own session transcript in the kept run dir. A main-loop call sent with
+  another effort is an `errors.jsonl` row (`serving_substitution`, `meta.failure_rule: "effort_not_sent"`), as is a
+  requested effort that no call confirms on an otherwise valid run. `summary.json` gains `model_requested`,
+  `effort` and `effort_sent` when the pass had one value of each, and `hillclimb check` validates them. `hillclimb
+  regrade` keeps all three on the rows it rebuilds. The dry run prints each case's requested model and effort, and
+  says its estimate ignores both.
+- **A variant keeps one requested model and effort per case.** A resumed pass that would run a case at another
+  model or effort than the variant's rows for it ran is refused before spend; before this, the remaining slots
+  silently ran the new setting. Rows written before the requested fields existed are held to their served model,
+  and warn when they record none. Different values across variants are allowed.
+- **The LLM decider's effort is recorded.** A gate it answers carries `effort` beside `model` in `decisions[]` and
+  `gateProvenance.gates[]` of `result.json`: the effort its host `claude` call was pinned to.
 - **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
   When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
   (`plugins.local_plugins` or `remote_plugins`), and the plugin's name differs, the run works here but real Cowork's
