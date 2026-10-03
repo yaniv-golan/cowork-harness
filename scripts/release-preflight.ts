@@ -9,6 +9,8 @@
 //   1. check:versions passes (scripts/check-versions.ts).
 //   2. CHANGELOG.md has a "## [<package.json version>]" heading (release.yml:54-59's regex) AND —
 //      stricter than release.yml — the section body is non-empty.
+//      It also FAILS when that section still holds a placeholder: a line starting with a TODO marker, or an
+//      HTML comment that says "placeholder" (invisible once rendered), naming each line.
 //   3. The tag `v<version>` does not already exist, locally or on origin.
 //   4. The working tree is clean (`git status --porcelain` empty).
 //   5. Best-effort, WARN-only: nudge about the ANTHROPIC_API_KEY repo secret (the live suite runs only with it).
@@ -91,6 +93,54 @@ export function changelogHasVersionSection(changelogText: string, version: strin
 }
 
 /**
+ * Lines inside the `## [<version>]` section that are still a placeholder: an HTML comment that says
+ * "placeholder" (one line or spanning several) or a line that starts with a `TODO` marker (after an optional
+ * list bullet and emphasis). A comment renders invisible on GitHub and in the release notes, so a forgotten
+ * one ships with nothing to show it. Inline code spans are ignored, so prose that shows a marker as code, or
+ * mentions a placeholder or a TODO mid-sentence, is not flagged. `line` is 1-based in the whole file.
+ */
+export function changelogPlaceholderLines(changelogText: string, version: string): Array<{ line: number; text: string }> {
+  const headingPrefix = `## [${version}]`;
+  const lines = changelogText.split("\n");
+  const found: Array<{ line: number; text: string }> = [];
+  let inSection = false;
+  let inComment = false;
+  let commentStart = -1;
+  let commentText = "";
+  for (const [i, raw] of lines.entries()) {
+    if (!inSection) {
+      if (raw.startsWith(headingPrefix)) inSection = true;
+      continue;
+    }
+    if (raw.startsWith("## [")) break;
+    const line = raw.replace(/`[^`]*`/g, "");
+    if (!inComment && /^\s*(?:[-*+]\s+)?(?:\*\*|__|\*|_)?\s*TODO(?![A-Za-z0-9])/.test(line)) {
+      found.push({ line: i + 1, text: raw });
+      continue;
+    }
+    let rest = line;
+    while (rest.length) {
+      if (!inComment) {
+        const open = rest.indexOf("<!--");
+        if (open < 0) break;
+        inComment = true;
+        commentStart = i;
+        commentText = "";
+        rest = rest.slice(open + 4);
+      }
+      const close = rest.indexOf("-->");
+      commentText += (close < 0 ? rest : rest.slice(0, close)) + "\n";
+      if (close < 0) break;
+      inComment = false;
+      if (/placeholder/i.test(commentText)) found.push({ line: commentStart + 1, text: lines[commentStart]! });
+      rest = rest.slice(close + 3);
+    }
+  }
+  if (inComment && /placeholder/i.test(commentText)) found.push({ line: commentStart + 1, text: lines[commentStart]! });
+  return found;
+}
+
+/**
  * Whether tag `v<version>` already exists, either locally (`git tag -l` output, one tag per entry) or
  * on origin (`git ls-remote --tags origin` output, raw lines of the form `<sha>\trefs/tags/vX.Y.Z`,
  * possibly with a trailing `^{}` for the dereferenced annotated-tag entry).
@@ -160,6 +210,17 @@ function checkChangelog(version: string): CheckResult {
     name: "CHANGELOG.md heading + non-empty section",
     status: ok ? "PASS" : "FAIL",
     detail: ok ? `found non-empty "## [${version}]" section` : `missing, or empty, "## [${version}]" section in CHANGELOG.md`,
+  };
+}
+
+function checkChangelogPlaceholders(version: string): CheckResult {
+  const found = changelogPlaceholderLines(r("CHANGELOG.md"), version);
+  return {
+    name: "CHANGELOG.md section has no placeholder",
+    status: found.length ? "FAIL" : "PASS",
+    detail: found.length
+      ? `"## [${version}]" still has a placeholder; replace it before tagging: ${found.map((f) => `CHANGELOG.md:${f.line} ${f.text.trim()}`).join("; ")}`
+      : `no TODO line or placeholder comment in "## [${version}]"`,
   };
 }
 
@@ -389,6 +450,7 @@ function main(): void {
   const hardResults: CheckResult[] = [
     checkCheckVersions(),
     checkChangelog(version),
+    checkChangelogPlaceholders(version),
     checkTagDoesNotExist(version),
     checkWorkingTreeClean(),
     checkInitSurfaceObserved(newestBaseline(), allowUnobserved),
