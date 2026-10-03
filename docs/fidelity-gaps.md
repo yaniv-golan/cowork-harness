@@ -24,7 +24,7 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 Every `##` below is one gap (or one scoping note). Grouped, since there are 36 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
-- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/`: the harness refuses them by default, real Cowork allows them](#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
+- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
@@ -312,23 +312,58 @@ added to the prompt (real Cowork does not list a session's files to the model ei
 
 **What follows from it:** a skill that relies on its earlier conversation (an answer the user gave in step 1,
 or a plan the agent stated but never wrote down) cannot resume from a fixture the way it would in the same
-session — the fixture tests only the state the skill persisted to `outputs/`. A run that deletes a fixture
-file fails by default; that is the harness's own outputs-delete policy (`allow_outputs_delete: true` opts
-out), not production behaviour, which lets a skill delete in `outputs/` without asking.
+session — the fixture tests only the state the skill persisted to `outputs/`. Deleting a fixture file is an
+outputs delete: it passes by default on a baseline that records `outputs` as `rwd` (Desktop 2.16120.0 and
+later, matching production, which lets a skill delete there without asking), and fails by default on an
+older `rw` baseline (`allow_outputs_delete: true` opts out there).
 
-## Deletes in `outputs/`: the harness refuses them by default, real Cowork allows them
+## Deletes in `outputs/` follow the baseline's recorded mount mode
 
 **Real Cowork behaviour:** from Desktop 2.16120.0 the `outputs` mount is `rwd` (deletes allowed) for a normal
 session. Every mount builder (the host-loop shell's `computeBashMounts`, the VM-loop builder and the shares builder)
 sets its mode from one exported function, `outputsMountMode`, which returns `"rwd"` unless the session is a bridge
-session (`"rw"`, delete denied). Connected folders are different: they stay `rw` until the user approves deletes for
-that folder (`allow_cowork_file_delete`), as before. Both committed baselines that describe these releases
+session (`"rw"`, delete denied). A bridge session is the Dispatch agent session (session type `agent`, created when a
+message arrives over the Sessions API); ordinary task sessions, Dispatch children, scheduled tasks and chat sessions
+are not, so they get `rwd`. Connected folders are different: they stay `rw` until the user approves deletes for that
+folder (`allow_cowork_file_delete`), as before. Both committed baselines that describe these releases
 (`desktop-2.16120.0`, `desktop-2.19675.0`) record `outputs` as `rwd`, and `sync` flags it if that function changes.
+Before 2.16120.0 outputs went through the same approved-list rule as a folder, so it was `rw`.
 
-**Harness behaviour:** a run whose agent deletes a file in `outputs/` still fails by default, through the harness's own
-outputs-delete check (`allow_outputs_delete: true` opts out). That check is a harness policy, not production
-behaviour. A skill that cleans up its own scratch files in `outputs/` works in real Cowork and goes red here unless the
-scenario opts out.
+Measured on Desktop 2.19675.0 (agent 2.1.286), host loop, a normal session with no folder connected: `rm` of a file in
+`outputs/` succeeded twice with no permission card, and `mv` and overwrite-by-rename inside `outputs/` also succeeded;
+Desktop's log listed the session's mounts as `outputs:rwd` with no delete-approved mounts. A connected folder in the
+same probe was `rw` (`rm` → "Operation not permitted") until approved. The VM loop was not probed live; it uses the
+same function.
+
+**Harness behaviour:** each live run records the baseline's outputs mode as `result.json`'s `outputsMountMode`, and
+the default verdict follows it:
+
+| Baseline records `outputs` as | An outputs delete (or a move out of `outputs/`), nothing authored | Guard roster |
+|---|---|---|
+| `rwd` (2.16120.0 and later) | passes, no signal | `outputs-delete —` (not applicable: outputs is not delete-denied) |
+| `rw` (before 2.16120.0) | fails `outputs_delete` (`allow_outputs_delete: true` accepts it) | `✗` |
+
+`no_delete_in_outputs: true` checks outputs deletes on every baseline, so a scenario that wants the old check
+authors it. `no_delete_in_mounts: true` also keeps covering outputs: unless `allow_delete_in` waives outputs, authoring
+it arms the outputs check on an `rwd` baseline, so a delete only the filesystem diff saw still fails (as
+`outputs_delete`, which `allow_outputs_delete` waives, as on `rw`) and the roster reports it. The detection itself (the bash-command scan and the per-turn filesystem
+diff) runs on every live run and its evidence stays in `result.json`'s `scan` / `fsDiff`.
+
+Two edges the default `rwd` verdict does not distinguish, both silent when nothing is authored:
+
+- **A delete through an outputs symlink into a connected folder.** `rm -rf mnt/outputs/link/`, where `link` points
+  into a `rw` connected folder, is attributed to outputs only, so on an `rwd` baseline it passes by default, while
+  production would return `EPERM` inside the folder. On `rw` it fails, but only because it is read as an outputs
+  delete. The scan does not resolve symlinks.
+- **Removing the outputs directory itself.** `rm -rf mnt/outputs` is an outputs delete; on `rwd` it passes by default.
+  In production outputs is a mountpoint, so its contents go but the directory stays; in the harness the directory
+  itself can vanish, and later turns and delivery may then differ from production.
+
+Not modelled: a bridge session. The harness has no Dispatch agent session, so every scenario is a normal session.
+`lane: remote` records no outputs mode (the Desktop mount builders are not evidence about Cowork's cloud lane), so
+it keeps the delete-denied verdict until the cloud lane is measured. A result written before `outputsMountMode`
+existed also reads as `rw`, so `verify-run` keeps failing an outputs delete in it; re-run the scenario to get the
+current verdict.
 
 ## Folder access in `chat` sessions
 
@@ -1213,14 +1248,29 @@ expanded here with no hook involved. Measured against agent 2.1.239 in the harne
   *not* forwarded to the model as literal text, so the run reads as a silent no-op.
 - **Both staging routes register the name.** `skills.local` copies to `<configDir>/skills/<basename>`
   (`src/session.ts`), which `--setting-sources user` loads; plugin sources become `--plugin-dir`
-  (`src/runtime/argv.ts`). Skills resolve by their bare frontmatter `name`, not plugin-qualified.
+  (`src/runtime/argv.ts`). In the agent, a skill resolves by its bare skill-directory name, not plugin-qualified
+  and not its frontmatter `name` (a plugin skill's name is sanitized: `skills/my.skill/` answers to `/my-skill`,
+  see `src/skill-id.ts`; only a `SKILL.md` placed directly in a plugin's skills path is named by its frontmatter `name`).
 - **The slash must be at position 0** — the input is trimmed, then must start with `/`. A slash named
   mid-sentence ("review the deck with /deck-review") is never expanded; it reaches the model as prose, which
   may then pick the `Skill` tool on its own. That is the model-invocation path, i.e. the auto-trigger a
   slash normally bypasses, so the scenario quietly stops testing what it reads as testing.
   `lint` reports it as ⚠ `WARN [prompt-slash-not-leading]`.
+- **Real Cowork resolves a typed slash command earlier, and more strictly.** Everything above is the
+  agent's resolver. In Cowork the Desktop app resolves what the user typed before any agent runs; a refusal
+  shows "Unknown skill", creates no task, and the agent never sees the message. Observed on Desktop
+  2.19675.0, 2026-10-03, 4 runs: a bare `/<skill>` whose name differs from its plugin's name was refused
+  (the agent here would expand it to `plugin:skill`); a bare `/<skill>` whose plugin has the same name
+  worked with one copy installed and was refused with two; the qualified `/<plugin>:<skill>` was refused
+  with two copies too; picking from the slash menu always worked. The harness passes `prompt:` straight to
+  the agent, so it models none of this and cannot see the refusal: a slash scenario that runs here may not
+  run when a user types it in Cowork. Pick the skill from the menu, or name the skill like its plugin, and do
+  not install two copies of a plugin. The qualified form was not measured with a single copy installed (only
+  seen refused with two), so it is not a proven fix. `lint` reports a bare name that differs from its staged
+  plugin's name as ⚠ `WARN [slash-skill-name-differs-from-plugin]`.
 
-The gap is therefore the hook's `additionalContext`, not the expansion.
+The gap is therefore the hook's `additionalContext` for a slash the agent receives, plus the app-side
+resolution above, which no run can observe.
 
 ### What this actually costs you
 

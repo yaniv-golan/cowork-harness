@@ -8,7 +8,7 @@
  *
  *  `events.jsonl` is append-only across turns with no per-turn header, so every whole-file scanner saw
  *  the PRIOR turn's events too. That was not telemetry noise — three of them decide the run's outcome:
- *  `scanEvents` (outputs-delete / host-path-leak → `severity:"fail"` signals),
+ *  `scanEvents` (outputs-delete on a delete-denied outputs mount / host-path-leak → `severity:"fail"` signals),
  *  `findUngatedPathToolCalls` (→ `record.result = "error"`), and `detectCapabilityUse`
  *  (→ `missing_capability`, a fail signal). So on any `--resume` — every `critique` reflection turn —
  *  turn 1's evidence FAILED turn 2.

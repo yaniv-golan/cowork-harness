@@ -785,9 +785,10 @@ def _lint_prompt_slash(doc, path):
     auto-trigger a slash is normally used to bypass. The scenario still runs and can still pass, so the
     failure mode is a scenario that silently tests something other than what it reads as.
 
-    Deliberately silent when the prompt DOES start with `/`: that is the working case. Registration is not
-    checkable statically (it depends on how the skill is staged), so an unresolvable leading name is left
-    to the run itself, where it shows up as `Unknown command: /x` with `num_turns: 0`.
+    Deliberately silent when the prompt DOES start with `/`: that is the working case for the agent.
+    Registration is not checked here (it depends on how the skill is staged), so an unresolvable leading
+    name is left to the run itself, where it shows up as `Unknown command: /x` with `num_turns: 0`. The
+    one staging-aware check on a leading slash is `_lint_slash_skill_plugin_name`.
     """
     findings = []
     prompt = doc.get("prompt")
@@ -817,6 +818,210 @@ def _lint_prompt_slash(doc, path):
             )
         )
     return findings
+
+
+# A prompt that STARTS with a bare (unqualified) slash name: `/<name>` then whitespace or end of prompt.
+_BARE_LEADING_SLASH_RE = re.compile(r"^/([A-Za-z][A-Za-z0-9_-]*)(?:\s|$)")
+
+
+def _session_path_for_lint(doc, path):
+    """The scenario's `session:` file as a Path, or None when there is none to read (inline, absent, or
+    missing on this machine). `session:` resolves relative to the scenario file, as the loader does."""
+    sess = doc.get("session")
+    if not isinstance(sess, str) or not sess.strip() or sess.strip().startswith("("):
+        return None
+    p = Path(os.path.expanduser(sess.strip()))
+    if not p.is_absolute():
+        p = Path(path).parent / p
+    return p if p.is_file() else None
+
+
+def _session_host_path(raw, base):
+    """One session-declared host path, resolved like `resolveSessionPaths`: `~`/`~/x` expand to home,
+    an absolute path stays, anything else is relative to the session file's directory."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    if raw == "~" or raw.startswith("~/"):
+        return Path(os.path.expanduser(raw))
+    if raw.startswith("~"):
+        return None  # `~<user>` — the loader refuses it; nothing to resolve here
+    p = Path(raw)
+    return p if p.is_absolute() else base / p
+
+
+def _sanitize_skill_name(name):
+    """A skill name as the agent's plugin-skill loader writes it into the id (mirrors `sanitizeSkillName`
+    in src/skill-id.ts): every UTF-16 code unit outside [a-zA-Z0-9_-] becomes "-", so a character outside
+    the BMP becomes two."""
+    out = []
+    for ch in name:
+        if re.match(r"[a-zA-Z0-9_-]$", ch):
+            out.append(ch)
+        else:
+            out.append("--" if ord(ch) > 0xFFFF else "-")
+    return "".join(out)
+
+
+_SKILL_MD_MAX_BYTES = 1024 * 1024
+
+
+def _plugin_manifest(plugin_dir):
+    """`.claude-plugin/plugin.json` as a dict, or None. A root-level `plugin.json` is NOT read — the agent
+    does not read it (see `binaryPluginIdentity` in src/session.ts). Never raises."""
+    try:
+        data = json.loads((plugin_dir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _loadable_skill_md(md):
+    try:
+        return md.is_file() and md.stat().st_size <= _SKILL_MD_MAX_BYTES
+    except OSError:
+        return False
+
+
+def _plugin_registered_skills(plugin_dir, yaml_mod):
+    """(plugin name, bare registered skill names) as the agent's plugin skill loader derives them — mirrors
+    `registeredSkills` in src/hillclimb/skill.ts and `registeredSkillId` in src/skill-id.ts:
+      - plugin name: the manifest `name`, else the directory name;
+      - skills paths: `skills/` whenever it exists; then each manifest `skills` entry (a string or a list;
+        `.` or `./`-prefixed, an existing directory inside the plugin, `skills/` itself dropped); the plugin
+        root only when the manifest has no `skills` field at all and there is no `skills/`;
+      - per path: a SKILL.md directly in it is ONE skill, named by its frontmatter `name` (minus a leading
+        `<plugin>:`) or the path's basename; otherwise each subdirectory holding a SKILL.md is a skill named
+        by its DIRECTORY;
+      - every name is sanitized (`_sanitize_skill_name`).
+    The git-tracked-file filter the TS side applies is not modelled. Never raises."""
+    manifest = _plugin_manifest(plugin_dir) or {}
+    name = manifest.get("name") if isinstance(manifest.get("name"), str) and manifest.get("name") else plugin_dir.name
+    skills_dir = plugin_dir / "skills"
+    paths = []
+    has_skills_dir = skills_dir.is_dir()
+    if has_skills_dir:
+        paths.append(skills_dir)
+    if "skills" in manifest:
+        raw = manifest["skills"]
+        try:
+            real_root = plugin_dir.resolve()
+        except OSError:
+            real_root = None
+        for e in raw if isinstance(raw, list) else [raw]:
+            if not isinstance(e, str) or not (e == "." or e.startswith("./")) or real_root is None:
+                continue
+            cand = plugin_dir / e
+            try:
+                real = cand.resolve()
+            except OSError:
+                continue
+            if not (real == real_root or real_root in real.parents) or not cand.is_dir():
+                continue
+            if has_skills_dir and real == skills_dir.resolve():
+                continue
+            paths.append(cand)
+    elif not has_skills_dir:
+        paths.append(plugin_dir)
+    names = set()
+    for sp in paths:
+        md = sp / "SKILL.md"
+        if _loadable_skill_md(md):
+            fm = _agent_name_from_frontmatter(md, yaml_mod) or sp.resolve().name
+            if fm.startswith(name + ":"):
+                fm = fm[len(name) + 1 :]
+            names.add(_sanitize_skill_name(fm))
+            continue
+        try:
+            entries = sorted(sp.iterdir())
+        except OSError:
+            continue
+        for sd in entries:
+            if sd.is_dir() and _loadable_skill_md(sd / "SKILL.md"):
+                names.add(_sanitize_skill_name(sd.name))
+    return name, names
+
+
+def _user_skill_names(skill_dir, yaml_mod):
+    """Names a `skills.local` user skill might answer to — its directory name and its frontmatter `name:`.
+    Generous on purpose: a match here only SILENCES the warning."""
+    names = {skill_dir.name, _sanitize_skill_name(skill_dir.name)}
+    fm = _agent_name_from_frontmatter(skill_dir / "SKILL.md", yaml_mod)
+    if fm:
+        names.add(fm)
+    return names
+
+
+def _lint_slash_skill_plugin_name(doc, path):
+    """W: a leading BARE `/<name>` that names a staged plugin's skill whose plugin is named differently.
+
+    The harness hands `prompt:` to the agent, which expands a bare plugin-skill name to `plugin:skill`.
+    Real Cowork resolves a TYPED slash command in the Desktop app before any agent runs, and refused this
+    shape with "Unknown skill" and no task (observed on Desktop 2.19675.0, 2026-10-03, 4 runs). The refusal
+    never reaches the agent, so no run can catch it — only the static shape can.
+
+    Best effort, and silent whenever it cannot tell: the scenario's `session:` must be a readable file on
+    this machine, and only its `plugins.local_plugins` / `plugins.remote_plugins` directories are read
+    (marketplace-delivered plugins are not resolved), so an inline session is silent too. Plugin and skill
+    names follow the agent's own derivation (`_plugin_registered_skills`). A
+    `skills.local` skill answering to the same name also silences it — that route is not a plugin skill.
+    """
+    prompt = doc.get("prompt")
+    if not isinstance(prompt, str):
+        return []
+    m = _BARE_LEADING_SLASH_RE.match(prompt.lstrip())
+    if not m:
+        return []
+    token = m.group(1)
+    sess_path = _session_path_for_lint(doc, path)
+    if sess_path is None:
+        return []
+    yaml_mod = _require_yaml()
+    try:
+        sess = yaml_mod.safe_load(sess_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(sess, dict):
+        return []
+    base = sess_path.parent
+    plugins = sess.get("plugins") if isinstance(sess.get("plugins"), dict) else {}
+    skills = sess.get("skills") if isinstance(sess.get("skills"), dict) else {}
+
+    for raw in skills.get("local") or []:
+        d = _session_host_path(raw, base)
+        if d is not None and d.is_dir() and token in _user_skill_names(d, yaml_mod):
+            return []
+
+    hits = []
+    for key in ("local_plugins", "remote_plugins"):
+        for raw in plugins.get(key) or []:
+            d = _session_host_path(raw, base)
+            if d is None or not d.is_dir():
+                continue
+            plugin_name, registered = _plugin_registered_skills(d, yaml_mod)
+            if token not in registered:
+                continue
+            if plugin_name == token:
+                return []  # the shape that resolved in Cowork with one copy installed
+            if plugin_name not in hits:
+                hits.append(plugin_name)
+    if not hits:
+        return []
+    plugin_name = hits[0]
+    return [
+        Finding(
+            "WARN",
+            "slash-skill-name-differs-from-plugin",
+            f"`prompt:` starts with the bare `/{token}`, a skill of the staged plugin `{plugin_name}`, whose "
+            "name differs. Real Cowork's app resolves a typed slash command before the agent runs and has "
+            "refused a bare skill name that differs from its plugin's name (\"Unknown skill\", no task); "
+            "this runs in the harness, because the agent expands the bare name, but may not in Cowork.",
+            "Pick the skill from Cowork's slash menu, or name the skill like its plugin. The qualified "
+            f"`/{plugin_name}:{token}` is an option, but it was not measured with a single copy installed (it "
+            "was refused with two copies). Do not install two copies of one plugin.",
+            path,
+        )
+    ]
 
 
 _TOOL_RESULT_KEYS = ("tool_result_contains", "tool_result_not_contains", "tool_result_matches", "tool_result_not_matches")
@@ -1215,6 +1420,8 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
 
     # W: a slash command named mid-prompt is never expanded — see _lint_prompt_slash.
     findings.extend(_lint_prompt_slash(doc, path))
+    # W: a bare leading `/<skill>` whose staged plugin is named differently — see _lint_slash_skill_plugin_name.
+    findings.extend(_lint_slash_skill_plugin_name(doc, path))
 
     # W: unknown assertion keys inside assert items (e.g. invented file_not_empty, kind, path)
     unknown_assert = sorted(assert_keys - ASSERT_KEYS)
@@ -2092,6 +2299,7 @@ LINT_RULES = {
     "regex-double-quoted": "WARN",
     "replay-noop": "WARN",
     "slash-prompt-forked-result-anchor": "WARN",
+    "slash-skill-name-differs-from-plugin": "WARN",
     "tool-called-always-passes": "INFO",
     "tool-input-regex-redactable": "WARN",
     "tool-input-shell-tier": "INFO",
@@ -4090,7 +4298,7 @@ def main(argv=None):
     sp.add_argument("--web-fetch", dest="web_fetch", action="append", metavar="DOMAIN", help="web_fetch approval rule (repeatable)")
     sp.add_argument("--file", action="append", metavar="PATH", help="file_exists assertion (repeatable)")
     sp.add_argument("--artifact", action="append", metavar="PATH", help="user_visible_artifact assertion (repeatable)")
-    sp.add_argument("--no-delete", action="store_true", help="add no_delete_in_outputs: true")
+    sp.add_argument("--no-delete", action="store_true", help="add no_delete_in_outputs: true (checks outputs deletes on every baseline; from Desktop 2.16120.0 Cowork itself allows them)")
     sp.add_argument("--egress-allowed", dest="egress_allowed", action="append", metavar="HOST", help="egress_allowed assertion (repeatable)")
     sp.add_argument("--egress-denied", dest="egress_denied", action="append", metavar="HOST", help="egress_denied assertion (repeatable)")
     sp.add_argument("--out", help="write to this file (default: stdout)")

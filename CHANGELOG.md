@@ -79,9 +79,26 @@ All notable changes to this project are documented here. The format is based on
   evidence-unavailable** (it passed as "new this run" before, though the pre-run manifest never looked there). Move
   the assertion to a file the step writes under `outputs/` or a connected folder. A replay of an existing cassette is
   unaffected: such a path is not in the cassette's manifest.
+- **An outputs delete no longer fails a run by default on `latest`.** `latest` (`desktop-2.19675.0`) records the
+  `outputs` mount as `rwd`, so a CI gate that relied on the implicit `outputs_delete` failure stops catching a skill
+  that deletes in `outputs/`. To keep that check, author `no_delete_in_outputs: true`; it behaves as before on every
+  baseline. See Changed.
+- **`verify-run` on an older result.json keeps the old outputs-delete verdict.** A result written by 4.2.x or earlier
+  has no `outputsMountMode`, which reads as `rw`. Re-verifying one that recorded an outputs delete on Desktop 2.16120.0 or
+  later therefore still fails, while a fresh run of the same scenario passes. That red is safe; re-run the
+  scenario to get the current verdict.
 
 ### Added
 
+- **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
+  When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
+  (`plugins.local_plugins` or `remote_plugins`), and the plugin's name differs, the run works here but real Cowork's
+  app has refused that typed form. The fix suggests picking the skill from the slash menu or naming it like its
+  plugin; `/<plugin>:<skill>` is offered as not measured with a single copy installed. Plugin and skill names are
+  derived as the agent derives them: `.claude-plugin/plugin.json`'s `name` and `skills` (a root `plugin.json` is
+  ignored), else the directory name, and a skill's sanitized directory name. The rule reads the `session:` file and
+  its plugin directories, and stays silent for an inline `session:`, for marketplace-delivered plugins, and when
+  the files are not on the machine running `lint`.
 - **`prune --include-hillclimb`.** It ranks hillclimb-labelled runs with every other run, so `--keep-last`
   applies to them. It deletes the `hillclimb regrade` and `hillclimb freeze-ref` evidence of every flow under
   the runs root, a loop still running included, and `freeze-ref` re-reads a frozen reference's source run: pass it
@@ -338,8 +355,9 @@ All notable changes to this project are documented here. The format is based on
   `semantic_pairwise` reference store, an empty one, and
   more than 64 MiB (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`), or one file over the pre-run hash cap. An untouched fixture file is pre-run, not
   authored: `semantic_matches` and `semantic_pairwise` judge only what the step created or rewrote, and `RunResult.artifacts[]`
-  marks an untouched one `preRun: true`. Deleting a fixture file fails the run by default (the harness's
-  outputs-delete policy; `allow_outputs_delete` opts out). `RunResult.workspaceFixture` is the ref as the
+  marks an untouched one `preRun: true`. Deleting a fixture file is an outputs delete: it passes by default on a
+  baseline that records `outputs` as `rwd` (Desktop 2.16120.0 and later) and fails by default on an older `rw` one
+  (`allow_outputs_delete` opts out there); see Changed. `RunResult.workspaceFixture` is the ref as the
   scenario file wrote it, and `scaffold` re-emits it verbatim, asserting only what the step produced. The fixture's content signature is part of
   the cassette staleness check: a changed fixture is a `fixture` finding (a warning by default; `--strict`,
   `--fail-on-skill-drift` and an explicit `--session` fail it), and one that cannot be found or scanned is
@@ -497,6 +515,26 @@ All notable changes to this project are documented here. The format is based on
     a sub-agent.
   - `tool_result_contains` / `tool_result_matches`, their negations, and the `result:` predicates of
     `tool_called` all see the larger capture.
+- **On baselines recording outputs as `rwd` (Desktop ≥2.16120.0), an outputs delete no longer fails the default
+  verdict; author `no_delete_in_outputs` to keep the check.** This is a default-verdict change made for fidelity. From
+  Desktop 2.16120.0 every mount builder gives `outputs` the mode `rwd` (deletes allowed) for a normal session, and `rw`
+  only for a Dispatch bridge session, which the harness does not model. Measured on 2.19675.0: `rm`, `mv` and
+  overwrite-by-rename in `outputs/` all succeed with no permission card. The harness failed such a run anyway.
+  - Each live run records the baseline's outputs mode as the new `result.json` field `outputsMountMode`. On `rwd`,
+    `outputs_delete`, `outputs_delete_unconfirmed` and `outputs_diff_unavailable` do not fire unless
+    `no_delete_in_outputs` is authored, or `no_delete_in_mounts` without `allow_delete_in` waiving outputs. Otherwise
+    the guard roster shows `outputs-delete —` (not applicable). A move out of
+    `outputs/` is treated the same as an `rm`.
+  - Baselines recording `rw` (every release before 2.16120.0) keep the old verdict. So does `lane: remote`, which
+    records no mode, because Desktop's mount builders are not evidence about Cowork's cloud lane.
+  - `allow_outputs_delete` is still accepted. On an `rwd` baseline it is a no-op with no warning, unless
+    `no_delete_in_mounts` arms the outputs check; then it waives that check's `outputs_delete` signal, as on `rw`.
+  - `no_delete_in_outputs` and `no_delete_in_mounts` keep covering `outputs` on every baseline: authoring either arms
+    the outputs check, so a delete only the filesystem diff saw still fails the run (unless `allow_outputs_delete`
+    waives it). Their failure messages no longer
+    say production denies the delete.
+  - The detection still runs on every live run, and its evidence stays in `scan` / `fsDiff`. Committed cassettes are
+    unaffected: these signals never run on replay.
 
 ### Fixed
 
@@ -516,6 +554,20 @@ All notable changes to this project are documented here. The format is based on
   updated" uses the status staleness window (`COWORK_HARNESS_STATUS_STALE_MS`, default 15s, read from `prune`'s own
   environment). A run frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json`
   that is not a regular file is not read, so a FIFO there cannot hang `prune`.
+- **`prune` deletes only run dirs, and refuses a `<runs-dir>` at the wrong level.** It ranks and deletes only
+  dirs named `local_` followed by lowercase letters and digits (a run's id), and dirs named `sess-` followed by
+  letters, digits, `_` or `-` only under `--pinned-older-than`. Any other dir under a scenario is left alone, and
+  `prune` prints how many it left; a dir that looks like a run but has another name is counted on its own line,
+  with up to three paths. A dir `prune` cannot read is skipped and counted. Before, `prune` given the wrong dir treated the level
+  below it as scenarios and deleted their contents past `--keep-last`. It now exits 2 and deletes nothing,
+  `--dry-run` included, when the root is a run dir, a dir inside a run dir, a scenario dir, an eval dir or a dir
+  of eval dirs, the parent of a runs root (such as `~/.cowork-harness`), or a file. The message says what the
+  path looks like and which root to pass instead. The check applies however the root was set: the positional,
+  `--run-dir` or `COWORK_HARNESS_RUNS_DIR`. A runs root that holds another runs root inside it (found without
+  following symlinks) is now refused too; prune each one by its own path. The check looks only a few levels deep
+  and is bounded in time; a root it cannot clear in that bound, and that is not itself a runs root (an
+  `index.jsonl` of its own, or only scenario dirs), is refused as well, so `prune ~` refuses instead of
+  scanning the home dir. A scenario named `runs`, `turns` or `events.jsonl` still prunes normally.
 - **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
   registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
   so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a
@@ -744,9 +796,9 @@ All notable changes to this project are documented here. The format is based on
   2.16120.0 every mount builder takes the outputs mode from one exported function, `outputsMountMode`, which allows
   deletes for a normal session and denies them only for a bridge session. Both baselines said `rw` (delete denied).
   Connected folders keep the approved-list rule. `sync` now pins that function and its non-bridge `"rwd"`, so a change
-  is an unknown delta; the delete-deny resolver's site count could not see this. Nothing the harness runs reads the
-  recorded mode, so no cassette goes stale. The harness's own outputs-delete check is unchanged; see
-  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them).
+  is an unknown delta; the delete-deny resolver's site count could not see this. No cassette goes stale. The default
+  outputs-delete verdict now follows the recorded mode (see Changed); see
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-follow-the-baselines-recorded-mount-mode).
 - **The agent now runs with auto-memory off, as Cowork does.** For an ordinary task Desktop gives the agent an
   auto-memory directory only when server gate `123929380` is on. Otherwise it sends
   `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. The gate is off in all 31 committed baselines that record it; the other 9, which
@@ -801,6 +853,15 @@ All notable changes to this project are documented here. The format is based on
   `mcp__remote-devices__<tool>` (and `mcp__remote-devices__<server>__<tool>` for a bridged host MCP server), and
   `device_commit_files` as taking 1–50 files, each naming a shared file's id (`fileUuid`, preferred) or a staged
   path (`stagedPath`); both are optional in the schema.
+- The docs on slash-command prompts now say that a slash which runs in the harness may not run when a user types it
+  in Cowork. The harness hands `prompt:` to the agent, which expands a bare plugin-skill name to `plugin:skill`; real
+  Cowork resolves a typed slash command in the Desktop app first, and a refusal ("Unknown skill") creates no task
+  and never reaches the agent. Observed on Desktop 2.19675.0, 2026-10-03, 4 runs: a bare name that differs from its
+  plugin's name was refused, and with two copies of a plugin installed both the bare and the qualified forms were
+  refused; picking from the slash menu always worked. The advice: pick the skill from the menu, or name it like its
+  plugin, and do not install two copies of one plugin. The qualified `/<plugin>:<skill>` was not measured with a
+  single copy installed. The docs also now say a skill registers under its directory name (sanitized for a plugin
+  skill), not its frontmatter `name`.
 
 ## [4.2.1] — 2026-10-01
 

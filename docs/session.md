@@ -61,7 +61,8 @@ agent_env:
 #    (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)
 folders:
   - { from: ~/code/myproject, mode: rw }    # mounted at mnt/myproject; mode default rw (delete denied, like
-                                            # Cowork); use rwd only to model a delete-approved mount
+                                            # a Cowork folder); use rwd only to model a delete-approved mount.
+                                            # (outputs/ differs: rwd from Desktop 2.16120.0, see fidelity-gaps.md)
                                             # NOTE: at `fidelity: hostloop`, a rw/rwd folder needs the
                                             # scenario's `allow_host_writes: true` (see scenario.md) —
                                             # hostloop's native file tools have no container around them.
@@ -222,7 +223,7 @@ default `{}`) hashes identically to one authored before this field existed.
 For an ad-hoc `skill` run (no session file), the CLI flags **`--upload <file>`** and **`--folder <dir>`**
 are the equivalents of `uploads[]` and `folders[]`.
 
-`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc detection instead: `no_delete_in_mounts` is the one that covers connected folders — `no_delete_in_outputs` covers `outputs/` ONLY — plus the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md), which records what production denies: `unlink`/`rmdir` only, not in-place emptying).
+`folders[].mode` is `r` \| `rw` \| `rwd` (read / read-write / read-write-delete), matching Cowork's per-mount grants. (There is no `to:` field — the mount name is always derived from the folder basename, collision-resolved; `.projects` is now only a reserved name.) Enforcement: `r` mounts get a per-mount `:ro` bind on the Docker tiers, so writes fail in the guest; the `rw` vs `rwd` delete-deny distinction is not yet mount-enforced (post-hoc detection instead: `no_delete_in_mounts` is the one that covers connected folders, and it covers `outputs/` too; `no_delete_in_outputs` covers `outputs/` ONLY — plus the planned FUSE delete-deny sub-project — see [boundary.md](./boundary.md), which records what production denies on a `rw` mount: `unlink`/`rmdir` only, not in-place emptying). `outputs/` itself is not a `folders[]` entry: its mode comes from the baseline (`rwd`, deletes allowed, from Desktop 2.16120.0; `rw` before), and the default verdict follows it.
 
 ### Discovery
 See [discovery.md](./discovery.md) for the full model. In short: the harness builds a clean `CLAUDE_CONFIG_DIR` with a generated `settings.json`, mounts plugins at the Cowork paths, and wires `--mcp-config` — every field here is an override knob.

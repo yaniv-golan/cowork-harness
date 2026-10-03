@@ -392,7 +392,8 @@ export function dockerRunArgv(i: DockerRunInput): string[] {
     `${i.sessionHost}:${i.sessionRoot}`,
     // Per-mount read-only enforcement — a nested `:ro` bind over each `mode:r` subpath makes
     // uploads / plugins unwritable in the guest (matching Cowork: asar uploads = 'ro'), while the rest
-    // of the session tree stays writable. Delete-deny for rw/rwd is the separate FUSE sub-project.
+    // of the session tree stays writable. Delete-deny for `rw` mounts (connected folders, and outputs on
+    // baselines before 2.16120.0) is not enforced here; it is detected post-run.
     ...(i.readOnlyMountPaths ?? []).flatMap((mp) => ["-v", `${i.sessionHost}/mnt/${mp}:${i.sessionRoot}/mnt/${mp}:ro`]),
     // Real folder mounts + `.claude/{skills,projects}`, layered AFTER the overlays above so they
     // correctly shadow the (now-absent, for folders) staged-copy destination.

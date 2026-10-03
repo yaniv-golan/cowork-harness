@@ -1,12 +1,28 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, readdirSync, utimesSync, rmSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import {
+  chmodSync,
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  utimesSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { finalizeRunStatus, writeRunningStatus, type RunStatusMeta } from "../src/run/run-status.js";
 import { hillclimbRunLabel } from "../src/run/run-labels.js";
 import type { RunRecord } from "../src/run/run.js";
+import { appendIndexRow, CRITIQUE_SESSION_PREFIX, type RunIndexRow } from "../src/run/run-index.js";
+import { jobRunId } from "../src/eval/schedule.js";
+import * as gc from "../src/run/runs-gc.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
@@ -35,9 +51,9 @@ describe.skipIf(!can)("prune", () => {
 
   it("prune --dry-run does not delete any directories", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
-    makeRunDir(runsRoot, "my-scenario", "run-a");
-    makeRunDir(runsRoot, "my-scenario", "run-b");
-    makeRunDir(runsRoot, "my-scenario", "run-c");
+    makeRunDir(runsRoot, "my-scenario", "local_a");
+    makeRunDir(runsRoot, "my-scenario", "local_b");
+    makeRunDir(runsRoot, "my-scenario", "local_c");
     const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", "--dry-run", runsRoot], {
       encoding: "utf8",
     });
@@ -51,10 +67,10 @@ describe.skipIf(!can)("prune", () => {
   it("prune --keep-last 1 leaves exactly 1 run dir per scenario", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
     // Three run dirs; the mtime tiebreaker sorts alphabetically descending,
-    // so "run-c" is "newest" and will be kept.
-    makeRunDir(runsRoot, "s", "run-a");
-    makeRunDir(runsRoot, "s", "run-b");
-    makeRunDir(runsRoot, "s", "run-c");
+    // so "local_c" is "newest" and will be kept.
+    makeRunDir(runsRoot, "s", "local_a");
+    makeRunDir(runsRoot, "s", "local_b");
+    makeRunDir(runsRoot, "s", "local_c");
     const r = spawnSync("node", [CLI, "prune", "--keep-last", "1", runsRoot], { encoding: "utf8" });
     expect(r.status).toBe(0);
     const remaining = readdirSync(join(runsRoot, "s"));
@@ -63,8 +79,8 @@ describe.skipIf(!can)("prune", () => {
 
   it("prune --keep-last N ≥ count leaves all dirs intact", () => {
     const runsRoot = mkdtempSync(join(tmpdir(), "cwh-runs-"));
-    makeRunDir(runsRoot, "s", "run-a");
-    makeRunDir(runsRoot, "s", "run-b");
+    makeRunDir(runsRoot, "s", "local_a");
+    makeRunDir(runsRoot, "s", "local_b");
     const r = spawnSync("node", [CLI, "prune", "--keep-last", "5", runsRoot], { encoding: "utf8" });
     expect(r.status).toBe(0);
     expect(readdirSync(join(runsRoot, "s")).length).toBe(2);
@@ -529,5 +545,622 @@ describe.skipIf(!can)("prune never deletes a run that is still running", () => {
     expect(r.error, "prune hung reading a FIFO status.json").toBeUndefined();
     expect(r.status, r.stderr).toBe(0);
     expect(existsSync(fifoDir)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// The level prune runs at. prune takes the RUNS ROOT (`<root>/<scenario>/<run>`). Handed a scenario dir, a run
+// dir or the parent of a runs root, it used to treat the next level down as scenarios and delete their
+// children past --keep-last. Two guards now: a shape check refuses the wrong level (exit 2, nothing deleted,
+// --dry-run included), and only children named like a run id are ever ranked or deleted.
+
+/** Every path under `root`, sorted, with a content hash for files. mtimes are not compared. */
+function snapshotTree(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, rel: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const p = join(dir, e.name);
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        out.push(`${r}/`);
+        walk(p, r);
+      } else {
+        const buf = readFileSync(p);
+        out.push(`${r} ${buf.length} ${createHash("sha256").update(buf).digest("hex").slice(0, 16)}`);
+      }
+    }
+  };
+  walk(root, "");
+  return out;
+}
+/** A row written by the real index writer, so a fixture's `index.jsonl` is what a finished run leaves. */
+function indexRow(root: string): void {
+  appendIndexRow(root, {
+    v: 1,
+    ts: new Date().toISOString(),
+    command: "run",
+    scenario: "s",
+    slug: "s",
+    runId: "local_0000000000001",
+    fidelity: "container",
+    baseline: "desktop-0.0.0",
+    result: "success",
+    pass: true,
+  } as RunIndexRow);
+}
+/** A runs root as a finished run leaves it: index.jsonl plus `<scenario>/<n runs>`. */
+function realRoot(root: string, scenario = "s", n = 3): string {
+  mkdirSync(root, { recursive: true });
+  indexRow(root);
+  for (let i = 0; i < n; i++) runDir(root, scenario, { mtimeSec: T0 + i });
+  return root;
+}
+const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
+const runCount = (dir: string) => readdirSync(dir).filter((n) => n.startsWith("local_")).length;
+
+/** Run `args` against a fresh fixture, with and without --dry-run: exit 2, the message, and an unchanged tree.
+ *  The real run goes LAST and its stderr is returned, so a caller's fixture variable names the same build. */
+function expectRefused(build: () => { top: string; args: string[] }, message: RegExp, env: NodeJS.ProcessEnv = {}): string {
+  let stderr = "";
+  for (const dry of [true, false]) {
+    const { top, args } = build();
+    const before = snapshotTree(top);
+    const r = prune(dry ? ["--dry-run", ...args] : args, env);
+    const tag = dry ? "--dry-run" : "real";
+    expect(r.status, `${tag}: ${r.stderr}`).toBe(2);
+    expect(r.stderr, tag).toMatch(message);
+    expect(r.stderr, tag).toMatch(/Nothing was deleted/);
+    expect(r.stderr, tag).not.toMatch(/✗ pruned|\n\s+at /);
+    expect(snapshotTree(top), `${tag}: the tree changed`).toEqual(before);
+    if (!dry) stderr = r.stderr;
+  }
+  return stderr;
+}
+
+describe.skipIf(!can)("prune refuses a root at the wrong level", () => {
+  it("R1: the parent of a runs root (P/runs) is refused; P/runs itself prunes", () => {
+    let P = "";
+    const err = expectRefused(() => {
+      P = tmp("prune-lvl-");
+      realRoot(join(P, "runs"), "s", 8);
+      return { top: P, args: ["--keep-last", "1", P] };
+    }, /looks like the parent of a runs root/);
+    expect(err).toContain(join(P, "runs"));
+    const ok = prune(["--keep-last", "1", join(P, "runs")]);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(runCount(join(P, "runs", "s"))).toBe(1);
+  });
+
+  it("R1b: refuses before touching an earlier-sorted child (no lazy per-scenario check)", () => {
+    expectRefused(() => {
+      const P = tmp("prune-lvl-");
+      for (let i = 0; i < 7; i++) mkdirSync(join(P, "aaa-notes", `local_${i}aaaaaaaaaaaa`), { recursive: true });
+      realRoot(join(P, "runs"), "s", 8);
+      return { top: P, args: ["--keep-last", "1", P] };
+    }, /looks like the parent of a runs root/);
+  });
+
+  it("R1c: a child with index.jsonl and only scaffold-dir scenarios is a runs root", () => {
+    expectRefused(() => {
+      const P = tmp("prune-lvl-");
+      const C = join(P, "myroot");
+      indexRow(C);
+      for (const s of ["a", "b"]) for (let i = 0; i < 3; i++) mkdirSync(join(C, s, `local_${s}${i}aaaaaaaaaaaa`), { recursive: true });
+      return { top: P, args: ["--keep-last", "1", P] };
+    }, /looks like the parent of a runs root: .*myroot \(index\.jsonl\)/);
+  });
+
+  it("R1d: an empty child named runs (the default runs-dir name) is refused", () => {
+    expectRefused(() => {
+      const P = tmp("prune-lvl-");
+      mkdirSync(join(P, "runs"));
+      return { top: P, args: [P] };
+    }, /looks like the parent of a runs root: .*runs \(the default runs-dir name\)/);
+  });
+
+  it("R1e: a runs root holding a nested runs root is refused with the nested message; the nested root prunes by its own path", () => {
+    let R = "";
+    const err = expectRefused(() => {
+      R = realRoot(tmp("prune-lvl-"), "s", 3);
+      realRoot(join(R, "nested"), "t", 3);
+      return { top: R, args: ["--keep-last", "1", R] };
+    }, /holds a nested runs root, so prune cannot run on it: /);
+    expect(err).toContain(join(R, "nested"));
+    expect(err).not.toMatch(/parent of/);
+    const ok = prune(["--keep-last", "1", join(R, "nested")]);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(runCount(join(R, "nested", "t"))).toBe(1);
+  });
+
+  it("R1f: lists every runs root it found, not just the first", () => {
+    let P = "";
+    const err = expectRefused(() => {
+      P = tmp("prune-lvl-");
+      realRoot(join(P, "runs"));
+      realRoot(join(P, "runs-old"));
+      return { top: P, args: [P] };
+    }, /looks like the parent of runs roots: /);
+    expect(err).toContain(join(P, "runs"));
+    expect(err).toContain(join(P, "runs-old"));
+  });
+
+  it("R2: a scenario dir is refused; the hint names the runs root, says prune has no per-scenario scope, and previews first", () => {
+    let R = "";
+    const err = expectRefused(() => {
+      R = realRoot(tmp("prune-lvl-"), "s", 8);
+      return { top: R, args: ["--keep-last", "1", join(R, "s")] };
+    }, /looks like a scenario dir, not a runs root: .*local_\w+ is a run dir \(status\.json, turns\/\)/);
+    expect(err).toMatch(/no per-scenario scope/);
+    expect(err).toContain(`prune --dry-run ${R}`);
+    expect(err).not.toMatch(/parent of/);
+    const ok = prune(["--keep-last", "1", R]);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(runCount(join(R, "s"))).toBe(1);
+  });
+
+  it("R2b: ONE run-shaped child (status.json only) among empty scaffold dirs is enough", () => {
+    expectRefused(() => {
+      const R = tmp("prune-lvl-");
+      runDir(R, "s", { turns: false, mtimeSec: T0 });
+      for (let i = 0; i < 6; i++) mkdirSync(join(R, "s", `local_${i}zzzzzzzzzzzz`));
+      return { top: R, args: ["--keep-last", "1", join(R, "s")] };
+    }, /looks like a scenario dir/);
+  });
+
+  it("R2c: the check comes before --pinned-older-than and --include-hillclimb", () => {
+    expectRefused(() => {
+      const R = tmp("prune-lvl-");
+      runDir(R, "s", { name: "sess-old", mtimeSec: T0 - 30 * 86_400 });
+      runDir(R, "s", { status: "running", pid: process.pid, mtimeSec: T0 });
+      return { top: R, args: ["--pinned-older-than", "7d", "--include-hillclimb", join(R, "s")] };
+    }, /looks like a scenario dir/);
+  });
+
+  it("R2d: a root given by --run-dir is checked too", () => {
+    expectRefused(() => {
+      const R = realRoot(tmp("prune-lvl-"), "s", 8);
+      return { top: R, args: ["--keep-last", "1", "--run-dir", join(R, "s")] };
+    }, /looks like a scenario dir/);
+  });
+
+  it("R3: a run dir is refused; the hint names the runs root two levels up", () => {
+    let R = "";
+    const err = expectRefused(() => {
+      R = tmp("prune-lvl-");
+      const d = runDir(R, "s", { mtimeSec: T0 });
+      writeFileSync(join(d, "events.jsonl"), '{"type":"init"}\n');
+      for (let i = 1; i < 4; i++) runDir(R, "s", { mtimeSec: T0 + i });
+      return { top: R, args: ["--keep-last", "1", d] };
+    }, /looks like a run dir, not a runs root \(it has status\.json, events\.jsonl, turns\/\)/);
+    expect(err).toMatch(/no per-scenario scope/);
+    expect(err).toContain(`prune --dry-run ${R}`);
+    const ok = prune(["--keep-last", "1", R]);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(runCount(join(R, "s"))).toBe(1);
+  });
+
+  it("R3b: one marker is enough: events.jsonl, turns/<N>, a pre-layout file, or .origin", () => {
+    const shapes: Array<[string, (d: string) => void]> = [
+      ["events.jsonl", (d) => writeFileSync(join(d, "events.jsonl"), "{}\n")],
+      ["turns/", (d) => mkdirSync(join(d, "turns", "1"), { recursive: true })],
+      ["result.json", (d) => (writeFileSync(join(d, "result.json"), "{}"), writeFileSync(join(d, "run.jsonl"), "{}\n"))],
+      [".origin", (d) => writeFileSync(join(d, ".origin"), "{}")],
+    ];
+    for (const [marker, make] of shapes) {
+      expectRefused(
+        () => {
+          const R = tmp("prune-lvl-");
+          const d = join(R, "s", "local_0000000000001");
+          mkdirSync(join(d, "work", "outputs", "a"), { recursive: true });
+          make(d);
+          return { top: R, args: [d] };
+        },
+        new RegExp(`looks like a run dir.*\\(it has [^)]*${escapeRegExp(marker)}`),
+      );
+    }
+  });
+
+  it("R3c: a dir inside a run dir is refused", () => {
+    expectRefused(() => {
+      const R = tmp("prune-lvl-");
+      const d = runDir(R, "s", { mtimeSec: T0 });
+      for (let i = 0; i < 8; i++) mkdirSync(join(d, "work", "outputs", `local_${i}aaaaaaaaaaaa`), { recursive: true });
+      return { top: R, args: ["--keep-last", "1", join(d, "work")] };
+    }, /is inside the run dir .*local_/);
+  });
+
+  it("E1: an eval dir (manifest.json) and a dir of eval dirs are refused", () => {
+    expectRefused(() => {
+      const E = tmp("prune-lvl-");
+      writeFileSync(join(E, "manifest.json"), "{}");
+      writeFileSync(join(E, "runs.jsonl"), "");
+      mkdirSync(join(E, "a", "local_0000000000001"), { recursive: true });
+      mkdirSync(join(E, "a", "local_0000000000002"), { recursive: true });
+      return { top: E, args: ["--keep-last", "1", E] };
+    }, /looks like an eval dir/);
+    expectRefused(() => {
+      const Es = tmp("prune-lvl-");
+      mkdirSync(join(Es, "20260930-000000-abc123", "x", "local_0000000000001"), { recursive: true });
+      mkdirSync(join(Es, "20260930-000000-abc123", "x", "local_0000000000002"), { recursive: true });
+      writeFileSync(join(Es, "20260930-000000-abc123", "manifest.json"), "{}");
+      return { top: Es, args: ["--keep-last", "1", Es] };
+    }, /looks like a dir of eval dirs/);
+  });
+
+  it("N0: a root that is a file exits 2 with no stack trace", () => {
+    expectRefused(() => {
+      const P = tmp("prune-lvl-");
+      writeFileSync(join(P, "f"), "x");
+      return { top: P, args: [join(P, "f")] };
+    }, /is not a directory/);
+  });
+});
+
+describe.skipIf(!can)("prune still prunes a real runs root", () => {
+  it("F1/F2: an empty root and an index-only root", () => {
+    const empty = tmp("prune-ok-");
+    const r1 = prune([empty]);
+    expect(r1.status, r1.stderr).toBe(0);
+    expect(r1.stderr).toMatch(/nothing to prune/);
+    const idx = tmp("prune-ok-");
+    indexRow(idx);
+    writeFileSync(join(idx, "capability-cache.json"), "{}");
+    const r2 = prune([idx]);
+    expect(r2.status, r2.stderr).toBe(0);
+  });
+
+  it("F3: a single scenario", () => {
+    const R = realRoot(tmp("prune-ok-"), "s", 3);
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(runCount(join(R, "s"))).toBe(1);
+  });
+
+  it("F4: a scenario named runs, with runs or only scaffold dirs", () => {
+    const R = realRoot(tmp("prune-ok-"), "runs", 3);
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(runCount(join(R, "runs"))).toBe(1);
+    const S = tmp("prune-ok-");
+    for (let i = 0; i < 3; i++) mkdirSync(join(S, "runs", `local_${i}aaaaaaaaaaaa`), { recursive: true });
+    writeFileSync(join(S, "runs", ".DS_Store"), "");
+    const r2 = prune(["--keep-last", "1", S]);
+    expect(r2.status, r2.stderr).toBe(0);
+    expect(runCount(join(S, "runs"))).toBe(1);
+  });
+
+  it("F5: scenarios named turns, events.jsonl, status.json, result.json", () => {
+    const R = tmp("prune-ok-");
+    indexRow(R);
+    const scen = ["turns", "events.jsonl", "status.json", "result.json"];
+    for (const s of scen) for (let i = 0; i < 3; i++) runDir(R, s, { mtimeSec: T0 + i });
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    for (const s of scen) expect(runCount(join(R, s)), s).toBe(1);
+  });
+
+  it("F6: unrelated user dirs are left alone and counted", () => {
+    const R = realRoot(tmp("prune-ok-"), "s", 3);
+    mkdirSync(join(R, "notes", "a", "b"), { recursive: true });
+    mkdirSync(join(R, "notes", "c"), { recursive: true });
+    mkdirSync(join(R, "tmp"));
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(runCount(join(R, "s"))).toBe(1);
+    expect(existsSync(join(R, "notes", "a", "b")) && existsSync(join(R, "notes", "c")) && existsSync(join(R, "tmp"))).toBe(true);
+    expect(r.stderr).toMatch(/left alone 2 dir\(s\) not named like a run/);
+  });
+
+  it("F7: chat/, quarantine/, .migrating/ and capability-cache.json", () => {
+    const R = tmp("prune-ok-");
+    indexRow(R);
+    for (let i = 0; i < 3; i++) runDir(R, "chat", { mtimeSec: T0 + i });
+    mkdirSync(join(R, "quarantine"));
+    writeFileSync(join(R, "quarantine", "x.cassette.json"), "{}");
+    mkdirSync(join(R, ".migrating"));
+    writeFileSync(join(R, "capability-cache.json"), "{}");
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(runCount(join(R, "chat"))).toBe(1);
+    expect(existsSync(join(R, "quarantine", "x.cassette.json"))).toBe(true);
+  });
+
+  // The shape check has no reliable marker for a home dir or a repo. The name allowlist is what protects them:
+  // nothing in them is named like a run id, so nothing is ranked or deleted, and the count says so.
+  it("F8: a home-like dir is left untouched, with the count printed", () => {
+    const H = tmp("prune-home-");
+    for (const d of [
+      "Documents/a",
+      "Documents/b",
+      "Library/Caches",
+      "Library/Preferences",
+      "code/yaniv/repo",
+      "Desktop",
+      "Music",
+      "Pictures/x",
+    ])
+      mkdirSync(join(H, d), { recursive: true });
+    writeFileSync(join(H, "Documents", "a", "notes.txt"), "keep me");
+    realRoot(join(H, ".cowork-harness", "runs"), "s", 8);
+    const before = snapshotTree(H);
+    const r = prune(["--keep-last", "1", H]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(snapshotTree(H)).toEqual(before);
+    expect(r.stderr).toMatch(/left alone \d+ dir\(s\) not named like a run/);
+  });
+
+  it("F9: a repo-like dir is left untouched, with the count printed", () => {
+    const G = tmp("prune-repo-");
+    for (const d of [
+      "src/run",
+      "src/eval",
+      "test/fixtures",
+      "docs/img",
+      "node_modules/a",
+      "node_modules/b",
+      "dist/x",
+      "scripts/ci",
+      ".git/objects",
+      ".git/refs",
+    ])
+      mkdirSync(join(G, d), { recursive: true });
+    writeFileSync(join(G, "package.json"), "{}");
+    writeFileSync(join(G, "src", "run", "a.ts"), "export {}");
+    const before = snapshotTree(G);
+    const r = prune(["--keep-last", "1", G]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(snapshotTree(G)).toEqual(before);
+    expect(r.stderr).toMatch(/left alone 10 dir\(s\) not named like a run/);
+    expect(r.stderr).toContain(`no <scenario>/<run> dirs found under ${G}; the default runs root is ~/.cowork-harness/runs`);
+  });
+
+  it("F10: a runs root nested three levels down is left untouched (the allowlist, not the shape check)", () => {
+    const R = realRoot(tmp("prune-ok-"), "s", 3);
+    realRoot(join(R, "x", "y", "nested"), "t", 8);
+    for (const w of ["w1", "w2"]) mkdirSync(join(R, "x", w)); // siblings, so a ranking of x's children would delete
+    const before = snapshotTree(join(R, "x"));
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(runCount(join(R, "s"))).toBe(1);
+    expect(snapshotTree(join(R, "x"))).toEqual(before);
+    expect(r.stderr).toMatch(/left alone 3 dir\(s\) not named like a run/);
+  });
+});
+
+describe.skipIf(!can)("prune ranks and deletes only dirs named like a run id", () => {
+  it("a run-shaped dir with another name is left alone and counted separately, with its path", () => {
+    const R = realRoot(tmp("prune-names-"), "s", 3);
+    const odd = ["run-a", "run-b", "local_ABC", "2026-10-01"].map((n) => runDir(R, "s", { name: n, mtimeSec: T0 - 100 }));
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    for (const d of odd) expect(existsSync(d), d).toBe(true);
+    expect(runCount(join(R, "s"))).toBe(2); // local_ABC counts here by prefix; the 3 real local_ ids trimmed to 1
+    expect(r.stderr).toMatch(/left 4 run-shaped dir\(s\) with an unrecognised name alone: /);
+    expect(r.stderr).toContain(join(R, "s", "2026-10-01"));
+    expect(r.stderr).toMatch(/\(\+1 more\)/);
+  });
+
+  it("a sess- dir outside the session-id grammar is not reclaimed by --pinned-older-than", () => {
+    const R = tmp("prune-names-");
+    const bad = runDir(R, "s", { name: "sess-a.b", mtimeSec: T0 - 30 * 86_400 });
+    const good = runDir(R, "s", { name: "sess-ok_1", mtimeSec: T0 - 30 * 86_400 });
+    const r = prune(["--pinned-older-than", "7d", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(bad)).toBe(true);
+    expect(existsSync(good)).toBe(false);
+  });
+
+  it("the grammars match what every writer mints", () => {
+    expect(gc.LOCAL_RUN_ID_RE.test(`local_${process.hrtime.bigint().toString(36)}`)).toBe(true); // execute.ts, chat.ts
+    expect(gc.LOCAL_RUN_ID_RE.test(jobRunId("20260930-000000-abc123", "before", 0, 1))).toBe(true); // eval
+    expect(gc.LOCAL_RUN_ID_RE.test(`local_${BigInt("0xffffffffffffffff").toString(36).padStart(13, "0")}`)).toBe(true); // hillclimb
+    expect(gc.PINNED_RUN_ID_RE.test(`sess-${CRITIQUE_SESSION_PREFIX}${randomUUID()}`)).toBe(true); // critique
+    expect(gc.PINNED_RUN_ID_RE.test("sess-My_Session-1")).toBe(true); // --session-id [A-Za-z0-9_-]+
+    for (const n of ["local_", "local_A", "local_a.b", "sess-", "sess-a/b", "sess-a.b", "run-a"])
+      expect(gc.LOCAL_RUN_ID_RE.test(n) || gc.PINNED_RUN_ID_RE.test(n), n).toBe(false);
+  });
+});
+
+describe("runDirEvidence: one reader for the ranking and the level check", () => {
+  const mk = (make: (d: string) => void): string => {
+    const d = join(tmp("prune-ev-"), "local_0000000000001");
+    mkdirSync(d);
+    make(d);
+    return d;
+  };
+  const fixtures: Record<string, string> = {
+    statusOnly: mk((d) => writeFileSync(join(d, "status.json"), "{}")),
+    originOnly: mk((d) => writeFileSync(join(d, ".origin"), "{}")),
+    eventsOnly: mk((d) => writeFileSync(join(d, "events.jsonl"), "{}\n")),
+    turnsOnly: mk((d) => mkdirSync(join(d, "turns", "1"), { recursive: true })),
+    legacy: mk((d) => writeFileSync(join(d, "result.json"), "{}")),
+    mixed: mk((d) => (mkdirSync(join(d, "turns", "1"), { recursive: true }), writeFileSync(join(d, "trace.json"), "{}"))),
+    empty: mk(() => {}),
+    dirNamedLikeMarkers: mk((d) =>
+      ["events.jsonl", "status.json", "result.json", ".origin", "turns"].forEach((n) => mkdirSync(join(d, n))),
+    ),
+  };
+
+  it("isRealRun implies looksLikeRunDir; status.json and .origin alone mark a run dir but not a real run", () => {
+    for (const [k, d] of Object.entries(fixtures)) if (gc.isRealRun(d)) expect(gc.looksLikeRunDir(d), k).toBe(true);
+    for (const k of ["statusOnly", "originOnly"]) {
+      expect(gc.looksLikeRunDir(fixtures[k]), k).toBe(true);
+      expect(gc.isRealRun(fixtures[k]), k).toBe(false);
+    }
+    for (const k of ["eventsOnly", "turnsOnly", "legacy", "mixed"]) expect(gc.isRealRun(fixtures[k]), k).toBe(true);
+    for (const k of ["empty", "dirNamedLikeMarkers"]) expect(gc.looksLikeRunDir(fixtures[k]), k).toBe(false);
+  });
+
+  it("a stray result.json or invalid status.json above a correct root does not refuse it", () => {
+    const P = tmp("prune-ev-");
+    writeFileSync(join(P, "result.json"), "{}");
+    writeFileSync(join(P, "events.jsonl"), "{}\n");
+    writeFileSync(join(P, "status.json"), '{"state":"done"}');
+    const R = realRoot(join(P, "runs-here"), "s", 2);
+    expect(gc.pruneLevelRefusal(R)).toBeUndefined();
+    expect(gc.pruneLevelRefusal(join(R, "s"))).toMatch(/scenario dir/);
+    expect(dirname(R)).toBe(P);
+  });
+});
+
+describe.skipIf(!can)("prune level check: review follow-ups", () => {
+  it("a runs root whose child holds a manifest.json still prunes; the child is left alone", () => {
+    const R = realRoot(tmp("prune-fu-"), "s", 3);
+    mkdirSync(join(R, "backup"));
+    writeFileSync(join(R, "backup", "manifest.json"), "{}");
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(runCount(join(R, "s"))).toBe(1);
+    expect(existsSync(join(R, "backup", "manifest.json"))).toBe(true);
+  });
+
+  it("<run>/turns/1 names the run dir it is inside, and hints at the runs root", () => {
+    let R = "";
+    let run = "";
+    const err = expectRefused(() => {
+      R = tmp("prune-fu-");
+      run = runDir(R, "s", { mtimeSec: T0 });
+      return { top: R, args: [join(run, "turns", "1")] };
+    }, /is inside the run dir /);
+    expect(err).toContain(`is inside the run dir ${run}`);
+    expect(err).toContain(`prune --dry-run ${R}`);
+  });
+
+  it("the parent hint prefers the child named runs over an earlier-sorted runs root", () => {
+    let P = "";
+    const err = expectRefused(() => {
+      P = tmp("prune-fu-");
+      realRoot(join(P, "aaa-root"));
+      realRoot(join(P, "runs"));
+      return { top: P, args: [P] };
+    }, /looks like the parent of runs roots: /);
+    expect(err).toContain(`Did you mean: cowork-harness prune --dry-run ${join(P, "runs")} (or ${join(P, "aaa-root")})`);
+  });
+
+  it("several nested runs roots are listed as one clean list", () => {
+    let R = "";
+    const err = expectRefused(() => {
+      R = realRoot(tmp("prune-fu-"), "s", 2);
+      realRoot(join(R, "n1"), "t", 2);
+      realRoot(join(R, "n2"), "t", 2);
+      return { top: R, args: [R] };
+    }, /holds nested runs roots, so prune cannot run on it: /);
+    expect(err).toContain(`${join(R, "n1")} (index.jsonl), ${join(R, "n2")} (index.jsonl). Nothing was deleted.`);
+  });
+
+  it("a root from COWORK_HARNESS_RUNS_DIR says so; one from --run-dir or the positional does not", () => {
+    const R = realRoot(tmp("prune-fu-"), "s", 3);
+    const env = prune([], { COWORK_HARNESS_RUNS_DIR: join(R, "s") });
+    expect(env.status, env.stderr).toBe(2);
+    expect(env.stderr).toContain(`prune: ${join(R, "s")} (from COWORK_HARNESS_RUNS_DIR) looks like a scenario dir`);
+    const flag = prune(["--run-dir", join(R, "s")], { COWORK_HARNESS_RUNS_DIR: "/tmp/cwh-env-loses" });
+    expect(flag.status).toBe(2);
+    expect(flag.stderr).not.toContain("from COWORK_HARNESS_RUNS_DIR");
+    const pos = prune([join(R, "s")], { COWORK_HARNESS_RUNS_DIR: R });
+    expect(pos.status).toBe(2);
+    expect(pos.stderr).not.toContain("from COWORK_HARNESS_RUNS_DIR");
+  });
+
+  // The level scan does not follow symlinks below the root (a cloud-storage folder can block a stat for minutes).
+  // A runs root reached through one is not recognised, and the name allowlist keeps it intact.
+  it("a runs root behind a symlinked child is left untouched", () => {
+    const P = tmp("prune-fu-");
+    const target = realRoot(join(tmp("prune-fu-target-"), "r"), "s", 8);
+    symlinkSync(target, join(P, "linked"));
+    const before = snapshotTree(target);
+    const r = prune(["--keep-last", "1", P]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(snapshotTree(target)).toEqual(before);
+  });
+
+  // chmod 000 has no effect for root, so the case is meaningless there.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable dir is skipped and counted, not a crash", () => {
+    const R = realRoot(tmp("prune-fu-"), "s", 3);
+    const locked = join(R, "locked");
+    mkdirSync(join(locked, "local_0000000000001"), { recursive: true });
+    const P = tmp("prune-fu-");
+    const lockedChild = join(P, "locked");
+    mkdirSync(join(lockedChild, "x"), { recursive: true });
+    chmodSync(locked, 0o000);
+    chmodSync(lockedChild, 0o000);
+    try {
+      const r = prune(["--keep-last", "1", R]);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stderr).toContain(`skipped 1 dir(s) it could not read: ${locked}`);
+      expect(runCount(join(R, "s"))).toBe(1);
+      const lv = prune([P]); // the level scan meets the unreadable child, too
+      expect(lv.status, lv.stderr).toBe(0);
+      expect(lv.stderr).not.toMatch(/\n\s+at /);
+    } finally {
+      chmodSync(locked, 0o755);
+      chmodSync(lockedChild, 0o755);
+    }
+    expect(existsSync(join(locked, "local_0000000000001"))).toBe(true);
+  });
+});
+
+// The deep part of the level scan is budgeted. When it runs out it must fail CLOSED (a scenario may itself be named
+// like a run id, so the allowlist alone does not cover a missed runs root), except on a root that is positively a
+// runs root. The root's own listing and the marker probes on its direct children are never budgeted.
+describe.skipIf(!can)("prune level check under an exhausted scan budget", () => {
+  const exhausted = [{ budget: 0 }, { deadlineMs: 0 }];
+
+  it("an unrecognised root fails closed", () => {
+    const P = tmp("prune-budget-");
+    mkdirSync(join(P, "notes", "a", "b"), { recursive: true });
+    mkdirSync(join(P, "tmp", "x"), { recursive: true });
+    for (const limits of exhausted)
+      expect(gc.pruneLevelRefusal(P, "", limits), JSON.stringify(limits)).toMatch(/the level check did not finish under /);
+    expect(gc.pruneLevelRefusal(P)).toBeUndefined(); // with the default budget it clears, and the allowlist applies
+  });
+
+  it("a positively recognised runs root is unaffected", () => {
+    const R = realRoot(tmp("prune-budget-"), "s", 3);
+    mkdirSync(join(R, "notes", "a"), { recursive: true });
+    const noIndex = tmp("prune-budget-");
+    for (let i = 0; i < 3; i++) runDir(noIndex, "s", { mtimeSec: T0 + i });
+    for (const limits of exhausted) {
+      expect(gc.pruneLevelRefusal(R, "", limits), JSON.stringify(limits)).toBeUndefined();
+      expect(gc.pruneLevelRefusal(noIndex, "", limits), JSON.stringify(limits)).toBeUndefined();
+    }
+  });
+
+  it("a runs root under a child, with scenarios named like run ids, is refused whatever the budget", () => {
+    const E = tmp("prune-budget-");
+    const ch = join(E, "ch");
+    const runs = realRoot(join(ch, "runs"), "local_scen1", 3);
+    for (const s of ["local_scen2", "local_scen3"]) for (let i = 0; i < 3; i++) runDir(runs, s, { mtimeSec: T0 + i });
+    for (const limits of [...exhausted, {}])
+      expect(gc.pruneLevelRefusal(ch, "", limits), JSON.stringify(limits)).toMatch(
+        /looks like the parent of a runs root: .*runs \(index\.jsonl\)/,
+      );
+    const before = snapshotTree(E);
+    const r = prune(["--dry-run", ch]);
+    expect(r.status, r.stderr).toBe(2);
+    expect(snapshotTree(E)).toEqual(before);
+  });
+});
+
+describe.skipIf(!can)("prune: symlinks and the run-shape diagnostic", () => {
+  it("a run-id-named symlink to a dir outside the root is removed; its target survives", () => {
+    const R = realRoot(tmp("prune-link-"), "s", 2);
+    const outside = runDir(tmp("prune-link-target-"), "x", { mtimeSec: T0 - 1000 });
+    const before = snapshotTree(outside);
+    const link = join(R, "s", "local_0000000000link");
+    symlinkSync(outside, link);
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(link)).toBe(false);
+    expect(snapshotTree(outside)).toEqual(before);
+  });
+
+  it("under a root that is not positively a runs root, other dirs are counted without probing them", () => {
+    const R = tmp("prune-link-");
+    for (let i = 0; i < 2; i++) runDir(R, "s", { mtimeSec: T0 + i });
+    runDir(R, "s", { name: "run-a", mtimeSec: T0 });
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/left alone 1 dir\(s\) not named like a run/);
+    expect(r.stderr).not.toMatch(/run-shaped dir\(s\) with an unrecognised name/);
   });
 });
