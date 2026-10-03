@@ -240,7 +240,9 @@ a note and the sent-effort check below decides.
 - `meta.model_requested` and `meta.effort`: the requested model pin and effort.
 - `model` and `meta.effort_sent`: the model that served the main loop, and the effort its calls went out with. The
   agent writes that effort into its own session transcript for every main-loop call, after its own overrides,
-  caps and clamps, and the run dir keeps the transcript; `meta.effort_sent` is read from there.
+  caps and clamps, and the run dir keeps the transcript (on hostloop and protocol, a session that pins
+  `plugins.config_dir` keeps it there instead, and it is read by the run's own session id); `meta.effort_sent` is
+  read from there. When no transcript is found, the error row names where it looked.
 
 A row whose agent did not send the requested effort is an `errors.jsonl` row (`serving_substitution`,
 `meta.failure_rule: "effort_not_sent"`), with one exception: an agent that failed before any main-loop assistant
@@ -457,7 +459,8 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   says so). `--model`, `--effort` and `--judge-model` are not in it. `hillclimb freeze-ref` needs no approval: the gate covers
   `run` and `regrade`. `--approve-harness` is yours to pass, never the loop's.
 - **One model and effort per case in a variant.** A pass that would run a case at another requested model or
-  effort than the variant's rows for that case recorded (`meta.model_requested`, `meta.effort`) is refused before
+  effort than the variant's rows for that case recorded (`meta.model_requested`, `meta.effort`, on its
+  `results.jsonl` and `errors.jsonl` rows alike) is refused before
   spending, naming the case, what the rows ran and what the pass would run: run the change as a new variant, or
   keep the setting the rows ran with. Rows written before those fields existed are held to the model that served
   them (a dated snapshot of the pin counts as the pin), and warn when they record none; their effort is unknown,
@@ -494,11 +497,11 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   `--dry-run --approve-harness` first, as in the [Quick start](#quick-start)) and run the baseline there: in this flow every slot already has a row, and a pass resumes by slot.
 - **Judge variance.** Set `order: both` on a `semantic_pairwise` assert to cancel position bias. The frozen
   reference is one sample (the lowest-rep good row), so an unusually good or bad reference shifts every comparison.
-- **Effort and the sub-agent model are session-level.** `effort` and `agent_env.subagent_model` are read from the session
-  file, which every variant shares and the harness gate covers, so one flow runs every variant at one setting, and
-  a change is a gated edit that every later resume also runs. The loop's guide can climb a staircase of model and
-  effort settings, which does not map onto one flow.
-  `hillclimb run` takes no per-variant effort or sub-agent model flag: to compare settings, run one flow per setting, from a scenario directory whose session sets it.
+- **The session's effort and sub-agent model are shared by every variant.** The session file's `effort` and
+  `agent_env.subagent_model` are covered by the harness gate, so changing either is a gated edit that every later
+  resume also runs. Step the main loop's effort per variant with `--effort` instead, and a sub-agent's model and
+  effort through the plugin's `agents/*.md` (see [Model and effort per variant](#model-and-effort-per-variant));
+  only `agent_env.subagent_model` itself, which overrides every sub-agent at once, needs one flow per setting.
 - **Deciders and concurrency.** `--decider-cmd` and `--decider-dir` need `--concurrency 1`; a scenario's
   `on_unanswered: llm` does not. `latency_s` is measured under the pass's concurrency, so compare latency only
   between passes at the same `--concurrency`.

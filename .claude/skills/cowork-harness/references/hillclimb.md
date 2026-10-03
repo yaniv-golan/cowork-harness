@@ -114,7 +114,7 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
   over the variant's whole `results.jsonl` (`"mixed"` when its rows differ, or only some carry the key), and `effort_selector: false` (or
   `"mixed"`) when the variant's models have no selector.
 - **A variant keeps one model and effort per case.** A pass asking for another than the variant's rows for a case
-  ran is refused before spend: run it as a new variant. Rows from before these fields were recorded are held to
+  (scored or error) ran is refused before spend: run it as a new variant. Rows from before these fields were recorded are held to
   their served model, and warn when they have none; their unknown effort always warns. A no-selector case is not
   held to its rows' effort (only the baseline default).
 - **`model:` / `effort:` in the tuned skill's own `SKILL.md` frontmatter move the main loop**, not a sub-agent. An

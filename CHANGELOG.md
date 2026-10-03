@@ -199,7 +199,8 @@ All notable changes to this project are documented here. The format is based on
   requested model and effort, and says its estimate ignores both.
 - **hillclimb rows record the requested model and effort beside what the agent was served and sent.**
   `meta.model_requested` and `meta.effort` hold the request; `meta.effort_sent` holds the effort the main loop's
-  assistant messages went out with, read from the agent's own session transcript in the kept run dir (a value outside
+  assistant messages went out with, read from the agent's own session transcript in the kept run dir, or in the session's pinned `plugins.config_dir`
+  on hostloop and protocol, picked by the run's session id (a value outside
   the effort levels is never recorded). A row whose agent did not send the requested effort is an error row,
   `effort_not_sent` (`serving_substitution`): a main-loop message with another effort, an invalid one or none, even
   when the agent then failed, or no main-loop message at all on an otherwise valid run; an agent that failed before
@@ -208,7 +209,8 @@ All notable changes to this project are documented here. The format is based on
   `effort`, `effort_sent` and `effort_selector` over the variant's whole `results.jsonl`, `"mixed"` when its rows
   differ or only some carry the key, and `hillclimb check` validates them. `hillclimb regrade` keeps the row fields on the rows it rebuilds.
 - **A variant keeps one requested model and effort per case.** A pass that would run a case at another model or
-  effort than the variant's rows for that case recorded is refused before spend, naming both. Rows that record no
+  effort than the variant's rows for that case recorded (in `results.jsonl` or `errors.jsonl`) is refused before
+  spend, naming both. Rows that record no
   requested model are held to the model that served them (a dated snapshot of the pin counts as the pin) and warn
   when they record none; rows that record no requested effort warn. A case whose model has no effort selector is not
   held to its rows' effort, which is only the baseline default. Different values across variants are allowed; a
