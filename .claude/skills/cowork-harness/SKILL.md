@@ -99,7 +99,7 @@ CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that
 
 Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · migrate-run-dir · lint ·
 lint-skill · analyze-skill · probe-dispatch ·
-verify-run · regrade · fixture · trace · inspect · diff · critique · eval · eval report · hillclimb <run|check|state-template|freeze-ref|regrade> · stats · decide · gates · answer · scaffold · assertions --list · sync ·
+verify-run · regrade · fixture · ref <freeze|verify> · trace · inspect · diff · critique · eval · eval report · hillclimb <run|check|state-template|freeze-ref|regrade> · stats · decide · gates · answer · scaffold · assertions --list · sync ·
 list · boundary-check · status · vm <init|status|delete|prune> · doctor · init-redact`. Always check `cowork-harness <cmd> --help`.
 
 ## Invariants — how a green run lies
@@ -160,4 +160,5 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/critique.md`](references/critique.md) | `critique` report and evidence-package shapes |
 | [`references/eval.md`](references/eval.md) | `eval`: paired before/after of two plugin versions — labels, refusals, exit codes, files |
 | [`references/hillclimb.md`](references/hillclimb.md) | `hillclimb run` / `check` / `state-template` / `freeze-ref` / `regrade` for a `/claude-api hillclimb` loop — pass `--flow` to each, the harness gate, resume, pairwise references, re-grading, refusals, exit codes |
+| [`references/hillclimb-recipe.md`](references/hillclimb-recipe.md) | Recipe 7: the `/claude-api hillclimb` loop with the harness as its runner, step by step — the runner command, Step 0.5 checks, metrics, spend, rounds, stalls |
 | `scripts/scenario.py` | `scaffold`, `lint`, `lint-skill`, `resolve-agent-types <plugin-dir>` (validates a pinned `subagent_type` against `plugin.json` + `agents/*.md`) |

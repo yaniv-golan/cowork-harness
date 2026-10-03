@@ -48,6 +48,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 - [docs/chat.md](docs/chat.md): the interactive `chat` command — multi-turn sessions, `--folder`, fidelity tiers
 - [docs/critique.md](docs/critique.md): EXPERIMENTAL `critique` — grounded skill self-critique (advisory lead, not an attestation); how it resists confabulation, cost, exit codes, and running it on a skill you did not write
 - [docs/eval.md](docs/eval.md): EXPERIMENTAL `eval` — paired A/B evaluation of a skill edit (two plugin versions, interleaved, pinned models, per-claim exact tests); exit 0 / 1 (a drop at the `--fail-on` level) / 2 / 3. `eval --dry-run [--target-effect <pp>]` plans it first at no cost: the cost at `--reps` and, per row, the detectable change, power and the `--reps` a target change needs, from the runs dir's history; `--max-budget-usd` refuses before any run
+- [docs/hillclimb.md](docs/hillclimb.md): `hillclimb` as the runner for Claude Code's `/claude-api hillclimb` loop — setup, where the flow dir, kept runs and snapshots live, the loop's steps mapped to commands, row keys, numeric metrics, pairwise references, cost and spend, the differences from the loop's own runner
 - [docs/debugging.md](docs/debugging.md): debugging a run — `inspect`/`trace`/`verify-run`/`diff`/`chat` for a misbehaving skill, and the false-green hunt
 - [docs/gotchas.md](docs/gotchas.md): troubleshooting FAQ (setup + authoring) — lint/docker/worktree/doctor/scenarioDrift failures and skill-authoring/host-loop footguns
 - [docs/fidelity-gaps.md](docs/fidelity-gaps.md): what the harness deliberately does NOT reproduce vs real Cowork
@@ -61,6 +62,7 @@ It is a fidelity fixture, not the Desktop runtime. The CLI binary is `cowork-har
 ## Using it from an agent
 - [.claude/skills/cowork-harness/SKILL.md](.claude/skills/cowork-harness/SKILL.md): the companion skill that teaches an agent to drive the harness
 - [.claude/skills/cowork-harness/references/hillclimb.md](.claude/skills/cowork-harness/references/hillclimb.md): driving a `/claude-api hillclimb` loop with `hillclimb run`, `check`, `state-template`, `freeze-ref` and `regrade` — pass the same `--flow <dir>` to each (`state-template` writes `<flow>/metrics.md` only when it is given); `--approve-harness` is the human's, never the loop's
+- [.claude/skills/cowork-harness/references/hillclimb-recipe.md](.claude/skills/cowork-harness/references/hillclimb-recipe.md): the loop's procedure for `/claude-api hillclimb` with the harness as its runner, step by step in the guide's order
 
 ## Optional
 - [CONTRIBUTING.md](CONTRIBUTING.md): dev setup, the build gate, and the test-alongside-any-schema-change rule for contributors

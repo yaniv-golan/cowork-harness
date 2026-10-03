@@ -297,7 +297,7 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
 Rows carry the per-assertion and rubric-claim grades, the served model, token usage, cost, latency, and
 `skill_invoked`. A session's uploads are copied into `<flow>/inputs/` (`--no-copy-inputs` skips that), and the
 files a run authored into `<flow>/<variant>/out/<id>_rep<k>/files/`. Text copies are secret-scrubbed and
-host-path-redacted; any other file (a PDF, a spreadsheet) is copied as it is. A file over 2 MB, or past 20 MB in
+host-path-redacted; any other file (a PDF, a spreadsheet) is copied as it is. A file over 2 MiB, or past 20 MiB in
 one rep, is not copied and is listed in the row's `meta.inputs_skipped` or `meta.outputs_skipped`. A trace opens
 with the system append the agent was spawned with (Anthropic's built-in system prompt withheld) and inlines each
 sub-agent's turns after its dispatch. Before committing a flow dir, check what `inputs/` and `out/` hold.
@@ -306,7 +306,8 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
 
 - **`<flow>/metrics.md` is the legend** for every key a row carries; read it before averaging.
 - **`<key>_present: 0` means the value is absent, not 0.** `pass_present: 0` marks a verdict that failed only
-  because a judge's evidence was refused; `claims_present` works the same way. Averaging an absent value as 0
+  because one single-key `semantic_matches` assertion's evidence was refused (with a multi-key assertion the row
+  scores `pass: 0`); `claims_present` works the same way. Averaging an absent value as 0
   reads a capture problem as a regression.
 - **`semantic_pairwise` keys.** `win` is the mean pairwise value against the baseline's reference: 1 win, 0.5
   tie or both bad, 0 loss; 0.5 on the baseline's own rows. `win_present: 0` means no comparison with the baseline
@@ -316,7 +317,8 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
   the `_present` keys as 0; an agent failure scores 0, measured. `check` errors when a reference document changed
   under the flow.
 - **`skill_invoked` is 1 or 0** for whether the run invoked the tracked skill (`meta.skill_tracked` names it);
-  a row without it means no skill was tracked, not "not invoked".
+  a row without it means not measured, never "not invoked": no skill was tracked, or the run's record could not
+  tell (`meta.skill_tracked` set, the cell blank).
 - **Numeric metrics.** A scenario's declared `metrics` are columns on every scored row:
   - `<id>` holds the value, and is present only when the metric was measured.
   - `<id>_present` is 1 when measured and 0 otherwise. When the metric was unavailable,
