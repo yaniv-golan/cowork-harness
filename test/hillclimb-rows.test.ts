@@ -616,6 +616,8 @@ describe("requested vs sent effort", () => {
       error: "the requested effort high was not sent on 1 of 2 main-loop assistant message(s)",
     });
     expect((out.row.meta as Record<string, unknown>).failure_rule).toBe("effort_not_sent");
+    // one message carried it and one did not: the row records no sent effort
+    expect(out.row.meta).not.toHaveProperty("effort_sent");
   });
 
   it("no transcript to confirm it, though the main loop answered, is an error row", () => {

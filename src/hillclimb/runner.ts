@@ -294,10 +294,16 @@ async function run(
   // One variant, one requested model and effort per case: a resumed pass that would ask for another fills the case's
   // remaining slots with a different setting. Refused before spend; across variants a change is the lever, unsaid.
   if (existing) {
-    const mix = requestedMix(existing, v, cases, (c) => ({ model: deps.pin(c), effort: deps.requestedEffort(c).effort }), {
-      effortFlag: args.effort !== undefined,
-      modelFlag: args.model !== undefined,
-    });
+    const mix = requestedMix(
+      existing,
+      v,
+      cases,
+      (c) => ({ model: deps.pin(c), effort: deps.requestedEffort(c).effort, noSelector: deps.requestedEffort(c).noSelector }),
+      {
+        effortFlag: args.effort !== undefined,
+        modelFlag: args.model !== undefined,
+      },
+    );
     if (mix.refusals.length)
       throw new UsageError(
         `${mix.refusals.join("; ")} — one variant would mix two settings: run the change as a new variant (--variant v<N>), or keep the setting the rows ran with`,
@@ -679,6 +685,7 @@ export function requestedSummary(results: string | null): Record<string, string 
   const seen = { model_requested: new Set<string>(), effort: new Set<string>(), effort_sent: new Set<string>() };
   let rows = 0;
   let noSelector = 0;
+  const lacking = { model_requested: 0, effort: 0, effort_sent: 0 };
   for (const line of (results ?? "").split("\n")) {
     if (!line.trim()) continue;
     let meta: Record<string, unknown> | undefined;
@@ -689,13 +696,17 @@ export function requestedSummary(results: string | null): Record<string, string 
     }
     rows++;
     if (meta?.effort_selector === false) noSelector++;
-    for (const k of Object.keys(seen) as Array<keyof typeof seen>) if (typeof meta?.[k] === "string") seen[k].add(meta[k] as string);
+    for (const k of Object.keys(seen) as Array<keyof typeof seen>)
+      if (typeof meta?.[k] === "string") seen[k].add(meta[k] as string);
+      else lacking[k]++;
   }
-  const one = (s: Set<string>) => (s.size === 0 ? undefined : s.size === 1 ? [...s][0] : "mixed");
+  // One value over every row; "mixed" when rows carry several, or some carry it and some do not.
+  const one = (k: keyof typeof seen) =>
+    seen[k].size === 0 ? undefined : seen[k].size === 1 && lacking[k] === 0 ? [...seen[k]][0] : "mixed";
   return {
-    model_requested: one(seen.model_requested),
-    effort: one(seen.effort),
-    effort_sent: one(seen.effort_sent),
+    model_requested: one("model_requested"),
+    effort: one("effort"),
+    effort_sent: one("effort_sent"),
     effort_selector: noSelector === 0 ? undefined : noSelector === rows ? false : "mixed",
   };
 }
@@ -710,7 +721,7 @@ function requestedMix(
   snap: ReturnType<typeof loadFlowSnapshot>,
   variant: string,
   cases: readonly HillclimbCase[],
-  want: (c: HillclimbCase) => { model: string | undefined; effort: string },
+  want: (c: HillclimbCase) => { model: string | undefined; effort: string; noSelector: boolean },
   flags: { effortFlag: boolean; modelFlag: boolean },
 ): { refusals: string[]; warnings: string[] } {
   const byId = new Map(cases.map((c) => [c.id, want(c)]));
@@ -720,7 +731,7 @@ function requestedMix(
   const others = { model: new Map<string, Set<string>>(), effort: new Map<string, Set<string>>() };
   for (const line of (snap.variants[variant]?.results ?? "").split("\n")) {
     if (!line.trim()) continue;
-    let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown; effort?: unknown } };
+    let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown; effort?: unknown; effort_selector?: unknown } };
     try {
       r = JSON.parse(line);
     } catch {
@@ -745,6 +756,9 @@ function requestedMix(
           refusals.add(`variant ${variant}'s rows for case ${id} ran model ${r.model} (served), and this pass would run model ${w.model}`);
       } else noModel.add(id);
     }
+    // A model with no effort selector sends none: its rows' effort is only the baseline default (a sync may move it),
+    // so it is not held against a pass whose case has no selector either.
+    if (w.noSelector && r.meta?.effort_selector === false) continue;
     if (ef !== undefined) {
       if (ef !== w.effort)
         refusals.add(`variant ${variant}'s rows for case ${id} ran effort ${ef}, and this pass would run effort ${w.effort}`);

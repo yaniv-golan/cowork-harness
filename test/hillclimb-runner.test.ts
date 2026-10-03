@@ -769,7 +769,10 @@ describe("requestedSummary: summary.json's requested and sent keys over the vari
   it("one value is written, several are mixed, none is absent", () => {
     expect(
       requestedSummary(
-        [row({ effort: "high", effort_sent: "high", model_requested: "m" }), row({ effort: "high", model_requested: "m" })].join("\n"),
+        [
+          row({ effort: "high", effort_sent: "high", model_requested: "m" }),
+          row({ effort: "high", effort_sent: "high", model_requested: "m" }),
+        ].join("\n"),
       ),
     ).toEqual({
       model_requested: "m",
@@ -778,6 +781,11 @@ describe("requestedSummary: summary.json's requested and sent keys over the vari
       effort_selector: undefined,
     });
     expect(requestedSummary([row({ effort: "high" }), row({ effort: "low" })].join("\n")).effort).toBe("mixed");
+    // a row that records the key beside one that does not (written before it existed) is mixed, not the one value
+    expect(requestedSummary([row({ effort: "high", model_requested: "m" }), row({})].join("\n"))).toMatchObject({
+      effort: "mixed",
+      model_requested: "mixed",
+    });
     expect(requestedSummary(null)).toEqual({
       model_requested: undefined,
       effort: undefined,

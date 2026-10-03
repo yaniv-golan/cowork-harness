@@ -339,6 +339,12 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       throw new UsageError(
         `case ${c.id}: model ${sub.model} has no effort selector: remove ${args.effort !== undefined ? "--effort" : "the session's effort:"} (the agent sends no effort for it)`,
       );
+    // ...and a dated pin is held to its model's levels, which the per-model check (exact ids) does not find for it.
+    const requestedEffort = efforts.get(c.id)!.effort;
+    if (Array.isArray(selector) && !selector.includes(requestedEffort))
+      throw new UsageError(
+        `case ${c.id}: effort "${requestedEffort}" is not offered by model "${sub.model}" — supported levels: ${selector.join(", ")}`,
+      );
 
     // semantic_pairwise references: the gate a run applies before its run dir exists, once per case, over the
     // substituted session and with the flow's setup — a missing or damaged baseline reference, or a store a mount

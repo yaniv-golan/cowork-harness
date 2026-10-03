@@ -1731,6 +1731,16 @@ describe("--effort: the requested effort reaches the agent and every row", () =>
     expect(calls).toEqual([]);
   });
 
+  it("a dated pin is held to its model's levels: an effort it does not offer is refused before spend", async () => {
+    await approve();
+    const r = await runHillclimbCommand(args("--model", "claude-sonnet-4-6-20251001", "--effort", "xhigh", "--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toBe(
+      'refusing to run: case alpha: effort "xhigh" is not offered by model "claude-sonnet-4-6-20251001" — supported levels: low, medium, high, max',
+    );
+    expect(calls).toEqual([]);
+  });
+
   it("a dated pin of a model with no effort selector: --effort is refused, and without it rows score with effort_selector false", async () => {
     await approve();
     const h = await runHillclimbCommand(args("--model", "claude-haiku-4-5-20251001", "--effort", "low", "--approve-harness"), deps());
@@ -1919,6 +1929,27 @@ describe("a variant runs one requested model and effort per case: the resume gua
       expect((await runHillclimbCommand(args("--reps", reps, ...extra), deps())).exitCode).toBe(0);
       expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([effortWarning]);
     }
+  });
+
+  it("a no-selector case's rows are not held to their effort: it is only the baseline default, which a sync may move", async () => {
+    await approve();
+    sentEffortOverride = null;
+    await runHillclimbCommand(args("--model", "claude-haiku-4-5"), deps()); // a served-model error row: rewrite it as scored
+    const errs = readFileSync(join(cwd, "flow", "baseline", "errors.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const scored = { ...errs[0], meta: { ...errs[0].meta, effort: "low", effort_selector: false } };
+    delete scored.meta.failure_rule;
+    writeFileSync(join(cwd, "flow", "baseline", "results.jsonl"), JSON.stringify(scored) + "\n");
+    rmSync(join(cwd, "flow", "baseline", "errors.jsonl"));
+    calls = [];
+    const r = await runHillclimbCommand(args("--model", "claude-haiku-4-5", "--reps", "2", "--dry-run"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    // a case WITH a selector is still held to it
+    rewrite("baseline", (x) => (x.meta.effort_selector = undefined));
+    const s = await runHillclimbCommand(args("--reps", "2", "--dry-run"), deps());
+    expect(s.exitCode).toBe(2);
   });
 
   it("the guard is per case: a --case pass may run another case at another effort, and warns that the variant's cases differ", async () => {

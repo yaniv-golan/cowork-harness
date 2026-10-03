@@ -297,7 +297,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
     // A model with no effort selector: the effort above was passed, but the agent sends none for it.
     ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
-    ...(sent.values.length === 1 && sent.invalid === 0 ? { effort_sent: sent.values[0] } : {}),
+    ...(sent.values.length === 1 && sent.invalid === 0 && sent.unsent === 0 ? { effort_sent: sent.values[0] } : {}),
   };
   const errorRow = (failure_class: string, error: string, metaExtra: Record<string, unknown>): RowOut => ({
     dest: "errors",
