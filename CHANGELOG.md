@@ -10,8 +10,9 @@ All notable changes to this project are documented here. The format is based on
 
 - **The host-`claude` isolation check from 4.2.1 now refuses earlier, and covers more.** `eval` refuses up front,
   before its manifest, instead of writing a report with every run errored, and `eval --dry-run` makes the same
-  check. `regrade` makes it before its first grade. A `semantic_pairwise` assert graded by the host `claude`
-  triggers it, as `semantic_matches` does. All exit 2, before any model call.
+  check. It also applies to the new `regrade`, which makes it before its first grade, and to the new
+  `semantic_pairwise`, whose host-`claude` judge triggers it as `semantic_matches` does. All exit 2, before any model
+  call.
 - **`record` no longer writes account data or Claude Code's own text into a cassette.** It removes, on every
   recording, `--no-redact` included:
   - the account's model menu: the agent's `initialize` response lists the models the account is offered, with
@@ -40,6 +41,19 @@ All notable changes to this project are documented here. The format is based on
   built-in description, as they already did for `.jsonl` transcripts, and the pre-commit hook blocks with "run npm
   run build" when `dist/` was built from an older version of the scrub than the source. The committed cassettes
   are scrubbed.
+
+- **Output printed to the terminal is now secret-scrubbed like the files a run writes.** Before, a value
+  that `result.json` showed as `[REDACTED]` (an auth token, or anything in `COWORK_HARNESS_SCRUB_KEYS` /
+  `COWORK_HARNESS_SCRUB_VALUES`) was printed verbatim to stdout by `--output-format json` and to stderr by
+  text output: the agent's final message, assertion messages, verdict signals and failures, and the
+  transcript in the failure footer. This affected `run`, `skill`, `record`, `replay` and `verify-run`
+  (`verify-run` and `replay` echo the scenario's own assertion values). stdout and stderr are now scrubbed
+  with the same set of secrets. Text cut to fit a display line (a `-V` tool input, a tool-result head, a
+  `trace` row) is scrubbed before the cut, so no leading part of a secret is printed either. A json
+  envelope stays one parseable document for secrets of realistic length. A very short or common value, or
+  one equal to a JSON token (`e`, `1`, `true`), is redacted wherever that text appears, help text and JSON
+  syntax included, and can leave the output unparseable, so use `COWORK_HARNESS_SCRUB_VALUES` for real
+  secret values only.
 
 ### Upgrade notes
 
@@ -139,6 +153,40 @@ All notable changes to this project are documented here. The format is based on
   release are not like-for-like under those conditions. Exit codes and their meanings are unchanged; the host
   `claude` floor stays 2.1.197, which accepts `--effort` and `--settings`.
 
+- **Verdict change: a top-level `Skill` result is captured up to 32,768 characters (10,240 in 4.2.x).** A
+  `tool_result_not_contains` / `tool_result_not_matches` over a longer `Skill` result sees the whole text, so it can
+  fail where it passed, on a live run and on replay of an existing cassette. See Changed.
+- **Verdict change: `stalled` catches a closing request for input that has no `?`.** After an `AskUserQuestion`
+  gate, a run, a replay or an `eval` rep that ends "Please share X so I can …" fails `stalled`, so an existing
+  cassette with that ending fails on replay. Author `allow_stall: true` if that ending is intended. See Fixed.
+- **Verdict change at `protocol`: `hook_event_fired` / `hook_event_blocked` see every hook event.** That tier now
+  passes `--include-hook-events`, so a plugin's Stop or PostToolUse hook that read "never fired" there is seen, and
+  an assertion on such an event can change outcome at `protocol`. See Fixed.
+- **`eval` labels and exit codes can move.**
+  - An assertion whose only keys are verdict modifiers is no longer a row, so the correction family `m` can
+    shrink and a row's corrected label can move; an eval whose scenarios leave no row at all is refused (exit 2).
+  - `allow_stall: true` is honoured: a stalled rep of such a scenario is graded like a completed run instead of
+    failing every row.
+  - A grade refused for unavailable evidence leaves its rows instead of counting as a fail, and a row the
+    candidate's excess refusals took below the rep threshold is `insufficient_refusals`, which `--fail-on
+    possible` gates on.
+
+  `eval report <eval-dir>` over an eval dir written by 4.2.x can therefore change its row labels and, with
+  `--fail-on`, its exit code. See Changed and Fixed.
+- **Grades that can move on a live run.** Each closes a false result in 4.2.x, so a live verdict can differ from
+  4.2.x's on the same skill:
+  - `host_path_leak` exempts a host-shaped literal the agent shows from the staged plugin's or skill's own files,
+    so a run at `container` or `microvm` that failed on one passes;
+  - a fresh `--session-id` re-run at `microvm` no longer inherits the previous run's `outputs/`, so a file
+    assertion that passed on a leftover file can fail;
+  - `semantic_matches: {include_subagent_text: true}` grades with the sub-agent text on live runs (and at
+    `protocol` under managed config), so its grade can move either way.
+
+  See Fixed.
+- **`Bearer <token>` is redacted whole.** `result.json`, `run.jsonl`, `trace.json` and newly recorded cassettes
+  show `[REDACTED]` where they showed `Bearer [REDACTED]`, so a re-recorded cassette that asserts on the word
+  `Bearer` next to a token reads differently. See Fixed.
+
 ### Added
 
 <!-- pending: --effort entry -->
@@ -186,8 +234,8 @@ All notable changes to this project are documented here. The format is based on
   from the kept work dir — no judge, no spend. The published scenario schema mirrors every other load rule.
   Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`.
   Declaring a metric arms the pre-run manifest even in a scenario with no other key that needs it: such a run
-  persists `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back
-  the files the run authored (which `hillclimb` attaches as new or changed outputs only), and walk and hash `outputs/`, `uploads/` and every
+  persists `preRunPaths` / `preRunHashes`, marks untouched files `artifacts[].preRun`, reads back
+  the files the run authored (which `hillclimb` attaches as new or changed outputs only), and walks and hashes `outputs/`, `uploads/` and every
   connected folder before each run (time on a large connected folder).
 
 - **`lint-skill --suppressions <file>` accepts reviewed findings from a JSON file, one site per entry.** Each
@@ -203,7 +251,7 @@ All notable changes to this project are documented here. The format is based on
 - **`hook_output_contains` / `hook_output_not_contains` read what a command hook printed.** `{event, stream?, text |
   matches}` checks the `stdout` / `stderr` (default either) of the hook's `hook_response` frames for `event`, so a hook
   that fails open and says why on stderr while exiting 0 — which `hook_event_fired` passes — can be caught. `text` is a
-  literal (case-sensitive), `matches` a regex. Neither passes vacuously: no frame for the event fails both. The negative
+  literal (case-sensitive), `matches` a case-insensitive regex. Neither passes vacuously: no frame for the event fails both. The negative
   key fails evidence-unavailable on a frame without the selected field, when a hook for the event started and never
   sent a response (an async hook, or one still running when the run ended), when the agent truncated a frame's output,
   or over output a redaction policy rewrote; a miss of the positive key is labelled the same way. On a redacted
@@ -284,8 +332,9 @@ All notable changes to this project are documented here. The format is based on
   before writing any.
   Exit `0` / `2` (freeze), `0` / `1` / `2` (verify).
 
-- **A graded `semantic_matches` assert records `assertions[].judgeAttempts`:** `1`, or `2` when the judge's
-  one retry after a malformed grade ran — so a grade that needed a retry can be told apart.
+- **A graded `semantic_matches` or `semantic_pairwise` assert records `assertions[].judgeAttempts`:** for
+  `semantic_matches`, `1`, or `2` when the judge's one retry after a malformed grade ran; for `semantic_pairwise`,
+  `1` plus every retry over all its comparisons — so a grade that needed a retry can be told apart.
 
 - **Every scenario run's directory records `system-prompt-append.txt`** (a `chat` session writes none): the `--append-system-prompt` the agent was
   spawned with, as passed with secrets scrubbed (empty when none). It holds the harness's append only, never
@@ -295,14 +344,14 @@ All notable changes to this project are documented here. The format is based on
   <scenario.yaml | dir/>` runs every scenario `--reps` times into `<flow>/<variant>/` under the published
   runner-scaffold contract (`results.jsonl`, `errors.jsonl`, `traces/`, `progress.txt`, `summary.json`), with the
   scaffold's flags, defaults and exit codes: `0` every attempt scored, `1` a failed attempt or a mid-run stop, `2`
-  refused before spending; Its flags: `--variant` (`baseline` or `v<N>`, default `baseline`), `--model` (the concrete
+  refused before spending. Its flags: `--variant` (`baseline` or `v<N>`, default `baseline`), `--model` (the concrete
   id the agent must be served by; an alias is refused), `--reps` (default 1), `--concurrency` (default 4; a
   decider channel needs 1), `--timeout-s` (per case, default 1800, `0` for none; it bounds the whole attempt, the
   judge phase included), `--case <id>` (repeatable), `--ablate` (the null run with the skill removed; use a
   sibling flow dir), `--judge-model`, `--decider-cmd` / `--decider-dir` (no `--decider-llm`, as on `eval`; a
   scenario's own `on_unanswered: llm` marks its rows `meta.non_deterministic`), `--no-copy-inputs`, `--dry-run` and
   `--approve-harness`. The pass's `done -
-  N ok, M failed` line and the envelope's `failed` count (case, rep) slots; a baseline pass's reference freeze
+  N ok, M failed` line and the envelope's `failed` field count (case, rep) slots; a baseline pass's reference freeze
   reports on its own line (`reference freeze: skipped` or `failed`), and exits 1. Every case's session declares exactly one `plugins.local_plugins` entry, the same in
   every case: the plugin the loop tunes. Each variant runs from a snapshot of that plugin taken on its first run, so a resume or
   appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
@@ -325,7 +374,7 @@ All notable changes to this project are documented here. The format is based on
   per-assertion and rubric-claim grades (`claims`, the pooled share of graded claims that passed, beside
   `claims_present`; a verdict that failed only on one single-key `semantic_matches` assert's refused evidence leaves
   `pass` unmeasured, `pass_present: 0`), the served model, usage, `skill_invoked`, how the judge ran
-  (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
+  (`meta.judge_transport`, or `meta.judge_transports` when the row's judges ran differently), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
   was spawned with (Anthropic's built-in system prompt withheld), and inlines each sub-agent's turns after its
   dispatch, opened by a `system` turn saying what that child received: the harness's sub-agent append (Anthropic's
@@ -441,7 +490,8 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `reevaluated` count. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
   no judge call. An agent-failed row whose kept run cannot be re-evaluated (an unanswered gate) only has its meta
   brought current, its grade all 0, and is counted as `agentFailed`, never listed. Rewritten rows record
-  `meta.regrade_reevaluated` and `meta.regrade_harness_version`. It is gated like `run`, under the `--skill` the flow
+  `meta.regrade_harness_version`, and `meta.regrade_reevaluated: true` when the case has a deterministic or
+  `expect_denied` assert. It is gated like `run`, under the `--skill` the flow
   was approved with (`harness_skill`, which its `--approve-harness` keeps), refuses up front (exit 2) when it would
   call the judge and the host `claude` cannot run it isolated (asked again under the locks when a reference changed
   in between), takes every selected variant's lock, and preflights
@@ -469,9 +519,9 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   cannot rewrite them.
   `hillclimb freeze-ref` freezes a variant's references the same way, so later rounds are compared with a new bar
   (an entry already complete is reported, never rewritten; exit `0` nothing refused, `1` a case refused, `2` usage);
-  `hillclimb check` errors when a reference changed under the flow and notes when a variant beats the newest one on
-  90% of its rows. A `semantic_pairwise` result records `composedDoc` (the composed document's fingerprint, even
-  when no judge read it), `judgeAttempts`, and, for a metric-only reference, `pairwise[].gate: false` and the status
+  `hillclimb check` errors when a reference changed under the flow and notes when a later variant's mean `win` against the
+  newest reference is 0.9 or more (a tie counts 0.5). A `semantic_pairwise` result records `composedDoc` (the composed document's fingerprint, even
+  when no judge read it) and, for a metric-only reference, `pairwise[].gate: false` and the status
   `invalid`; a caller's deadline stops the gating comparisons and ends the run as a timeout (a metric-only comparison
   it cuts off is recorded `invalid`). `ref freeze`'s success JSON carries `status` (`frozen` or `added`), and a frozen
   entry records its run id and its run dir relative to the runs root, never as a host path.
@@ -515,7 +565,7 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   the cassette staleness check: a changed fixture is a `fixture` finding (a warning by default; `--strict`,
   `--fail-on-skill-drift` and an explicit `--session` fail it), and one that cannot be found or scanned is
   `unverifiable-fixture`, which fails the replay and makes `verify-cassettes` exit 3. A cassette stores the
-  path relative to itself (`record` refuses a fixture outside the cassette's repository); text fixture files are inlined and redacted like any outputs file, while an
+  path relative to itself (`record` refuses a fixture outside the cassette's repository; outside git, its directory); text fixture files are inlined and redacted like any outputs file, while an
   untouched binary one is recorded hash-only (`truncationReason: "fixture"`). `fixture export` writes one.
 - **`authored: true|false` on `file_exists`, `user_visible_artifact`, `artifact_text` and `artifact_json`.**
   Those keys prove a file is there (or what it says), not who wrote it. `authored: true` also requires that
@@ -614,18 +664,19 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
     fires); a write failure carries the run dirs
     already graded in `runs[]`.
 - **`--output-format json` now says whether `--max-budget-usd` was actually enforced.** Every envelope
-  from `run`, `skill` and `record` (every `record` arm, including `record`'s `--dry-run` arms; `skill
-  --dry-run` runs no pre-flight) carries a top-level `budget` object when a cap was passed: `{capUsd,
+  from `run`, `skill`, `record` and `eval` (every `record` arm, including `record`'s `--dry-run` arms, and
+  `eval --dry-run`; `skill --dry-run` runs no pre-flight) carries a top-level `budget` object when a cap was passed: `{capUsd,
   basis, enforced, reason?, estimateUsd?, unpriced[], runsDir, runsDirRedirected}`. `enforced: false` means at least one scenario had no priced history and ran with
-  no cap at all; `"lower_bound"` means a `record` batch was checked against an estimate that counted its
+  no cap at all; `"lower_bound"` means a `record` batch or an `eval` (basis `batch`) was checked against an estimate that counted its
   unpriced scenarios as $0. Previously an uncapped run was visible only as a stderr warning. Absent
   without `--max-budget-usd`, and on `--repeat`, whose running-total cap is reported in `rollups[]`
   ([SPEC.md](./SPEC.md) §11).
 - **A `--max-budget-usd` refusal is machine-distinguishable.** Its error envelope now carries
   `error.code: "budget_exceeded"` and `error.budget` (the same shape, with the refused estimate). The
-  category stays `runtime` and exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`), so a
-  consumer no longer has to match message prose to tell "refused on cost" from "did not load";
-  `error.code` is absent on every other error.
+  category stays `runtime` and exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`; `eval` and
+  `eval --dry-run` refuse with exit 2), so a consumer no longer has to match message prose to tell "refused on
+  cost" from "did not load". `error.code` is set only on this refusal and on `regrade`'s three refusal codes
+  (`doc_drift`, `unchecked_content`, `no_semantic_asserts`).
 
 ### Changed
 
@@ -665,11 +716,10 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   - any other braced use → `plugin-root-braced-in-vm-bash` (INFO), whose message says when the rewrite
     applies (the path as its own word) and that a value forwarded to a host-side reader arrives as a VM path.
 
-  A line with both forms gets one finding per form, and a fully commented-out line gets none. To migrate a `--suppressions` file: delete an entry that
-  named `plugin-root-in-vm-bash` for a braced site that is now the INFO (an INFO never fails `--strict`); for a
-  forwarding site, fix the skill, or, if the program really opens the path itself, change the entry's `rule`
-  to `plugin-root-forwarded-from-vm-bash`. Markers and `--ignore-rule` migrate the same way. Entries for the
-  bare form need no change.
+  A line with both forms gets one finding per form, and a fully commented-out line gets none. To migrate an ignore marker or `--ignore-rule`: delete one
+  that named `plugin-root-in-vm-bash` for a braced site that is now the INFO (an INFO never fails `--strict`); for
+  a forwarding site, fix the skill, or, if the program really opens the path itself, name
+  `plugin-root-forwarded-from-vm-bash` instead. One for the bare form needs no change.
 
 - **`eval` no longer makes a row of an assertion whose only keys are verdict modifiers** (`allow_stall`,
   `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
@@ -690,8 +740,7 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   32,768 characters it now sees the whole text, so it can fail where it used to pass. That applies on live
   runs and on replay of an older cassette, since replay re-reads the frozen stream. No committed cassette is
   affected: none has a `Skill` result near the old cap.
-  - This is where a foreground fork's whole answer arrives. The largest fork answer measured in kept runs
-    was 9,657 characters, so under the old cap any longer answer would have been refused as truncated.
+  - This is where a foreground fork's whole answer arrives, which `include_fork_results` grades.
   - The new cap is the judged document's own per-answer budget (the final-answer cap).
   - It applies to a `Skill` call the main agent makes at the top level. Every other tool result keeps
     10,240, including a fork's child calls, a `Skill` invoked inside a fork, and a `Skill` call made inside
@@ -704,7 +753,8 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   gives `outputs` the mode `rwd` (deletes allowed) for a normal session, and `rw` only for a Dispatch bridge session,
   which the harness does not model. Measured on 2.19675.0: `rm`, `mv` and overwrite-by-rename in `outputs/` all
   succeed with no permission card. The harness failed such a run anyway.
-  - The `desktop-2.16120.0` and `desktop-2.19675.0` baselines record the `outputs` mount as `rwd` (both said `rw`).
+  - `desktop-2.16120.0` now records the `outputs` mount as `rwd` (it said `rw`), as does the new
+    `desktop-2.19675.0`.
     Connected folders keep the approved-list rule. `sync` pins `outputsMountMode` and its non-bridge `"rwd"`, so a
     change is an unknown delta; the delete-deny resolver's site count could not see this. No cassette goes stale.
     See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-follow-the-baselines-recorded-mount-mode).
@@ -741,7 +791,8 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `hillclimb regrade` and no `eval` exclusion. Before the first call, the harness reads your user settings (`settings.json` and
   `.claude.json` under `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json` and `~/.claude.json`). If an `env` block sets
   one of the three keys, it warns, naming the keys (never their values), and records them as `settingsEnvOverride`.
-  A user `maxEffortLevel` still lowers the effort and cannot be raised from the call. It is recorded as
+  A user `maxEffortLevel`, read from `settings.json` only, still lowers the effort and cannot be raised from the
+  call. It is recorded as
   `settingsMaxEffort`, with a warning when it is below the role's pin. A host `claude` whose `--help` lacks
   `--effort` or `--settings` is now refused before any model call, like one lacking an isolation flag.
 - **An exported `CLAUDE_CODE_EFFORT_LEVEL` no longer overrides a scenario's effort on the hostloop and protocol
@@ -915,18 +966,6 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   over the raw text and written next to the scrubbed fields, so anyone holding a report could confirm a
   guessed scrub value offline by hashing candidates. A finding whose text carries no scrub value
   fingerprints exactly as before.
-- **Output printed to the terminal is now secret-scrubbed like the files a run writes.** Before, a value
-  that `result.json` showed as `[REDACTED]` (an auth token, or anything in `COWORK_HARNESS_SCRUB_KEYS` /
-  `COWORK_HARNESS_SCRUB_VALUES`) was printed verbatim to stdout by `--output-format json` and to stderr by
-  text output: the agent's final message, assertion messages, verdict signals and failures, and the
-  transcript in the failure footer. This affected `run`, `skill`, `record`, `replay` and `verify-run`
-  (`verify-run` and `replay` echo the scenario's own assertion values). stdout and stderr are now scrubbed
-  with the same set of secrets. Text cut to fit a display line (a `-V` tool input, a tool-result head, a
-  `trace` row) is scrubbed before the cut, so no leading part of a secret is printed either. A json
-  envelope stays one parseable document for secrets of realistic length. A very short or common value, or
-  one equal to a JSON token (`e`, `1`, `true`), is redacted wherever that text appears, help text and JSON
-  syntax included, and can leave the output unparseable, so use `COWORK_HARNESS_SCRUB_VALUES` for real
-  secret values only.
 - **A secret ending in a backslash left an invalid escape in `result.json`.** Of a secret's redacted
   forms, the longest is now replaced first, so its JSON-escaped form is replaced whole. A side effect:
   `Bearer <token>` is now redacted whole, as `[REDACTED]` rather than `Bearer [REDACTED]`, in
