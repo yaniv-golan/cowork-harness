@@ -488,6 +488,56 @@ describe.runIf(POSIX)("hillclimb regrade's judge isolation preflight", () => {
     180_000,
   );
 
+  // The judge decision is made before the locks over the rows as they are then; the rows are read again under the locks
+  // and a change in between is refused, nothing written. isolationCheck runs exactly in that window.
+  it("results.jsonl changed between the judge decision and the locks: refused, nothing written", async () => {
+    const { flow } = buildFlow();
+    const file = join(flow, "v1", "results.jsonl");
+    let mutated = "";
+    const out = await regradeFlow(
+      ARGS({ rejudge: true }),
+      DEPS({
+        isolationCheck: () => {
+          appendFileSync(file, readFileSync(file, "utf8"));
+          mutated = readFileSync(file, "utf8");
+          return undefined;
+        },
+      }),
+    );
+    expect(out.exitCode, JSON.stringify(out)).toBe(2);
+    expect(out.error?.message).toMatch(/v1\/results\.jsonl changed while regrade was starting .*nothing was written/);
+    expect(readFileSync(file, "utf8")).toBe(mutated);
+    expect(readdirSync(join(flow, "v1")).some((n) => n.endsWith(".bak.jsonl"))).toBe(false);
+  }, 180_000);
+
+  // What else the judge decision reads (a reference store) can change before the locks too: when the rows under the
+  // locks need a judge the pre-lock decision did not foresee, the isolation check is asked there, before any spend.
+  it("a judge needed only under the locks (a reference changed in between) still asks the isolation check first", async () => {
+    const { flow } = buildFlow();
+    const before = tree(join(flow, "v1"));
+    let asked = 0;
+    let regradeCalls = 0;
+    const out = await regradeFlow(
+      ARGS(),
+      DEPS({
+        beforeLock: () => rmSync(join(flow, "baseline", "ref"), { recursive: true, force: true }),
+        isolationCheck: () => {
+          asked++;
+          return "the host claude cannot run isolated (SYNTHETIC refusal)";
+        },
+        regrade: async () => {
+          regradeCalls++;
+          throw new Error("the core re-grade must not run");
+        },
+      }),
+    );
+    expect(asked).toBe(1);
+    expect(out.exitCode, JSON.stringify(out)).toBe(2);
+    expect(out.error?.message).toBe("refusing to regrade: the host claude cannot run isolated (SYNTHETIC refusal)");
+    expect(regradeCalls).toBe(0);
+    expect(tree(join(flow, "v1"))).toEqual(before);
+  }, 180_000);
+
   it("--rejudge with --fill-refs is a usage error (a fill re-judges nothing), nothing written", () => {
     const { cli, flow } = buildFlow();
     const before = tree(flow);

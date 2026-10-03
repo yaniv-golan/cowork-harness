@@ -74,6 +74,8 @@ export interface RegradeFlowDeps {
   harnessVersion?: string;
   /** Test seams, forwarded to `regradeRuns`. */
   regradeOptions?: Pick<RegradeOptions, "makeJudge" | "pairwiseComplete" | "now">;
+  /** Test seam: called after the pre-lock judge decision, right before the locks are taken. */
+  beforeLock?: () => void;
   /** Test seam: the core re-grade (default `regradeRuns`). */
   regrade?: typeof regradeRuns;
   /** Test seam: the metrics merge (default `mergeMetrics`). */
@@ -926,7 +928,8 @@ async function regradeFlowInner(
       }
     return false;
   };
-  if (willJudge()) {
+  const judgesPreLock = willJudge();
+  if (judgesPreLock) {
     const iso = deps.isolationCheck();
     if (iso) return refuse(iso);
   }
@@ -955,6 +958,7 @@ async function regradeFlowInner(
       `harness changed since last approved run (files: ${digest.hashed.join(", ")}); approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}. Re-run with --approve-harness after reviewing the diff.`,
     );
 
+  deps.beforeLock?.();
   // Lock every selected variant (sorted), all or nothing.
   const writers = new Map<string, FlowWriter>();
   const releases: Array<() => void> = [];
@@ -1199,6 +1203,14 @@ async function regradeFlowInner(
           why: `an errors.jsonl row (judge_invalid): its slot is open — \`hillclimb run ${args.target} --flow ${flowArg} --variant ${v} --case ${id} --reps ${Number(e.rep) + 1}\` re-runs it (one agent run per open slot)`,
         });
       }
+    }
+
+    // The rows are the ones the pre-lock decision read, but what else it read (a reference store) can have changed
+    // since: a judge the rows need now that it did not foresee is preceded by the same isolation check, before any
+    // spend and before anything is written.
+    if (batches.length && !judgesPreLock) {
+      const iso = deps.isolationCheck();
+      if (iso) return refuse(iso);
     }
 
     const optsFor = (b: Batch, checkOnly: boolean) => ({
