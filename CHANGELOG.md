@@ -348,8 +348,8 @@ All notable changes to this project are documented here. The format is based on
   keeps the run's own outcome even when the kept run re-evaluates differently (its grader is unchanged, so the
   difference is the reconstruction's), recorded in `meta.regrade_kept_live` and named on stderr. An assert whose
   literal holds a scrubbed secret, recorded `[REDACTED]` in `result.json`, is matched under this process's scrub; one
-  this process cannot reproduce is kept unchanged as well (never re-evaluated or re-judged over the scrubbed
-  transcript) and named on stderr, since whether it was edited cannot be known. **The default
+  this process cannot reproduce is kept unchanged as well (never re-evaluated over the scrubbed transcript, nor
+  re-judged without `--rejudge`) and named on stderr, since whether it was edited cannot be known. **The default
   regrade re-judges only what changed:** a judged assert is re-judged only when the assert itself, the judge model
   a re-judge would ask for (`--judge-model`, else the assert's own `judge_model` — so a row re-judged under an
   override goes back to its pin — else `COWORK_HARNESS_JUDGE_MODEL` or the harness default), the judge prompt template, a `semantic_pairwise` assert's
