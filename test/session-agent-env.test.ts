@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { loadSession, agentEnvOverrides, SCRUBBED_AGENT_ENV_KEYS } from "../src/session.js";
 import { buildHostLoopNativeEnv } from "../src/runtime/hostloop.js";
 import { buildProtocolEnv } from "../src/runtime/protocol.js";
@@ -173,55 +173,42 @@ const OPERATOR_VALUE: Record<(typeof EFFORT_THINKING_KEYS)[number], string> = {
 };
 
 describe("effort/thinking env keys exported by the operator do not reach the agent", () => {
+  // stubEnv/unstubAllEnvs RESTORE a developer's real export afterwards; a bare `delete` would lose it for the worker.
+  afterEach(() => vi.unstubAllEnvs());
+
   for (const k of EFFORT_THINKING_KEYS) {
     it(`hostloop scrubs an operator-exported ${k}`, () => {
-      process.env[k] = OPERATOR_VALUE[k];
-      try {
-        const env = buildHostLoopNativeEnv(loadBaseline("latest"), { configDir: "/tmp/cfg" });
-        expect(env[k]).toBeUndefined();
-      } finally {
-        delete process.env[k];
-      }
+      vi.stubEnv(k, OPERATOR_VALUE[k]);
+      const env = buildHostLoopNativeEnv(loadBaseline("latest"), { configDir: "/tmp/cfg" });
+      expect(env[k]).toBeUndefined();
     });
 
     it(`protocol scrubs an operator-exported ${k}`, () => {
-      process.env[k] = OPERATOR_VALUE[k];
-      try {
-        // `baseEnv` is what buildProtocolEnv scrubs; it must actually carry the key or the assertion is vacuous.
-        const plan = { baseEnv: { ...process.env }, agentEnv: {} } as unknown as LaunchPlan;
-        expect(plan.baseEnv[k]).toBe(OPERATOR_VALUE[k]);
-        const env = buildProtocolEnv(plan, loadBaseline("latest"));
-        expect(env[k]).toBeUndefined();
-      } finally {
-        delete process.env[k];
-      }
+      vi.stubEnv(k, OPERATOR_VALUE[k]);
+      // `baseEnv` is what buildProtocolEnv scrubs; it must actually carry the key or the assertion is vacuous.
+      const plan = { baseEnv: { ...process.env }, agentEnv: {} } as unknown as LaunchPlan;
+      expect(plan.baseEnv[k]).toBe(OPERATOR_VALUE[k]);
+      const env = buildProtocolEnv(plan, loadBaseline("latest"));
+      expect(env[k]).toBeUndefined();
     });
   }
 
   it("hostloop keeps a BASELINE-provided CLAUDE_CODE_EFFORT_LEVEL over the operator's export", () => {
     // No recorded Desktop spawn sets it; construct a baseline that does, so the layering is pinned: the scrub
     // touches the operator layer only, and the baseline overlay that follows it survives.
-    process.env.CLAUDE_CODE_EFFORT_LEVEL = "low";
-    try {
-      const base = loadBaseline("latest");
-      const withKey = { ...base, spawn: { ...base.spawn, env: { ...(base.spawn?.env ?? {}), CLAUDE_CODE_EFFORT_LEVEL: "high" } } };
-      const env = buildHostLoopNativeEnv(withKey as never, { configDir: "/tmp/cfg" });
-      expect(env.CLAUDE_CODE_EFFORT_LEVEL).toBe("high");
-    } finally {
-      delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
-    }
+    vi.stubEnv("CLAUDE_CODE_EFFORT_LEVEL", "low");
+    const base = loadBaseline("latest");
+    const withKey = { ...base, spawn: { ...base.spawn, env: { ...(base.spawn?.env ?? {}), CLAUDE_CODE_EFFORT_LEVEL: "high" } } };
+    const env = buildHostLoopNativeEnv(withKey as never, { configDir: "/tmp/cfg" });
+    expect(env.CLAUDE_CODE_EFFORT_LEVEL).toBe("high");
   });
 
   it("container/microvm keep a BASELINE-provided CLAUDE_CODE_EFFORT_LEVEL and never take the operator's", () => {
-    process.env.CLAUDE_CODE_EFFORT_LEVEL = "low";
-    try {
-      const base = loadBaseline("latest");
-      expect(spawnEnv(base, { configGuest: "/mnt/.claude", proxyHost: "http://p" }).CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined();
-      const withKey = { ...base, spawn: { ...base.spawn, env: { ...(base.spawn?.env ?? {}), CLAUDE_CODE_EFFORT_LEVEL: "high" } } };
-      expect(spawnEnv(withKey as never, { configGuest: "/mnt/.claude", proxyHost: "http://p" }).CLAUDE_CODE_EFFORT_LEVEL).toBe("high");
-    } finally {
-      delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
-    }
+    vi.stubEnv("CLAUDE_CODE_EFFORT_LEVEL", "low");
+    const base = loadBaseline("latest");
+    expect(spawnEnv(base, { configGuest: "/mnt/.claude", proxyHost: "http://p" }).CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined();
+    const withKey = { ...base, spawn: { ...base.spawn, env: { ...(base.spawn?.env ?? {}), CLAUDE_CODE_EFFORT_LEVEL: "high" } } };
+    expect(spawnEnv(withKey as never, { configGuest: "/mnt/.claude", proxyHost: "http://p" }).CLAUDE_CODE_EFFORT_LEVEL).toBe("high");
   });
 
   it("the latest baseline's spawn env sets none of the three keys", () => {

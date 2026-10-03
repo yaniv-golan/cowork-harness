@@ -655,10 +655,11 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
 - **An exported `CLAUDE_CODE_EFFORT_LEVEL` no longer overrides a scenario's effort on the hostloop and protocol
   tiers.** The agent reads that variable ahead of `--effort`, and those two tiers start the agent from your shell's
   environment, so an exported value replaced the session's `effort` for `run`, `record`, `eval` and `hillclimb` alike.
-  `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`, which makes the agent send an effort for a model that otherwise gets none, and
-  `CLAUDE_CODE_DISABLE_THINKING`, which turns thinking off whatever `extended_thinking` says, are dropped from the
-  inherited environment too. Real Cowork sets none of the three. A value a baseline's spawn environment sets still
-  reaches the agent; no recorded Desktop release sets one. The container and microvm tiers never inherited them.
+  `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`, which makes the agent send an effort for a model it has no effort data for,
+  and `CLAUDE_CODE_DISABLE_THINKING`, which turns thinking off whatever `extended_thinking` says, are dropped from
+  the inherited environment too. Real Cowork sets none of the three. On hostloop, container and microvm a value a
+  baseline's spawn environment sets still reaches the agent (protocol applies no baseline spawn environment); no
+  recorded Desktop release sets one. The container and microvm tiers never inherited them.
 - **`hillclimb state-template --flow` names the rows lacking a `win_<vN>` column and says to run `hillclimb regrade
   --fill-refs` without `--case`.** The note now groups those rows by case and variant, and says whether each case's rows
   were written before the reference was frozen (a pairwise case) or need a judge-free rebuild (a case with no

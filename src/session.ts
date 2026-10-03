@@ -290,13 +290,20 @@ export const SCRUBBED_AGENT_ENV_KEYS = [
   // `CLAUDE_CODE_EFFORT_LEVEL` FIRST — `env ?? (env===null ? modelDefault : …) ?? turnEffort ?? sessionEffort ??
   // modelDefault`, where the session effort is what `--effort` sets, and `unset`/`auto` mean "model default",
   // which displaces the flag too. Only a hook's effort value outranks it. `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`
-  // forces the model-supports-effort predicate true, so an effort parameter is sent for a model that otherwise
-  // gets none. `CLAUDE_CODE_DISABLE_THINKING` turns thinking off whatever the thinking flag says (and clamps
+  // makes the model-supports-effort predicate true for a model the agent has no effort data for (a model id
+  // outside its capability tables), so an effort parameter is sent where it otherwise would not be. It is
+  // checked AFTER the per-model overrides, the capability table and a hard-coded no-effort list (claude-3-*,
+  // opus-4-0/4-1, sonnet-4-0/4-5, haiku-4-5), so it cannot turn effort on for those. `CLAUDE_CODE_DISABLE_THINKING` turns thinking off whatever the thinking flag says (and clamps
   // effort with it). Cowork sets none of the three: they are absent from the constructed spawn env, and the
   // host-loop spawn copies only PATH/HOME/LOGNAME/SHELL/TERM/USER/CLAUDE_CODE_TMPDIR from Desktop's own
   // environment — Desktop does adopt a login-shell `CLAUDE_CODE_EFFORT_LEVEL` into that environment, but for
   // its Code tab, not for the Cowork agent. Unlike the two `_FORCE` keys these have an authored replacement:
   // the session's `effort` and `extended_thinking`.
+  // KNOWN AND DELIBERATELY NOT SCRUBBED, from the same family: `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` acts only on
+  // opus-4-6 and sonnet-4-6 (it switches their thinking from adaptive to a fixed budget), and
+  // `DISABLE_INTERLEAVED_THINKING` drops the interleaved-thinking beta header. Neither changes the effort level
+  // or whether thinking is on, which is what the session's `effort` and `extended_thinking` model, so they fail
+  // (b). Revisit if the harness ever models thinking mode or the beta-header set.
   "CLAUDE_CODE_EFFORT_LEVEL",
   "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
   "CLAUDE_CODE_DISABLE_THINKING",

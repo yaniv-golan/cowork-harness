@@ -183,7 +183,8 @@ before any baseline/knob overlay — so a stray shell value can never leak throu
 others. Three of them are the keys above. Three more set effort and thinking, and the session's `effort` and
 `extended_thinking` fields are their replacement: `CLAUDE_CODE_EFFORT_LEVEL`, which the agent reads ahead of
 `--effort` (so an export would replace the session's `effort`), `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`, which makes
-it send an effort for a model that otherwise gets none, and `CLAUDE_CODE_DISABLE_THINKING`, which turns thinking
+it send an effort for a model it has no effort data for (it cannot turn effort on for the models the agent lists
+as having none, such as the Claude 3 models and `claude-haiku-4-5`), and `CLAUDE_CODE_DISABLE_THINKING`, which turns thinking
 off whatever `extended_thinking` says. The other two have **no `agent_env` knob** and are scrubbed with
 no authored replacement: `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, which promotes the env model override above a
 sub-agent's frontmatter and a per-dispatch `model:`, and
