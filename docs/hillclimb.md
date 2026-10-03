@@ -173,9 +173,9 @@ A scenario can declare numbers it measures from an artifact the run writes ([sce
 - `hillclimb check` warns when a value falls outside `[min, scale]` (an unbounded metric is not range-checked).
 - **Adding a metric** is allowed: re-run `state-template --flow`, merge only the new `metrics` entries into
   `_state.json`, and approve the new sha. Rows written before it lack the key (`check` notes them) until
-  `hillclimb regrade` fills it from their kept runs, except on a row whose run recorded no pre-run manifest (its
-  case declared no metric and no judged assertion when it ran): it reads `no_manifest`, and only re-running the
-  case measures it. Declaring a metric before the baseline pass avoids that.
+  `hillclimb regrade` fills it from their kept runs at no agent cost: every hillclimb run records the pre-run
+  manifest a metric is measured against. A re-graded row whose run lacks one reads `no_manifest`, and only
+  re-running the case measures it.
 - **Changing a metric** (its artifact, path, direction, `scale`, `unbounded` or `min`) is refused on `run` and `regrade`.
   Start a new flow, or declare it under a new id.
 - **Removing a metric** is allowed, with a warning to drop `<id>` and `<id>_present` from `_state.json`. Declaring
@@ -327,4 +327,4 @@ resumed pass would mix them, and `hillclimb check` flags a case whose rows carry
 | A non-baseline pass refuses on a pairwise case | The baseline reference is missing: `hillclimb freeze-ref … --variant baseline --case <id>`, or, when the message says freezing cannot repair it, a fresh flow dir |
 | The same slots run on every pass | They are `errors.jsonl` rows with a permanent fault; read `failure_class` and `error` |
 | `regrade` lists rows "kept run dir is gone" | Pass the `--run-dir` the runs were written with; a removed run cannot be re-graded (`prune --include-hillclimb` removes them) |
-| A new metric or `win_<vN>` column is missing on older rows | They were written before it: fill a metric with `hillclimb regrade` (a row whose run recorded no pre-run manifest reads `no_manifest`: re-run it), a reference's column with `hillclimb regrade --fill-refs`, before comparing |
+| A new metric or `win_<vN>` column is missing on older rows | They were written before it: fill a metric with `hillclimb regrade` (a row reading `no_manifest` needs a re-run), a reference's column with `hillclimb regrade --fill-refs`, before comparing |
