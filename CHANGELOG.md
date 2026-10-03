@@ -12,41 +12,34 @@ All notable changes to this project are documented here. The format is based on
   before its manifest, instead of writing a report with every run errored, and `eval --dry-run` makes the same
   check. `regrade` makes it before its first grade. A `semantic_pairwise` assert graded by the host `claude`
   triggers it, as `semantic_matches` does. All exit 2, before any model call.
-- **`record` no longer writes the recording account's model menu into a cassette.** The agent's `initialize` response
-  lists the models the account is offered, with their display copy and, on a pay-per-token account, per-Mtok
-  pricing; a committed cassette published it. `record` now empties that `models` array before writing, on every
-  recording, `--no-redact` included. Nothing in replay, the verdict, staleness or the fingerprint reads it, and the
-  write is held to the same verdict-preservation check as policy redaction. A cassette recorded by an older harness
-  may still carry it; re-record to drop it. The committed cassettes are scrubbed.
-- **`record` also drops a subscription account's `rate_limit_info` and the agent's hand-back frame from every
-  cassette.** A recorded `rate_limit_event` carried the account's usage (utilization, reset times, overage state); it
-  is now emptied to `{}`. The agent binary's own frame around a sub-agent's report (the hand-back line before the
-  report, and the "use SendMessage" continuation hint after it) is replaced by `[subagent report]`, with the report
-  body and `agentId` kept. Nothing in `src` reads either. `rehash` and `replay --reassert --write` apply the same
-  scrub when they rewrite a cassette. If the scrub's verdict-preservation check cannot pass, `record` writes the
-  cassette unscrubbed with a warning naming the scrub, instead of refusing and losing the paid run. The committed
-  cassettes are scrubbed. The pre-commit hook and the repo guard now refuse a staged or committed `*.cassette.json`
-  carrying the agent's hand-back frame or other agent-binary text, as they already did for `.jsonl` transcripts.
-- **`record` also withholds the descriptions of Claude Code's built-in agents, commands and skills.** The agent's
-  `initialize` response lists every slash command and agent with its description, and for the agent's own entries
-  (`claude-api`, `code-review`, `security-review`, `init`, `Explore`, `general-purpose`, …) that description is
-  Anthropic's own text. `record` now replaces each with `[built-in description withheld]`, keeping the name and
-  every other field. Built-in is decided from the recording itself, not from a list: a command the agent marks
-  `builtin: true`, an agent with no `<plugin>:` prefix (every plugin agent carries one), or an entry from a plugin the
-  recording marks built-in. Only a recording from an agent too old to mark its commands falls back to the known
-  built-in skill names. The plugin under test's own agents, commands and skills, and a scenario's own skills, keep
-  their descriptions. Nothing in `src` reads a registry agent's or command's description. `replay --reassert
-  --write` now also rewrites a cassette whose assert block is already current when its events still carry something
-  the recorder removes, so an existing cassette can adopt a newer scrub without a re-record. The committed cassettes
-  are scrubbed, and the pre-commit hook and the repo guard refuse a cassette that carries a built-in description.
-- **`record` also withholds a built-in command's `argumentHint`, and every rewrite is now verdict-checked.** A
-  built-in command's non-empty usage hint (its syntax string, the agent's own text) is replaced by
-  `[built-in hint withheld]`, decided the same way as its description; the plugin under test's own hints are kept.
-  `rehash` and `replay --reassert --write` now hold the recorder's scrub to the same verdict-preservation check as
-  `record`: if it cannot pass, the rewrite still lands with the events unscrubbed and a warning naming the scrub,
-  instead of being applied unchecked. The pre-commit hook now also refuses to vouch for a staged cassette from a
-  stale build: when `dist/`'s scrub version differs from the source's, it blocks with "run npm run build". The
-  committed cassettes are rescrubbed.
+- **`record` no longer writes account data or Claude Code's own text into a cassette.** It removes, on every
+  recording, `--no-redact` included:
+  - the account's model menu: the agent's `initialize` response lists the models the account is offered, with
+    their display copy and, on a pay-per-token account, per-Mtok pricing; its `models` array is emptied;
+  - a subscription account's usage: a recorded `rate_limit_event`'s `rate_limit_info` (utilization, reset times,
+    overage state) is emptied to `{}`;
+  - the agent binary's frame around a sub-agent's report: the hand-back line before the report and the "use
+    SendMessage" continuation hint after it are replaced by `[subagent report]`, with the report body and
+    `agentId` kept;
+  - the descriptions of Claude Code's built-in agents, commands and skills (`claude-api`, `code-review`,
+    `security-review`, `init`, `Explore`, `general-purpose`, …), which are Anthropic's own text, replaced by
+    `[built-in description withheld]`, and a built-in command's non-empty `argumentHint` (its usage syntax),
+    replaced by `[built-in hint withheld]`. The name and every other field are kept. Built-in is decided from
+    the recording itself, not from a list: a command the agent marks `builtin: true`, an agent with no
+    `<plugin>:` prefix (every plugin agent carries one), or an entry from a plugin the recording marks built-in.
+    Only a recording from an agent too old to mark its commands falls back to the known built-in skill names. The
+    plugin under test's own agents, commands, skills and hints, and a scenario's own skills, keep their text.
+
+  Nothing in `src` reads any of these. `rehash` and `replay --reassert --write` apply the same removal when they
+  rewrite a cassette, and `replay --reassert --write` also rewrites a cassette whose assert block is already
+  current when its events still carry something the recorder removes, so a cassette recorded by an older harness
+  can drop them without a re-record. Every one of these writes is held to the same verdict-preservation check as
+  policy redaction; if it cannot pass, the cassette is written with its events unscrubbed and a warning naming
+  what was not removed, instead of refusing and losing the paid run. The pre-commit hook and the repo guard refuse
+  a staged or committed `*.cassette.json` that carries the agent's hand-back frame, other agent-binary text or a
+  built-in description, as they already did for `.jsonl` transcripts, and the pre-commit hook blocks with "run npm
+  run build" when `dist/` was built from an older version of the scrub than the source. The committed cassettes
+  are scrubbed.
 
 ### Upgrade notes
 
@@ -86,20 +79,22 @@ All notable changes to this project are documented here. The format is based on
   the host's arch, so an x64 Mac runs its own x64 build of 2.1.286 with no env var. A baseline with the map but no
   entry for your arch matches by version, with a stderr note. If you hand-edit a baseline's `nativeStagedPath`, keep
   `nativeBuilds` consistent with it, or drop the map to fall back to the build in the path.
-- **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
-  `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
-  don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
-  `tool_called` / `tool_not_called`), so the format change alone needs no re-record or re-stamp (the auto-memory
-  bullet above still applies). v14 is one bump shared with the
-  other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
-  schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
-  assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
-  `artifact_text` / `artifact_json`, or a `question_option_count`, `hook_output_contains` or `hook_output_not_contains`
-  assertion, also stamps v14.
-- **`authored: true` on a path outside `outputs/`, `uploads/` and the connected folders now fails
-  evidence-unavailable** (it passed as "new this run" before, though the pre-run manifest never looked there). Move
-  the assertion to a file the step writes under `outputs/` or a connected folder. A replay of an existing cassette is
-  unaffected: such a path is not in the cassette's manifest.
+- **Cassette format v14.** A cassette stamps `cassetteVersion` 14 when its scenario uses any of:
+  - `workspace_fixture`;
+  - `semantic_matches.include_fork_results` (any value);
+  - `semantic_pairwise`;
+  - the object form of `file_exists` / `user_visible_artifact`, or `authored` on `artifact_text` /
+    `artifact_json` (any value);
+  - `question_option_count`;
+  - `hook_output_contains` / `hook_output_not_contains`.
+
+  `metrics:` stamps nothing: metrics never change a verdict, so an older harness replays such a cassette to the
+  same verdict, without `RunResult.metrics`. An older harness (max v13) reports a v14 cassette as too new: `replay`
+  refuses it (`--best-effort-future-cassette` opts in) and `verify-cassettes` fails it. Upgrade every reader to
+  4.3.0 before recording with one of these keys; don't re-record. Every other cassette stamps what it did before
+  (v12, or v13 with the object form of `tool_called` / `tool_not_called`), so the format change alone needs no
+  re-record or re-stamp (the auto-memory bullet above still applies). `schema/cassette.v14.json` is the new
+  schema; `schema/cassette.v13.json` is retained.
 - **Verdict change at `hostloop`: a skill that forwards `${CLAUDE_PLUGIN_ROOT}` through bash to a host-side
   reader now fails there, as it does in Cowork.** The workspace bash tool rewrites a plugin's host path in a
   command to its VM mount (see Fixed), so `python3 build.py --plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, whose
@@ -110,28 +105,43 @@ All notable changes to this project are documented here. The format is based on
   such as `bash ${CLAUDE_PLUGIN_ROOT}/scripts/x.sh` that failed under `hostloop` now runs. Exit codes and their
   meanings are unchanged; only these verdicts move, on a baseline from Desktop 1.40609.0. A replay serves the
   frozen tool results, so a committed `hostloop` cassette keeps its old verdict until you re-record it.
-- **`lint-skill`: a suppression written for `plugin-root-in-vm-bash` on a braced `${CLAUDE_PLUGIN_ROOT}` site
-  suppresses nothing.** Those sites moved to other rules (see Changed), so such a marker, `--suppressions`
-  entry or `--ignore-rule` reports `lint-skill-ignore-unused` — INFO, but WARN under `--strict-ignores`, so
-  `lint-skill --strict --strict-ignores` can exit 1 on a skill that passed before. A site suppressed as a
-  reviewed-safe forward (`--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, the example the docs used to give) is
-  a real break at host-loop now; it reports `plugin-root-forwarded-from-vm-bash` and fails `--strict` until the
-  skill stops forwarding the root through bash.
+- **`lint-skill --strict` can fail a skill that passed before: a suppression of `plugin-root-in-vm-bash` no longer
+  covers a braced `${CLAUDE_PLUGIN_ROOT}` site.** Braced sites moved to two new rules (see Changed). One that
+  forwards the root as the value of a location option (`--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, the
+  reviewed-safe example the docs used to give) is a real break at host-loop and reports
+  `plugin-root-forwarded-from-vm-bash` (WARN), which fails `--strict` until the skill stops forwarding the root
+  through bash. Any other braced site reports the INFO `plugin-root-braced-in-vm-bash`, which never fails
+  `--strict`. Either way the old ignore marker or `--ignore-rule` suppresses nothing and reports
+  `lint-skill-ignore-unused` (INFO, or WARN under the new `--strict-ignores`). Changed says how to migrate.
 - **Verdict change: `self_heal_ran` also counts a `/sessions/<id>/mnt/.remote-plugins/…` path.** A run whose
   model located a remote plugin's files there read as not having self-healed; `self_heal_ran: true` now passes
   on it and `self_heal_ran: false` fails. It is a live-only assertion, so a replay is unaffected.
 - **`hostloop` runs workspace commands with `bash -c` instead of `sh -c`**, so a bash-only construct in a command
   (process substitution, `[[ … ]]`) that failed under `hostloop` now runs, as it does in Cowork.
-- **An outputs delete no longer fails a run by default on `latest`.** `latest` (`desktop-2.19675.0`) records the
-  `outputs` mount as `rwd`, so a CI gate that relied on the implicit `outputs_delete` failure stops catching a skill
-  that deletes in `outputs/`. To keep that check, author `no_delete_in_outputs: true`; it behaves as before on every
-  baseline. See Changed.
-- **`verify-run` on an older result.json keeps the old outputs-delete verdict.** A result written by 4.2.x or earlier
-  has no `outputsMountMode`, which reads as `rw`. Re-verifying one that recorded an outputs delete on Desktop 2.16120.0 or
-  later therefore still fails, while a fresh run of the same scenario passes. That red is safe; re-run the
-  scenario to get the current verdict.
+- **An outputs delete no longer fails a run by default on `latest`.** `latest` (`desktop-2.19675.0`), like
+  `desktop-2.16120.0`, records the `outputs` mount as `rwd`, as Desktop builds it, so a CI gate that relied on the
+  implicit `outputs_delete` failure stops catching a skill that deletes in `outputs/`. This turns red runs green,
+  never the reverse. To keep that check, author `no_delete_in_outputs: true`; it fails such a delete on every
+  baseline. Exit codes and their meanings are unchanged; see Changed. Committed cassettes are unaffected (these
+  signals never run on replay). `verify-run` on a `result.json` written by 4.2.x or earlier keeps the old verdict:
+  it has no `outputsMountMode`, which reads as `rw`, so re-verifying one that recorded an outputs delete on Desktop
+  2.16120.0 or later still fails while a fresh run of the same scenario passes. Re-run the scenario to get the
+  current verdict.
+- **Grades and agent runs no longer follow an exported effort or thinking setting.** The judge, the LLM decider
+  and the `critique` evaluator pin their effort (`high` for the judge and the evaluator, `medium` for the
+  decider) and ignore `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` and
+  `CLAUDE_CODE_DISABLE_THINKING`, and a user-settings `effortLevel`; at `hostloop` and `protocol` the agent
+  ignores the three variables too (see Fixed). With the
+  default judge and decider models, and no such variable exported, nothing changes. Otherwise a grade, a
+  decider answer or a `hostloop` / `protocol` run can differ from one made by 4.2.x: a judge pointed at a model
+  whose default effort differs (`claude-opus-4-7` defaults to `xhigh`) now runs at the pin, and an exported
+  effort no longer reaches the agent. `eval` and `hillclimb` comparisons and `stats` trends that span this
+  release are not like-for-like under those conditions. Exit codes and their meanings are unchanged; the host
+  `claude` floor stays 2.1.197, which accepts `--effort` and `--settings`.
 
 ### Added
+
+<!-- pending: --effort entry -->
 
 - **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
   When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
@@ -142,10 +152,16 @@ All notable changes to this project are documented here. The format is based on
   ignored), else the directory name, and a skill's sanitized directory name. The rule reads the `session:` file and
   its plugin directories, and stays silent for an inline `session:`, for marketplace-delivered plugins, and when
   the files are not on the machine running `lint`.
-- **`prune --include-hillclimb`.** It ranks hillclimb-labelled runs with every other run, so `--keep-last`
-  applies to them. It deletes the `hillclimb regrade` and `hillclimb freeze-ref` evidence of every flow under
-  the runs root, a loop still running included, and `freeze-ref` re-reads a frozen reference's source run: pass it
-  only once every climb there is finished, or scope it with the `<runs-dir>` the climb used.
+- **`prune` keeps hillclimb runs, and `prune --include-hillclimb` prunes them.** A run labelled `hillclimb:…`
+  (what `hillclimb run` writes, or a run you labelled `--label hillclimb:…` yourself, which 4.2.x pruned) is not
+  pruned and takes no `--keep-last` slot, so a routine `prune` during a climb leaves the runs `hillclimb regrade`
+  and `hillclimb freeze-ref` read. `prune` prints how many it kept per scenario and label, and lists each one under
+  `--dry-run`. A `sess-*` dir follows the pinned rule (`--pinned-older-than`) even when it carries a hillclimb
+  label, and a run dir that is a symlink is not read through, so it is an ordinary run (pruning it removes only
+  the link). `--include-hillclimb` ranks hillclimb-labelled runs with every other run, so `--keep-last` applies to
+  them. It deletes the `hillclimb regrade` and `hillclimb freeze-ref` evidence of every flow under the runs root, a
+  loop still running included, and `freeze-ref` re-reads a frozen reference's source run: pass it only once every
+  climb there is finished, or scope it with the `<runs-dir>` the climb used.
 - **A question batch your `answers:` script only partly matches is now reported, not just warned about.**
   When one `AskUserQuestion` carries several sub-questions and the scripted rules match some but not all,
   the whole batch goes to the `on_unanswered` fallback, so the matched answers are not delivered. That stays
@@ -169,8 +185,8 @@ All notable changes to this project are documented here. The format is based on
   freezes it; a plain replay notices an on-disk `metrics:` drift. `verify-run` re-measures the current declaration
   from the kept work dir — no judge, no spend. The published scenario schema mirrors every other load rule.
   Loader-only rules (not expressible in JSON Schema): a duplicate id (compared case-insensitively) and `min` below `scale`.
-  Declaring a metric arms the pre-run manifest, which a scenario with no other baseline-reading key did not capture
-  before: such runs now persist `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back
+  Declaring a metric arms the pre-run manifest even in a scenario with no other key that needs it: such a run
+  persists `preRunPaths` / `preRunHashes`, mark untouched files `artifacts[].preRun`, read back
   the files the run authored (which `hillclimb` attaches as new or changed outputs only), and walk and hash `outputs/`, `uploads/` and every
   connected folder before each run (time on a large connected folder).
 
@@ -231,11 +247,14 @@ All notable changes to this project are documented here. The format is based on
     experimental.
   - `--max-budget-usd <x>`, with or without `--dry-run`, refuses before any run (exit 2, `error.code:
     "budget_exceeded"`, `budget.basis: "batch"`) when each scenario's worst observed run × its 2 × `--reps` runs
-    sums above x. It is a pre-flight only; judge spend is not counted, as on every other command.
+    sums above x. It is a pre-flight only; judge spend is not counted, as on every other command, and a capped
+    real eval prints the schedule's estimated judge spend as not covered by the cap.
 
 - **A graded `semantic_matches` or `semantic_pairwise` assert records how its judge was called:** `assertions[].judgeTransport`
-  (`{isolation, cliVersion?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's version, and
-  `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config), so grades made
+  (`{isolation, cliVersion?, effort?, settingsEnvOverride?, settingsMaxEffort?, strictMcp?}` — the isolation level of
+  the host `claude` call, that CLI's version, the `--effort` it was called with, the user-settings `env` keys and
+  `maxEffortLevel` that could change it (see Fixed), and `strictMcp: false` when the call left out
+  `--strict-mcp-config` for an enterprise MCP config), so grades made
   under different conditions can be told apart. `regrade` output and `eval`'s per-run lines carry it too, and a
   `critique` report records its evaluator's as `evaluatorTransport`, present with `evaluatorModel`. Absent for a
   judge a library caller injects.
@@ -276,9 +295,15 @@ All notable changes to this project are documented here. The format is based on
   <scenario.yaml | dir/>` runs every scenario `--reps` times into `<flow>/<variant>/` under the published
   runner-scaffold contract (`results.jsonl`, `errors.jsonl`, `traces/`, `progress.txt`, `summary.json`), with the
   scaffold's flags, defaults and exit codes: `0` every attempt scored, `1` a failed attempt or a mid-run stop, `2`
-  refused before spending; `--timeout-s` bounds the whole attempt, the judge phase included. The pass's `done -
+  refused before spending; Its flags: `--variant` (`baseline` or `v<N>`, default `baseline`), `--model` (the concrete
+  id the agent must be served by; an alias is refused), `--reps` (default 1), `--concurrency` (default 4; a
+  decider channel needs 1), `--timeout-s` (per case, default 1800, `0` for none; it bounds the whole attempt, the
+  judge phase included), `--case <id>` (repeatable), `--ablate` (the null run with the skill removed; use a
+  sibling flow dir), `--judge-model`, `--decider-cmd` / `--decider-dir` (no `--decider-llm`, as on `eval`; a
+  scenario's own `on_unanswered: llm` marks its rows `meta.non_deterministic`), `--no-copy-inputs`, `--dry-run` and
+  `--approve-harness`. The pass's `done -
   N ok, M failed` line and the envelope's `failed` count (case, rep) slots; a baseline pass's reference freeze
-  reports on its own line (`reference freeze: skipped` or `failed`), and still exits 1. Every case's session declares exactly one `plugins.local_plugins` entry, the same in
+  reports on its own line (`reference freeze: skipped` or `failed`), and exits 1. Every case's session declares exactly one `plugins.local_plugins` entry, the same in
   every case: the plugin the loop tunes. Each variant runs from a snapshot of that plugin taken on its first run, so a resume or
   appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
   refuses no usable agent credential at a selected case's tier (`doctor`'s check, as `eval` applies it; at protocol a
@@ -297,7 +322,9 @@ All notable changes to this project are documented here. The format is based on
   file must still parse and every case's baseline must still load, the harness gate and the files kept unreadable
   cover every case, and the one-plugin rule covers every case whose session parses (an unselected case whose session
   is inline or does not parse is skipped for it, with a note). `hillclimb regrade --case` follows the same rule. Rows carry the
-  per-assertion and rubric-claim grades, the served model, usage, `skill_invoked`, how the judge ran
+  per-assertion and rubric-claim grades (`claims`, the pooled share of graded claims that passed, beside
+  `claims_present`; a verdict that failed only on one single-key `semantic_matches` assert's refused evidence leaves
+  `pass` unmeasured, `pass_present: 0`), the served model, usage, `skill_invoked`, how the judge ran
   (`meta.judge_transport`), the run's content signature and skill hash; a session's uploads are copied into `<flow>/inputs/` and attached (`--no-copy-inputs` skips that); the
   files a run authored are copied (text copies secret-scrubbed and host-path-redacted, other files as they are) and attached to its final turn. A trace opens with the system append the agent
   was spawned with (Anthropic's built-in system prompt withheld), and inlines each sub-agent's turns after its
@@ -306,8 +333,9 @@ All notable changes to this project are documented here. The format is based on
   remaining runs from this machine's history: `hillclimb run --dry-run` (`--output-format json`) carries the same
   `plan.cost` summary as `eval --dry-run`, on its basis exactly (hillclimb runs excluded), and its nine keys are covered
   the same way (`schema/schedule-cost.json`). `hillclimb check` checks a flow dir against our reading of the published
-  schema and warns on a baseline case with no headroom; `hillclimb state-template` prints a `_state.json` skeleton
-  and, with `--flow`, writes the metrics legend to `<flow>/metrics.md` (never over an edited copy). Every `hillclimb`
+  schema and warns on a baseline case with no headroom (exit `0` clean, `1` findings, `2` usage; a warning never
+  changes it); `hillclimb state-template` prints a `_state.json` skeleton and, with `--flow`, writes the metrics
+  legend to `<flow>/metrics.md` (an edited copy is kept, and the new legend goes to `metrics.md.new`). Every `hillclimb`
   subcommand takes `--flow <dir>` (default `.claude/hillclimb/flow`), and `--help` and `docs/cli.md` show it on each: a loop whose
   flow dir is not the default passes the same dir to every one.
   `COWORK_HARNESS_HILLCLIMB_SNAPSHOTS` relocates the snapshots (an absolute path outside any git work tree), for a
@@ -326,7 +354,7 @@ All notable changes to this project are documented here. The format is based on
   with a warning. A `--skill` selection is part of the harness sha: `--approve-harness` records it in `_state.json` as
   `harness_skill`, beside `harness_sha`, and a run whose `--skill` was changed, added or dropped since is refused with a
   message naming the change, which the dry run's gate line names too. `--skill` is not remembered between passes, so the
-  runner command the loop repeats must carry it every time. Without `--skill` the sha is what it was before.
+  runner command the loop repeats must carry it every time. Without `--skill` the sha records no skill selection.
 
 - **`hillclimb` grades a scenario's `metrics`.** Each metric declared across a flow's scenarios is a grade key
   on every row: `<id>` holds the measured value and is left out when nothing was measured (never written as 0),
@@ -354,9 +382,8 @@ All notable changes to this project are documented here. The format is based on
   declares it any more, or a regrade limited by `--variant` / `--case` did not re-measure them). Every `hillclimb run`
   attempt records the pre-run manifest, whatever its scenario asserts (a plain `run` keeps recording it only when
   something needs it), so a metric added mid-loop is measured by `regrade` from the kept run instead of reading
-  `no_manifest`; the cost is a pre-spawn walk of the run's work roots on every attempt. A row run before this, of a
-  case that declared no metric and no judged assert, keeps `no_manifest`: only re-running the case (or re-recording a
-  cassette) measures it. See docs/cli.md → Numeric metrics in hillclimb.
+  `no_manifest`; the cost is a pre-spawn walk of the run's work roots on every attempt. See docs/cli.md → Numeric
+  metrics in hillclimb.
 
 - **Hillclimb rows record the assertion set they were graded under** (`meta.assert_sig`, a hash of the case's
   `assert` and `expect_denied`, `semantic_pairwise.refs` left out so a flow moved to another checkout keeps its
@@ -373,7 +400,7 @@ All notable changes to this project are documented here. The format is based on
   names each case not compared: nothing recorded, a recorded scenario not found from the current directory, or a
   case the target holds no scenario for.
 
-- **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
+- **`hillclimb regrade` re-grades a flow's rows in place.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
   run` writes rows with, without running the agent, from the scenario as it is now (a changed, added or removed
   assert is applied). Every assert no judge grades and every `expect_denied` host is re-evaluated from the kept run
@@ -423,12 +450,10 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `<variant>/regrade.md` (per-assert and metric columns included; `a<i>` is not compared across two assertion lists,
   with the mean `pass` over the variant's scored rows before and after, also when no row was rewritten; every
   variant's line, there and on stderr, shows the same counters in one order, a zero included),
-  and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1). `regrade`
-  now re-grades `semantic_pairwise` asserts in the live run's comparison order, checks their references before any
-  spend, and drift-checks an all-neutral run against its `composedDoc`; `no_semantic_asserts` now means the scenario has
-  neither judged key. A re-grade that only adds comparisons records the outcomes it kept as `pairwise[].copied: true`.
-  A `regrade` entry a judge read records `judgeModelRequested`, the model the re-grade asked for, beside the
-  `judgeModel` that answered.
+  and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1), and so is an open
+  `judge_invalid` slot in `errors.jsonl`, which is never moved into `results.jsonl`: the summary counts those slots
+  per variant and names, per case, the `hillclimb run … --case <id> --reps <n>` that re-runs them. A fill records the outcomes it
+  kept as `pairwise[].copied: true`.
 
 - **`semantic_pairwise` inside a hillclimb flow, and `hillclimb freeze-ref`.** Under `hillclimb run` every pairwise
   assert is judged against the flow's own references — `<flow>/baseline/ref`, then each later variant's — instead of
@@ -436,20 +461,25 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   case's lowest-rep good row; any other variant is refused before spending while its case has none. Only the
   baseline's reference decides `pass`; rows gain `win` / `win_present` / `both_bad` (which `state-template` declares
   and the metrics legend explains), a `win_<vN>` column per later reference, and per-assert drill-down keys. A
-  `win_<vN>` column is declared only when every scored row carries it; `hillclimb regrade --fill-refs` adds it to
-  the rows written before that reference was frozen.
-  `hillclimb freeze-ref` freezes a variant's references the same way, so later rounds are compared with a new bar;
+  `win_<vN>` column is declared only when every scored row carries it; `hillclimb regrade --fill-refs` (without
+  `--case`) adds it to the rows written before that reference was frozen. `hillclimb state-template --flow` names the
+  rows lacking one, grouped by case and variant, and says whether each case's rows were written before the reference
+  was frozen (a pairwise case) or need a judge-free rebuild (a case with no `semantic_pairwise` assert, which a
+  `--case`-scoped fill skips); rows of a case with no scenario in the target get their own remedy, since a fill
+  cannot rewrite them.
+  `hillclimb freeze-ref` freezes a variant's references the same way, so later rounds are compared with a new bar
+  (an entry already complete is reported, never rewritten; exit `0` nothing refused, `1` a case refused, `2` usage);
   `hillclimb check` errors when a reference changed under the flow and notes when a variant beats the newest one on
-  90% of its rows. A `semantic_pairwise` result now records `composedDoc` (the composed document's fingerprint, even
+  90% of its rows. A `semantic_pairwise` result records `composedDoc` (the composed document's fingerprint, even
   when no judge read it), `judgeAttempts`, and, for a metric-only reference, `pairwise[].gate: false` and the status
   `invalid`; a caller's deadline stops the gating comparisons and ends the run as a timeout (a metric-only comparison
-  it cuts off is recorded `invalid`). `ref freeze`'s success JSON gains `status` (`frozen` or `added`), and a frozen
+  it cuts off is recorded `invalid`). `ref freeze`'s success JSON carries `status` (`frozen` or `added`), and a frozen
   entry records its run id and its run dir relative to the runs root, never as a host path.
 
 - **`semantic_matches.include_fork_results: true` — grade a foreground `context: fork` skill's own
   answer.** A fork's answer comes back as the `Skill` tool result. It is neither top-level transcript text
-  nor a sub-agent dispatch, so until now the judge never saw it, and `include_subagent_text` could not
-  reach it. The new opt-in joins every top-level `Skill` call to its result by `toolUseId` (never by
+  nor a sub-agent dispatch, so without this opt-in the judge never sees it, and `include_subagent_text`
+  cannot reach it. The opt-in joins every top-level `Skill` call to its result by `toolUseId` (never by
   position: a fork's result arrives after all of its children's) and appends each result to the judged
   document. The heading is `## Fork skill result: <skill>` when the result carries the agent's
   `completed (forked execution)` marker, and `## Skill result: <skill>` otherwise (an inline skill's
@@ -490,7 +520,13 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
 - **`authored: true|false` on `file_exists`, `user_visible_artifact`, `artifact_text` and `artifact_json`.**
   Those keys prove a file is there (or what it says), not who wrote it. `authored: true` also requires that
   this run created or rewrote the file — an untouched pre-run file fails, and so does a run with no pre-run
-  manifest to tell (evidence-unavailable); on replay the cassette's manifest hashes decide, and a hash that
+  manifest to tell (evidence-unavailable). The pre-run manifest walks `outputs/`, `uploads/` and the connected
+  folders only, so `authored: true` on a path anywhere else (a plugin's or skill's own files under
+  `.local-plugins/`, say) fails evidence-unavailable, naming the folders the manifest covers. The check and every
+  lookup (the manifest, the pre-run link paths, a replay's link entries and post-run hashes) use the file's stored
+  on-disk name, matched exactly: on a case-sensitive filesystem `Outputs/` is not `outputs/`, and a case- or
+  normalization-twin of a manifest file is never read as that file. The symlinked-directory check runs `lstat` on
+  each directory of the path as written. On replay the cassette's manifest hashes decide, and a hash that
   record-time scrubbing or redaction rewrote is evidence-unavailable, never authored. `file_exists` and
   `user_visible_artifact` take it through a new object form, `{path, authored}`; the string form is
   unchanged. `authored: true` applies to a regular file: a directory fails, and a symlink or a hard-linked file is
@@ -514,9 +550,13 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   listed; `--out` must be absent or empty, and outside the run dir. A partial or failed run exports and says so; a
   `replay` run dir is refused. Exit `0` written, `2` usage or refusal. The JSON payload's keys are experimental.
 
-- **`regrade <run-dir>… --scenario <scenario.yaml>` re-grades a kept run's `semantic_matches` asserts** with
-  the judge, without running the agent again; the judge call is the only spend. `verify-run` never calls the
-  judge, so a rubric change previously meant a paid re-run.
+- **`regrade <run-dir>… --scenario <scenario.yaml>` re-grades a kept run's `semantic_matches` and
+  `semantic_pairwise` asserts** with the judge, without running the agent again; the judge call is the only spend.
+  `verify-run` never calls the judge, so without `regrade` a rubric change means a paid re-run.
+  - It refuses (exit 2) before reading any run dir when the host `claude` cannot run the judge isolated (see
+    Security).
+  - A `semantic_pairwise` assert is re-graded in the live run's comparison order, its references are checked
+    before any spend, and an all-neutral run is drift-checked against its `composedDoc`.
   - The judged document is rebuilt from the kept run dir with the capture budget the live run recorded
     (`authoredCapture`) and the scenario's `evidence_files` as priority globs, and scrubbed with this process's
     secret set. A value the live run scrubbed that this process does not know is not scrubbed: run `regrade`
@@ -554,9 +594,13 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   - Judge spend is reported per run and in total (`judgeCostUsd`, with `unpricedGrades` counting grades that
     had no price — the total is then a floor). Grades the judge could not produce are counted as
     `invalidGrades`, apart from failures.
-  - `--judge-model` grades every assert with one model; an alias such as `opus` is refused.
+  - `--judge-model` grades every assert with one model; an alias such as `opus` is refused. An entry a judge read
+    records `judgeModelRequested`, the model the re-grade asked for, beside the `judgeModel` that answered.
+  - When the scenario declares `metrics:`, each `runs[]` entry and the regrade file carry `metrics` (the
+    `RunResult.metrics` shape), re-read from the kept work dir. A file is read only while its bytes still equal the
+    run's own recorded post-run hash; a file edited since the run is `pruned`.
   - Exit `0` when every re-graded assert passes, `1` when any fails or is judge-invalid, `2` on usage or a
-    refusal: a multi-turn, partial, replay or chat run dir, a pruned work dir, a missing transcript sidecar, a
+    refusal: a scenario with no `semantic_matches` or `semantic_pairwise` assert, a multi-turn, partial, replay or chat run dir, a pruned work dir, a missing transcript sidecar, a
     rebuilt document that differs from the live one (without `--allow-doc-drift`), content the live judge never
     read (without `--allow-unchecked`), or
     a run recorded before `authoredCapture` existed (accepted with `--authored-total-bytes <N>`). Refusals are
@@ -564,7 +608,8 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
     were graded also exits `2`.
   - `--output-format json` prints one payload document with a `runs[]` array. **The envelope is a covered
     surface** ([SPEC.md](./SPEC.md) §12), described by `schema/regrade.json`; the regrade file's layout stays
-    experimental. A drift or unchecked-content refusal carries `error.code` (`doc_drift` /
+    experimental. A refusal of a scenario with nothing to re-grade carries `error.code: "no_semantic_asserts"`
+    (category `usage`), and a drift or unchecked-content refusal carries `error.code` (`doc_drift` /
     `unchecked_content`) and `refusals[]`, listing every refused run dir (complete only when no other refusal
     fires); a write failure carries the run dirs
     already graded in `runs[]`.
@@ -581,12 +626,6 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   category stays `runtime` and exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`), so a
   consumer no longer has to match message prose to tell "refused on cost" from "did not load";
   `error.code` is absent on every other error.
-- **`regrade` names a scenario with nothing to re-grade.** Its refusal of a scenario with no `semantic_matches`
-  or `semantic_pairwise` assert now carries `error.code: "no_semantic_asserts"` in the JSON error envelope (category `usage`, exit 2 as
-  before), so a caller can tell "nothing to re-grade" from a failure without reading the message.
-- **`regrade` re-reads declared metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade
-  file carry `metrics` (the `RunResult.metrics` shape), re-read from the kept work dir. A file is read only while
-  its bytes still equal the run's own recorded post-run hash; a file edited since the run is `pruned`.
 
 ### Changed
 
@@ -661,9 +700,14 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
     `tool_called` all see the larger capture.
 - **On baselines recording outputs as `rwd` (Desktop ≥2.16120.0), an outputs delete no longer fails the default
   verdict; author `no_delete_in_outputs` to keep the check.** This is a default-verdict change made for fidelity. From
-  Desktop 2.16120.0 every mount builder gives `outputs` the mode `rwd` (deletes allowed) for a normal session, and `rw`
-  only for a Dispatch bridge session, which the harness does not model. Measured on 2.19675.0: `rm`, `mv` and
-  overwrite-by-rename in `outputs/` all succeed with no permission card. The harness failed such a run anyway.
+  Desktop 2.16120.0 every mount builder takes the outputs mode from one exported function, `outputsMountMode`, which
+  gives `outputs` the mode `rwd` (deletes allowed) for a normal session, and `rw` only for a Dispatch bridge session,
+  which the harness does not model. Measured on 2.19675.0: `rm`, `mv` and overwrite-by-rename in `outputs/` all
+  succeed with no permission card. The harness failed such a run anyway.
+  - The `desktop-2.16120.0` and `desktop-2.19675.0` baselines record the `outputs` mount as `rwd` (both said `rw`).
+    Connected folders keep the approved-list rule. `sync` pins `outputsMountMode` and its non-bridge `"rwd"`, so a
+    change is an unknown delta; the delete-deny resolver's site count could not see this. No cassette goes stale.
+    See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-follow-the-baselines-recorded-mount-mode).
   - Each live run records the baseline's outputs mode as the new `result.json` field `outputsMountMode`. On `rwd`,
     `outputs_delete`, `outputs_delete_unconfirmed` and `outputs_diff_unavailable` do not fire unless
     `no_delete_in_outputs` is authored, or `no_delete_in_mounts` without `allow_delete_in` waiving outputs. Otherwise
@@ -693,8 +737,8 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   that role's default model (`claude-opus-4-8`, and `sonnet`, which resolves to `claude-sonnet-5-5`), so those run as
   before. A role pointed at a model with another default (`claude-opus-4-7` defaults to `xhigh`) now runs at the pin.
   The effort is recorded as `effort` in `judgeTransport` (and `judge_transport`) and in a critique's
-  `evaluatorTransport`. A grade recorded before has none, and its absence triggers no re-judge in `hillclimb regrade`
-  and no `eval` exclusion. Before the first call, the harness reads your user settings (`settings.json` and
+  `evaluatorTransport`. A grade that records no effort (one made by 4.2.x included) triggers no re-judge in
+  `hillclimb regrade` and no `eval` exclusion. Before the first call, the harness reads your user settings (`settings.json` and
   `.claude.json` under `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json` and `~/.claude.json`). If an `env` block sets
   one of the three keys, it warns, naming the keys (never their values), and records them as `settingsEnvOverride`.
   A user `maxEffortLevel` still lowers the effort and cannot be raised from the call. It is recorded as
@@ -708,11 +752,6 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   the inherited environment too. Real Cowork sets none of the three. On hostloop, container and microvm a value a
   baseline's spawn environment sets still reaches the agent (protocol applies no baseline spawn environment); no
   recorded Desktop release sets one. The container and microvm tiers never inherited them.
-- **`hillclimb state-template --flow` names the rows lacking a `win_<vN>` column and says to run `hillclimb regrade
-  --fill-refs` without `--case`.** The note now groups those rows by case and variant, and says whether each case's rows
-  were written before the reference was frozen (a pairwise case) or need a judge-free rebuild (a case with no
-  `semantic_pairwise` assert, which a `--case`-scoped fill skips). Rows of a case with no scenario in the target get
-  their own remedy, since a fill cannot rewrite them.
 - **`sync --diff` reported 57 gate ids as removed on Desktop 2.19675.0 where 2 were.** That release ships its gate
   defaults as a rule table (`<id>:{rule:…}`), which `provenance.asarGateIds` did not read, so it also missed 2 new
   ids. The table is now read. The shape occurs in no earlier Desktop release, so no committed baseline changes:
@@ -733,32 +772,28 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
 - **`self_heal_ran` counts a VM path under `.remote-plugins/`.** It recognised only `.local-plugins/`, so a skill
   installed as a remote plugin that located its own files under `/sessions/<id>/mnt/.remote-plugins/…` read as
   not having self-healed.
-- **`prune` keeps hillclimb runs.** A run labelled `hillclimb:…` is not pruned and takes no `--keep-last` slot, so
-  a routine `prune` during a climb leaves the runs `hillclimb regrade` and `hillclimb freeze-ref` read. A run you
-  labelled `--label hillclimb:…` yourself is kept the same way. `prune` prints how many it kept per scenario and
-  label, and lists each one under `--dry-run`. A bare `prune` therefore deletes less than before. A `sess-*` dir
-  follows the pinned rule (`--pinned-older-than`) even when it carries a hillclimb label, and a run dir that is a
-  symlink is not read through, so it is an ordinary run (pruning it removes only the link). The eval note also
-  finds an eval's label in the latest turn's `result.json` when `status.json` is missing or unreadable.
-- **`prune` keeps a run whose `status.json` says `running` while it is still being updated or its process is
-  alive (up to 24h).** Such a run is skipped under every flag, and the final line counts it. "Still being
-  updated" uses the status staleness window (`COWORK_HARNESS_STATUS_STALE_MS`, default 15s, read from `prune`'s own
-  environment). A run frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json`
-  that is not a regular file is not read, so a FIFO there cannot hang `prune`.
-- **`prune` deletes only run dirs, and refuses a `<runs-dir>` at the wrong level.** It ranks and deletes only
-  dirs named `local_` followed by lowercase letters and digits (a run's id), and dirs named `sess-` followed by
-  letters, digits, `_` or `-` only under `--pinned-older-than`. Any other dir under a scenario is left alone, and
-  `prune` prints how many it left; a dir that looks like a run but has another name is counted on its own line,
-  with up to three paths. A dir `prune` cannot read is skipped and counted. Before, `prune` given the wrong dir treated the level
-  below it as scenarios and deleted their contents past `--keep-last`. It now exits 2 and deletes nothing,
-  `--dry-run` included, when the root is a run dir, a dir inside a run dir, a scenario dir, an eval dir or a dir
-  of eval dirs, the parent of a runs root (such as `~/.cowork-harness`), or a file. The message says what the
-  path looks like and which root to pass instead. The check applies however the root was set: the positional,
-  `--run-dir` or `COWORK_HARNESS_RUNS_DIR`. A runs root that holds another runs root inside it (found without
-  following symlinks) is now refused too; prune each one by its own path. The check looks only a few levels deep
-  and is bounded in time; a root it cannot clear in that bound, and that is not itself a runs root (an
-  `index.jsonl` of its own, or only scenario dirs), is refused as well, so `prune ~` refuses instead of
-  scanning the home dir. A scenario named `runs`, `turns` or `events.jsonl` still prunes normally.
+- **`prune` deletes only finished run dirs, and refuses a `<runs-dir>` at the wrong level.** Given the wrong dir,
+  `prune` treated the level below it as scenarios and deleted their contents past `--keep-last`; it could also
+  delete a run still in progress.
+  - It ranks and deletes only dirs named `local_` followed by lowercase letters and digits (a run's id), and dirs
+    named `sess-` followed by letters, digits, `_` or `-` only under `--pinned-older-than`. Any other dir under a
+    scenario is left alone, and `prune` prints how many it left; a dir that looks like a run but has another name is
+    counted on its own line, with up to three paths. A dir `prune` cannot read is skipped and counted.
+  - It exits 2 and deletes nothing, `--dry-run` included, when the root is a run dir, a dir inside a run dir, a
+    scenario dir, an eval dir or a dir of eval dirs, the parent of a runs root (such as `~/.cowork-harness`), a runs
+    root that holds another runs root inside it (found without following symlinks; prune each one by its own path),
+    or a file. The message says what the path looks like and which root to pass instead. The check applies however
+    the root was set: the positional, `--run-dir` or `COWORK_HARNESS_RUNS_DIR`. It looks only a few levels deep and
+    is bounded in time; a root it cannot clear in that bound, and that is not itself a runs root (an `index.jsonl`
+    of its own, or only scenario dirs), is refused as well, so `prune ~` refuses instead of scanning the home dir. A
+    scenario named `runs`, `turns` or `events.jsonl` still prunes normally.
+  - A run whose `status.json` says `running` is kept, under every flag, while that file is still being updated or
+    the run's process is alive (up to 24h), and the final line counts it. "Still being updated" uses the status
+    staleness window (`COWORK_HARNESS_STATUS_STALE_MS`, default 15s, read from `prune`'s own environment). A run
+    frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json` that is not a regular
+    file is not read, so a FIFO there cannot hang `prune`.
+  - The eval note finds an eval's label in the latest turn's `result.json` when `status.json` is missing or
+    unreadable.
 - **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
   registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
   so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a
@@ -848,19 +883,16 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   prove one (counted as `unrecorded`). A refusal whose claims also missed `min_pass` cannot be told from
   a graded fail there, and is still scored as a fail. The roll-up row of an assertion with keys besides
   `semantic_matches` keeps a refused rep as a fail, because the grade's one `pass` covers every key.
-- **`eval --fail-on possible` no longer passes when the candidate's evidence refusals hide a drop.**
-  Excluding refusals has a blind spot: if the edit makes the deliverable outgrow the evidence budget, the
-  candidate refuses more, its rows fall below the rep threshold, and they would read plain `insufficient`
-  — where the same runs used to show a roll-up drop that `--fail-on possible` gated on. Such a row is now
-  `insufficient_refusals`: the candidate refused at least 2 more grades than the baseline, and that excess
-  alone took the row below the threshold. It is a drop signal at the `possible` level — `--fail-on
-  possible` exits 1 on it, `--fail-on confirmed` does not, and without `--fail-on` the exit code is
-  unchanged. It is not counted toward "every row insufficient", and `summary.labels` counts it under its
-  own key (no longer within `insufficient`). The header warns per assertion when the arms' refusals differ
-  by 2 or more reps, or either arm refused at least 20% of its scored reps (`summary.refusalImbalances`);
-  a baseline that refuses more warns but never labels a row. Re-reporting an eval dir written before this
-  change (`eval report <dir>`) can change its row labels — refusals provable from the kept fields now
-  leave the rows — and, with `--fail-on`, its exit code.
+  - Leaving refusals out has a blind spot: if the edit makes the deliverable outgrow the evidence budget, the
+    candidate refuses more and its rows fall below the rep threshold. Such a row is `insufficient_refusals`, not
+    plain `insufficient`: the candidate refused at least 2 more grades than the baseline, and that excess alone
+    took the row below the threshold. It is a drop signal at the `possible` level — `--fail-on possible` exits 1
+    on it, `--fail-on confirmed` does not, and without `--fail-on` the exit code is unchanged. It is not counted
+    toward "every row insufficient", and `summary.labels` counts it under its own key. The header warns per
+    assertion when the arms' refusals differ by 2 or more reps, or either arm refused at least 20% of its scored
+    reps (`summary.refusalImbalances`); a baseline that refuses more warns but never labels a row.
+  - Re-reporting an eval dir written earlier (`eval report <dir>`) can change its row labels — refusals provable
+    from the kept fields leave the rows — and, with `--fail-on`, its exit code.
 
 - **A budget refusal on `record <dir/> --dry-run` no longer drops the corpus findings from the JSON.**
   The refusal's error envelope replaces the dry-run payload, and `broken[]`, `refusals[]` and
@@ -935,15 +967,6 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   - A sub-agent's reasoning and web searches now appear in the `subagent` entries of `run.jsonl` and
     `trace.json` whenever the reasoning is captured, including on a run salvaged after an unanswered gate. Before, they
     appeared there only when the run had no usable timeline.
-- **`authored: true` no longer passes on a file the pre-run walk never covered.** The pre-run manifest walks
-  `outputs/`, `uploads/` and the connected folders only, so a file staged elsewhere under the work root before
-  the run (a plugin's or skill's own files under `.local-plugins/`, say) was missing from it and read as "new this
-  run". On `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json`, `authored: true` on such a
-  path now fails evidence-unavailable, naming the folders the manifest covers. The check and every lookup (the
-  manifest, the pre-run link paths, a replay's link entries and post-run hashes) use the file's stored on-disk name,
-  matched exactly: on a case-sensitive filesystem `Outputs/` is not `outputs/`, and a case- or normalization-twin of a
-  manifest file is never read as that file. The symlinked-directory check runs `lstat` on each directory of the path
-  as written.
 - **`artifact_json` and `artifact_text` no longer hang on a FIFO.** A FIFO at the artifact path was opened for
   reading, which blocks until a writer appears, so one left in `outputs/` wedged the run's evaluation. Both keys now
   check the file type first and fail with "is not a regular file" on anything that is neither a regular file nor a
@@ -960,6 +983,9 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
     (one Desktop has not finished staging), a marker naming another build, no `claude.app` or a bare `claude`
     binary is skipped, and the message names the reason. A symlinked build dir is skipped, as Desktop skips it.
     The fallback search over other versions also skips a symlinked version dir, which is a harness rule.
+  - A pinned version dir (`claude-code/<ver>`) that is a symlink to a dir of another name is followed, as Desktop
+    follows it, with a stderr note naming the version the link points at. When it holds only an unfinished build
+    or an unrecognised entry, the error names that cause (`unfinished` or `unknown-layout`).
   - When several builds of one version are staged, a pin that names a build selects it. Otherwise the newest
     `.verified` mtime wins, then build name, with a stderr note naming the builds passed over. When a flat pin's
     file is still present but a verified build of that version wins, a stderr line names both paths.
@@ -978,18 +1004,6 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, which runs a different version, and `doctor` said to open Cowork. For an
   ELF that was never staged, both say that Desktop stages it on macOS and that elsewhere `COWORK_AGENT_BINARY` must
   point at a Linux ELF, instead of saying to open Cowork.
-- **A symlinked pinned native version dir is diagnosed and reported accurately.** When the pinned version dir
-  (`claude-code/<ver>`) is a symlink to a dir of another name, `hostloop` still runs the binary it holds, as Desktop
-  does, and prints a stderr note naming the version the link points at. When that symlinked dir holds only an
-  unfinished build or an unrecognised entry, the error names it with cause `unfinished` or `unknown-layout`,
-  instead of reporting that nothing is staged.
-- **The `desktop-2.16120.0` and `desktop-2.19675.0` baselines record the `outputs` mount as `rwd`.** From Desktop
-  2.16120.0 every mount builder takes the outputs mode from one exported function, `outputsMountMode`, which allows
-  deletes for a normal session and denies them only for a bridge session. Both baselines said `rw` (delete denied).
-  Connected folders keep the approved-list rule. `sync` now pins that function and its non-bridge `"rwd"`, so a change
-  is an unknown delta; the delete-deny resolver's site count could not see this. No cassette goes stale. The default
-  outputs-delete verdict now follows the recorded mode (see Changed); see
-  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-follow-the-baselines-recorded-mount-mode).
 - **The agent now runs with auto-memory off, as Cowork does.** For an ordinary task Desktop gives the agent an
   auto-memory directory only when server gate `123929380` is on. Otherwise it sends
   `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. The gate is off in all 31 committed baselines that record it; the other 9, which
@@ -1040,7 +1054,9 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   - The container cleanup now stays registered until the teardown has removed the container successfully, at
     every tier. If the removal fails, or the teardown throws before it, a later signal or the process exit
     removes the container and then its network. The egress network cleanup likewise stays registered until its
-    networks are gone.
+    networks are gone. A container or network counts as gone only when the container runtime says so about it
+    (Docker's or Podman's own not-found message), never on another "not found", such as a missing docker context,
+    that leaves it running.
   - The sidecar registers its own cleanup, which removes the container and kills the `docker run` client before
     the network is removed. The client has to be killed explicitly: a signal to the whole process group reaches
     it, and it forwards the signal to a container that ignores it.
@@ -1067,6 +1083,14 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `references/hillclimb-recipe.md` (Recipe 7) is the loop's step-by-step procedure. The guide is indexed in the
   README, `docs/README.md` and `llms.txt`, the recipe in `SKILL.md`, `task-recipes.md` and `llms.txt`, and the
   skill's description and its Orient list name `hillclimb`.
+- Every assertion field-shape signature in the companion skill's references and `docs/scenario.md` shows a
+  list-typed field as a list (`artifact_text: {artifact, contains?: [..], …}`), and a string-or-list field as both;
+  a catalog row that showed `contains` as a string led an agent to write a scenario the loader refused. The skill's
+  pages also name the host roots `transcript_no_host_path` detects without their leading slash, so an agent that
+  reads them during a sandboxed run does not trip its own host-path leak check.
+- [RELEASING.md](./RELEASING.md) documents the maintenance release flow (a patch cut from a release tag), and its
+  live gate counts the live tests that will actually run (`vitest list --staticParse=false`, with a negative control
+  that leaves no token resolvable) and runs the companion skill's routing check on three prompts.
 - The companion skill now says that a green run says nothing about a skill edited while a session is
   running: Cowork re-syncs skills into a live session, and the harness stages them once per run, by design.
   This was previously documented only in `docs/fidelity-gaps.md`.
