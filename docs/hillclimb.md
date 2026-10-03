@@ -243,20 +243,24 @@ a note and the sent-effort check below decides.
   caps and clamps, and the run dir keeps the transcript; `meta.effort_sent` is read from there.
 
 A row whose agent did not send the requested effort is an `errors.jsonl` row (`serving_substitution`,
-`meta.failure_rule: "effort_not_sent"`), never a scored one:
+`meta.failure_rule: "effort_not_sent"`), with one exception: an agent that failed before any main-loop assistant
+message stays a scored agent failure (every graded key 0), its effort unconfirmed, as the served-model rule
+treats a run with no model evidence. In detail:
 
 - a main-loop assistant message sent with another effort, with a value that is not an effort level (never
-  recorded), or with none: an error row even when the agent then failed;
-- no main-loop assistant message in the agent's transcript (or no transcript), on a run whose main loop answered:
-  an error row unless the agent failed first, which stays a scored agent failure.
+  recorded), or with none: an error row, even when the agent then failed;
+- no main-loop assistant message in the agent's transcript (or no transcript): an error row on a run whose main
+  loop answered and whose agent did not fail; when the agent failed, the scored agent failure above, with no
+  `meta.effort_sent`.
 
 A model with no effort selector may send none: its rows record `meta.effort` (what the harness passed) beside
 `meta.effort_selector: false`, and no `meta.effort_sent`. A comparison over effort therefore compares efforts the
 agent sent. What remains unobserved is how the server treats a level it accepted.
 
 `summary.json` records `model_requested`, `effort` and `effort_sent` over the variant's whole `results.jsonl`,
-recomputed after every pass: the one value its rows carry, or `"mixed"` when they carry more than one (a `--case`
-pass at another effort makes it mixed). It records `effort_selector: false` when every row's model has no effort
+recomputed after every pass: the one value every row carries, or `"mixed"` when rows carry more than one, or when
+some carry it and some do not (a `--case` pass at another effort, rows written before the field existed, or a
+scored agent failure with no `effort_sent`); the key is left out only when no row carries it. It records `effort_selector: false` when every row's model has no effort
 selector, `"mixed"` when only some do.
 
 **A skill's own frontmatter moves the main loop.** `model:` or `effort:` in the tuned skill's `SKILL.md`
@@ -457,8 +461,10 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   spending, naming the case, what the rows ran and what the pass would run: run the change as a new variant, or
   keep the setting the rows ran with. Rows written before those fields existed are held to the model that served
   them (a dated snapshot of the pin counts as the pin), and warn when they record none; their effort is unknown,
-  which always warns. Another variant is free to differ: that is the lever. A `--case`
-  pass whose flag value differs from what the variant's other cases ran warns once.
+  which always warns. A case whose model has no effort selector is not held to its rows' effort when they say
+  so too (`meta.effort_selector: false`): that effort is only the baseline default, which a `sync` may move.
+  Another variant is free to differ: that is the lever. A `--case` pass whose flag value differs from what the
+  variant's other cases ran prints one warning per distinct value those cases ran.
 - **No answer key in reach.** A pass is refused when the agent could read the flow dir, a scenario or session
   file, a `harness_paths` file or the runs root through a mount, a workspace fixture or the plugin. A file
   listed in `harness_paths` that sits inside a workspace fixture counts as an input and is not refused, so keep

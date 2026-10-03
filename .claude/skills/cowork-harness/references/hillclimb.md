@@ -107,14 +107,16 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
   `meta.effort_sent` (what the main loop was served and sent, the effort read from the agent's own session
   transcript). A row whose agent did not send the requested effort is an `errors.jsonl` row (`serving_substitution`,
   `meta.failure_rule: "effort_not_sent"`): a main-loop message with another effort, an invalid one or none (even if
-  the agent then failed), or no main-loop message at all on an otherwise valid run. So a comparison over effort
+  the agent then failed), or no main-loop message at all on an otherwise valid run. An agent that failed before any
+  main-loop message stays a scored agent failure, its effort unconfirmed. So a comparison over effort
   compares efforts actually sent; how the server treats an accepted level stays unobserved. A no-selector model's
   rows carry `meta.effort_selector: false`. `summary.json` records `model_requested`, `effort` and `effort_sent`
-  over the variant's whole `results.jsonl` (`"mixed"` when its rows differ), and `effort_selector: false` (or
+  over the variant's whole `results.jsonl` (`"mixed"` when its rows differ, or only some carry the key), and `effort_selector: false` (or
   `"mixed"`) when the variant's models have no selector.
 - **A variant keeps one model and effort per case.** A pass asking for another than the variant's rows for a case
   ran is refused before spend: run it as a new variant. Rows from before these fields were recorded are held to
-  their served model, and warn when they have none; their unknown effort always warns.
+  their served model, and warn when they have none; their unknown effort always warns. A no-selector case is not
+  held to its rows' effort (only the baseline default).
 - **`model:` / `effort:` in the tuned skill's own `SKILL.md` frontmatter move the main loop**, not a sub-agent. An
   `effort:` that changes it makes the rows `effort_not_sent` errors (seen for a slash-command invocation); a
   `model:` is expected to make every row `serving_substitution` (inferred). Put sub-agent settings in `agents/*.md`.

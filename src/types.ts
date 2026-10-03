@@ -1881,9 +1881,11 @@ export interface RunResult {
     // request_id (UUID) of a question gate — lets `trace --view questions` pair a decision to its event row by id
     // instead of positionally (retried/duplicated gate events would shift a positional pairing). Optional.
     requestId?: string;
+    /** The LLM decider's model on a `by: "llm"` decision: a question gate, or a permission it answered. */
     model?: string;
-    /** The LLM decider's effort on a `by: "llm"` question gate: the `--effort` its host-`claude` call was pinned to
-     *  (`GRADER_EFFORT.decider`). Absent for any other answer source, or a decider transport that reported none. */
+    /** The LLM decider's effort on a `by: "llm"` decision (a question gate, or a permission it answered): the `--effort`
+     *  its host-`claude` call was pinned to (`GRADER_EFFORT.decider`). Absent for any other answer source, or a decider
+     *  transport that reported none. */
     effort?: string;
     detail?: unknown;
     rationale?: string;

@@ -421,8 +421,8 @@ interface DecisionRecord {
   // older records (positional fallback) and on the synchronous abstain→deny/undelivered/mismatch→deny
   // paths in handleDecision (those already record the true outcome at push time — nothing to reconcile).
   requestId?: string;
-  model?: string; // decider model for by:"llm" gates — surfaced in gate provenance for auditability
-  effort?: string; // the LLM decider's effort for by:"llm" gates (its transport's pin) — beside `model`
+  model?: string; // decider model for by:"llm" decisions (question and permission) — question gates surface it in gate provenance
+  effort?: string; // the LLM decider's effort for by:"llm" decisions, question and permission (its transport's pin) — beside `model`
   detail?: unknown;
   rationale?: string;
   // The FULL offered option set (label + description) as originally presented by the model — present
