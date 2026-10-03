@@ -26,6 +26,18 @@ export interface HillclimbCase {
 
 const stemOf = (file: string): string => basename(file).replace(/\.ya?ml$/i, "");
 
+/** Whether a YAML file is a scenario as a directory load decides it (eval's rule): a mapping with a `prompt:`. An
+ *  unparseable file counts, so the scenario loader reports it; a session file, an upload or a fixture does not. */
+export function isScenarioFile(f: string): boolean {
+  let doc: unknown;
+  try {
+    doc = parseYaml(readFileSync(f, "utf8"));
+  } catch {
+    return true;
+  }
+  return typeof doc === "object" && doc !== null && !Array.isArray(doc) && "prompt" in doc;
+}
+
 /** Load every scenario under `target` (a file, or a directory's .yaml/.yml files, sorted). In a directory a
  *  YAML document with no `prompt:` is not a scenario (eval's rule) and is reported in `skipped`; a single
  *  named file is always loaded so a wrong file fails loud. Throws UsageError on an empty set, a duplicate
@@ -36,13 +48,7 @@ export function loadCases(target: string): { cases: HillclimbCase[]; skipped: st
   const skipped: string[] = [];
   const files = inputs.isDir
     ? inputs.files.filter((f) => {
-        let doc: unknown;
-        try {
-          doc = parseYaml(readFileSync(f, "utf8"));
-        } catch {
-          return true; // unparseable: the scenario loader reports it
-        }
-        const isScenario = typeof doc === "object" && doc !== null && !Array.isArray(doc) && "prompt" in doc;
+        const isScenario = isScenarioFile(f);
         if (!isScenario) skipped.push(basename(f));
         return isScenario;
       })

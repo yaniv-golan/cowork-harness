@@ -347,8 +347,11 @@ All notable changes to this project are documented here. The format is based on
   user's to give. `hillclimb check [<scenario.yaml | dir/>]` also warns about a case whose rows were all graded
   under an older set than its scenario's now, comparing with the target when given, else with the scenario files
   the last `--approve-harness` hashed (`_state.json` `harness_files`), else those `harness_paths` lists, so a plain
-  `hillclimb check --flow <dir>` on an approved flow catches them; a note says when nothing is recorded or a
-  recorded file is gone.
+  `hillclimb check --flow <dir>` on an approved flow catches them (a session file named after the case is not taken
+  for its scenario). Its `regrade` remedy names a target that hashes the scenario set the flow was approved over —
+  the scenarios' directory when it holds exactly them, else the case's own file — so it runs as printed. A note
+  names each case not compared: nothing recorded, a recorded scenario not found from the current directory, or a
+  case the target holds no scenario for.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb

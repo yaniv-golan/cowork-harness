@@ -313,8 +313,12 @@ doc-drift`). Each row records `meta.assert_sig`, the assertions it was graded un
 resumed pass would mix them, and `hillclimb check` flags a case whose rows carry more than one, and a case whose
 rows were graded under another assertion set than its scenario's now — compared with the scenario target when one
 is passed (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last `--approve-harness` hashed
-(`_state.json` `harness_files`), else those `harness_paths` lists (a note says when nothing is recorded or a
-recorded file is gone).
+(`_state.json` `harness_files`), else those `harness_paths` lists. A recorded file counts as a case's scenario when
+it has a `prompt:` and its stem is the case's id, so a session file named after the case is not one. A note names a
+case it could not compare: nothing recorded, a recorded scenario not found from the current directory (run `check`
+where the flow was approved), or, with a target, a case the target holds no scenario for. The remedy's `regrade`
+target is one that hashes the scenario set the flow was approved over: the scenarios' directory when it holds
+exactly them, else the case's own file (or its directory), else `<scenarios>`.
 
 ## Guardrails the harness adds
 
