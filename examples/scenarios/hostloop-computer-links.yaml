@@ -19,7 +19,7 @@ session: ../sessions/hostloop-computer-links.yaml
 fidelity: hostloop # native host agent loop + Docker sidecar for shell/web
 
 prompt: |
-  Write a file at outputs/report.md whose contents are exactly the line: hostloop smoke.
+  Write a file named report.md in your outputs directory whose contents are exactly the line: hostloop smoke.
   Then, in your reply, share that file with me as a computer:// link so I can open it.
 
 # Deterministic answers over the same can_use_tool channel Desktop's UI uses. The task needs only

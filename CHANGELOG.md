@@ -57,9 +57,8 @@ All notable changes to this project are documented here. The format is based on
 
     The same applies to `stats` trends and `eval`/`hillclimb` comparisons that span this release: spend and
     transcripts on either side of it are not like-for-like.
-  - The committed cassettes: `example-pdf-skill`, `dispatch-shell` and `hostloop-computer-links` are re-recorded, and
-    `example-multiselect-gate` is re-stamped. Those four recordings predate the auto-memory switch. The committed
-    example cassettes are re-recorded with it in this same release, so the shipped ones run with memory off.
+  - The committed cassettes: `example-pdf-skill`, `dispatch-shell`, `hostloop-computer-links` and
+    `example-multiselect-gate` are re-recorded with auto-memory off, so their init frames carry no `memory_paths`.
 - **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
   the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
 - **`hostloop` on an Intel (x64) Mac: the native build pin is per architecture.** `desktop-2.19675.0` records the
@@ -559,7 +558,8 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
     loses 2, and the native agent pin names its per-build directory (`claude-code/2.1.286/<build>/…`), which Desktop
     2.19675.0 introduced, with the build for each CPU arch in the new `agentBinary.nativeBuilds` (see Upgrade notes).
   - Unchanged from `desktop-2.16120.0`: the Cowork system prompt, the sub-agent append fingerprints, the egress
-    contract, the model/effort config and the first-party `spawn.env`.
+    contract, the model/effort config and the first-party `spawn.env`. The prompt's 2.19675.0 fingerprint is
+    recorded in `baselines/prompts/cowork-system-prompt-fingerprints.json`.
   - The Desktop init surface was read from 3 local frames. Desktop's `cowork` server declares `send_user_message` in
     some of them; it is model-gated and was already served on 2.16120.0 (see Documentation). None of the three
     carried the `create_artifact` family; sessions that get the native `Artifact` tool never do.
@@ -941,6 +941,15 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   - **Wording.** The L0 contamination warning and the `l0_host_config_contamination` message no longer list
     auto-memory.
   - See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not).
+- **A `protocol` recording on host `claude` 2.1.287 is no longer refused as host contamination.** That CLI ships a
+  built-in `plugin-authoring` skill (from its builtin plugin `cc-plugin-plugin-authoring`), which the host-inventory
+  scan did not know, so `record` quarantined a clean recording and `verify-cassettes` failed it. The name is now on
+  the scan's list of agent built-ins: it is a bare literal in the staged agent 2.1.286 (ELF and native) and in host
+  CLI 2.1.287, and the recording that surfaced it was made on a managed config dir.
+- **`example-pdf-skill` and its CI self-test sibling no longer deny a harmless command in their Bash `allow_if`.**
+  They used `!command.includes('rm')`, which also matched "normalize", "format" or "confirm". They now use the word
+  match the other examples and the scenario docs use, `!/\brm\b/.test(command)`, and the example cassette is
+  re-recorded with it.
 
 ### Documentation
 

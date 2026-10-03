@@ -20,7 +20,7 @@ answers:
   - when_tool: Task
     decide: allow
   - when_tool: Bash
-    allow_if: "!command.includes('rm') && !command.includes('curl')"
+    allow_if: '!/\brm\b/.test(command) && !command.includes("curl")'
     else: deny
 
 assert:

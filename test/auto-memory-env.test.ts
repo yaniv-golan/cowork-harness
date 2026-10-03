@@ -123,25 +123,35 @@ describe("autoMemoryEnv", () => {
   });
 });
 
-// The end-to-end witness, BEFORE half: every committed cassette that carries an init frame was recorded with
-// auto-memory ON (pre-fix), so the instrument must see `memory_paths` in it. The AFTER half — a fresh run's init
-// frame carries none — is test/live-auto-memory.test.ts, a billed live run, and a RELEASING.md live-gate step.
-// WHEN THESE CASSETTES ARE RE-RECORDED (planned once, later in this release) they lose `memory_paths` and this
-// block goes red — by design. Keep the instrument check by pointing it at a frozen pre-fix init frame (one
-// `system`/`init` line with `memory_paths` copied into a small fixture), and add the opposite assertion — no
-// `memory_paths` — over the re-recorded cassettes, which then become the committed AFTER half.
-describe("initMemoryPaths sees memory_paths in the committed pre-fix cassettes", () => {
+// The end-to-end witness. BEFORE half: a frozen init frame from a recording made with auto-memory ON (pre-fix),
+// in which the instrument must see `memory_paths`. It is a fixture, not a live cassette, so it cannot go stale
+// when the cassettes are re-recorded. AFTER half: every committed cassette re-recorded with memory off has an
+// init frame and no `memory_paths` in it. test/live-auto-memory.test.ts, a billed live run and a RELEASING.md
+// live-gate step, checks the same on a fresh run.
+const initEvents = (path: string): string[] => (JSON.parse(readFileSync(path, "utf8")) as { events: string[] }).events;
+
+describe("initMemoryPaths sees memory_paths in a frozen pre-fix init frame", () => {
+  it("test/fixtures/auto-memory/pre-fix-init.json", () => {
+    const r = initMemoryPaths(initEvents("test/fixtures/auto-memory/pre-fix-init.json"));
+    expect(r.initSeen).toBe(true);
+    expect((r.memoryPaths as { auto?: unknown } | undefined)?.auto).toEqual(expect.any(String));
+  });
+});
+
+describe("the committed cassettes re-recorded with auto-memory off carry no memory_paths", () => {
   it.each([
     "examples/replays/example-multiselect-gate.cassette.json",
     "examples/replays/example-pdf-skill.cassette.json",
     "examples/replays/hostloop-computer-links.cassette.json",
     "test/fixtures/tool-call-dispatch/dispatch-shell.cassette.json",
   ])("%s", (path) => {
-    const c = JSON.parse(readFileSync(path, "utf8")) as { events: string[] };
-    const r = initMemoryPaths(c.events);
+    const r = initMemoryPaths(initEvents(path));
     expect(r.initSeen).toBe(true);
-    expect((r.memoryPaths as { auto?: unknown } | undefined)?.auto).toEqual(expect.any(String));
+    expect(r.memoryPaths).toBeUndefined();
   });
+});
+
+describe("initMemoryPaths edge cases", () => {
   it("a frame without the key, and a stream without an init frame, are told apart", () => {
     expect(initMemoryPaths(['{"type":"system","subtype":"init","tools":[]}'])).toEqual({ initSeen: true, memoryPaths: undefined });
     expect(initMemoryPaths(['{"type":"assistant"}', "not json"])).toEqual({ initSeen: false, memoryPaths: undefined });

@@ -248,8 +248,8 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       - `protocol` runs the HOST `claude` on your `PATH`, not the staged agent. `container` (Docker, the agent image,
         the staged binary) and `hostloop` (macOS, the staged native app) run the staged agent Cowork runs. Those two
         are the real witnesses.
-      - The committed cassettes predate the switch and still carry `memory_paths`. That is expected, and this step
-        does not re-record them.
+      - The committed cassettes are re-recorded with memory off and carry no `memory_paths`
+        (`test/auto-memory-env.test.ts` checks that, $0). This step does not re-record them.
 - [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the companion
       skill (`SKILL.md`, `references/`, the bundled `scenario.py` + `assertion-keys.json`), and no internal
       planning notes. The skill ships on BOTH channels: npm carries it alongside everything else, while a
