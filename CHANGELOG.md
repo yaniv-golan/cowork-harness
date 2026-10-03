@@ -192,29 +192,30 @@ All notable changes to this project are documented here. The format is based on
 - **`hillclimb run --effort LEVEL`** sets the main loop's effort for a pass (`low`, `medium`, `high`, `xhigh`, `max`;
   `extra` is read as `xhigh`), so a variant can step effort without editing the gated session file. Without it each
   case runs its session's `effort:`, else the baseline default. It is outside the harness sha, like `--model`. Refused
-  before spend: a level the pinned model does not offer (a dated pin included); any effort on a model with no effort selector (the
-  baseline's no-level models and the ones the agent never sends an effort for, `claude-3-*`, `claude-opus-4-0`/`4-1`,
-  `claude-sonnet-4-0`/`4-5` and `claude-haiku-4-5`, dated ids included); `xhigh` or `max` with
-  `extended_thinking: false`; and thinking off on a model that does not allow it. The dry run prints each case's
+  before spend: a level the pinned model does not offer (a dated pin included); any effort on a model with no effort
+  selector (the baseline's no-level models and the ones the agent never sends an effort for, `claude-3-*`,
+  `claude-opus-4-0`/`4-1`, `claude-sonnet-4-0`/`4-5` and `claude-haiku-4-5`, dated ids included); `xhigh` or `max`
+  with `extended_thinking: false`; and thinking off on a model that does not allow it. The dry run prints each case's
   requested model and effort, and says its estimate ignores both.
 - **hillclimb rows record the requested model and effort beside what the agent was served and sent.**
   `meta.model_requested` and `meta.effort` hold the request; `meta.effort_sent` holds the effort the main loop's
-  assistant messages went out with, read from the agent's own session transcript in the kept run dir, or in the session's pinned `plugins.config_dir`
-  on hostloop and protocol, picked by the run's session id (a value outside
-  the effort levels is never recorded). A row whose agent did not send the requested effort is an error row,
+  assistant messages went out with, read from the agent's own session transcript in the kept run dir, or in the
+  session's pinned `plugins.config_dir` on hostloop and protocol, picked by the run's session id (a value outside the
+  effort levels is never recorded). A row whose agent did not send the requested effort is an error row,
   `effort_not_sent` (`serving_substitution`): a main-loop message with another effort, an invalid one or none, even
   when the agent then failed, or no main-loop message at all on an otherwise valid run; an agent that failed before
-  any main-loop message stays a scored agent failure, its effort unconfirmed. A model with no effort
-  selector may send none; its rows carry `meta.effort_selector: false`. `summary.json` records `model_requested`,
-  `effort`, `effort_sent` and `effort_selector` over the variant's whole `results.jsonl`, `"mixed"` when its rows
-  differ or only some carry the key, and `hillclimb check` validates them. `hillclimb regrade` keeps the row fields on the rows it rebuilds.
-- **A variant keeps one requested model and effort per case.** A pass that would run a case at another model or
-  effort than the variant's rows for that case recorded (in `results.jsonl` or `errors.jsonl`) is refused before
-  spend, naming both. Rows that record no
-  requested model are held to the model that served them (a dated snapshot of the pin counts as the pin) and warn
-  when they record none; rows that record no requested effort warn. A case whose model has no effort selector is not
-  held to its rows' effort, which is only the baseline default. Different values across variants are allowed; a
-  `--case` pass whose flag value differs from what the variant's other cases ran warns, once per distinct value.
+  any main-loop message stays a scored agent failure, its effort unconfirmed. A model with no effort selector may send
+  none; its rows carry `meta.effort_selector: false`. `summary.json` records `model_requested`, `effort`,
+  `effort_sent` and `effort_selector` over the variant's whole `results.jsonl`, `"mixed"` when its rows differ or only
+  some carry the key, and `hillclimb check` validates them. `hillclimb regrade` keeps the row fields on the rows it
+  rebuilds.
+- **A variant keeps one requested model and effort per case.** A pass that would run a case at another model or effort
+  than the variant's rows for that case recorded (in `results.jsonl` or `errors.jsonl`) is refused before spend,
+  naming both. Rows that record no requested model are held to the model that served them (a dated snapshot of the pin
+  counts as the pin) and warn when they record none; rows that record no requested effort warn. A case whose model has
+  no effort selector is not held to its rows' effort, which is only the baseline default. Different values across
+  variants are allowed; a `--case` pass whose flag value differs from what the variant's other cases ran warns, once
+  per distinct value.
 - **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
   When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
   (`plugins.local_plugins` or `remote_plugins`), and the plugin's name differs, the run works here but real Cowork's
