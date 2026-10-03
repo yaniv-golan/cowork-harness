@@ -138,10 +138,9 @@ describe("initMemoryPaths sees memory_paths in a frozen pre-fix init frame", () 
   });
 });
 
-// Not listed until re-recorded with memory off, so still carrying `memory_paths`:
-// examples/replays/example-multiselect-gate.cassette.json. Move it into this list when its re-recording lands.
 describe("the committed cassettes re-recorded with auto-memory off carry no memory_paths", () => {
   it.each([
+    "examples/replays/example-multiselect-gate.cassette.json",
     "examples/replays/example-pdf-skill.cassette.json",
     "examples/replays/hostloop-computer-links.cassette.json",
     "test/fixtures/tool-call-dispatch/dispatch-shell.cassette.json",
