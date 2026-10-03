@@ -148,22 +148,42 @@ function markerList(e: RunDirEvidence): string {
     .join(", ");
 }
 
-/** The level scan's bounds. It runs on whatever path the user typed, a home dir included, so it must stay cheap:
- *  at most LEVEL_SCAN_MAX_CHILDREN children of any one dir are looked at, and the whole scan stops looking for
- *  more evidence after LEVEL_SCAN_BUDGET units (one per entry, more per run-dir probe) or LEVEL_SCAN_DEADLINE_MS.
- *  It never follows a symlink below the root and never stats a plain entry: a cloud-storage folder (Google Drive
- *  and the like) can block a stat for minutes. What the scan does not see is still protected by the name
- *  allowlist. */
+/** The level scan's bounds. It runs on whatever path the user typed, a home dir included, so its DEEP part (below
+ *  the root's direct children) is charged to a budget: LEVEL_SCAN_BUDGET units (one per entry, more per run-dir
+ *  probe) or LEVEL_SCAN_DEADLINE_MS, whichever runs out first. The deadline bounds the work started; it cannot
+ *  interrupt a call that is already blocked, which is why the scan never stats a plain entry and never follows a
+ *  symlink below the root (a stat inside a cloud-storage folder can block for minutes).
+ *  The root's own listing and the cheap marker probes on its direct children are NOT charged (only the per-dir
+ *  child cap bounds them), so the refusals that rest on them never depend on the budget. If the charged part runs
+ *  out, the check fails CLOSED unless the root is positively a runs root. */
 const LEVEL_SCAN_MAX_CHILDREN = 2000;
 const LEVEL_SCAN_BUDGET = 20_000;
 const LEVEL_SCAN_DEADLINE_MS = 3000;
-/** The current level scan's remaining budget and deadline; undefined outside `pruneLevelRefusal` (no bound). */
-let scan: { left: number; until: number } | undefined;
-/** Spend `n` units of the level-scan budget; false once it or the deadline is spent. Always true outside a scan. */
+/** Test seam: the deep scan's budget and deadline. */
+export interface LevelScanLimits {
+  budget?: number;
+  deadlineMs?: number;
+}
+/** The current level scan's state; undefined outside `pruneLevelRefusal` (no bound). */
+let scan: { left: number; until: number; exhausted: boolean } | undefined;
+/** Spend `n` units of the deep-scan budget; false (and the scan marked exhausted) once it or the deadline is
+ *  spent. Always true outside a scan. */
 function charge(n: number): boolean {
   if (scan === undefined) return true;
   scan.left -= n;
-  return scan.left >= 0 && Date.now() < scan.until;
+  if (scan.left >= 0 && Date.now() < scan.until) return true;
+  scan.exhausted = true;
+  return false;
+}
+/** Run `fn` with the budget off: for the root's own listing and the direct-child probes. */
+function uncharged<T>(fn: () => T): T {
+  const saved = scan;
+  scan = undefined;
+  try {
+    return fn();
+  } finally {
+    scan = saved;
+  }
 }
 
 /** Dir children of `dir` for the level scan, sorted. Dot entries (`.migrating`, `.git`, `.Trash`, ...) are never
@@ -185,11 +205,12 @@ function dirChildren(dir: string): string[] {
     .slice(0, LEVEL_SCAN_MAX_CHILDREN);
   return charge(out.length) ? out : [];
 }
-/** `looksLikeRunDir`, charged to the level-scan budget (false once it is spent). A probe is several fs calls. */
+/** `looksLikeRunDir`, charged to the deep-scan budget (false once it is spent). A probe is several fs calls. */
 const scanLooksLikeRunDir = (dir: string): boolean => charge(6) && looksLikeRunDir(dir);
 const looksLikeScenarioDir = (dir: string): boolean => dirChildren(dir).some((x) => scanLooksLikeRunDir(join(dir, x)));
 /** Every non-dot child of `dir` is named like a run id (a scenario whose runs are all empty scaffold dirs). */
 function runIdNamed(dir: string): boolean {
+  if (!charge(1)) return false;
   let names: string[];
   try {
     names = readdirSync(dir).filter((n) => !n.startsWith("."));
@@ -198,12 +219,16 @@ function runIdNamed(dir: string): boolean {
   }
   return names.length > 0 && names.every((n) => LOCAL_RUN_ID_RE.test(n) || PINNED_RUN_ID_RE.test(n));
 }
-/** What marks `dir` as a runs root, or undefined. The deep branch never descends into a run-shaped dir:
- *  a run dir's `turns/1/result.json` would read as a pre-layout run one level down. */
-function runsRootEvidence(dir: string): string | undefined {
+/** The file markers of a runs root: cheap, fixed-name probes. */
+function runsRootMarker(dir: string): string | undefined {
   if (isFile(join(dir, "index.jsonl"))) return "index.jsonl";
   if (isFile(join(dir, "capability-cache.json"))) return "capability-cache.json";
   if (isDir(join(dir, MIGRATION_JOURNAL_DIR))) return `${MIGRATION_JOURNAL_DIR}/`;
+  return undefined;
+}
+/** A `<scenario>/<run>` dir two levels under `dir` (charged). Never descends into a run-shaped dir: a run dir's
+ *  `turns/1/result.json` would read as a pre-layout run one level down. */
+function nestedRunEvidence(dir: string): string | undefined {
   for (const x of dirChildren(dir)) {
     const px = join(dir, x);
     if (scanLooksLikeRunDir(px)) continue;
@@ -213,6 +238,9 @@ function runsRootEvidence(dir: string): string | undefined {
   return undefined;
 }
 
+/** At most this many non-run-named dirs are probed for run markers per prune, for the diagnostic count. */
+const ODD_RUN_PROBES = 500;
+
 const DEFAULT_RUNS_DIR_NAME = basename(defaultRunsHome());
 
 /** Why `root` is not at the runs-root level, as a two-line message, or undefined. Checked once, before anything
@@ -220,10 +248,14 @@ const DEFAULT_RUNS_DIR_NAME = basename(defaultRunsHome());
  *  inside a run dir, a run dir, an eval dir, a scenario dir, then a dir holding a runs root. A root this cannot
  *  recognise (a home dir, a repo) is left to the name allowlist: nothing in it is named like a run id.
  *  ANY run-shaped child refuses: a false refusal costs a re-typed path, a false delete costs history.
- *  `source` is appended to the path in the message (e.g. where the root came from). The scan is bounded (see
- *  LEVEL_SCAN_BUDGET). */
-export function pruneLevelRefusal(root: string, source = ""): string | undefined {
-  scan = { left: LEVEL_SCAN_BUDGET, until: Date.now() + LEVEL_SCAN_DEADLINE_MS };
+ *  `source` is appended to the path in the message (e.g. where the root came from). `limits` is a test seam for
+ *  the deep scan's bounds (see LEVEL_SCAN_BUDGET). */
+export function pruneLevelRefusal(root: string, source = "", limits: LevelScanLimits = {}): string | undefined {
+  scan = {
+    left: limits.budget ?? LEVEL_SCAN_BUDGET,
+    until: Date.now() + (limits.deadlineMs ?? LEVEL_SCAN_DEADLINE_MS),
+    exhausted: false,
+  };
   try {
     return levelRefusal(root, source);
   } finally {
@@ -267,37 +299,57 @@ function levelRefusal(root: string, source: string): string | undefined {
     "and `eval report <eval-dir>` rebuilds a report from the eval dir alone.";
   if (isFile(join(abs, MANIFEST_FILE))) return refuse(`looks like an eval dir (it has ${MANIFEST_FILE}), not a runs root`, evalHint);
 
-  const children = dirChildren(abs);
+  // UNCHARGED: the root's listing and fixed-name probes on each direct child.
+  const children = uncharged(() => dirChildren(abs));
+  const childMarker = new Map<string, string>();
+  const evalChildren: string[] = [];
   for (const c of children) {
-    if (!charge(6)) break;
-    const e = runDirEvidence(join(abs, c));
+    const pc = join(abs, c);
+    const e = runDirEvidence(pc);
     if (looksLikeRunDirFrom(e))
       return refuse(`looks like a scenario dir, not a runs root: ${join(root, c)} is a run dir (${markerList(e)})`, wider(dirname(abs)));
+    const m = runsRootMarker(pc);
+    if (m !== undefined) childMarker.set(c, m);
+    if (isFile(join(pc, MANIFEST_FILE))) evalChildren.push(c);
   }
+  const rootMarker = runsRootMarker(abs);
 
+  // CHARGED from here: anything that lists a child's children.
   // Is the root itself a runs root? Then a child holding manifest.json is just a dir the allowlist leaves alone,
   // and a child that is a runs root is a NESTED one.
-  const scenarioChildren = new Set(children.filter((c) => looksLikeScenarioDir(join(abs, c))));
-  const isRootItself = runsRootEvidence(abs) !== undefined || scenarioChildren.size > 0;
+  const scenarioChildren = new Set(children.filter((c) => !childMarker.has(c) && looksLikeScenarioDir(join(abs, c))));
+  const isRootItself = rootMarker !== undefined || scenarioChildren.size > 0;
 
-  if (!isRootItself) {
-    const evalChild = children.find((c) => isFile(join(abs, c, MANIFEST_FILE)));
-    if (evalChild !== undefined)
-      return refuse(`looks like a dir of eval dirs, not a runs root: ${join(root, evalChild)} has ${MANIFEST_FILE}`, evalHint);
-  }
+  if (!isRootItself && evalChildren.length > 0)
+    return refuse(`looks like a dir of eval dirs, not a runs root: ${join(root, evalChildren[0])} has ${MANIFEST_FILE}`, evalHint);
 
   // A child that is itself a runs root, or carries the default runs-dir name. A scenario that happens to be
-  // named like that is exempt: it has run-shaped children, or (only scaffold dirs) run-id-named ones.
+  // named like that is exempt: it has run-shaped children, or (only scaffold dirs) run-id-named ones. The
+  // default-name child is judged uncharged: one listing, and a budget cut must not turn a scenario named `runs`
+  // into a refusal.
   const roots: Array<{ name: string; why: string }> = [];
   for (const c of children) {
     if (roots.length >= MAX_ROOTS_FOUND) break;
     if (scenarioChildren.has(c)) continue;
     const pc = join(abs, c);
-    const ev = runsRootEvidence(pc);
+    const ev = childMarker.get(c) ?? nestedRunEvidence(pc);
     if (ev !== undefined) roots.push({ name: c, why: ev });
-    else if (c === DEFAULT_RUNS_DIR_NAME && !runIdNamed(pc)) roots.push({ name: c, why: "the default runs-dir name" });
+    else if (c === DEFAULT_RUNS_DIR_NAME && uncharged(() => !looksLikeScenarioDir(pc) && !runIdNamed(pc)))
+      roots.push({ name: c, why: "the default runs-dir name" });
   }
-  if (roots.length === 0) return undefined;
+  if (roots.length === 0) {
+    // The deep scan ran out before it could clear this root: fail CLOSED, unless the root is positively a runs
+    // root (a file marker of its own, or every child a scenario or a scenario of run-id-named scaffold dirs).
+    if (scan?.exhausted !== true) return undefined;
+    const positive =
+      (rootMarker !== undefined && rootMarker !== `${MIGRATION_JOURNAL_DIR}/`) ||
+      (children.length > 0 && children.every((c) => scenarioChildren.has(c) || uncharged(() => runIdNamed(join(abs, c)))));
+    if (positive) return undefined;
+    return refuse(
+      `could not be checked: the level check did not finish under ${abs}`,
+      "pass the runs root itself, the dir that holds <scenario>/<run> dirs (by default ~/.cowork-harness/runs). Preview first: cowork-harness prune --dry-run <runs-root>",
+    );
+  }
   // The default name first: it is the likeliest one meant.
   roots.sort((x, y) => Number(y.name === DEFAULT_RUNS_DIR_NAME) - Number(x.name === DEFAULT_RUNS_DIR_NAME));
   const shown = roots.slice(0, 3);
@@ -410,6 +462,8 @@ export function cmdRunsGc(args: string[]): void {
   let otherDirs = 0;
   const oddRuns: string[] = [];
   let runNamed = 0;
+  let oddProbes = 0;
+  const rootIsRunsRoot = isFile(join(runsRoot, "index.jsonl")) || isFile(join(runsRoot, "capability-cache.json"));
   // A dir prune may not read (EPERM/EACCES, e.g. ~/.Trash) is skipped and counted, not a crash.
   const unreadable: string[] = [];
   const readNames = (dir: string): string[] | undefined => {
@@ -495,9 +549,14 @@ export function cmdRunsGc(args: string[]): void {
     // Anything else is typed from the listing alone, never stat'ed: under a wrong root that can be a cloud-storage
     // folder, where a stat can block for minutes.
     const isRunId = (name: string) => LOCAL_RUN_ID_RE.test(name) || PINNED_RUN_ID_RE.test(name);
+    // Which of the others look like runs is a diagnostic only, and the probe stats inside arbitrary dirs. So it
+    // runs only under a root that is positively a runs root, never inside a symlinked scenario dir, and at most
+    // ODD_RUN_PROBES times.
+    const probe = rootIsRunsRoot && !isSymlink(scenarioDir);
     for (const e of entries) {
       if (e.name.startsWith(".") || isRunId(e.name) || !e.isDirectory()) continue;
-      if (looksLikeRunDir(join(scenarioDir, e.name))) oddRuns.push(join(scenarioDir, e.name));
+      if (probe && oddProbes < ODD_RUN_PROBES && (oddProbes++, looksLikeRunDir(join(scenarioDir, e.name))))
+        oddRuns.push(join(scenarioDir, e.name));
       else otherDirs++;
     }
     const runIdDirs = entries

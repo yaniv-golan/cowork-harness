@@ -1097,3 +1097,69 @@ describe.skipIf(!can)("prune level check: review follow-ups", () => {
     expect(existsSync(join(locked, "local_0000000000001"))).toBe(true);
   });
 });
+
+// The deep part of the level scan is budgeted. When it runs out it must fail CLOSED (a scenario may itself be named
+// like a run id, so the allowlist alone does not cover a missed runs root), except on a root that is positively a
+// runs root. The root's own listing and the marker probes on its direct children are never budgeted.
+describe.skipIf(!can)("prune level check under an exhausted scan budget", () => {
+  const exhausted = [{ budget: 0 }, { deadlineMs: 0 }];
+
+  it("an unrecognised root fails closed", () => {
+    const P = tmp("prune-budget-");
+    mkdirSync(join(P, "notes", "a", "b"), { recursive: true });
+    mkdirSync(join(P, "tmp", "x"), { recursive: true });
+    for (const limits of exhausted)
+      expect(gc.pruneLevelRefusal(P, "", limits), JSON.stringify(limits)).toMatch(/the level check did not finish under /);
+    expect(gc.pruneLevelRefusal(P)).toBeUndefined(); // with the default budget it clears, and the allowlist applies
+  });
+
+  it("a positively recognised runs root is unaffected", () => {
+    const R = realRoot(tmp("prune-budget-"), "s", 3);
+    mkdirSync(join(R, "notes", "a"), { recursive: true });
+    const noIndex = tmp("prune-budget-");
+    for (let i = 0; i < 3; i++) runDir(noIndex, "s", { mtimeSec: T0 + i });
+    for (const limits of exhausted) {
+      expect(gc.pruneLevelRefusal(R, "", limits), JSON.stringify(limits)).toBeUndefined();
+      expect(gc.pruneLevelRefusal(noIndex, "", limits), JSON.stringify(limits)).toBeUndefined();
+    }
+  });
+
+  it("a runs root under a child, with scenarios named like run ids, is refused whatever the budget", () => {
+    const E = tmp("prune-budget-");
+    const ch = join(E, "ch");
+    const runs = realRoot(join(ch, "runs"), "local_scen1", 3);
+    for (const s of ["local_scen2", "local_scen3"]) for (let i = 0; i < 3; i++) runDir(runs, s, { mtimeSec: T0 + i });
+    for (const limits of [...exhausted, {}])
+      expect(gc.pruneLevelRefusal(ch, "", limits), JSON.stringify(limits)).toMatch(
+        /looks like the parent of a runs root: .*runs \(index\.jsonl\)/,
+      );
+    const before = snapshotTree(E);
+    const r = prune(["--dry-run", ch]);
+    expect(r.status, r.stderr).toBe(2);
+    expect(snapshotTree(E)).toEqual(before);
+  });
+});
+
+describe.skipIf(!can)("prune: symlinks and the run-shape diagnostic", () => {
+  it("a run-id-named symlink to a dir outside the root is removed; its target survives", () => {
+    const R = realRoot(tmp("prune-link-"), "s", 2);
+    const outside = runDir(tmp("prune-link-target-"), "x", { mtimeSec: T0 - 1000 });
+    const before = snapshotTree(outside);
+    const link = join(R, "s", "local_0000000000link");
+    symlinkSync(outside, link);
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(link)).toBe(false);
+    expect(snapshotTree(outside)).toEqual(before);
+  });
+
+  it("under a root that is not positively a runs root, other dirs are counted without probing them", () => {
+    const R = tmp("prune-link-");
+    for (let i = 0; i < 2; i++) runDir(R, "s", { mtimeSec: T0 + i });
+    runDir(R, "s", { name: "run-a", mtimeSec: T0 });
+    const r = prune(["--keep-last", "1", R]);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/left alone 1 dir\(s\) not named like a run/);
+    expect(r.stderr).not.toMatch(/run-shaped dir\(s\) with an unrecognised name/);
+  });
+});
