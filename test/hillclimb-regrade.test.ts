@@ -1575,6 +1575,25 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(out.variants[0]!.evidenceChanged).toEqual([{ prompt_id: "alpha", rep: 0, evidence: [{ assert: 1 }] }]);
   }, 240_000);
 
+  // An entry an older fill wrote with its judge provenance stripped: graded comparisons, no judge model. What graded
+  // them is unknown, so the row is named (err toward re-judging), never kept unseen by every trigger.
+  it("evidence_changed: a pairwise entry with graded outcomes but no judge model is listed (its grader is unknown)", async () => {
+    const { rows } = buildFlow();
+    const file = join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json");
+    const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: Array<Record<string, unknown>> };
+    expect((r.assertions[1]!.pairwise as Array<{ status: string }>).some((o) => o.status === "graded")).toBe(true);
+    r.assertions[1]!.composedDoc = r.assertions[1]!.judgedDoc;
+    for (const k of ["judgeModel", "judgedDoc", "judgePromptHash", "judgeUsage", "judgeCostUsd", "judgeTransport", "judgeAttempts"])
+      delete r.assertions[1]![k];
+    writeFileSync(file, JSON.stringify(r));
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(seen.calls).toBe(0);
+    expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(EVIDENCE) }]);
+    expect(out.variants[0]!.evidenceChanged).toEqual([{ prompt_id: "alpha", rep: 0, evidence: [{ assert: 1 }] }]);
+  }, 240_000);
+
   it("evidence_changed: --rejudge grades the current evidence, records both hashes, says so; the next regrade keeps it", async () => {
     const { rows, evals } = buildFlow();
     const graded = rows("v1")[0]!;

@@ -455,7 +455,8 @@ export interface EvidenceChange {
  *  row is graded with is recomposed from the kept run (`gradedDocDrift`: the same check, and the same code, the
  *  core re-grade runs before any judge call — its own assert, its list's capture inputs, the run's recorded budget,
  *  this process's secrets) and compared with the document it records. An entry a judge read that records no
- *  document cannot be compared: counted changed (one re-judge records it). An entry no judge read and that records
+ *  document cannot be compared: counted changed (one re-judge records it), as is a pairwise entry holding graded
+ *  comparisons with no judge recorded (an older fill dropped its provenance). An entry no judge read and that records
  *  no document (an evidence refusal) is not compared. A run that records no capture budget is not checked (the core
  *  refuses to re-grade it). `refusal` when the kept run cannot be recomposed. */
 function evidenceDrift(
@@ -481,6 +482,9 @@ function evidenceDrift(
     changes.set(d.index, { assert: indexOf(d.index), gradedDocSha: d.recordedSha256, currentDocSha: d.currentSha256 });
   plan.pool.forEach((e, k) => {
     if (e.judgeModel !== undefined && e.judgedDoc === undefined && e.composedDoc === undefined) changes.set(k, { assert: indexOf(k) });
+    // Graded comparisons with no judge recorded (an older fill copied them and dropped their judge's provenance):
+    // what graded them, and on what, is unknown — named too, never kept unseen by every trigger.
+    else if (e.judgeModel === undefined && (e.pairwise ?? []).some((o) => o.status === "graded")) changes.set(k, { assert: indexOf(k) });
   });
   return { changes: [...changes].sort(([a], [b]) => a - b).map(([, x]) => x) };
 }
