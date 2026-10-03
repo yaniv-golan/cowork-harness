@@ -140,15 +140,20 @@ function measure(ctx: MetricsContext, m: ScenarioMetric): MetricMeasurement {
 }
 
 /** A metric whose authorship cannot be decided. With no pre-run manifest at all it is `no_manifest`: nothing says the
- *  run did not write the file, so `pre_run` would be a false claim — and a re-record would not help, but a re-run
- *  does (declaring a metric arms the manifest). Every other undecidable case (a link, a second hard link, a --resume
- *  turn, a missing per-file hash) stays `pre_run`. */
+ *  run did not write the file, so `pre_run` would be a false claim. A re-run or a re-record with the metric declared
+ *  measures it: declaring a metric arms the manifest, and a cassette keeps it (`preRunHashes`). Every other
+ *  undecidable case (a link, a second hard link, a --resume turn, a missing per-file hash) stays `pre_run`. */
 function undecidableMetric(
   who: Extract<ReturnType<typeof authorshipOf>, { state: "undecidable" }>,
   off: (unavailable: MetricUnavailable, why: string, evidenceLimited?: boolean, remedy?: string) => MetricMeasurement,
 ): MetricMeasurement {
   if (who.cause === "no_manifest")
-    return off("no_manifest", who.why, true, "re-run the case: declaring a metric arms the pre-run manifest, so a new run records one");
+    return off(
+      "no_manifest",
+      who.why,
+      true,
+      "re-run or re-record the case with the metric declared: declaring a metric arms the pre-run manifest, which a cassette keeps",
+    );
   return off("pre_run", who.why, who.evidence);
 }
 

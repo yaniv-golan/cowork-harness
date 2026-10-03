@@ -22,7 +22,7 @@ describe("replayMetrics", () => {
     expect(replayMetrics({ workRoot: "", userVisiblePrefixes: [] }, [{ ...decl, scale: undefined }])).toBeUndefined();
     expect(said()).toMatch(/\[replay\] metrics: the cassette's frozen metrics declaration is invalid/);
   });
-  it("no pre-run manifest: no_manifest, warned with a re-run as the remedy (a re-record would not arm it)", () => {
+  it("no pre-run manifest: no_manifest, warned with a re-run or re-record as the remedy (either arms the manifest)", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "replay-nm-")));
     try {
       mkdirSync(join(root, "outputs"));
@@ -31,7 +31,7 @@ describe("replayMetrics", () => {
         { id: "words", unavailable: "no_manifest" },
       ]);
       expect(said()).toMatch(
-        /\[replay\] metrics: 1\/1 not measurable from this cassette \(words: no_manifest — no pre-run manifest for this run\/cassette .*; re-run the case: declaring a metric arms the pre-run manifest/,
+        /\[replay\] metrics: 1\/1 not measurable from this cassette \(words: no_manifest — no pre-run manifest for this run\/cassette .*; re-run or re-record the case with the metric declared: declaring a metric arms the pre-run manifest, which a cassette keeps/,
       );
     } finally {
       rmSync(root, { recursive: true, force: true });

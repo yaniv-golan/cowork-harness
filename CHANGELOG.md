@@ -88,7 +88,7 @@ All notable changes to this project are documented here. The format is based on
   `not_json`, `not_a_number`, `readonly`, `size`, `remote`, `pruned`, `pre_run`, `no_manifest`. A file the run did
   not write is `pre_run`, decided as `authored: true` decides it (content hash against the pre-run manifest), so a
   file the run rewrote unchanged is treated as untouched. A kept run or cassette recorded with no pre-run manifest at
-  all is `no_manifest` (whether the run wrote the file cannot be decided; re-running the case measures it), never
+  all is `no_manifest` (whether the run wrote the file cannot be decided; re-running or re-recording the case with the metric declared measures it), never
   `pre_run`. `replay` re-measures from the cassette manifest and warns once about
   metrics the recording cannot support; `--assert-from` / `--reassert` measure the on-disk declaration and `--write`
   freezes it; a plain replay notices an on-disk `metrics:` drift. `verify-run` re-measures the current declaration
