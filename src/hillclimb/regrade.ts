@@ -230,9 +230,12 @@ function shownRunPath(p: string, secrets: readonly string[]): string {
   return redactDeep(tildeify(p), secrets);
 }
 
-/** The judge model that made a fill's comparisons (the row's own judge fields stay the live ones). */
-const fillModel = (report: RegradeRunReport): string | undefined =>
-  report.assertions.find((a) => a.assertion.semantic_pairwise !== undefined && a.judgeModel !== undefined)?.judgeModel;
+/** The judge model this regrade's own calls were answered by — never a kept entry's: one id, `mixed` for several,
+ *  undefined when no judge was called. A fill's are its comparisons' (the row's own judge fields stay the live ones). */
+const regradeModel = (report: RegradeRunReport): string | undefined => {
+  const models = [...new Set(report.assertions.flatMap((a) => (a.copied !== true && a.judgeModel !== undefined ? [a.judgeModel] : [])))];
+  return models.length === 0 ? undefined : models.length === 1 ? models[0] : "mixed";
+};
 
 /** A core message as the flow, the JSON envelope and stderr show it: no secret, no host path. */
 const shownMessage = (m: string, secrets: readonly string[]): string => redactDeep(m, secrets);
@@ -1342,13 +1345,11 @@ async function regradeFlowInner(
               ? { regrade_rejudged_because: [...t.plan.rejudge].map(([i, because]) => ({ assert: i, because })) }
               : {}),
             ...(t.evidence.length ? { regrade_evidence: t.evidence } : {}),
-            ...(args.fillRefs
-              ? {
-                  regrade_fill: b.onlyRefs,
-                  ...(report.judgeCostUsd !== undefined ? { regrade_judge_usd: report.judgeCostUsd } : {}),
-                  ...(fillModel(report) ? { regrade_judge_model: fillModel(report) } : {}),
-                }
-              : {}),
+            ...(args.fillRefs ? { regrade_fill: b.onlyRefs } : {}),
+            // This regrade's own spend and judge, apart from the row's `judge_usage` / `judge_model` (the judges behind
+            // every entry it is graded with, a kept one included).
+            ...(report.judgeCostUsd !== undefined ? { regrade_judge_usd: report.judgeCostUsd } : {}),
+            ...(regradeModel(report) !== undefined ? { regrade_judge_model: regradeModel(report) } : {}),
           },
           args.fillRefs ? undefined : copy,
           report,

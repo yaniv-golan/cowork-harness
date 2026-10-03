@@ -1221,6 +1221,29 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(Object.keys(keys(after.grade)).length).toBeGreaterThan(0);
   }, 240_000);
 
+  // `judge_usage` / `judge_model` describe the judges behind the grade the row carries (kept entries included);
+  // `meta.regrade_judge_usd` is what THIS regrade spent, in a default regrade as in a fill.
+  it("a partial re-judge records its own spend (regrade_judge_usd) and model apart from the row's judge fields", async () => {
+    const { rows, evals } = buildFlow({ extra: SECOND });
+    edit(evals, "rubric: ['second']", "rubric: ['second, edited']");
+    const deps = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => ({
+          structured: { rationale: "r", verdict: "A" },
+          model: "claude-haiku-4-5",
+          usage: { "claude-haiku-4-5": { inputTokens: 1, outputTokens: 1, costUSD: 0.25 } },
+          subtype: "success",
+        }),
+      },
+    });
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    const meta = rows("v1")[0]!.meta;
+    expect(meta.regrade_judge_usd).toBe(0.25);
+    expect(meta.regrade_judge_model).toBe("claude-haiku-4-5");
+    expect(meta).not.toHaveProperty("regrade_fill");
+  }, 240_000);
+
   it("--rejudge re-judges every judged assert of every row", async () => {
     buildFlow({ extra: SECOND });
     const { seen, deps } = counting();
