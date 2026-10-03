@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync } from "nod
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { harnessDigest, gateDecision, listedInside, harnessChangeText } from "../src/hillclimb/gate.js";
+import { flowHarnessDigest, harnessDigest, hashedPaths, gateDecision, listedInside, harnessChangeText } from "../src/hillclimb/gate.js";
 
 let cwd: string;
 const put = (rel: string, body: string) => {
@@ -29,6 +29,14 @@ beforeEach(() => {
 afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
 describe("harnessDigest", () => {
+  it("hashedPaths names exactly the path entries harnessDigest records, an unreadable listed entry left out", () => {
+    put("package-lock.json", "{}");
+    const input = { ...base(), listed: ["evals/a.yaml", "gone.yaml", "evals"] };
+    const keys = Object.keys(harnessDigest(input).entries).filter((k) => !k.startsWith("<"));
+    expect(hashedPaths(input)).toEqual(keys);
+    expect(keys).toEqual(["evals/_session.yaml", "evals/a.yaml", "package-lock.json"]);
+  });
+
   it("is S's construction: sha256 over sorted (relpath \\0 bytes \\0), plus the virtual entries", () => {
     const d = harnessDigest(base());
     const h = createHash("sha256");
@@ -51,6 +59,15 @@ describe("harnessDigest", () => {
     // Pinned literal, computed on the code before `tags` was added; it must never move.
     expect(harnessDigest(base()).sha).toBe("d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71");
     expect(harnessDigest({ ...base(), tags: [] }).sha).toBe("d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71");
+  });
+
+  it("the keys an approval records beside the sha (harness_skill, harness_files) are not hashed: the pinned sha holds", () => {
+    const flow = (state: Record<string, unknown>) =>
+      flowHarnessDigest({ cwd, state, derived: base().derived, harnessVersion: "4.3.0", baselineId: "2.9939.4" }).sha;
+    expect(flow({})).toBe("d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71");
+    expect(flow({ harness_sha: "x", harness_files: { "evals/a.yaml": "0".repeat(64) }, harness_skill: "s" })).toBe(
+      "d8183115d25b62619e3997ca38c67bd0392cd57d4c030d9370912e5bee91ee71",
+    );
   });
 
   it("a tag (the --skill selection) joins the sha after the virtual entries and shows in what was hashed", () => {

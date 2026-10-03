@@ -313,7 +313,8 @@ All notable changes to this project are documented here. The format is based on
   and `<id>_present` says whether it was measured — 0 on a case that does not declare the metric, on an
   agent-caused failure, and when the metric was unavailable, with the reason in `meta.metrics_unavailable`.
   `hillclimb state-template` declares them (direction, plus `scale` and `min` when given, with labels unique
-  across the declarations) and defines each in `metrics.md` (the file and path it is read from, its direction and
+  across the declarations and within the 14 characters the published schema asks for; a long id's `<id>_present`
+  label is the id cut short before ` meas`, so it never ends in a bare truncated word) and defines each in `metrics.md` (the file and path it is read from, its direction and
   range). `hillclimb run` and `state-template` refuse one metric id declared differently in two scenarios, or
   spelled in a different case, before spending, naming both cases. Each row records its metrics' declaration
   signatures in `meta.metric_sigs`, and `hillclimb run` (with `--dry-run`) refuses a metric whose declaration
@@ -343,7 +344,14 @@ All notable changes to this project are documented here. The format is based on
   the `hillclimb regrade <target> --flow <dir> --case <id>` that re-evaluates them; `hillclimb check` warns per case
   whose rows carry more than one, naming the same command, so a comparison over them never silently mixes two
   graders. Both say that a scenario edited since the flow's last approval also needs `--approve-harness`, the
-  user's to give.
+  user's to give. `hillclimb check [<scenario.yaml | dir/>]` also warns about a case whose rows were all graded
+  under an older set than its scenario's now, comparing with the target when given, else with the scenario files
+  the last `--approve-harness` hashed (`_state.json` `harness_files`), else those `harness_paths` lists, so a plain
+  `hillclimb check --flow <dir>` on an approved flow catches them (a session file named after the case is not taken
+  for its scenario). Its `regrade` remedy names a target that hashes exactly the files the flow was approved over —
+  the scenarios' directory when it holds exactly them, else the case's own file — so it runs as printed. A note
+  names each case not compared: nothing recorded, a recorded scenario not found from the current directory, or a
+  case the target holds no scenario for.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
@@ -392,7 +400,9 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   in between), takes every selected variant's lock, and preflights
   every batch's evidence before any judge call (a refusal writes nothing).
   `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
-  `<variant>/regrade.md` (per-assert and metric columns included; `a<i>` is not compared across two assertion lists),
+  `<variant>/regrade.md` (per-assert and metric columns included; `a<i>` is not compared across two assertion lists,
+  with the mean `pass` over the variant's scored rows before and after, also when no row was rewritten; every
+  variant's line, there and on stderr, shows the same counters in one order, a zero included),
   and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1). `regrade`
   now re-grades `semantic_pairwise` asserts in the live run's comparison order, checks their references before any
   spend, and drift-checks an all-neutral run against its `composedDoc`; `no_semantic_asserts` now means the scenario has

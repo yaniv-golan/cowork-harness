@@ -131,6 +131,22 @@ describe("labels (the full viewer's legend truncates at 14 chars)", () => {
     for (const x of all) expect(x.length).toBeLessThanOrEqual(14);
   });
 
+  it("a long id's _present label keeps its suffix readable (' meas'), never a bare truncated ' m'", () => {
+    const l = labels([m("amount_total"), m("response_length")]);
+    expect(l.amount_total).toBe("amount_total");
+    expect(l.amount_total_present).toBe("amount_to meas");
+    expect(l.response_length).toBe("response_lengt");
+    expect(l.response_length_present).toBe("response meas");
+    for (const x of Object.values(l)) expect(x.length).toBeLessThanOrEqual(14);
+  });
+
+  it("two _present labels that abbreviate alike are told apart in the id part, keeping the ' meas' suffix", () => {
+    const l = labels([m("response_length_a"), m("response_length_b")]);
+    expect(l.response_length_a_present).toMatch(/ meas$/);
+    expect(l.response_length_b_present).toMatch(/ meas$/);
+    expect(l.response_length_a_present).not.toBe(l.response_length_b_present);
+  });
+
   it("two long ids that truncate alike are told apart too, and a short id's label is unchanged", () => {
     const l = labels([m("response_length_a"), m("response_length_b"), m("words")]);
     const all = Object.values(l);

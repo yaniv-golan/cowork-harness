@@ -1,7 +1,8 @@
 // `hillclimb` command family: `run`, `check`, `state-template`. The scenario runner comes from src/cli.ts (its
 // per-scenario runner and decider channel live there); everything else is composed here.
 
-import { join, relative, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { UsageError } from "../errors.js";
 import { writeAllSync } from "../io.js";
@@ -12,9 +13,18 @@ import { isolationRefusal } from "../decide/llm-transport.js";
 import { tokenCheck } from "../run/doctor.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
 import { HILLCLIMB_RUN_DEFAULTS, parseHillclimbRunArgs } from "./args.js";
-import { loadCases } from "./cases.js";
-import { assertSigWarnings, headroom, metricRangeWarnings, pairwiseHints, pairwiseRefFindings, stateMetricFindings } from "./check.js";
+import { isScenarioFile, loadCases } from "./cases.js";
+import {
+  assertSigWarnings,
+  headroom,
+  metricRangeWarnings,
+  pairwiseHints,
+  pairwiseRefFindings,
+  staleAssertSigWarnings,
+  stateMetricFindings,
+} from "./check.js";
 import { prepareCases } from "./command.js";
+import { hashedPaths } from "./gate.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
 import { runHillclimbCommand } from "./run-command.js";
@@ -35,7 +45,11 @@ import { regradeFlow } from "./regrade.js";
 import { freezeRefCommand } from "./freeze-ref.js";
 import { flowHasPairwise } from "./grade-keys.js";
 import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
-import { flowMetricUnion } from "./metric-keys.js";
+import { flowMetricUnion, rowAssertSigs } from "./metric-keys.js";
+import { pathSafeId } from "./ids.js";
+import { parseScenarioFile } from "../run/execute.js";
+import type { Scenario } from "../types.js";
+import type { FlowSnapshot } from "./schema-check.js";
 
 const CMD = "hillclimb";
 
@@ -50,22 +64,165 @@ export interface HillclimbCliDeps<F extends JobFlags> {
   };
 }
 
-/** `hillclimb check`: our schema reading (harness profile) plus `_state.json`'s metric rule; headroom and a float
- *  outside its declared range only warn. */
-export function checkReport(flowArg: string, cwd: string): { report: SchemaCheckReport; warnings: string[]; exitCode: 0 | 1 } {
+/** The scenarios `check` compares the rows' `meta.assert_sig` with, and the positional each case's remedy names.
+ *
+ *  With a target, its cases; a flow case it holds no scenario for is named in a note. Without one, the scenario files
+ *  the flow's `_state.json` records: `harness_files` (each approval's record of what it hashed), else `harness_paths`
+ *  (as state-template writes them). Both are cwd-relative and mix scenarios with session files, uploads and fixtures:
+ *  a recorded file is a case's scenario when it is a scenario as a directory load decides it (`isScenarioFile`) and
+ *  its stem's id is the case's. The rows themselves record only the scenario's name, never its file. A recorded file
+ *  not found from this directory, or one that does not parse, is named in a note and its case left uncompared; with
+ *  nothing recorded, one note says to pass the target. Only rows that record an assert_sig are compared.
+ *
+ *  A remedy's `regrade` positional must hash the scenario set the flow was approved over, or the gate refuses it: the
+ *  recorded scenarios' one directory when it loads exactly them, else the case's own file, else its directory, each
+ *  only when it reproduces that set (scenarios `harness_paths` lists are hashed whatever the positional); none ⇒ the
+ *  placeholder. */
+function assertSigScenarios(
+  snap: FlowSnapshot,
+  cwd: string,
+  flowShown: string,
+  target: string | undefined,
+): { target?: string; targetOf: (id: string) => string | undefined; cases: Array<{ id: string; scenario: Scenario }>; notes: string[] } {
+  const ids = [...new Set(rowAssertSigs(snap).map((r) => r.promptId))];
+  if (target !== undefined) {
+    const cases = loadCases(resolve(cwd, target)).cases;
+    const held = new Set(cases.map((c) => c.id));
+    const notes = ids
+      .filter((id) => !held.has(id))
+      .map(
+        (id) =>
+          `note: the target ${target} has no scenario for case ${id}, so its rows were not compared with a current assertion set — pass the target that holds it: \`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\``,
+      );
+    return { target, targetOf: () => target, cases, notes };
+  }
+  if (!ids.length) return { targetOf: () => undefined, cases: [], notes: [] };
+  const pass = `pass the target (\`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\`)`;
+  let yaml: string[] = [];
+  let listed: string[] = [];
+  /** Every `harness_paths` entry as written, and the path keys of `harness_files` (`undefined` when it is absent). */
+  let listedAll: string[] = [];
+  let hashedKeys: Set<string> | undefined;
+  let key = "harness_paths";
+  try {
+    const st = JSON.parse(snap.state ?? "{}") as Record<string, unknown>;
+    const yamlOf = (v: unknown) => (Array.isArray(v) ? v.filter((p): p is string => typeof p === "string" && /\.ya?ml$/i.test(p)) : []);
+    const files = st?.harness_files;
+    listed = yamlOf(st?.harness_paths);
+    listedAll = Array.isArray(st?.harness_paths) ? st.harness_paths.map(String) : [];
+    if (files && typeof files === "object" && !Array.isArray(files))
+      // Its `<…>` virtual entries and `skill:` tags are not paths.
+      hashedKeys = new Set(Object.keys(files).filter((k) => !/^<.*>$/.test(k) && !k.startsWith("skill:")));
+    yaml = yamlOf(files && typeof files === "object" && !Array.isArray(files) ? Object.keys(files) : undefined);
+    if (yaml.length) key = "harness_files";
+    else yaml = listed;
+  } catch {
+    // An unreadable _state.json is check's finding: nothing is recorded.
+  }
+  if (!yaml.length)
+    return {
+      targetOf: () => undefined,
+      cases: [],
+      notes: [
+        `note: _state.json records no scenario files (harness_files, harness_paths), so the rows' assertion sets were not compared with the scenarios' current ones — pass the target: \`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\``,
+      ],
+    };
+  const found = (p: string) => existsSync(resolve(cwd, p));
+  const scenarios = yaml.filter((p) => found(p) && isScenarioFile(resolve(cwd, p)));
+  const unfound = yaml.filter((p) => !found(p));
+  const idOf = (p: string) => pathSafeId(basename(p).replace(/\.ya?ml$/i, ""));
+  const cases: Array<{ id: string; scenario: Scenario }> = [];
+  const fileOf = new Map<string, string>();
+  const notes: string[] = [];
+  const compare = (id: string) => `to compare case ${id}'s rows with its current assertion set`;
+  for (const id of ids) {
+    const mine = scenarios.filter((p) => idOf(p) === id);
+    const gone = unfound.filter((p) => idOf(p) === id);
+    let why: string | undefined;
+    if (mine.length > 1) why = `_state.json ${key} records ${mine.length} scenario files for case ${id} (${mine.join(", ")}) — ${pass}`;
+    else if (mine.length === 0 && gone.length)
+      why = `the flow's recorded scenario ${gone.join(", ")} (_state.json ${key}) was not found relative to the current directory (${cwd}) — run check from the directory the flow was approved in, or ${pass}`;
+    else if (mine.length === 0) why = `_state.json ${key} records no scenario file for case ${id} — ${pass}`;
+    if (why !== undefined) {
+      notes.push(`note: ${why} ${compare(id)}`);
+      continue;
+    }
+    try {
+      cases.push({ id, scenario: parseScenarioFile(resolve(cwd, mine[0]!)) });
+      fileOf.set(id, mine[0]!);
+    } catch (e) {
+      notes.push(
+        `note: the flow's recorded scenario ${mine[0]} (_state.json ${key}) cannot be read (${(e as Error).message}) — ${pass} ${compare(id)}`,
+      );
+    }
+  }
+  // Whether `regrade <t>` would hash what the flow was approved over, so the gate lets it through. With the
+  // approval's record (`harness_files`): exactly its paths — every path regrade's digest would read for the cases
+  // `<t>` loads (their scenarios, session files, uploads and fixtures), the lockfiles and the `harness_paths`
+  // entries. Without it: the scenario set — every scenario `<t>` loads was recorded, and every recorded one it does
+  // not load is hashed anyway (a `harness_paths` entry).
+  const recorded = new Set(scenarios);
+  const always = new Set(listed);
+  const loads = new Map<string, { files: string[]; hashed?: Set<string> } | undefined>();
+  const loaded = (t: string) => {
+    if (!loads.has(t))
+      try {
+        const cs = loadCases(resolve(cwd, t)).cases;
+        const files = cs.map((c) => relative(cwd, resolve(c.file)));
+        const hashed =
+          hashedKeys === undefined
+            ? undefined
+            : new Set(
+                hashedPaths({ cwd, listed: listedAll, derived: prepareCases(cs, { env: process.env, noAgentRun: true }).derivedPaths(cs) }),
+              );
+        loads.set(t, { files, ...(hashed ? { hashed } : {}) });
+      } catch {
+        loads.set(t, undefined);
+      }
+    return loads.get(t);
+  };
+  const sameSet = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((x) => b.has(x));
+  const reproduces = (t: string, id: string) => {
+    const got = loaded(t);
+    if (got === undefined || !got.files.some((p) => idOf(p) === id)) return false;
+    if (hashedKeys !== undefined) return got.hashed !== undefined && sameSet(got.hashed, hashedKeys);
+    return got.files.every((p) => recorded.has(p)) && [...recorded].every((p) => got.files.includes(p) || always.has(p));
+  };
+  const dirs = [...new Set(scenarios.map((p) => dirname(p)))];
+  const targetOf = (id: string): string | undefined => {
+    const file = fileOf.get(id);
+    const candidates = [...(dirs.length === 1 ? dirs : []), ...(file !== undefined ? [file, dirname(file)] : [])];
+    return candidates.find((t) => reproduces(t, id));
+  };
+  const all = [...new Set(cases.map((c) => targetOf(c.id)))];
+  return { ...(all.length === 1 && all[0] !== undefined ? { target: all[0] } : {}), targetOf, cases, notes };
+}
+
+/** `hillclimb check`: our schema reading (harness profile) plus `_state.json`'s metric rule; headroom, a float outside
+ *  its declared range and rows graded under another assertion set than the scenario's now (`target`, else the
+ *  scenario files `_state.json` records) only warn. */
+export function checkReport(
+  flowArg: string,
+  cwd: string,
+  target?: string,
+): { report: SchemaCheckReport; warnings: string[]; exitCode: 0 | 1 } {
   const flowAbs = resolve(cwd, normalizeRootArg(flowArg));
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
   const base = checkFlowDir(flowAbs, { profile: "harness" });
   const snap = loadFlowSnapshot(flowAbs);
   const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap)];
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
+  const flowShown = normalizeRootArg(flowArg);
+  const sig = assertSigScenarios(snap, cwd, flowShown, target);
   return {
     report,
     warnings: [
       ...headroom(snap).warnings,
       ...metricRangeWarnings(snap),
-      ...assertSigWarnings(snap, normalizeRootArg(flowArg)),
-      ...pairwiseHints(snap, normalizeRootArg(flowArg)),
+      ...assertSigWarnings(snap, flowShown, sig.targetOf),
+      ...staleAssertSigWarnings(snap, sig.cases, flowShown, sig.targetOf),
+      ...sig.notes,
+      ...pairwiseHints(snap, flowShown, sig.target),
     ],
     exitCode: report.errors ? 1 : 0,
   };
@@ -126,7 +283,7 @@ export function stateTemplateFor(
     skillInvoked: tracked.name !== undefined,
   });
   // With --flow: a float the flow's _state.json still declares that no scenario declares any more. Only here are both
-  // the scenarios and the flow at hand (`check` reads the flow alone), so this is where a removal's leftover is named.
+  // the scenarios and the flow at hand (`check` reads no scenario's metrics), so this is where a removal's leftover is named.
   if (opts.flow !== undefined) {
     const flowAbs = resolve(cwd, normalizeRootArg(opts.flow));
     if (lexists(flowAbs)) {
@@ -271,8 +428,8 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     const flow = flowGiven ?? HILLCLIMB_RUN_DEFAULTS.flow;
     try {
       if (sub === "check") {
-        if (p.positionals.length) return usage(`hillclimb check takes no positional argument`, HILLCLIMB_CHECK_USAGE);
-        const c = checkReport(flow, process.cwd());
+        if (p.positionals.length > 1) return usage(`hillclimb check takes at most one scenario file or directory`, HILLCLIMB_CHECK_USAGE);
+        const c = checkReport(flow, process.cwd(), p.positionals[0]);
         if (json)
           writeAllSync(
             1,
