@@ -29,7 +29,10 @@ const hostloopSrc = readFileSync(join(SRC, "runtime", "hostloop.ts"), "utf8");
 function assertMarkPrecedesForcedRemoval(src: string) {
   // Statement calls only — the thunk factory is handed the mark as a callback (`markTearingDown: () => …`).
   const markIdxs = [...src.matchAll(/^\s*hostloopMarkTearingDown\?\.\(\);/gm)].map((m) => m.index!);
-  const rmIdxs = [...src.matchAll(/spawnSync\(runner,\s*\["rm",\s*"-f",\s*containerName\]/g)].map((m) => m.index!);
+  // The removal is the bare `rm -f`, or the helper that runs it and then releases the signal-time thunks.
+  const rmIdxs = [
+    ...src.matchAll(/spawnSync\(runner,\s*\["rm",\s*"-f",\s*containerName\]|removeContainerThenRelease\(runner,\s*containerName\b/g),
+  ].map((m) => m.index!);
   // The normal-path finally. The Ctrl-C thunk's own mark-then-remove order lives in makeContainerPhaseReap
   // (execute.ts), shared by run and chat, and is pinned behaviourally in force-kill-wiring.test.ts.
   expect(rmIdxs.length).toBeGreaterThanOrEqual(1);
