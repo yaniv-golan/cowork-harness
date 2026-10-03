@@ -146,6 +146,22 @@ describe("captureInputHostPathCorpus — the pre-run corpus of host paths the us
     expect([...readCorpus(outDir)]).toEqual(["/Users/", "/home/someone/doc.md", "/opt/cowork/", "/private/var/empty"]);
   });
 
+  it("the inputs spend the shared file budget first: a large plugin never crowds out an input's tokens", () => {
+    put("proj/a.txt", "/Users/alice/input-path");
+    for (let i = 0; i < 5_000; i++) put(`.local-plugins/cache/big/f${String(i).padStart(4, "0")}.md`, "x");
+    put(".local-plugins/cache/big/zz.md", "/Users/alice/plugin-path");
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      capture({ mounts: [mount(".local-plugins/cache/big", "local-plugin"), mount("proj", "folder")], resume: false }, mnt, outDir);
+    } finally {
+      spy.mockRestore();
+    }
+    const tokens = [...readCorpus(outDir)];
+    expect(tokens).toContain("/Users/alice/input-path");
+    expect(tokens, "past the cap a plugin's later files are not scanned").not.toContain("/Users/alice/plugin-path");
+    expect(JSON.parse(readFileSync(join(outDir, "input-host-paths.json"), "utf8")).capped).toBe(true);
+  });
+
   it("a plugin file outside a declared plugin mount contributes nothing", () => {
     put(".local-plugins/cache/undeclared/SKILL.md", "/Users/alice/stray");
     capture({ mounts: [], resume: false }, mnt, outDir);
