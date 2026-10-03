@@ -9082,6 +9082,7 @@ export async function replayCassette(
         by: d.by,
         requestId: d.requestId,
         model: d.model,
+        ...(d.effort !== undefined ? { effort: d.effort } : {}),
         detail: d.detail,
         rationale: d.rationale,
         questions: d.questions,

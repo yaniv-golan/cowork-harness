@@ -115,6 +115,10 @@ describe.runIf(can)("the LLM decider's spend reaches result.json on both lanes",
       expect(res, r.stderr).toBeDefined();
       expect(res.partial).toBeFalsy();
       expect(res.decisions.some((d: { by: string }) => d.by === "llm")).toBe(true);
+      // The decider's pinned effort is recorded beside the model that answered, on the decision and its gate.
+      const llm = res.decisions.find((d: { by: string }) => d.by === "llm");
+      expect(llm).toMatchObject({ model: "claude-sonnet-5", effort: "medium" });
+      expect(res.gateProvenance.gates[0]).toMatchObject({ answeredBy: "llm", model: "claude-sonnet-5", effort: "medium" });
       expect(res.deciderCostUsd).toBeCloseTo(0.0125, 10);
       expect(res.deciderUsage).toEqual({
         input_tokens: 1200,

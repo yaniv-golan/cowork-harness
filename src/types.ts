@@ -1664,6 +1664,8 @@ export interface GateProvenance {
   answeredBy: string;
   answer: string;
   model?: string;
+  /** The LLM decider's effort (the `--effort` its host-`claude` call was pinned to) when `answeredBy === "llm"`. */
+  effort?: string;
 }
 
 /** Run-level rollup of gate provenance: how many gates, a `by`-source histogram, and per-gate detail
@@ -1880,6 +1882,9 @@ export interface RunResult {
     // instead of positionally (retried/duplicated gate events would shift a positional pairing). Optional.
     requestId?: string;
     model?: string;
+    /** The LLM decider's effort on a `by: "llm"` question gate: the `--effort` its host-`claude` call was pinned to
+     *  (`GRADER_EFFORT.decider`). Absent for any other answer source, or a decider transport that reported none. */
+    effort?: string;
     detail?: unknown;
     rationale?: string;
     // The full AskUserQuestion option set (label + description) as originally offered by the model —

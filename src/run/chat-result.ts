@@ -105,6 +105,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
       by: d.by,
       requestId: d.requestId,
       model: d.model,
+      ...(d.effort !== undefined ? { effort: d.effort } : {}),
       detail: d.detail,
       rationale: d.rationale,
       questions: d.questions,

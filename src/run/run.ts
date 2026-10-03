@@ -422,6 +422,7 @@ interface DecisionRecord {
   // paths in handleDecision (those already record the true outcome at push time — nothing to reconcile).
   requestId?: string;
   model?: string; // decider model for by:"llm" gates — surfaced in gate provenance for auditability
+  effort?: string; // the LLM decider's effort for by:"llm" gates (its transport's pin) — beside `model`
   detail?: unknown;
   rationale?: string;
   // The FULL offered option set (label + description) as originally presented by the model — present
@@ -1633,7 +1634,7 @@ export class Run {
     } else if (!skipRecord) {
       // `req` here is the ORIGINAL can_use_tool request (not a synthetic webfetch:<domain> one), so on
       // the web_fetch gate path this is the ONE recorded decision, with name:"mcp__workspace__web_fetch".
-      this.recordDecision(req, decided.response, decided.by, decided.rationale, decided.model);
+      this.recordDecision(req, decided.response, decided.by, decided.rationale, decided.model, decided.effort);
     }
   }
 
@@ -1650,7 +1651,14 @@ export class Run {
 
   // Typed: `resp` is the discriminated DecisionResponse and `by` is the Decision["by"] union (a typo'd
   // attribution is now a compile error). resp fields are read via resp.kind narrowing; req fields via req.
-  private recordDecision(req: DecisionRequest, resp: DecisionResponse, by: Decision["by"], rationale?: string, model?: string) {
+  private recordDecision(
+    req: DecisionRequest,
+    resp: DecisionResponse,
+    by: Decision["by"],
+    rationale?: string,
+    model?: string,
+    effort?: string,
+  ) {
     if (req.kind === "question") {
       const answers = resp.kind === "question" ? resp.answers : {};
       this.rec.decisions.push({
@@ -1660,6 +1668,7 @@ export class Run {
         by,
         requestId: req.id, // for id-keyed pairing in `trace --view questions` (not positional)
         model,
+        ...(effort !== undefined ? { effort } : {}),
         detail: answers,
         rationale,
         questions: req.questions,

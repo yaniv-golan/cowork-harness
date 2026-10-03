@@ -42,6 +42,7 @@ export interface Decision {
   by: "scripted" | "cowork" | "strict" | "human" | "llm" | "agent" | "external" | "first" | "fail" | "replay" | "abstain-fallback";
   rationale?: string;
   model?: string; // set by LlmDecider — surfaced in unanswered[].model for auditability
+  effort?: string; // set by LlmDecider: the effort its transport reports calling with — surfaced in gate provenance
 }
 
 export interface Decider {
@@ -403,6 +404,9 @@ export interface CompleteResult {
    *  `subtype`. Present only on the structured transport (`claudeCliCompleteStructured`); deciders ignore them. */
   structured?: unknown;
   subtype?: string;
+  /** The `--effort` the call was made with (`GRADER_EFFORT[role]` on the host-`claude` transport), recorded on an LLM
+   *  decision beside `model`. A test double may omit it: then none is recorded. */
+  effort?: string;
 }
 export type Complete = (prompt: string, model: string) => Promise<CompleteResult>;
 
@@ -578,7 +582,7 @@ export class LlmDecider implements Decider {
     if (req.kind === "permission") {
       if (!req.options) return ABSTAIN;
       const labels = req.options.map((o) => o.label);
-      const { text: raw, model: permModel } = await this.ask(this.permPrompt(req, ctx));
+      const { text: raw, model: permModel, effort: permEffort } = await this.ask(this.permPrompt(req, ctx));
       // Echo backstop, at parity with the question path's `echoPrefixMatch` tier: the model often
       // parrots the offered option plus a self-glossed tail past a `:` boundary ("Allow once: fetch
       // this URL one time"). Bind the echoed label instead of failing loud. The OTHER:/suffix tiers are
@@ -602,11 +606,13 @@ export class LlmDecider implements Decider {
         by: "llm",
         rationale: this.intent ?? "LLM judgment",
         model: permModel,
+        ...(permEffort !== undefined ? { effort: permEffort } : {}),
       };
     }
     if (req.kind !== "question") return ABSTAIN; // dialog/elicit → fail-closed terminal
     const answers: Record<string, string> = {};
     let resolvedModel = this.model; // overwritten below by whatever the transport actually reports
+    let resolvedEffort: string | undefined; // likewise: the effort the transport reports calling with
     // true once ANY question in this gate was answered via a free-text path (the no-option passthrough or the
     // OTHER: sentinel) rather than a label pick — surfaced in the rationale so a persisted decision record can
     // distinguish a genuine option choice from a free-text answer without re-deriving it from the answers map.
@@ -624,6 +630,7 @@ export class LlmDecider implements Decider {
       if (labels.length === 0) {
         const freeRes = await this.ask(this.freeTextPrompt(text, ctx));
         resolvedModel = freeRes.model;
+        resolvedEffort = freeRes.effort;
         const free = freeRes.text.trim();
         if (free === "")
           throw new UnansweredError(
@@ -638,6 +645,7 @@ export class LlmDecider implements Decider {
       const multi = q.multiSelect === true;
       const labelRes = await this.ask(this.prompt(text, q.options, multi, ctx));
       resolvedModel = labelRes.model;
+      resolvedEffort = labelRes.effort;
       const raw = labelRes.text;
       // MULTI-SELECT (the index protocol is the ONLY accepted form): a comma-list of bare, in-range option
       // numbers (e.g. "1, 3"). Anything else — a label echo, or a mixed "1, Seed" — fails loud rather than
@@ -732,6 +740,7 @@ export class LlmDecider implements Decider {
       by: "llm",
       rationale: (this.intent ?? "LLM judgment") + (usedOther ? " [via Other free-text]" : ""),
       model: resolvedModel,
+      ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
     };
   }
 
