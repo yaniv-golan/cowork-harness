@@ -474,7 +474,12 @@ describe.runIf(POSIX)("hillclimb regrade: the judge spend and the breakdown", ()
       const NOWHERE = "  - semantic_matches:\n      rubric: ['answers']\n      evidence_files: ['outputs/nowhere.md']\n";
       // beta: its only judged assert refuses. alpha: a changed pairwise rubric (re-judged) beside the same refusal — a
       // MIXED row, judged, whose refused assert adds nothing unpriced.
-      appendFileSync(join(evals, "beta.yaml"), NOWHERE);
+      // beta also declares a metric since the runs: its rebuilt row is re-measured (unavailable: nothing authored), as
+      // a row no judge reads is, and counted so — no "; re-measured N" clause that differs from the rebuilt count.
+      appendFileSync(
+        join(evals, "beta.yaml"),
+        `${NOWHERE}metrics:\n  - { id: gone, artifact: outputs/none.json, path: x, better: higher, scale: 1 }\n`,
+      );
       const alpha = join(evals, "alpha.yaml");
       writeFileSync(alpha, readFileSync(alpha, "utf8").replace("rubric: ['answers']", "rubric: ['answers well']") + NOWHERE);
       const makeJudge = () =>
@@ -498,6 +503,8 @@ describe.runIf(POSIX)("hillclimb regrade: the judge spend and the breakdown", ()
         rewritten: 2,
         judged: 1,
         rebuilt: 1,
+        reevaluated: 1,
+        remeasured: 1,
         listedAfterJudge: 0,
         judgeUsd: 0.0123,
         judgeUnpriced: 0,
@@ -508,6 +515,8 @@ describe.runIf(POSIX)("hillclimb regrade: the judge spend and the breakdown", ()
       );
       expect(lines.join("\n")).not.toContain("unpriced");
       expect(lines.join("\n")).not.toContain("a floor");
+      expect(line).not.toContain("re-measured");
+      expect(rows("v1").find((r) => r.prompt_id === "beta")!.meta).toMatchObject({ regrade_remeasured: true, regrade_reevaluated: true });
       const beta = rows("v1").find((r) => r.prompt_id === "beta")!;
       expect(beta.meta).not.toHaveProperty("regrade_judge_usd");
       expect(beta.meta).not.toHaveProperty("regrade_judge_model");

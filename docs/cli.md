@@ -659,7 +659,7 @@ them: remove it from `_state.json`) or rows a partial re-measure left behind (a 
 `--case`, or rows it listed), and the note names both ("… written after the last row that does — either no scenario
 declares it since v2 …"); and when no row carries it, the note says so and gives both readings. `hillclimb regrade` re-measures every metric of every selected row from the kept run's
 work dir — a row a judge re-grades, and with no judge call every other one (a case with no judged assert, a row whose
-judged asserts all keep their entries, an agent-failed row, a fill's neutral-only row) — so the row gains the metric: its value and `<id>_present`, its signature in
+judged asserts all keep their entries or all refused their evidence, an agent-failed row, a fill's neutral-only row) — so the row gains the metric: its value and `<id>_present`, its signature in
 `meta.metric_sigs`, and its reason in `meta.metrics_unavailable` when it is still unavailable (`<id>` stays omitted
 then). A re-measure never replaces a value the run measured, and an agent-failed row gains the signature and
 `<id>_present: 0`, never a value. A row whose kept run dir is gone or refused, or whose kept work dir is gone, is

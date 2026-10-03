@@ -121,11 +121,12 @@ export interface RegradeFlowVariant {
   listed: Array<{ prompt_id: string; rep: number; why: string }>;
   /** Rows whose deterministic asserts (every assert no judge grades, and each `expect_denied` host) were re-evaluated
    *  from their kept run with no judge call (a case with no judged assert, an agent-failed row, a fill row that needed
-   *  no comparison). A row whose re-evaluation changed nothing is counted here but not rewritten. A re-judged row's
+   *  no comparison, a row whose judged asserts all refused their evidence). A row whose re-evaluation changed nothing is counted here but not rewritten. A re-judged row's
    *  deterministic asserts are re-evaluated too; it is counted in `rewritten`. */
   reevaluated: number;
   /** Rows whose metrics were re-measured from their kept run with no judge call (a case with no judged assert, an
-   *  agent-failed row, a fill row that needed no comparison). A row whose re-measure changed nothing is counted here
+   *  agent-failed row, a fill row that needed no comparison, a row whose judged asserts all refused their evidence). A
+   *  row whose re-measure changed nothing is counted here
    *  but not rewritten. */
   remeasured: number;
   /** Agent-failed rows (`meta.failure_class: errored_agent`) whose kept run cannot be re-evaluated (a partial run, an
@@ -1672,7 +1673,13 @@ async function regradeFlowInner(
         if (called) {
           vr.listedAfterJudge--;
           vr.judged++;
-        } else vr.rebuilt++;
+        } else {
+          // Rebuilt with no judge call, as a row no judge reads is: its deterministic asserts re-evaluated and its
+          // metrics re-measured from the kept run (the re-grade's own measure), counted the same way.
+          vr.rebuilt++;
+          if (shape.metrics.length && declaresMetrics(b.c)) vr.remeasured++;
+          if (deterministicIndexes(b.c).length) vr.reevaluated++;
+        }
         if (!aIndexAligned(t.line.row!, t.result, b.c)) misaligned.add(t.line);
       }
     }
