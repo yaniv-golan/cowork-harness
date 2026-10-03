@@ -153,7 +153,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   from their kept runs at no agent cost (every hillclimb run records the pre-run manifest; a row reading `no_manifest` needs a re-run). Changing a declared metric is refused (new flow or new id); removing one warns.
 - **Pairwise saturation.** When `check` notes a variant scoring 0.9 or more against the newest reference:
   `cowork-harness hillclimb freeze-ref T --flow F --variant vN`, then
-  `cowork-harness hillclimb regrade T --flow F --fill-refs`, then `state-template T --flow F` and merge the new
+  `cowork-harness hillclimb regrade T --flow F --fill-refs` (no `--case`: rows of cases with no pairwise
+  assertion need the column too, at no judge cost), then `state-template T --flow F` and merge the new
   `win_vN` entries (it declares them only once no scored row lacks them). Only the baseline's reference
   decides `pass`.
 
