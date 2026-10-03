@@ -503,10 +503,11 @@ All notable changes to this project are documented here. The format is based on
     `outputs/` is treated the same as an `rm`.
   - Baselines recording `rw` (every release before 2.16120.0) keep the old verdict. So does `lane: remote`, which
     records no mode, because Desktop's mount builders are not evidence about Cowork's cloud lane.
-  - `allow_outputs_delete` is still accepted. It has nothing to waive on an `rwd` baseline, so it is a no-op there,
-    with no warning.
+  - `allow_outputs_delete` is still accepted. On an `rwd` baseline it is a no-op with no warning, unless
+    `no_delete_in_mounts` arms the outputs check; then it waives that check's `outputs_delete` signal, as on `rw`.
   - `no_delete_in_outputs` and `no_delete_in_mounts` keep covering `outputs` on every baseline: authoring either arms
-    the outputs check, so a delete only the filesystem diff saw still fails the run. Their failure messages no longer
+    the outputs check, so a delete only the filesystem diff saw still fails the run (unless `allow_outputs_delete`
+    waives it). Their failure messages no longer
     say production denies the delete.
   - The detection still runs on every live run, and its evidence stays in `scan` / `fsDiff`. Committed cassettes are
     unaffected: these signals never run on replay.

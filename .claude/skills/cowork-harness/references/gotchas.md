@@ -70,7 +70,7 @@ authorable). Reach for this list when debugging a run's behavior, that one while
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.
 
 8. **Read-only mounts are enforced; delete-deny is a HARNESS gap — production DOES enforce it.**
-   (On `rw` mounts — see below for which mounts those are.) `mode:r` mounts get a real `:ro` bind (a write fails in-guest). But `rw` vs `rwd`
+   Production enforces it on `rw` mounts; which mounts are `rw` is below. `mode:r` mounts get a real `:ro` bind (a write fails in-guest). But `rw` vs `rwd`
    (write-but-no-delete) is *not* mount-enforced **in the harness** — `rm` succeeds and is only caught
    post-hoc. **Real Cowork enforces it live on a `rw` mount:** a FUSE mount where `unlink`/`rmdir` fail
    `Operation not permitted`; a skill must request approval via `allow_cowork_file_delete` (which
@@ -79,7 +79,8 @@ authorable). Reach for this list when debugging a run's behavior, that one while
    2.16120.0 a normal session mounts it `rwd`, so `rm`, `mv` and overwrite-by-rename there succeed in
    production (measured on 2.19675.0, no permission card). The harness's default verdict follows the
    baseline's recorded outputs mode: on `latest` an outputs delete passes unless the scenario asserts
-   `no_delete_in_outputs: true`, which checks on every baseline.
+   `no_delete_in_outputs: true` (which checks on every baseline) or `no_delete_in_mounts: true` without
+   waiving outputs (which arms the same check).
    **On a `rw` mount only unlinking is denied** (probed 2026-08-04, when outputs was still `rw`). Emptying
    a file in place — `truncate -s 0`, `> file`, `shred` without `-u` — and renaming *within* the mount both
    SUCCEED, so the harness does not flag them. Renaming a file OUT of a `rw` outputs mount failed
@@ -88,7 +89,8 @@ authorable). Reach for this list when debugging a run's behavior, that one while
    skill should not stage disposable scratch there (cleanup costs an approval prompt), and a skill's
    "catch-EPERM-then-request-approval" branch cannot be exercised at any harness tier (the `rm` just
    succeeds here). On an older `rw` baseline, if a scenario's deletion IS intended, assert
-   `allow_outputs_delete: true` (a no-op on `rwd` baselines) rather than dropping `no_delete_in_outputs`.
+   `allow_outputs_delete: true` rather than dropping `no_delete_in_outputs` (on `rwd` it is a no-op unless
+   `no_delete_in_mounts` arms the outputs check, where it waives that check as on `rw`).
 
 9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could
    leak. Put it at a working-dir or install root (token resolution: env > `--dotenv` > `./.env` >

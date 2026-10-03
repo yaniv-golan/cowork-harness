@@ -1174,12 +1174,12 @@
             "const": true
           },
           "allow_outputs_delete": {
-            "description": "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. Has an effect only on a baseline recording outputs `rw` (Desktop before 2.16120.0); on `rwd` (2.16120.0+) an outputs delete does not fail by default, so it is an accepted no-op. WAIVES the harness's post-hoc detection; it does NOT model a live EPERM. Mutually exclusive with no_delete_in_outputs",
+            "description": "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. Has an effect on a baseline recording outputs `rw` (Desktop before 2.16120.0); on `rwd` (2.16120.0+) an outputs delete does not fail by default, so it is an accepted no-op, unless no_delete_in_mounts arms the outputs check, where it waives that check's signal as on `rw`. WAIVES the harness's post-hoc detection; it does NOT model a live EPERM. Mutually exclusive with no_delete_in_outputs",
             "type": "boolean",
             "const": true
           },
           "no_delete_in_mounts": {
-            "description": "fails if a delete is DETECTED in outputs (on every baseline, including those where Cowork allows it; unless outputs is waived, authoring the key also arms the outputs check, so a filesystem-proven outputs delete fails the run as outputs_delete) or in any `rw` connected folder, unless that mount is waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on a `rw` connected folder until per-mount approval",
+            "description": "fails if a delete is DETECTED in outputs (on every baseline, including those where Cowork allows it; unless outputs is waived, authoring the key also arms the outputs check, so a filesystem-proven outputs delete fails the run as the outputs_delete signal, which allow_outputs_delete waives) or in any `rw` connected folder, unless that mount is waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on a `rw` connected folder until per-mount approval",
             "type": "boolean",
             "const": true
           },

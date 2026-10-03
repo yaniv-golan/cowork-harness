@@ -267,7 +267,7 @@ the default verdict follows it:
 `no_delete_in_outputs: true` checks outputs deletes on every baseline, so a scenario that wants the old check
 authors it. `no_delete_in_mounts: true` also keeps covering outputs: unless `allow_delete_in` waives outputs, authoring
 it arms the outputs check on an `rwd` baseline, so a delete only the filesystem diff saw still fails (as
-`outputs_delete`) and the roster reports it. The detection itself (the bash-command scan and the per-turn filesystem
+`outputs_delete`, which `allow_outputs_delete` waives, as on `rw`) and the roster reports it. The detection itself (the bash-command scan and the per-turn filesystem
 diff) runs on every live run and its evidence stays in `result.json`'s `scan` / `fsDiff`.
 
 Two edges the default `rwd` verdict does not distinguish, both silent when nothing is authored:

@@ -1041,7 +1041,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. Has an effect only on a baseline recording outputs `rw` (Desktop before 2.16120.0); on `rwd` (2.16120.0+) an outputs delete does not fail by default, so it is an accepted no-op. WAIVES the harness's post-hoc detection; it does NOT model a live EPERM. Mutually exclusive with no_delete_in_outputs",
+      "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. Has an effect on a baseline recording outputs `rw` (Desktop before 2.16120.0); on `rwd` (2.16120.0+) an outputs delete does not fail by default, so it is an accepted no-op, unless no_delete_in_mounts arms the outputs check, where it waives that check's signal as on `rw`. WAIVES the harness's post-hoc detection; it does NOT model a live EPERM. Mutually exclusive with no_delete_in_outputs",
     ),
   // Production denies unlink/rmdir on EVERY delete-denied (`rw`) connected folder, and approval is strictly
   // per-mount. `no_delete_in_outputs` covers only outputs; this is the mount-wide form, and it covers outputs
@@ -1050,7 +1050,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete is DETECTED in outputs (on every baseline, including those where Cowork allows it; unless outputs is waived, authoring the key also arms the outputs check, so a filesystem-proven outputs delete fails the run as outputs_delete) or in any `rw` connected folder, unless that mount is waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on a `rw` connected folder until per-mount approval",
+      "fails if a delete is DETECTED in outputs (on every baseline, including those where Cowork allows it; unless outputs is waived, authoring the key also arms the outputs check, so a filesystem-proven outputs delete fails the run as the outputs_delete signal, which allow_outputs_delete waives) or in any `rw` connected folder, unless that mount is waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on a `rw` connected folder until per-mount approval",
     ),
   // A WAIVER of the harness's post-hoc detection for the named mounts, mirroring allow_outputs_delete
   // exactly: detection still RUNS and the hits stay in result.json for forensics — only the verdict is

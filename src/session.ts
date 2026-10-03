@@ -444,7 +444,9 @@ export function userVisibleRootsFromPlan(plan: LaunchPlan): string[] {
  *  authoring, the modelled equivalent of `fileDeleteApprovedMounts`). `outputs` is included only when the
  *  baseline records it `rw` (Desktop before 2.16120.0); from 2.16120.0 a normal session mounts it `rwd`.
  *  The delete SCAN still covers outputs on every baseline (see `scanEvents`), because the authored
- *  `no_delete_in_outputs` / `no_delete_in_mounts` keys check it whatever production allows. */
+ *  `no_delete_in_outputs` / `no_delete_in_mounts` keys check it whatever production allows. So `outputsMode` changes
+ *  nothing the scan detects; it is kept so this function answers its own name truthfully per baseline (the
+ *  delete-denied set), which `test/session.test.ts` pins, rather than claiming outputs is denied where it is not. */
 export function deleteDeniedRootsFromPlan(plan: LaunchPlan, outputsMode: "rw" | "rwd"): string[] {
   const folders = plan.mounts.filter((m) => m.kind === "folder" && m.mode === "rw").map((m) => m.mountPath);
   return outputsMode === "rw" ? ["outputs", ...folders] : folders;
