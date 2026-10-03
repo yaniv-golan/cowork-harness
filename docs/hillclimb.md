@@ -508,8 +508,9 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
 ## What hillclimb is not for
 
 - Multi-turn conversations: every case is one prompt.
-- Comparing effort or sub-agent model settings within one flow (see
-  [What a round can and cannot see](#what-a-round-can-and-cannot-see)).
+- Comparing session-level settings other than model and effort (for example `agent_env.subagent_model` or
+  `extended_thinking`) within one flow: those are gated and shared by every variant. Vary a sub-agent's model and
+  effort through the plugin's `agents/*.md` instead (see [Model and effort per variant](#model-and-effort-per-variant)).
 - Cases that read live web content or a connected folder that changes between rounds.
 - A score the skill computes about itself.
 - A significance claim to publish: use `eval`.
