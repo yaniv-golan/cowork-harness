@@ -77,6 +77,9 @@ export interface FlowSnapshot {
 
 /** runner-scaffold.mjs l.199. Stricter than the lite builder's `v\d+` (build-report-lite.mjs l.156). */
 export const VARIANT_DIR_RE = /^(baseline|v[1-9]\d*)$/;
+/** Variant dirs in flow order: `baseline` first, then `v<N>` numerically (`v2` before `v10`). */
+export const compareVariants = (a: string, b: string): number =>
+  a === b ? 0 : a === "baseline" ? -1 : b === "baseline" ? 1 : Number(a.slice(1)) - Number(b.slice(1));
 const LITE_VARIANT_DIR_RE = /^(baseline|v\d+)$/;
 /** build-report-lite.mjs l.231: directory names the lite builder ignores without a warning. */
 const LITE_NON_VARIANT_DIRS = new Set(["trajectory", "attachments", "refs", "ref", "inputs", "out", "target", "__pycache__"]);

@@ -121,7 +121,7 @@ export function stateTemplateFor(
     cases: cases.map((c) => ({ name: c.id, assertions: c.scenario.assert ?? [], metrics: c.scenario.metrics })),
     harnessPaths: prep.derivedPaths(cases).map((p) => relative(cwd, p)),
     decider: false,
-    ...(pairwiseRefs ? { pairwiseRefs } : {}),
+    ...(pairwiseRefs ? { pairwiseRefs, target } : {}),
     skillInvoked: tracked.name !== undefined,
   });
   // With --flow: a float the flow's _state.json still declares that no scenario declares any more. Only here are both

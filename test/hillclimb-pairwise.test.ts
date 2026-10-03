@@ -297,14 +297,18 @@ describe("state-template", () => {
     expect(t.metricsMd).toContain("`a0_win`");
   });
 
+  const FILL =
+    "run `hillclimb regrade --fill-refs` WITHOUT --case (and with the default --variant all) so the rows of every case " +
+    "are rebuilt (regrade names any it still cannot), then re-run this command";
+
   it("names the lacking rows by case (at most five), saying why each case's rows lack the column", () => {
-    const cases = ["c1", "c2", "c3", "c4", "c5", "c6"].map((name, i) => ({ name, assertions: i === 0 ? [PW] : [] }));
+    const cases = ["c1", "c2", "c3", "c4", "c5", "c6", "c7"].map((name, i) => ({ name, assertions: i === 0 ? [PW] : [] }));
     const missing = [
       { variant: "baseline", caseId: "c1" },
       { variant: "baseline", caseId: "c2" },
       { variant: "v1", caseId: "c2" },
       { variant: "v1", caseId: "c2" },
-      ...["c3", "c4", "c5", "c6", "gone"].map((caseId) => ({ variant: "v1", caseId })),
+      ...["c3", "c4", "c5", "c6", "c7"].map((caseId) => ({ variant: "v1", caseId })),
     ];
     const t = stateTemplate({
       cases,
@@ -314,20 +318,63 @@ describe("state-template", () => {
     });
     expect(t.notes.join("\n")).toBe(
       "win_v2 is not declared: 9 scored row(s) do not carry it — " +
-        "c1 (baseline ×1: written before v2's reference was frozen, judged against it); " +
+        "c1 (baseline ×1: written before v2's reference was frozen); " +
         "c2 (baseline ×1, v1 ×2: no semantic_pairwise assert, rebuilt without a judge call); " +
         "c3 (v1 ×1: no semantic_pairwise assert, rebuilt without a judge call); " +
         "c4 (v1 ×1: no semantic_pairwise assert, rebuilt without a judge call); " +
-        "c5 (v1 ×1: no semantic_pairwise assert, rebuilt without a judge call); and 2 more case(s) " +
-        "— run `hillclimb regrade --fill-refs` WITHOUT --case so every case's rows are rebuilt, then re-run this command",
+        "c5 (v1 ×1: no semantic_pairwise assert, rebuilt without a judge call); and 2 more case(s) — " +
+        FILL,
     );
-    const unloaded = stateTemplate({
+  });
+
+  it("orders a case's variants baseline first, then numerically, whatever order the rows arrive in", () => {
+    const missing = ["v10", "v2", "baseline", "v10"].map((variant) => ({ variant, caseId: "c1" }));
+    const t = stateTemplate({
+      cases: [{ name: "c1", assertions: [PW] }],
+      harnessPaths: [],
+      decider: false,
+      pairwiseRefs: [{ ref: "v11", rowsMissing: missing.length, missing }],
+    });
+    expect(t.notes.join("\n")).toContain("c1 (baseline ×1, v2 ×1, v10 ×2: written before v11's reference was frozen)");
+  });
+
+  it("gives a case not in the target its own remedy, naming the target, and no fill advice when that is all", () => {
+    const cases = [{ name: "c1", assertions: [PW] }];
+    const both = stateTemplate({
       cases,
       harnessPaths: [],
       decider: false,
-      pairwiseRefs: [{ ref: "v2", rowsMissing: 1, missing: [{ variant: "v1", caseId: "gone" }] }],
+      target: "evals/c1.yaml",
+      pairwiseRefs: [
+        {
+          ref: "v1",
+          rowsMissing: 3,
+          missing: [
+            { variant: "baseline", caseId: "c1" },
+            { variant: "v1", caseId: "gone" },
+            { variant: "baseline", caseId: "gone" },
+          ],
+        },
+      ],
     });
-    expect(unloaded.notes.join("\n")).toContain("gone (v1 ×1: not a loaded case)");
+    expect(both.notes.join("\n")).toBe(
+      "win_v1 is not declared: 3 scored row(s) do not carry it — c1 (baseline ×1: written before v1's reference was frozen) — " +
+        FILL +
+        "; gone (baseline ×1, v1 ×1): no scenario for it in evals/c1.yaml — run state-template and regrade on the directory " +
+        "that holds it, or restore it; until then win_v1 stays undeclared",
+    );
+    const only = stateTemplate({
+      cases,
+      harnessPaths: [],
+      decider: false,
+      target: "evals/c1.yaml",
+      pairwiseRefs: [{ ref: "v1", rowsMissing: 1, missing: [{ variant: "v1", caseId: "gone" }] }],
+    });
+    expect(only.notes.join("\n")).toBe(
+      "win_v1 is not declared: 1 scored row(s) do not carry it — gone (v1 ×1): no scenario for it in evals/c1.yaml — " +
+        "run state-template and regrade on the directory that holds it, or restore it; until then win_v1 stays undeclared",
+    );
+    expect(only.notes.join("\n")).not.toMatch(/--fill-refs/);
   });
 
   it("without --flow it declares win alone and says to pass --flow", () => {

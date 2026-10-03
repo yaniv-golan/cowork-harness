@@ -8,6 +8,7 @@
 
 import type { Assertion } from "../types.js";
 import { flowHasPairwise, flowMetricDecls, metricUnion, type GradeKeyDecl, type MetricDecl } from "./grade-keys.js";
+import { compareVariants } from "./schema-check.js";
 
 export interface PerfField {
   id: string;
@@ -44,6 +45,8 @@ export function stateTemplate(opts: {
    *  which (each row's variant and case id). Known only with `--flow`. A column is declared only when NO scored row
    *  lacks it: rows written before its reference was frozen do not carry it, and `check` would then fail every one. */
   pairwiseRefs?: ReadonlyArray<{ ref: string; rowsMissing: number; missing?: ReadonlyArray<{ variant: string; caseId: string }> }>;
+  /** The scenarios argument as given, named when a lacking row's case has no scenario in it. */
+  target?: string;
   /** The rows will carry skill_invoked (a tracked skill); false leaves it out of perf_fields. Default true. */
   skillInvoked?: boolean;
 }): StateTemplate {
@@ -52,8 +55,8 @@ export function stateTemplate(opts: {
   for (const r of opts.pairwiseRefs ?? [])
     if (r.rowsMissing > 0)
       notes.push(
-        `win_${r.ref} is not declared: ${r.rowsMissing} scored row(s) do not carry it${missingRows(r.ref, r.missing, opts.cases)} ` +
-          "— run `hillclimb regrade --fill-refs` WITHOUT --case so every case's rows are rebuilt, then re-run this command",
+        `win_${r.ref} is not declared: ${r.rowsMissing} scored row(s) do not carry it — ` +
+          missingRows(r.ref, r.missing, opts.cases, opts.target ?? "the target"),
       );
   if (opts.pairwiseRefs === undefined && flowHasPairwise(opts.cases))
     notes.push("pass --flow to declare a win_<vN> column for each later variant's frozen reference (only `win` is declared without it)");
@@ -69,35 +72,58 @@ export function stateTemplate(opts: {
 
 const MAX_CASES_NAMED = 5;
 
-/** ` — alpha (baseline ×1: …); beta (…)`: the rows lacking `win_<ref>`, by case, each case saying why its rows lack
- *  it. A pairwise case's rows were written before the reference was frozen (a fill judges them against it); a case
- *  with no `semantic_pairwise` assert still carries the flow's win columns, rebuilt without a judge call — and a
- *  `--case`-scoped fill skips it. Empty when the rows are not known. */
+const FILL_REFS =
+  "run `hillclimb regrade --fill-refs` WITHOUT --case (and with the default --variant all) so the rows of every case " +
+  "are rebuilt (regrade names any it still cannot), then re-run this command";
+
+/** The rows lacking `win_<ref>`, by case and variant, and how to fill them. A pairwise case's rows were written before
+ *  the reference was frozen; a case with no `semantic_pairwise` assert still carries the flow's win columns, rebuilt
+ *  without a judge call — and a `--case`-scoped fill skips it. Both are filled by an unscoped `--fill-refs`. A case with
+ *  no scenario in the target is not: regrade lists its rows and never rewrites them, so it gets its own remedy. With
+ *  the rows unknown, the fill advice alone. */
 function missingRows(
   ref: string,
   missing: ReadonlyArray<{ variant: string; caseId: string }> | undefined,
   cases: ReadonlyArray<{ name?: string; assertions: readonly Assertion[] }>,
+  target: string,
 ): string {
-  if (!missing?.length) return "";
+  if (!missing?.length) return FILL_REFS;
   const byCase = new Map<string, Map<string, number>>();
   for (const m of missing) {
     const vs = byCase.get(m.caseId) ?? new Map<string, number>();
     vs.set(m.variant, (vs.get(m.variant) ?? 0) + 1);
     byCase.set(m.caseId, vs);
   }
+  const counts = (id: string) =>
+    [...byCase.get(id)!]
+      .sort(([a], [b]) => compareVariants(a, b))
+      .map(([v, n]) => `${v} ×${n}`)
+      .join(", ");
+  const capped = (parts: string[], total: number) =>
+    total > MAX_CASES_NAMED ? [...parts, `and ${total - MAX_CASES_NAMED} more case(s)`] : parts;
   const loaded = new Map(cases.filter((c) => c.name !== undefined).map((c) => [c.name!, flowHasPairwise([c])]));
   const ids = [...byCase.keys()].sort();
-  const parts = ids.slice(0, MAX_CASES_NAMED).map((id) => {
-    const counts = [...byCase.get(id)!].map(([v, n]) => `${v} ×${n}`).join(", ");
-    const why = !loaded.has(id)
-      ? "not a loaded case"
-      : loaded.get(id)
-        ? `written before ${ref}'s reference was frozen, judged against it`
+  const fillable = ids.filter((id) => loaded.has(id));
+  const unloaded = ids.filter((id) => !loaded.has(id));
+  const out: string[] = [];
+  if (fillable.length) {
+    const parts = fillable.slice(0, MAX_CASES_NAMED).map((id) => {
+      const why = loaded.get(id)
+        ? `written before ${ref}'s reference was frozen`
         : "no semantic_pairwise assert, rebuilt without a judge call";
-    return `${id} (${counts}: ${why})`;
-  });
-  if (ids.length > MAX_CASES_NAMED) parts.push(`and ${ids.length - MAX_CASES_NAMED} more case(s)`);
-  return ` — ${parts.join("; ")}`;
+      return `${id} (${counts(id)}: ${why})`;
+    });
+    out.push(`${capped(parts, fillable.length).join("; ")} — ${FILL_REFS}`);
+  }
+  if (unloaded.length) {
+    const parts = unloaded.slice(0, MAX_CASES_NAMED).map((id) => `${id} (${counts(id)})`);
+    out.push(
+      `${capped(parts, unloaded.length).join("; ")}: no scenario for ${unloaded.length > 1 ? "them" : "it"} in ${target} — ` +
+        `run state-template and regrade on the directory that holds ${unloaded.length > 1 ? "them" : "it"}, or restore ` +
+        `${unloaded.length > 1 ? "them" : "it"}; until then win_${ref} stays undeclared`,
+    );
+  }
+  return out.join("; ");
 }
 
 function metricsMd(declared: readonly GradeKeyDecl[], floats: readonly MetricDecl[]): string {

@@ -296,8 +296,8 @@ cat "${ENVELOPE}"
     expect(t.state.metrics.map((m) => m.id)).not.toContain("win_v1");
     expect(t.notes.join("\n")).toBe(
       "win_v1 is not declared: 2 scored row(s) do not carry it — alpha (baseline ×1, v1 ×1: written before v1's reference " +
-        "was frozen, judged against it) — run `hillclimb regrade --fill-refs` WITHOUT --case so every case's rows are rebuilt, " +
-        "then re-run this command",
+        "was frozen) — run `hillclimb regrade --fill-refs` WITHOUT --case (and with the default --variant all) " +
+        "so the rows of every case are rebuilt (regrade names any it still cannot), then re-run this command",
     );
 
     // --fill-refs judges only what each row lacks: the baseline row against v1 (one call); v1's own row is neutral
@@ -383,7 +383,7 @@ cat "${ENVELOPE}"
     const before = note();
     expect(before.ids).not.toContain("win_v1");
     expect(before.text).toMatch(/^win_v1 is not declared: 4 scored row\(s\) do not carry it — /);
-    expect(before.text).toContain("alpha (baseline ×1, v1 ×1: written before v1's reference was frozen, judged against it)");
+    expect(before.text).toContain("alpha (baseline ×1, v1 ×1: written before v1's reference was frozen)");
     expect(before.text).toContain("beta (baseline ×1, v1 ×1: no semantic_pairwise assert, rebuilt without a judge call)");
 
     // The natural scoped fill: alpha's rows gain win_v1; beta's are skipped, and the note now names them alone.
@@ -392,8 +392,8 @@ cat "${ENVELOPE}"
     expect(scoped.ids).not.toContain("win_v1");
     expect(scoped.text).toBe(
       "win_v1 is not declared: 2 scored row(s) do not carry it — beta (baseline ×1, v1 ×1: no semantic_pairwise assert, " +
-        "rebuilt without a judge call) — run `hillclimb regrade --fill-refs` WITHOUT --case so every case's rows are rebuilt, " +
-        "then re-run this command",
+        "rebuilt without a judge call) — run `hillclimb regrade --fill-refs` WITHOUT --case (and with the default --variant all) " +
+        "so the rows of every case are rebuilt (regrade names any it still cannot), then re-run this command",
     );
 
     // The printed repair works: an unscoped fill rebuilds beta's rows, and win_v1 is declared.
