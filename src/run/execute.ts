@@ -8,7 +8,8 @@ import { hostPathTokens, hostPathTokenOccurrences } from "./host-path-tokens.js"
 import {
   isInputBorneHostPath,
   readInputHostPathCorpus,
-  readInputHostPathNeverExemptRoots,
+  readSourcedHostPathCorpus,
+  corpusTokenCount,
   type InputHostPathCorpus,
 } from "./input-host-paths.js";
 import { hasTurnDirs, currentTurnFromDirs, turnWriteDir, classifyRunDir, preLayoutMessage } from "./turn-layout.js";
@@ -76,7 +77,7 @@ import { assertSpawnAllowed } from "../spawn-guard.js";
 import { decideLoopFromBaseline, readGateFlag, readGateNumber, resolveSkillDiscoveryGates } from "../loop-decision.js";
 import { makeWebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import type { WebFetchProvenance } from "../hostloop/workspace-handler.js";
-import { startEgressSidecar, registerCleanup, type EgressSidecar } from "../egress/sidecar.js";
+import { startEgressSidecar, registerCleanup, removeContainerThenRelease, type EgressSidecar } from "../egress/sidecar.js";
 import { startEgressProxy } from "../egress/proxy.js";
 import {
   evaluate,
@@ -1472,9 +1473,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra failure
       // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
       hostloopMarkTearingDown?.();
-      if (containerName) spawnSync(runner, ["rm", "-f", containerName], { stdio: "ignore" });
-      deregisterContainerReap?.(); // the normal path has reaped the container; drop the signal-time thunks
-      deregisterHostLoopSidecarReap?.();
+      // Drops the signal-time thunks only once the container is gone; a failed `rm -f` keeps them for a signal
+      // or the process exit.
+      removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);
       if (sidecar) {
         const eg = sidecar.collect();
         egress = eg.entries;
@@ -2242,7 +2243,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             hostPathLeaked: scan.hostPathLeaked,
             // Input provenance, omitted when zero (byte-identical result.json for a run with no such inputs):
             // how many host-path tokens the inputs carried, and how many matches that exempted.
-            ...(inputCorpus?.tokens.size ? { inputHostPathTokens: inputCorpus.tokens.size } : {}),
+            ...(inputCorpus && corpusTokenCount(inputCorpus) ? { inputHostPathTokens: corpusTokenCount(inputCorpus) } : {}),
             ...(scan.hostPathsFromInputs ? { hostPathsFromInputs: scan.hostPathsFromInputs } : {}),
             selfHealRan: scan.selfHealRan,
           },
@@ -4206,9 +4207,10 @@ export function ownHostRoots(outDir: string, sessionId: string, baseline: Platfo
 }
 
 /** The input-provenance corpus the post-run scan exempts against: the host-path tokens the first turn's
- *  staged inputs, declared plugins and local skills carried (persisted by the runtime), plus this turn's prompt, with this
- *  run's own roots and the plugins' host source locations (persisted beside the tokens) never exempt. Only at container/microvm: those are the tiers that stage inputs and arm the
- *  `host_path_leak` signal; elsewhere nothing is exempted (and nothing is reported). */
+ *  staged inputs carried (persisted by the runtime) plus this turn's prompt, and apart from them the staged
+ *  plugins' and local skills' tokens with their host source locations, which those tokens never exempt. This
+ *  run's own roots are never exempt. Only at container/microvm: those are the tiers that stage inputs and arm
+ *  the `host_path_leak` signal; elsewhere nothing is exempted (and nothing is reported). */
 export function inputProvenanceCorpus(
   outDir: string,
   sessionId: string,
@@ -4220,8 +4222,9 @@ export function inputProvenanceCorpus(
   const { subtree, exact } = ownHostRoots(outDir, sessionId, baseline);
   return {
     tokens: new Set([...readInputHostPathCorpus(outDir), ...hostPathTokens(prompt ?? "")]),
-    neverExemptRoots: [...subtree, ...readInputHostPathNeverExemptRoots(outDir)],
+    neverExemptRoots: subtree,
     neverExemptExact: exact,
+    sourced: readSourcedHostPathCorpus(outDir),
   };
 }
 

@@ -900,7 +900,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if a host path (/Users, /opt) leaked into model-visible text (post-run scan); a path that came verbatim from the scenario's own input files or prompt is not a leak. Only `true` is valid (writing `false` is a rejected footgun — omit to allow or use allow_stall)",
+      "fails if a host path (/Users, /opt) leaked into model-visible text (post-run scan); a path that came verbatim from the scenario's own input files, prompt, or declared plugins' or local skills' files is not a leak. Only `true` is valid (writing `false` is a rejected footgun — omit to allow or use allow_stall)",
     ),
   computer_links_resolve: z
     .literal(true)

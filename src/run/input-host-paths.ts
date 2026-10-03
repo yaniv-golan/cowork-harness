@@ -53,6 +53,12 @@ export interface InputHostPathCorpus {
   /** Roots refused only as themselves (not what is under them): the vm-work root and the runs dir hold
    *  OTHER sessions, which an input may legitimately name. */
   neverExemptExact?: readonly string[];
+  /** Tokens from the staged plugins' and local skills' own files, with those plugins' and skills' host source
+   *  locations. A token found ONLY here is also refused at or under one of `roots` (compared on path-segment
+   *  boundaries): the agent sees a plugin only under `/sessions/…`, so its source path in model-visible text
+   *  is what a leak of that mount looks like, whatever its files say. The rule binds these tokens only — a
+   *  path the user's own upload, folder or prompt names stays exempt, as it always was. */
+  sourced?: { tokens: ReadonlySet<string>; roots: readonly string[] };
 }
 
 /** Is `token` a string prefix of `root` that does not end at a path boundary — a spelling of the root cut
@@ -62,9 +68,12 @@ function truncates(token: string, root: string): boolean {
 }
 
 /** Is this host-path token one the user supplied — and not at or under a root the harness created, nor a
- *  truncated spelling of one? */
+ *  truncated spelling of one? A token supplied only by a plugin's or skill's files must also not be at or
+ *  under that plugin's or skill's host source. */
 export function isInputBorneHostPath(token: string, corpus: InputHostPathCorpus | undefined): boolean {
-  if (!corpus || !corpus.tokens.has(token)) return false;
+  if (!corpus) return false;
+  const fromInputs = corpus.tokens.has(token);
+  if (!fromInputs && !corpus.sourced?.tokens.has(token)) return false;
   // The own-root checks compare LOCATIONS, so the token is canonicalized first (membership above stays
   // exact): invisible format characters (Unicode `Cf`: zero-width chars, soft hyphen, BOM) dropped, `.`/`..` segments resolved, trailing sentence punctuation
   // and slashes removed (`<run dir>.` names the run dir), and case folded — macOS's default filesystem is
@@ -79,7 +88,15 @@ export function isInputBorneHostPath(token: string, corpus: InputHostPathCorpus 
   const exact = (corpus.neverExemptExact ?? []).filter((r) => r !== "").map(canon);
   const underOrTruncates = roots.some((r) => bare === r || bare.startsWith(`${r}/`) || truncates(bare, r));
   const exactOrTruncates = exact.some((r) => bare === r || truncates(bare, r));
-  return !underOrTruncates && !exactOrTruncates;
+  if (underOrTruncates || exactOrTruncates) return false;
+  if (fromInputs) return true;
+  const sources = (corpus.sourced?.roots ?? []).filter((r) => r !== "").map(canon);
+  return !sources.some((r) => bare === r || bare.startsWith(`${r}/`));
+}
+
+/** How many distinct host-path tokens the corpus carries, from every source. */
+export function corpusTokenCount(corpus: InputHostPathCorpus): number {
+  return new Set([...corpus.tokens, ...(corpus.sourced?.tokens ?? [])]).size;
 }
 
 function isBinary(path: string): boolean {
@@ -95,9 +112,10 @@ function isBinary(path: string): boolean {
 
 /**
  * Tokenize the staged input mounts (uploads, connected folders, projects), the staged `workspace_fixture`
- * files and the staged plugin mounts under `mntHost` and write the corpus to `<outDir>/input-host-paths.json`,
- * with the plugins' host source locations as roots never to exempt. A no-op on a resumed turn, whose corpus is the one the first
- * turn captured. Deterministic: entries are walked in sorted order and tokens are stored sorted.
+ * files, the staged plugin mounts and the staged `skills.local` skills under `mntHost` and write the corpus to
+ * `<outDir>/input-host-paths.json`: the inputs' tokens, and apart from them the plugins' and skills' tokens with
+ * their host source locations. A no-op on a resumed turn, whose corpus is the one the first turn captured.
+ * Deterministic: entries are walked in sorted order and tokens are stored sorted.
  */
 export function captureInputHostPathCorpus(
   plan: Pick<LaunchPlan, "mounts" | "resume" | "workspaceFixture" | "stagedSkills">,
@@ -106,6 +124,8 @@ export function captureInputHostPathCorpus(
 ): void {
   if (plan.resume) return;
   const tokens = new Set<string>();
+  const sourceTokens = new Set<string>();
+  let into = tokens;
   let files = 0;
   let bytes = 0;
   let capped = false;
@@ -138,7 +158,7 @@ export function captureInputHostPathCorpus(
     bytes += st.size;
     try {
       if (isBinary(path)) return;
-      for (const t of hostPathTokens(readFileSync(path, "utf8"))) tokens.add(t);
+      for (const t of hostPathTokens(readFileSync(path, "utf8"))) into.add(t);
     } catch {
       /* unreadable: contributes nothing */
     }
@@ -149,6 +169,8 @@ export function captureInputHostPathCorpus(
   // files there now are exactly the fixture's (visited by name — never the whole outputs dir).
   for (const f of plan.workspaceFixture?.files ?? []) visit(join(mntHost, "outputs", ...f.path.split("/")));
   // The declared plugins and local skills LAST, so they spend only what the inputs left of the shared budget.
+  // Their tokens are kept apart: the never-exempt source rule applies to them, not to the inputs'.
+  into = sourceTokens;
   const pluginSources = new Set<string>();
   const neverExemptSource = (src: string): void => {
     if (!src) return;
@@ -170,27 +192,43 @@ export function captureInputHostPathCorpus(
     visit(join(mntHost, ".claude", "skills", sk.dest));
     neverExemptSource(sk.src);
   }
-  if (capped)
+  if (capped && !cappedNoticeShown) {
+    cappedNoticeShown = true; // once per process: a large plugin hits the cap on every run of a batch
     warn(
       `::notice:: [scan] input, plugin and skill files exceed ${MAX_FILES} files / ${MAX_TOTAL_BYTES / 1024 / 1024} MiB — host paths in the rest ` +
         `are not recognised as user-supplied, so quoting them counts as a host_path_leak\n`,
     );
+  }
   writeFileSync(
     join(outDir, INPUT_HOST_PATHS_FILE),
-    JSON.stringify({ version: 1, capped, tokens: [...tokens].sort(), neverExemptRoots: [...pluginSources].sort() }, null, 2),
+    JSON.stringify(
+      {
+        version: 1,
+        capped,
+        tokens: [...tokens].sort(),
+        sourceTokens: [...sourceTokens].sort(),
+        sourceRoots: [...pluginSources].sort(),
+      },
+      null,
+      2,
+    ),
   );
 }
 
-/** The roots a fresh stage recorded as never exempt (the declared plugins' and local skills' host source locations). Missing or
- *  unreadable ⇒ none — the corpus reader below then yields no tokens either, so nothing is exempted. */
-export function readInputHostPathNeverExemptRoots(outDir: string): string[] {
+let cappedNoticeShown = false;
+
+/** The plugins' and local skills' tokens and host source locations a fresh stage persisted. Missing or
+ *  unreadable ⇒ none (no exemptions from them — fails closed). */
+export function readSourcedHostPathCorpus(outDir: string): { tokens: Set<string>; roots: string[] } {
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((t): t is string => typeof t === "string" && t !== "") : []);
   try {
-    const parsed = JSON.parse(readFileSync(join(outDir, INPUT_HOST_PATHS_FILE), "utf8")) as { neverExemptRoots?: unknown };
-    return Array.isArray(parsed.neverExemptRoots)
-      ? parsed.neverExemptRoots.filter((t): t is string => typeof t === "string" && t !== "")
-      : [];
+    const parsed = JSON.parse(readFileSync(join(outDir, INPUT_HOST_PATHS_FILE), "utf8")) as {
+      sourceTokens?: unknown;
+      sourceRoots?: unknown;
+    };
+    return { tokens: new Set(strings(parsed.sourceTokens)), roots: strings(parsed.sourceRoots) };
   } catch {
-    return [];
+    return { tokens: new Set(), roots: [] };
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as execute from "../src/run/execute.js";
@@ -20,6 +20,8 @@ const hostPathTokens = (t: string): string[] => (execute as any).hostPathTokens(
 const capture = (plan: Partial<LaunchPlan>, mntHost: string, outDir: string): void =>
   (provenance as any).captureInputHostPathCorpus(plan, mntHost, outDir);
 const readCorpus = (outDir: string): Set<string> => (provenance as any).readInputHostPathCorpus?.(outDir) ?? new Set();
+/** The plugins' and local skills' tokens, kept apart from the inputs'. */
+const readSourced = (outDir: string): Set<string> => (provenance as any).readSourcedHostPathCorpus?.(outDir)?.tokens ?? new Set();
 
 let dir: string;
 let mnt: string;
@@ -143,7 +145,8 @@ describe("captureInputHostPathCorpus — the pre-run corpus of host paths the us
       mnt,
       outDir,
     );
-    expect([...readCorpus(outDir)]).toEqual(["/Users/", "/home/someone/doc.md", "/opt/cowork/", "/private/var/empty"]);
+    expect([...readSourced(outDir)]).toEqual(["/Users/", "/home/someone/doc.md", "/opt/cowork/", "/private/var/empty"]);
+    expect(readCorpus(outDir).size, "plugin tokens are kept apart from the inputs'").toBe(0);
   });
 
   it("the inputs spend the shared file budget first: a large plugin never crowds out an input's tokens", () => {
@@ -156,9 +159,8 @@ describe("captureInputHostPathCorpus — the pre-run corpus of host paths the us
     } finally {
       spy.mockRestore();
     }
-    const tokens = [...readCorpus(outDir)];
-    expect(tokens).toContain("/Users/alice/input-path");
-    expect(tokens, "past the cap a plugin's later files are not scanned").not.toContain("/Users/alice/plugin-path");
+    expect([...readCorpus(outDir)]).toContain("/Users/alice/input-path");
+    expect([...readSourced(outDir)], "past the cap a plugin's later files are not scanned").not.toContain("/Users/alice/plugin-path");
     expect(JSON.parse(readFileSync(join(outDir, "input-host-paths.json"), "utf8")).capped).toBe(true);
   });
 
@@ -166,6 +168,7 @@ describe("captureInputHostPathCorpus — the pre-run corpus of host paths the us
     put(".local-plugins/cache/undeclared/SKILL.md", "/Users/alice/stray");
     capture({ mounts: [], resume: false }, mnt, outDir);
     expect(readCorpus(outDir).size).toBe(0);
+    expect(readSourced(outDir).size).toBe(0);
   });
 
   it("does not tokenize oversize or binary files, nor .git/ or node_modules/", () => {
@@ -320,17 +323,62 @@ describe("the staged plugin's own files are input too", () => {
   it("the plugin's host SOURCE location leaks even when a plugin file names it", () => {
     const src = "/Users/alice/code/my-plugin";
     stagePlugin(`dev notes: built from ${src}/skills/x\n`, src);
-    expect(corpusFor().tokens.has(`${src}/skills/x`), "precondition: the plugin file yields the token").toBe(true);
+    expect(corpusFor().sourced.tokens.has(`${src}/skills/x`), "precondition: the plugin file yields the token").toBe(true);
     const f = events(read(`dev notes: built from ${src}/skills/x`));
     expect(scanEvents(f, ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
   });
 
   it("a host path the agent writes into the staged plugin tree during the run is not exempt", () => {
-    stagePlugin("# Assertion catalog\n");
+    stagePlugin("staged: /Users/alice/staged-path\n");
     put(`${PLUGIN}/references/later.md`, "/Users/alice/written-by-agent");
     capture({ mounts: [mount(PLUGIN, "local-plugin")], resume: true }, mnt, outDir);
+    // control: what WAS staged is exempt, so this case fails if the plugin scan is gone
+    expect(scanEvents(events(read("/Users/alice/staged-path")), ["outputs"], corpusFor()).hostPathLeaked).toBe(false);
     const f = events(read("/Users/alice/written-by-agent"));
     expect(scanEvents(f, ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
+  });
+
+  // The source rule binds the plugin's own tokens only: a path the USER's upload or prompt names stays exempt,
+  // as it always was, even under the plugin's source.
+  it("an upload naming a path under the plugin source is still exempt", () => {
+    const src = "/Users/alice/code/my-plugin";
+    put("uploads/notes.md", `edit ${src}/SKILL.md please\n`);
+    put(`${PLUGIN}/SKILL.md`, "# skill\n");
+    capture(
+      { mounts: [mount("uploads/notes.md", "upload"), { ...mount(PLUGIN, "local-plugin"), hostPath: src }], resume: false },
+      mnt,
+      outDir,
+    );
+    expect(scanEvents(events(read(`edit ${src}/SKILL.md please`)), ["outputs"], corpusFor()).hostPathLeaked).toBe(false);
+  });
+
+  it("a prompt naming a path under the plugin source is still exempt", () => {
+    const src = "/Users/alice/code/my-plugin";
+    stagePlugin("# skill\n", src);
+    const corpus = (execute as any).inputProvenanceCorpus(outDir, "local_sid", {}, `look at ${src}/SKILL.md`, "container");
+    expect(scanEvents(events(say(`reading ${src}/SKILL.md`)), ["outputs"], corpus).hostPathLeaked).toBe(false);
+  });
+
+  it("the source rule compares on path segments: a sibling that shares a string prefix is not under it", () => {
+    stagePlugin("see /Users/alice/code/foo/x.md\n", "/Users/alice/code/foo-plugin");
+    expect(scanEvents(events(read("see /Users/alice/code/foo/x.md")), ["outputs"], corpusFor()).hostPathLeaked).toBe(false);
+    // and the other way round: a token under the real source is still refused
+    stagePlugin("see /Users/alice/code/foo-plugin/x.md\n", "/Users/alice/code/foo-plugin");
+    expect(scanEvents(events(read("see /Users/alice/code/foo-plugin/x.md")), ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
+  });
+
+  // The resolved spelling of a symlinked source is refused too. Needs a host-shaped tmpdir, which macOS has
+  // (/var/folders → /private/var/folders) and Linux does not (bare /tmp is not a host-path root).
+  it.runIf(process.platform === "darwin")("a symlinked plugin source: its resolved location is never exempt either", () => {
+    const real = join(dir, "real-plugin");
+    mkdirSync(real, { recursive: true });
+    const link = join(dir, "link-plugin");
+    symlinkSync(real, link);
+    const resolved = realpathSync(real);
+    expect(resolved, "precondition: the link and its target are spelled differently").not.toBe(link);
+    stagePlugin(`built at ${resolved}/x\n`, link);
+    expect(corpusFor().sourced.tokens.has(`${resolved}/x`), "precondition: the token is host-shaped").toBe(true);
+    expect(scanEvents(events(read(`built at ${resolved}/x`)), ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
   });
 });
 
@@ -368,14 +416,28 @@ describe("the staged local skills' own files are input too", () => {
   it("a skill file naming the skill's own host source location fails", () => {
     const src = "/Users/alice/code/my-skill";
     stageSkill(`built from ${src}/references\n`, src);
-    expect(corpusFor().tokens.has(`${src}/references`), "precondition: the skill file yields the token").toBe(true);
+    expect(corpusFor().sourced.tokens.has(`${src}/references`), "precondition: the skill file yields the token").toBe(true);
     expect(scanEvents(events(read(`built from ${src}/references`)), ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
+  });
+
+  it("an upload naming a path under the skill source is still exempt", () => {
+    const src = "/Users/alice/code/my-skill";
+    put("uploads/notes.md", `edit ${src}/SKILL.md\n`);
+    put(`${SKILL}/SKILL.md`, "# skill\n");
+    capture(
+      { mounts: [mount("uploads/notes.md", "upload")], stagedSkills: [{ src, dest: "my-skill" }], resume: false } as any,
+      mnt,
+      outDir,
+    );
+    expect(scanEvents(events(read(`edit ${src}/SKILL.md`)), ["outputs"], corpusFor()).hostPathLeaked).toBe(false);
   });
 
   it("a path written into the staged skill after staging fails", () => {
     stageSkill(ROW);
     put(`${SKILL}/later.md`, "/Users/alice/written-by-agent");
     capture({ mounts: [], stagedSkills: [{ src: "/unused/my-skill", dest: "my-skill" }], resume: true } as any, mnt, outDir);
+    // control: what WAS staged is exempt, so this case fails if the skill scan is gone
+    expect(scanEvents(events(read(ROW)), ["outputs"], corpusFor()).hostPathLeaked).toBe(false);
     expect(scanEvents(events(read("/Users/alice/written-by-agent")), ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
   });
 
@@ -400,6 +462,7 @@ describe("the staged local skills' own files are input too", () => {
     put(".claude/settings.json", '{"p":"/Users/alice/cfg"}');
     capture({ mounts: [], stagedSkills: [], resume: false } as any, mnt, outDir);
     expect(readCorpus(outDir).size).toBe(0);
+    expect(readSourced(outDir).size).toBe(0);
   });
 
   it("a staged skill spends the budget after the inputs", () => {
@@ -416,9 +479,8 @@ describe("the staged local skills' own files are input too", () => {
     } finally {
       spy.mockRestore();
     }
-    const tokens = [...readCorpus(outDir)];
-    expect(tokens).toContain("/Users/alice/input-path");
-    expect(tokens).not.toContain("/Users/alice/skill-path");
+    expect([...readCorpus(outDir)]).toContain("/Users/alice/input-path");
+    expect([...readSourced(outDir)]).not.toContain("/Users/alice/skill-path");
   });
 });
 
