@@ -1531,6 +1531,40 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     240_000,
   );
 
+  it("an edit inside a scrubbed literal that this process's scrub reproduces: kept, and named as unknowable, never as unchanged", async () => {
+    // Both values are scrubbed, so the edited assert scrubs to the very form the run recorded: an exact scrubbed match.
+    // Whether the assert changed cannot be told from result.json, so the row must never be told it is unchanged.
+    const both = { COWORK_HARNESS_SCRUB_VALUES: "All done,Nope" };
+    const { rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"], env: both });
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a1: 1 });
+    edit(evals, "transcript_contains: All done", "transcript_contains: Nope");
+    const lines: string[] = [];
+    const out = await regradeFlow(
+      ARGS({ variant: "v1", approveHarness: true }),
+      DEPS({ secrets: collectSecrets(), stderr: (l) => lines.push(l) }),
+    );
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a1: 1 });
+    const said = lines.join("\n");
+    expect(said).not.toMatch(/assertion 1 \(`transcript_contains`\).*unchanged since the run/);
+    expect(said).toMatch(
+      /alpha rep0: assertion 1 \(`transcript_contains`\) — cannot tell whether this assert changed: its literal is scrubbed in the run's result\.json — re-run the case to apply an edit/,
+    );
+    expect(said).not.toMatch(/All done|Nope/);
+  }, 240_000);
+
+  it("a scrubbed literal this process's scrub reproduces, scenario unchanged: no cannot-tell line", async () => {
+    const { rows } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"], env: SCRUBBED });
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a1: 1 });
+    const lines: string[] = [];
+    const out = await regradeFlow(
+      ARGS({ variant: "v1", approveHarness: true }),
+      DEPS({ secrets: collectSecrets(), stderr: (l) => lines.push(l) }),
+    );
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(lines.join("\n")).not.toMatch(/cannot tell whether this assert changed/);
+  }, 240_000);
+
   it.each([
     ["this process's scrub reproduces it", true],
     ["this process cannot reproduce it (no secrets)", false],
