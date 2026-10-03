@@ -1024,6 +1024,15 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `llms.txt`) for driving a `/claude-api hillclimb` loop with `hillclimb run`, `check`, `state-template`,
   `freeze-ref` and `regrade`: the flags, the snapshot and harness gate, refusals, exit codes, pairwise references,
   re-grading a flow, and how to read the rows, the `semantic_pairwise` keys included.
+- [docs/hillclimb.md](./docs/hillclimb.md) is the setup guide for running the harness as the runner of the
+  `/claude-api hillclimb` loop: a terms table, a quick start that hands the loop its runner command and the companion
+  skill's recipe, the requirements, where the flow dir and the kept runs live, the loop's steps mapped to
+  commands, row keys, metrics, pairwise references, cost and a ballpark, the differences from the loop's own
+  runner, what a round can and cannot see (agent-written metrics, what the judge reads, inputs outside the
+  harness gate, session-level effort), what `hillclimb` is not for, and troubleshooting. The companion skill's
+  `references/hillclimb-recipe.md` (Recipe 7) is the loop's step-by-step procedure. The guide is indexed in the
+  README, `docs/README.md` and `llms.txt`, the recipe in `SKILL.md`, `task-recipes.md` and `llms.txt`, and the
+  skill's description and its Orient list name `hillclimb`.
 - The companion skill now says that a green run says nothing about a skill edited while a session is
   running: Cowork re-syncs skills into a live session, and the harness stages them once per run, by design.
   This was previously documented only in `docs/fidelity-gaps.md`.
