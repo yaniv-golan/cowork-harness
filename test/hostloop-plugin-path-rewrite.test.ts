@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadBaseline, PLUGIN_PATH_VM_REWRITE_MIN_VERSION } from "../src/baseline.js";
@@ -7,7 +7,7 @@ import { loadSession, buildLaunchPlan, type LaunchPlan } from "../src/session.js
 import { buildPluginPathRewrites, rewritePluginPaths, type PluginPathRewrite } from "../src/hostloop/plugin-path-rewrite.js";
 import { hostLoopPluginPathRewrites } from "../src/runtime/hostloop.js";
 import { pluginDirArgs, dockerRunArgv } from "../src/runtime/argv.js";
-import { resolveHostLoopBindMounts } from "../src/runtime/hostloop-stage.js";
+import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "../src/runtime/hostloop-stage.js";
 import { makeWorkspaceHandler } from "../src/hostloop/workspace-handler.js";
 import { scanEvents } from "../src/run/execute.js";
 
@@ -399,5 +399,46 @@ describe("the post-run scan reads the recorded command, not the executed one", (
   it("a model-written VM plugin path counts, for a local and for a remote plugin", () => {
     expect(scanEvents(events(`bash ${VM_SESSION}/mnt/.local-plugins/marketplaces/m/p/x.sh`)).selfHealRan).toBe(true);
     expect(scanEvents(events(`bash ${V}/x.sh`)).selfHealRan).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The direct-exec form: a plugin script run as "<root>/scripts/x.sh" (no `bash` in front) needs its exec
+// bit to survive staging. Cowork runs it from the VM mount; so must the harness, from the staged copy the
+// sidecar binds.
+// ---------------------------------------------------------------------------------------------
+describe("a plugin script staged for hostloop keeps its exec bit", () => {
+  function stagedPlugin() {
+    const src = mkdtempSync(join(tmpdir(), "cwh-rw-exec-src-"));
+    mkdirSync(join(src, "scripts"));
+    writeFileSync(join(src, "scripts", "x.sh"), '#!/bin/sh\necho ran-from "$0"\n');
+    chmodSync(join(src, "scripts", "x.sh"), 0o755);
+    writeFileSync(join(src, "scripts", "data.txt"), "d\n");
+    chmodSync(join(src, "scripts", "data.txt"), 0o640);
+    const out = mkdtempSync(join(tmpdir(), "cwh-rw-exec-out-"));
+    const p = buildLaunchPlan(loadSession({ plugins: { remote_plugins: [src] } }), latest, out);
+    const mntHost = join(out, "work", "session", "mnt");
+    mkdirSync(mntHost, { recursive: true });
+    stageHostLoopWorkspace(p, mntHost);
+    return { p, mntHost, staged: join(mntHost, p.pluginDirs[0]!) };
+  }
+
+  it("the staged copy keeps 0755 on the script and does not widen a 0640 file", () => {
+    const { staged } = stagedPlugin();
+    expect(statSync(join(staged, "scripts", "x.sh")).mode & 0o777).toBe(0o755);
+    expect(statSync(join(staged, "scripts", "data.txt")).mode & 0o777).toBe(0o640);
+  });
+
+  it("end to end: the rewritten VM path executes the staged script directly", async () => {
+    const { p, mntHost, staged } = stagedPlugin();
+    const map = hostLoopPluginPathRewrites(latest, p, mntHost, VM_SESSION);
+    // The fake runner stands in for the sidecar's bind mount: it maps <session>/mnt back to the staged tree,
+    // then runs the shell it was handed.
+    const runner = fakeRunner(
+      `shift 4; sh_=$1; flag=$2; cmd=$(printf '%s' "$3" | sed "s#${VM_SESSION}/mnt#${mntHost}#g"); exec "$sh_" "$flag" "$cmd"\n`,
+    );
+    const r = await callBash({ runner, rewrites: map }, { command: `"${staged}/scripts/x.sh"` });
+    expect(r.isError).toBeFalsy();
+    expect(r.content[0]!.text.trim()).toBe(`ran-from ${staged}/scripts/x.sh`);
   });
 });
