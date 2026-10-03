@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { rewritePluginPaths } from "../src/hostloop/plugin-path-rewrite.js";
 
 // `scenario.py lint-skill` inspects SKILL.md bodies for two Cowork host-loop footguns:
 //   (a) ${CLAUDE_PLUGIN_ROOT} in an in-VM bash context (fenced bash / Bash() directive) — the bare form is
@@ -375,7 +376,9 @@ describe.skipIf(!havePython)("lint-skill — the forwarding shape", () => {
     const hits = rulesFor(cmd);
     expect(hits.map((f) => [f.rule, f.severity])).toEqual([["plugin-root-forwarded-from-vm-bash", "WARN"]]);
     expect(hits[0]!.line).toBe(4);
-    expect(hits[0]!.message).toMatch(/breaks at hostloop: the sub-agent gets a VM path its file tools refuse/);
+    expect(hits[0]!.message).toMatch(
+      /likely breaks at host-loop — a host-side reader it is passed to \(a sub-agent's Read, say\) receives a VM path it refuses/,
+    );
     expect(hits[0]!.fix).toMatch(/plugin agent's definition/);
     expect(hits[0]!.fix).toContain("<!-- lint-skill: ignore-start plugin-root-forwarded-from-vm-bash: ");
   });
@@ -390,7 +393,7 @@ describe.skipIf(!havePython)("lint-skill — the forwarding shape", () => {
     ['claude --plugin-dir "${CLAUDE_PLUGIN_ROOT}" -p hi'],
     ['cd /tmp && /usr/local/bin/claude --plugin-dir="${CLAUDE_PLUGIN_ROOT}"'],
     ['tool --format "${CLAUDE_PLUGIN_ROOT}"'],
-    ['bash "${CLAUDE_PLUGIN_ROOT}/x.sh" --root "${CLAUDE_PLUGIN_ROOT}-old"'],
+    ['bash "${CLAUDE_PLUGIN_ROOT}/x.sh" --root "${CLAUDE_PLUGIN_ROOT}/old"'],
   ])("%s → INFO plugin-root-braced-in-vm-bash only", (cmd) => {
     expect(rulesFor(cmd).map((f) => [f.rule, f.severity])).toEqual([["plugin-root-braced-in-vm-bash", "INFO"]]);
   });
@@ -487,6 +490,78 @@ describe.skipIf(!havePython)("lint-skill — plugin-root finding per form", () =
     const hits = lintSkill(d).findings.filter((f) => f.rule.startsWith("plugin-root"));
     expect(hits.map((f) => [f.rule, f.severity])).toEqual([["plugin-root-in-vm-bash", "WARN"]]);
     expect(hits[0]!.message).toMatch(/outside a plugin/);
+  });
+
+  it.each([
+    ["cp ${CLAUDE_PLUGIN_ROOT}-v2/x ."],
+    ["ls x${CLAUDE_PLUGIN_ROOT}/a"],
+    ["cat ${CLAUDE_PLUGIN_ROOT}.bak"],
+    ["cat ${CLAUDE_PLUGIN_ROOT}:x"],
+    ['echo "a"${CLAUDE_PLUGIN_ROOT}/x'],
+    ["open file://${CLAUDE_PLUGIN_ROOT}/x"],
+  ])("glued, so not rewritten: %s → WARN plugin-root-in-vm-bash, 'not rewritten here'", (line) => {
+    const hits = hitsFor(line);
+    expect(hits.map((f) => [f.rule, f.severity])).toEqual([["plugin-root-in-vm-bash", "WARN"]]);
+    expect(hits[0]!.message).toMatch(/not rewritten here/);
+  });
+
+  it.each([
+    ['bash "${CLAUDE_PLUGIN_ROOT}/x.sh"'],
+    ["X='${CLAUDE_PLUGIN_ROOT}'"],
+    ["a:${CLAUDE_PLUGIN_ROOT}/x"],
+    ["tool --data=${CLAUDE_PLUGIN_ROOT}/d"],
+    ["R=`ls ${CLAUDE_PLUGIN_ROOT}`"],
+    ["cd ${CLAUDE_PLUGIN_ROOT}&&ls"],
+  ])("a word of its own, so rewritten: %s → INFO only", (line) => {
+    expect(hitsFor(line).map((f) => f.rule)).toEqual(["plugin-root-braced-in-vm-bash"]);
+  });
+
+  it("one plugin-root-in-vm-bash per line: glued braced plus bare, and standalone braced plus bare", () => {
+    expect(hitsFor('cp ${CLAUDE_PLUGIN_ROOT}-v2/a "$CLAUDE_PLUGIN_ROOT/b"').map((f) => f.rule)).toEqual(["plugin-root-in-vm-bash"]);
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-standalone-both-"));
+    writeFileSync(
+      join(d, "SKILL.md"),
+      ["# S", "", "```bash", 'cp "${CLAUDE_PLUGIN_ROOT}/a" "$CLAUDE_PLUGIN_ROOT/b"', "```", ""].join("\n"),
+    );
+    expect(
+      lintSkill(d)
+        .findings.filter((f) => f.rule.startsWith("plugin-root"))
+        .map((f) => f.rule),
+    ).toEqual(["plugin-root-in-vm-bash"]);
+  });
+
+  it("the glued check uses exactly the rewrite's boundary sets (each character, both sides)", () => {
+    // Every printable ASCII character plus the whitespace kinds where JavaScript and Python disagree.
+    const chars = [
+      ...Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)),
+      "\t",
+      "\n",
+      "\v",
+      "\f",
+      "\u001c",
+      "\u00a0",
+      "\u2028",
+      "\u3000",
+    ];
+    const map = [{ hostPath: "/k", vmPath: "/v" }];
+    const texts = chars.flatMap((c) => [`a ${c}\${CLAUDE_PLUGIN_ROOT}`, `a \${CLAUDE_PLUGIN_ROOT}${c}`]);
+    const out = spawnSync(
+      py,
+      [
+        "-c",
+        "import importlib.util,json,sys\n" +
+          "spec=importlib.util.spec_from_file_location('s',sys.argv[1]);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\n" +
+          "print(json.dumps([m._glued_plugin_root(t) for t in json.loads(sys.stdin.read())]))",
+        SCRIPT,
+      ],
+      { input: JSON.stringify(texts), encoding: "utf8" },
+    );
+    const glued = JSON.parse(out.stdout) as boolean[];
+    const rewritten = texts.map((t) => {
+      const cmd = t.replace("${CLAUDE_PLUGIN_ROOT}", "/k");
+      return rewritePluginPaths(cmd, map) !== cmd;
+    });
+    expect(glued).toEqual(rewritten.map((r) => !r));
   });
 
   it("a fully commented-out line gets no finding", () => {

@@ -2258,6 +2258,42 @@ _IGNORE_MARKER_EXAMPLE = (
 )
 
 
+# The host-loop bash rewrite's boundary sets (src/hostloop/plugin-path-rewrite.ts), spelled the same way: a
+# substituted path is rewritten only when the character before it is not a left blocker (or is an opening
+# quote) and the character after it is in the right-boundary set or the end of the command.
+_REWRITE_LEFT_BLOCKERS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" + "_./\\-" + ")}~" + "`'\"")
+_REWRITE_RIGHT_BOUNDARY = set("`'\"" + "&|;<>" + "()[]{}" + "/")
+_REWRITE_QUOTE_OPENER_PRECEDERS = set("=&|;(<{")
+_REWRITE_QUOTES = set("`'\"")
+# JavaScript's `\s`, which the rewrite tests with (Python's str.isspace also counts \x1c-\x1f, `\s` does not).
+_JS_WHITESPACE = set("\t\n\v\f\r \u00a0\u1680\u2028\u2029\u202f\u205f\u3000\ufeff") | {chr(c) for c in range(0x2000, 0x200B)}
+
+
+def _rewrite_is_opening_quote(text, idx):
+    quote = text[idx - 1]
+    if text[:idx].count(quote) % 2 != 1:
+        return False
+    before = text[idx - 2] if idx >= 2 else None
+    return before is None or before in _JS_WHITESPACE or before in _REWRITE_QUOTE_OPENER_PRECEDERS
+
+
+def _glued_plugin_root(text):
+    """True when some braced `${CLAUDE_PLUGIN_ROOT}` in `text` is glued to other text on either side, so the
+    host-loop bash tool does not rewrite the path substituted for it, and the VM shell gets a host path."""
+    for m in _PLUGIN_ROOT_BRACED.finditer(text):
+        prev = text[m.start() - 1] if m.start() > 0 else None
+        nxt = text[m.end()] if m.end() < len(text) else None
+        left_ok = (
+            prev is None
+            or prev not in _REWRITE_LEFT_BLOCKERS
+            or (prev in _REWRITE_QUOTES and _rewrite_is_opening_quote(text, m.start()))
+        )
+        right_ok = nxt is None or nxt in _JS_WHITESPACE or nxt in _REWRITE_RIGHT_BOUNDARY
+        if not (left_ok and right_ok):
+            return True
+    return False
+
+
 def _command_word(before):
     """The program of the command an option at the end of `before` belongs to (its basename), skipping
     leading `NAME=value` assignments; "" when there is none."""
@@ -2287,11 +2323,10 @@ def _finding_plugin_root_forwarded(path, line, ctx_label):
     return Finding(
         "WARN",
         "plugin-root-forwarded-from-vm-bash",
-        f"`${{CLAUDE_PLUGIN_ROOT}}` passed whole as a location option's value in an in-VM bash context ({ctx_label}): "
-        "breaks at hostloop: the sub-agent gets a VM path its file tools refuse. At host-loop (Cowork's "
-        "default) the bash tool rewrites the plugin's host path to its VM mount before the command runs, so "
-        "the program receives, and passes on, a `/sessions/…` path, which a host-side file tool (a sub-agent's "
-        "Read, say) refuses there.",
+        f"`${{CLAUDE_PLUGIN_ROOT}}` passed whole as a location option's value in an in-VM bash context ({ctx_label}) "
+        "likely breaks at host-loop — a host-side reader it is passed to (a sub-agent's Read, say) receives a VM "
+        "path it refuses. At host-loop (Cowork's default) the bash tool rewrites the plugin's host path to its VM "
+        "mount before the command runs, so the program receives, and passes on, a `/sessions/…` path.",
         "Do not route the plugin root through bash for a host-side reader: have the reader name "
         "`${CLAUDE_PLUGIN_ROOT}` in its own text, for example a plugin agent's definition, whose body is "
         "substituted with the plugin's host path when the agent loads. If the program opens the path itself, "
@@ -2327,9 +2362,26 @@ def _findings_plugin_root(path, line, ctx_label, text, in_plugin=True):
             )
         )
     elif _PLUGIN_ROOT_BRACED.search(text):
+        glued = _glued_plugin_root(text)
+        if glued:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "plugin-root-in-vm-bash",
+                    f"`${{CLAUDE_PLUGIN_ROOT}}` glued to other text in an in-VM bash context ({ctx_label}): the path "
+                    "the agent substitutes is not rewritten here. At host-loop (Cowork's default) the bash tool "
+                    "rewrites the plugin's host path to its VM mount only when the path is a word of its own, so this "
+                    "command gets the HOST path, which does not exist in the VM.",
+                    "Keep the path its own word: follow it with `/`, whitespace, a quote or the end of the command, "
+                    "and put nothing but whitespace, `=`, `:` or an opening quote right before it "
+                    "(`${CLAUDE_PLUGIN_ROOT}-v2` and `x${CLAUDE_PLUGIN_ROOT}` are not rewritten).",
+                    path,
+                    line,
+                )
+            )
         if _is_forwarded_plugin_root(text):
             findings.append(_finding_plugin_root_forwarded(path, line, ctx_label))
-        else:
+        elif not glued:
             findings.append(
                 Finding(
                     "INFO",
@@ -2352,6 +2404,9 @@ def _findings_plugin_root(path, line, ctx_label, text, in_plugin=True):
                 )
             )
     m = _PLUGIN_ROOT_UNREPLACED.search(text)
+    # One `plugin-root-in-vm-bash` per line: a standalone or glued braced form already reported it.
+    if any(f.rule == "plugin-root-in-vm-bash" for f in findings):
+        return findings
     if m or not findings:
         written = m.group(0) if m else "$CLAUDE_PLUGIN_ROOT"
         findings.append(
@@ -2559,7 +2614,8 @@ def _lint_skill_text(path, raw_lines, force_json=False):
     fence_len = 0
     fence_lang = ""
     # Per-bash-fence buffer (Item 4): plugin-root token hit line numbers + the whole block's text, so a
-    # ${CLAUDE_PLUGIN_ROOT} use that is self-healed elsewhere IN THE SAME BLOCK downgrades WARN -> INFO.
+    # ${CLAUDE_PLUGIN_ROOT} use that is self-healed elsewhere IN THE SAME BLOCK is reported as the INFO
+    # `plugin-root-guarded` instead of its per-form finding.
     # Emission is deferred to fence close (or EOF) but original 1-based line numbers are preserved.
     bash_token_lines = []
     bash_block_text = []
@@ -4070,9 +4126,10 @@ def main(argv=None):
             "replaced at load with a HOST path that the host-loop bash tool rewrites to the plugin's VM mount "
             "when it stands as its own word (INFO plugin-root-braced-in-vm-bash), so a value forwarded through "
             "bash to a host-side file tool arrives as a VM path (WARN plugin-root-forwarded-from-vm-bash, for "
-            "the whole root as the value of an option named root/dir/path/plugin/base, outside quotes and not for "
-            "`claude` itself). In a standalone skill (no plugin.json above it) nothing replaces the braced form, "
-            "so it is the WARN too. A fully commented-out line is skipped. Suppress a reviewed site with a "
+            "the whole root as the value of an option named root/dir/path/plugin/base, not inside an open quoted "
+            "string (such as an echo'd sentence) and not for `claude` itself). The braced form glued to other "
+            "text (${CLAUDE_PLUGIN_ROOT}-v2, x${CLAUDE_PLUGIN_ROOT}) is not rewritten, and in a standalone skill "
+            "(no plugin.json above it) nothing replaces it, so both are the WARN plugin-root-in-vm-bash too. A fully commented-out line is skipped. Suppress a reviewed site with a "
             "marker (below);\n"
             "  (b) a hook command that exports an env var or writes into /tmp for the in-VM agent — a "
             "host-side hook write is not VM-visible (works in the CLI, silently no-ops in Cowork).\n\n"
