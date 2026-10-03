@@ -285,8 +285,9 @@ that the loop and the lite report builder read, with these differences:
 - when a harness upgrade changes how an unchanged assertion evaluates, it keeps the recorded outcome and notes
   it; edit the assertion, or re-run the case, to re-grade it;
 - an assertion whose text contains a value the secret scrub removes is matched under this process's scrub, so an
-  unchanged one keeps its graded outcome; one this process's scrub cannot reproduce is kept as unchanged and
-  named on stderr. Neither is re-evaluated over scrubbed evidence, nor re-judged without `--rejudge`;
+  unchanged one keeps its graded outcome; when this process's scrub cannot tell whether it changed, stderr says
+  so. It is never re-evaluated or re-judged over scrubbed evidence: a re-judge it would need lists the row, with
+  the remedy (re-grade with the run's scrub settings, or pass `--allow-doc-drift`);
 - it re-judges a judged assertion when something the judge sees changed (its rubric or claims, its judge model or
   prompt template, or a `semantic_pairwise` assertion's references), recording why in
   `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
