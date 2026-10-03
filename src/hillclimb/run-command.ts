@@ -175,12 +175,13 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     const managedLogin = t.status === "warn" && tier === "protocol";
     if (t.status === "fail" || managedLogin)
       throw new UsageError(
-        `no usable agent credential for fidelity ${tier} (case${ids.length > 1 ? "s" : ""} ${ids.join(", ")}): ${t.detail}` +
+        // doctor's `warn` detail says protocol can use that login, which holds only for an unmanaged config dir: say
+        // what is true here instead.
+        `no usable agent credential for fidelity ${tier} (case${ids.length > 1 ? "s" : ""} ${ids.join(", ")}): ` +
           (managedLogin
-            ? ` — but hillclimb runs protocol with a managed config dir, where that login is not read. Fix: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env, or point at a file holding it: cowork-harness --dotenv <path> hillclimb run …`
-            : t.remedy
-              ? `. Fix: ${t.remedy}`
-              : "") +
+            ? "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the environment or a .env; the only login found is the one in your Claude config dir (Keychain or .credentials.json), which hillclimb's protocol runs do not read — they use a managed config dir. Fix: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env, or point at a file holding it: cowork-harness --dotenv <path> hillclimb run …"
+            : t.detail) +
+          (managedLogin ? "" : t.remedy ? `. Fix: ${t.remedy}` : "") +
           ` (the same check as \`cowork-harness doctor --tier ${tier}\`)`,
       );
   }

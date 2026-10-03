@@ -1521,10 +1521,11 @@ describe("credentials: refused before spend when no source resolves; an auth fai
     try {
       const r = await runHillclimbCommand(args("--dry-run"), deps({ tokenCheck: warn }));
       expect(r.exitCode).toBe(2);
+      // Its own detail, never doctor's (which says protocol can authenticate from that login: true only unmanaged).
       expect(r.error?.message).toContain(
-        "no usable agent credential for fidelity protocol (case alpha): no env / .env token, but a Keychain entry exists",
+        "no usable agent credential for fidelity protocol (case alpha): no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the environment or a .env; the only login found is the one in your Claude config dir (Keychain or .credentials.json), which hillclimb's protocol runs do not read — they use a managed config dir",
       );
-      expect(r.error?.message).toContain("hillclimb runs protocol with a managed config dir, where that login is not read");
+      expect(r.error?.message).not.toContain("a Keychain entry exists");
       expect(r.error?.message).toContain("cowork-harness doctor --tier protocol");
     } finally {
       if (saved === undefined) delete process.env.COWORK_MANAGED_CONFIG;
