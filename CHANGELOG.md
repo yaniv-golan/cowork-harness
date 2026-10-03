@@ -306,7 +306,8 @@ All notable changes to this project are documented here. The format is based on
   and `<id>_present` says whether it was measured — 0 on a case that does not declare the metric, on an
   agent-caused failure, and when the metric was unavailable, with the reason in `meta.metrics_unavailable`.
   `hillclimb state-template` declares them (direction, plus `scale` and `min` when given, with labels unique
-  across the declarations) and defines each in `metrics.md` (the file and path it is read from, its direction and
+  across the declarations and within the 14 characters the published schema asks for; a long id's `<id>_present`
+  label is the id cut short before ` meas`, so it never ends in a bare truncated word) and defines each in `metrics.md` (the file and path it is read from, its direction and
   range). `hillclimb run` and `state-template` refuse one metric id declared differently in two scenarios, or
   spelled in a different case, before spending, naming both cases. Each row records its metrics' declaration
   signatures in `meta.metric_sigs`, and `hillclimb run` (with `--dry-run`) refuses a metric whose declaration

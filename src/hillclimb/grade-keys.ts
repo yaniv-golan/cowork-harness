@@ -136,7 +136,17 @@ const floatDecl = (m: MetricDecl): GradeKeyDecl => ({
   ...(m.scale !== undefined ? { scale: m.scale } : {}),
   ...(m.min !== undefined ? { min: m.min } : {}),
 });
-const presentDecl = (id: string): GradeKeyDecl => ({ id: `${id}_present`, kind: "binary", label: label(`${id} measured`) });
+/** `<id>` cut to fit before `suffix` in LABEL_MAX, a separator left dangling by the cut dropped. */
+const fit = (id: string, suffix: string): string => id.slice(0, LABEL_MAX - suffix.length).replace(/[_.\-\s]+$/, "") + suffix;
+/** A metric's `_present` companion: `<id> measured` when it fits, else the id cut short before ` meas` (the pairwise
+ *  companions' abbreviation). Cutting the whole label instead would leave a bare `amount_total m`. */
+const presentLabels = new WeakMap<GradeKeyDecl, string>();
+const presentDecl = (id: string): GradeKeyDecl => {
+  const full = `${id} measured`;
+  const d: GradeKeyDecl = { id: `${id}_present`, kind: "binary", label: full.length <= LABEL_MAX ? full : fit(id, " meas") };
+  presentLabels.set(d, id);
+  return d;
+};
 
 /** Labels made unique across one declaration list, each still <= LABEL_MAX: a label already taken is cut short and
  *  given a `~<n>` suffix. A graded key keeps its plain label before a `_present` companion does, so the number a
@@ -146,7 +156,10 @@ function uniqueLabels(decls: GradeKeyDecl[]): GradeKeyDecl[] {
   const out = new Map<GradeKeyDecl, string>();
   const claim = (d: GradeKeyDecl) => {
     let l = d.label;
-    for (let n = 2; taken.has(l); n++) l = d.label.slice(0, LABEL_MAX - `~${n}`.length) + `~${n}`;
+    // A metric's `_present` label is told apart in its id part, so it keeps its ` meas` suffix.
+    const base = presentLabels.get(d);
+    for (let n = 2; taken.has(l); n++)
+      l = base !== undefined ? fit(base, `~${n} meas`) : d.label.slice(0, LABEL_MAX - `~${n}`.length) + `~${n}`;
     taken.add(l);
     out.set(d, l);
   };
