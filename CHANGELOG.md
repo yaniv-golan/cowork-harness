@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.3.0] — 2026-10-03
+
+<!-- placeholder: release summary text, finalized after the acceptance run -->
+
 ### Security
 
 - **The host-`claude` isolation check from 4.2.1 now refuses earlier, and covers more.** `eval` refuses up front,
