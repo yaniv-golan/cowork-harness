@@ -81,6 +81,9 @@ All notable changes to this project are documented here. The format is based on
   reviewed-safe forward (`--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, the example the docs used to give) is
   a real break at host-loop now; it reports `plugin-root-forwarded-from-vm-bash` and fails `--strict` until the
   skill stops forwarding the root through bash.
+- **Verdict change: `self_heal_ran` also counts a `/sessions/<id>/mnt/.remote-plugins/…` path.** A run whose
+  model located a remote plugin's files there read as not having self-healed; `self_heal_ran: true` now passes
+  on it and `self_heal_ran: false` fails. It is a live-only assertion, so a replay is unaffected.
 
 ### Added
 
@@ -541,7 +544,6 @@ All notable changes to this project are documented here. The format is based on
 - **`self_heal_ran` counts a VM path under `.remote-plugins/`.** It recognised only `.local-plugins/`, so a skill
   installed as a remote plugin that located its own files under `/sessions/<id>/mnt/.remote-plugins/…` read as
   not having self-healed.
-
 - **`prune` keeps hillclimb runs.** A run labelled `hillclimb:…` is not pruned and takes no `--keep-last` slot, so
   a routine `prune` during a climb leaves the runs `hillclimb regrade` and `hillclimb freeze-ref` read. A run you
   labelled `--label hillclimb:…` yourself is kept the same way. `prune` prints how many it kept per scenario and
