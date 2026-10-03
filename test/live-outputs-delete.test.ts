@@ -71,15 +71,20 @@ const IMAGE = "cowork-agent-base:2";
 let AGENT = "";
 /** The outputs mode `latest` records, read from the raw baseline file (independent of the code under test). */
 let LATEST_OUTPUTS_MODE: string | undefined;
+let latestVersion: string | undefined;
 try {
   const latest = loadBaseline("latest");
-  const raw = JSON.parse(readFileSync(resolve("baselines", `desktop-${latest.appVersion}.json`), "utf8")) as {
-    mountLayout: { mounts: { name: string; mode: string }[] };
-  };
-  LATEST_OUTPUTS_MODE = raw.mountLayout.mounts.find((m) => m.name === "outputs")?.mode;
+  latestVersion = latest.appVersion;
   AGENT = resolveAgentBinary(latest);
 } catch {
   /* baseline/binary missing → skip */
+}
+// Read OUTSIDE the try above: a file-name mismatch must not masquerade as a missing agent and skip silently.
+if (latestVersion !== undefined) {
+  const raw = JSON.parse(readFileSync(resolve("baselines", `desktop-${latestVersion}.json`), "utf8")) as {
+    mountLayout: { mounts: { name: string; mode: string }[] };
+  };
+  LATEST_OUTPUTS_MODE = raw.mountLayout.mounts.find((m) => m.name === "outputs")?.mode;
 }
 const RWD = LATEST_OUTPUTS_MODE === "rwd";
 const dockerOk = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;

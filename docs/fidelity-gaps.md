@@ -265,8 +265,20 @@ the default verdict follows it:
 | `rw` (before 2.16120.0) | fails `outputs_delete` (`allow_outputs_delete: true` accepts it) | `✗` |
 
 `no_delete_in_outputs: true` checks outputs deletes on every baseline, so a scenario that wants the old check
-authors it; `no_delete_in_mounts: true` also keeps covering outputs. The detection itself (the bash-command scan and
-the per-turn filesystem diff) runs on every live run and its evidence stays in `result.json`'s `scan` / `fsDiff`.
+authors it. `no_delete_in_mounts: true` also keeps covering outputs: unless `allow_delete_in` waives outputs, authoring
+it arms the outputs check on an `rwd` baseline, so a delete only the filesystem diff saw still fails (as
+`outputs_delete`) and the roster reports it. The detection itself (the bash-command scan and the per-turn filesystem
+diff) runs on every live run and its evidence stays in `result.json`'s `scan` / `fsDiff`.
+
+Two edges the default `rwd` verdict does not distinguish, both silent when nothing is authored:
+
+- **A delete through an outputs symlink into a connected folder.** `rm -rf mnt/outputs/link/`, where `link` points
+  into a `rw` connected folder, is attributed to outputs only, so on an `rwd` baseline it passes by default, while
+  production would return `EPERM` inside the folder. On `rw` it fails, but only because it is read as an outputs
+  delete. The scan does not resolve symlinks.
+- **Removing the outputs directory itself.** `rm -rf mnt/outputs` is an outputs delete; on `rwd` it passes by default.
+  In production outputs is a mountpoint, so its contents go but the directory stays; in the harness the directory
+  itself can vanish, and later turns and delivery may then differ from production.
 
 Not modelled: a bridge session. The harness has no Dispatch agent session, so every scenario is a normal session.
 `lane: remote` records no outputs mode (the Desktop mount builders are not evidence about Cowork's cloud lane), so

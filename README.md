@@ -137,7 +137,7 @@ assert:
 
 `✓` means a guard ran and found nothing, `✗` that it fired, `?` that it could not conclude, and `—` that it does
 not apply. `outputs-delete —` is what a live run on `latest` shows: from Desktop 2.16120.0 Cowork lets a skill delete
-in `outputs/`, so that check is off unless the scenario asserts `no_delete_in_outputs`. Its evidence is still in
+in `outputs/`, so that check is off unless the scenario asserts `no_delete_in_outputs` (or `no_delete_in_mounts` without waiving outputs). Its evidence is still in
 `result.json`.
 
 That `skill=offered,invoked` is the part a transcript cannot give you: whether the skill was *selected*,

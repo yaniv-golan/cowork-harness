@@ -1050,7 +1050,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete is DETECTED in outputs (on every baseline, including those where Cowork allows it) or in any `rw` connected folder, unless that mount is waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on a `rw` connected folder until per-mount approval",
+      "fails if a delete is DETECTED in outputs (on every baseline, including those where Cowork allows it; unless outputs is waived, authoring the key also arms the outputs check, so a filesystem-proven outputs delete fails the run as outputs_delete) or in any `rw` connected folder, unless that mount is waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on a `rw` connected folder until per-mount approval",
     ),
   // A WAIVER of the harness's post-hoc detection for the named mounts, mirroring allow_outputs_delete
   // exactly: detection still RUNS and the hits stay in result.json for forensics — only the verdict is

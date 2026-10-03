@@ -69,8 +69,8 @@ All notable changes to this project are documented here. The format is based on
   that deletes in `outputs/`. To keep that check, author `no_delete_in_outputs: true`; it behaves as before on every
   baseline. See Changed.
 - **`verify-run` on an older result.json keeps the old outputs-delete verdict.** A result written by 4.2.x or earlier
-  has no `outputsMountMode`, which reads as `rw`. Re-verifying one that recorded an outputs delete on Desktop
-  2.19675.0 therefore still fails, while a fresh run of the same scenario passes. That red is safe; re-run the
+  has no `outputsMountMode`, which reads as `rw`. Re-verifying one that recorded an outputs delete on Desktop 2.16120.0 or
+  later therefore still fails, while a fresh run of the same scenario passes. That red is safe; re-run the
   scenario to get the current verdict.
 
 ### Added
@@ -498,14 +498,16 @@ All notable changes to this project are documented here. The format is based on
   overwrite-by-rename in `outputs/` all succeed with no permission card. The harness failed such a run anyway.
   - Each live run records the baseline's outputs mode as the new `result.json` field `outputsMountMode`. On `rwd`,
     `outputs_delete`, `outputs_delete_unconfirmed` and `outputs_diff_unavailable` do not fire unless
-    `no_delete_in_outputs` is authored, and the guard roster shows `outputs-delete —` (not applicable). A move out of
+    `no_delete_in_outputs` is authored, or `no_delete_in_mounts` without `allow_delete_in` waiving outputs. Otherwise
+    the guard roster shows `outputs-delete —` (not applicable). A move out of
     `outputs/` is treated the same as an `rm`.
   - Baselines recording `rw` (every release before 2.16120.0) keep the old verdict. So does `lane: remote`, which
     records no mode, because Desktop's mount builders are not evidence about Cowork's cloud lane.
   - `allow_outputs_delete` is still accepted. It has nothing to waive on an `rwd` baseline, so it is a no-op there,
     with no warning.
-  - `no_delete_in_outputs` and `no_delete_in_mounts` keep covering `outputs` on every baseline. Their failure messages
-    no longer say production denies the delete.
+  - `no_delete_in_outputs` and `no_delete_in_mounts` keep covering `outputs` on every baseline: authoring either arms
+    the outputs check, so a delete only the filesystem diff saw still fails the run. Their failure messages no longer
+    say production denies the delete.
   - The detection still runs on every live run, and its evidence stays in `scan` / `fsDiff`. Committed cassettes are
     unaffected: these signals never run on replay.
 

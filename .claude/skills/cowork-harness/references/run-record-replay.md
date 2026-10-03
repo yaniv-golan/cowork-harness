@@ -307,13 +307,14 @@ Recognize these before "fixing" a non-bug:
   `allow_outputs_delete`. The warn is raised even when `no_delete_in_outputs` is authored (the assertion
   passes; this warn is how the hit stays visible in text output). On a baseline recording outputs as `rwd`
   (Desktop 2.16120.0+, including `latest`) none of `outputs_delete`, `outputs_delete_unconfirmed` and
-  `outputs_diff_unavailable` fires unless `no_delete_in_outputs` is authored, and the roster shows
+  `outputs_diff_unavailable` fires unless `no_delete_in_outputs` or `no_delete_in_mounts` (outputs not waived) is authored, and the roster shows
   `outputs-delete —` (not applicable; the evidence stays in `scan` / `fsDiff`).
 - **`outputs_diff_unavailable`** (`WARN`) — the outputs filesystem diff could not verify this turn and the
   text scan saw nothing, so a delete by a script file or a non-bash tool would have gone unseen.
 - **`scan_unavailable`** (`WARN`) — emitted only on the live lane: `events.jsonl` was missing/corrupt, so
   `RunResult.scan` is undefined and the host-path guard and the outputs-delete **text scan did not run this
-  run** (the outputs filesystem diff still did, and a delete it proves still fails). Not a
+  run** (the outputs filesystem diff still did, and a delete it proves still fails wherever the outputs check is
+  armed: a `rw` baseline, or `no_delete_in_outputs` / `no_delete_in_mounts` authored). Not a
   pass or a defect — assert `no_delete_in_outputs` / `transcript_no_host_path` to hard-fail on it instead.
 - **`partly_scripted_gate`** (`WARN`) — one `AskUserQuestion` batched several sub-questions and your
   `answers:` matched only some. Answers are delivered as one unit, so the whole batch went to

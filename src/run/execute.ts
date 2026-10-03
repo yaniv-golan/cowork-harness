@@ -3312,10 +3312,12 @@ export function hostPathLeaked(text: string): boolean {
 
 export { hostPathTokens };
 
-// Operations that UNLINK a name. Scoped to match the real product's enforcement, which was measured
-// directly against the outputs mount with raw syscalls (not shell commands, which mask the syscall
-// behind fallbacks): `unlink` and `rmdir` fail EPERM; every other operation succeeds, including
-// content destruction and renames. So the token set here is deliberately NARROW.
+// Operations that UNLINK a name. Scoped to match the real product's enforcement on a delete-denied (`rw`) mount,
+// which was measured on 2026-08-04 (before Desktop 2.16120.0, while outputs was still `rw`) directly against the
+// outputs mount with raw syscalls (not shell commands, which mask the syscall behind fallbacks): `unlink` and
+// `rmdir` failed EPERM; every other operation succeeded, including content destruction and renames. A connected
+// folder is still `rw`; outputs is `rwd` from 2.16120.0 (see `outputsCheckArmed`). So the token set here is
+// deliberately NARROW.
 //
 // Deliberately NOT delete tokens, because the product permits them:
 //   - `truncate -s 0 f` / `open(f,"w")` / a statement-leading `> f` — these EMPTY a file without
