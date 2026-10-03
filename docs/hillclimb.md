@@ -87,8 +87,9 @@ Three things live outside the flow dir, and the loop needs all three for the who
 
 - **The kept run dirs** under the runs root (`~/.cowork-harness/runs`, or `--run-dir` / `COWORK_HARNESS_RUNS_DIR`).
   `hillclimb regrade`, `hillclimb freeze-ref` and every row's `meta.run_dir` point into them. Pass the same
-  `--run-dir` to every command, and do not `prune` during a climb: `prune` keeps the newest few runs per
-  scenario, and a pruned run cannot be re-graded or frozen.
+  `--run-dir` to every command. `prune` keeps hillclimb-labelled runs, outside `--keep-last`; run
+  `prune --include-hillclimb` only after the climb ends, since it removes that evidence for every flow under the
+  runs root, live ones included.
 - **The per-variant snapshots** in `~/.cowork-harness/hillclimb-snapshots` (`COWORK_HARNESS_HILLCLIMB_SNAPSHOTS`
   moves them). A resumed or appended rep runs its variant's snapshot. They are keyed by the flow dir's real path,
   so moving or renaming the flow dir orphans them.
@@ -305,5 +306,5 @@ A row whose kept run dir is gone is listed instead of re-graded.
 | `skill_invoked` is blank | The plugin has several skills (pass `--skill <name>`, the bare name, on every pass), it has none, or the run's record could not tell (`meta.skill_tracked` is set but the cell is blank) |
 | A non-baseline pass refuses on a pairwise case | The baseline reference is missing: `hillclimb freeze-ref … --variant baseline --case <id>`, or, when the message says freezing cannot repair it, a fresh flow dir |
 | The same slots run on every pass | They are `errors.jsonl` rows with a permanent fault; read `failure_class` and `error` |
-| `regrade` lists rows "kept run dir is gone" | Pass the `--run-dir` the runs were written with; a pruned run cannot be re-graded |
+| `regrade` lists rows "kept run dir is gone" | Pass the `--run-dir` the runs were written with; a removed run cannot be re-graded (`prune --include-hillclimb` removes them) |
 | A new metric or `win_<vN>` column is missing on older rows | They were written before it: fill a metric with `hillclimb regrade`, a reference's column with `hillclimb regrade --fill-refs`, before comparing |

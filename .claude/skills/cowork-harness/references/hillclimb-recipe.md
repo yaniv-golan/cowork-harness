@@ -21,7 +21,7 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Full report viewer untested:** prefer the lite report builder; if you use the full viewer, spot-check that a
   trace renders and that a float column's axis makes sense.
 - **`cost_usd` is the reported total:** use it for `$/run`; never derive cost from `model` × `usage` (Step 2).
-- **Kept runs and snapshots outside the flow dir:** same `--run-dir` every time; no `prune` until the climb ends.
+- **Kept runs and snapshots outside the flow dir:** same `--run-dir` every time; no `prune --include-hillclimb` until the climb ends (a plain `prune` keeps hillclimb runs).
 - **Git-tracked snapshot:** `git add` new plugin files before a variant's first run; a fix after a canary is a
   new variant.
 - **The lever is the plugin:** a session-file change (model, effort, sub-agent model) is a gated harness edit
@@ -156,6 +156,7 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - The headline is the delta in `pass` (or the goal metric) between the baseline and the winning variant, from the
   rows, labelled directional without a split.
 - Before the user commits `F`, list what it holds: `inputs/` copies of uploads, `out/` copies of outputs, and
-  rows with judge rationales. Recommend ignoring `traces/`, `inputs/`, `*/out/`, `regrade-*.bak.jsonl` and `.lock`.
-- The kept runs (`meta.run_dir`) and the snapshots are outside `F`; tell the user not to `prune` until the climb
-  is finished, or `regrade` and `freeze-ref` lose their evidence.
+  rows with judge rationales. Recommend ignoring `traces/`, `inputs/`, `*/out/`, `*/ref/`, `regrade-*.bak.jsonl` and `.lock`.
+- The kept runs (`meta.run_dir`) and the snapshots are outside `F`. A plain `prune` keeps hillclimb runs; tell the
+  user not to run `prune --include-hillclimb` until the climb is finished, or `regrade` and `freeze-ref` lose their
+  evidence.
