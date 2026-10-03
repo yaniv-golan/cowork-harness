@@ -100,7 +100,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Agent spend** = Σ `cost_usd` over every `results.jsonl` + Σ `meta.cost_usd` over every `errors.jsonl`.
   `cost_usd` is the agent's whole cost (sub-agents included) and excludes the judge. Don't derive it from
   `model` × `usage`: `usage` is the main model only.
-- **Judge and decider spend** = for every row's `meta.run_dir` (results and errors rows): each assertion's
+- **Judge and decider spend** = for every row's kept run dir (results and errors rows; find it by `meta.run_id`
+  in the runs root's `index.jsonl`, whose `outDir` is the dir — `meta.run_dir` is redacted when the runs root is
+  outside the home directory): each assertion's
   `judgeCostUsd` and the `deciderCostUsd` in its `result.json`, plus the TOP-LEVEL `judgeCostUsd` of every
   re-grade file under `turns/<N>/regrade/` (never its per-assertion values: it also lists the grades it kept, at
   their original cost). A re-grade with no judge call writes no file. A row's `judge_model`/`judge_usage` describe its current grades only (a re-grade

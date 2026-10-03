@@ -86,7 +86,8 @@ at least these, and read what remains before the first commit:
 Three things live outside the flow dir, and the loop needs all three for the whole climb:
 
 - **The kept run dirs** under the runs root (`~/.cowork-harness/runs`, or `--run-dir` / `COWORK_HARNESS_RUNS_DIR`).
-  `hillclimb regrade`, `hillclimb freeze-ref` and every row's `meta.run_dir` point into them. Pass the same
+  `hillclimb regrade` and `hillclimb freeze-ref` find them by each row's `meta.run_id`, and `meta.run_dir`
+  points into them (redacted when the runs root is outside your home directory). Pass the same
   `--run-dir` to every command. `prune` keeps hillclimb-labelled runs, outside `--keep-last`; run
   `prune --include-hillclimb` only after the climb ends, since it removes that evidence for every flow under the
   runs root, live ones included.
@@ -211,12 +212,16 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
 - **Spend for a climb:**
   - agent spend = the sum of `cost_usd` over every `results.jsonl`, plus `meta.cost_usd` on every
     `errors.jsonl` row (failed attempts are billed; an error row's top-level `usage` is the main model only);
-  - judge and decider spend = for every row's `meta.run_dir` (scored and error rows alike), the
+  - judge and decider spend = for every row's kept run dir (scored and error rows alike), the
     `judgeCostUsd` of each assertion and the `deciderCostUsd` in that run's `result.json`, plus the
     top-level `judgeCostUsd` of every re-grade file a `hillclimb regrade` wrote into the same run dir
     (`turns/<N>/regrade/*.json`). Use the file's top-level figure, never its per-assertion ones: a re-grade file
     also lists the grades it kept, with their original cost. Those files are never overwritten, and a re-grade
     that makes no judge call writes none, so the sum counts every judge call once.
+    Find each run dir the way `hillclimb regrade` does, by the row's `meta.run_id`: the runs root's
+    `index.jsonl` maps each `runId` to its `outDir` (the root is `~/.cowork-harness/runs`, or `--run-dir` /
+    `COWORK_HARNESS_RUNS_DIR`). A row's `meta.run_dir` is a pointer for reading one rep, and it is redacted
+    when the runs root is outside your home directory.
     This needs the kept run dirs: the rows alone cannot rebuild judge spend, so a loop that sums only
     `results.jsonl` and `errors.jsonl`, as the loop's guide describes, undercounts it.
 - **There is no spend cap on `hillclimb run`.** Recompute spend from the files after every round, as the loop's
