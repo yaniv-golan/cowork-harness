@@ -191,11 +191,11 @@ const sum = (xs: number[]): number | undefined => (xs.length ? xs.reduce((s, x) 
 const mean = (xs: number[]): number | undefined => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : undefined);
 
 /** A variant's spend over its whole `results.jsonl` (scored rows) and `errors.jsonl` (failed attempts, whose spend sits
- *  in `meta`). One run is counted once (by `meta.run_dir`, else `meta.run_id`; a row with neither is its own run). */
+ *  in `meta`). One run is counted once (by `meta.run_id`, never redacted; a row without one is its own run). */
 export function costSummary(results: string | null | undefined, errors: string | null | undefined): CostSummary {
   const seen = new Set<string>();
   const once = (r: Row): boolean => {
-    const id = typeof r.meta?.run_dir === "string" ? r.meta.run_dir : typeof r.meta?.run_id === "string" ? r.meta.run_id : undefined;
+    const id = typeof r.meta?.run_id === "string" ? r.meta.run_id : undefined;
     if (id === undefined) return true;
     if (seen.has(id)) return false;
     seen.add(id);

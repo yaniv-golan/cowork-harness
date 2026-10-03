@@ -611,6 +611,7 @@ async function run(
       });
       // What the variant's rows asked for and were sent, over its whole results.jsonl (a --case pass adds to it).
       writer.setSummaryKeys(requestedSummary(writer.readVariantFile("results.jsonl")));
+      // The variant's spend: printed before the `done` line, which stays the pass's last line (the scaffold's).
       for (const line of writeCostSummary(writer, v)) say(line);
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs), all).warnings) say(line);
     } catch (e) {

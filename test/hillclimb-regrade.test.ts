@@ -1957,7 +1957,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
   // The live rows a real CLI pass wrote: a pairwise assert judged against the baseline costs its judge call; the
   // baseline's own assert against its own reference is neutral (no judge called) and is neither priced nor unpriced.
   it("live rows: judge_usd on a judged row; the baseline's neutral own-reference pairwise is not unpriced", () => {
-    const { rows, flow } = buildFlow({});
+    const { rows, flow } = buildFlow({ reps: 2 });
     const base = rows("baseline")[0]! as Record<string, any>;
     expect(base).not.toHaveProperty("judge_usd");
     expect(base.meta).not.toHaveProperty("judge_unpriced");
@@ -1966,9 +1966,18 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(v1.meta).not.toHaveProperty("judge_unpriced");
     const summary = (v: string) => JSON.parse(readFileSync(join(flow, v, "summary.json"), "utf8"));
     // The stub agent reports no total_cost_usd: its rows record no cost, counted as such and never as $0.
-    expect(summary("baseline")).toMatchObject({ judge_rows_unpriced: 0, cost_rows: 0, cost_rows_unrecorded: 1 });
+    expect(summary("baseline")).toMatchObject({
+      judge_rows_unpriced: 0,
+      cost_rows: 0,
+      cost_rows_unrecorded: 2,
+      billing_rows_unrecorded: 2,
+    });
     expect(summary("baseline")).not.toHaveProperty("judge_usd_total");
-    expect(summary("v1")).toMatchObject({ judge_usd_total: 0.051539, judge_usd_mean: 0.051539, judge_rows_unpriced: 0 });
+    expect(summary("v1")).toMatchObject({
+      judge_usd_total: expect.closeTo(2 * 0.051539, 10),
+      judge_usd_mean: 0.051539,
+      judge_rows_unpriced: 0,
+    });
   }, 240_000);
 
   // A re-judge keeps the row's `judge_usd` (what the live judge spent) and recomputes the variant's spend keys at its end.
