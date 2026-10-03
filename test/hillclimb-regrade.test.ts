@@ -352,7 +352,11 @@ describe.runIf(POSIX)("hillclimb regrade applies run's harness gate to a flow ap
     writeFileSync(sc, readFileSync(sc, "utf8").replace("rubric: ['answers']", "rubric: ['answers', 'is brief']"));
     const out = await regradeFlow(ARGS(), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
     expect(out.exitCode).toBe(2);
-    expect(out.error?.message).toMatch(/harness changed since last approved run/);
+    // The edited scenario is named first, the rest counted, never listed (run's wording).
+    expect(out.error?.message).toMatch(
+      /: harness changed since last approved run \(changed: evals\/alpha\.yaml; and \d+ unchanged\); approved /,
+    );
+    expect(out.error?.message).not.toContain("_session.yaml");
     expect(stateOf()).toMatchObject({ harness_skill: "x" });
   }, 180_000);
 });
