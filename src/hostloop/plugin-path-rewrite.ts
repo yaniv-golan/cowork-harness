@@ -27,17 +27,32 @@ export interface RewritePluginInput {
   installPath: string;
 }
 
+/** A bracket expression from character ranges (passed through) and literal characters (each escaped). */
+function charClass(ranges: string, literals: string, extra = ""): string {
+  return `[${extra}${ranges}${literals.replace(/[\\\]\[^-]/g, "\\$&")}]`;
+}
+const ALPHANUMERIC = "a-zA-Z0-9";
+const QUOTE_CHARS = "`'\"";
+const PATH_CHARS = "_./\\-";
+const CLOSERS = ")}~";
+const OPERATORS = "&|;<>";
+const BRACKETS = "()[]{}";
+const WORD_OPENERS = "=&|;(<{";
+
 /** A character that, right before a key, means the key is the tail of a longer word or path, so the match is
- *  not rewritten. A quote here is the exception handled by {@link isOpeningQuote}. */
-const LEFT_BLOCKERS = /[A-Za-z0-9_.\-/\\})`~"']/;
+ *  not rewritten: a letter, digit or underscore, a path character, a closing bracket, a tilde, or a quote. A
+ *  quote is the exception handled by {@link isOpeningQuote}. */
+const LEFT_BLOCKERS = new RegExp(charClass(ALPHANUMERIC, PATH_CHARS + CLOSERS + QUOTE_CHARS));
 /** A character that may follow a key: whitespace, a quote, a shell operator or bracket, or `/` (a path
  *  inside the plugin). Anything else (`-`, `.`, `:`, `,`, `=`, a letter) means the key is a prefix of a
  *  longer name. */
-const RIGHT_BOUNDARY = /[\s"'`;|&<>()[\]{}/]/;
-/** What may precede an opening quote for it to count as one. */
-const QUOTE_OPENER_PRECEDERS = /[\s=;|&(<{]/;
-/** A VM path is a rewrite target only when every character is in this set. */
-const SAFE_VM_PATH = /^[A-Za-z0-9._/-]+$/;
+const RIGHT_BOUNDARY = new RegExp(charClass("", QUOTE_CHARS + OPERATORS + BRACKETS + "/", "\\s"));
+/** What may precede an opening quote for it to count as one: whitespace, `=`, or a shell operator that
+ *  starts a word. */
+const QUOTE_OPENER_PRECEDERS = new RegExp(charClass("", WORD_OPENERS, "\\s"));
+/** A VM path is a rewrite target only when every character is a letter, digit, `_`, `.`, `-` or `/`. */
+const SAFE_VM_CHARS = "_./-";
+const SAFE_VM_PATH = new RegExp(`^${charClass(ALPHANUMERIC, SAFE_VM_CHARS)}+$`);
 
 const QUOTES = new Set(['"', "'", "`"]);
 
