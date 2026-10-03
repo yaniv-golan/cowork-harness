@@ -1099,6 +1099,8 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
       expect(out.variants.find((x) => x.variant === v)).toMatchObject({ rewritten: 1, reevaluated: 1, listed: [] });
       // The deterministic move shows in regrade.md's moved table.
       expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/a1 1→0/);
+      // The mean pass is over the variant's scored rows, before and after the rewrite.
+      expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/; mean pass before 1\.00, after 0\.00 over 1 scored row\(s\)\n/);
     }
   }, 240_000);
 
@@ -1255,7 +1257,13 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
   it("a row whose re-evaluation changes nothing stays byte for byte and is counted re-evaluated", async () => {
     const { flow } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
     const before = tree(flow);
-    const out = await regradeFlow(ARGS(), DEPS());
+    const lines: string[] = [];
+    const out = await regradeFlow(ARGS(), DEPS({ stderr: (l) => lines.push(l) }));
+    // Nothing rewritten: the mean is still the variant's real one, and says it is unchanged.
+    for (const v of ["baseline", "v1"])
+      expect(lines.find((l) => l.startsWith(`  [${v}] `))).toMatch(
+        /; mean pass before 1\.00, after 1\.00 over 1 scored row\(s\); unchanged \(no rows rewritten\)$/,
+      );
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
     expect(out.variants.map(({ variant, rewritten, reevaluated, listed }) => ({ variant, rewritten, reevaluated, listed }))).toEqual([
       { variant: "baseline", rewritten: 0, reevaluated: 1, listed: [] },

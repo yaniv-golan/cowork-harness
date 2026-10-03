@@ -1724,14 +1724,19 @@ async function regradeFlowInner(
           keys: changedKeys(before.get(l), rebuilt.get(l)!.grade, metricIds).filter((k) => !misaligned.has(l) || !/^a\d+/.test(k)),
         }))
         .filter((x) => x.keys.length || misaligned.has(x.l));
-      const mean = (rows: Array<Record<string, number> | undefined>) => {
-        const xs = rows.map((g) => g?.pass).filter((x): x is number => typeof x === "number");
-        return xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(2) : "n/a";
-      };
+      // The mean pass over the variant's scored rows (every row with a numeric pass), before and after: a row not
+      // rewritten counts with its own grade on both sides, so nothing rewritten reads the real mean twice.
+      const scored = pv.lines.filter((l) => typeof l.row?.grade?.pass === "number");
+      const mean = (xs: number[]) => (xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(2) : "n/a");
+      const passOf = (g: Record<string, number> | undefined) => (typeof g?.pass === "number" ? [g.pass] : []);
+      const means =
+        `mean pass before ${mean(scored.flatMap((l) => passOf(l.row!.grade)))}, ` +
+        `after ${mean(scored.flatMap((l) => passOf(rebuilt.get(l)?.grade ?? l.row!.grade)))} over ${scored.length} scored row(s)` +
+        (changed.length ? "" : "; unchanged (no rows rewritten)");
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
-        `rewritten ${pv.v.rewritten}${pv.v.reevaluated ? `, re-evaluated ${pv.v.reevaluated} (no judge call)` : ""}${pv.v.remeasured ? `, re-measured ${pv.v.remeasured} (no judge call)` : ""}${pv.v.agentFailed ? `, ${pv.v.agentFailed} agent failure(s): meta updated` : ""}, listed ${pv.v.listed.length}; mean pass before ${mean(changed.map((l) => before.get(l)))}, after ${mean(changed.map((l) => rebuilt.get(l)!.grade))}`,
+        `rewritten ${pv.v.rewritten}${pv.v.reevaluated ? `, re-evaluated ${pv.v.reevaluated} (no judge call)` : ""}${pv.v.remeasured ? `, re-measured ${pv.v.remeasured} (no judge call)` : ""}${pv.v.agentFailed ? `, ${pv.v.agentFailed} agent failure(s): meta updated` : ""}, listed ${pv.v.listed.length}; ${means}`,
         ...(moved.length ? ["", "| case | rep | moved |", "|---|---|---|"] : []),
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
