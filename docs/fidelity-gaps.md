@@ -202,8 +202,9 @@ the fifth, `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, on every tier (protocol, conta
 off, which is every committed baseline, this is exactly what production sends: the modeled configuration is faithful
 and the memory keys are genuinely unreachable. The agent then loads no memory section into its prompt, and its init
 frame carries no `memory_paths`. Before this was fixed the harness set nothing, so the agent ran with its default
-auto-memory ON. **The committed cassettes were recorded that way** (their init frames carry `memory_paths`) and stay
-so until re-recorded; replay does not read the field.
+auto-memory ON. **Two committed cassettes were still recorded that way**, `example-multiselect-gate` and
+`hostloop-computer-links` (their init frames carry `memory_paths`), and stay so until re-recorded; replay does not read
+the field. `example-pdf-skill` and `dispatch-shell` are re-recorded with memory off.
 
 The same switch also gates, in the agent:
 - a sub-agent's `memory:` frontmatter, which appends Read/Write/Edit to that sub-agent's tools and a memory prompt to
