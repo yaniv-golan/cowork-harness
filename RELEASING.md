@@ -131,7 +131,10 @@ surfaces — every `schema/*.json` (field paths + enums, including exit-code enu
 inputs/outputs, and the documented `COWORK_*` env-var set — into `test/fixtures/surface-baseline.json`.
 Any change to those reds CI until you regenerate (`npm run gen:surface`) and review the diff; at `1.0.0`
 a *removal or type/enum change* means a **major** bump. `npm run check:surface` prints the
-added/removed/changed breakdown.
+added/removed/changed breakdown against that committed snapshot. Every PR regenerates the snapshot, so at
+release time that diff reads +0 whatever changed since the last release; `npm run check:surface -- --since-tag`
+diffs against the snapshot as of the last release tag (the highest `vX.Y.Z` tag that is an ancestor of HEAD)
+instead, and fails on a removed or changed leaf unless `package.json` is a major bump over that tag.
 
 **1.0.0 surface-freeze review (one-time, MANUAL — the surfaces the snapshot can't cover).** Before
 tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-readable source:
@@ -220,7 +223,10 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       the push-to-main live suite will be skipped and this release won't be live-validated in CI; warns if a
       ruleset **required status check** names no job in `ci.yml`; fails if the newest baseline's
       `provenance.desktopInitSurface` is unobserved — start one Cowork session and re-run `sync`, or pass
-      `--allow-unobserved-init-surface` for an emergency release).
+      `--allow-unobserved-init-surface` for an emergency release; fails if the covered surface lost or changed
+      a leaf since the last release tag and the bumped version is not a major — the same check as
+      `npm run check:surface -- --since-tag`, which prints the counts and lists every removed/changed leaf.
+      Before the bump it reports the diff without enforcing it).
 - [ ] `npm run format:check` — fix any issues (`npm run format:write`).
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.

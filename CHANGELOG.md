@@ -677,6 +677,11 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `eval --dry-run` refuse with exit 2), so a consumer no longer has to match message prose to tell "refused on
   cost" from "did not load". `error.code` is set only on this refusal and on `regrade`'s three refusal codes
   (`doc_drift`, `unchecked_content`, `no_semantic_asserts`).
+- **`npm run preflight` refuses a covered-surface break since the last release unless the version is a major.**
+  The surface is diffed against the snapshot as of the last `vX.Y.Z` release tag reachable from HEAD, not the
+  per-PR snapshot (which every PR regenerates, so it reads no change at release time). A removed or changed leaf
+  fails unless `package.json` is a major bump over that tag; added and widened leaves pass. Before the bump the
+  diff is reported without being enforced. `npm run check:surface -- --since-tag` runs it alone.
 
 ### Changed
 
