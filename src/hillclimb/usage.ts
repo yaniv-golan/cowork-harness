@@ -25,7 +25,6 @@ export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = [
   "--approve-harness",
   "--fill-refs",
   "--rejudge",
-  "--reevaluate",
   "--allow-doc-drift",
   "--allow-unchecked",
 ] as const;
@@ -75,7 +74,7 @@ export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario
        1 a case refused, 2 usage.`;
 
 export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml | dir/> [--flow DIR] [--variant all|baseline|vN] [--case ID]...
-       [--judge-model ID] [--fill-refs | --rejudge] [--reevaluate] [--approve-harness] [--allow-doc-drift] [--allow-unchecked]
+       [--judge-model ID] [--fill-refs | --rejudge] [--approve-harness] [--allow-doc-drift] [--allow-unchecked]
        [--output-format text|json] [--dotenv FILE] [--run-dir DIR]
        Rebuilds a flow's scored rows from the scenario as it is now and their kept run dirs (no agent run), rewriting
        results.jsonl atomically (the prior file kept as regrade-<sha>.bak.jsonl, a before/after in <variant>/regrade.md).
@@ -86,9 +85,7 @@ export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml 
        content); the rest keep their entries, at no judge cost. A row whose judged evidence the current harness
        composes differently than it was graded on is listed and kept (--rejudge grades it on the current evidence,
        unless it is less redacted: then only --rejudge --allow-doc-drift).
-       --rejudge: re-judge every judged assert. --reevaluate: also take the re-evaluated outcome of a deterministic
-       assert unchanged since the run (a fix in the harness's evaluator; no judge call); a row where that assert reads
-       what the run did not record (the kept work dir, a connected folder's link) is listed instead. --fill-refs: only the pairwise comparisons a row lacks are judged (a
+       --rejudge: re-judge every judged assert. --fill-refs: only the pairwise comparisons a row lacks are judged (a
        reference frozen after it), so pass cannot move and every row carries every win column. Gated like run. Exit 0
        rewritten or nothing to do, 1 some rows listed (not re-graded) or a failure after the first judge call, 2 refused
        before any judge call.`;
