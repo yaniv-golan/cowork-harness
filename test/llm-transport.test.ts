@@ -688,6 +688,12 @@ describe("user-settings detection (what the CLI reads under --setting-sources us
     expect(transportIdentity("decider").settingsMaxEffort).toBe("medium");
   });
 
+  it("a maxEffortLevel of max is no cap, so nothing is recorded", () => {
+    writeSettings({ maxEffortLevel: "max" });
+    begin();
+    expect(transportIdentity()).not.toHaveProperty("settingsMaxEffort");
+  });
+
   it("no settings file, or one without those keys, records nothing", () => {
     begin();
     expect(transportIdentity()).not.toHaveProperty("settingsEnvOverride");

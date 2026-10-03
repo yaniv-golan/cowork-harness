@@ -159,6 +159,8 @@ function buildFlow(
     COWORK_HARNESS_RUNS_DIR: f.runsDir,
     COWORK_HARNESS_CLAUDE_BIN: judge,
     HOME: f.env.HOME!,
+    // The judge transport's user-settings check reads CLAUDE_CONFIG_DIR ahead of HOME: keep it off this machine's config.
+    CLAUDE_CONFIG_DIR: join(f.env.HOME!, ".claude"),
     COWORK_MANAGED_CONFIG: "1",
     ...(opts.env ?? {}),
   })) {

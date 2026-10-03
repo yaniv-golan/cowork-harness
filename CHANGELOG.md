@@ -656,8 +656,9 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   and pin their effort.** Their host `claude` calls ran at whatever `CLAUDE_CODE_EFFORT_LEVEL`,
   `CLAUDE_CODE_DISABLE_THINKING` or `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` the shell exported, or at a user-settings
   `effortLevel`, so the same answer could be graded differently under two shells. Those three keys are now dropped
-  from the call's environment, and each call passes `--settings` blanking them, so a user-settings or global-config
-  `env` block cannot set them either. Each call also pins its effort with `--effort`, which outranks a settings
+  from the call's environment, and each call passes `--settings` blanking them, which should stop a user-settings or
+  global-config `env` block from setting them too (read from Claude Code 2.1.288, not observed live; the detection
+  below is the backstop). Each call also pins its effort with `--effort`, which outranks a settings
   `effortLevel`: `high` for the judge and the evaluator, `medium` for the decider. Each is the default effort of
   that role's default model (`claude-opus-4-8`, and `sonnet`, which resolves to `claude-sonnet-5-5`), so those run as
   before. A role pointed at a model with another default (`claude-opus-4-7` defaults to `xhigh`) now runs at the pin.

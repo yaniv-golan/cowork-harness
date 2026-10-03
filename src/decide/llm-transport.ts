@@ -109,7 +109,9 @@ export function userSettingsEffort(env: NodeJS.ProcessEnv = process.env): UserSe
     const o = parsed as { env?: unknown; maxEffortLevel?: unknown };
     if (o.env && typeof o.env === "object")
       for (const k of EFFORT_THINKING_ENV_KEYS) if (Object.prototype.hasOwnProperty.call(o.env, k)) keys.add(k);
-    if (i === 0 && typeof o.maxEffortLevel === "string" && EFFORT_ORDER.includes(o.maxEffortLevel)) maxEffort = o.maxEffortLevel;
+    // `max` is the CLI's "no cap", so it is not recorded.
+    if (i === 0 && typeof o.maxEffortLevel === "string" && EFFORT_ORDER.includes(o.maxEffortLevel) && o.maxEffortLevel !== "max")
+      maxEffort = o.maxEffortLevel;
   }
   return { envKeys: [...keys].sort(), ...(maxEffort !== undefined ? { maxEffort } : {}) };
 }

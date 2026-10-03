@@ -990,8 +990,10 @@ Rarely needed.
   `critique` evaluator, `--effort medium` for the LLM decider. Each is the default effort of that role's default
   model, so an `effortLevel` in your user settings does not change how it grades or answers. `CLAUDE_CODE_EFFORT_LEVEL`,
   `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` and `CLAUDE_CODE_DISABLE_THINKING` are dropped from the environment it inherits,
-  and blanked with `--settings`, so an `env` block in your user settings or `~/.claude.json` cannot set them. Before the
-  first call the harness reads those files. If one sets any of the three keys it warns, naming the keys, never their
+  and blanked with `--settings`, which should stop an `env` block in your user settings or global config (`settings.json`
+  and `.claude.json` under `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json` and `~/.claude.json`) from setting them.
+  That is read from Claude Code 2.1.288, not observed in a live call, so before the first call the harness also reads
+  those files. If one sets any of the three keys it warns, naming the keys, never their
   values, and records them in the transport identity (`settingsEnvOverride`). A `maxEffortLevel` in your user settings
   below the pin still lowers the effort: across settings files the lowest wins, so nothing the call passes raises it.
   The harness records it (`settingsMaxEffort`) and warns when it is below the pin. A managed (policy) `env` block also
