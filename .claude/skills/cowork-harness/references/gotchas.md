@@ -1,6 +1,6 @@
 # Gotchas
 
-Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). The full "✓ passed ≠ correct" landmine catalog.
+Tracks `cowork-harness 4.3.0` (baseline `desktop-2.19675.0`). The full "✓ passed ≠ correct" landmine catalog.
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
