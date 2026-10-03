@@ -2322,6 +2322,11 @@ def test_slash_skill_quiet_for_user_skill(tmp_path):
     assert _slash_findings(tmp_path, "/deck-review deck.pdf", local_skill="deck-review") == []
 
 
+def test_slash_skill_quiet_for_user_skill_alone(tmp_path):
+    # The only skill answering to the name is a `skills.local` user skill; the plugin's skill is another.
+    assert _slash_findings(tmp_path, "/my-notes go", local_skill="my-notes") == []
+
+
 def test_slash_skill_quiet_when_no_staged_skill_matches(tmp_path):
     assert _slash_findings(tmp_path, "/other-skill go") == []
 
