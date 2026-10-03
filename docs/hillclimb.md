@@ -213,8 +213,10 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
     `errors.jsonl` row (failed attempts are billed; an error row's top-level `usage` is the main model only);
   - judge and decider spend = for every row's `meta.run_dir` (scored and error rows alike), the
     `judgeCostUsd` of each assertion and the `deciderCostUsd` in that run's `result.json`, plus the
-    `judgeCostUsd` in every re-grade file a `hillclimb regrade` wrote into the same run dir
-    (`turns/<N>/regrade/*.json`). Those files are never overwritten, so the sum counts every judge call once.
+    top-level `judgeCostUsd` of every re-grade file a `hillclimb regrade` wrote into the same run dir
+    (`turns/<N>/regrade/*.json`). Use the file's top-level figure, never its per-assertion ones: a re-grade file
+    also lists the grades it kept, with their original cost. Those files are never overwritten, and a re-grade
+    that makes no judge call writes none, so the sum counts every judge call once.
     This needs the kept run dirs: the rows alone cannot rebuild judge spend, so a loop that sums only
     `results.jsonl` and `errors.jsonl`, as the loop's guide describes, undercounts it.
 - **There is no spend cap on `hillclimb run`.** Recompute spend from the files after every round, as the loop's
@@ -268,13 +270,19 @@ that the loop and the lite report builder read, with these differences:
 
 `hillclimb regrade` re-grades the flow's rows from their kept run dirs, without running the agent:
 
-- it re-evaluates every assertion against the kept run (a judged one with a judge call, a deterministic one such
-  as `file_exists` or `tool_called` without) and recomputes `pass`, so a rubric or assertion fix reaches the
-  rows already written;
-- it re-measures every declared metric from the kept run, so a metric added mid-climb fills the older rows;
-- `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot move.
+- it re-evaluates every deterministic assertion (`file_exists`, `tool_called`, …) against the kept run, and
+  re-measures every declared metric, so an assertion fix or a metric added mid-climb reaches the rows already
+  written;
+- it re-judges a judged assertion when something the judge sees changed (its rubric, its claims, its judge
+  settings), recording why in `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
+- it recomputes `pass`;
+- `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot move. After a grader edit, run
+  a default re-grade first: a fill lists the rows whose grader changed instead of filling them.
 
-A row whose kept run dir is gone is listed instead of re-graded.
+A row is listed instead of re-graded when its kept run dir is gone, or when the evidence its judge read has
+changed since it was graded (an edited kept run, or a harness change to how the document is composed or
+scrubbed); `--rejudge` grades the latter. Each row records `meta.assert_sig`, the assertions it was graded
+under: `hillclimb run` warns when a resumed pass would mix them, and `hillclimb check` flags a variant that does.
 
 ## Guardrails the harness adds
 

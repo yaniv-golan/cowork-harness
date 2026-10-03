@@ -72,8 +72,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Recompute the headline** from `F/<variant>/results.jsonl`, never from `summary.json`.
 - **Spot-check grading.** Read the lowest-scoring baseline rows' `explanation` and traces. If a rubric is wrong,
   tell the user; after they edit it and approve the new sha, `cowork-harness hillclimb regrade T --flow F`
-  re-evaluates every row in place from its kept run without running the agent (judged assertions with a judge
-  call, deterministic ones without).
+  re-evaluates every row in place from its kept run without running the agent: deterministic assertions and
+  metrics without a judge call, a judged assertion re-judged because its rubric changed.
 - **Triage every zero.** An agent's own failure is a scored row (`meta.failure_class: "errored_agent"`, with
   `meta.termination_rule`). Infrastructure, timeouts, a wrong served model and invalid judge grades are
   `errors.jsonl` rows, never in the scored denominator.
@@ -101,8 +101,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   `cost_usd` is the agent's whole cost (sub-agents included) and excludes the judge. Don't derive it from
   `model` × `usage`: `usage` is the main model only.
 - **Judge and decider spend** = for every row's `meta.run_dir` (results and errors rows): each assertion's
-  `judgeCostUsd` and the `deciderCostUsd` in its `result.json`, plus the `judgeCostUsd` in every re-grade file
-  under `turns/<N>/regrade/`. A row's `judge_model`/`judge_usage` describe its current grades only (a re-grade
+  `judgeCostUsd` and the `deciderCostUsd` in its `result.json`, plus the TOP-LEVEL `judgeCostUsd` of every
+  re-grade file under `turns/<N>/regrade/` (never its per-assertion values: it also lists the grades it kept, at
+  their original cost). A re-grade with no judge call writes no file. A row's `judge_model`/`judge_usage` describe its current grades only (a re-grade
   replaces them): never sum them as spend.
 - `hillclimb run` has no spend cap: check the total against the budget every round.
 - `--dry-run` estimates agent spend for the slots it would run (judge spend not included; a scenario with no
@@ -140,7 +141,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 
 - **Grader drift.** If a rubric is wrong, the user edits it and approves the sha; then
   `cowork-harness hillclimb regrade T --flow F` re-grades every variant's rows (default `--variant all`) and writes
-  `F/<variant>/regrade.md` with what moved.
+  `F/<variant>/regrade.md` with what moved. A row whose judge evidence itself changed since it was graded is
+  listed instead: ask the user before re-running with `--rejudge`.
 - **A new metric.** Add `metrics:` to the scenario, have the user approve the sha, re-run
   `cowork-harness hillclimb state-template T --flow F` and merge only the new `metrics` entries into
   `_state.json`. Rows written before it lack the key (`check` notes them); `hillclimb regrade T --flow F` fills it
