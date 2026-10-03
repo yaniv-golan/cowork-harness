@@ -843,7 +843,10 @@ or the fidelity tier. Recognize these before "fixing" a non-bug:
   A host path the **user supplied** is not a leak (at `container`/`microvm`): before the agent runs, the
   staged uploads and connected folders (and each turn's prompt) are scanned for host paths, and a path the
   agent later shows **verbatim** is exempt, so quoting a kept run's `result.json` or a log you connected
-  does not fail the run. A path token ends at whitespace, a quote, a backtick, `,`, `;`, `)`, `]`, `<`, `>` or a
+  does not fail the run. The staged copy of every declared plugin (`local_plugins`, `remote_plugins`,
+  marketplace plugins) is scanned the same way, so a skill whose own reference file lists host-shaped
+  literals does not fail when the agent reads it; a plugin's host source location is never exempt, even
+  when a plugin file names it. A path token ends at whitespace, a quote, a backtick, `,`, `;`, `)`, `]`, `<`, `>` or a
   backslash, and the match is by whole token: a sub-path of an input path, a different spelling (`/var/…`
   vs `/private/var/…`), or a path followed by a sentence-final `.` still counts. A token cut short where
   the path goes on — whitespace, `,` or `;` followed by more path (`/Users/a/My Documents/x`,
@@ -855,7 +858,7 @@ or the fidelity tier. Recognize these before "fixing" a non-bug:
   truncated spelling of one. It is captured on the first turn only, so a path the agent writes into a
   connected folder is not exempt on a later turn. Files over 2 MiB, binary files, `.git/` and
   `node_modules/` are not scanned (past 5,000 files or 64 MiB the rest are skipped too, with a notice) —
-  their paths still count. A result that relied on the exemption carries `scan.hostPathsFromInputs` (and
+  their paths still count; plugin files are scanned after the inputs, so they never use up the inputs' share. A result that relied on the exemption carries `scan.hostPathsFromInputs` (and
   `scan.inputHostPathTokens`, the corpus size) and prints a `::notice::`; the paths themselves are never
   written to `result.json`. The same rule applies to `transcript_no_host_path`.
 

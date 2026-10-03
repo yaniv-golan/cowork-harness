@@ -1,4 +1,4 @@
-import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, writeFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import type { LaunchPlan, Mount } from "../session.js";
 import { warn } from "../io.js";
@@ -14,9 +14,19 @@ import { hostPathTokens } from "./host-path-tokens.js";
  * agent runs, the staged input files are tokenized and the tokens kept as a private sidecar in the run dir;
  * the post-run scan exempts a token found there verbatim.
  *
+ * The plugins the scenario declares (local, remote and marketplace plugin mounts) are input in the same sense:
+ * the plugin under test reaches the agent through its staged copy, and a reference file in it may list
+ * host-shaped literals of its own (a catalog of the very roots this signal looks for). Their STAGED copy is
+ * walked — exactly the bytes the agent can read, never the source tree — under the same rules as the inputs.
+ * A plugin's host SOURCE location is recorded too and is never exempt (see `neverExemptRoots` in the sidecar):
+ * at container/microvm the agent sees the plugin only under `/sessions/…`, so its source path in
+ * model-visible text is what a leak of that mount looks like, whatever a plugin file says.
+ *
  * Captured on a FRESH stage only, never on a resumed turn: a connected folder is writable, so an agent could
  * write a host path into it in one turn and read it back in the next. Every bound (file size, binary files,
- * file and byte totals) only SHRINKS the corpus — fewer exemptions, so the signal fails closed.
+ * file and byte totals) only SHRINKS the corpus — fewer exemptions, so the signal fails closed. The bounds are
+ * one budget, spent on the user's inputs first and the plugins last, so plugin files can never crowd out an
+ * input's exemptions.
  *
  * The sidecar lists private host paths: it lives beside `pre-run-manifest.json`, above the staged tree, and
  * nothing copies it into result.json or a cassette.
@@ -24,6 +34,7 @@ import { hostPathTokens } from "./host-path-tokens.js";
 export const INPUT_HOST_PATHS_FILE = "input-host-paths.json";
 
 const INPUT_KINDS: ReadonlySet<Mount["kind"]> = new Set(["upload", "folder", "project"]);
+const PLUGIN_KINDS: ReadonlySet<Mount["kind"]> = new Set(["local-plugin", "remote-plugin", "marketplace-plugin"]);
 const SKIP_DIRS = new Set([".git", "node_modules"]);
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILES = 5_000;
@@ -81,8 +92,9 @@ function isBinary(path: string): boolean {
 }
 
 /**
- * Tokenize the staged input mounts (uploads, connected folders, projects) and the staged `workspace_fixture`
- * files under `mntHost` and write the corpus to `<outDir>/input-host-paths.json`. A no-op on a resumed turn, whose corpus is the one the first
+ * Tokenize the staged input mounts (uploads, connected folders, projects), the staged `workspace_fixture`
+ * files and the staged plugin mounts under `mntHost` and write the corpus to `<outDir>/input-host-paths.json`,
+ * with the plugins' host source locations as roots never to exempt. A no-op on a resumed turn, whose corpus is the one the first
  * turn captured. Deterministic: entries are walked in sorted order and tokens are stored sorted.
  */
 export function captureInputHostPathCorpus(
@@ -134,12 +146,42 @@ export function captureInputHostPathCorpus(
   // workspace_fixture files are user-supplied input too: staged into outputs/ just before this runs, so the
   // files there now are exactly the fixture's (visited by name — never the whole outputs dir).
   for (const f of plan.workspaceFixture?.files ?? []) visit(join(mntHost, "outputs", ...f.path.split("/")));
+  // The declared plugins LAST, so they spend only what the inputs left of the shared budget.
+  const pluginSources = new Set<string>();
+  for (const m of plan.mounts) {
+    if (!PLUGIN_KINDS.has(m.kind)) continue;
+    visit(join(mntHost, m.mountPath));
+    if (m.hostPath) {
+      pluginSources.add(m.hostPath);
+      try {
+        pluginSources.add(realpathSync(m.hostPath));
+      } catch {
+        /* source gone after staging: the raw spelling is enough */
+      }
+    }
+  }
   if (capped)
     warn(
-      `::notice:: [scan] input files exceed ${MAX_FILES} files / ${MAX_TOTAL_BYTES / 1024 / 1024} MiB — host paths in the rest ` +
+      `::notice:: [scan] input and plugin files exceed ${MAX_FILES} files / ${MAX_TOTAL_BYTES / 1024 / 1024} MiB — host paths in the rest ` +
         `are not recognised as user-supplied, so quoting them counts as a host_path_leak\n`,
     );
-  writeFileSync(join(outDir, INPUT_HOST_PATHS_FILE), JSON.stringify({ version: 1, capped, tokens: [...tokens].sort() }, null, 2));
+  writeFileSync(
+    join(outDir, INPUT_HOST_PATHS_FILE),
+    JSON.stringify({ version: 1, capped, tokens: [...tokens].sort(), neverExemptRoots: [...pluginSources].sort() }, null, 2),
+  );
+}
+
+/** The roots a fresh stage recorded as never exempt (the declared plugins' host source locations). Missing or
+ *  unreadable ⇒ none — the corpus reader below then yields no tokens either, so nothing is exempted. */
+export function readInputHostPathNeverExemptRoots(outDir: string): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(join(outDir, INPUT_HOST_PATHS_FILE), "utf8")) as { neverExemptRoots?: unknown };
+    return Array.isArray(parsed.neverExemptRoots)
+      ? parsed.neverExemptRoots.filter((t): t is string => typeof t === "string" && t !== "")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 /** The corpus a fresh stage persisted. Missing or unreadable ⇒ empty (no exemptions — fails closed). */

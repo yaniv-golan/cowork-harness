@@ -5,7 +5,12 @@ import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
 import { hostPathTokens, hostPathTokenOccurrences } from "./host-path-tokens.js";
-import { isInputBorneHostPath, readInputHostPathCorpus, type InputHostPathCorpus } from "./input-host-paths.js";
+import {
+  isInputBorneHostPath,
+  readInputHostPathCorpus,
+  readInputHostPathNeverExemptRoots,
+  type InputHostPathCorpus,
+} from "./input-host-paths.js";
 import { hasTurnDirs, currentTurnFromDirs, turnWriteDir, classifyRunDir, preLayoutMessage } from "./turn-layout.js";
 import { randomUUID, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -4194,8 +4199,8 @@ export function ownHostRoots(outDir: string, sessionId: string, baseline: Platfo
 }
 
 /** The input-provenance corpus the post-run scan exempts against: the host-path tokens the first turn's
- *  staged inputs carried (persisted by the runtime), plus this turn's prompt, with this run's own roots
- *  never exempt. Only at container/microvm: those are the tiers that stage inputs and arm the
+ *  staged inputs and declared plugins carried (persisted by the runtime), plus this turn's prompt, with this
+ *  run's own roots and the plugins' host source locations (persisted beside the tokens) never exempt. Only at container/microvm: those are the tiers that stage inputs and arm the
  *  `host_path_leak` signal; elsewhere nothing is exempted (and nothing is reported). */
 export function inputProvenanceCorpus(
   outDir: string,
@@ -4208,7 +4213,7 @@ export function inputProvenanceCorpus(
   const { subtree, exact } = ownHostRoots(outDir, sessionId, baseline);
   return {
     tokens: new Set([...readInputHostPathCorpus(outDir), ...hostPathTokens(prompt ?? "")]),
-    neverExemptRoots: subtree,
+    neverExemptRoots: [...subtree, ...readInputHostPathNeverExemptRoots(outDir)],
     neverExemptExact: exact,
   };
 }

@@ -2524,8 +2524,8 @@ export interface RunResult {
     mountDeletes?: { mount: string; command: string }[];
     /** A host path that did NOT come from the scenario's inputs appeared in model-visible text. */
     hostPathLeaked: boolean;
-    /** How many distinct host-path tokens the scenario's inputs carried — the staged uploads and connected
-     *  folders (captured before the agent ran, on the first turn) plus the turn's prompt. The tokens
+    /** How many distinct host-path tokens the scenario's inputs carried — the staged uploads, connected
+     *  folders and declared plugins (captured before the agent ran, on the first turn) plus the turn's prompt. The tokens
      *  themselves are private paths and are never written here. Omitted when zero. */
     inputHostPathTokens?: number;
     /** How many distinct host-path tokens in model-visible text were exempted from `hostPathLeaked` because

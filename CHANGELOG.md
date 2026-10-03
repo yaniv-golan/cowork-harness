@@ -955,6 +955,15 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   They used `!command.includes('rm')`, which also matched "normalize", "format" or "confirm". They now use the word
   match the other examples and the scenario docs use, `!/\brm\b/.test(command)`, and the example cassette is
   re-recorded with it.
+- **`host_path_leak` no longer fires on host-shaped literals in the plugin under test's own files.** At `container`
+  and `microvm`, an agent that Read a reference file from its own plugin (a catalog row listing roots such as
+  `/Users/` or `/opt/cowork/`, say) failed the run, though no host path had leaked. The staged copy of every declared
+  plugin (`local_plugins`, `remote_plugins`, marketplace plugins) is now scanned before the agent runs, the same way
+  uploads and connected folders already were, and a literal the agent shows verbatim from it is exempt. The same
+  rules apply: first turn only, the same size, binary and file-count bounds (plugins are scanned after the inputs, so
+  they never use up the inputs' share), and nothing under a location the harness created for the run. A plugin's
+  host source location is never exempt, even when a plugin file names it. A result that relied on the exemption
+  counts those paths in `scan.hostPathsFromInputs`, and the verdict notice now says "inputs, prompt or plugin files".
 
 ### Documentation
 

@@ -120,11 +120,35 @@ describe("captureInputHostPathCorpus — the pre-run corpus of host paths the us
     expect(existsSync(join(outDir, "input-host-paths.json"))).toBe(true);
   });
 
-  it("ignores plugin mounts, the managed config dir and outputs — they are not user input", () => {
+  it("ignores the managed config dir and outputs — they are not user input", () => {
     put("outputs/x.md", "/Users/alice/out/a");
     put(".claude/settings.json", '{"p":"/Users/alice/cfg"}');
-    put(".local-plugins/p/SKILL.md", "/Users/alice/plugin/b");
-    capture({ mounts: [mount(".local-plugins/p", "local-plugin")], resume: false }, mnt, outDir);
+    capture({ mounts: [], resume: false }, mnt, outDir);
+    expect(readCorpus(outDir).size).toBe(0);
+  });
+
+  it("collects tokens from the STAGED copy of every plugin kind the scenario declared", () => {
+    put(".local-plugins/marketplaces/local-desktop-app-uploads/p/references/catalog.md", "roots: `/Users/`, `/opt/cowork/`\n");
+    put(".remote-plugins/plugin_abc/SKILL.md", "see /home/someone/doc.md\n");
+    put(".local-plugins/cache/mkt/q/1.0.0/README.md", "under /private/var/empty\n");
+    capture(
+      {
+        mounts: [
+          mount(".local-plugins/marketplaces/local-desktop-app-uploads/p", "local-plugin"),
+          mount(".remote-plugins/plugin_abc", "remote-plugin"),
+          mount(".local-plugins/cache/mkt/q/1.0.0", "marketplace-plugin"),
+        ],
+        resume: false,
+      },
+      mnt,
+      outDir,
+    );
+    expect([...readCorpus(outDir)]).toEqual(["/Users/", "/home/someone/doc.md", "/opt/cowork/", "/private/var/empty"]);
+  });
+
+  it("a plugin file outside a declared plugin mount contributes nothing", () => {
+    put(".local-plugins/cache/undeclared/SKILL.md", "/Users/alice/stray");
+    capture({ mounts: [], resume: false }, mnt, outDir);
     expect(readCorpus(outDir).size).toBe(0);
   });
 
@@ -210,6 +234,90 @@ describe("scanEvents — a host path the user supplied is not a leak", () => {
   });
 });
 
+// The plugin under test is user-supplied input too: its own files (a reference catalog listing the host roots
+// the leak guard looks for, say) reach the agent through the staged plugin, and the agent reading them is not a
+// leak. Only literals present in the STAGED plugin's files are exempt; the plugin's host SOURCE location is
+// what a leak of the plugin mount looks like, so it is never exempt even when a plugin file names it.
+describe("the staged plugin's own files are input too", () => {
+  const PLUGIN = ".local-plugins/marketplaces/local-desktop-app-uploads/cowork-harness";
+  const CATALOG_ROW =
+    "| `transcript_no_host_path: true` | no host path (`/Users/`, `/opt/cowork/`, `/home/`, `/root/`, and the macOS " +
+    "`/private/var/`, `/private/tmp/`, `/var/folders/`, `/Volumes/` roots) leaked into model-visible text |\n";
+  const read = (body: string) =>
+    JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_r", content: body }] } });
+  const stagePlugin = (body: string, hostPath = "/unused") => {
+    put(`${PLUGIN}/references/assertion-catalog.md`, body);
+    capture({ mounts: [{ ...mount(PLUGIN, "local-plugin"), hostPath }], resume: false }, mnt, outDir);
+  };
+  const corpusFor = () => (execute as any).inputProvenanceCorpus(outDir, "local_sid", {}, "which assertion?", "container");
+  const verdictOf = (scan: any) =>
+    computeVerdict(
+      {
+        scenario: "t",
+        fidelity: "container",
+        effectiveFidelity: "container",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir: "/tmp/x",
+        scan: { outputsDeletes: [], hostPathLeaked: scan.hostPathLeaked, selfHealRan: false },
+      } as RunResult,
+      "live",
+    );
+
+  it("router shape: the agent Reads the plugin's catalog row listing host roots — green", () => {
+    stagePlugin(`# Assertion catalog\n\n${CATALOG_ROW}`);
+    const f = events(read(`1\t# Assertion catalog\n2\t\n3\t${CATALOG_ROW}`));
+    const scan = scanEvents(f, ["outputs"], corpusFor()) as any;
+    expect(scan.hostPathLeaked).toBe(false);
+    expect(scan.hostPathsFromInputs).toBe(8);
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(verdictOf(scan).signals.map((s: any) => s.code)).not.toContain("host_path_leak");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a real leak: the same literal in NO plugin file stays red", () => {
+    stagePlugin("# Assertion catalog\n\nnothing host-shaped here\n");
+    const f = events(read(`3\t${CATALOG_ROW}`));
+    const scan = scanEvents(f, ["outputs"], corpusFor()) as any;
+    expect(scan.hostPathLeaked).toBe(true);
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(verdictOf(scan).signals.map((s: any) => s.code)).toContain("host_path_leak");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("mixed: the plugin's literals beside a real host path the agent produced — red", () => {
+    stagePlugin(`# Assertion catalog\n\n${CATALOG_ROW}`);
+    const f = events(read(`3\t${CATALOG_ROW}`), say("the roots are `/Users/`; your file is /Users/bob/secret.txt"));
+    const scan = scanEvents(f, ["outputs"], corpusFor()) as any;
+    expect(scan.hostPathLeaked).toBe(true);
+  });
+
+  it("the plugin's host SOURCE location leaks even when a plugin file names it", () => {
+    const src = "/Users/alice/code/my-plugin";
+    stagePlugin(`dev notes: built from ${src}/skills/x\n`, src);
+    expect(corpusFor().tokens.has(`${src}/skills/x`), "precondition: the plugin file yields the token").toBe(true);
+    const f = events(read(`dev notes: built from ${src}/skills/x`));
+    expect(scanEvents(f, ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
+  });
+
+  it("a host path the agent writes into the staged plugin tree during the run is not exempt", () => {
+    stagePlugin("# Assertion catalog\n");
+    put(`${PLUGIN}/references/later.md`, "/Users/alice/written-by-agent");
+    capture({ mounts: [mount(PLUGIN, "local-plugin")], resume: true }, mnt, outDir);
+    const f = events(read("/Users/alice/written-by-agent"));
+    expect(scanEvents(f, ["outputs"], corpusFor()).hostPathLeaked).toBe(true);
+  });
+});
+
 describe("verdict — a pass that relied on the exemption says so", () => {
   const rr = (scan: RunResult["scan"]): RunResult => ({
     scenario: "t",
@@ -239,7 +347,7 @@ describe("verdict — a pass that relied on the exemption says so", () => {
       spy.mockRestore();
     }
     expect(writes.join("")).toMatch(
-      /::notice:: \[verdict\] 2 host path\(s\) in model-visible text came verbatim from the scenario's inputs or prompt; not counted as a leak/,
+      /::notice:: \[verdict\] 2 host path\(s\) in model-visible text came verbatim from the scenario's inputs, prompt or plugin files; not counted as a leak/,
     );
   });
 });
