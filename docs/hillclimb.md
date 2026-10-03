@@ -192,7 +192,8 @@ against it (`win`: 1 win, 0.5 tie, 0 loss; 0.5 on the baseline's own rows). The 
 
 When a variant wins nearly every comparison (`check` notes a mean of 0.9 or more), raise the bar: freeze that
 variant's output as a second reference, fill its column on the earlier rows, then declare it (`state-template`
-declares `win_<vN>` only once no scored row lacks it):
+declares `win_<vN>` only once no scored row lacks it). Run the fill without `--case`: rows of cases with no
+pairwise assertion need the column too, and gain it with no judge call:
 
 ```bash
 cowork-harness hillclimb freeze-ref evals/ --flow ~/hc/my-skill --variant v3
