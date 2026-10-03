@@ -314,13 +314,15 @@ function mayBeScrubbedFrom(was: string, now: string): boolean {
  *  scrubbed (`[REDACTED]`). It is matched against the current list scrubbed with this process's secrets, as the run
  *  scrubbed it. One still unmatched whose recorded identity carries a redaction token that the current assert could
  *  have been scrubbed to (this process does not know the run's secrets) is matched too — the run's entry is kept, never
- *  re-evaluated over scrubbed evidence — and named in `scrubbedOnly`: whether it is really unchanged is unknowable. */
+ *  re-evaluated over scrubbed evidence — and named in `scrubbedOnly`: whether it is really unchanged is unknowable.
+ *  One matched exactly only once scrubbed (not as written) is named in `scrubbedExact`: an edit inside its scrubbed
+ *  literal (one secret for another) scrubs to the same form, so it is unchanged only if the row's list is. */
 function matchByIdentity(
   wasIds: readonly string[],
   nowList: readonly unknown[],
   secrets: readonly string[],
   only: (i: number) => boolean = () => true,
-): { at: Array<number | undefined>; scrubbedOnly: number[] } {
+): { at: Array<number | undefined>; scrubbedOnly: number[]; scrubbedExact: number[] } {
   const raw = assertIdentities(nowList);
   let scrubbed: string[] | undefined;
   if (secrets.length)
@@ -334,6 +336,11 @@ function matchByIdentity(
   const at: Array<number | undefined> = raw.map(() => undefined);
   const used = new Set<number>();
   const scrubbedOnly: number[] = [];
+  const scrubbedExact: number[] = [];
+  const note = (i: number, k: number, isLoose: boolean) => {
+    if (isLoose) scrubbedOnly.push(i);
+    else if (wasIds[k] !== raw[i]) scrubbedExact.push(i);
+  };
   for (const [ok, isLoose] of [
     [exact, false],
     [loose, true],
@@ -342,7 +349,7 @@ function matchByIdentity(
       if (only(i) && at[i] === undefined && i < wasIds.length && !used.has(i) && ok(i, i)) {
         at[i] = i;
         used.add(i);
-        if (isLoose) scrubbedOnly.push(i);
+        note(i, i, isLoose);
       }
     for (let i = 0; i < raw.length; i++) {
       if (!only(i) || at[i] !== undefined) continue;
@@ -350,10 +357,11 @@ function matchByIdentity(
       if (k < 0) continue;
       at[i] = k;
       used.add(k);
-      if (isLoose) scrubbedOnly.push(i);
+      note(i, k, isLoose);
     }
   }
-  return { at, scrubbedOnly: scrubbedOnly.sort((a, b) => a - b) };
+  const byIndex = (a: number, b: number) => a - b;
+  return { at, scrubbedOnly: scrubbedOnly.sort(byIndex), scrubbedExact: scrubbedExact.sort(byIndex) };
 }
 
 /** The run's entry for each authored index, matched by identity (`matchByIdentity`), and the indexes matched only as
@@ -362,10 +370,14 @@ function liveByIdentity(
   live: RunResult,
   c: HillclimbCase,
   secrets: readonly string[],
-): { entries: Array<Entry | undefined>; scrubbedOnly: number[] } {
+): { entries: Array<Entry | undefined>; scrubbedOnly: number[]; scrubbedExact: number[] } {
   const was = authoredOf(live);
   const m = matchByIdentity(assertIdentities(was.map((e) => e.assertion)), authoredNow(c), secrets);
-  return { entries: m.at.map((k) => (k === undefined ? undefined : was[k])), scrubbedOnly: m.scrubbedOnly };
+  return {
+    entries: m.at.map((k) => (k === undefined ? undefined : was[k])),
+    scrubbedOnly: m.scrubbedOnly,
+    scrubbedExact: m.scrubbedExact,
+  };
 }
 
 /** A regrade file's name as `regradeFileStem` writes it: never a path. */
@@ -431,6 +443,8 @@ export interface JudgedPlan {
   poolAt: number[];
   /** The judged indexes matched to their graded entry only as possibly scrubbed (`matchByIdentity`). */
   scrubbedOnly: number[];
+  /** The judged indexes matched exactly only once scrubbed with this process's secrets (`matchByIdentity`). */
+  scrubbedExact: number[];
 }
 
 /** Which of a row's judged asserts a regrade re-judges, decided from the row, its kept run and the flow's reference
@@ -510,6 +524,7 @@ export function judgedPlan(
     pool,
     poolAt: src?.at ?? [],
     scrubbedOnly: src ? m.scrubbedOnly : [],
+    scrubbedExact: src ? m.scrubbedExact : [],
   };
 }
 
@@ -914,6 +929,17 @@ function missingRefs(plan: JudgedPlan, c: HillclimbCase, refNames: readonly stri
   return refNames.filter((ref) => pairwiseIdx.some((i) => !(plan.entries.get(i)?.pairwise ?? []).some((o) => o.ref === ref)));
 }
 
+/** The pairwise asserts a fill would judge: each lacking an outcome against a reference other than its own variant's
+ *  (that one is neutral, never judged). Per index, the form of `missingRefs`. */
+function fillJudged(plan: JudgedPlan, c: HillclimbCase, variant: string, refNames: readonly string[]): number[] {
+  return c.scenario.assert.flatMap((a, i) =>
+    a.semantic_pairwise !== undefined &&
+    refNames.some((ref) => ref !== variant && !(plan.entries.get(i)?.pairwise ?? []).some((o) => o.ref === ref))
+      ? [i]
+      : [],
+  );
+}
+
 /** Whether a row's `a<i>` keys before and after a rebuild name the same asserts: its assertion set is the scenario's
  *  now (same `assert_sig`), or — a row no regrade rewrote, so graded under its run's list — the run's list has the same
  *  length and the same keys at every index (a value edit keeps the alignment; an inserted or removed assert breaks it).
@@ -1212,11 +1238,31 @@ async function regradeFlowInner(
           refs,
           secrets: deps.secrets,
         });
-        // An assert the run recorded scrubbed that this process's secrets do not reproduce: taken as unchanged (its
-        // live outcome kept, never re-evaluated or re-judged over scrubbed evidence), and said, since that is unknowable.
-        for (const i of [...new Set([...byIdentity.scrubbedOnly, ...plan.scrubbedOnly])].sort((a, b) => a - b))
+        // An assert the run recorded scrubbed that this process's secrets do not reproduce: taken as unchanged, and
+        // said, since that is unknowable. Its live judge read the rubric and the document both scrubbed; a re-judge here
+        // would send the rubric as written against the scrubbed evidence (for a negative claim, a leak turned green no
+        // live run could produce). So any re-judge such an assert would need lists the row — no judge call, nothing
+        // written — unless the operator, having checked the scrub settings, passes --allow-doc-drift. One matched
+        // exactly under this process's scrub is re-judged with its rubric scrubbed as the run sent it.
+        const unknowable = [...new Set([...byIdentity.scrubbedOnly, ...plan.scrubbedOnly])].sort((a, b) => a - b);
+        const toJudge = agentFailed ? [] : args.fillRefs ? fillJudged(plan, c, v, refNames) : [...plan.rejudge.keys()];
+        const rawRubric = unknowable.filter((i) => toJudge.includes(i));
+        if (rawRubric.length && !args.allowDocDrift) {
+          vr.listed.push({
+            prompt_id: id,
+            rep,
+            why: shownMessage(
+              `${rawRubric.map((i) => labelOf(c, i)).join(", ")} ${rawRubric.length === 1 ? "is" : "are"} scrubbed in the run's result.json and this process's secrets do not reproduce ${rawRubric.length === 1 ? "it" : "them"}: a re-judge would send the rubric as written against the scrubbed evidence the run's judge read — run with the same scrub settings the run used (COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS), or pass --allow-doc-drift explicitly after checking them`,
+              deps.secrets,
+            ),
+          });
+          continue;
+        }
+        for (const i of unknowable)
           say(
-            `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it, so whether it changed since the run is unknowable — its graded outcome kept, never re-evaluated over the scrubbed evidence (an unchanged assert matches exactly under the run's COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS; an edited one takes a re-run of the case)`,
+            rawRubric.includes(i)
+              ? `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it — re-judged anyway (--allow-doc-drift): its rubric is sent as written against the scrubbed evidence`
+              : `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it, so whether it changed since the run is unknowable — its graded outcome kept, never re-evaluated over the scrubbed evidence (an unchanged assert matches exactly under the run's COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS; an edited one takes a re-run of the case)`,
           );
         // A fill keeps every outcome the row was graded with: one judged against a reference that has since changed
         // (re-frozen by hand) would mix two references in one row — listed before any spend, never written. Read from

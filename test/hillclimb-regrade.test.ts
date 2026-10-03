@@ -1561,6 +1561,95 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     240_000,
   );
 
+  // The live run sent the judge the rubric and the document both scrubbed (`[REDACTED]`). A re-judge from a process
+  // whose scrub does not reproduce the recorded rubric would send the RAW rubric against the scrubbed document — for a
+  // negative claim, a leak turned green no live run could produce. Any re-judge such an assert would need lists the row
+  // (no judge call, nothing written) until --allow-doc-drift, after checking the scrub settings.
+  const SCRUBBED_JUDGED = ["  - semantic_pairwise:", "      rubric: ['says All done']", "      judge_model: claude-haiku-4-5-20251001"];
+  const capturing = (secrets: readonly string[]) => {
+    const users: string[] = [];
+    const lines: string[] = [];
+    const deps = DEPS({
+      secrets,
+      stderr: (l) => lines.push(l),
+      regradeOptions: {
+        pairwiseComplete: async (call) => {
+          users.push(call.user);
+          return { structured: { rationale: "r", verdict: "A" }, model: "claude-haiku-4-5", subtype: "success" };
+        },
+      },
+    });
+    return { users, lines, deps };
+  };
+  const SCRUB_REMEDY = /run with the same scrub settings the run used.*or pass --allow-doc-drift explicitly after checking/;
+
+  it.each([
+    ["--rejudge", { rejudge: true }],
+    ["--judge-model", { judgeModel: "claude-opus-4-8" }],
+  ] as const)(
+    "a judged assert scrubbed in its run that this process cannot reproduce: %s lists the row, no judge call, row untouched",
+    async (_n, over) => {
+      const { flow } = buildFlow({ extra: SCRUBBED_JUDGED, env: SCRUBBED });
+      const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+      const { users, lines, deps } = capturing([]);
+      const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true, ...over }), deps);
+      expect(out.exitCode, JSON.stringify(out)).toBe(1);
+      expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(SCRUB_REMEDY) }]);
+      expect(users).toEqual([]);
+      expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+      // Listed, so never said to be kept.
+      expect(lines.join("\n")).not.toMatch(/graded outcome kept/);
+    },
+    240_000,
+  );
+
+  it("a judged assert scrubbed in its run that this process cannot reproduce: freeze-ref then --fill-refs lists the row, no judge call", async () => {
+    const { cli, flow } = buildFlow({ extra: SCRUBBED_JUDGED, env: SCRUBBED });
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const before = readFileSync(join(flow, "baseline", "results.jsonl"), "utf8");
+    const { users, deps } = capturing([]);
+    const out = await regradeFlow(ARGS({ variant: "baseline", fillRefs: true, approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(SCRUB_REMEDY) }]);
+    expect(users).toEqual([]);
+    expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before);
+  }, 300_000);
+
+  it("a judged assert scrubbed in its run that this process cannot reproduce: freeze-ref then a default regrade (opponents changed) lists the row", async () => {
+    const { cli, flow } = buildFlow({ extra: SCRUBBED_JUDGED, env: SCRUBBED });
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const before = readFileSync(join(flow, "baseline", "results.jsonl"), "utf8");
+    const { users, deps } = capturing([]);
+    const out = await regradeFlow(ARGS({ variant: "baseline", approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(SCRUB_REMEDY) }]);
+    expect(users).toEqual([]);
+    expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before);
+  }, 300_000);
+
+  it("a judged assert scrubbed in its run that this process cannot reproduce: --allow-doc-drift lets the re-judge through", async () => {
+    const { rows } = buildFlow({ extra: SCRUBBED_JUDGED, env: SCRUBBED });
+    const { users, lines, deps } = capturing([]);
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true, rejudge: true, allowDocDrift: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(out.variants[0]!.listed).toEqual([]);
+    expect(users.length).toBeGreaterThan(0);
+    expect(rows("v1")[0]!.meta.regrade_rejudged_because).toBeDefined();
+    // Re-judged, so never said to be kept.
+    expect(lines.join("\n")).not.toMatch(/graded outcome kept/);
+  }, 240_000);
+
+  it("a judged assert scrubbed in its run that this process's scrub reproduces: re-judged with the rubric scrubbed as the run sent it", async () => {
+    buildFlow({ extra: SCRUBBED_JUDGED, env: SCRUBBED });
+    const { users, deps } = capturing(collectSecrets());
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true, rejudge: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(out.variants[0]!.listed).toEqual([]);
+    const scrubbedRubric = users.filter((u) => u.includes("says [REDACTED]"));
+    expect(scrubbedRubric.length).toBeGreaterThan(0);
+    for (const u of users) expect(u).not.toContain("All done");
+  }, 240_000);
+
   // A default regrade re-judges a judged assert only when something its judge reads or grades with changed: a
   // deterministic fix costs no judge call and re-rolls no verdict.
   const SECOND = ["  - semantic_pairwise:", "      rubric: ['second']", "      judge_model: claude-haiku-4-5-20251001"];
