@@ -281,7 +281,7 @@ that the loop and the lite report builder read, with these differences:
 
 - it re-evaluates a deterministic assertion (`file_exists`, `tool_called`, …) whose definition changed against
   the kept run, and re-measures every declared metric, so an assertion fix or a metric added mid-climb reaches
-  the rows already written;
+  the rows already written (a value already measured is kept if the kept file can no longer be read);
 - `--reevaluate` (no judge, no agent cost) also takes the fresh outcome of every unchanged deterministic
   assertion, for a fix in the harness's own evaluator; it lists a row whose kept run cannot be evaluated
   faithfully;
