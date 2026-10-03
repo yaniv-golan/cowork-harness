@@ -593,12 +593,12 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         severity: "fail",
         message: "a host path leaked into model-visible text (assert transcript_no_host_path to make this explicit)",
       });
-    // Host paths the user supplied (input files, the prompt, the declared plugins' files) are exempt from the scan; say so when a result
+    // Host paths the user supplied (input files, the prompt, the declared plugins' and local skills' files) are exempt from the scan; say so when a result
     // relied on that, so a clean scan over an input that names host paths is never a silent pass.
     const fromInputs = result.scan?.hostPathsFromInputs ?? 0;
     if (fromInputs > 0 && result.effectiveFidelity !== "hostloop" && result.effectiveFidelity !== "protocol")
       warn(
-        `::notice:: [verdict] ${fromInputs} host path(s) in model-visible text came verbatim from the scenario's inputs, prompt or plugin files; not counted as a leak\n`,
+        `::notice:: [verdict] ${fromInputs} host path(s) in model-visible text came verbatim from the scenario's inputs, prompt, plugin or skill files; not counted as a leak\n`,
       );
 
     // L0 (protocol) reading the operator's REAL config dir — their installed plugins, skills and MCP

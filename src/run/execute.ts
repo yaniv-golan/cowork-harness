@@ -4206,7 +4206,7 @@ export function ownHostRoots(outDir: string, sessionId: string, baseline: Platfo
 }
 
 /** The input-provenance corpus the post-run scan exempts against: the host-path tokens the first turn's
- *  staged inputs and declared plugins carried (persisted by the runtime), plus this turn's prompt, with this
+ *  staged inputs, declared plugins and local skills carried (persisted by the runtime), plus this turn's prompt, with this
  *  run's own roots and the plugins' host source locations (persisted beside the tokens) never exempt. Only at container/microvm: those are the tiers that stage inputs and arm the
  *  `host_path_leak` signal; elsewhere nothing is exempted (and nothing is reported). */
 export function inputProvenanceCorpus(

@@ -962,15 +962,17 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   They used `!command.includes('rm')`, which also matched "normalize", "format" or "confirm". They now use the word
   match the other examples and the scenario docs use, `!/\brm\b/.test(command)`, and the example cassette is
   re-recorded with it.
-- **`host_path_leak` no longer fires on host-shaped literals in the plugin under test's own files.** At `container`
+- **`host_path_leak` no longer fires on host-shaped literals in the skill under test's own files.** At `container`
   and `microvm`, an agent that Read a reference file from its own plugin (a catalog row listing roots such as
   `/Users/` or `/opt/cowork/`, say) failed the run, though no host path had leaked. The staged copy of every declared
-  plugin (`local_plugins`, `remote_plugins`, marketplace plugins) is now scanned before the agent runs, the same way
-  uploads and connected folders already were, and a literal the agent shows verbatim from it is exempt. The same
-  rules apply: first turn only, the same size, binary and file-count bounds (plugins are scanned after the inputs, so
-  they never use up the inputs' share), and nothing under a location the harness created for the run. A plugin's
-  host source location is never exempt, even when a plugin file names it. A result that relied on the exemption
-  counts those paths in `scan.hostPathsFromInputs`, and the verdict notice now says "inputs, prompt or plugin files".
+  plugin (`local_plugins`, `remote_plugins`, marketplace plugins) and of every `skills.local` skill is now scanned
+  before the agent runs, the same way uploads and connected folders already were, and a literal the agent shows
+  verbatim from it is exempt. The same rules apply: first turn only, links not followed, the same size, binary and
+  file-count bounds (plugins and skills are scanned after the inputs, so they never use up the inputs' share), and
+  nothing under a location the harness created for the run. For a local skill only its own staged directory is
+  scanned, never the rest of the config dir. A plugin's or skill's host source location is never exempt, even when
+  one of its files names it. A result that relied on the exemption counts those paths in `scan.hostPathsFromInputs`,
+  and the verdict notice now says "inputs, prompt, plugin or skill files".
 - **A signal no longer leaks the `hostloop` workspace sidecar.** After a Ctrl-C (or SIGTERM, or SIGHUP) during a
   `hostloop` `run` or `chat`, the harness exited 130 but left the `cowork-hl-*` container, its `docker run` client
   and the `cowork-int-*` network running. The run's teardown dropped its signal-time container cleanup before

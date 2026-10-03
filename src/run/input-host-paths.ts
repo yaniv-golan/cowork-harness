@@ -14,19 +14,21 @@ import { hostPathTokens } from "./host-path-tokens.js";
  * agent runs, the staged input files are tokenized and the tokens kept as a private sidecar in the run dir;
  * the post-run scan exempts a token found there verbatim.
  *
- * The plugins the scenario declares (local, remote and marketplace plugin mounts) are input in the same sense:
+ * The plugins the scenario declares (local, remote and marketplace plugin mounts), and the `skills.local` skills
+ * it stages into the managed config dir (`mnt/.claude/skills/<name>` — only those, never the rest of that dir),
+ * are input in the same sense:
  * the plugin under test reaches the agent through its staged copy, and a reference file in it may list
  * host-shaped literals of its own (a catalog of the very roots this signal looks for). Their STAGED copy is
  * walked — exactly the bytes the agent can read, never the source tree — under the same rules as the inputs.
- * A plugin's host SOURCE location is recorded too and is never exempt (see `neverExemptRoots` in the sidecar):
- * at container/microvm the agent sees the plugin only under `/sessions/…`, so its source path in
- * model-visible text is what a leak of that mount looks like, whatever a plugin file says.
+ * A plugin's or skill's host SOURCE location is recorded too and is never exempt (see `neverExemptRoots` in the sidecar):
+ * at container/microvm the agent sees them only under `/sessions/…`, so a source path in model-visible text
+ * is what a leak of one looks like, whatever its files say.
  *
  * Captured on a FRESH stage only, never on a resumed turn: a connected folder is writable, so an agent could
  * write a host path into it in one turn and read it back in the next. Every bound (file size, binary files,
  * file and byte totals) only SHRINKS the corpus — fewer exemptions, so the signal fails closed. The bounds are
- * one budget, spent on the user's inputs first and the plugins last, so plugin files can never crowd out an
- * input's exemptions.
+ * one budget, spent on the user's inputs first and the plugins and skills last, so their files can never
+ * crowd out an input's exemptions.
  *
  * The sidecar lists private host paths: it lives beside `pre-run-manifest.json`, above the staged tree, and
  * nothing copies it into result.json or a cassette.
@@ -98,7 +100,7 @@ function isBinary(path: string): boolean {
  * turn captured. Deterministic: entries are walked in sorted order and tokens are stored sorted.
  */
 export function captureInputHostPathCorpus(
-  plan: Pick<LaunchPlan, "mounts" | "resume" | "workspaceFixture">,
+  plan: Pick<LaunchPlan, "mounts" | "resume" | "workspaceFixture" | "stagedSkills">,
   mntHost: string,
   outDir: string,
 ): void {
@@ -146,23 +148,31 @@ export function captureInputHostPathCorpus(
   // workspace_fixture files are user-supplied input too: staged into outputs/ just before this runs, so the
   // files there now are exactly the fixture's (visited by name — never the whole outputs dir).
   for (const f of plan.workspaceFixture?.files ?? []) visit(join(mntHost, "outputs", ...f.path.split("/")));
-  // The declared plugins LAST, so they spend only what the inputs left of the shared budget.
+  // The declared plugins and local skills LAST, so they spend only what the inputs left of the shared budget.
   const pluginSources = new Set<string>();
+  const neverExemptSource = (src: string): void => {
+    if (!src) return;
+    pluginSources.add(src);
+    try {
+      pluginSources.add(realpathSync(src));
+    } catch {
+      /* source gone after staging: the raw spelling is enough */
+    }
+  };
   for (const m of plan.mounts) {
     if (!PLUGIN_KINDS.has(m.kind)) continue;
     visit(join(mntHost, m.mountPath));
-    if (m.hostPath) {
-      pluginSources.add(m.hostPath);
-      try {
-        pluginSources.add(realpathSync(m.hostPath));
-      } catch {
-        /* source gone after staging: the raw spelling is enough */
-      }
-    }
+    neverExemptSource(m.hostPath);
+  }
+  // A local skill's staged copy: the managed config dir lands at mnt/.claude (stageWorkspace), each skill at
+  // skills/<dest> — visited by name, never the whole config dir (settings files the harness writes are not input).
+  for (const sk of plan.stagedSkills ?? []) {
+    visit(join(mntHost, ".claude", "skills", sk.dest));
+    neverExemptSource(sk.src);
   }
   if (capped)
     warn(
-      `::notice:: [scan] input and plugin files exceed ${MAX_FILES} files / ${MAX_TOTAL_BYTES / 1024 / 1024} MiB — host paths in the rest ` +
+      `::notice:: [scan] input, plugin and skill files exceed ${MAX_FILES} files / ${MAX_TOTAL_BYTES / 1024 / 1024} MiB — host paths in the rest ` +
         `are not recognised as user-supplied, so quoting them counts as a host_path_leak\n`,
     );
   writeFileSync(
@@ -171,7 +181,7 @@ export function captureInputHostPathCorpus(
   );
 }
 
-/** The roots a fresh stage recorded as never exempt (the declared plugins' host source locations). Missing or
+/** The roots a fresh stage recorded as never exempt (the declared plugins' and local skills' host source locations). Missing or
  *  unreadable ⇒ none — the corpus reader below then yields no tokens either, so nothing is exempted. */
 export function readInputHostPathNeverExemptRoots(outDir: string): string[] {
   try {

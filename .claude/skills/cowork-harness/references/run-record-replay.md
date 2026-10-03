@@ -272,8 +272,8 @@ Recognize these before "fixing" a non-bug:
   `transcript_no_host_path`. At `fidelity: cowork` the skip follows the **resolved** tier, so a `cowork`
   run that lands on `container` is armed. Author `transcript_no_host_path` to enforce cleanliness where
   it's valid. A host path that came verbatim from the scenario's own uploads, connected folders, prompt or
-  declared plugins' files is not a leak (whole-token match; a token cut short where the path goes on, one
-  naming a location the harness created for the run, or a plugin's host source location, is never exempt);
+  declared plugins' or local skills' files is not a leak (whole-token match; a token cut short where the path goes on, one
+  naming a location the harness created for the run, or a plugin's or skill's host source location, is never exempt);
   `scan.inputHostPathTokens` counts the host-path tokens the inputs carried, `scan.hostPathsFromInputs` the ones exempted, and a non-zero exemption prints a
   `::notice::` so a clean scan that relied on it is never silent.
 - **`exec_infra_error`** (`WARN`, host-loop) — one or more container `exec` calls failed for
