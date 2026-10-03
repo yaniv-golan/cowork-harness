@@ -387,7 +387,8 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   every batch's evidence before any judge call (a refusal writes nothing).
   `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
   `<variant>/regrade.md` (per-assert and metric columns included; `a<i>` is not compared across two assertion lists,
-  with the mean `pass` over the variant's scored rows before and after, also when no row was rewritten),
+  with the mean `pass` over the variant's scored rows before and after, also when no row was rewritten; every
+  variant's line, there and on stderr, shows the same counters in one order, a zero included),
   and `result.json` is never touched. Rows it cannot re-grade are listed (exit 1). `regrade`
   now re-grades `semantic_pairwise` asserts in the live run's comparison order, checks their references before any
   spend, and drift-checks an all-neutral run against its `composedDoc`; `no_semantic_asserts` now means the scenario has

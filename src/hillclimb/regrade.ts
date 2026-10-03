@@ -965,6 +965,12 @@ const changedKeys = (
   return [...keys].filter((k) => (/^(pass|claims|win|both_bad|a\d+)/.test(k) || metric(k)) && before?.[k] !== after?.[k]);
 };
 
+/** A variant's counters, one fixed set in one order with every count shown (zero included), wherever they are printed:
+ *  its `regrade.md` line, its stderr line and the closing summary. */
+const counters = (v: RegradeFlowVariant): string =>
+  `rewritten ${v.rewritten}, re-evaluated ${v.reevaluated} (no judge call), re-measured ${v.remeasured} (no judge call), ` +
+  `agent-failed ${v.agentFailed} (meta updated), listed ${v.listed.length}`;
+
 export async function regradeFlow(args: HillclimbRegradeArgs, deps: RegradeFlowDeps): Promise<RegradeFlowOutcome> {
   const say = (l: string) => deps.stderr(l);
   const refuse = (m: string): RegradeFlowOutcome => {
@@ -1736,7 +1742,7 @@ async function regradeFlowInner(
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
-        `rewritten ${pv.v.rewritten}${pv.v.reevaluated ? `, re-evaluated ${pv.v.reevaluated} (no judge call)` : ""}${pv.v.remeasured ? `, re-measured ${pv.v.remeasured} (no judge call)` : ""}${pv.v.agentFailed ? `, ${pv.v.agentFailed} agent failure(s): meta updated` : ""}, listed ${pv.v.listed.length}; ${means}`,
+        `${counters(pv.v)}; ${means}`,
         ...(moved.length ? ["", "| case | rep | moved |", "|---|---|---|"] : []),
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
@@ -1770,14 +1776,7 @@ async function regradeFlowInner(
       );
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;
-    say(
-      `hillclimb regrade: ${outcome.variants
-        .map(
-          (v) =>
-            `${v.variant} ${v.rewritten} rewritten${v.reevaluated ? `, ${v.reevaluated} re-evaluated (no judge call)` : ""}${v.remeasured ? `, ${v.remeasured} re-measured (no judge call)` : ""}${v.agentFailed ? `, ${v.agentFailed} agent failure(s): meta updated` : ""}${v.listed.length ? `, ${v.listed.length} listed` : ""}`,
-        )
-        .join("; ")}`,
-    );
+    say(`hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${counters(v)}`).join("; ")}`);
     return outcome;
   } finally {
     for (const r of releases.reverse()) r();
