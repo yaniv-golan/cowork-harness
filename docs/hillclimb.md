@@ -10,7 +10,7 @@ and every round runs your scenarios in the sandboxed agent, grades them with you
 layout the loop expects. The harness makes no keep-or-revert decision of its own. The goal, the best round, the
 stopping rule and the edits to your skill stay the loop's.
 
-`eval` compares two versions of a skill you already have; `hillclimb` drives the loop that produces them;
+`eval` compares two versions of a skill you already have; `hillclimb` runs each round of the loop that produces them;
 `critique` finds what is wrong with a skill; `skill` and `run` check that it works.
 
 The command, its flags and defaults, its exit codes and the run envelope are a covered surface. The harness's own
@@ -45,7 +45,7 @@ each step of the loop) and [`references/hillclimb.md`](../.claude/skills/cowork-
 | Variant | One round: `baseline` (the first variant, the starting plugin), then `v1`, `v2`, …; each runs a snapshot of the plugin taken on its first run |
 | Case | One scenario file; its id is the file stem |
 | Rep, slot | One run of a case in a variant, counted from 0; a (case, rep) pair is a slot, and a pass resumes by slot |
-| Harness gate | A sha over everything the loop must not change (scenarios, sessions, uploads, fixtures, lockfiles, the harness version and Desktop baseline), recorded by `--approve-harness` in `_state.json` |
+| Harness gate | A sha over the inputs the loop must not change (scenarios, sessions, uploads, workspace fixtures, lockfiles, `harness_paths`, the `--skill` selection, the harness version and Desktop baseline), recorded by `--approve-harness` in `_state.json` |
 | Pairwise reference | A frozen output a `semantic_pairwise` assert is judged against: the baseline's, then any a `hillclimb freeze-ref --flow <dir>` adds |
 
 Other terms, defined where they are used: a fill (`hillclimb regrade --flow <dir> --fill-refs`) adds the columns
@@ -78,6 +78,7 @@ cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --dry-run --approve-har
 
 # 3. Optional: one case of the baseline, to see a row and its cost before the loop runs every case.
 #    It is the baseline's first run, so it fixes the baseline's snapshot: make no plugin edit after it.
+#    Pass the same fixed flags as the runner command in step 5 (--skill, --model, --judge-model).
 cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --variant baseline --case <id> --reps 1
 ```
 
@@ -285,7 +286,7 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
     `results.jsonl` and `errors.jsonl`, as the loop's guide describes, undercounts it.
 - **There is no spend cap on `hillclimb run`.** It takes no `--max-budget-usd`. Recompute spend from the files
   after every round, as the loop's guide does, and stop at your budget. (`--max-budget-usd` on `run` and `eval` is
-  a pre-flight refusal priced from the agent's cost history, not a cap on spend: only `run --repeat` keeps a running
+  a pre-flight refusal priced from the agent's cost history, not a cap on spend: only a `--repeat` batch keeps a running
   total, and an `eval` is never stopped mid-way.)
 - **A ballpark before you start.** A round is cases × reps agent runs, plus the judge calls of every judged
   assertion on every row (a `semantic_pairwise` assert makes one per reference it is judged against, and `order: both` doubles it). One
@@ -317,7 +318,7 @@ that the loop and the lite report builder read, with these differences:
   `git add`ed (a stderr line counts the files left out). A `--case` canary is the variant's first run, so a fix
   made after it goes into a new variant.
 - **The lever is the plugin.** Each variant snapshots the plugin. The session file (`model`, `effort`,
-  `subagent_model`) is shared by every variant and covered by the harness gate, so changing it is a gated edit
+  `agent_env.subagent_model`) is shared by every variant and covered by the harness gate, so changing it is a gated edit
   that every later resume also runs; `--model` on the command line selects the agent model outside the gate, so
   leave it out of the allowlisted prefix if the loop's goal is moving to another model. Cowork's system prompt is
   not tunable.
@@ -400,7 +401,8 @@ resumed pass would mix them, and `hillclimb check` flags a case whose rows carry
 - **A metric is read from a file the run writes,** so the skill under test writes it, and an edit can move the
   number without improving the work. Never have the skill compute its own score; put the ground truth in the
   scenario, as `artifact_json` expected values or rubric claims.
-- **The judge never sees uploads or tool results.** It reads the final message, the assistant's transcript text
+- **The judge sees no uploads and no tool results** (except a `Skill` call's result under
+  `include_fork_results: true`). It reads the final message, the assistant's transcript text
   and the files the run wrote ([scenario.md](./scenario.md), `semantic_matches`). To grade faithfulness to an
   uploaded document, write the source facts into the rubric.
 - **The harness gate does not hash connected-folder contents or live web responses.** A case that reads either can
@@ -409,10 +411,11 @@ resumed pass would mix them, and `hillclimb check` flags a case whose rows carry
 - **A variant that rewords or batches its questions can miss the scripted `answers:`.** The run ends asking for
   input and is scored as an agent failure (every key 0): read `meta.termination_rule` before blaming quality. A fix
   to `answers:` is a gated scenario edit, but it marks no row stale (`meta.assert_sig` covers `assert` and
-  `expect_denied` only) and a re-grade cannot answer a question again, so re-run the baseline.
+  `expect_denied` only) and a re-grade cannot answer a question again, so start a fresh flow dir and run the
+  baseline there: in this flow every slot already has a row, and a pass resumes by slot.
 - **Judge variance.** Set `order: both` on a `semantic_pairwise` assert to cancel position bias. The frozen
   reference is one sample (the lowest-rep good row), so an unusually good or bad reference shifts every comparison.
-- **Effort and the sub-agent model are session-level.** `effort` and `subagent_model` are read from the session
+- **Effort and the sub-agent model are session-level.** `effort` and `agent_env.subagent_model` are read from the session
   file, which every variant shares and the harness gate covers, so one flow runs every variant at one setting, and
   a change is a gated edit that every later resume also runs. The loop's guide can climb a staircase of model and
   effort settings, which does not map onto one flow.
@@ -446,4 +449,4 @@ resumed pass would mix them, and `hillclimb check` flags a case whose rows carry
 | A non-baseline pass refuses on a pairwise case | The baseline reference is missing: `hillclimb freeze-ref … --variant baseline --case <id>`, or, when the message says freezing cannot repair it, a fresh flow dir |
 | The same slots run on every pass | They are `errors.jsonl` rows with a permanent fault; read `failure_class` and `error` |
 | `regrade` lists rows "kept run dir is gone" | Pass the `--run-dir` the runs were written with; a removed run cannot be re-graded (`prune --include-hillclimb` removes them) |
-| A new metric or `win_<vN>` column is missing on older rows | They were written before it: fill a metric with `hillclimb regrade` (a row reading `no_manifest` needs a re-run), a reference's column with `hillclimb regrade --fill-refs`, before comparing. A row whose case has no scenario file in the target is listed instead and stays without it |
+| A new metric or `win_<vN>` column is missing on older rows | They were written before it: fill a metric with `hillclimb regrade` (a row reading `no_manifest` needs a re-run), a reference's column with `hillclimb regrade --flow <dir> --fill-refs`, before comparing. A row whose case has no scenario file in the target is listed instead and stays without it |

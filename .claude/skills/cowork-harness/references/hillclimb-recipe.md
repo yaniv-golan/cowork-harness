@@ -79,8 +79,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Triage every zero.** An agent's own failure is a scored row (`meta.failure_class: "errored_agent"`, with
   `meta.termination_rule`). Infrastructure, timeouts, a wrong served model and invalid judge grades are
   `errors.jsonl` rows, never in the scored denominator. A variant that rewords or batches its questions can miss
-  the scripted `answers:` and end asking for input: read `meta.termination_rule` before blaming quality. A fix to
-  `answers:` marks no row stale and no re-grade can apply it: ask the user to re-run the baseline.
+  the scripted `answers:` and end asking for input (a scored agent failure): read `meta.termination_rule` before
+  blaming quality. A fix to `answers:` marks no row stale, no re-grade can apply it, and a pass in this flow runs
+  nothing for slots that already have a row: ask the user to start a fresh flow dir and run the baseline there.
 - **Served model.** A run served by another model, or with no evidence of the pinned one, is an `errors.jsonl`
   row (`serving_substitution`), not a score; a run with no model evidence whose agent failed on its own is a
   scored agent failure.

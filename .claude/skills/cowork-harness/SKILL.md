@@ -80,7 +80,7 @@ CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that
   before your edit with the one after using `cowork-harness eval` (EXPERIMENTAL, live: 10 runs per
   scenario at the defaults). See **Recipe 5** step 6 in `references/task-recipes.md` (validity,
   discrimination — the traps) and [`references/eval.md`](references/eval.md). `eval` compares two versions you
-  already have; `hillclimb` drives the loop that produces them; `critique` finds what is wrong; `skill`/`run`
+  already have; `hillclimb` runs each round of the loop that produces them; `critique` finds what is wrong; `skill`/`run`
   checks it works.
 - **Improve a skill round by round** with Claude Code's `/claude-api hillclimb` → `cowork-harness hillclimb run`
   is the loop's runner. Follow [`references/hillclimb-recipe.md`](references/hillclimb-recipe.md) (the procedure,

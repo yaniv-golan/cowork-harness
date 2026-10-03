@@ -317,7 +317,7 @@ load-bearing gates with `--answer` once you know which fire.
 
 ## Recipe 7 — Climb a skill with `/claude-api hillclimb`
 
-`eval` (Recipe 5) compares two versions you already have; `hillclimb` drives the loop that produces them;
+`eval` (Recipe 5) compares two versions you already have; `hillclimb` runs each round of the loop that produces them;
 `critique` finds what is wrong; `skill`/`run` checks it works. The loop's procedure, with `hillclimb run` as its
 runner, is its own page: [`hillclimb-recipe.md`](hillclimb-recipe.md). The command reference is
 [`hillclimb.md`](hillclimb.md).
