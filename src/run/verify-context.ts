@@ -18,6 +18,7 @@ import { readPreRunManifestOrigin } from "./pre-run-manifest.js";
 import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { unionReferenceAccesses } from "./run.js";
 import { requireTurns, turnArtifactPath } from "./turn-layout.js";
+import { relocatedRunDirRefusal } from "./run-dir-identity.js";
 import { recordedSlashInvokedSkills } from "../critique/skill-invocation.js";
 
 /** Read the persisted transcript from a kept run's `run.jsonl` (the `{t:"transcript"}` line).
@@ -251,6 +252,10 @@ export function assertContextFromRunDir(
         `verdict and must not be read as pass/fail. (can't verify ⇒ not green)`,
     );
   }
+  // A run dir copied or moved since its run: result.json's absolute evidence paths still name the original, so
+  // everything below would read the original's tree while reporting the given dir (run-dir-identity.ts).
+  const relocated = relocatedRunDirRefusal(runDir, result, cmd);
+  if (relocated) return refuse("runtime", relocated);
   let scenario: Scenario;
   if (typeof scenarioOrLoader === "function") {
     try {

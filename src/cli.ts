@@ -74,6 +74,7 @@ import {
 } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
 import { parseGatesFromEvents, readTranscriptSidecar, reevaluateRun } from "./run/verify-context.js";
+import { relocatedRunDirRefusal } from "./run/run-dir-identity.js";
 import { cmdRegrade, REGRADE_USAGE } from "./run/regrade.js";
 import { cmdFixture } from "./fixture/cli.js";
 import { cmdHillclimb } from "./hillclimb/cli.js";
@@ -5041,6 +5042,10 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const resultPath = turnArtifactPath(runDir, diffTurn, "result.json");
   if (existsSync(resultPath)) {
     const result = JSON.parse(readFileSync(resultPath, "utf8")) as RunResult;
+    // diff is a regression gate: a copied or moved side would hash the ORIGINAL's artifacts through result.json's
+    // recorded work dir and could report two different trees identical. Refused like a pre-layout dir.
+    const relocated = relocatedRunDirRefusal(runDir, result, "diff");
+    if (relocated) throw new LegacyRunDirError(relocated);
     scenarioName = result.scenario;
     meta = {
       result: result.result,
