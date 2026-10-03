@@ -8,6 +8,7 @@
 
 import { UsageError } from "../errors.js";
 import { isConcreteModelId } from "../run/model-provenance.js";
+import { SESSION_EFFORT_TOKENS, type SessionConfig } from "../session.js";
 import { envOutputFormat, parseOutputFormat } from "../run/envelope.js";
 import { VARIANT_DIR_RE } from "./schema-check.js";
 import { HILLCLIMB_RUN_BOOLEAN_FLAGS, HILLCLIMB_RUN_REPEATED_FLAGS, HILLCLIMB_RUN_VALUE_FLAGS } from "./usage.js";
@@ -27,6 +28,9 @@ export interface HillclimbRunArgs {
   flow: string;
   variant: string;
   model?: string;
+  /** The effort every case's agent is asked for (`extra` already read as `xhigh`); absent ⇒ each case's session
+   *  `effort:`, else the baseline default. */
+  effort?: NonNullable<SessionConfig["effort"]>;
   reps: number;
   concurrency: number;
   /** Seconds; 0 = no ceiling. */
@@ -129,6 +133,17 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
       throw new UsageError(`${flag} must be a concrete model id (e.g. claude-sonnet-4-6), not an alias: got "${v}"`);
   }
 
+  let effort: HillclimbRunArgs["effort"];
+  if (values["--effort"] !== undefined) {
+    const v = values["--effort"];
+    if (!(SESSION_EFFORT_TOKENS as readonly string[]).includes(v))
+      throw new UsageError(
+        `--effort must be one of ${SESSION_EFFORT_TOKENS.filter((t) => t !== "extra").join(", ")} (or extra, read as xhigh); got "${v}"`,
+      );
+    // `extra` is the Cowork UI's label for xhigh, normalized as a session's `effort:` is (loadSession).
+    effort = v === "extra" ? "xhigh" : (v as HillclimbRunArgs["effort"]);
+  }
+
   let outputFormat: "text" | "json";
   try {
     outputFormat = "--output-format" in values ? parseOutputFormat([...argv]) : envOutputFormat();
@@ -151,6 +166,7 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
     flow: values["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow,
     variant,
     ...(values["--model"] !== undefined ? { model: values["--model"] } : {}),
+    ...(effort !== undefined ? { effort } : {}),
     reps,
     concurrency,
     timeoutS,

@@ -56,6 +56,7 @@ with no `prompt:` (a session file) is skipped.
 scenario's `timeout_ms` lowered to it, a tie going to the runner; no judge starts after it, though one already
 running finishes; reaching it is an `errors.jsonl` `timeout` row, while a shorter `timeout_ms` of the scenario's own
 firing first is a scored `errored_agent` row), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
+`--effort LEVEL` (below),
 `--case ID`, `--skill NAME`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--decider-cmd CMD` or
 `--decider-dir DIR`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 

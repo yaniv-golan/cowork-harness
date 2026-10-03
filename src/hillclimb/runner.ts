@@ -64,6 +64,10 @@ export interface RunnerDeps {
   runJob: (job: JobSpec) => Promise<JobReport>;
   /** The concrete model a case's main loop must be served by. */
   pin: (c: HillclimbCase) => string | undefined;
+  /** The effort a case's agent is asked for (the resolved `--effort` / session `effort:` / baseline default), and
+   *  whether its model has no effort selector (then the agent may send none). Required, so no caller skips the
+   *  requested-vs-sent check by omission. */
+  requestedEffort: (c: HillclimbCase) => { effort: string; noSelector: boolean };
   /** Every file that defines the measurement (scenario, session, answers, uploads) — the gate's derived set. */
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
   /** Named values the gate hashes beside the derived files: what a file's bytes leave out (a fixture's exec bits). */
@@ -436,6 +440,7 @@ async function run(
         ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
         rep,
         pin: deps.pin(c),
+        requestedEffort: deps.requestedEffort(c),
         ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
         events: report.events,
         attemptS: report.attemptS,

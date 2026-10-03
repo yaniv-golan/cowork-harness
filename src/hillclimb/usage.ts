@@ -7,6 +7,7 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--flow",
   "--variant",
   "--model",
+  "--effort",
   "--reps",
   "--concurrency",
   "--timeout-s",
@@ -29,7 +30,7 @@ export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = [
   "--allow-unchecked",
 ] as const;
 
-export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--reps N]
+export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--effort LEVEL] [--reps N]
        [--concurrency N] [--timeout-s N (0 = no ceiling)] [--approve-harness] [flags]
        The runner for /claude-api hillclimb: runs every scenario --reps times into <flow>/<variant>/ with the
        runner-scaffold contract (results.jsonl, errors.jsonl, traces/, progress.txt, summary.json). Exit 0 all
@@ -37,6 +38,11 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --flow DIR              flow directory (default .claude/hillclimb/flow)
   --variant ID            'baseline' or 'v<N>' (default baseline)
   --model ID              concrete model id the agent must be served by; an alias is refused
+  --effort LEVEL          the effort the agent is asked for: low|medium|high|xhigh|max (extra = xhigh);
+                          default the session's effort:, else the baseline default. Levels are per model:
+                          one the model does not offer is refused before spend. Each row records it
+                          (meta.effort) and the effort the agent sent (meta.effort_sent); a mismatch is
+                          an error row. Not in the harness sha: keep one value per variant
   --reps N                reps per case (default 1)
   --concurrency N         jobs in flight (default 4; a decider needs --concurrency 1)
   --timeout-s N           per-case wall-clock ceiling in seconds (default 1800; 0 = none)

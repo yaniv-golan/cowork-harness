@@ -59,6 +59,9 @@ export interface AttemptContext {
   rep: number;
   /** The concrete model the main loop must be served by. */
   pin?: string;
+  /** The effort the agent was asked for, and whether its model has no effort selector. Recorded as `meta.effort`;
+   *  absent ⇒ nothing was requested (a caller outside `hillclimb run`). */
+  requestedEffort?: { effort: string; noSelector: boolean };
   /** The variant snapshot's content signature; a run whose fingerprint differs is not this variant. */
   expectedContentSig?: string;
   /** `events.jsonl` lines of the attempt's run dir (readers scope to the current turn). */
@@ -282,6 +285,11 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     models[m] = { ...snake(e as Record<string, unknown>), ...(typeof cost === "number" ? { cost_usd: cost } : {}) };
   }
   const retriesUnrecorded = r?.apiRetries === undefined;
+  // What the attempt asked for, beside the evidence of what it got (`model`, `meta.effort_sent`).
+  const requested = {
+    ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
+    ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
+  };
   const errorRow = (failure_class: string, error: string, metaExtra: Record<string, unknown>): RowOut => ({
     dest: "errors",
     row: {
@@ -299,6 +307,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       latency_s: ctx.attemptS, // the whole attempt, as the scaffold (l.563)
       meta: {
         ...(ctx.meta.runDir !== undefined ? { run_dir: ctx.meta.runDir, run_id: basename(ctx.meta.runDir) } : {}),
+        ...requested,
         ...(typeof r?.cost?.usd === "number" ? { cost_usd: r.cost.usd } : {}),
         ...(Object.keys(models).length ? { models } : {}),
         ...(retriesUnrecorded ? { retries_unrecorded: true } : {}),
@@ -402,6 +411,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(ctx.meta.contentSig !== undefined ? { content_sig: ctx.meta.contentSig } : {}),
       ...(ctx.meta.skillHash !== undefined ? { skill_hash: ctx.meta.skillHash } : {}),
       ...(ctx.meta.skillTracked !== undefined ? { skill_tracked: ctx.meta.skillTracked } : {}),
+      ...requested,
       ...(r?.apiRetries
         ? { retries, retry_delay_s: r.apiRetries.delayMs / 1000, subagent_retries: r.apiRetries.subagentCount }
         : { retries_unrecorded: true }),

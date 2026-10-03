@@ -10,7 +10,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
-import { applySessionOverrides, expandHome, type SessionConfig } from "../session.js";
+import { applySessionOverrides, effortSelector, expandHome, resolveEffort, thinkingEffortRefusal, type SessionConfig } from "../session.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { effectiveTier, loadSessionFromFile, runOutDir, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
 import { pairwiseRefsRefusal } from "../refs/preflight.js";
@@ -123,6 +123,7 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   if (!args.dryRun || outcome.remaining === undefined) return outcome;
   const cost = price(outcome.remaining);
   say(`[${args.variant}] ${scheduleCostLine(cost)}`);
+  say(`[${args.variant}] the estimate ignores the requested model and effort: it prices each scenario's recorded runs, whatever they ran`);
   return { ...outcome, cost: scheduleCostJson(cost) };
 }
 
@@ -287,6 +288,9 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   // session) records no signature: a --case pass then records a source_sig a full pass would not, and summary.json
   // keeps the first writer's.
   const sessions = new Map<string, SessionConfig>();
+  // What each selected case's agent is asked for: the model pin and the effort (`--effort`, else the session's
+  // `effort:`, else the baseline default — the one resolver the argv builders use).
+  const efforts = new Map<string, { effort: string; noSelector: boolean }>();
   const sigs = new Map<string, string>();
   const chosen = new Set(selected.map((c) => c.id));
   for (const c of cases) {
@@ -301,16 +305,29 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       /* not run in this pass: its refusal is a pass that selects it */
     }
   }
+  const unlisted = new Set<string>();
   for (const c of selected) {
     const declared = prep.session(c);
     let sub: SessionConfig;
     try {
-      sub = applySessionOverrides(declared, { model: prep.pin(c), skillDirSubstitution: [declared.plugins.local_plugins[0], pluginDir] });
+      sub = applySessionOverrides(declared, {
+        model: prep.pin(c),
+        ...(args.effort !== undefined ? { effort: args.effort } : {}),
+        skillDirSubstitution: [declared.plugins.local_plugins[0], pluginDir],
+      });
     } catch (e) {
       throw new UsageError(`case ${c.id}: ${message(e)}`);
     }
     sessions.set(c.id, sub);
     const baseline = prep.baseline(c);
+    // Effort the agent would not send as requested is refused here, before spend: thinking off with xhigh/max, or on a
+    // model that disallows it. (An effort the model does not offer is refused by the input checks below.)
+    const thinking = thinkingEffortRefusal(sub, baseline);
+    if (thinking) throw new UsageError(`case ${c.id}: ${thinking}`);
+    const selector = effortSelector(sub.model, baseline);
+    efforts.set(c.id, { effort: resolveEffort({ flag: args.effort, session: declared.effort, baseline }), noSelector: selector === false });
+    if (selector === undefined && sub.model !== undefined) unlisted.add(sub.model);
+    if (args.dryRun) say(`[${v}] case ${c.id}: model ${sub.model ?? "(unpinned)"}, effort ${efforts.get(c.id)!.effort} (requested)`);
     const sig = buildFingerprint(c.scenario.session, baseline.appVersion, undefined, c.scenario.skills, baseline, sub).contentSig;
     if (sig === undefined) throw new UsageError(`case ${c.id}: the plugin hashes to nothing (no files the fingerprint covers)`);
     sigs.set(c.id, sig);
@@ -349,6 +366,11 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       }
     }
   }
+
+  if (unlisted.size)
+    say(
+      `[${v}] note: the baseline lists no effort levels for ${[...unlisted].sort().join(", ")}, so the requested effort is not checked against the model before spend; each row's sent-effort check (meta.effort_sent) decides`,
+    );
 
   // Which skill's invocation the rows record (the `skill_invoked` column), resolved against the snapshot the runs
   // mount (a dry run: the live plugin's tracked files, which a pass would snapshot). An unknown --skill refuses
@@ -426,6 +448,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       return rep;
     },
     pin: prep.pin,
+    requestedEffort: (c) => efforts.get(c.id)!,
     inputs: (c) => prep.session(c).uploads.map((u) => resolve(expandHome(u))),
     derivedPaths: prep.derivedPaths,
     derivedValues: prep.derivedValues,

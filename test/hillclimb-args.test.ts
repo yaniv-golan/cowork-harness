@@ -162,3 +162,21 @@ describe("hillclimb run args — harness additions", () => {
     expect(a).toMatchObject({ variant: "v2", reps: 3 });
   });
 });
+
+describe("hillclimb run --effort", () => {
+  it("takes a session effort level, normalizing `extra` (the UI label) to xhigh", () => {
+    const a = run("evals/", "--effort", "high");
+    expect(!a.help && a.effort).toBe("high");
+    const b = run("evals/", "--effort=extra");
+    expect(!b.help && b.effort).toBe("xhigh");
+    const c = run("evals/");
+    expect(!c.help && c.effort).toBeUndefined();
+  });
+  it("refuses a value outside the session effort levels, naming them", () => {
+    refuses(
+      ["evals/", "--effort", "turbo"],
+      /--effort must be one of low, medium, high, xhigh, max \(or extra, read as xhigh\); got "turbo"/,
+    );
+    refuses(["evals/", "--effort", "High"], /--effort must be one of/);
+  });
+});

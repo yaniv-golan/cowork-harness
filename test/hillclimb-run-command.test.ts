@@ -1666,3 +1666,77 @@ describe("the harness gate names what changed", () => {
     expect(state()).toHaveProperty("harness_files");
   });
 });
+
+describe("--effort: the requested effort reaches the agent and every row", () => {
+  const session = (extra: string) =>
+    writeFileSync(join(cwd, "evals", "_session.yaml"), `model: ${MODEL}\n${extra}plugins:\n  local_plugins:\n    - ${plugin}\n`);
+  const approve = () => runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+
+  it("--effort sets the session the run gets, and rows record it as meta.effort beside meta.model_requested", async () => {
+    await approve();
+    const r = await runHillclimbCommand(args("--effort", "high"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    expect((calls[0].extra.session as SessionConfig).effort).toBe("high");
+    const meta = rows()[0].meta as Record<string, unknown>;
+    expect(meta.effort).toBe("high");
+    expect(meta.model_requested).toBe(MODEL);
+  });
+
+  it("without --effort a row records the session's effort:, else the baseline default", async () => {
+    session("effort: low\n");
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    expect((rows()[0].meta as Record<string, unknown>).effort).toBe("low");
+    expect((calls[0].extra.session as SessionConfig).effort).toBe("low");
+    session("");
+    await approve();
+    await runHillclimbCommand(args("--variant", "v1"), deps());
+    const v1 = JSON.parse(
+      readFileSync(join(cwd, "flow", "v1", "results.jsonl"), "utf8")
+        .trim()
+        .split("\n")[0],
+    );
+    expect(v1.meta.effort).toBe("medium");
+  });
+
+  it("an effort the pinned model does not offer is refused before spend", async () => {
+    await approve();
+    // claude-sonnet-4-6 offers low, medium, high, max — not xhigh
+    const r = await runHillclimbCommand(args("--model", "claude-sonnet-4-6", "--effort", "xhigh", "--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/effort "xhigh" is not offered by model "claude-sonnet-4-6"/);
+    // a model with no effort selector refuses any --effort
+    const h = await runHillclimbCommand(args("--model", "claude-haiku-4-5", "--effort", "low", "--approve-harness"), deps());
+    expect(h.exitCode).toBe(2);
+    expect(h.error?.message).toMatch(/model "claude-haiku-4-5" has no effort selector/);
+    expect(calls).toEqual([]);
+  });
+
+  it("xhigh or max with extended_thinking: false is refused before spend, and so is thinking off where the model disallows it", async () => {
+    session("extended_thinking: false\n");
+    await approve();
+    const r = await runHillclimbCommand(args("--effort", "max"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/case alpha: effort max with extended_thinking: false/);
+    const o = await runHillclimbCommand(args("--model", "claude-opus-5", "--approve-harness"), deps());
+    expect(o.exitCode).toBe(2);
+    expect(o.error?.message).toMatch(/case alpha: model claude-opus-5 does not allow thinking to be turned off/);
+    expect(calls).toEqual([]);
+  });
+
+  it("the dry run prints each case's requested model and effort, and that the estimate ignores both", async () => {
+    const r = await runHillclimbCommand(args("--dry-run", "--effort", "high"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    const text = err.join("\n");
+    expect(text).toContain(`[baseline] case alpha: model ${MODEL}, effort high (requested)`);
+    expect(text).toMatch(/the estimate ignores the requested model and effort/);
+  });
+
+  it("a model the baseline lists no effort levels for is named once: the sent-effort check decides", async () => {
+    await approve();
+    await runHillclimbCommand(args("--model", "claude-opus-5-5", "--dry-run"), deps());
+    expect(err.filter((l) => l.includes("lists no effort levels"))).toEqual([
+      "[baseline] note: the baseline lists no effort levels for claude-opus-5-5, so the requested effort is not checked against the model before spend; each row's sent-effort check (meta.effort_sent) decides",
+    ]);
+  });
+});

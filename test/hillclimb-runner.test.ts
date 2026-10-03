@@ -73,6 +73,7 @@ function deps(over: Partial<RunnerDeps> = {}): RunnerDeps {
     stderr: (l) => err.push(l),
     virtual: { harnessVersion: "4.3.0", baselineId: "2.9939.4" },
     pin: () => MODEL,
+    requestedEffort: () => ({ effort: "medium", noSelector: false }),
     derivedPaths: (cases) => cases.map((c) => c.file),
     mountRoots: () => [],
     tickMs: 1_000_000,
