@@ -411,7 +411,9 @@ All notable changes to this project are documented here. The format is based on
   `plan.cost` summary as `eval --dry-run`, on its basis exactly (hillclimb runs excluded), and its nine keys are covered
   the same way (`schema/schedule-cost.json`). `hillclimb check` checks a flow dir against our reading of the published
   schema and warns on a baseline case with no headroom (exit `0` clean, `1` findings, `2` usage; a warning never
-  changes it); `hillclimb state-template` prints a `_state.json` skeleton and, with `--flow`, writes the metrics
+  changes it). A `semantic_pairwise` case with `pass` at the ceiling gets a note instead of that warning, on `check`
+  and at the end of a baseline pass: its pairwise assert is neutral against its own reference on baseline, so `pass`
+  is 1 by construction and a variant's gain shows in `win`. The floor warning is the same for every case; `hillclimb state-template` prints a `_state.json` skeleton and, with `--flow`, writes the metrics
   legend to `<flow>/metrics.md` (an edited copy is kept, and the new legend goes to `metrics.md.new`). Every `hillclimb`
   subcommand takes `--flow <dir>` (default `.claude/hillclimb/flow`), and `--help` and `docs/cli.md` show it on each: a loop whose
   flow dir is not the default passes the same dir to every one.
@@ -451,9 +453,9 @@ All notable changes to this project are documented here. The format is based on
   its kept run, before any judge call (a row gains the signatures of metrics added since, and loses an unavailable
   reason for one now measured). A row no judge re-grades is re-measured too: a case with no judged assert, a row
   whose judged asserts all keep their entries, an agent-failed row (signatures and `<id>_present: 0`, never a value)
-  and a fill row that needs no comparison. A row of a case that declares a metric gains
-  `meta.regrade_remeasured: true`, and each variant reports a `remeasured` count (`regrade.md`, stderr, the JSON
-  payload). A row whose kept run dir is gone or refused, or whose kept work dir is gone, is listed (exit 1). It
+  and a fill row that needs no comparison. Every rewritten row of a case that declares a metric, re-judged or not,
+  gains `meta.regrade_remeasured: true`, and each variant reports a `remeasured` count of the rows re-measured with
+  no judge call (the JSON payload). A row whose kept run dir is gone or refused, or whose kept work dir is gone, is listed (exit 1). It
   refuses a changed declaration before any judge call, as `run` does. `hillclimb check`'s note on rows that lack a
   metric says whether they predate it (a later row carries it) or come after the last row that does (no scenario
   declares it any more, or a regrade limited by `--variant` / `--case` did not re-measure them). Every `hillclimb run`
@@ -515,7 +517,11 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `meta.regrade_judge_model`); its `judge_usage` / `judge_model` describe every entry it is graded with. A later
   rebuild with no judge call drops both (they were that regrade's, not its own) and keeps `meta.regrade_file`. Every selected row is re-evaluated before any judge call, a case with
   no judged assert included; a row whose rebuild changes nothing stays byte for byte, and each variant reports a
-  `reevaluated` count. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
+  `reevaluated` count. `regrade.md`, stderr and the closing summary break each variant's rewritten rows down:
+  `rewritten 3: 1 re-judged ($0.0515 judge), 2 rebuilt without a judge call; agent-failed 0, listed 0`, with this
+  regrade's own judge spend, a fill's note on rows that lacked only their own reference (`(only their own reference
+  was missing: neutral 0.5)`), and the re-measured count where it differs from the rebuilt one; the JSON payload
+  carries `judged` and `judgeUsd` beside the other counts. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
   no judge call. An agent-failed row whose kept run cannot be re-evaluated (an unanswered gate) only has its meta
   brought current, its grade all 0, and is counted as `agentFailed`, never listed. Rewritten rows record
   `meta.regrade_harness_version`, and `meta.regrade_reevaluated: true` when the case has a deterministic or

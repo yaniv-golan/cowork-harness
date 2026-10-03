@@ -37,6 +37,39 @@ describe("headroom", () => {
     expect(headroom(s).ceiling).toEqual(["extract-table"]);
   });
 
+  it("a pairwise case at the pass ceiling is a note, not a warning: its pairwise assert is neutral on baseline", () => {
+    const s = snap();
+    editRows(s, "baseline", (r) => (r.prompt_id === "extract-table" || r.prompt_id === "long-answer") && ((r.grade as Row).pass = 1));
+    const cases = [
+      { id: "extract-table", scenario: { assert: [{ result: "success" }, { semantic_pairwise: { rubric: ["r"] } }] } },
+      { id: "long-answer", scenario: { assert: [{ result: "success" }] } },
+    ] as never;
+    const h = headroom(s, cases);
+    expect(h.ceiling).toEqual(["extract-table", "long-answer"]);
+    expect(h.warnings).toEqual([
+      "note: extract-table: pass is 1 on baseline by construction (its pairwise assert is neutral against its own reference); a variant's gain shows in `win`, not `pass`",
+      expect.stringMatching(/^warning: 1\/3 baseline cases are at the ceiling on pass .*: long-answer — they cannot show a gain/),
+      expect.stringMatching(/^warning: 1\/3 baseline cases are at the floor on pass.*summarize-report/),
+    ]);
+  });
+
+  it("a pairwise case at the floor still warns; the note is for pass alone, not another headline metric", () => {
+    const s = snap();
+    const pw = [{ id: "summarize-report", scenario: { assert: [{ semantic_pairwise: { rubric: ["r"] } }] } }] as never;
+    expect(headroom(s, pw).warnings).toEqual([
+      expect.stringMatching(/^warning: 1\/3 baseline cases are at the floor on pass.*summarize-report/),
+    ]);
+    setState(s, (st) => ((st.metrics as Row[])[0].better = "lower"));
+    expect(headroom(s, pw).warnings).toEqual([
+      expect.stringMatching(/^warning: 1\/3 baseline cases are at the ceiling on pass.*summarize-report/),
+    ]);
+    const s2 = snap();
+    setState(s2, (st) => (st.metrics = [{ id: "words", kind: "float", better: "lower", unbounded: true }]));
+    editRows(s2, "baseline", (r) => ((r.grade as Row).words = r.prompt_id === "extract-table" ? 0 : 120));
+    const et = [{ id: "extract-table", scenario: { assert: [{ semantic_pairwise: { rubric: ["r"] } }] } }] as never;
+    expect(headroom(s2, et).warnings).toEqual([expect.stringMatching(/^warning: 1\/3 baseline cases are at the ceiling on words/)]);
+  });
+
   it("direction-aware: with better: lower, all-zero is the good end", () => {
     const s = snap();
     setState(s, (st) => ((st.metrics as Row[])[0].better = "lower"));

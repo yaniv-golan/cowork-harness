@@ -41,7 +41,9 @@ time:
   `--output-format json`); progress goes to stderr every 30 s and to `progress.txt`.
 - **`hillclimb check --flow <dir>`** checks the flow dir against our reading of the published hillclimb schema
   and the `_state.json` metric declarations, and warns when a baseline case has no headroom (every rep at the
-  ceiling or the floor of the headline metric). It also warns about a case whose rows were graded under
+  ceiling or the floor of the headline metric). A `semantic_pairwise` case with `pass` at the ceiling gets a note
+  instead: on baseline its pairwise assert is neutral against its own reference, so a variant's gain shows in `win`.
+  It also warns about a case whose rows were graded under
   another assertion set than its scenario's now, naming the `hillclimb regrade <target> --flow <dir> --case <id>`
   that re-evaluates them. It compares with the scenario target when you pass one
   (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last `--approve-harness` hashed
@@ -301,8 +303,11 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   asserts all keep their entries, an agent-failed row (it gains the metric signature and `<id>_present: 0`, never a
   value), and a fill row that needs no comparison. Such a row keeps the judge-side keys of the re-grade whose entries
   it carries (`meta.regrade_file` and the doc-match keys — not that regrade's `regrade_judge_usd` /
-  `regrade_judge_model`, which would read as this rebuild's own), and gains `meta.regrade_remeasured: true` when its case declares a metric (plus `meta.regrade_fill` in
-  a fill); `regrade.md`, stderr and each variant's `reevaluated` and `remeasured` counts report them.
+  `regrade_judge_model`, which would read as this rebuild's own), plus `meta.regrade_fill` in a fill. Every rewritten
+  row of a case that declares a metric, re-judged or not, gains `meta.regrade_remeasured: true`. `regrade.md` and
+  stderr break the rewritten rows down (`rewritten 3: 1 re-judged ($0.0515 judge), 2 rebuilt without a judge call;
+  agent-failed 0, listed 0`, a fill noting rows whose only missing reference was their own: neutral 0.5); the JSON's
+  `judged` / `judgeUsd` count the re-judged rows and their spend, `reevaluated` / `remeasured` the unjudged ones.
 - **An agent-failed row whose kept run cannot be re-evaluated** (a partial run: an unanswered gate) scores 0
   whatever its asserts say, so only its meta is brought current (`assert_sig`, `metric_sigs`), its grade all 0. It
   is never listed; each variant's `agentFailed` count reports it.

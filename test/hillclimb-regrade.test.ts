@@ -229,22 +229,34 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     };
     const before = { baseline: verdictKeys("baseline"), v1: verdictKeys("v1") };
     const lines: string[] = [];
-    const out = await regradeFlow(ARGS({ fillRefs: true }), DEPS({ stderr: (l) => lines.push(l) }));
+    // A judge that reports its spend, so the line can show it.
+    const priced: CompleteStructured = async () => ({
+      structured: { rationale: "r", verdict: "tie" },
+      model: "claude-haiku-4-5",
+      subtype: "success",
+      usage: {
+        "claude-haiku-4-5": { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.0123 },
+      },
+    });
+    const out = await regradeFlow(
+      ARGS({ fillRefs: true }),
+      DEPS({ stderr: (l) => lines.push(l), regradeOptions: { pairwiseComplete: priced } }),
+    );
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
-    // One counter set, every counter shown (zero included), on each variant's line and in the summary — whatever each
-    // variant did. The two variants' activity differs here (the baseline's alpha row is judged against v1's reference).
-    const COUNTERS = String.raw`rewritten \d+, re-evaluated \d+ \(no judge call\), re-measured \d+ \(no judge call\), agent-failed \d+ \(meta updated\), listed \d+`;
-    for (const v of ["baseline", "v1"])
-      expect(lines.find((l) => l.startsWith(`  [${v}] `))).toMatch(new RegExp(`^  \\[${v}\\] ${COUNTERS}; mean pass `));
-    expect(lines.at(-1)).toMatch(new RegExp(`^hillclimb regrade: baseline ${COUNTERS}; v1 ${COUNTERS}$`));
-    const counts = (v: string) => {
-      const x = out.variants.find((y) => y.variant === v)!;
-      return [x.rewritten, x.reevaluated, x.remeasured, x.agentFailed, x.listed.length];
-    };
-    expect(counts("baseline")).not.toEqual(counts("v1"));
-    // The JSON payload's per-variant fields already carry every counter.
+    // What each rewritten row went through, on each variant's line and in the summary: the baseline's alpha row is
+    // judged against v1's reference (one judge call); v1's alpha row lacks only its own reference (neutral, no judge
+    // call); both beta rows (no judged assert) are rebuilt with no judge call.
+    const BASE = String.raw`rewritten 2: 1 re-judged \(\$0\.0123 judge\), 1 rebuilt without a judge call; agent-failed 0, listed 0`;
+    const V1 = String.raw`rewritten 2: 0 re-judged, 2 rebuilt without a judge call \(1 of them only their own reference was missing: neutral 0\.5\); agent-failed 0, listed 0`;
+    expect(lines.find((l) => l.startsWith("  [baseline] "))).toMatch(new RegExp(`^  \\[baseline\\] ${BASE}; mean pass `));
+    expect(lines.find((l) => l.startsWith("  [v1] "))).toMatch(new RegExp(`^  \\[v1\\] ${V1}; mean pass `));
+    expect(lines.at(-1)).toMatch(new RegExp(`^hillclimb regrade: baseline ${BASE}; v1 ${V1}$`));
+    // The JSON payload keeps every counter, the judged rows and their judge spend added.
+    expect(out.variants.find((y) => y.variant === "baseline")).toMatchObject({ rewritten: 2, judged: 1, judgeUsd: 0.0123 });
+    expect(out.variants.find((y) => y.variant === "v1")).toMatchObject({ rewritten: 2, judged: 0 });
+    expect(out.variants.find((y) => y.variant === "v1")).not.toHaveProperty("judgeUsd");
     for (const x of out.variants)
-      expect(Object.keys(x)).toEqual(expect.arrayContaining(["rewritten", "reevaluated", "remeasured", "agentFailed", "listed"]));
+      expect(Object.keys(x)).toEqual(expect.arrayContaining(["rewritten", "judged", "reevaluated", "remeasured", "agentFailed", "listed"]));
     for (const v of ["baseline", "v1"]) {
       const beta = rows(v).find((r) => r.prompt_id === "beta")!;
       expect(beta.grade).toMatchObject({ win_present: 0, win_v1_present: 0 });
@@ -340,6 +352,30 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     );
     expect(out.error?.message ?? "").not.toMatch(/--model/);
     expect(readdirSync(join(f.cwd, "flow", "v1")).some((n) => n.endsWith(".bak.jsonl"))).toBe(true);
+  }, 180_000);
+});
+
+describe.runIf(POSIX)("the baseline ceiling on a pairwise case", () => {
+  const NOTE =
+    "note: alpha: pass is 1 on baseline by construction (its pairwise assert is neutral against its own reference); a variant's gain shows in `win`, not `pass`";
+  it("run and check print a note for it, not the ceiling warning", () => {
+    const { cli } = buildFlow();
+    const run = cli("run", "evals", "--flow", "flow", "--concurrency", "1");
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stderr).toContain(NOTE);
+    expect(run.stderr).not.toMatch(/at the ceiling/);
+    const check = cli("check", "evals", "--flow", "flow");
+    expect(check.stderr + check.stdout).toContain(NOTE);
+    expect(check.stderr + check.stdout).not.toMatch(/at the ceiling/);
+  }, 180_000);
+  it("a case with no pairwise assert at the ceiling still warns, on run and on check", () => {
+    const { cli } = buildFlow({ noPairwise: true });
+    const run = cli("run", "evals", "--flow", "flow", "--concurrency", "1");
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stderr).toMatch(/warning: 1\/1 baseline cases are at the ceiling on pass .*: alpha/);
+    expect(run.stderr).not.toContain("by construction");
+    const check = cli("check", "evals", "--flow", "flow");
+    expect(check.stderr + check.stdout).toMatch(/warning: 1\/1 baseline cases are at the ceiling on pass .*: alpha/);
   }, 180_000);
 });
 
@@ -753,10 +789,11 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     expect(v1.meta.metrics_unavailable).toEqual({ gone: "missing_artifact" });
     expect(Object.keys(v1.meta.metric_sigs as object).sort()).toEqual(["gone", "other"]);
     expect(v1.meta.regrade_remeasured).toBe(true);
-    // The judged baseline row: the added metric is sigged, with its reason — and no re-measure-only marker.
+    // The judged baseline row: the added metric is sigged, with its reason, and it is marked re-measured as the
+    // unjudged row is (both paths re-measure).
     expect(Object.keys(rows("baseline")[0]!.meta.metric_sigs as object).sort()).toEqual(["gone", "other"]);
     expect(rows("baseline")[0]!.meta.metrics_unavailable).toEqual({ gone: "missing_artifact" });
-    expect(rows("baseline")[0]!.meta).not.toHaveProperty("regrade_remeasured");
+    expect(rows("baseline")[0]!.meta.regrade_remeasured).toBe(true);
     const c = checkReport("flow", f.cwd);
     expect(
       c.report.findings.filter((x) => x.level === "error"),
@@ -773,6 +810,8 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
     expect(rows("v1")[0]!.grade).toMatchObject({ other_present: 1, other: 1200 });
     expect(rows("v1")[0]!.meta.regrade_doc_matches_live).toBeDefined();
+    // A re-judged row of a case that declares a metric was re-measured, and says so.
+    expect(rows("v1")[0]!.meta.regrade_remeasured).toBe(true);
   }, 240_000);
 
   it("a metric whose declaration changed since the rows were written is refused before any judge call, nothing written", async () => {
@@ -836,13 +875,13 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
       expect(row.meta).not.toHaveProperty("regrade_doc_matches_live");
       expect(row.meta).not.toHaveProperty("regrade_file");
       expect(out.variants.find((x) => x.variant === v)).toMatchObject({ rewritten: 1, remeasured: 1, listed: [] });
-      expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/re-measured 1/);
+      expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/rewritten 1: 0 re-judged, 1 rebuilt without a judge call;/);
       // The metric columns that moved are in the moved table.
       expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/words —→1200/);
       expect(readdirSync(join(flow, v)).some((n) => /^regrade-[0-9a-f]{16}\.bak\.jsonl$/.test(n))).toBe(true);
     }
     expect(lines.join("\n")).toMatch(
-      /baseline rewritten 1, re-evaluated 1 \(no judge call\), re-measured 1 \(no judge call\), agent-failed 0 \(meta updated\), listed 0; v1 rewritten 1, re-evaluated 1 \(no judge call\), re-measured 1 \(no judge call\), agent-failed 0 \(meta updated\), listed 0$/,
+      /baseline rewritten 1: 0 re-judged, 1 rebuilt without a judge call; agent-failed 0, listed 0; v1 rewritten 1: 0 re-judged, 1 rebuilt without a judge call; agent-failed 0, listed 0$/,
     );
   }, 240_000);
 
@@ -959,8 +998,9 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
     const row = rows("v1")[0]!;
     expect(row.grade).toMatchObject({ words_present: 1, words: 1200 });
     expect(row.meta.regrade_doc_matches_live).toBeDefined();
-    expect(row.meta).not.toHaveProperty("regrade_remeasured");
-    expect(again.variants[0]).toMatchObject({ rewritten: 1, remeasured: 0 });
+    // Re-measured by the re-grade, and marked so as an unjudged row is; the `remeasured` count stays the unjudged rows'.
+    expect(row.meta.regrade_remeasured).toBe(true);
+    expect(again.variants[0]).toMatchObject({ rewritten: 1, judged: 1, remeasured: 0 });
   }, 240_000);
 
   it("a row whose kept run dir is gone or refused is listed per row (exit 1) and left untouched; its sibling is re-measured", async () => {
@@ -1279,7 +1319,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(rows("v1").find((r) => r.prompt_id === "alpha")!.meta.regrade_remeasured).toBe(true);
     expect(rows("v1").find((r) => r.prompt_id === "beta")!.meta).not.toHaveProperty("regrade_remeasured");
     expect(lines.at(-1)).toMatch(
-      /^hillclimb regrade: baseline rewritten 2, re-evaluated 2 \(no judge call\), re-measured 1 \(no judge call\), agent-failed 0/,
+      /^hillclimb regrade: baseline rewritten 2: 0 re-judged, 2 rebuilt without a judge call; re-measured 1 without a judge call; agent-failed 0, listed 0;/,
     );
   }, 240_000);
 
@@ -2347,7 +2387,7 @@ describe.runIf(POSIX)("hillclimb regrade: an agent-failed row whose run cannot b
     expect(row.meta).not.toHaveProperty("metrics_unavailable");
     expect(Object.entries(row.grade).filter(([k, x]) => !k.endsWith("_present") && x !== 0)).toEqual([]);
     expect(row.grade).toMatchObject({ pass: 0, a0: 0, a1: 0, words_present: 0 });
-    expect(lines.join("\n")).toMatch(/agent-failed 1 \(meta updated\)/);
+    expect(lines.join("\n")).toMatch(/rewritten 1: 0 re-judged, 0 rebuilt without a judge call; agent-failed 1, listed 0/);
   }, 240_000);
 
   it("in a fill too: an agent-failed row whose case gained an assert is never listed (it scores 0 whatever lines up)", async () => {

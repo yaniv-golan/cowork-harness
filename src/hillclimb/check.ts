@@ -51,7 +51,16 @@ function declaredMetrics(snap: FlowSnapshot): DeclaredMetric[] {
   }
 }
 
-export function headroom(snap: FlowSnapshot): Headroom {
+/** A case as `headroom` reads it: its id and its scenario's asserts. */
+export interface HeadroomCase {
+  id: string;
+  scenario: { assert?: ReadonlyArray<object> };
+}
+
+/** `cases` (the target's, when the caller has them) tell a `semantic_pairwise` case apart: on baseline its pairwise
+ *  assert is neutral against its own reference, so `pass` at the ceiling there is by construction, not a lack of
+ *  headroom — a note, not the ceiling warning. */
+export function headroom(snap: FlowSnapshot, cases: readonly HeadroomCase[] = []): Headroom {
   const base = snap.variants.baseline;
   const rows = parseRows(base?.results);
   if (rows.length === 0)
@@ -98,9 +107,17 @@ export function headroom(snap: FlowSnapshot): Headroom {
   }
   const n = byCase.size;
   const warnings: string[] = [];
-  if (ceiling.length)
+  // Detected from the case's asserts, never from its win value.
+  const pairwise = new Set(cases.filter((c) => (c.scenario.assert ?? []).some((a) => a && "semantic_pairwise" in a)).map((c) => c.id));
+  const byConstruction = head.id === "pass" && better === "higher" ? ceiling.filter((id) => pairwise.has(id)) : [];
+  const atCeiling = ceiling.filter((id) => !byConstruction.includes(id));
+  if (byConstruction.length)
     warnings.push(
-      `warning: ${ceiling.length}/${n} baseline cases are at the ceiling on ${head.id} (every rep at the good end): ${ceiling.join(", ")} — they cannot show a gain; consider harder cases, more reps or a finer-grained metric`,
+      `note: ${byConstruction.join(", ")}: pass is 1 on baseline by construction (its pairwise assert is neutral against its own reference); a variant's gain shows in \`win\`, not \`pass\``,
+    );
+  if (atCeiling.length)
+    warnings.push(
+      `warning: ${atCeiling.length}/${n} baseline cases are at the ceiling on ${head.id} (every rep at the good end): ${atCeiling.join(", ")} — they cannot show a gain; consider harder cases, more reps or a finer-grained metric`,
     );
   if (floor.length)
     warnings.push(

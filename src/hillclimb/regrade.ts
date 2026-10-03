@@ -97,6 +97,11 @@ export interface RegradeFlowDeps {
 export interface RegradeFlowVariant {
   variant: string;
   rewritten: number;
+  /** Rows a judge re-graded (each rewritten): `rewritten` less these is the rows rebuilt with no judge call (and any
+   *  agent-failed row whose meta was brought current). */
+  judged: number;
+  /** What this regrade's judge calls for those rows cost, summed (`regrade_judge_usd`); absent when none reported one. */
+  judgeUsd?: number;
   /** Rows not re-graded, with why. Nothing was written for them. */
   listed: Array<{ prompt_id: string; rep: number; why: string }>;
   /** Rows whose deterministic asserts (every assert no judge grades, and each `expect_denied` host) were re-evaluated
@@ -965,11 +970,30 @@ const changedKeys = (
   return [...keys].filter((k) => (/^(pass|claims|win|both_bad|a\d+)/.test(k) || metric(k)) && before?.[k] !== after?.[k]);
 };
 
-/** A variant's counters, one fixed set in one order with every count shown (zero included), wherever they are printed:
- *  its `regrade.md` line, its stderr line and the closing summary. */
-const counters = (v: RegradeFlowVariant): string =>
-  `rewritten ${v.rewritten}, re-evaluated ${v.reevaluated} (no judge call), re-measured ${v.remeasured} (no judge call), ` +
-  `agent-failed ${v.agentFailed} (meta updated), listed ${v.listed.length}`;
+/** What a variant's rewritten rows went through, beside its JSON counts: rows rebuilt with no judge call that were
+ *  rewritten, and how many of them lacked only their own variant's reference (a fill: neutral, 0.5). */
+interface PlainTally {
+  rewritten: number;
+  ownRefOnly: number;
+}
+
+/** A variant's counters, one fixed set in one order, wherever they are printed: its `regrade.md` line, its stderr
+ *  line and the closing summary. `rewritten` is broken down into the rows a judge re-graded (with this regrade's judge
+ *  spend) and those rebuilt with no judge call; the re-measured count shows only where it differs from the latter. */
+const counters = (v: RegradeFlowVariant, plain: PlainTally): string => {
+  const usd = v.judged ? (v.judgeUsd !== undefined ? ` ($${v.judgeUsd.toFixed(4)} judge)` : " (judge cost unknown)") : "";
+  const own =
+    plain.ownRefOnly && plain.ownRefOnly === plain.rewritten
+      ? " (only their own reference was missing: neutral 0.5)"
+      : plain.ownRefOnly
+        ? ` (${plain.ownRefOnly} of them only their own reference was missing: neutral 0.5)`
+        : "";
+  const remeasured = v.remeasured && v.remeasured !== plain.rewritten ? `; re-measured ${v.remeasured} without a judge call` : "";
+  return (
+    `rewritten ${v.rewritten}: ${v.judged} re-judged${usd}, ${plain.rewritten} rebuilt without a judge call${own}${remeasured}; ` +
+    `agent-failed ${v.agentFailed}, listed ${v.listed.length}`
+  );
+};
 
 export async function regradeFlow(args: HillclimbRegradeArgs, deps: RegradeFlowDeps): Promise<RegradeFlowOutcome> {
   const say = (l: string) => deps.stderr(l);
@@ -1139,6 +1163,8 @@ async function regradeFlowInner(
     // one), and which harness version evaluated it (`meta.env.harnessVersion` is the run's).
     const reevaluatedMeta = (c: HillclimbCase, t: Target): Record<string, unknown> => ({
       ...(deterministicIndexes(c).length ? { regrade_reevaluated: true } : {}),
+      // Both paths re-measure a case that declares a metric: a re-grade's report and a re-evaluation alike.
+      ...(declaresMetrics(c) ? { regrade_remeasured: true } : {}),
       regrade_harness_version: harnessVersion,
       ...(t.keptLive.length ? { regrade_kept_live: t.keptLive } : {}),
     });
@@ -1156,7 +1182,7 @@ async function regradeFlowInner(
     const plain: Target[] = [];
     // Agent-failed rows whose kept run cannot be re-evaluated: rebuilt with no evidence read (see `agentFailed`).
     const metaOnly: Array<{ variant: string; c: HillclimbCase; line: Line; result: RunResult }> = [];
-    const perVariant = new Map<string, { lines: Line[]; old: string; v: RegradeFlowVariant }>();
+    const perVariant = new Map<string, { lines: Line[]; old: string; v: RegradeFlowVariant; plain: PlainTally }>();
     for (const v of variants) {
       const old = writers.get(v)!.readVariantFile("results.jsonl") ?? "";
       const lines: Line[] = old
@@ -1173,6 +1199,7 @@ async function regradeFlowInner(
       const vr: RegradeFlowVariant = {
         variant: v,
         rewritten: 0,
+        judged: 0,
         listed: [],
         reevaluated: 0,
         remeasured: 0,
@@ -1180,7 +1207,7 @@ async function regradeFlowInner(
         evidenceChanged: [],
         regradeFiles: [],
       };
-      perVariant.set(v, { lines, old, v: vr });
+      perVariant.set(v, { lines, old, v: vr, plain: { rewritten: 0, ownRefOnly: 0 } });
       outcome.variants.push(vr);
       const groups = new Map<string, Batch>();
       for (const line of lines) {
@@ -1592,6 +1619,8 @@ async function regradeFlowInner(
         }
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
+        vr.judged++;
+        if (report.judgeCostUsd !== undefined) vr.judgeUsd = (vr.judgeUsd ?? 0) + report.judgeCostUsd;
         if (!aIndexAligned(t.line.row!, t.result, b.c)) misaligned.add(t.line);
       }
     }
@@ -1640,7 +1669,6 @@ async function regradeFlowInner(
           ...(t.plan.fromFile ? carriedJudgeMeta(t.line.row!) : {}),
           regraded_at: at,
           ...reevaluatedMeta(t.c, t),
-          ...(re && declaresMetrics(t.c) ? { regrade_remeasured: true } : {}),
           ...(args.fillRefs ? { regrade_fill: t.missing } : {}),
         },
         undefined,
@@ -1673,6 +1701,10 @@ async function regradeFlowInner(
       else {
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
+        const pt = perVariant.get(t.variant)!.plain;
+        pt.rewritten++;
+        // A fill row of a pairwise case that lacked only its own variant's reference: neutral, no judge call.
+        if (args.fillRefs && !agentFailed && t.missing.length && t.missing.every((r) => r === t.variant)) pt.ownRefOnly++;
         if (!aIndexAligned(t.line.row!, t.result, t.c)) misaligned.add(t.line);
       }
     }
@@ -1742,7 +1774,7 @@ async function regradeFlowInner(
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
-        `${counters(pv.v)}; ${means}`,
+        `${counters(pv.v, pv.plain)}; ${means}`,
         ...(moved.length ? ["", "| case | rep | moved |", "|---|---|---|"] : []),
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
@@ -1776,7 +1808,9 @@ async function regradeFlowInner(
       );
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;
-    say(`hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${counters(v)}`).join("; ")}`);
+    say(
+      `hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${counters(v, perVariant.get(v.variant)?.plain ?? { rewritten: 0, ownRefOnly: 0 })}`).join("; ")}`,
+    );
     return outcome;
   } finally {
     for (const r of releases.reverse()) r();
