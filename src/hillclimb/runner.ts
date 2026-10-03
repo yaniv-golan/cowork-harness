@@ -19,7 +19,7 @@ import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./case
 import type { PairwiseDecls } from "./grade-keys.js";
 import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
-import { approvedHarnessSkill, flowHarnessDigest, gateDecision, listedInside } from "./gate.js";
+import { approvedHarnessSkill, flowHarnessDigest, gateDecision, harnessChangeText, listedInside } from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { flowMetricUnion, refuseChangedMetrics, removedMetrics, staleAssertSigRows, undeclaredRowMetrics } from "./metric-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
@@ -85,9 +85,13 @@ export interface RunnerDeps {
   /** Set when any case has `semantic_pairwise`: the later variants' references this pass judges against, so every
    *  row carries one win column per reference. */
   pairwise?: PairwiseDecls;
+  /** Printed once per pass, after the first attempt the agent could not authenticate (failure rule `auth`): where
+   *  credentials come from at that case's tier and how to check them. */
+  authHint?: (c: HillclimbCase) => string;
   /** After the pool, before the summary: work over the pass's written rows (a baseline pass freezes the flow's
-   *  pairwise references). Returns the lines to print and how many of them are failures — counted like a failed
-   *  post-row write: no error row, `scored` unchanged. Not called on a dry run. */
+   *  pairwise references). Returns the lines to print and how many of them are failures — a step's failure, not a
+   *  slot's: it fails the pass (exit 1) but is never counted in `failed`, which counts (case, rep) slots. Not called
+   *  on a dry run. */
   afterPass?: (pass: { variant: string; flowAbs: string; cases: readonly HillclimbCase[]; results: string | null }) => {
     lines: string[];
     failures: number;
@@ -101,6 +105,8 @@ export interface RunOutcome {
   exitCode: 0 | 1 | 2;
   scheduled: number;
   ok: number;
+  /** Failed (case, rep) slots: an error row, or a scored row whose later writes failed. A failed step after the pool
+   *  (the reference freeze, summary.json) exits 1 without counting here. */
   failed: number;
   /** Rows appended to results.jsonl this pass — an attempt whose later writes failed is still scored. */
   scored?: number;
@@ -308,13 +314,16 @@ async function run(
   if (args.dryRun && !args.approveHarness) {
     const change = decision.kind === "mismatch" ? skillChange() : undefined;
     const why = change ? `: ${change.cause}${change.filesToo ? ", and the hashed files changed too" : ""}` : "";
-    say(
-      `harness gate: ${decision.kind === "ok" ? "approved" : decision.kind}${why} (sha256 ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")})`,
-    );
+    // A mismatch names what changed first (as the refusal does); approved or absent shows everything the sha covers.
+    const detail =
+      decision.kind === "mismatch"
+        ? `${harnessChangeText(state, digest)}; sha256 ${digest.sha.slice(0, 12)}`
+        : `sha256 ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}`;
+    say(`harness gate: ${decision.kind === "ok" ? "approved" : decision.kind}${why} (${detail})`);
   } else if (decision.kind !== "ok") {
     if (!digest.lockfiles.length) say("note: no lockfile in the current directory - dependency changes are outside the harness sha");
     if (decision.kind === "approve") {
-      w!.approveHarness(digest.sha, args.skill);
+      w!.approveHarness(digest.sha, { skill: args.skill, files: digest.entries });
       say(`harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${statePathShown}`);
     } else if (decision.kind === "absent") {
       const m = `no approved harness sha in ${statePathShown} (computed ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}).`;
@@ -324,7 +333,7 @@ async function run(
       return { exitCode: 2, scheduled: 0, ok: 0, failed: 0, error: { category: "usage", message: `${m} ${fix}` } };
     } else {
       const shas = `approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}`;
-      const files = `files: ${digest.hashed.join(", ")}`;
+      const files = harnessChangeText(state, digest);
       let m: string;
       let fix = "Re-run with --approve-harness after reviewing the diff.";
       const change = skillChange();
@@ -363,7 +372,11 @@ async function run(
     const writer = w!;
     let ok = 0;
     let scored = 0;
+    // `fail` counts failed slots only; a step after the pool that fails (the reference freeze, summary.json) fails the
+    // pass through `stepFailures`, reported on its own line, so one failed slot never reads as two.
     let fail = 0;
+    let stepFailures = 0;
+    let authHinted = false;
     const t0 = now();
     const progress = () => {
       const n = ok + fail;
@@ -475,6 +488,10 @@ async function run(
         fail++;
         writer.appendError(out.row);
         say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(out.row.error)}`);
+        if (!authHinted && deps.authHint && (out.row.meta as Record<string, unknown> | undefined)?.failure_rule === "auth") {
+          authHinted = true;
+          say(`  [${v}] ${deps.authHint(c)}`);
+        }
         return;
       }
       // The session's uploads: attached to the row now, copied after it (unless --no-copy-inputs).
@@ -539,9 +556,9 @@ async function run(
       try {
         const r = deps.afterPass({ variant: v, flowAbs, cases, results: w.readVariantFile("results.jsonl") });
         for (const line of r.lines) say(line);
-        fail += r.failures;
+        stepFailures += r.failures;
       } catch (e) {
-        fail++;
+        stepFailures++;
         say(`[${v}] the pass finished, but its post-pass step failed: ${message(e)}`);
       }
     try {
@@ -551,7 +568,7 @@ async function run(
       });
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
     } catch (e) {
-      fail++;
+      stepFailures++;
       say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);
     }
     // The second-reference hint is advice: a flow read it cannot make (a concurrent freeze's temp dir vanishing
@@ -562,7 +579,7 @@ async function run(
       /* warn-only */
     }
     say(`[${v}] done - ${ok} ok, ${fail} failed -> ${join(flowArg, v, "results.jsonl")}`);
-    return { exitCode: fail ? 1 : 0, scheduled: tasks.length, ok, failed: fail, scored };
+    return { exitCode: fail || stepFailures ? 1 : 0, scheduled: tasks.length, ok, failed: fail, scored };
   } finally {
     release();
   }

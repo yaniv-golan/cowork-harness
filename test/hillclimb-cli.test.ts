@@ -333,12 +333,38 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     expect(r.stderr).toMatch(/wrote flow\/metrics\.md/);
   });
 
+  it("run --dry-run with no credential source at all refuses (exit 2), naming what is missing and doctor", () => {
+    setup();
+    // Each credential is set EMPTY, not deleted: a .env never overrides a variable the environment defines, so neither
+    // a ./.env nor the install's own .env (dist/../.env, present in a developer's checkout) can supply one, and an empty
+    // value is no credential. The test does not depend on whether the checkout has a .env.
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      COWORK_HARNESS_RUNS_DIR: join(cwd, "runs"),
+      COWORK_MANAGED_CONFIG: "",
+      CLAUDE_CODE_OAUTH_TOKEN: "",
+      ANTHROPIC_API_KEY: "",
+      ANTHROPIC_AUTH_TOKEN: "",
+    };
+    const r = spawnSync("node", [CLI, "hillclimb", "run", "evals", "--flow", "flow", "--dry-run", "--output-format", "json"], {
+      cwd,
+      encoding: "utf8",
+      env,
+    });
+    expect(r.status, r.stderr).toBe(2);
+    const out = JSON.parse(r.stdout);
+    expect(out.ok).toBe(false);
+    expect(out.error.message).toContain("no usable agent credential for fidelity");
+    expect(out.error.message).toContain("cowork-harness doctor --tier");
+  });
+
   it("run --dry-run --output-format json: the envelope's ok is the verdict, and the cost object is present", () => {
     setup();
     const r = spawnSync("node", [CLI, "hillclimb", "run", "evals", "--flow", "flow", "--dry-run", "--output-format", "json"], {
       cwd,
       encoding: "utf8",
-      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: join(cwd, "runs") },
+      // A dummy credential: the dry run refuses before spend when no credential source resolves (below).
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: join(cwd, "runs"), CLAUDE_CODE_OAUTH_TOKEN: "test-not-a-real-token" },
     });
     expect(r.status).toBe(0);
     const env = JSON.parse(r.stdout);

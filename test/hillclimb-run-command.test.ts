@@ -35,6 +35,8 @@ import type { RunResult, Scenario } from "../src/types.js";
 
 const FX = join(import.meta.dirname, "fixtures");
 const excerpt = JSON.parse(readFileSync(join(FX, "eval-classify", "success-semantic.json"), "utf8")) as RunResult;
+// The agent's own reply when it could not authenticate: a committed real run's result (`<synthetic>`, zero spend).
+const authFailed = JSON.parse(readFileSync(join(FX, "eval-classify", "auth-result.json"), "utf8")) as RunResult;
 const frames = readFileSync(join(FX, "hillclimb-runs", "result-event-pair.jsonl"), "utf8")
   .trim()
   .split("\n");
@@ -82,6 +84,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
     stderr: (l) => err.push(l),
     flags: {},
     isolationCheck: () => undefined,
+    tokenCheck: () => ({ id: "token", title: "Auth token", status: "ok", detail: "found (env / .env)", required: true }),
     runScenario: async (a) => {
       calls.push({ scenario: a.scenario, extra: a.extra as Record<string, unknown> });
       const outDir = join(cwd, "runs", String(a.extra.runId));
@@ -180,7 +183,9 @@ describe("runHillclimbCommand", () => {
       writeFileSync(join(cwd, "fx", "report.md"), "# draft 2\n");
       const r = await runHillclimbCommand(args(), deps());
       expect(r.exitCode).toBe(2);
-      expect(r.error?.message).toMatch(/harness changed since last approved run \(files: .*fx\/report\.md/);
+      expect(r.error?.message).toMatch(
+        /harness changed since last approved run \(changed: fx\/report\.md, <workspace-fixture:alpha>; and \d+ unchanged\)/,
+      );
       expect(calls).toEqual([]);
     } finally {
       if (saved === undefined) delete process.env.COWORK_HARNESS_GITSET;
@@ -693,7 +698,7 @@ describe("runHillclimbCommand", () => {
         expect(r.exitCode).toBe(1);
         expect(r.scored).toBe(1);
         const text = err.join("\n");
-        expect(text).toMatch(/alpha: the baseline reference was not frozen — case alpha: no good row/);
+        expect(text).toMatch(/\[baseline\] reference freeze: skipped — case alpha: no good row/);
         expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
         expect(
           existsSync(join(cwd, "flow", "baseline", "errors.jsonl"))
@@ -1198,7 +1203,7 @@ describe("skill_invoked: which skill the rows track", () => {
     expect(r.exitCode).toBe(2);
     expect(r.error?.message).toMatch(
       new RegExp(
-        `^harness changed since last approved run: tracked skill x → y, and the hashed files changed too \\(files: [^)]*evals/alpha\\.yaml[^)]*, skill:y\\); approved ${SHA}, now ${SHA}\\. Re-run with --approve-harness after reviewing the diff\\.$`,
+        `^harness changed since last approved run: tracked skill x → y, and the hashed files changed too \\(changed: evals/alpha\\.yaml, skill:y \\(new\\), skill:x \\(removed\\); and \\d+ unchanged\\); approved ${SHA}, now ${SHA}\\. Re-run with --approve-harness after reviewing the diff\\.$`,
       ),
     );
   });
@@ -1209,7 +1214,7 @@ describe("skill_invoked: which skill the rows track", () => {
     const r = await runHillclimbCommand(args("--skill", "x"), deps());
     expect(r.error?.message).toMatch(
       new RegExp(
-        `^harness changed since last approved run \\(files: [^)]*, skill:x\\); approved ${SHA}, now ${SHA}\\. Re-run with --approve-harness after reviewing the diff\\.$`,
+        `^harness changed since last approved run \\(changed: evals/alpha\\.yaml; and \\d+ unchanged\\); approved ${SHA}, now ${SHA}\\. Re-run with --approve-harness after reviewing the diff\\.$`,
       ),
     );
   });
@@ -1420,11 +1425,17 @@ describe("skill_invoked: what each row tracked, and keeping a variant's column o
     addSkill("y");
     await runHillclimbCommand(args("--skill", "x", "--approve-harness", "--dry-run"), deps());
     await runHillclimbCommand(args("--skill", "y", "--dry-run"), deps());
-    expect(err.join("\n")).toMatch(new RegExp(`harness gate: mismatch: tracked skill x → y \\(sha256 ${SHA} over: .*skill:y\\)`));
+    expect(err.join("\n")).toMatch(
+      new RegExp(
+        `harness gate: mismatch: tracked skill x → y \\(changed: skill:y \\(new\\), skill:x \\(removed\\); and \\d+ unchanged; sha256 ${SHA}\\)`,
+      ),
+    );
     err = [];
     writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("do the thing", "do the other thing"));
     await runHillclimbCommand(args("--skill", "y", "--dry-run"), deps());
-    expect(err.join("\n")).toMatch(/harness gate: mismatch: tracked skill x → y, and the hashed files changed too \(sha256/);
+    expect(err.join("\n")).toMatch(
+      /harness gate: mismatch: tracked skill x → y, and the hashed files changed too \(changed: evals\/alpha\.yaml, skill:y/,
+    );
   });
 
   it("a workspace_fixture edit with a --skill switch names both causes; a switch alone with a fixture present is skill-only", async () => {
@@ -1437,7 +1448,7 @@ describe("skill_invoked: what each row tracked, and keeping a variant's column o
       const both = await runHillclimbCommand(args("--skill", "y"), deps());
       expect(both.exitCode).toBe(2);
       expect(both.error?.message).toMatch(
-        /^harness changed since last approved run: tracked skill x → y, and the hashed files changed too \(files: [^)]*fx\/report\.md[^)]*, skill:y\)/,
+        /^harness changed since last approved run: tracked skill x → y, and the hashed files changed too \(changed: fx\/report\.md, <workspace-fixture:alpha>, skill:y \(new\), skill:x \(removed\); and \d+ unchanged\)/,
       );
       expect(calls).toEqual([]);
     });
@@ -1455,5 +1466,203 @@ describe("skill_invoked: what each row tracked, and keeping a variant's column o
       await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
       expect(state().harness_sha).toBe(plain);
     });
+  });
+});
+
+describe("credentials: refused before spend when no source resolves; an auth failure says where credentials come from", () => {
+  const failing = (tier: string) => ({
+    id: "token",
+    title: "Auth token",
+    status: "fail" as const,
+    detail: `no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN (asked for ${tier})`,
+    remedy:
+      "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>",
+    required: true,
+  });
+  const authDeps = (over: Partial<RunCommandDeps> = {}) => {
+    const d = deps(over);
+    const inner = d.runScenario;
+    return {
+      ...d,
+      runScenario: (async (a: Parameters<typeof inner>[0]) => {
+        const r = await inner(a);
+        return { ...authFailed, outDir: r.outDir, fingerprint: r.fingerprint } as RunResult;
+      }) as typeof inner,
+    };
+  };
+
+  it("no credential source resolves at the case's tier: exit 2 before any run, naming the tier, what is missing and how to supply it", async () => {
+    const asked: string[] = [];
+    const r = await runHillclimbCommand(args("--approve-harness"), deps({ tokenCheck: (tier) => (asked.push(tier), failing(tier)) }));
+    expect(r.exitCode).toBe(2);
+    expect(calls).toEqual([]);
+    expect(asked).toEqual(["container"]);
+    expect(r.error?.message).toContain("no usable agent credential for fidelity container (case alpha)");
+    expect(r.error?.message).toContain("no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN");
+    expect(r.error?.message).toContain("Fix: export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token)");
+    expect(r.error?.message).toContain("cowork-harness doctor --tier container");
+    // A refusal records no approval.
+    expect(existsSync(join(cwd, "flow", "_state.json")) ? readFileSync(join(cwd, "flow", "_state.json"), "utf8") : "").not.toContain(
+      "harness_sha",
+    );
+  });
+
+  it("protocol's own login (doctor warns, as it can serve an unmanaged protocol run) is refused: hillclimb's protocol runs use a managed config dir", async () => {
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: protocol"));
+    const warn = () => ({
+      id: "token",
+      title: "Auth token",
+      status: "warn" as const,
+      detail: "no env / .env token, but a Keychain entry exists",
+      required: true,
+    });
+    const saved = process.env.COWORK_MANAGED_CONFIG;
+    process.env.COWORK_MANAGED_CONFIG = "1";
+    try {
+      const r = await runHillclimbCommand(args("--dry-run"), deps({ tokenCheck: warn }));
+      expect(r.exitCode).toBe(2);
+      // Its own detail, never doctor's (which says protocol can authenticate from that login: true only unmanaged).
+      expect(r.error?.message).toContain(
+        "no usable agent credential for fidelity protocol (case alpha): no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the environment or a .env; the only login found is the one in your Claude config dir (Keychain or .credentials.json), which hillclimb's protocol runs do not read — they use a managed config dir",
+      );
+      expect(r.error?.message).not.toContain("a Keychain entry exists");
+      expect(r.error?.message).toContain("cowork-harness doctor --tier protocol");
+    } finally {
+      if (saved === undefined) delete process.env.COWORK_MANAGED_CONFIG;
+      else process.env.COWORK_MANAGED_CONFIG = saved;
+    }
+  });
+
+  it("the dry run refuses the same way, before printing a plan", async () => {
+    const r = await runHillclimbCommand(args("--dry-run"), deps({ tokenCheck: failing }));
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toContain("no usable agent credential for fidelity container");
+  });
+
+  it("a usable credential (or one doctor only warns about) runs", async () => {
+    const warn = () => ({ id: "token", title: "Auth token", status: "warn" as const, detail: "w", required: true });
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    expect((await runHillclimbCommand(args(), deps({ tokenCheck: warn }))).exitCode).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a run the agent could not authenticate prints, once per pass, the sources credentials are read from and how to check them", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const r = await runHillclimbCommand(args("--reps", "2"), authDeps());
+    expect(r.exitCode).toBe(1);
+    const text = err.join("\n");
+    expect(text).toContain("FAILED: run ended error (auth)");
+    const hints = err.filter((l) => l.includes("the agent could not authenticate"));
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toContain("CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY");
+    expect(hints[0]).toContain("the process environment, then --dotenv <path>, then ./.env, then <install>/.env");
+    expect(hints[0]).toContain("a credential is set, so the agent rejected it");
+    expect(hints[0]).toContain("cowork-harness doctor --tier container");
+  });
+
+  it("at a tier that never passes ANTHROPIC_AUTH_TOKEN, a run failing with only that set says so (by name, never its value)", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    await runHillclimbCommand(args(), authDeps({ env: { ANTHROPIC_AUTH_TOKEN: "sk-test-SECRET-9" } }));
+    const hint = err.find((l) => l.includes("the agent could not authenticate"))!;
+    expect(hint).toContain(
+      "ANTHROPIC_AUTH_TOKEN is set, but at fidelity container only CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY reach the agent",
+    );
+    expect(err.join("\n")).not.toContain("sk-test-SECRET-9");
+  });
+});
+
+describe("the pass summary counts slots; the reference freeze reports on its own line", () => {
+  const pairwise = () =>
+    writeFileSync(
+      join(cwd, "evals", "alpha.yaml"),
+      SCENARIO.replace(
+        /  - semantic_matches:[\s\S]*$/,
+        `  - semantic_pairwise:\n      refs: [${join(cwd, "refstore")}]\n      judge_model: "claude-haiku-4-5-20251001"\n`,
+      ),
+    );
+
+  it("one failed slot on a pairwise baseline is one failure: the skipped freeze is its own line, and the pass still exits 1", async () => {
+    pairwise();
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const r = await runHillclimbCommand(
+      args(),
+      deps({
+        runScenario: async () => {
+          throw new Error("SYNTHETIC spawn failure");
+        },
+      }),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.failed).toBe(1);
+    const text = err.join("\n");
+    expect(text).toMatch(/\[baseline\] done - 0 ok, 1 failed -> /);
+    expect(text).toMatch(/\[baseline\] reference freeze: skipped — case alpha: no good row/);
+  });
+
+  it("a scored slot whose freeze finds no good row: 1 ok, 0 failed, and the freeze line says skipped", async () => {
+    pairwise();
+    const r = await runHillclimbCommand(args("--approve-harness"), deps());
+    expect(r.exitCode).toBe(1);
+    expect(r.failed).toBe(0);
+    const text = err.join("\n");
+    expect(text).toMatch(/\[baseline\] done - 1 ok, 0 failed -> /);
+    expect(text).toMatch(/\[baseline\] reference freeze: skipped — case alpha: no good row/);
+    expect(text).toContain("hillclimb freeze-ref evals --flow flow --variant baseline --case alpha");
+  });
+});
+
+describe("the harness gate names what changed", () => {
+  const state = () => JSON.parse(readFileSync(join(cwd, "flow", "_state.json"), "utf8")) as Record<string, unknown>;
+  const SHA = "[0-9a-f]{12}";
+  const edit = () => writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("do the thing", "do the other thing"));
+
+  it("an approval records a sha256 per hashed entry beside harness_sha", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const files = state().harness_files as Record<string, string>;
+    expect(Object.keys(files)).toEqual(
+      expect.arrayContaining(["evals/alpha.yaml", "evals/_session.yaml", "<baseline>", "<cowork-harness-version>"]),
+    );
+    for (const v of Object.values(files)) expect(v).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("a one-file edit refuses naming that file first and counting the rest, not listing them", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const n = Object.keys(state().harness_files as object).length;
+    edit();
+    const r = await runHillclimbCommand(args(), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(
+      new RegExp(
+        `^harness changed since last approved run \\(changed: evals/alpha\\.yaml; and ${n - 1} unchanged\\); approved ${SHA}, now ${SHA}\\. Re-run with --approve-harness after reviewing the diff\\.$`,
+      ),
+    );
+    expect(r.error?.message).not.toContain("_session.yaml");
+  });
+
+  it("the dry run's gate line names the changed file the same way", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    edit();
+    err = [];
+    await runHillclimbCommand(args("--dry-run"), deps());
+    expect(err.join("\n")).toMatch(
+      new RegExp(`harness gate: mismatch \\(changed: evals/alpha\\.yaml; and \\d+ unchanged; sha256 ${SHA}\\)`),
+    );
+  });
+
+  it("an older approval (harness_sha alone) still loads: the refusal says the change is unknown and lists every file", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const { harness_files: _drop, ...old } = state();
+    writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify(old, null, 2) + "\n");
+    // Unchanged files: the older approval still passes the gate.
+    expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(0);
+    edit();
+    const r = await runHillclimbCommand(args(), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(
+      /^harness changed since last approved run \(changed: unknown \(older approval\); files: [^;]*evals\/_session\.yaml/,
+    );
+    // Re-approving records the per-entry hashes from then on.
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    expect(state()).toHaveProperty("harness_files");
   });
 });

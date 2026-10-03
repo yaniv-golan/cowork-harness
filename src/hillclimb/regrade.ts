@@ -43,7 +43,7 @@ import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
 import { lexists, normalizeRootArg, NoFollowRoot } from "./fs.js";
-import { approvedHarnessSkill, flowHarnessDigest, gateDecision } from "./gate.js";
+import { approvedHarnessSkill, flowHarnessDigest, gateDecision, harnessChangeText } from "./gate.js";
 import { assertIdentities, assertSig, canonicalJson, flowHasPairwise, type MetricDecl } from "./grade-keys.js";
 import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
@@ -1101,7 +1101,7 @@ async function regradeFlowInner(
     );
   if (decision.kind === "mismatch")
     return refuse(
-      `harness changed since last approved run (files: ${digest.hashed.join(", ")}); approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}. Re-run with --approve-harness after reviewing the diff.`,
+      `harness changed since last approved run (${harnessChangeText(state, digest)}); approved ${String(state.harness_sha).slice(0, 12)}, now ${digest.sha.slice(0, 12)}. Re-run with --approve-harness after reviewing the diff.`,
     );
 
   deps.beforeLock?.();
@@ -1488,7 +1488,7 @@ async function regradeFlowInner(
       );
     // Every refusal is decided: record the approval now, so a refused regrade never records one.
     if (decision.kind === "approve") {
-      writers.get(variants[0]!)!.approveHarness(digest.sha, approvedSkill);
+      writers.get(variants[0]!)!.approveHarness(digest.sha, { skill: approvedSkill, files: digest.entries });
       say(
         `harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${join(flowArg, "_state.json")}`,
       );

@@ -837,6 +837,17 @@ describe("schema-check: _state.json", () => {
     expect(ok.findings).toEqual([]);
     expectOnly(check(withState((st) => (st.harness_skill = 3))), "error", "state.harness_skill");
   });
+
+  it("harness_files (the per-entry hashes an approval records) is accepted as name -> sha256 hex; anything else is a note, never an error", () => {
+    const ok = check(
+      withState(
+        (st) => ((st.harness_sha = "a".repeat(64)), (st.harness_files = { "evals/a.yaml": "b".repeat(64), "<baseline>": "c".repeat(64) })),
+      ),
+    );
+    expect(ok.findings).toEqual([]);
+    for (const bad of [["evals/a.yaml"], "x", null, { "evals/a.yaml": 3 }, { "evals/a.yaml": "not-hex" }])
+      expectOnly(check(withState((st) => (st.harness_files = bad))), "note", "state.harness_files");
+  });
 });
 
 describe("schema-check: summary.json", () => {
