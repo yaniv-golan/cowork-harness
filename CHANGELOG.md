@@ -652,6 +652,18 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
 
 ### Fixed
 
+- **The judge, the LLM decider and the `critique` evaluator no longer inherit an exported effort or thinking setting,
+  and pin their effort.** Their host `claude` calls ran at whatever `CLAUDE_CODE_EFFORT_LEVEL`,
+  `CLAUDE_CODE_DISABLE_THINKING` or `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` the shell exported, or at a user-settings
+  `effortLevel`, so the same answer could be graded differently under two shells. Those three keys are now dropped
+  from the call's environment, and every call passes `--effort high`, which outranks a settings `effortLevel`.
+  `high` is the default effort of the default judge and evaluator (`claude-opus-4-8`) and of the decider's `sonnet`,
+  so those grade as before. A judge pinned to a model with another default (`claude-opus-4-7` defaults to `xhigh`)
+  now runs at `high`. A user-settings `env` block that sets one of the three keys still overrides the pin. The
+  effort is recorded as `effort` in `judgeTransport` (and `judge_transport`) and in a critique's
+  `evaluatorTransport`. A grade recorded before has none, and its absence triggers no re-judge in `hillclimb regrade`
+  and no `eval` exclusion. A host `claude` whose `--help` lacks `--effort` is now refused before any model call,
+  like one lacking an isolation flag.
 - **An exported `CLAUDE_CODE_EFFORT_LEVEL` no longer overrides a scenario's effort on the hostloop and protocol
   tiers.** The agent reads that variable ahead of `--effort`, and those two tiers start the agent from your shell's
   environment, so an exported value replaced the session's `effort` for `run`, `record`, `eval` and `hillclimb` alike.

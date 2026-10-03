@@ -415,6 +415,18 @@ describe("classifyRep precedence: infra > agent > drift > prompt > model > judge
     delete noHash.assertions![1].judgePromptHash;
     expect(classifyRep({ result: noHash }, expected).bucket).toBe("valid");
   });
+  // Graders record the --effort they ran at from this release on. A rep graded before has no `effort` in its
+  // transport; it must classify exactly as a rep that has one — the absence is "unknown", never a changed judge.
+  it("a judge transport with or without a recorded effort classifies the same (valid)", () => {
+    for (const transport of [
+      { isolation: "1", cliVersion: "2.1.200" },
+      { isolation: "1", cliVersion: "2.1.288", effort: "high" },
+    ]) {
+      const r = validRep();
+      (r.assertions![1] as { judgeTransport?: unknown }).judgeTransport = transport;
+      expect(classifyRep({ result: r }, expected).bucket).toBe("valid");
+    }
+  });
   it("an agent error beats judge_invalid", () => {
     const agentErrInvalid = validRep({ result: "error", errorSource: "timeout" });
     agentErrInvalid.assertions![1].judgeInvalid = true;

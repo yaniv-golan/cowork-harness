@@ -5,15 +5,22 @@ import { warn, envPositiveNumber } from "../io.js";
 import { isUsageLimit } from "../usage-limit.js";
 import type { Complete, CompleteResult } from "./decider.js";
 import type { CompleteStructured } from "./pairwise-judge.js";
+import { EFFORT_THINKING_ENV_KEYS } from "../effort-env.js";
 
-/** Every `claude -p` the harness runs (the LLM judge, the LLM decider, the critique evaluator) runs ISOLATED from the
- *  operator's own setup. The model reads untrusted agent output, so it must be able to call no tool (`--tools ""`;
- *  without it, read-only tools always run and Write/Bash/Web run whenever the operator's settings allow them), and
- *  nothing of the operator's environment may shape its answer: no CLAUDE.md, skills, plugins, hooks or MCP servers
- *  (`--safe-mode`, `--strict-mcp-config`), no project or local settings from the harness's working directory
- *  (`--setting-sources user` — user settings stay, so `apiKeyHelper` auth keeps working), and no transcript written
+/** Every `claude -p` the harness runs (the LLM judge, the LLM decider, the critique evaluator) runs ISOLATED from most
+ *  of the operator's own setup. The model reads untrusted agent output, so it must be able to call no tool
+ *  (`--tools ""`; without it, read-only tools always run and Write/Bash/Web run whenever the operator's settings allow
+ *  them). It loads no CLAUDE.md, skills, plugins, hooks or MCP servers (`--safe-mode`, `--strict-mcp-config`), no
+ *  project or local settings from the harness's working directory (`--setting-sources user`), and writes no transcript
  *  into the operator's session history (`--no-session-persistence`). Every flag exists in Claude Code 2.1.197 and
  *  later; `assertIsolationSupported` refuses an older CLI before any model call.
+ *
+ *  What is NOT isolated, by design: USER settings stay, so `apiKeyHelper` auth keeps working, and the call inherits
+ *  the harness's own environment (auth, PATH, proxy). Two things narrow what that lets through for grading. The
+ *  effort is pinned with `--effort` (`JUDGE_EFFORT`), which outranks a user-settings `effortLevel`; and the
+ *  effort/thinking env keys (`EFFORT_THINKING_ENV_KEYS`) are dropped from the inherited environment, since the CLI
+ *  reads `CLAUDE_CODE_EFFORT_LEVEL` ahead of `--effort`. Still open: a user-settings `env` block that sets one of those
+ *  keys is applied inside the CLI, after this spawn, and outranks the pin.
  *
  *  `--tools` takes a variadic value, so it goes LAST: an empty value followed by more flags parses correctly on the
  *  CLIs measured, but nothing after it can be swallowed if a future parser reads the variadic list greedily.
@@ -28,8 +35,24 @@ export const ISOLATION_ARGS: readonly string[] = [
   "--tools",
   "",
 ];
-/** The flags `ISOLATION_ARGS` needs the host CLI to accept, matched against its `--help`. */
-const ISOLATION_FLAGS = ["--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "--tools"];
+/** The effort every host-`claude` call is made at. Without a pin the CLI picks the model's default, which a
+ *  server-side per-model setting can move between two calls. `high` is the binary's catalog default for the
+ *  harness's default judge and evaluator (`claude-opus-4-8`) and for the decider's `sonnet` (`claude-sonnet-5`), and
+ *  its fallback for a model with none, so a default grader runs as it did before the pin. A judge pinned to a model
+ *  whose default differs (`claude-opus-4-7` defaults to `xhigh`) now runs at `high`. A model that takes no effort
+ *  parameter is sent none: the CLI drops the level for it. */
+export const JUDGE_EFFORT = "high";
+
+/** The host-`claude` call's environment: the harness's own, minus the keys that would change its effort or thinking
+ *  (see `ISOLATION_ARGS`). Everything else — auth, PATH, proxy — is kept. */
+export function graderSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const k of EFFORT_THINKING_ENV_KEYS) delete env[k];
+  return env;
+}
+
+/** The flags `ISOLATION_ARGS` (and the `--effort` pin) need the host CLI to accept, matched against its `--help`. */
+const ISOLATION_FLAGS = ["--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "--tools", "--effort"];
 /** The oldest Claude Code version verified to accept every isolation flag. */
 export const ISOLATION_MIN_CLI = "2.1.197";
 
@@ -137,12 +160,16 @@ export function isolationRefusal(): string | undefined {
 }
 
 /** How a host-`claude` call was made, recorded beside a judge's grade or a critique: the isolation level
- *  (`ISOLATION_ARGS`; bumped when that set changes), the host CLI's version, and `strictMcp: false` when the call left
- *  out `--strict-mcp-config` for an enterprise MCP config (`--safe-mode` still kept MCP servers out). A grade from
- *  another level, or a CLI whose safe mode differs, ran under different conditions — a comparison can tell. */
+ *  (`ISOLATION_ARGS`; bumped when that set changes), the host CLI's version, the `--effort` it was called with, and
+ *  `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config (`--safe-mode` still
+ *  kept MCP servers out). A grade from another level, or a CLI whose safe mode differs, ran under different
+ *  conditions — a comparison can tell. A grade recorded before `effort` existed has none: its effort is unknown (the
+ *  model's default, or whatever the grading shell exported), and no comparison treats the absence as a change. */
 export interface TransportIdentity {
   isolation: "1";
   cliVersion?: string;
+  /** The `--effort` passed (`JUDGE_EFFORT`). A model that takes no effort parameter was sent none. */
+  effort?: string;
   strictMcp?: false;
 }
 const cliVersions = new Map<string, string | null>();
@@ -152,7 +179,7 @@ export function transportIdentity(bin: string = process.env.COWORK_HARNESS_CLAUD
   try {
     assertSpawnAllowed("the host `claude` version probe");
   } catch {
-    return { isolation: "1", ...strict };
+    return { isolation: "1", effort: JUDGE_EFFORT, ...strict };
   }
   let v = cliVersions.get(bin);
   if (v === undefined) {
@@ -160,7 +187,7 @@ export function transportIdentity(bin: string = process.env.COWORK_HARNESS_CLAUD
     v = (r.stdout ?? "").trim().split(/\s+/)[0] || null;
     cliVersions.set(bin, v);
   }
-  return v ? { isolation: "1", cliVersion: v, ...strict } : { isolation: "1", ...strict };
+  return v ? { isolation: "1", cliVersion: v, effort: JUDGE_EFFORT, ...strict } : { isolation: "1", effort: JUDGE_EFFORT, ...strict };
 }
 
 /** Test seam: forget every cached probe, and (optionally) point the enterprise-MCP check at another path so a
@@ -299,10 +326,12 @@ function spawnOnce(
     // The prompt is delivered on STDIN, not argv: an argv prompt is world-readable via `ps` for the life of
     // the child (verified: `echo '...' | claude -p --output-format json` with no positional prompt reads
     // from stdin and returns the identical success envelope) — stdin is process-private.
-    // The caller's extra flags go BEFORE the isolation flags, so the variadic `--tools ""` stays last.
+    // The caller's extra flags go BEFORE the isolation flags, so the variadic `--tools ""` stays last. The effort is
+    // pinned, and the env keys that would outrank or bypass the pin are dropped (see `ISOLATION_ARGS`).
     const args = isolationArgs(bin);
-    const child = spawn(bin, ["-p", "--model", model, "--output-format", "json", ...extraArgs, ...args], {
+    const child = spawn(bin, ["-p", "--model", model, "--effort", JUDGE_EFFORT, "--output-format", "json", ...extraArgs, ...args], {
       stdio: ["pipe", "pipe", "pipe"],
+      env: graderSpawnEnv(),
     });
     // A child that exits/errors before consuming stdin (e.g. ENOENT, or a fake bin that exits immediately)
     // delivers EPIPE asynchronously as an `error` event on stdin — without a listener Node escalates it to

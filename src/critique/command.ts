@@ -1385,7 +1385,7 @@ interface ReportState {
    *  every pass that ran agreed on it. Never the requested alias/default. */
   evaluatorModel?: string;
   /** How the evaluator's calls were made (isolation level, host CLI version) — present with `evaluatorModel`. */
-  evaluatorTransport?: { isolation: string; cliVersion?: string; strictMcp?: false };
+  evaluatorTransport?: { isolation: string; cliVersion?: string; effort?: string; strictMcp?: false };
   /** The requested model (opts.evaluatorModel ?? defaultEvaluatorModel()) — shown ONLY as unresolved
    *  debugging context when the evaluator never completed (infra failure or evaluator error), clearly
    *  labeled as such; never presented as if it were the resolved provenance value. */

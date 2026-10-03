@@ -713,7 +713,8 @@ reach into `turns/1/` yourself:
   message reached the run (a crash, a kill, a gate before the first reply), which passing `--model`
   does not change;
 - **how the evaluator ran is in the report itself**: `evaluatorTransport` in `--output-format json`
-  (`{isolation, cliVersion?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's version, and
+  (`{isolation, cliVersion?, effort?, strictMcp?}` — the isolation level of the host `claude` call, that CLI's
+  version, the `--effort` it was called with (`high`; absent from a report written before it was recorded), and
   `strictMcp: false` when it left out `--strict-mcp-config` for an enterprise MCP config), present
   with `evaluatorModel`, so two critiques' evaluator verdicts can be compared knowing both ran under the same
   conditions;

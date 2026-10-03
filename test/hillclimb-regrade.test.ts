@@ -54,7 +54,7 @@ const ENVELOPE = join(import.meta.dirname, "fixtures", "pairwise-judge", "claude
 const JUDGE = `#!/bin/sh
 if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
 if [ "$1" = "--help" ]; then
-  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>"; do echo "  $f   x"; done
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>" "--effort <level>"; do echo "  $f   x"; done
   exit 0
 fi
 cat >/dev/null
@@ -1879,6 +1879,29 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
       expect(out.exitCode, JSON.stringify(out)).toBe(0);
       expect(seen.calls).toBe(1);
       expect(rows("v1")[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: [trigger] }]);
+    },
+    240_000,
+  );
+
+  // Graders record the --effort they ran at from this release on. An entry graded before has a transport with no
+  // `effort`, and one graded after has `effort: "high"`: neither is a reason to re-judge (the transport is provenance,
+  // not a trigger), so a flow kept from an older release is not re-judged wholesale.
+  it.each([
+    ["no recorded effort (graded before it was recorded)", { isolation: "1", cliVersion: "2.1.200" }],
+    ["a recorded effort", { isolation: "1", cliVersion: "2.1.288", effort: "high" }],
+  ] as const)(
+    "a judged entry whose transport has %s is not re-judged",
+    async (_label, transport) => {
+      const { rows } = buildFlow();
+      const file = join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json");
+      const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: Array<{ judgeTransport?: unknown }> };
+      r.assertions[1]!.judgeTransport = transport;
+      writeFileSync(file, JSON.stringify(r));
+      const { seen, deps } = counting();
+      const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+      expect(out.exitCode, JSON.stringify(out)).toBe(0);
+      expect(seen.calls).toBe(0);
+      expect(rows("v1")[0]!.meta).not.toHaveProperty("regrade_rejudged_because");
     },
     240_000,
   );

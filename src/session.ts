@@ -1,4 +1,5 @@
 import { warn as warnToStderr } from "./io.js";
+import { EFFORT_THINKING_ENV_KEYS } from "./effort-env.js";
 import { z } from "zod";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, existsSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -304,9 +305,7 @@ export const SCRUBBED_AGENT_ENV_KEYS = [
   // `DISABLE_INTERLEAVED_THINKING` drops the interleaved-thinking beta header. Neither changes the effort level
   // or whether thinking is on, which is what the session's `effort` and `extended_thinking` model, so they fail
   // (b). Revisit if the harness ever models thinking mode or the beta-header set.
-  "CLAUDE_CODE_EFFORT_LEVEL",
-  "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
-  "CLAUDE_CODE_DISABLE_THINKING",
+  ...EFFORT_THINKING_ENV_KEYS,
 ] as const;
 
 /** Map the authored `agent_env` knob to its exact env keys. An unset field emits NO key — never an empty

@@ -15,7 +15,7 @@ const FAKE = `#!/bin/sh
 # The isolation preflight probes --help / --version first: answer as a current CLI.
 if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
 if [ "$1" = "--help" ]; then
-  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>"; do
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>" "--effort <level>"; do
     echo "  $f   x"
   done
   exit 0
@@ -79,6 +79,8 @@ describe("claudeCliCompleteStructured (real envelope shape)", () => {
       "-p",
       "--model",
       "m",
+      "--effort",
+      "high",
       "--output-format",
       "json",
       "--json-schema",
