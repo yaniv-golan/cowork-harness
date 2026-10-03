@@ -2603,6 +2603,29 @@ describe.runIf(POSIX)("hillclimb check compares the rows' assertion set with the
     expect(runPrinted(cli, ws).status).toBe(0);
   }, 240_000);
 
+  it("a scenario listed in harness_paths with its own session: the remedy never names a target that would hash that session", () => {
+    const { cli, flow, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    // beta, beside alpha, listed by hand as a measurement file, with a session file of its own. The approval on
+    // evals/alpha.yaml hashes beta's bytes (listed) but never its session: `regrade evals` would add sessions/b.yaml.
+    mkdirSync(join(f.cwd, "sessions"));
+    writeFileSync(join(f.cwd, "sessions", "b.yaml"), readFileSync(join(evals, "_session.yaml"), "utf8"));
+    writeFileSync(
+      join(evals, "beta.yaml"),
+      readFileSync(join(evals, "alpha.yaml"), "utf8").replace("name: alpha", "name: beta").replace("./_session.yaml", "../sessions/b.yaml"),
+    );
+    const stFile = join(flow, "_state.json");
+    writeFileSync(stFile, JSON.stringify({ ...JSON.parse(readFileSync(stFile, "utf8")), harness_paths: ["evals/beta.yaml"] }));
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: Nope"));
+    const approve = cli("run", "evals/alpha.yaml", "--flow", "flow", "--variant", "v1", "--dry-run", "--approve-harness");
+    expect(approve.status, approve.stderr).toBe(0);
+    const ws = sigLines(checkReport("flow", f.cwd).warnings);
+    expect(ws).toEqual([expect.stringMatching(/run `hillclimb regrade evals\/alpha\.yaml --flow flow --case alpha`/)]);
+    const r = runPrinted(cli, ws);
+    expect(r.status, r.stderr).toBe(0);
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([]);
+  }, 240_000);
+
   it("with a target that holds no scenario for a flow case, a note names the case it did not compare", () => {
     const { evals } = staleFlow();
     mkdirSync(join(f.cwd, "ev"));

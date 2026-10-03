@@ -317,7 +317,7 @@ is passed (`hillclimb check evals/ --flow <dir>`), else with the scenario files 
 it has a `prompt:` and its stem is the case's id, so a session file named after the case is not one. A note names a
 case it could not compare: nothing recorded, a recorded scenario not found from the current directory (run `check`
 where the flow was approved), or, with a target, a case the target holds no scenario for. The remedy's `regrade`
-target is one that hashes the scenario set the flow was approved over: the scenarios' directory when it holds
+target is one that hashes exactly the files the flow was approved over: the scenarios' directory when it holds
 exactly them, else the case's own file (or its directory), else `<scenarios>`.
 
 ## Guardrails the harness adds

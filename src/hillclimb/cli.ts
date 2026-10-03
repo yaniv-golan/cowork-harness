@@ -24,6 +24,7 @@ import {
   stateMetricFindings,
 } from "./check.js";
 import { prepareCases } from "./command.js";
+import { hashedPaths } from "./gate.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
 import { runHillclimbCommand } from "./run-command.js";
@@ -99,12 +100,19 @@ function assertSigScenarios(
   const pass = `pass the target (\`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\`)`;
   let yaml: string[] = [];
   let listed: string[] = [];
+  /** Every `harness_paths` entry as written, and the path keys of `harness_files` (`undefined` when it is absent). */
+  let listedAll: string[] = [];
+  let hashedKeys: Set<string> | undefined;
   let key = "harness_paths";
   try {
     const st = JSON.parse(snap.state ?? "{}") as Record<string, unknown>;
     const yamlOf = (v: unknown) => (Array.isArray(v) ? v.filter((p): p is string => typeof p === "string" && /\.ya?ml$/i.test(p)) : []);
     const files = st?.harness_files;
     listed = yamlOf(st?.harness_paths);
+    listedAll = Array.isArray(st?.harness_paths) ? st.harness_paths.map(String) : [];
+    if (files && typeof files === "object" && !Array.isArray(files))
+      // Its `<…>` virtual entries and `skill:` tags are not paths.
+      hashedKeys = new Set(Object.keys(files).filter((k) => !/^<.*>$/.test(k) && !k.startsWith("skill:")));
     yaml = yamlOf(files && typeof files === "object" && !Array.isArray(files) ? Object.keys(files) : undefined);
     if (yaml.length) key = "harness_files";
     else yaml = listed;
@@ -148,31 +156,37 @@ function assertSigScenarios(
       );
     }
   }
-  // Whether `regrade <t>` would hash the approved scenario set: every scenario it loads was recorded, and every
-  // recorded one it does not load is hashed anyway (a `harness_paths` entry).
+  // Whether `regrade <t>` would hash what the flow was approved over, so the gate lets it through. With the
+  // approval's record (`harness_files`): exactly its paths — every path regrade's digest would read for the cases
+  // `<t>` loads (their scenarios, session files, uploads and fixtures), the lockfiles and the `harness_paths`
+  // entries. Without it: the scenario set — every scenario `<t>` loads was recorded, and every recorded one it does
+  // not load is hashed anyway (a `harness_paths` entry).
   const recorded = new Set(scenarios);
   const always = new Set(listed);
-  const loads = new Map<string, string[] | undefined>();
+  const loads = new Map<string, { files: string[]; hashed?: Set<string> } | undefined>();
   const loaded = (t: string) => {
     if (!loads.has(t))
       try {
-        loads.set(
-          t,
-          loadCases(resolve(cwd, t)).cases.map((c) => relative(cwd, resolve(c.file))),
-        );
+        const cs = loadCases(resolve(cwd, t)).cases;
+        const files = cs.map((c) => relative(cwd, resolve(c.file)));
+        const hashed =
+          hashedKeys === undefined
+            ? undefined
+            : new Set(
+                hashedPaths({ cwd, listed: listedAll, derived: prepareCases(cs, { env: process.env, noAgentRun: true }).derivedPaths(cs) }),
+              );
+        loads.set(t, { files, ...(hashed ? { hashed } : {}) });
       } catch {
         loads.set(t, undefined);
       }
     return loads.get(t);
   };
+  const sameSet = (a: Set<string>, b: Set<string>) => a.size === b.size && [...a].every((x) => b.has(x));
   const reproduces = (t: string, id: string) => {
     const got = loaded(t);
-    return (
-      got !== undefined &&
-      got.some((p) => idOf(p) === id) &&
-      got.every((p) => recorded.has(p)) &&
-      [...recorded].every((p) => got.includes(p) || always.has(p))
-    );
+    if (got === undefined || !got.files.some((p) => idOf(p) === id)) return false;
+    if (hashedKeys !== undefined) return got.hashed !== undefined && sameSet(got.hashed, hashedKeys);
+    return got.files.every((p) => recorded.has(p)) && [...recorded].every((p) => got.files.includes(p) || always.has(p));
   };
   const dirs = [...new Set(scenarios.map((p) => dirname(p)))];
   const targetOf = (id: string): string | undefined => {

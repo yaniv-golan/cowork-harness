@@ -47,7 +47,7 @@ time:
   (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last `--approve-harness` hashed
   (`_state.json` `harness_files`), else those `harness_paths` lists, and says so in a note when nothing is
   recorded, a recorded scenario is not found from the current directory (run `check` where the flow was
-  approved), or a target holds no scenario for a case. The remedy names a `regrade` target that hashes the set
+  approved), or a target holds no scenario for a case. The remedy names a `regrade` target that hashes exactly the files
   the flow was approved over (the scenarios' directory, else the case's own file), so it runs as printed. No
   warning changes the exit code.
   Exit `1` is an error finding (a malformed row or `_state.json`, or a float metric declared with no `better`):

@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync } from "nod
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { flowHarnessDigest, harnessDigest, gateDecision, listedInside, harnessChangeText } from "../src/hillclimb/gate.js";
+import { flowHarnessDigest, harnessDigest, hashedPaths, gateDecision, listedInside, harnessChangeText } from "../src/hillclimb/gate.js";
 
 let cwd: string;
 const put = (rel: string, body: string) => {
@@ -29,6 +29,14 @@ beforeEach(() => {
 afterEach(() => rmSync(cwd, { recursive: true, force: true }));
 
 describe("harnessDigest", () => {
+  it("hashedPaths names exactly the path entries harnessDigest records, an unreadable listed entry left out", () => {
+    put("package-lock.json", "{}");
+    const input = { ...base(), listed: ["evals/a.yaml", "gone.yaml", "evals"] };
+    const keys = Object.keys(harnessDigest(input).entries).filter((k) => !k.startsWith("<"));
+    expect(hashedPaths(input)).toEqual(keys);
+    expect(keys).toEqual(["evals/_session.yaml", "evals/a.yaml", "package-lock.json"]);
+  });
+
   it("is S's construction: sha256 over sorted (relpath \\0 bytes \\0), plus the virtual entries", () => {
     const d = harnessDigest(base());
     const h = createHash("sha256");
