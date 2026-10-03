@@ -30,7 +30,7 @@ import { loadFlowSnapshot } from "./schema-check.js";
 import { hillclimbRunLabel } from "../run/run-labels.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import { servedModelMismatch } from "./served-model.js";
-import { costLine, costSummary, otherModelShareWarning } from "./cost.js";
+import { billingOf, costLine, costSummary, otherModelShareWarning, type Billing } from "./cost.js";
 
 /** What one job hands back. */
 export interface JobReport {
@@ -522,6 +522,8 @@ async function run(
               retries_unrecorded: true,
               judge_retries_unrecorded: true,
               ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
+              ...(typeof report.result?.deciderCostUsd === "number" ? { decider_usd: report.result.deciderCostUsd } : {}),
+              ...fallbackBilling(report, ctx),
               ...(report.runDir !== undefined ? { run_dir: report.runDir, run_id: basename(report.runDir) } : {}),
             },
           },
@@ -629,6 +631,17 @@ async function run(
     return { exitCode: fail || stepFailures ? 1 : 0, scheduled: tasks.length, ok, failed: fail, scored };
   } finally {
     release();
+  }
+}
+
+/** The billing of an attempt whose row could not be built: read from its own frames, which do not depend on what threw;
+ *  nothing when they cannot be read either. */
+function fallbackBilling(report: JobReport, ctx: AttemptContext): { billing?: Billing } {
+  try {
+    const billing = billingOf({ events: report.events, modelUsage: report.result?.modelUsage, entrypoint: ctx.entrypoint });
+    return billing !== undefined ? { billing } : {};
+  } catch {
+    return {};
   }
 }
 

@@ -159,6 +159,7 @@ export interface CostSummary {
     judge_usd_mean?: number;
     judge_usd_total?: number;
     judge_rows_unpriced: number;
+    judge_rows_unrecorded: number;
     regrade_judge_usd_total?: number;
     decider_usd_total?: number;
     billing_basis: BillingBasis | "mixed" | "unrecorded";
@@ -187,8 +188,19 @@ function parseRows(text: string | null | undefined): Row[] {
 }
 
 const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
-const sum = (xs: number[]): number | undefined => (xs.length ? xs.reduce((s, x) => s + x, 0) : undefined);
-const mean = (xs: number[]): number | undefined => (xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : undefined);
+/** Every sum and mean is written rounded to 6 decimals (a millionth of a dollar), never with float noise. */
+const round6 = (x: number): number => Math.round(x * 1e6) / 1e6;
+const sum = (xs: number[]): number | undefined => (xs.length ? round6(xs.reduce((s, x) => s + x, 0)) : undefined);
+const mean = (xs: number[]): number | undefined => (xs.length ? round6(xs.reduce((s, x) => s + x, 0) / xs.length) : undefined);
+
+/** A row whose judge ran (`judge_model` or `judge_usage`) but that records none of its spend: no `judge_usd`, no
+ *  `meta.judge_unpriced`, no `meta.regrade_judge_usd` — a row written before the spend was recorded. A row no judge
+ *  read (a baseline row neutral against its own reference) has no `judge_model` and never counts. */
+const judgeUnrecorded = (x: { r: Row; judge: number | undefined }): boolean =>
+  (x.r.judge_model !== undefined || x.r.judge_usage !== undefined) &&
+  x.judge === undefined &&
+  x.r.meta?.judge_unpriced === undefined &&
+  x.r.meta?.regrade_judge_usd === undefined;
 
 /** A variant's spend over its whole `results.jsonl` (scored rows) and `errors.jsonl` (failed attempts, whose spend sits
  *  in `meta`). One run is counted once (by `meta.run_id`, never redacted; a row without one is its own run). */
@@ -226,9 +238,11 @@ export function costSummary(results: string | null | undefined, errors: string |
       cost_usd_total: sum(costs),
       cost_rows: costs.length,
       cost_rows_unrecorded: rows.length - costs.length,
-      judge_usd_mean: mean(rows.flatMap((x) => (x.scored && x.judge !== undefined ? [x.judge] : []))),
+      // The same rows as cost_usd_mean (scored, with a cost); one with no judge_usd adds 0, so the two means add up to $/run.
+      judge_usd_mean: mean(rows.flatMap((x) => (x.scored && x.cost !== undefined ? [x.judge ?? 0] : []))),
       judge_usd_total: sum(rows.flatMap((x) => (x.judge !== undefined ? [x.judge] : []))),
       judge_rows_unpriced: rows.filter((x) => (num(x.r.meta?.judge_unpriced) ?? 0) > 0).length,
+      judge_rows_unrecorded: rows.filter(judgeUnrecorded).length,
       regrade_judge_usd_total: sum(
         rows.flatMap((x) => (x.scored && num(x.r.meta?.regrade_judge_usd) !== undefined ? [num(x.r.meta!.regrade_judge_usd)!] : [])),
       ),
@@ -249,6 +263,8 @@ export function costLine(variant: string, s: CostSummary): string {
   const basis =
     `basis ${k.billing_basis}` +
     (k.billing_basis === "subscription" ? " — cost_usd is the agent's list-price estimate, not a charge" : "") +
+    (k.billing_basis === "mixed" ? " — compare cost only between rows of the same basis" : "") +
+    (k.billing_rows_unrecorded && k.billing_basis !== "unrecorded" ? `; ${k.billing_rows_unrecorded} row(s) record no basis` : "") +
     (s.costBases.has("unknown")
       ? "; cost basis unknown — the agent had no price for a model and guessed cost_usd"
       : s.costBases.has("managed")
@@ -257,15 +273,20 @@ export function costLine(variant: string, s: CostSummary): string {
   const agent =
     k.cost_usd_total === undefined
       ? `agent cost not recorded on ${k.cost_rows_unrecorded} row(s)`
-      : `agent ${usd(k.cost_usd_total)} over ${k.cost_rows} row(s)${k.cost_rows_unrecorded ? ` (${k.cost_rows_unrecorded} without a cost)` : ""}` +
+      : `agent ${usd(k.cost_usd_total)} over ${k.cost_rows} row(s)${k.cost_rows_unrecorded ? ` (${k.cost_rows_unrecorded} without a cost — a floor)` : ""}` +
         (k.cost_usd_mean !== undefined ? `, ${usd(k.cost_usd_mean)}/run over ${s.scoredCostRows} scored row(s)` : "");
   const parts = [agent];
-  if (k.judge_usd_total !== undefined || k.judge_rows_unpriced)
+  const judgeGaps = [
+    ...(k.judge_rows_unpriced ? [`${k.judge_rows_unpriced} row(s) with an unpriced judge call`] : []),
+    ...(k.judge_rows_unrecorded ? [`${k.judge_rows_unrecorded} row(s) whose judge cost was not recorded`] : []),
+  ];
+  if (k.judge_usd_total !== undefined || judgeGaps.length)
     parts.push(
       `judge ${k.judge_usd_total !== undefined ? usd(k.judge_usd_total) : "$0 recorded"}` +
-        (k.judge_rows_unpriced ? ` (${k.judge_rows_unpriced} row(s) with an unpriced judge call — a floor)` : ""),
+        (judgeGaps.length ? ` (${judgeGaps.join(", ")} — a floor)` : ""),
     );
-  if (k.regrade_judge_usd_total !== undefined) parts.push(`regrade judge ${usd(k.regrade_judge_usd_total)}`);
+  if (k.regrade_judge_usd_total !== undefined)
+    parts.push(`regrade judge ${usd(k.regrade_judge_usd_total)} (the last regrade per row — a floor)`);
   if (k.decider_usd_total !== undefined) parts.push(`decider ${usd(k.decider_usd_total)}`);
   return `[${variant}] cost (variant total; ${basis}): ${parts.join("; ")}`;
 }
