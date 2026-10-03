@@ -96,7 +96,12 @@ describe("scrubRecordedAgentData", () => {
   });
 
   it("touches a built-in name only inside the initialize registry response", () => {
-    const elsewhere = line({ type: "user", commands: [{ name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE ONE" }] });
+    // Same commands[] shape, inside a control_response that is NOT the initialize response (another request id, no
+    // agents[]): only the registry gate keeps it out.
+    const elsewhere = line({
+      type: "control_response",
+      response: { request_id: "req-7", response: { commands: [{ name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE ONE" }] } },
+    });
     const r = scrubRecordedAgentData(cassetteOf([elsewhere]));
     expect(r.kinds).toEqual([]);
     expect(r.cassette.events[0]).toBe(elsewhere);
