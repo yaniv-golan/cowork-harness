@@ -25,7 +25,7 @@ And because every run is recorded, you get the thing a transcript can't give you
 
 > **New here?** Start by running a committed cassette `replay` and browsing [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)) to see green runs before any setup — then read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
 
-> **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime. Cowork runs a session in one of two lanes: **local** — the Desktop app driving the agent on your own machine against an Apple Virtualization.framework microVM sandbox (on the pinned baseline the agent loop runs on the **host** and reaches into the VM for shell; a VM-loop configuration that runs the whole agent inside the microVM also exists — see [DESIGN.md](./DESIGN.md), "Which Cowork? — both are implemented") — or **remote**, where the agent runs in an Anthropic-hosted cloud container (the default for new sessions since 2026-07-07; local stays available). **This harness emulates the local lane's runtime**, and holds a run to either lane's *delivery* contract via a scenario's [`lane:`](./docs/scenario.md#lanes-lane--which-delivery-contract-the-run-is-held-to) key — the lanes deliver files differently, which is the part that changes skill behaviour (see [docs/fidelity-gaps.md](./docs/fidelity-gaps.md), "File delivery"). You **cannot** drive the local microVM from a script (Cowork's session control plane is closed off; see [DESIGN.md §1](./DESIGN.md#1-what-real-cowork-actually-is-and-why-scripting-it-is-closed) for why). What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in cowork mode (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.
+> **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime. Cowork runs a session in one of two lanes: **local** — the Desktop app driving the agent on your own machine against an Apple Virtualization.framework microVM sandbox (on the pinned baseline the agent loop runs on the **host** and reaches into the VM for shell; a VM-loop configuration that runs the whole agent inside the microVM also exists — see [DESIGN.md](./DESIGN.md), "Which Cowork? — both are implemented") — or **remote**, where the agent runs in an Anthropic-hosted cloud container (Anthropic [documents the cloud as Cowork's default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview), and for Pro and Max plans [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new tasks run in the cloud from 2026-10-06, with tasks already running on the user's computer finishing there). **This harness emulates the local lane's runtime**, and holds a run to either lane's *delivery* contract via a scenario's [`lane:`](./docs/scenario.md#lanes-lane--which-delivery-contract-the-run-is-held-to) key — the lanes deliver files differently, which is the part that changes skill behaviour (see [docs/fidelity-gaps.md](./docs/fidelity-gaps.md), "File delivery"). You **cannot** drive the local microVM from a script (Cowork's session control plane is closed off; see [DESIGN.md §1](./DESIGN.md#1-what-real-cowork-actually-is-and-why-scripting-it-is-closed) for why). What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in cowork mode (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.
 
 **Zero-friction preview — no token, no Docker.** A committed cassette replays from a fresh clone (the example
 cassette ships in the repo; just Node ≥ 22):
@@ -246,8 +246,15 @@ Cowork also has a **remote lane**, where the session runs server-side in an ephe
 that reaches your machine over a link. There the filesystem, the shell tool, and file delivery are all
 different — folders arrive under `$HOME/mnt/`, deliverables go to `/mnt/user-data/outputs/` and are
 handed over with `SendUserFile`, and the environment prompt is authored by the server rather than by
-Desktop. **Which lane you get is a Cowork setting** ("Only on this computer", Settings → Cowork), and
-it has been observed **off** — i.e. remote — on a current install.
+Desktop. **No setting reliably decides which lane you get.** Cowork's "Only on this computer" option
+(Settings → Cowork in the older composer, Settings → General → Tasks in the merged interface) has been
+**on** while sessions still ran in the cloud (observed 2026-10-02); on 2026-10-03 the older Cowork composer ran
+sessions locally and the merged composer ran them in the cloud (2 of 2 each, one Personal/Max organization), and
+on Desktop 2.19675.0 the composer offers no per-session lane picker. For Pro and Max plans, Anthropic
+[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that from 2026-10-06
+new tasks run in the cloud and the option is removed, and that tasks already running on the user's computer stay there. To know which
+lane a session ran on, check the session itself — see
+[docs/fidelity-gaps.md → Which lane a session actually ran on](./docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on).
 
 The harness **cannot execute the remote lane**: that container is Anthropic's, not something a local
 tool can stand up. What it does instead is refuse to fake it. Declare `lane: remote` on a scenario and
@@ -259,8 +266,9 @@ means more than it should.
 triggers, how it sequences tools, which questions it asks, whether it respects a permission gate.
 Environment-shaped conclusions do not: anything asserting a path, a mount, or a delivery mechanism is a
 statement about the **local** lane specifically. Scope your claims accordingly, and if you are probing
-real Cowork to compare, turn "Only on this computer" **on** first or you will be measuring a lane this
-tool does not model.
+real Cowork to compare, confirm the probe session ran on the local lane
+([how](./docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)) — a cloud-lane session is a lane
+this tool does not model.
 
 **Decision guide** — `fidelity:` takes exactly one of these five values (`protocol`/`container`/`microvm` vary isolation strength; `hostloop`/`cowork` are overlays that instead pick *where the loop runs* — there's no combining the two groups):
 

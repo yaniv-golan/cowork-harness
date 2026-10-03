@@ -773,6 +773,19 @@ All notable changes to this project are documented here. The format is based on
   chooses among builds, and the ELF recovery runbook notes the `linux-x64` ELF on an x64 Mac. The troubleshooting
   FAQ and the companion skill list recovering the pinned ELF as the remedy that keeps the exact pin, and the FAQ has
   an entry for a native agent that is not found at `hostloop`.
+- Which Cowork lane a session runs on is documented as an observation, not a setting. The README, `DESIGN.md`,
+  `docs/fidelity-gaps.md`, `docs/scenario.md`, `docs/maintenance.md` and the companion skill described the lane
+  as picked per session or by the "Only on this computer" setting; sessions have run in the cloud with that
+  setting on, and Desktop 2.19675.0 shows no per-session lane picker. The docs cite Anthropic's Help Center for
+  the cloud being Cowork's default and for its announcement that new Pro and Max tasks run in the cloud from 2026-10-06, in place
+  of an unsourced "default since 2026-07-07". A new `docs/fidelity-gaps.md` section, "Which lane a session
+  actually ran on", lists the checks that settle it. The `lane` description in `schema/run-result.json` drops
+  "a per-session human choice", and the note `sync` prints when the sub-agent-override gate is on states the
+  local-lane precondition the same way.
+- The remote lane's device-bridge tools are documented under the names the agent calls,
+  `mcp__remote-devices__<tool>` (and `mcp__remote-devices__<server>__<tool>` for a bridged host MCP server), and
+  `device_commit_files` as taking 1–50 files, each naming a shared file's id (`fileUuid`, preferred) or a staged
+  path (`stagedPath`); both are optional in the schema.
 
 ## [4.2.1] — 2026-10-01
 

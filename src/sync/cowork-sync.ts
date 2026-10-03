@@ -737,9 +737,10 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "Still one account, one session, and still segment-targetable. " +
       "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
       "for its environment section verbatim, diff the three composed parts) rather than trusting this note. " +
-      "NOTE the probe now has a PRECONDITION: Cowork's `Only on this computer` setting (localAgentMode) is " +
-      "OFF by default, and with it off a session runs server-side with a server-authored prompt that has no " +
-      "`## Cowork environment` section at all. Turn it ON, or you will probe a lane this harness does not model.",
+      "NOTE the probe has a PRECONDITION: the session must run on the LOCAL lane. Cowork's " +
+      "`Only on this computer` setting (localAgentMode) does not reliably select it (cloud runs seen with " +
+      "it ON), and Anthropic announces its removal for Pro/Max from 2026-10-06. Confirm the session ran " +
+      "locally before probing; see docs/fidelity-gaps.md, 'Which lane a session actually ran on'.",
   ];
 }
 
@@ -4097,9 +4098,10 @@ function enclosingFunctionName(chunk: string, at: number): string | null {
  *     s.stepStarted("download_and_sdk_prepare");let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);
  *
  * reached from the `startVM` export (`startVM:()=>KJ`, whose body calls the function holding that step).
- * On this account the local VM now boots only because the cloud lane's device bash starts it, so this is
- * the harness's sole agent supply — if Desktop drops the call or moves it off the startVM path, the agent
- * stops being staged with nothing else noticing. Fail closed.
+ * On this account the local VM has been observed booting because a cloud session's `device_bash`, a scheduled
+ * task, or a local-lane session started it, so this staging path is the harness's agent supply — if Desktop
+ * drops the call or moves it off the startVM path, the agent stops being staged with nothing else noticing.
+ * Fail closed.
  */
 export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
