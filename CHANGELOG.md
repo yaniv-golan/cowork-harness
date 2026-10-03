@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format is based on
 
 ## [4.3.0] — 2026-10-03
 
-<!-- placeholder: release summary text, finalized after the acceptance run -->
+**TODO: release summary — replace before tagging.**
 
 ### Security
 
