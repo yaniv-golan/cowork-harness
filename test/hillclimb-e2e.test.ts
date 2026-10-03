@@ -267,7 +267,7 @@ cat "${ENVELOPE}"
 
     const base = cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1");
     expect(base.status, base.stderr).toBe(0);
-    expect(base.stderr).toMatch(/alpha: froze the baseline reference from rep 0/);
+    expect(base.stderr).toMatch(/\[baseline\] reference freeze: case alpha frozen from rep 0/);
     expect(rowsOf("baseline")[0]!.grade).toMatchObject({ pass: 1, win_present: 1, win: 0.5, both_bad: 0 });
     expect(readdirSync(join(flow, "baseline", "ref", "alpha")).length).toBeGreaterThan(0);
 

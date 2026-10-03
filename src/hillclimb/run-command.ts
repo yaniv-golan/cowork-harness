@@ -28,7 +28,8 @@ import { pkgVersion } from "../run/envelope.js";
 import { ANSWER_KEY_ADVICE, answerKeyFindings } from "../eval/snapshot.js";
 import { evidenceFacts } from "../eval/invocation.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
-import type { Scenario } from "../types.js";
+import type { FidelityTier, Scenario } from "../types.js";
+import { authFailureHint, type DoctorCheck } from "../run/doctor.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { refuseChangedMetrics } from "./metric-keys.js";
@@ -84,6 +85,9 @@ export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolea
   /** The host-`claude` isolation preflight (`isolationRefusal`, src/decide/llm-transport.ts): the refusal message, or
    *  undefined. Required, as on eval, so no caller skips it by omission. */
   isolationCheck: () => string | undefined;
+  /** Doctor's credential check for a tier (`tokenCheck`, src/run/doctor.ts — the one eval refuses on). Required, as
+   *  on eval, so no caller skips it by omission. */
+  tokenCheck: (tier: FidelityTier) => DoctorCheck;
   harnessVersion?: string;
   /** Where a run with this id writes — `runOutDir` unless a test redirects it. */
   runDirFor?: (scenario: Scenario, runId: string) => string;
@@ -158,6 +162,28 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   );
   for (const n of prep.notes) say(`[${v}] ${n}`);
   const live = prep.lever;
+
+  // Credentials: doctor's own check for every tier the selected cases run at, before any snapshot, approval or spend —
+  // eval's refusal. Without it a pass with no usable credential runs every slot to "Not logged in". Read-only and
+  // offline (env names, a Keychain presence probe, file existence). `warn` is protocol's own login in the real config
+  // dir, which hillclimb never reads: its protocol runs use a managed config dir (prepareCases refuses one without),
+  // so that login cannot authenticate them either.
+  const byTier = new Map<FidelityTier, string[]>();
+  for (const c of selected) byTier.set(c.scenario.fidelity, [...(byTier.get(c.scenario.fidelity) ?? []), c.id]);
+  for (const [tier, ids] of byTier) {
+    const t = deps.tokenCheck(tier);
+    const managedLogin = t.status === "warn" && tier === "protocol";
+    if (t.status === "fail" || managedLogin)
+      throw new UsageError(
+        `no usable agent credential for fidelity ${tier} (case${ids.length > 1 ? "s" : ""} ${ids.join(", ")}): ${t.detail}` +
+          (managedLogin
+            ? ` — but hillclimb runs protocol with a managed config dir, where that login is not read. Fix: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env, or point at a file holding it: cowork-harness --dotenv <path> hillclimb run …`
+            : t.remedy
+              ? `. Fix: ${t.remedy}`
+              : "") +
+          ` (the same check as \`cowork-harness doctor --tier ${tier}\`)`,
+      );
+  }
 
   // The judges (semantic_matches, semantic_pairwise) and the LLM decider run the host `claude` isolated and tool-less (eval's rule): a CLI that cannot is
   // refused here, once, instead of failing every rep after its agent spend. A decider channel replaces the LLM
@@ -429,20 +455,23 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
                 command: "hillclimb run",
               });
               if (o.status === "exists") continue;
+              // Its own line, apart from the slot count: a freeze skipped because the case's slots failed is the
+              // same failure, never a second one in `failed` (it still fails the pass).
               if (o.status === "refused") {
                 failures++;
                 lines.push(
-                  `  [${v}] ${c.id}: the baseline reference was not frozen — ${o.message}` +
+                  `[${v}] reference freeze: ${o.noGoodRow ? "skipped" : "failed"} — ${o.message}` +
                     (o.restart
                       ? ""
                       : `; repair with \`hillclimb freeze-ref ${args.target} --flow ${flowArg} --variant baseline --case ${c.id}\``),
                 );
-              } else lines.push(`  [${v}] ${c.id}: froze the baseline reference from rep ${o.rep}`);
+              } else lines.push(`[${v}] reference freeze: case ${c.id} frozen from rep ${o.rep}`);
             }
             return { lines, failures };
           },
         }
       : {}),
+    authHint: (c) => authFailureHint(c.scenario.fidelity, deps.tokenCheck(c.scenario.fidelity), deps.env),
     expectedContentSig: (c) => sigs.get(c.id),
     ...(tracked.name !== undefined ? { skillTracked: tracked.id } : {}),
     ...(deps.now ? { now: deps.now } : {}),

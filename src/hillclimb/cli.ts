@@ -9,6 +9,7 @@ import { applyCommandGlobal, applyParsedCommandGlobals, withCommandGlobals } fro
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "../run/envelope.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { isolationRefusal } from "../decide/llm-transport.js";
+import { tokenCheck } from "../run/doctor.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
 import { HILLCLIMB_RUN_DEFAULTS, parseHillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
@@ -213,6 +214,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         flags: r.flags,
         runScenario: r.runScenario,
         isolationCheck: () => isolationRefusal(),
+        tokenCheck: (tier) => tokenCheck(tier),
       });
     } finally {
       r.close();

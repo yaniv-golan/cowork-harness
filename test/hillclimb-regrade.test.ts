@@ -339,6 +339,8 @@ describe.runIf(POSIX)("hillclimb regrade applies run's harness gate to a flow ap
     const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
     expect(out.exitCode, JSON.stringify(out.error)).toBe(0);
     expect(stateOf()).toMatchObject({ harness_skill: "x" });
+    // ...and records the per-entry hashes behind its sha, as run's approval does, so a later refusal names the change.
+    expect((stateOf().harness_files as Record<string, string>)["evals/alpha.yaml"]).toMatch(/^[0-9a-f]{64}$/);
     const r = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--skill", "x", "--dry-run");
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).toMatch(/harness gate: approved/);

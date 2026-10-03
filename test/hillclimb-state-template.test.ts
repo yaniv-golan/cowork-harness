@@ -35,7 +35,17 @@ describe("stateTemplate", () => {
 
   it("carries the harness paths and nothing loop-owned", () => {
     expect(t.state.harness_paths).toEqual(["evals/a.yaml"]);
-    for (const k of ["goal", "best", "harness_sha", "train_ids", "test_ids", "val_ids", "approve_each_round", "current_round"])
+    for (const k of [
+      "goal",
+      "best",
+      "harness_sha",
+      "harness_files",
+      "train_ids",
+      "test_ids",
+      "val_ids",
+      "approve_each_round",
+      "current_round",
+    ])
       expect(t.state).not.toHaveProperty(k);
   });
 
