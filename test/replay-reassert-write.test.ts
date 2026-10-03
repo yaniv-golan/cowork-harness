@@ -114,7 +114,7 @@ describe.skipIf(!can)("replay --reassert --write — persist a stream-derivable 
     expect(readCassette(cwd).scenario.assert).toEqual([{ transcript_contains: "hello" }]);
   });
 
-  it("(j) a CURRENT block still gets its events rescrubbed (here a built-in skill's description), and nothing else changes", () => {
+  it("(j) a CURRENT block still gets its events rescrubbed (here a built-in command's and agent's description), and nothing else changes", () => {
     const cwd = tmp();
     const c = JSON.parse(cassetteJson({ assert: [{ transcript_contains: "hello" }], controlOut: [JSON.stringify({ some: "frame" })] }));
     c.events.splice(
@@ -129,7 +129,10 @@ describe.skipIf(!can)("replay --reassert --write — persist a stream-derivable 
               { name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE", builtin: true },
               { name: "p:s", description: "plugin prose" },
             ],
-            agents: [],
+            agents: [
+              { name: "Explore", description: "SYNTHETIC BUILT-IN AGENT PROSE" },
+              { name: "p:a", description: "plugin agent prose" },
+            ],
           },
         },
       }),
@@ -139,10 +142,12 @@ describe.skipIf(!can)("replay --reassert --write — persist a stream-derivable 
     const before = readCassette(cwd);
     const w = replay(cwd, ["c.cassette.json", "--reassert", "--write", "--output-format", "json"]);
     expect(w.code).toBe(0);
-    expect(w.stderr).toMatch(/already matches the on-disk scenario; removed from its events .*\(builtin-skill-description\)/);
+    expect(w.stderr).toMatch(/already matches the on-disk scenario; removed from its events .*\(builtin-description\)/);
     const after = readCassette(cwd);
     expect(after.events[1]).not.toContain("SYNTHETIC BUILT-IN PROSE");
+    expect(after.events[1]).not.toContain("SYNTHETIC BUILT-IN AGENT PROSE");
     expect(after.events[1]).toContain("plugin prose");
+    expect(after.events[1]).toContain("plugin agent prose");
     expect(after.events.filter((l: string, i: number) => l !== before.events[i])).toHaveLength(1);
     expect({ ...after, events: [] }).toEqual({ ...before, events: [] }); // block, version, controlOut: untouched
     // and a second --write is a byte-identical no-op

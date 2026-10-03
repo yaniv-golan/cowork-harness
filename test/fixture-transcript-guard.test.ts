@@ -96,7 +96,7 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
     expect(run(body("[subagent report]\n  the body")).out).not.toMatch(/carries agent-binary text/);
   });
 
-  // The built-in skill description check runs the recorder's own scrub, so it needs the REAL built module.
+  // The built-in description check runs the recorder's own scrub, so it needs the REAL built module.
   const REAL_SCRUB = join(REPO, "dist", "run", "cassette.js");
   const realScrub = `export * from ${JSON.stringify(REAL_SCRUB)};\n`;
   const registry = (description: string) =>
@@ -113,7 +113,7 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
                   { name: "claude-api", description, builtin: true },
                   { name: "my-plugin:my-skill", description: "the plugin's own text" },
                 ],
-                agents: [],
+                agents: [{ name: "my-plugin:my-agent", description: "the plugin's own agent text" }],
               },
             },
           }),
@@ -122,24 +122,24 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
       null,
       2,
     );
-  it("blocks a staged cassette carrying a built-in skill's description", () => {
+  it("blocks a staged cassette carrying a built-in command's description", () => {
     if (!statSync(REAL_SCRUB, { throwIfNoEntry: false })) throw new Error("dist/run/cassette.js missing — run `npm run build`");
     const r = run(registry("SYNTHETIC BUILT-IN PROSE"), realScrub);
     expect(r.code).not.toBe(0);
-    expect(r.out).toMatch(/carries the description of a Claude Code built-in skill/);
+    expect(r.out).toMatch(/carries the description of a Claude Code built-in agent or command/);
     expect(r.out).toContain("test/evals/x.cassette.json");
   });
   it("control: the placeholder (and a plugin's own description) is not blocked by it", async () => {
     if (!statSync(REAL_SCRUB, { throwIfNoEntry: false })) throw new Error("dist/run/cassette.js missing — run `npm run build`");
-    const { BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER } = await import("../src/run/cassette.js");
-    const r = run(registry(BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER), realScrub);
-    expect(r.out).not.toMatch(/built-in skill/);
+    const { BUILTIN_DESCRIPTION_PLACEHOLDER } = await import("../src/run/cassette.js");
+    const r = run(registry(BUILTIN_DESCRIPTION_PLACEHOLDER), realScrub);
+    expect(r.out).not.toMatch(/built-in agent or command/);
     expect(r.code).toBe(0);
   });
   it("blocks when the check cannot run (the probe crashes), rather than passing", () => {
     const r = run(registry("SYNTHETIC BUILT-IN PROSE"), 'throw new Error("broken build");\n');
     expect(r.code).not.toBe(0);
-    expect(r.out).toMatch(/could not check a staged cassette for built-in skill descriptions/);
+    expect(r.out).toMatch(/could not check a staged cassette for built-in descriptions/);
   });
 });
 

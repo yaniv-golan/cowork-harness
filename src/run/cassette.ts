@@ -1701,31 +1701,82 @@ function mapStrings(v: unknown, f: (s: string) => string): unknown {
   return v;
 }
 
-/** What replaces a BUILT-IN skill's description in the registry's `commands[]`. Exported so the committed-cassette
- *  guard compares against it exactly. */
-export const BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER = "[built-in skill description withheld]";
+/** What replaces the description of a BUILT-IN entry (agent, command or skill) in the registry. Exported so the
+ *  committed-cassette guard compares against it exactly. */
+export const BUILTIN_DESCRIPTION_PLACEHOLDER = "[built-in description withheld]";
 
-/** Replace the description of every BUILT-IN skill (a `KNOWN_BUILTIN_SKILLS` name) in the `commands[]` of the
- *  agent's `initialize` registry response — the agent's own text, not ours to publish. Matched on `name` alone, so
- *  a plugin skill (`plugin:skill`, the user's own text) is never touched; the name-collision cost of a bare name
- *  (a user skill literally named `run`) is the one documented on `KNOWN_BUILTIN_SKILLS`. Every other field
- *  (name, argumentHint, aliases, builtin, …) stays. Returns the SAME object when nothing changes. */
-function scrubBuiltinSkillDescriptions(m: { response?: { response?: Record<string, unknown> } }): unknown {
-  const body = m.response?.response;
-  if (!body || !Array.isArray(body.commands)) return m;
-  let changed = false;
-  const commands = body.commands.map((c: unknown) => {
-    if (c === null || typeof c !== "object") return c;
-    const cmd = c as { name?: unknown; description?: unknown };
-    if (typeof cmd.name !== "string" || !KNOWN_BUILTIN_SKILLS.has(cmd.name)) return c;
-    if (cmd.description === undefined || cmd.description === BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER) return c;
-    changed = true;
-    return { ...cmd, description: BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER };
-  });
-  return changed ? { ...m, response: { ...m.response, response: { ...body, commands } } } : m;
+/** Plugins the recording itself marks as the agent's own: `system/init` `plugins[]` entries whose `path` is
+ *  `"builtin"` (their `source` ends `@builtin`). A `<plugin>:<name>` entry from one of them is built-in too. */
+function recordedBuiltinPlugins(events: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const l of events) {
+    if (!l.includes('"plugins"') || !l.includes('"init"')) continue;
+    let e: { type?: string; subtype?: string; plugins?: unknown };
+    try {
+      e = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    if (e?.type !== "system" || e.subtype !== "init" || !Array.isArray(e.plugins)) continue;
+    for (const p of e.plugins as Array<{ name?: unknown; path?: unknown; source?: unknown } | null>) {
+      if (typeof p?.name !== "string") continue;
+      if (p.path === "builtin" || (typeof p.source === "string" && p.source.endsWith("@builtin"))) out.add(p.name);
+    }
+  }
+  return out;
 }
 
-export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame" | "builtin-skill-description";
+/** Replace the description of every BUILT-IN entry in the agent's `initialize` registry response — the agent's own
+ *  text, not ours to publish. "Built-in" is decided structurally, never by a roster we keep growing:
+ *   - `commands[]`: the row carries `builtin: true`, the agent's own marker (its SDK schema: "True when the command
+ *     is Claude Code's own; absent for a command defined by a user, project, plugin or MCP server"). Only for a
+ *     registry with NO row carrying that marker — an agent older than the marker — does it fall back to the
+ *     `KNOWN_BUILTIN_SKILLS` names.
+ *   - `agents[]`: no marker exists (rows are `{name, description, model}`), but every plugin agent is namespaced
+ *     `<plugin>:<agent>` and the harness stages no bare-named agent, so a bare name is the agent's own (or, at a
+ *     host-inheriting tier, the operator's — not the plugin under test's either).
+ *   - either list: a `<plugin>:<name>` whose plugin the recording marks built-in (see recordedBuiltinPlugins).
+ *  So the plugin under test's own agents, commands and skills (`<plugin>:<name>`, unmarked) and a scenario's
+ *  config-dir skills (bare, unmarked) keep their descriptions. Every other field stays. Returns the SAME object
+ *  when nothing changes. */
+function scrubBuiltinRegistryDescriptions(
+  m: { response?: { response?: Record<string, unknown> } },
+  builtinPlugins: ReadonlySet<string>,
+): unknown {
+  const body = m.response?.response;
+  if (!body) return m;
+  const fromBuiltinPlugin = (name: string): boolean => {
+    const sep = name.indexOf(":");
+    return sep > 0 && builtinPlugins.has(name.slice(0, sep));
+  };
+  const rows = (v: unknown): Array<Record<string, unknown>> =>
+    Array.isArray(v) ? (v.filter((x) => x !== null && typeof x === "object") as Array<Record<string, unknown>>) : [];
+  const markerPresent = rows(body.commands).some((c) => "builtin" in c);
+  const isBuiltinCommand = (c: Record<string, unknown>): boolean =>
+    typeof c.name === "string" && (c.builtin === true || fromBuiltinPlugin(c.name) || (!markerPresent && KNOWN_BUILTIN_SKILLS.has(c.name)));
+  const isBuiltinAgent = (a: Record<string, unknown>): boolean =>
+    typeof a.name === "string" && (!a.name.includes(":") || fromBuiltinPlugin(a.name));
+  let changed = false;
+  const withhold = (list: unknown, isBuiltin: (r: Record<string, unknown>) => boolean): unknown => {
+    if (!Array.isArray(list)) return list;
+    let touched = false;
+    const out = list.map((r: unknown) => {
+      if (r === null || typeof r !== "object") return r;
+      const row = r as Record<string, unknown>;
+      if (!isBuiltin(row) || row.description === undefined || row.description === BUILTIN_DESCRIPTION_PLACEHOLDER) return r;
+      touched = true;
+      return { ...row, description: BUILTIN_DESCRIPTION_PLACEHOLDER };
+    });
+    if (!touched) return list;
+    changed = true;
+    return out;
+  };
+  const commands = withhold(body.commands, isBuiltinCommand);
+  const agents = withhold(body.agents, isBuiltinAgent);
+  return changed ? { ...m, response: { ...m.response, response: { ...body, commands, agents } } } : m;
+}
+
+export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame" | "builtin-description";
 
 /** What the recorder removes from EVERY cassette before writing it (`--no-redact` included — none of it is
  *  policy content):
@@ -1736,11 +1787,11 @@ export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-han
  *     hand-back] …") replaced by a neutral placeholder, and the "(use SendMessage with to: …)" continuation hint
  *     dropped, wherever they occur in an event. The report body (indented below the frame), the agentId and the
  *     usage block stay;
- *   - `builtin-skill-description`: the description of each BUILT-IN skill (a `KNOWN_BUILTIN_SKILLS` name) in the
- *     `initialize` registry response's `commands[]`, replaced by BUILTIN_SKILL_DESCRIPTION_PLACEHOLDER; the name and
- *     every other field stay, and a plugin's own skills are untouched (see scrubBuiltinSkillDescriptions).
+ *   - `builtin-description`: the description of each BUILT-IN agent, command and skill in the `initialize` registry
+ *     response's `agents[]` and `commands[]`, replaced by BUILTIN_DESCRIPTION_PLACEHOLDER; the name and every other
+ *     field stay, and the plugin under test's own entries are untouched (see scrubBuiltinRegistryDescriptions).
  *  Safe for replay by construction: nothing in `src` reads the menu, `rate_limit*`, the frame/hint text, or a
- *  registry command's description; the
+ *  registry agent's or command's description; the
  *  fingerprint never reads `events`; no hash covers `events`. The record path still holds the result to the
  *  verdict-preservation check. Pure; returns the SAME cassette and no kinds when there is nothing to remove. */
 export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette; kinds: RecordedScrubKind[] } {
@@ -1748,6 +1799,7 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
   const menu = scrubAccountModelMenu(cassette);
   if (menu !== cassette) kinds.add("model-menu");
   let changed = false;
+  let builtinPlugins: Set<string> | undefined; // computed on first need
   const events = (menu.events ?? []).map((l) => {
     const hasRate = l.includes('"rate_limit_info"');
     const hasFrame = l.includes("[Subagent hand-back]") || l.includes("use SendMessage with to:");
@@ -1775,17 +1827,18 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
       }
     }
     if (hasCommands && isInitializeRegistryResponse(next as Parameters<typeof isInitializeRegistryResponse>[0])) {
-      const described = scrubBuiltinSkillDescriptions(next as Parameters<typeof scrubBuiltinSkillDescriptions>[0]);
+      builtinPlugins ??= recordedBuiltinPlugins(menu.events ?? []);
+      const described = scrubBuiltinRegistryDescriptions(next as Parameters<typeof scrubBuiltinRegistryDescriptions>[0], builtinPlugins);
       if (described !== next) {
         next = described;
-        kinds.add("builtin-skill-description");
+        kinds.add("builtin-description");
       }
     }
     if (next === e) return l;
     changed = true;
     return JSON.stringify(next);
   });
-  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame", "builtin-skill-description"];
+  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame", "builtin-description"];
   return { cassette: changed ? { ...menu, events } : menu, kinds: order.filter((k) => kinds.has(k)) };
 }
 
