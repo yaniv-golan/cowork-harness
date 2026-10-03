@@ -101,13 +101,20 @@ describe("verdict.failures[].kind", () => {
 // `assertions.push` IS an injection — an author's own `assert:` items are evaluated elsewhere and never
 // reach this call — so requiring the stamp on all of them is both sound and shape-independent.
 describe("every pseudo-assertion injection site stamps `source`", () => {
-  const files = ["src/run/cassette.ts", "src/cli.ts"];
+  // verify-context.ts is the shared kept-run re-evaluation (`verify-run`, `hillclimb regrade`): the list it builds,
+  // `deterministic`, is the authored entries it hands back, so a push onto it is scanned like any other.
+  const files = ["src/run/cassette.ts", "src/cli.ts", "src/run/verify-context.ts"];
+  const PUSH = /\b(assertions|deterministic)\.push\(/g;
+  /** The one push that is NOT an injection: the author's own `expect_denied`, expanded into one `egress_denied` entry
+   *  per host by the live run's helper — authored, so it carries no `source` (a stamp would hide the author's own
+   *  failure as a harness signal). Matched by its exact shape, so any other push in these files is held to the rule. */
+  const AUTHORED_EXPANSION = /^deterministic\.push\(\.\.\.expandExpectDenied\(/;
 
-  /** Every `assertions.push(` in these files, as `{ file, line, literal }`. */
+  /** Every `assertions.push(` / `deterministic.push(` in these files, as `{ file, line, literal }`. */
   const injectionSites = () =>
     files.flatMap((f) => {
       const src = readFileSync(resolve(f), "utf8");
-      return [...src.matchAll(/assertions\.push\(/g)].map((m) => {
+      return [...src.matchAll(PUSH)].map((m) => {
         const end = src.indexOf("});", m.index);
         return {
           file: f,
@@ -122,15 +129,18 @@ describe("every pseudo-assertion injection site stamps `source`", () => {
     // explicit-override escalation, the 2.0.0
     // DEFAULT unverifiable-skill escalation,
     // future-version, and SEVEN replay_protocol_fidelity corruption paths) + 2 in cli.ts (both
-    // answer-coverage). verify-run's expect_denied expansion — the author's own `expect_denied`, not an
-    // injection — now lives in the shared kept-run re-evaluation (src/run/verify-context.ts) and pushes
-    // no pseudo-assertion. A refactor that moves or renames the call reds here rather than silently
-    // scanning nothing.
-    expect(injectionSites().length).toBe(14);
+    // answer-coverage) + 1 in verify-context.ts: verify-run's expect_denied expansion, moved there with the shared
+    // kept-run re-evaluation — the author's own `expect_denied`, not an injection (`AUTHORED_EXPANSION`, exempt from
+    // the stamp below). A refactor that moves or renames a call reds here rather than silently scanning nothing.
+    expect(injectionSites().length).toBe(15);
+    expect(injectionSites().filter((s) => AUTHORED_EXPANSION.test(s.literal))).toEqual([
+      expect.objectContaining({ file: "src/run/verify-context.ts" }),
+    ]);
   });
 
   it("each one stamps a `source:` within its object literal", () => {
     const unstamped = injectionSites()
+      .filter((s) => !AUTHORED_EXPANSION.test(s.literal))
       .filter((s) => !/source:\s*"(staleness|cassette-format|coverage)"/.test(s.literal))
       .map((s) => `${s.file}:${s.line}`);
     expect(unstamped, "an injected pseudo-assertion with no `source` renders as one of the author's own asserts").toEqual([]);
@@ -142,5 +152,9 @@ describe("every pseudo-assertion injection site stamps `source`", () => {
     const bare = "assertions.push({ assertion: { replay_protocol_fidelity: true }, pass: false, message: m });";
     expect(/source:\s*"(staleness|cassette-format|coverage)"/.test(bare)).toBe(false);
     expect(/assertions\.push\(/.test(bare)).toBe(true);
+    // The authored-expansion exemption is exact: a bare push onto the re-evaluation's list is not exempt.
+    const bareDet = "deterministic.push({ assertion: { result: 'success' }, pass: false, message: m });";
+    expect(AUTHORED_EXPANSION.test(bareDet)).toBe(false);
+    expect(/source:\s*"(staleness|cassette-format|coverage)"/.test(bareDet)).toBe(false);
   });
 });
