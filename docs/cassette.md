@@ -116,7 +116,9 @@ a cassette you did not record.
 
 A validated re-check does **not** reach a plain `replay` (which reads the frozen block) until it is written
 back. Add **`--write`** to `--reassert` to persist the re-validated block into the cassette — free, no re-record —
-when **only** the `assert:`/`expect_denied:` block changed; `events`/`controlOut` stay byte-identical. It refuses
+when **only** the `assert:`/`expect_denied:` block changed; `controlOut` stays byte-identical, and `events` do too
+except that what the recorder now always removes is dropped from them (see "Always removed" below) — done even when
+the block is already current, which is how an older cassette adopts a newer scrub without a re-record. It refuses
 any key that would silently skip on this cassette (needs an artifact manifest, pre-run hashes, or `controlOut`)
 and, without `--allow-failing`, a failing verdict — so `--write` can't bake in a green a plain `replay` won't
 reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci) for the full propagation chain.
@@ -1260,7 +1262,8 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   can only be one your scenario attached deliberately via `mcp.config` — a supported feature — and flagging
   it would fail a legitimate fixture.
   **What it does NOT cover.** Only the name fields above are checked. The catalogs — `slash_commands[]`,
-  `skills[]`, `plugins[]`, and command *descriptions* — are **not** gated: `slash_commands` legitimately
+  `skills[]`, `plugins[]`, and command *descriptions* — are **not** gated by this scan (the recorder separately
+  withholds the descriptions of Claude Code's built-in skills; see "Always removed" below): `slash_commands` legitimately
   varies between clean fixtures and descriptions are unbounded free text, so there is no clean predicate,
   only an arbitrary threshold. In the leak that actually shipped, the gated fields were about **11% of the
   removed bytes** and the ungated catalogs about **89%** (the registry command catalog alone ~80%);
