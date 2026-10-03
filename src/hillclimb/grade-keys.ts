@@ -255,6 +255,26 @@ function withoutRefs(a: unknown): unknown {
  *  and so its pairwise compose key — is part of it. */
 export const assertIdentity = (a: unknown): string => canonicalJson(withoutRefs(a));
 
+/** The identity of each assertion of one list, with what it reads from its SIBLINGS folded in. `no_delete_in_mounts`
+ *  grades against the mounts `allow_delete_in` waives across the whole list (`evaluate`), so adding or removing a
+ *  sibling waiver changes what it grades: its identity carries the list's waived mounts (sorted, deduped). Every other
+ *  assertion reads only its own object, so its identity is `assertIdentity`'s; so is this one's when nothing is waived. */
+export function assertIdentities(list: readonly unknown[]): string[] {
+  const waived = [
+    ...new Set(
+      list.flatMap((a) => {
+        const w = (a as { allow_delete_in?: unknown } | null)?.allow_delete_in;
+        return Array.isArray(w) ? w.filter((x): x is string => typeof x === "string") : [];
+      }),
+    ),
+  ].sort();
+  return list.map((a) =>
+    waived.length && (a as { no_delete_in_mounts?: unknown } | null)?.no_delete_in_mounts !== undefined
+      ? canonicalJson({ assertion: withoutRefs(a), waivedBySiblings: { allow_delete_in: waived } })
+      : assertIdentity(a),
+  );
+}
+
 /** The assertion set a row was graded under, stamped on every scored row (`meta.assert_sig`): the first 16 hex chars
  *  of the sha256 of the canonical `{assert, expect_denied}` — key order never changes it, and neither does where the
  *  checkout lives (`semantic_pairwise.refs` is left out, as in `assertIdentity`). Rows of one case carrying two sigs

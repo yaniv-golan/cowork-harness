@@ -1134,6 +1134,45 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(md).not.toMatch(/a0 1→0/);
   }, 240_000);
 
+  // `no_delete_in_mounts` reads a waiver its sibling `allow_delete_in` sets across the whole list: removing or adding
+  // the sibling changes what the unchanged-looking assert grades, so it is not the assert its run graded.
+  it("no_delete_in_mounts: removing its allow_delete_in sibling re-evaluates it (pass moves); adding it back flips it back", async () => {
+    const { rows, evals } = buildFlow({
+      noPairwise: true,
+      extra: ["  - no_delete_in_mounts: true", "  - allow_delete_in: [proj]"],
+    });
+    const old = rows("v1")[0]!;
+    expect(old.grade).toMatchObject({ pass: 1, a1: 1 });
+    // The run deleted in its waived `proj` folder: the scan recorded it, and the waiver passed the assert.
+    const file = join(runDirOf(old), "turns", "1", "result.json");
+    const r = JSON.parse(readFileSync(file, "utf8")) as { scan?: Record<string, unknown> };
+    r.scan = {
+      outputsDeletes: [],
+      hostPathLeaked: false,
+      selfHealRan: false,
+      ...(r.scan ?? {}),
+      mountDeletes: [{ mount: "proj", command: "rm proj/a.txt" }],
+    };
+    writeFileSync(file, JSON.stringify(r));
+    const lines: string[] = [];
+    edit(evals, "  - allow_delete_in: [proj]\n", "");
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), DEPS({ stderr: (l) => lines.push(l) }));
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(lines.filter((l) => /kept its live outcome/.test(l))).toEqual([]);
+    const row = rows("v1")[0]!;
+    expect(row.grade).toMatchObject({ pass: 0, a0: 1, a1: 0 });
+    expect(row.meta).not.toHaveProperty("regrade_kept_live");
+    // The waiver back: the assert is the run's again, so it takes the run's own outcome.
+    writeFileSync(
+      join(evals, "alpha.yaml"),
+      readFileSync(join(evals, "alpha.yaml"), "utf8").replace(/\n?$/, "\n") + "  - allow_delete_in: [proj]\n",
+    );
+    const back = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), DEPS({ stderr: (l) => lines.push(l) }));
+    expect(back.exitCode, JSON.stringify(back)).toBe(0);
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a0: 1, a1: 1 });
+    expect(lines.filter((l) => /kept its live outcome/.test(l))).toEqual([]);
+  }, 240_000);
+
   it("counts: re-measured counts only rows of a case that declares a metric; the summary says no judge was called", async () => {
     f.cleanup();
     f = makeStubFixture(`mkdir -p outputs && printf '%s' '{"words":1200}' > outputs/m.json\n${STUB}`);

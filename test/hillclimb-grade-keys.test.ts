@@ -7,6 +7,7 @@
 // has the identical assertion list. One producer for the row writer and `state-template`.
 import { describe, it, expect } from "vitest";
 import {
+  assertIdentities,
   assertIdentity,
   assertSig,
   caseKeyDecls,
@@ -225,6 +226,23 @@ describe("presentCompanionOf — the explicit key → companion map the _present
 
   it("a whole-assertion key's companion is a<i>_present (only a refused single-key semantic_pairwise is ever omitted)", () => {
     expect(presentCompanionOf("a0")).toBe("a0_present");
+  });
+});
+
+// `no_delete_in_mounts` grades against the mounts `allow_delete_in` waives across the whole list: a sibling waiver is
+// part of what it grades, so of its identity. No other assert reads outside its own object.
+describe("assertIdentities: what an assert reads from its siblings", () => {
+  const base = [{ result: "success" }, { no_delete_in_mounts: true }];
+  it("folds the list's waived mounts (sorted, deduped) into no_delete_in_mounts only", () => {
+    const plain = assertIdentities(base);
+    expect(plain).toEqual(base.map(assertIdentity));
+    const waived = assertIdentities([...base, { allow_delete_in: ["b", "a"] }, { allow_delete_in: ["a"] }]);
+    expect(waived[0]).toBe(plain[0]);
+    expect(waived[1]).not.toBe(plain[1]);
+    expect(waived[2]).toBe(assertIdentity({ allow_delete_in: ["b", "a"] }));
+    // Order and duplicates of the waived mounts do not matter; another mount does.
+    expect(assertIdentities([...base, { allow_delete_in: ["a", "b"] }])[1]).toBe(waived[1]);
+    expect(assertIdentities([...base, { allow_delete_in: ["a"] }])[1]).not.toBe(waived[1]);
   });
 });
 

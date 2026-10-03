@@ -42,7 +42,7 @@ import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
 import { lexists, normalizeRootArg, NoFollowRoot } from "./fs.js";
 import { approvedHarnessSkill, flowHarnessDigest, gateDecision } from "./gate.js";
-import { assertIdentity, assertSig, canonicalJson, flowHasPairwise, type MetricDecl } from "./grade-keys.js";
+import { assertIdentities, assertSig, canonicalJson, flowHasPairwise, type MetricDecl } from "./grade-keys.js";
 import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
 import { pairwiseComposeKey, sameModelKey, type PairwiseRef } from "../run/pairwise-prepass.js";
@@ -293,14 +293,15 @@ const deterministicIndexes = (c: HillclimbCase): number[] =>
 
 const keysOf = (a: object): string => Object.keys(a).sort().join(",");
 
-/** The run's entry for each authored index, matched by IDENTITY (`assertIdentity`: the assertion as written, refs left
- *  out), never by position: adding or removing an assert leaves every other one matched. With multiplicity — each run
- *  entry answers one index; the same index first, then the first unused one — so a second copy of an assert is new. */
+/** The run's entry for each authored index, matched by IDENTITY (`assertIdentities`: the assertion as written, refs
+ *  left out, with what it reads from its siblings — each side's from its OWN list, the run's from the run's), never by
+ *  position: adding or removing an assert leaves every other one matched. With multiplicity — each run entry answers
+ *  one index; the same index first, then the first unused one — so a second copy of an assert is new. */
 function liveByIdentity(live: RunResult, c: HillclimbCase): Array<Entry | undefined> {
   const was = authoredOf(live);
-  const ids = was.map((e) => assertIdentity(e.assertion));
+  const ids = assertIdentities(was.map((e) => e.assertion));
   const used = new Set<number>();
-  const now = authoredNow(c).map(assertIdentity);
+  const now = assertIdentities(authoredNow(c));
   const out: Array<Entry | undefined> = now.map((id, i) => {
     if (ids[i] !== id) return undefined;
     used.add(i);
@@ -396,13 +397,16 @@ export function judgedPlan(
   const entries = new Map<number, Entry>();
   const rejudge = new Map<number, RejudgeTrigger[]>();
   const pool = src?.entries ?? [];
-  const ids = pool.map((e) => assertIdentity(e.assertion));
+  // The same identity rule as the deterministic step's (a judged assert reads nothing from its siblings, so here it is
+  // `assertIdentity`'s).
+  const ids = assertIdentities(pool.map((e) => e.assertion));
+  const nowIds = assertIdentities(c.scenario.assert);
   const used = new Set<number>();
   const refNames = o.refs.map((r) => r.name).filter((n) => n !== o.variant);
   for (const [i, a] of c.scenario.assert.entries()) {
     if (judgedOpts(a) === undefined) continue;
     const why: RejudgeTrigger[] = [];
-    const id = assertIdentity(a);
+    const id = nowIds[i]!;
     const k = src ? ids.findIndex((x, j) => x === id && !used.has(j)) : -1;
     if (!src) why.push("graded_entry_unavailable");
     else if (k < 0) why.push("assert_changed");
