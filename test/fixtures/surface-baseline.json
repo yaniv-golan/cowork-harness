@@ -2538,6 +2538,9 @@
       "definitions.RegradedAssertion.judgeModel": {
         "type": "string"
       },
+      "definitions.RegradedAssertion.judgeModelRequested": {
+        "type": "string"
+      },
       "definitions.RegradedAssertion.pass": {
         "type": "boolean",
         "required": true

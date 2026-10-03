@@ -1560,7 +1560,7 @@ describe("regrade: JSON envelope", () => {
       { liveAssertionIndex: 0, sections: [{ kind: "authored", path: "outputs/report.md", change: "changed" }] },
     ]);
     // TRIPWIRE, not a contract: the assertion entry's covered keys are assertionIndex, docMatchesLive, pass,
-    // judgeInvalid, judgeModel, judgeCostUsd and semanticClaims (SPEC §12); the rest follow the RunResult
+    // judgeInvalid, judgeModel, judgeModelRequested, judgeCostUsd and semanticClaims (SPEC §12); the rest follow the RunResult
     // assertion entry, which is not pinned field by field. A new key here is a prompt to review, then update.
     // `evidence` rides in from the shared assertion result (`evaluate`), as on RunResult.assertions[].
     const ASSERTION_KEYS_GRADED = [
@@ -1571,6 +1571,7 @@ describe("regrade: JSON envelope", () => {
       "judgeAttempts",
       "judgeCostUsd",
       "judgeModel",
+      "judgeModelRequested",
       "judgePromptHash",
       "judgeUsage",
       "judgedDoc",
@@ -1585,6 +1586,7 @@ describe("regrade: JSON envelope", () => {
       "judgeAttempts",
       "judgeInvalid",
       "judgeModel",
+      "judgeModelRequested",
       "judgePromptHash",
       "judgedDoc",
       "message",

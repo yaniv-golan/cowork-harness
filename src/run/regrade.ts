@@ -67,6 +67,9 @@ export interface RegradedAssertion {
   message?: string;
   semanticClaims?: RunResult["assertions"][number]["semanticClaims"];
   judgeModel?: string;
+  /** The model this re-grade ASKED its judge for (`--judge-model`, else the assert's `judge_model`, else the default),
+   *  on an entry a judge read; `judgeModel` is the id the judge answered as. A kept entry carries its own. */
+  judgeModelRequested?: string;
   judgeCostUsd?: number;
   judgeUsage?: RunResult["assertions"][number]["judgeUsage"];
   judgePromptHash?: string;
@@ -568,6 +571,7 @@ function writeNew(dir: string, stem: string, body: string): string {
 /** An entry's judge provenance: what the judge that graded it was, read, cost and was asked. */
 const JUDGE_FIELDS = [
   "judgeModel",
+  "judgeModelRequested",
   "judgeCostUsd",
   "judgeUsage",
   "judgedDoc",
@@ -953,9 +957,11 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       differing.push(...c.differing);
       const now = p.ctx.judgedDocs?.get(a) ?? p.ctx.composedDocs?.get(a);
       const readDrift = c.match !== "not_graded" && now?.sections.some((x) => drifted.has(`${x.kind}\0${x.path ?? ""}`)) === true;
+      const requested = opts.judgeModel ?? judgedOpts(a)!.judgeModel ?? defaultJudgeModel();
       return {
         assertionIndex,
         ...g,
+        ...(g.judgeModel !== undefined ? { judgeModelRequested: requested } : {}),
         docMatchesLive: readDrift ? false : c.match,
       } as RegradedAssertion;
     });

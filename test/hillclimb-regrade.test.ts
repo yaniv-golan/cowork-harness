@@ -89,6 +89,10 @@ function buildFlow(
     expectDenied?: string[];
     /** Isolation-check cases only: how a semantic_matches assert joins the scenario after the runs. */
     matches?: "added" | "recorded";
+    /** `null`: alpha's pairwise assert pins no judge_model (the env/default chain resolves it). */
+    judgeModel?: null;
+    /** Extra environment for the CLI passes and the in-process calls. */
+    env?: Record<string, string>;
   } = {},
 ) {
   const plugin = join(work, "plugin", "my-plugin");
@@ -110,12 +114,19 @@ function buildFlow(
     join(evals, "alpha.yaml"),
     (opts.noPairwise
       ? `name: alpha\n${head}`
-      : `name: alpha\n${head}  - semantic_pairwise:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n`) + metrics,
+      : `name: alpha\n${head}  - semantic_pairwise:\n      rubric: ['answers']\n${opts.judgeModel === null ? "" : "      judge_model: claude-haiku-4-5-20251001\n"}`) +
+      metrics,
   );
   if (opts.withBeta) writeFileSync(join(evals, "beta.yaml"), `name: beta\n${head}`);
   const judge = join(work, "judge.sh");
   writeFileSync(judge, JUDGE, { mode: 0o755 });
-  const env = { ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token", COWORK_HARNESS_CLAUDE_BIN: judge };
+  const env = {
+    ...f.env,
+    COWORK_MANAGED_CONFIG: "1",
+    CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
+    COWORK_HARNESS_CLAUDE_BIN: judge,
+    ...(opts.env ?? {}),
+  };
   const cli = (...a: string[]) =>
     spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
   const reps = String(opts.reps ?? 1);
@@ -130,6 +141,7 @@ function buildFlow(
     COWORK_HARNESS_CLAUDE_BIN: judge,
     HOME: f.env.HOME!,
     COWORK_MANAGED_CONFIG: "1",
+    ...(opts.env ?? {}),
   })) {
     if (!(k in saved)) saved[k] = process.env[k];
     process.env[k] = v;
@@ -1212,6 +1224,28 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(seen.calls).toBe(1);
     expect(rows("v1")[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["judge_model"] }]);
   }, 240_000);
+
+  // An assert that pins no judge_model is judged by the env/default chain: a changed COWORK_HARNESS_JUDGE_MODEL is a
+  // changed judge. The model a regrade asked for is recorded, so a judge served under another id is not re-judged again.
+  it("judge_model: a changed COWORK_HARNESS_JUDGE_MODEL re-judges an assert with no judge_model of its own, once", async () => {
+    const setJudge = (m: string) => {
+      if (!("COWORK_HARNESS_JUDGE_MODEL" in saved)) saved.COWORK_HARNESS_JUDGE_MODEL = process.env.COWORK_HARNESS_JUDGE_MODEL;
+      process.env.COWORK_HARNESS_JUDGE_MODEL = m;
+    };
+    const { rows } = buildFlow({ judgeModel: null, env: { COWORK_HARNESS_JUDGE_MODEL: "claude-haiku-4-5" } });
+    const { seen, deps } = counting();
+    // Unchanged: the model the env names is the one that graded.
+    expect((await regradeFlow(ARGS({ variant: "v1" }), deps)).exitCode).toBe(0);
+    expect(seen.calls).toBe(0);
+    setJudge("claude-sonnet-5");
+    const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(seen.calls).toBe(1);
+    expect(rows("v1")[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["judge_model"] }]);
+    // The stub judge answers as claude-haiku-4-5 whatever is asked: the request is what is compared, so no re-judge.
+    expect((await regradeFlow(ARGS({ variant: "v1" }), deps)).exitCode).toBe(0);
+    expect(seen.calls).toBe(1);
+  }, 300_000);
 
   it.each([
     ["judge_prompt", "it was graded under another judge prompt template"],

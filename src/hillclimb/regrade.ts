@@ -39,7 +39,7 @@ import { assertIdentity, assertSig, canonicalJson, flowHasPairwise, type MetricD
 import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
 import { pairwiseComposeKey, type PairwiseRef } from "../run/pairwise-prepass.js";
-import { JUDGE_PROMPT_HASH } from "../decide/semantic-judge.js";
+import { defaultJudgeModel, JUDGE_PROMPT_HASH } from "../decide/semantic-judge.js";
 import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
 import { judgedOpts, sharedCaptureWarning } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
@@ -328,7 +328,9 @@ function gradedSource(row: Row, runDir: string, result: RunResult): { entries: E
  *    pairwise compose key are all part of it); an added assert is one;
  *  - `graded_entry_unavailable`: the regrade file the row names cannot be read;
  *  - `rejudge`: `--rejudge`;
- *  - `judge_model`: `--judge-model` is not the model that graded it (exact string);
+ *  - `judge_model`: the model a re-judge would ask for (`--judge-model`, else — for an assert that pins no
+ *    `judge_model` — the env/default chain) is not the one it was graded by (the model its regrade asked for when
+ *    recorded, else the served id; exact string);
  *  - `judge_prompt`: it was graded under another judge prompt template (`judgePromptHash`);
  *  - `opponents_changed`: a pairwise assert's references (its own variant's aside: neutral, never judged) or their
  *    gating are not the flow's now;
@@ -379,7 +381,16 @@ export function judgedPlan(
       // A judge read it only when it recorded a model: an entry no judge read (every comparison neutral, or its
       // evidence refused) has no model or prompt to differ.
       if (e.judgeModel !== undefined) {
-        if (o.judgeModel !== undefined && e.judgeModel !== o.judgeModel) why.push("judge_model");
+        // The model a re-judge would ask for, resolved as the core resolves it (`--judge-model`, else the assert's own
+        // `judge_model`, else the env/default chain). An assert's own pin is part of its identity, so only the flag
+        // and the env/default arms are compared — with the model the last regrade ASKED for when it recorded one, else
+        // the one that answered (an id served under another name then reads changed: re-judged, never kept).
+        const pinned = judgedOpts(a)!.judgeModel;
+        if (o.judgeModel !== undefined || pinned === undefined) {
+          const wanted = o.judgeModel ?? defaultJudgeModel();
+          const asked = (e as { judgeModelRequested?: string }).judgeModelRequested ?? e.judgeModel;
+          if (asked !== wanted) why.push("judge_model");
+        }
         const prompt = a.semantic_pairwise !== undefined ? PAIRWISE_PROMPT_HASH : JUDGE_PROMPT_HASH;
         if (e.judgePromptHash !== prompt) why.push("judge_prompt");
       }
