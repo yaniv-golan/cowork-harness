@@ -102,8 +102,8 @@ which its `Read` can open. A task prompt the model writes is not substituted.
 The line shape alone does not tell this case apart from a program that opens the path itself.
 `python3 tool.py --data-dir "${CLAUDE_PLUGIN_ROOT}/data"` works at host-loop, because the program opens
 the rewritten VM path; the difference is in what the receiving program does with the value, which the
-skill text does not show. `lint-skill` reports the whole root passed as an option value — the usual
-forwarding shape — as a WARN, and every other braced use as an INFO (see
+skill text does not show. `lint-skill` reports the whole root passed as the value of an option named for a location (`root`, `dir`, `path`, `plugin` or `base` in its name) — the usual forwarding shape — as a WARN,
+and every other braced use as an INFO (see
 [Catch both before a paid run](#catch-both-before-a-paid-run)).
 
 ## How the tiers map
@@ -146,8 +146,10 @@ cowork-harness lint-skill path/to/skill/
 (also runnable directly as `python3 .claude/skills/cowork-harness/scripts/scenario.py lint-skill path/to/skill/`)
 
 It reports the plugin root in an in-VM bash context (fenced `bash`/`sh` blocks and `Bash(...)`
-directives): a bare `$CLAUDE_PLUGIN_ROOT` as the WARN `plugin-root-in-vm-bash`; the whole braced root
-passed as an option value as the WARN `plugin-root-forwarded-from-vm-bash`, the forwarding shape above;
+directives): a bare `$CLAUDE_PLUGIN_ROOT`, or any form in a standalone skill with no `plugin.json` above it
+(nothing replaces the token there), as the WARN `plugin-root-in-vm-bash`; the whole braced root passed as
+the value of an option named for a location (`root`, `dir`, `path`, `plugin` or `base` in its name), outside quotes and not to `claude` itself, as the WARN
+`plugin-root-forwarded-from-vm-bash`, the forwarding shape above;
 and any other braced use as the INFO `plugin-root-braced-in-vm-bash`, whose message says when the rewrite
 applies and when a forwarded value breaks. It also warns on a hook
 that exports an env var / writes `/tmp` for the in-VM agent — while leaving correct host-side

@@ -348,9 +348,18 @@ describe.skipIf(!havePython)("scenario.py lint-skill — Cowork host-loop footgu
 // The difference lives in the receiving program, not in the skill text. The one shape flagged as a forward is
 // the whole root as an option value; a path built under the root, a positional argument, a heredoc line, an
 // assignment and a comment stay the INFO. These pin both sides.
+// A skill dir that is its own plugin root, so the braced token is one the agent replaces (a standalone skill's
+// braced token is the bare-form WARN; see "plugin-root finding per form").
+function pluginSkillDir(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(d, ".claude-plugin"));
+  writeFileSync(join(d, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p" }));
+  return d;
+}
+
 describe.skipIf(!havePython)("lint-skill — the forwarding shape", () => {
   const rulesFor = (cmd: string) => {
-    const d = mkdtempSync(join(tmpdir(), "cwh-skill-argval-"));
+    const d = pluginSkillDir("cwh-skill-argval-");
     writeFileSync(join(d, "SKILL.md"), ["# S", "", "```bash", cmd, "```", ""].join("\n"));
     return lintSkill(d).findings.filter((f) => f.rule.startsWith("plugin-root"));
   };
@@ -360,6 +369,8 @@ describe.skipIf(!havePython)("lint-skill — the forwarding shape", () => {
     ["node s.js --root=${CLAUDE_PLUGIN_ROOT}"],
     ['  --plugin-root-agent "${CLAUDE_PLUGIN_ROOT}" \\'],
     ['python3 b.py --plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"; echo done'],
+    ['node gen.js --base-path "${CLAUDE_PLUGIN_ROOT}"'],
+    ['claude -p hi; python3 b.py --plugin-dir "${CLAUDE_PLUGIN_ROOT}"'],
   ])("%s → WARN plugin-root-forwarded-from-vm-bash", (cmd) => {
     const hits = rulesFor(cmd);
     expect(hits.map((f) => [f.rule, f.severity])).toEqual([["plugin-root-forwarded-from-vm-bash", "WARN"]]);
@@ -373,13 +384,18 @@ describe.skipIf(!havePython)("lint-skill — the forwarding shape", () => {
     ['python3 "$S" "${CLAUDE_PLUGIN_ROOT}"'],
     ["${CLAUDE_PLUGIN_ROOT}"],
     ['ROOT="${CLAUDE_PLUGIN_ROOT}"'],
-    ["# pass --plugin-root-agent ${CLAUDE_PLUGIN_ROOT} to the builder"],
+    ['run --plugin-root-agent "${CLAUDE_PLUGIN_ROOT}/a" # pass --root ${CLAUDE_PLUGIN_ROOT} later'],
+    ['echo "pass --root ${CLAUDE_PLUGIN_ROOT} to the tool"'],
+    ['ls --color "${CLAUDE_PLUGIN_ROOT}"'],
+    ['claude --plugin-dir "${CLAUDE_PLUGIN_ROOT}" -p hi'],
+    ['cd /tmp && /usr/local/bin/claude --plugin-dir="${CLAUDE_PLUGIN_ROOT}"'],
+    ['tool --format "${CLAUDE_PLUGIN_ROOT}"'],
     ['bash "${CLAUDE_PLUGIN_ROOT}/x.sh" --root "${CLAUDE_PLUGIN_ROOT}-old"'],
   ])("%s → INFO plugin-root-braced-in-vm-bash only", (cmd) => {
     expect(rulesFor(cmd).map((f) => [f.rule, f.severity])).toEqual([["plugin-root-braced-in-vm-bash", "INFO"]]);
   });
   it("a forwarded value in a self-healing block still WARNs (a heal fixes a path the shell opens, not one it passes on)", () => {
-    const d = mkdtempSync(join(tmpdir(), "cwh-skill-fwd-heal-"));
+    const d = pluginSkillDir("cwh-skill-fwd-heal-");
     const md = [
       "# S",
       "",
@@ -405,7 +421,7 @@ describe.skipIf(!havePython)("lint-skill — the forwarding shape", () => {
 // environment variable, empty at host-loop.
 describe.skipIf(!havePython)("lint-skill — plugin-root finding per form", () => {
   function hitsFor(line: string, fence = true): Finding[] {
-    const d = mkdtempSync(join(tmpdir(), "cwh-skill-form-"));
+    const d = pluginSkillDir("cwh-skill-form-");
     const body = fence ? ["# S", "", "```bash", line, "```", ""] : ["# S", "", line, ""];
     writeFileSync(join(d, "SKILL.md"), body.join("\n"));
     return lintSkill(d).findings.filter((f) => f.rule.startsWith("plugin-root"));
@@ -465,9 +481,22 @@ describe.skipIf(!havePython)("lint-skill — plugin-root finding per form", () =
     ]);
   });
 
+  it("a standalone skill (no plugin.json above it): the braced form is the WARN — nothing replaces it", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-skill-standalone-"));
+    writeFileSync(join(d, "SKILL.md"), ["# S", "", "```bash", 'bash "${CLAUDE_PLUGIN_ROOT}/x.sh"', "```", ""].join("\n"));
+    const hits = lintSkill(d).findings.filter((f) => f.rule.startsWith("plugin-root"));
+    expect(hits.map((f) => [f.rule, f.severity])).toEqual([["plugin-root-in-vm-bash", "WARN"]]);
+    expect(hits[0]!.message).toMatch(/outside a plugin/);
+  });
+
+  it("a fully commented-out line gets no finding", () => {
+    expect(hitsFor('  # bash "${CLAUDE_PLUGIN_ROOT}/x.sh" --root "${CLAUDE_PLUGIN_ROOT}"')).toEqual([]);
+    expect(hitsFor("# $CLAUDE_PLUGIN_ROOT is empty here")).toEqual([]);
+  });
+
   it("the braced INFO alone never fails --strict; the bare WARN does", () => {
     const run = (line: string) => {
-      const d = mkdtempSync(join(tmpdir(), "cwh-skill-form-strict-"));
+      const d = pluginSkillDir("cwh-skill-form-strict-");
       writeFileSync(join(d, "SKILL.md"), ["# S", "", "```bash", line, "```", ""].join("\n"));
       return spawnSync(py, [SCRIPT, "lint-skill", "--strict", join(d, "SKILL.md")], { encoding: "utf8" }).status;
     };

@@ -476,14 +476,16 @@ All notable changes to this project are documented here. The format is based on
   `${CLAUDE_PLUGIN_ROOT}` is replaced with a host path that the bash tool rewrites to the plugin's VM mount, so
   a step that opens it works, while the bare `$CLAUDE_PLUGIN_ROOT` is still empty there; one rule at one
   severity could not describe both. Old to new:
-  - bare `$CLAUDE_PLUGIN_ROOT` or `${CLAUDE_PLUGIN_ROOT:-…}` → still `plugin-root-in-vm-bash` (WARN);
-  - the whole braced root as an option value (`--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`,
-    `--root=${CLAUDE_PLUGIN_ROOT}`), the shape that forwards it → `plugin-root-forwarded-from-vm-bash` (WARN),
-    reported even inside a block that self-heals;
+  - bare `$CLAUDE_PLUGIN_ROOT` or `${CLAUDE_PLUGIN_ROOT:-…}`, and any form in a standalone skill with no
+    `plugin.json` above it → still `plugin-root-in-vm-bash` (WARN);
+  - the whole braced root as the value of an option named for a location (`root`, `dir`, `path`, `plugin` or
+    `base` in its name: `--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, `--root=${CLAUDE_PLUGIN_ROOT}`), outside
+    quotes and not to `claude` itself, the shape that forwards it → `plugin-root-forwarded-from-vm-bash`
+    (WARN), reported even inside a block that self-heals;
   - any other braced use → `plugin-root-braced-in-vm-bash` (INFO), whose message says when the rewrite
     applies (the path as its own word) and that a value forwarded to a host-side reader arrives as a VM path.
 
-  A line with both forms gets one finding per form. To migrate a `--suppressions` file: delete an entry that
+  A line with both forms gets one finding per form, and a fully commented-out line gets none. To migrate a `--suppressions` file: delete an entry that
   named `plugin-root-in-vm-bash` for a braced site that is now the INFO (an INFO never fails `--strict`); for a
   forwarding site, fix the skill, or, if the program really opens the path itself, change the entry's `rule`
   to `plugin-root-forwarded-from-vm-bash`. Markers and `--ignore-rule` migrate the same way. Entries for the
