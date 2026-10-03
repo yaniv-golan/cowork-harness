@@ -263,6 +263,8 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
     expect(out.exitCode, JSON.stringify(out.variants)).toBe(0);
     expect(rows("v1")[0]!.grade.pass).toBe(0);
+    // A rebuilt row keeps what its run asked for and what the agent sent: regrade never re-runs the agent.
+    expect(rows("v1")[0]!.meta).toMatchObject({ effort: "medium", effort_sent: "medium", model_requested: MODEL });
   }, 180_000);
 
   it("--allow-unchecked reaches the core only when passed; the metrics seam is called once per rewritten row", async () => {

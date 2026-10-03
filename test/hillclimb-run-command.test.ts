@@ -1706,8 +1706,10 @@ describe("--effort: the requested effort reaches the agent and every row", () =>
     expect((rows()[0].meta as Record<string, unknown>).effort).toBe("low");
     expect((calls[0].extra.session as SessionConfig).effort).toBe("low");
     session("");
-    await approve();
-    await runHillclimbCommand(args("--variant", "v1"), deps());
+    // approved in v1: the baseline variant's rows ran effort low, so re-approving there is refused (the resume guard)
+    await runHillclimbCommand(args("--variant", "v1", "--approve-harness", "--dry-run"), deps());
+    const r1 = await runHillclimbCommand(args("--variant", "v1"), deps());
+    expect(r1.exitCode, err.join("\n")).toBe(0);
     const v1 = JSON.parse(
       readFileSync(join(cwd, "flow", "v1", "results.jsonl"), "utf8")
         .trim()
@@ -1789,5 +1791,133 @@ describe("the sent effort, read from the agent's own transcript, decides whether
     sentEffortOverride = null;
     expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(1);
     expect(errs()[0]).toMatchObject({ error: "the requested effort medium was not sent on 1 of 1 main-loop call(s)" });
+  });
+});
+
+describe("a variant runs one requested model and effort per case: the resume guard", () => {
+  const rowsOf = (variant: string) =>
+    readFileSync(join(cwd, "flow", variant, "results.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, any>);
+  const rewrite = (variant: string, edit: (r: Record<string, any>) => void) => {
+    const rs = rowsOf(variant);
+    rs.forEach(edit);
+    writeFileSync(join(cwd, "flow", variant, "results.jsonl"), rs.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  };
+  /** Rows as written before the requested fields existed. */
+  const legacy = (variant: string, edit: (r: Record<string, any>) => void = () => {}) =>
+    rewrite(variant, (r) => {
+      delete r.meta.model_requested;
+      delete r.meta.effort;
+      delete r.meta.effort_sent;
+      edit(r);
+    });
+  const approve = () => runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+
+  it("a pass that would run another effort in a variant whose rows ran one is refused before spend, dry run too", async () => {
+    await approve();
+    await runHillclimbCommand(args("--effort", "high"), deps());
+    calls = [];
+    for (const extra of [["--dry-run"], []]) {
+      const r = await runHillclimbCommand(args("--effort", "low", "--reps", "2", ...extra), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toBe(
+        "refusing to run: variant baseline's rows for case alpha ran effort high, and this pass would run effort low — one variant would mix two settings: run the change as a new variant (--variant v<N>), or keep the setting the rows ran with",
+      );
+    }
+    expect(calls).toEqual([]);
+    // the same effort resumes
+    expect((await runHillclimbCommand(args("--effort", "high", "--reps", "2"), deps())).exitCode).toBe(0);
+  });
+
+  it("a pass that would run another model in the variant is refused", async () => {
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    calls = [];
+    const r = await runHillclimbCommand(args("--model", "claude-opus-4-8", "--reps", "2"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(
+      new RegExp(`variant baseline's rows for case alpha ran model ${MODEL}, and this pass would run model claude-opus-4-8 —`),
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("another effort or model in ANOTHER variant runs, with no warning: it is the lever", async () => {
+    await approve();
+    await runHillclimbCommand(args("--effort", "high"), deps());
+    err = [];
+    const r = await runHillclimbCommand(args("--variant", "v1", "--effort", "low"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    expect(err.join("\n")).not.toMatch(/warning: variant/);
+  });
+
+  it("rows written before the requested fields: a served model the pin does not account for refuses", async () => {
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    legacy("baseline", (r) => (r.model = "claude-opus-4-8"));
+    const r = await runHillclimbCommand(args("--reps", "2"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(
+      new RegExp(`variant baseline's rows for case alpha ran model claude-opus-4-8 \\(served\\), and this pass would run model ${MODEL} —`),
+    );
+  });
+
+  it("rows written before the requested fields: a dated snapshot of the pin served is the pin", async () => {
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    legacy("baseline", (r) => (r.model = `${MODEL}-20260101`));
+    err = [];
+    expect((await runHillclimbCommand(args("--reps", "2"), deps())).exitCode).toBe(0);
+    expect(err.join("\n")).not.toMatch(/warning: variant/);
+  });
+
+  it("rows written before the requested fields with no served model warn, never refuse; an unrecorded effort warns only under --effort", async () => {
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    legacy("baseline", (r) => delete r.model);
+    err = [];
+    expect((await runHillclimbCommand(args("--reps", "2"), deps())).exitCode).toBe(0);
+    expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([
+      `warning: variant baseline's earlier rows for case alpha record neither the requested nor the served model; this pass requests ${MODEL} — compare them only knowingly`,
+    ]);
+    legacy("baseline", (r) => (r.model = MODEL)); // served model known: only the effort is unrecorded
+    err = [];
+    expect((await runHillclimbCommand(args("--reps", "3", "--effort", "medium"), deps())).exitCode).toBe(0);
+    expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([
+      "warning: variant baseline's earlier rows for case alpha don't record the requested effort (written before it was recorded); this pass requests medium — compare them only knowingly",
+    ]);
+  });
+
+  it("the guard is per case: a --case pass may run another case at another effort, and warns that the variant's cases differ", async () => {
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO.replace("name: Alpha", "name: Beta"));
+    await approve();
+    await runHillclimbCommand(args("--case", "alpha", "--effort", "high"), deps());
+    err = [];
+    const r = await runHillclimbCommand(args("--case", "beta", "--effort", "low"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([
+      "warning: variant baseline's rows for case alpha ran effort high, and this pass runs effort low for case beta: the variant's cases ran different settings — compare across them only knowingly",
+    ]);
+  });
+
+  it("--effort is not in the harness sha: an approved flow runs under any --effort without re-approval", async () => {
+    await approve();
+    const shaOf = async (...a: string[]) => {
+      err = [];
+      await runHillclimbCommand(args("--dry-run", ...a), deps());
+      return err.find((l) => l.startsWith("harness gate:"));
+    };
+    const plain = await shaOf();
+    expect(plain).toMatch(/^harness gate: approved/);
+    expect(await shaOf("--effort", "max")).toBe(plain);
+    expect((await runHillclimbCommand(args("--effort", "max"), deps())).exitCode).toBe(0);
+  });
+
+  it("summary.json records the pass's requested model, requested effort and sent effort", async () => {
+    await approve();
+    await runHillclimbCommand(args("--effort", "high"), deps());
+    const s = JSON.parse(readFileSync(join(cwd, "flow", "baseline", "summary.json"), "utf8"));
+    expect(s).toMatchObject({ model: MODEL, model_requested: MODEL, effort: "high", effort_sent: "high" });
   });
 });

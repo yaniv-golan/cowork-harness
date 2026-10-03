@@ -315,7 +315,13 @@ describe("a pass", () => {
     mkdirSync(join(flowDir(), "baseline"), { recursive: true });
     writeFileSync(vfile("baseline", "summary.json"), JSON.stringify({ description: "loop" }));
     await runHillclimb(args(), deps());
-    expect(JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"))).toEqual({ description: "loop", model: MODEL });
+    expect(JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"))).toEqual({
+      description: "loop",
+      model: MODEL,
+      model_requested: MODEL,
+      effort: "medium",
+      effort_sent: "medium",
+    });
   });
 
   it("rows record whether the trace has the sub-agents' turns (meta.subagent_turns)", async () => {

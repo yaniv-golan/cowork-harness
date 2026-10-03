@@ -671,7 +671,12 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
         c.error("summary.json", F, "not valid JSON: the report falls back silently");
       }
       if (s !== undefined && !isObj(s)) c.error("summary.json", F, "must be a JSON object");
-      else if (isObj(s) && s.model !== undefined && typeof s.model !== "string") c.error("summary.model", F, "model must be a string");
+      else if (isObj(s)) {
+        if (s.model !== undefined && typeof s.model !== "string") c.error("summary.model", F, "model must be a string");
+        // ours: what the pass asked for, and the effort the agent sent (each written only when the pass had one value)
+        for (const k of ["model_requested", "effort", "effort_sent"] as const)
+          if (s[k] !== undefined && typeof s[k] !== "string") c.error(`summary.${k}`, F, `${k} must be a string`);
+      }
     }
 
     const traceKeys = new Set<string>();

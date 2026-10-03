@@ -859,4 +859,14 @@ describe("schema-check: summary.json", () => {
     m.variants.v1!.summary = JSON.stringify({ model: 3 });
     expectOnly(check(m), "error", "summary.model");
   });
+  it("model_requested, effort and effort_sent, when present, are strings", () => {
+    for (const k of ["model_requested", "effort", "effort_sent"]) {
+      const s = base();
+      s.variants.v1!.summary = JSON.stringify({ [k]: ["high"] });
+      expectOnly(check(s), "error", `summary.${k}`);
+    }
+    const ok = base();
+    ok.variants.v1!.summary = JSON.stringify({ model: "m", model_requested: "m", effort: "high", effort_sent: "high" });
+    expect(check(ok).findings.filter((f) => f.rule.startsWith("summary"))).toEqual([]);
+  });
 });
