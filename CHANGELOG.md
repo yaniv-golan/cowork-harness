@@ -286,21 +286,31 @@ All notable changes to this project are documented here. The format is based on
   with `verify-run`'s own evaluation, matched to the run's by identity, not position; one unchanged since the run
   keeps the run's own outcome even when the kept run re-evaluates differently (its grader is unchanged, so the
   difference is the reconstruction's), recorded in `meta.regrade_kept_live` and named on stderr. **The default
-  regrade re-judges only what changed:** a judged assert is re-judged only when the assert itself, `--judge-model`,
-  the judge prompt template, a `semantic_pairwise` assert's references or their gating, or a reference document's
-  content changed since the entry the row carries (its last re-grade's, else its run's); every other judged entry is
-  kept, at no judge cost, and a re-judged row records why in `meta.regrade_rejudged_because`. `--rejudge` re-judges
-  every judged assert. `pass` is recomputed whenever an entry is not the run's own. `--fill-refs` judges only the
-  pairwise comparisons a row lacks, so `pass` cannot move and every row gains the `win_<vN>` columns of references
-  frozen after it (a row whose deterministic outcome or judged rubric changed since it was graded is listed before
-  any judge call: run a default regrade first). Every selected row is re-evaluated before any judge call, a case with
+  regrade re-judges only what changed:** a judged assert is re-judged only when the assert itself, the judge model
+  a re-judge would ask for (`--judge-model`, else — for an assert that pins no `judge_model` —
+  `COWORK_HARNESS_JUDGE_MODEL` or the harness default), the judge prompt template, a `semantic_pairwise` assert's
+  references or their gating, or a reference document's content changed since the entry the row carries (its last
+  re-grade's, else its run's); every other judged entry is kept, at no judge cost, and a re-judged row records why in
+  `meta.regrade_rejudged_because`. `--rejudge` re-judges every judged assert. **Changed evidence is always named:**
+  every judged entry a row is graded with is recomposed from its kept run by the current harness (no judge call) and
+  compared with the document it records; a difference (an edited kept run, a harness change to composition, caps or
+  scrubbing) lists the row and keeps it as it is, whatever else changed for it, until `--rejudge` grades it on the
+  current evidence, recording `evidence_changed` and both hashes in `meta.regrade_evidence`. Each variant reports
+  those rows in `evidenceChanged`. `pass` is recomputed whenever an entry is not the run's own. `--fill-refs` judges
+  only the pairwise comparisons a row lacks, read from the entries it is graded with (a comparison an earlier
+  regrade judged is never judged again, and copied outcomes keep their judge's provenance), so `pass` cannot move
+  and every row gains the `win_<vN>` columns of references frozen after it (a row whose deterministic outcome or
+  judged rubric changed since it was graded is listed before any judge call: run a default regrade first). A row a
+  judge re-graded records this regrade's own spend and model (`meta.regrade_judge_usd`,
+  `meta.regrade_judge_model`); its `judge_usage` / `judge_model` describe every entry it is graded with. Every selected row is re-evaluated before any judge call, a case with
   no judged assert included; a row whose rebuild changes nothing stays byte for byte, and each variant reports a
   `reevaluated` count. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
   no judge call. An agent-failed row whose kept run cannot be re-evaluated (an unanswered gate) only has its meta
   brought current, its grade all 0, and is counted as `agentFailed`, never listed. Rewritten rows record
   `meta.regrade_reevaluated` and `meta.regrade_harness_version`. It is gated like `run`, under the `--skill` the flow
   was approved with (`harness_skill`, which its `--approve-harness` keeps), refuses up front (exit 2) when it would
-  call the judge and the host `claude` cannot run it isolated, takes every selected variant's lock, and preflights
+  call the judge and the host `claude` cannot run it isolated (asked again under the locks when a reference changed
+  in between), takes every selected variant's lock, and preflights
   every batch's evidence before any judge call (a refusal writes nothing).
   `results.jsonl` is replaced atomically with the prior file kept as `regrade-<sha16>.bak.jsonl`, the moved keys are in
   `<variant>/regrade.md` (per-assert and metric columns included; `a<i>` is not compared across two assertion lists),
@@ -308,6 +318,8 @@ All notable changes to this project are documented here. The format is based on
   now re-grades `semantic_pairwise` asserts in the live run's comparison order, checks their references before any
   spend, and drift-checks an all-neutral run against its `composedDoc`; `no_semantic_asserts` now means the scenario has
   neither judged key. A re-grade that only adds comparisons records the outcomes it kept as `pairwise[].copied: true`.
+  A `regrade` entry a judge read records `judgeModelRequested`, the model the re-grade asked for, beside the
+  `judgeModel` that answered.
 
 - **`semantic_pairwise` inside a hillclimb flow, and `hillclimb freeze-ref`.** Under `hillclimb run` every pairwise
   assert is judged against the flow's own references — `<flow>/baseline/ref`, then each later variant's — instead of

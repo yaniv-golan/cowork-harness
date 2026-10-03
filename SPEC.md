@@ -601,7 +601,7 @@ there are three families:
   `dryRun: true` with the estimate at `plan.cost`, where `eval --dry-run` puts it), `hillclimb check` (`reading`, `disclaimer`, `profile`, `findings`, `errors`, `notes`, `warnings`),
   `hillclimb state-template` (`state`, `metrics_md`, and with `--flow` `metrics_md_file`; `notes` when a column was left
   undeclared, experimental), `hillclimb freeze-ref` (payload experimental, §12: `frozen`, `added`, `exists`, `refused`,
-  `exitCode`), `hillclimb regrade` (payload experimental, §12: `flow`, `variants` (each `{variant, rewritten, listed, reevaluated, remeasured, agentFailed, regradeFiles, backup?}`), `exitCode`; so are `<variant>/regrade.md`, the `regrade-<sha16>.bak.jsonl` backups and the rows' `meta.regrade_*` and `meta.assert_sig` keys), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
+  `exitCode`), `hillclimb regrade` (payload experimental, §12: `flow`, `variants` (each `{variant, rewritten, listed, reevaluated, remeasured, agentFailed, evidenceChanged, regradeFiles, backup?}`), `exitCode`; so are `<variant>/regrade.md`, the `regrade-<sha16>.bak.jsonl` backups and the rows' `meta.regrade_*` and `meta.assert_sig` keys; a row a judged entry of which the current harness would show its judge different evidence than it was graded on is in `evidenceChanged` and is never silently kept or re-graded — listed and kept without `--rejudge`, re-judged on the current evidence with it, recording `evidence_changed` and both document hashes in `meta.regrade_evidence`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
   `answer` (`gate`, `answers`), `fixture export` (exit `0` written, `2` usage or refusal; payload experimental,
   §12: `message`, `written`, `skipped`, `refused` (`[]`), `notes`, `bytes`, `outputsDir`, `partial`, `result`; a
   refusal is the error envelope, its message in `error.message`, carrying `refused[]` and whichever of the other
@@ -664,7 +664,8 @@ holds only graded run dirs: a refusal refuses the whole batch and prints the err
 `scenarioSha256` is the SHA-256 of the scenario file's bytes. `judgeCostUsd` is the sum of the priced judge
 calls and is absent when none was priced (never `0` for unknown); `unpricedGrades > 0` makes it a floor.
 `invalidGrades` counts asserts the judge could not grade (`judgeInvalid`), which also fail. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
-`assertionIndex` (the assert's position in the scenario) and its own `docMatchesLive`; `notRegraded[]` lists
+`assertionIndex` (the assert's position in the scenario), its own `docMatchesLive` and, on an entry a judge read,
+`judgeModelRequested` (the model the re-grade asked for; `judgeModel` is the id the judge answered as); `notRegraded[]` lists
 every other assert as `{assertionIndex, keys}`. `metrics` (only when the scenario declares `metrics:`) is the
 `RunResult.metrics` shape re-read from the kept work dir; a file whose bytes differ from the run's recorded
 post-run hash (`RunResult.workspaceFiles`) is `unavailable: "pruned"`.
@@ -1148,7 +1149,7 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `unpricedGrades`, `uncheckedCount`, `uncheckedSections[]`, `docMatchesLive`, `differingSections[]`,
   `liveDocDrift[]`, `assertions[]`, `notRegraded[]`, `authoredCapture`, `metrics?`) and their nested shapes; on an
   `assertions[]` entry, only `assertionIndex`, `docMatchesLive`, `pass`, `judgeInvalid`, `judgeModel`,
-  `judgeCostUsd` and `semanticClaims` (its other keys follow the `RunResult` assertion entry, which is not
+  `judgeModelRequested`, `judgeCostUsd` and `semanticClaims` (its other keys follow the `RunResult` assertion entry, which is not
   pinned field by field); and the error envelope's `error.code` values (`doc_drift`, `unchecked_content`,
   `no_semantic_asserts`),
   `refusals[]` and post-write-failure `runs[]`. The enums are covered as sets: `docMatchesLive`, `change`,
