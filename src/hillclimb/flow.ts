@@ -169,7 +169,7 @@ export class FlowWriter {
    *  `--skill` selection it was approved with (`harness_skill`, removed when there is none, so a stale one never
    *  names a selection this sha did not hash), and the per-entry hashes behind the sha (`harness_files`, so a later
    *  refusal names what changed); keep everything else. */
-  approveHarness(sha: string, skill: string | undefined, files: Readonly<Record<string, string>>): void {
+  approveHarness(sha: string, { skill, files }: { skill?: string; files: Readonly<Record<string, string>> }): void {
     const { harness_skill: _stale, harness_files: _old, ...st } = this.state();
     const next = { ...st, harness_sha: sha, ...(skill !== undefined ? { harness_skill: skill } : {}), harness_files: files };
     this.r.writeFile(join(this.r.root, "_state.json"), JSON.stringify(next, null, 2) + "\n");

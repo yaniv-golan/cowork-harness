@@ -125,7 +125,7 @@ describe("FlowWriter — summary.json, approval, progress", () => {
       join(flow(), "_state.json"),
       JSON.stringify({ best: { round: 1 }, harness_sha: "old", harness_files: { "a.yaml": "0" } }),
     );
-    w.approveHarness("new", undefined, { "b.yaml": "1" });
+    w.approveHarness("new", { files: { "b.yaml": "1" } });
     // The per-entry hashes are replaced whole: an entry the new sha no longer covers is never kept.
     expect(JSON.parse(readFileSync(join(flow(), "_state.json"), "utf8"))).toEqual({
       best: { round: 1 },

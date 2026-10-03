@@ -1488,7 +1488,7 @@ async function regradeFlowInner(
       );
     // Every refusal is decided: record the approval now, so a refused regrade never records one.
     if (decision.kind === "approve") {
-      writers.get(variants[0]!)!.approveHarness(digest.sha, approvedSkill, digest.entries);
+      writers.get(variants[0]!)!.approveHarness(digest.sha, { skill: approvedSkill, files: digest.entries });
       say(
         `harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${join(flowArg, "_state.json")}`,
       );
