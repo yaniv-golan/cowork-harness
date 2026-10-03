@@ -363,8 +363,9 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
 
 Copy the cost numbers; never derive them. The loop's guide prices a run as `model` × `usage`, but `usage` (and
 `in_tokens` / `out_tokens`) covers only the main model and its same-model sub-agents, and the agent's own pricing
-adds what that formula misses (1-hour cache writes, regional multipliers, web-search fees). Measured on kept runs,
-the formula undercounts nearly every row. So:
+prices what that formula does not see (1-hour cache writes, which subscription logins make; regional multipliers;
+web-search fees). On kept runs the formula's figure differs from the agent's own, by different amounts on different
+rows, and no fixed multiplier reproduces it. So:
 
 - **`cost_usd` on a row is the agent's whole cost for that run**: its own `total_cost_usd`, across every model the
   run called (main loop, sub-agents, auxiliary calls). The judge is not in it. `meta.models` lists each model's
