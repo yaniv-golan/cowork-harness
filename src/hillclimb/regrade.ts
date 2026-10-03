@@ -96,12 +96,22 @@ export interface RegradeFlowDeps {
 
 export interface RegradeFlowVariant {
   variant: string;
+  /** Rows written back. The sum of `judged`, `rebuilt` and the agent-failed rows whose meta alone was rewritten. */
   rewritten: number;
-  /** Rows a judge re-graded (each rewritten): `rewritten` less these is the rows rebuilt with no judge call (and any
-   *  agent-failed row whose meta was brought current). */
+  /** Rows a judge re-graded and that were rewritten. */
   judged: number;
-  /** What this regrade's judge calls for those rows cost, summed (`regrade_judge_usd`); absent when none reported one. */
+  /** Rows a judge re-graded that were then listed, not written (a changed reference, a rebuild that cannot be made, a
+   *  fill that would move `pass`): their judge spend is in `judgeUsd` all the same. */
+  listedAfterJudge: number;
+  /** This regrade's judge spend, summed over every row a judge read (`listedAfterJudge` included); absent when no grade
+   *  was priced. A floor when `judgeUnpriced` > 0. */
   judgeUsd?: number;
+  /** Judged grades that reported no cost. */
+  judgeUnpriced: number;
+  /** Rows rebuilt with no judge call and rewritten. */
+  rebuilt: number;
+  /** Of `rebuilt`, the fill rows that lacked only their own variant's reference (neutral, 0.5). */
+  ownRefOnly: number;
   /** Rows not re-graded, with why. Nothing was written for them. */
   listed: Array<{ prompt_id: string; rep: number; why: string }>;
   /** Rows whose deterministic asserts (every assert no judge grades, and each `expect_denied` host) were re-evaluated
@@ -767,6 +777,7 @@ function rebuiltRow(
   const clear = [
     "claims",
     "pairwise_ref_sha256",
+    "pairwise_orders",
     "explanation_untrusted",
     "judge_models",
     "judge_transport",
@@ -826,6 +837,7 @@ function rebuiltRow(
   }
   if (Object.keys(g.claims).length) put("claims", g.claims);
   if (Object.keys(g.refShas).length) put("pairwise_ref_sha256", g.refShas);
+  if (Object.keys(g.pairwiseOrders).length) put("pairwise_orders", g.pairwiseOrders);
   // Who judged: the re-graded result in a full re-grade; in a fill, the row's own judge fields stand (its grades are
   // the live ones) and the fill's spend is said beside them.
   if (judgeFieldsFrom) {
@@ -970,28 +982,31 @@ const changedKeys = (
   return [...keys].filter((k) => (/^(pass|claims|win|both_bad|a\d+)/.test(k) || metric(k)) && before?.[k] !== after?.[k]);
 };
 
-/** What a variant's rewritten rows went through, beside its JSON counts: rows rebuilt with no judge call that were
- *  rewritten, and how many of them lacked only their own variant's reference (a fill: neutral, 0.5). */
-interface PlainTally {
-  rewritten: number;
-  ownRefOnly: number;
-}
-
 /** A variant's counters, one fixed set in one order, wherever they are printed: its `regrade.md` line, its stderr
- *  line and the closing summary. `rewritten` is broken down into the rows a judge re-graded (with this regrade's judge
- *  spend) and those rebuilt with no judge call; the re-measured count shows only where it differs from the latter. */
-const counters = (v: RegradeFlowVariant, plain: PlainTally): string => {
-  const usd = v.judged ? (v.judgeUsd !== undefined ? ` ($${v.judgeUsd.toFixed(4)} judge)` : " (judge cost unknown)") : "";
+ *  line and the closing summary. `rewritten` is broken down into parts that sum to it: the rows a judge re-graded
+ *  (with this regrade's whole judge spend, a row judged and then listed included), those rebuilt with no judge call,
+ *  and the agent-failed rows whose meta alone was rewritten. The re-measured count shows where it differs from the
+ *  rebuilt one. */
+const counters = (v: RegradeFlowVariant): string => {
+  const metaOnly = v.rewritten - v.judged - v.rebuilt;
+  const spent = v.judged || v.listedAfterJudge;
+  const cost =
+    v.judgeUsd === undefined
+      ? "judge cost unknown"
+      : `$${v.judgeUsd.toFixed(4)} judge${v.judgeUnpriced ? ` — a floor, ${v.judgeUnpriced} unpriced` : ""}`;
+  const usd = spent
+    ? ` (${cost}${v.listedAfterJudge ? `, incl. ${v.listedAfterJudge} row${v.listedAfterJudge === 1 ? "" : "s"} judged then listed` : ""})`
+    : "";
   const own =
-    plain.ownRefOnly && plain.ownRefOnly === plain.rewritten
+    v.ownRefOnly && v.ownRefOnly === v.rebuilt
       ? " (only their own reference was missing: neutral 0.5)"
-      : plain.ownRefOnly
-        ? ` (${plain.ownRefOnly} of them only their own reference was missing: neutral 0.5)`
+      : v.ownRefOnly
+        ? ` (${v.ownRefOnly} of them only their own reference was missing: neutral 0.5)`
         : "";
-  const remeasured = v.remeasured && v.remeasured !== plain.rewritten ? `; re-measured ${v.remeasured} without a judge call` : "";
+  const remeasured = v.remeasured && v.remeasured !== v.rebuilt ? `; re-measured ${v.remeasured} without a judge call` : "";
   return (
-    `rewritten ${v.rewritten}: ${v.judged} re-judged${usd}, ${plain.rewritten} rebuilt without a judge call${own}${remeasured}; ` +
-    `agent-failed ${v.agentFailed}, listed ${v.listed.length}`
+    `rewritten ${v.rewritten}: ${v.judged} re-judged${usd}, ${v.rebuilt} rebuilt without a judge call${own}, ` +
+    `${metaOnly} agent-failed (meta only)${remeasured}; listed ${v.listed.length}`
   );
 };
 
@@ -1182,7 +1197,7 @@ async function regradeFlowInner(
     const plain: Target[] = [];
     // Agent-failed rows whose kept run cannot be re-evaluated: rebuilt with no evidence read (see `agentFailed`).
     const metaOnly: Array<{ variant: string; c: HillclimbCase; line: Line; result: RunResult }> = [];
-    const perVariant = new Map<string, { lines: Line[]; old: string; v: RegradeFlowVariant; plain: PlainTally }>();
+    const perVariant = new Map<string, { lines: Line[]; old: string; v: RegradeFlowVariant }>();
     for (const v of variants) {
       const old = writers.get(v)!.readVariantFile("results.jsonl") ?? "";
       const lines: Line[] = old
@@ -1200,6 +1215,10 @@ async function regradeFlowInner(
         variant: v,
         rewritten: 0,
         judged: 0,
+        listedAfterJudge: 0,
+        judgeUnpriced: 0,
+        rebuilt: 0,
+        ownRefOnly: 0,
         listed: [],
         reevaluated: 0,
         remeasured: 0,
@@ -1207,7 +1226,7 @@ async function regradeFlowInner(
         evidenceChanged: [],
         regradeFiles: [],
       };
-      perVariant.set(v, { lines, old, v: vr, plain: { rewritten: 0, ownRefOnly: 0 } });
+      perVariant.set(v, { lines, old, v: vr });
       outcome.variants.push(vr);
       const groups = new Map<string, Batch>();
       for (const line of lines) {
@@ -1558,6 +1577,11 @@ async function regradeFlowInner(
           continue;
         }
         vr.regradeFiles.push(shownRunPath(report.regradeFile, deps.secrets));
+        // The judge already ran for this row: its spend counts whether the row is written or listed below. Counted as
+        // listed after its judge call until it is written (then moved to `judged`).
+        if (report.judgeCostUsd !== undefined) vr.judgeUsd = (vr.judgeUsd ?? 0) + report.judgeCostUsd;
+        vr.judgeUnpriced += report.unpricedGrades;
+        vr.listedAfterJudge++;
         // A fill keeps every outcome it did not judge: one copied against a reference that has since changed (re-frozen
         // by hand) would mix two references in one row — listed, never written.
         const stale = args.fillRefs ? staleCopied(report.assertions as never, b.c, refs) : [];
@@ -1619,8 +1643,8 @@ async function regradeFlowInner(
         }
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
+        vr.listedAfterJudge--;
         vr.judged++;
-        if (report.judgeCostUsd !== undefined) vr.judgeUsd = (vr.judgeUsd ?? 0) + report.judgeCostUsd;
         if (!aIndexAligned(t.line.row!, t.result, b.c)) misaligned.add(t.line);
       }
     }
@@ -1701,10 +1725,9 @@ async function regradeFlowInner(
       else {
         before.set(t.line, t.line.row!.grade);
         rebuilt.set(t.line, got.row);
-        const pt = perVariant.get(t.variant)!.plain;
-        pt.rewritten++;
+        vr.rebuilt++;
         // A fill row of a pairwise case that lacked only its own variant's reference: neutral, no judge call.
-        if (args.fillRefs && !agentFailed && t.missing.length && t.missing.every((r) => r === t.variant)) pt.ownRefOnly++;
+        if (args.fillRefs && !agentFailed && t.missing.length && t.missing.every((r) => r === t.variant)) vr.ownRefOnly++;
         if (!aIndexAligned(t.line.row!, t.result, t.c)) misaligned.add(t.line);
       }
     }
@@ -1723,7 +1746,13 @@ async function regradeFlowInner(
         result,
         m.c,
         shape,
-        { regraded_at: at, regrade_harness_version: harnessVersion },
+        {
+          regraded_at: at,
+          regrade_harness_version: harnessVersion,
+          // Its metric signatures are re-measured (every metric unmeasured, as for any agent failure), as the plain
+          // path's agent-failed row is.
+          ...(declaresMetrics(m.c) ? { regrade_remeasured: true } : {}),
+        },
         undefined,
         shape.metrics.length ? {} : undefined,
       );
@@ -1732,6 +1761,7 @@ async function regradeFlowInner(
         continue;
       }
       vr.agentFailed++;
+      if (declaresMetrics(m.c)) vr.remeasured++;
       if (
         JSON.stringify(got.row.grade) === JSON.stringify(m.line.row!.grade) &&
         (["metric_sigs", "assert_sig"] as const).every((k) => JSON.stringify(got.row.meta?.[k]) === JSON.stringify(m.line.row!.meta?.[k]))
@@ -1774,7 +1804,7 @@ async function regradeFlowInner(
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
-        `${counters(pv.v, pv.plain)}; ${means}`,
+        `${counters(pv.v)}; ${means}`,
         ...(moved.length ? ["", "| case | rep | moved |", "|---|---|---|"] : []),
         ...moved.map(({ l, keys }) => {
           const b = before.get(l) ?? {};
@@ -1808,9 +1838,7 @@ async function regradeFlowInner(
       );
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;
-    say(
-      `hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${counters(v, perVariant.get(v.variant)?.plain ?? { rewritten: 0, ownRefOnly: 0 })}`).join("; ")}`,
-    );
+    say(`hillclimb regrade: ${outcome.variants.map((v) => `${v.variant} ${counters(v)}`).join("; ")}`);
     return outcome;
   } finally {
     for (const r of releases.reverse()) r();

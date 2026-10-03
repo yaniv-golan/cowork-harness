@@ -114,6 +114,8 @@ function buildFlow(
     env?: Record<string, string>;
     /** The fake judge answers `tie` (see `tieJudge`): the live rows pass whatever order the comparison was in. */
     judgeTies?: boolean;
+    /** alpha's pairwise assert judges both orders. */
+    orderBoth?: boolean;
   } = {},
 ) {
   const plugin = join(work, "plugin", "my-plugin");
@@ -135,7 +137,7 @@ function buildFlow(
     join(evals, "alpha.yaml"),
     (opts.noPairwise
       ? `name: alpha\n${head}`
-      : `name: alpha\n${head}  - semantic_pairwise:\n      rubric: ['answers']\n${opts.judgeModel === null ? "" : "      judge_model: claude-haiku-4-5-20251001\n"}`) +
+      : `name: alpha\n${head}  - semantic_pairwise:\n      rubric: ['answers']\n${opts.judgeModel === null ? "" : "      judge_model: claude-haiku-4-5-20251001\n"}${opts.orderBoth ? "      order: both\n" : ""}`) +
       metrics,
   );
   if (opts.withBeta) writeFileSync(join(evals, "beta.yaml"), `name: beta\n${head}`);
@@ -246,14 +248,20 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     // What each rewritten row went through, on each variant's line and in the summary: the baseline's alpha row is
     // judged against v1's reference (one judge call); v1's alpha row lacks only its own reference (neutral, no judge
     // call); both beta rows (no judged assert) are rebuilt with no judge call.
-    const BASE = String.raw`rewritten 2: 1 re-judged \(\$0\.0123 judge\), 1 rebuilt without a judge call; agent-failed 0, listed 0`;
-    const V1 = String.raw`rewritten 2: 0 re-judged, 2 rebuilt without a judge call \(1 of them only their own reference was missing: neutral 0\.5\); agent-failed 0, listed 0`;
+    const BASE = String.raw`rewritten 2: 1 re-judged \(\$0\.0123 judge\), 1 rebuilt without a judge call, 0 agent-failed \(meta only\); listed 0`;
+    const V1 = String.raw`rewritten 2: 0 re-judged, 2 rebuilt without a judge call \(1 of them only their own reference was missing: neutral 0\.5\), 0 agent-failed \(meta only\); listed 0`;
     expect(lines.find((l) => l.startsWith("  [baseline] "))).toMatch(new RegExp(`^  \\[baseline\\] ${BASE}; mean pass `));
     expect(lines.find((l) => l.startsWith("  [v1] "))).toMatch(new RegExp(`^  \\[v1\\] ${V1}; mean pass `));
     expect(lines.at(-1)).toMatch(new RegExp(`^hillclimb regrade: baseline ${BASE}; v1 ${V1}$`));
     // The JSON payload keeps every counter, the judged rows and their judge spend added.
-    expect(out.variants.find((y) => y.variant === "baseline")).toMatchObject({ rewritten: 2, judged: 1, judgeUsd: 0.0123 });
-    expect(out.variants.find((y) => y.variant === "v1")).toMatchObject({ rewritten: 2, judged: 0 });
+    expect(out.variants.find((y) => y.variant === "baseline")).toMatchObject({
+      rewritten: 2,
+      judged: 1,
+      judgeUsd: 0.0123,
+      rebuilt: 1,
+      ownRefOnly: 0,
+    });
+    expect(out.variants.find((y) => y.variant === "v1")).toMatchObject({ rewritten: 2, judged: 0, rebuilt: 2, ownRefOnly: 1 });
     expect(out.variants.find((y) => y.variant === "v1")).not.toHaveProperty("judgeUsd");
     for (const x of out.variants)
       expect(Object.keys(x)).toEqual(expect.arrayContaining(["rewritten", "judged", "reevaluated", "remeasured", "agentFailed", "listed"]));
@@ -355,9 +363,103 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
   }, 180_000);
 });
 
+const priced = (verdict: "A" | "B" | "tie", costUSD: number | ((n: number) => number | undefined)): CompleteStructured =>
+  (() => {
+    let n = 0;
+    return async () => {
+      const c = typeof costUSD === "number" ? costUSD : costUSD(n++);
+      return {
+        structured: { rationale: "r", verdict },
+        model: "claude-haiku-4-5",
+        subtype: "success",
+        ...(c !== undefined
+          ? {
+              usage: {
+                "claude-haiku-4-5": { inputTokens: 1, outputTokens: 1, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: c },
+              },
+            }
+          : {}),
+      };
+    };
+  })();
+
+describe.runIf(POSIX)("hillclimb rows: structured per-order outcomes (meta.pairwise_orders)", () => {
+  it("a row judged order: both against baseline and v1 carries both entries; a re-judge replaces them, a rebuild without order: both drops them", async () => {
+    const { cli, rows, evals } = buildFlow({ orderBoth: true });
+    // The stub judge always answers "A": a win whenever the candidate is shown first, a loss whenever the reference is.
+    expect(rows("v1")[0]!.meta.pairwise_orders).toEqual({ "a1/baseline": { candidate_first: "win", ref_first: "loss" } });
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const v2 = cli("run", "evals", "--flow", "flow", "--variant", "v2", "--concurrency", "1");
+    expect(v2.status, v2.stderr).toBe(0);
+    expect(rows("v2")[0]!.meta.pairwise_orders).toEqual({
+      "a1/baseline": { candidate_first: "win", ref_first: "loss" },
+      "a1/v1": { candidate_first: "win", ref_first: "loss" },
+    });
+    // A re-judge answering "B" turns each order round.
+    const out = await regradeFlow(
+      ARGS({ variant: "v2", rejudge: true }),
+      DEPS({ regradeOptions: { pairwiseComplete: priced("B", 0.01) } }),
+    );
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(rows("v2")[0]!.meta.pairwise_orders).toEqual({
+      "a1/baseline": { candidate_first: "loss", ref_first: "win" },
+      "a1/v1": { candidate_first: "loss", ref_first: "win" },
+    });
+    // order: both removed: the re-judge records one order per comparison, and the stale structured value goes.
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("      order: both\n", ""));
+    const again = await regradeFlow(
+      ARGS({ variant: "v2", rejudge: true, approveHarness: true }),
+      DEPS({ regradeOptions: { pairwiseComplete: priced("B", 0.01) } }),
+    );
+    expect(again.exitCode, JSON.stringify(again)).toBe(0);
+    expect(rows("v2")[0]!.meta).not.toHaveProperty("pairwise_orders");
+  }, 300_000);
+});
+
+describe.runIf(POSIX)("hillclimb regrade: the judge spend and the breakdown", () => {
+  it("unpriced judge calls: (judge cost unknown); partly priced: the figure is a floor", async () => {
+    buildFlow({ reps: 2 });
+    const lines: string[] = [];
+    const none = await regradeFlow(
+      ARGS({ variant: "v1", rejudge: true }),
+      DEPS({ stderr: (l) => lines.push(l), regradeOptions: { pairwiseComplete: priced("A", () => undefined) } }),
+    );
+    expect(none.exitCode, JSON.stringify(none)).toBe(0);
+    expect(none.variants[0]).toMatchObject({ judged: 2, judgeUnpriced: 2, listedAfterJudge: 0 });
+    expect(none.variants[0]).not.toHaveProperty("judgeUsd");
+    expect(lines.find((l) => l.startsWith("  [v1] "))).toMatch(
+      /^  \[v1\] rewritten 2: 2 re-judged \(judge cost unknown\), 0 rebuilt without a judge call, 0 agent-failed \(meta only\); listed 0; mean pass /,
+    );
+    lines.length = 0;
+    // The first call priced, the second not: a sum over the priced one only, said to be a floor.
+    const part = await regradeFlow(
+      ARGS({ variant: "v1", rejudge: true }),
+      DEPS({ stderr: (l) => lines.push(l), regradeOptions: { pairwiseComplete: priced("A", (n) => (n === 0 ? 0.0123 : undefined)) } }),
+    );
+    expect(part.exitCode, JSON.stringify(part)).toBe(0);
+    expect(part.variants[0]).toMatchObject({ judged: 2, judgeUsd: 0.0123, judgeUnpriced: 1 });
+    expect(lines.find((l) => l.startsWith("  [v1] "))).toMatch(
+      /^  \[v1\] rewritten 2: 2 re-judged \(\$0\.0123 judge — a floor, 1 unpriced\), 0 rebuilt without a judge call, 0 agent-failed \(meta only\); listed 0; /,
+    );
+  }, 300_000);
+
+  it("a fill of only rows lacking their own reference: every one is said to be neutral", async () => {
+    const { cli } = buildFlow();
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const lines: string[] = [];
+    const out = await regradeFlow(ARGS({ variant: "v1", fillRefs: true }), DEPS({ stderr: (l) => lines.push(l) }));
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(out.variants[0]).toMatchObject({ rewritten: 1, judged: 0, rebuilt: 1, ownRefOnly: 1 });
+    expect(lines.find((l) => l.startsWith("  [v1] "))).toMatch(
+      /^  \[v1\] rewritten 1: 0 re-judged, 1 rebuilt without a judge call \(only their own reference was missing: neutral 0\.5\), 0 agent-failed \(meta only\); listed 0; /,
+    );
+  }, 240_000);
+});
+
 describe.runIf(POSIX)("the baseline ceiling on a pairwise case", () => {
   const NOTE =
-    "note: alpha: pass is 1 on baseline by construction (its pairwise assert is neutral against its own reference); a variant's gain shows in `win`, not `pass`";
+    "note: alpha: its pairwise assert cannot fail on baseline (neutral against its own reference), so `pass` cannot show a pairwise gain; that shows in `win`";
   it("run and check print a note for it, not the ceiling warning", () => {
     const { cli } = buildFlow();
     const run = cli("run", "evals", "--flow", "flow", "--concurrency", "1");
@@ -373,7 +475,7 @@ describe.runIf(POSIX)("the baseline ceiling on a pairwise case", () => {
     const run = cli("run", "evals", "--flow", "flow", "--concurrency", "1");
     expect(run.status, run.stderr).toBe(0);
     expect(run.stderr).toMatch(/warning: 1\/1 baseline cases are at the ceiling on pass .*: alpha/);
-    expect(run.stderr).not.toContain("by construction");
+    expect(run.stderr).not.toContain("cannot fail on baseline");
     const check = cli("check", "evals", "--flow", "flow");
     expect(check.stderr + check.stdout).toMatch(/warning: 1\/1 baseline cases are at the ceiling on pass .*: alpha/);
   }, 180_000);
@@ -875,13 +977,15 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
       expect(row.meta).not.toHaveProperty("regrade_doc_matches_live");
       expect(row.meta).not.toHaveProperty("regrade_file");
       expect(out.variants.find((x) => x.variant === v)).toMatchObject({ rewritten: 1, remeasured: 1, listed: [] });
-      expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/rewritten 1: 0 re-judged, 1 rebuilt without a judge call;/);
+      expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(
+        /rewritten 1: 0 re-judged, 1 rebuilt without a judge call, 0 agent-failed \(meta only\); listed 0;/,
+      );
       // The metric columns that moved are in the moved table.
       expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/words —→1200/);
       expect(readdirSync(join(flow, v)).some((n) => /^regrade-[0-9a-f]{16}\.bak\.jsonl$/.test(n))).toBe(true);
     }
     expect(lines.join("\n")).toMatch(
-      /baseline rewritten 1: 0 re-judged, 1 rebuilt without a judge call; agent-failed 0, listed 0; v1 rewritten 1: 0 re-judged, 1 rebuilt without a judge call; agent-failed 0, listed 0$/,
+      /baseline rewritten 1: 0 re-judged, 1 rebuilt without a judge call, 0 agent-failed \(meta only\); listed 0; v1 rewritten 1: 0 re-judged, 1 rebuilt without a judge call, 0 agent-failed \(meta only\); listed 0$/,
     );
   }, 240_000);
 
@@ -1319,7 +1423,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(rows("v1").find((r) => r.prompt_id === "alpha")!.meta.regrade_remeasured).toBe(true);
     expect(rows("v1").find((r) => r.prompt_id === "beta")!.meta).not.toHaveProperty("regrade_remeasured");
     expect(lines.at(-1)).toMatch(
-      /^hillclimb regrade: baseline rewritten 2: 0 re-judged, 2 rebuilt without a judge call; re-measured 1 without a judge call; agent-failed 0, listed 0;/,
+      /^hillclimb regrade: baseline rewritten 2: 0 re-judged, 2 rebuilt without a judge call, 0 agent-failed \(meta only\); re-measured 1 without a judge call; listed 0;/,
     );
   }, 240_000);
 
@@ -1481,7 +1585,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     const { cli, flow, rows, evals } = buildFlow({ judgeTies: true });
     for (const v of ["baseline", "v1"]) expect(rows(v)[0]!.grade.pass, JSON.stringify(rows(v)[0])).toBe(1);
     edit(evals, "assert:\n", "expect_denied: [blocked.example]\nassert:\n");
-    const { seen, deps } = counting();
+    const { deps } = counting();
     // A default regrade applies the host added since the run: no denial was recorded, so it fails, and pass with it.
     expect((await regradeFlow(ARGS({ approveHarness: true }), deps)).exitCode).toBe(0);
     for (const v of ["baseline", "v1"]) expect(rows(v)[0]!.grade.pass, v).toBe(0);
@@ -1497,8 +1601,17 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
       baseline: readFileSync(join(flow, "baseline", "results.jsonl"), "utf8"),
       v1: readFileSync(join(flow, "v1", "results.jsonl"), "utf8"),
     };
-    const fill = await regradeFlow(ARGS({ fillRefs: true }), deps);
+    // A priced judge: the baseline row's call is spent before the row is listed, and still counted.
+    const lines: string[] = [];
+    const fill = await regradeFlow(
+      ARGS({ fillRefs: true }),
+      DEPS({ stderr: (l) => lines.push(l), regradeOptions: { pairwiseComplete: priced("tie", 0.0123) } }),
+    );
     expect(fill.exitCode, JSON.stringify(fill)).toBe(1);
+    expect(fill.variants.find((v) => v.variant === "baseline")).toMatchObject({ judged: 0, listedAfterJudge: 1, judgeUsd: 0.0123 });
+    expect(lines.find((l) => l.startsWith("  [baseline] "))).toMatch(
+      /^  \[baseline\] rewritten 0: 0 re-judged \(\$0\.0123 judge, incl\. 1 row judged then listed\), 0 rebuilt without a judge call, 0 agent-failed \(meta only\); listed 1; /,
+    );
     // Both rebuild paths: baseline's row is judged (it lacks win_v1), v1's is rebuilt with no judge call.
     for (const v of fill.variants)
       expect(v.listed, `${v.variant} ${JSON.stringify(rows(v.variant)[0])} ${JSON.stringify(fill)}`).toEqual([
@@ -1511,7 +1624,6 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
         },
       ]);
     for (const v of ["baseline", "v1"] as const) expect(readFileSync(join(flow, v, "results.jsonl"), "utf8"), v).toBe(before[v]);
-    expect(seen.calls).toBeGreaterThan(0);
   }, 240_000);
 
   // result.json is written through the secret scrub, so an assert whose literal holds a scrubbed value is stored as
@@ -2380,14 +2492,19 @@ describe.runIf(POSIX)("hillclimb regrade: an agent-failed row whose run cannot b
     const lines: string[] = [];
     const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ stderr: (l) => lines.push(l) }));
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
-    for (const v of out.variants) expect(v).toMatchObject({ listed: [], rewritten: 1, agentFailed: 1, reevaluated: 0, remeasured: 0 });
+    // Its metric signatures are rewritten, so it was re-measured (as an agent-failed row the plain path rebuilds is).
+    for (const v of out.variants) expect(v).toMatchObject({ listed: [], rewritten: 1, agentFailed: 1, reevaluated: 0, remeasured: 1 });
     const row = rows("v1")[0]!;
     expect(row.meta.assert_sig).not.toBe(old.meta.assert_sig);
     expect(Object.keys(row.meta.metric_sigs as object)).toEqual(["words"]);
     expect(row.meta).not.toHaveProperty("metrics_unavailable");
     expect(Object.entries(row.grade).filter(([k, x]) => !k.endsWith("_present") && x !== 0)).toEqual([]);
     expect(row.grade).toMatchObject({ pass: 0, a0: 0, a1: 0, words_present: 0 });
-    expect(lines.join("\n")).toMatch(/rewritten 1: 0 re-judged, 0 rebuilt without a judge call; agent-failed 1, listed 0/);
+    expect(row.meta.regrade_remeasured).toBe(true);
+    // The breakdown sums to rewritten: the meta-only row is its own part.
+    expect(lines.join("\n")).toMatch(
+      /rewritten 1: 0 re-judged, 0 rebuilt without a judge call, 1 agent-failed \(meta only\); re-measured 1 without a judge call; listed 0/,
+    );
   }, 240_000);
 
   it("in a fill too: an agent-failed row whose case gained an assert is never listed (it scores 0 whatever lines up)", async () => {

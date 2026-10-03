@@ -1198,7 +1198,7 @@ export const Assertion = z.strictObject({
         .enum(["random", "both"])
         .optional()
         .describe(
-          "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a win/loss split scores as a tie, any other disagreement keeps the worse outcome",
+          "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a win/loss split scores as a tie, any other disagreement keeps the worse outcome. Each order's own outcome is recorded (assertions[].pairwise[].orders: candidate_first, ref_first); candidate_first winning more often than ref_first across runs is position bias",
         ),
       judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
       evidence_files: z

@@ -47,7 +47,21 @@ describe("headroom", () => {
     const h = headroom(s, cases);
     expect(h.ceiling).toEqual(["extract-table", "long-answer"]);
     expect(h.warnings).toEqual([
-      "note: extract-table: pass is 1 on baseline by construction (its pairwise assert is neutral against its own reference); a variant's gain shows in `win`, not `pass`",
+      "note: extract-table: its pairwise assert cannot fail on baseline (neutral against its own reference), so `pass` cannot show a pairwise gain; that shows in `win`",
+      expect.stringMatching(/^warning: 1\/3 baseline cases are at the ceiling on pass .*: long-answer — they cannot show a gain/),
+      expect.stringMatching(/^warning: 1\/3 baseline cases are at the floor on pass.*summarize-report/),
+    ]);
+  });
+
+  it("with no cases to read (check without a target), a case whose rows carry a<i>_win_present is pairwise, whatever its value", () => {
+    const s = snap();
+    editRows(s, "baseline", (r) => {
+      if (r.prompt_id === "extract-table" || r.prompt_id === "long-answer") (r.grade as Row).pass = 1;
+      // The key's presence marks the pairwise assert; its value (0 here: not compared) is never read.
+      if (r.prompt_id === "extract-table") (r.grade as Row).a1_win_present = 0;
+    });
+    expect(headroom(s).warnings).toEqual([
+      "note: extract-table: its pairwise assert cannot fail on baseline (neutral against its own reference), so `pass` cannot show a pairwise gain; that shows in `win`",
       expect.stringMatching(/^warning: 1\/3 baseline cases are at the ceiling on pass .*: long-answer — they cannot show a gain/),
       expect.stringMatching(/^warning: 1\/3 baseline cases are at the floor on pass.*summarize-report/),
     ]);

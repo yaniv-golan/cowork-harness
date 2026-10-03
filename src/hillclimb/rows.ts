@@ -236,7 +236,18 @@ export function gradeFor(
     for (const o of authoredGrades[i]?.pairwise ?? [])
       if (o.refDocSha256 !== undefined) refShas[`${pairwiseComposeKey(a)}/${o.ref}`] = o.refDocSha256;
   });
-  return { grade, explanation, claims, refShas, metricsUnavailable: metrics.unavailable };
+  // Each `order: both` comparison's per-order outcomes, against every reference, so position bias can be computed from a
+  // flow dir (`explanation.win` is the human view: baseline only, capped, untrusted). Keyed by assert index, not compose
+  // key: two asserts of one scope read the same document but are judged apart.
+  const pairwiseOrders: Record<string, { candidate_first: string; ref_first: string }> = {};
+  if (!agentFailed)
+    ctx.assertions.forEach((a, i) => {
+      if (a.semantic_pairwise === undefined) return;
+      for (const o of authoredGrades[i]?.pairwise ?? [])
+        if (o.status === "graded" && o.orders !== undefined)
+          pairwiseOrders[`a${i}/${o.ref}`] = { candidate_first: o.orders.candidate_first, ref_first: o.orders.ref_first };
+    });
+  return { grade, explanation, claims, refShas, pairwiseOrders, metricsUnavailable: metrics.unavailable };
 }
 
 /** The grade keys in declared order, so every row reads the same way. */
@@ -254,6 +265,8 @@ export interface GradeBlock {
   explanation: Record<string, string>;
   claims: Record<string, string>;
   refShas: Record<string, string>;
+  /** `a<i>/<ref>` → each order's outcome of an `order: both` comparison (the row's `meta.pairwise_orders`). */
+  pairwiseOrders: Record<string, { candidate_first: string; ref_first: string }>;
   /** Why each unmeasured flow metric was not measured, keyed by id (the row's `meta.metrics_unavailable`). */
   metricsUnavailable: Record<string, MetricUnavailable>;
 }
@@ -407,7 +420,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     return errorRow("error", `grade for assertion ${g.misaligned} could not be aligned with the scenario (${g.excluded})`, {
       failure_rule: "grade_alignment",
     });
-  const { explanation, claims, refShas, metricsUnavailable } = g;
+  const { explanation, claims, refShas, pairwiseOrders, metricsUnavailable } = g;
   const ordered = orderedGrade(g.grade, ctx);
 
   const toolCalls = r?.toolCalls;
@@ -471,6 +484,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       // The assertion set it was graded under: a later pass warns when the scenario's differs.
       assert_sig: assertSig({ assert: ctx.assertions, expect_denied: ctx.expectDenied ?? [] }),
       ...(Object.keys(refShas).length ? { pairwise_ref_sha256: refShas } : {}),
+      ...(Object.keys(pairwiseOrders).length ? { pairwise_orders: pairwiseOrders } : {}),
       ...(hasExplanation ? { explanation_untrusted: true } : {}),
       ...(agentFailed ? { failure_class: "errored_agent", termination_rule: term.rule } : {}),
       ...(Object.keys(models).length ? { models } : {}),

@@ -145,7 +145,10 @@ function metricsMd(declared: readonly GradeKeyDecl[], floats: readonly MetricDec
     L.push(
       "- `win` — the mean `semantic_pairwise` value against the flow's baseline reference: 1 a win, 0.5 a tie or both " +
         "outputs bad, 0 a loss, averaged over the case's pairwise assertions. The baseline's own rows are 0.5 (neutral). " +
-        "`explanation.win` carries the judge's reasons (untrusted model text).",
+        "`explanation.win` carries the judge's reasons against the baseline (untrusted model text), and under `order: both` " +
+        "each order's outcome (`a1 tie (candidate_first win, ref_first loss): …`). `meta.pairwise_orders` holds those outcomes " +
+        'structured, for every `order: both` comparison against every reference (`{"a<i>/<ref>": {candidate_first, ref_first}}`): ' +
+        "`candidate_first` winning more often than `ref_first` across rows is the judge favouring whichever output it saw first.",
       "- `win_present` — 0 when a pairwise comparison with the baseline could not be made (refused evidence, a missing " +
         "or damaged reference); `win` and `both_bad` are then absent (not 0).",
       "- `both_bad` — 1 when the judge found both outputs bad on any pairwise assertion (a weak reference shows here first).",

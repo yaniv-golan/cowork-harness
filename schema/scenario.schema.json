@@ -1350,7 +1350,7 @@
                 ]
               },
               "order": {
-                "description": "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a win/loss split scores as a tie, any other disagreement keeps the worse outcome",
+                "description": "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a win/loss split scores as a tie, any other disagreement keeps the worse outcome. Each order's own outcome is recorded (assertions[].pairwise[].orders: candidate_first, ref_first); candidate_first winning more often than ref_first across runs is position bias",
                 "type": "string",
                 "enum": [
                   "random",

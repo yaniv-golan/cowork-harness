@@ -57,9 +57,10 @@ export interface HeadroomCase {
   scenario: { assert?: ReadonlyArray<object> };
 }
 
-/** `cases` (the target's, when the caller has them) tell a `semantic_pairwise` case apart: on baseline its pairwise
- *  assert is neutral against its own reference, so `pass` at the ceiling there is by construction, not a lack of
- *  headroom — a note, not the ceiling warning. */
+/** A `semantic_pairwise` case at the `pass` ceiling gets a note, not the ceiling warning: on baseline its pairwise
+ *  assert is neutral against its own reference, so it cannot fail there, and `pass` cannot show a pairwise gain (that
+ *  shows in `win`). Such a case is told apart by its asserts in `cases` (the target's, when the caller has them); with
+ *  none to read, by its baseline rows carrying an `a<i>_win_present` key — its presence only, never its value. */
 export function headroom(snap: FlowSnapshot, cases: readonly HeadroomCase[] = []): Headroom {
   const base = snap.variants.baseline;
   const rows = parseRows(base?.results);
@@ -107,13 +108,20 @@ export function headroom(snap: FlowSnapshot, cases: readonly HeadroomCase[] = []
   }
   const n = byCase.size;
   const warnings: string[] = [];
-  // Detected from the case's asserts, never from its win value.
-  const pairwise = new Set(cases.filter((c) => (c.scenario.assert ?? []).some((a) => a && "semantic_pairwise" in a)).map((c) => c.id));
-  const byConstruction = head.id === "pass" && better === "higher" ? ceiling.filter((id) => pairwise.has(id)) : [];
-  const atCeiling = ceiling.filter((id) => !byConstruction.includes(id));
-  if (byConstruction.length)
+  // Detected from the case's asserts, never from its win value; with no cases to read, from the per-assert pairwise
+  // companion key a row of a pairwise case always carries.
+  const pairwise = new Set(
+    cases.length
+      ? cases.filter((c) => (c.scenario.assert ?? []).some((a) => a && "semantic_pairwise" in a)).map((c) => c.id)
+      : rows
+          .filter((r) => Object.keys((r.grade as Record<string, unknown> | undefined) ?? {}).some((k) => /^a\d+_win_present$/.test(k)))
+          .map((r) => String(r.prompt_id ?? "")),
+  );
+  const neutralOnBaseline = head.id === "pass" && better === "higher" ? ceiling.filter((id) => pairwise.has(id)) : [];
+  const atCeiling = ceiling.filter((id) => !neutralOnBaseline.includes(id));
+  if (neutralOnBaseline.length)
     warnings.push(
-      `note: ${byConstruction.join(", ")}: pass is 1 on baseline by construction (its pairwise assert is neutral against its own reference); a variant's gain shows in \`win\`, not \`pass\``,
+      `note: ${neutralOnBaseline.join(", ")}: its pairwise assert cannot fail on baseline (neutral against its own reference), so \`pass\` cannot show a pairwise gain; that shows in \`win\``,
     );
   if (atCeiling.length)
     warnings.push(

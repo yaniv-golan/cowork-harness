@@ -339,8 +339,10 @@ All notable changes to this project are documented here. The format is based on
   judge sees first is a seeded coin per run, assert and reference; `order: both` judges both orders (a win/loss
   split scores as a tie, any other disagreement keeps the worse outcome) and records each order's own outcome as
   `orders: {candidate_first, ref_first}`, so position bias reads from the records: in `result.json`, `eval`'s
-  `runs.jsonl`, the assert's message on a flip and a hillclimb row's `explanation.win`. `regrade` records fresh
-  per-order outcomes for a comparison it judges again and keeps them on one a fill copies. Each output sits inside
+  `runs.jsonl`, the assert's message on a flip and a hillclimb row: structured in `meta.pairwise_orders`
+  (`{"a<i>/<ref>": {candidate_first, ref_first}}`, every comparison against every reference) and named in
+  `explanation.win`. `regrade` records fresh per-order outcomes for a comparison it judges again and keeps them on one
+  a fill copies; a rebuilt row's `meta.pairwise_orders` is the rebuild's own. Each output sits inside
   random per-call fences; the judge never sees the words "reference" or "baseline", and answers through `--json-schema`
   structured output. A judge model equal to the model under test is warned about.
   Per-reference outcomes land in `assertions[].pairwise`; judge spend is reported like `semantic_matches`'.
@@ -412,8 +414,9 @@ All notable changes to this project are documented here. The format is based on
   the same way (`schema/schedule-cost.json`). `hillclimb check` checks a flow dir against our reading of the published
   schema and warns on a baseline case with no headroom (exit `0` clean, `1` findings, `2` usage; a warning never
   changes it). A `semantic_pairwise` case with `pass` at the ceiling gets a note instead of that warning, on `check`
-  and at the end of a baseline pass: its pairwise assert is neutral against its own reference on baseline, so `pass`
-  is 1 by construction and a variant's gain shows in `win`. The floor warning is the same for every case; `hillclimb state-template` prints a `_state.json` skeleton and, with `--flow`, writes the metrics
+  and at the end of a baseline pass: its pairwise assert cannot fail on baseline (neutral against its own reference),
+  so `pass` cannot show a pairwise gain; that shows in `win`. Without the scenario target, `check` finds such a case
+  by the `a<i>_win_present` key its rows carry. The floor warning is the same for every case; `hillclimb state-template` prints a `_state.json` skeleton and, with `--flow`, writes the metrics
   legend to `<flow>/metrics.md` (an edited copy is kept, and the new legend goes to `metrics.md.new`). Every `hillclimb`
   subcommand takes `--flow <dir>` (default `.claude/hillclimb/flow`), and `--help` and `docs/cli.md` show it on each: a loop whose
   flow dir is not the default passes the same dir to every one.
@@ -453,9 +456,9 @@ All notable changes to this project are documented here. The format is based on
   its kept run, before any judge call (a row gains the signatures of metrics added since, and loses an unavailable
   reason for one now measured). A row no judge re-grades is re-measured too: a case with no judged assert, a row
   whose judged asserts all keep their entries, an agent-failed row (signatures and `<id>_present: 0`, never a value)
-  and a fill row that needs no comparison. Every rewritten row of a case that declares a metric, re-judged or not,
-  gains `meta.regrade_remeasured: true`, and each variant reports a `remeasured` count of the rows re-measured with
-  no judge call (the JSON payload). A row whose kept run dir is gone or refused, or whose kept work dir is gone, is listed (exit 1). It
+  and a fill row that needs no comparison. Every rewritten row of a case that declares a metric (re-judged, rebuilt
+  with no judge call, or agent-failed with only its meta rebuilt) gains `meta.regrade_remeasured: true`, and each
+  variant reports a `remeasured` count of the rows re-measured with no judge call (the JSON payload). A row whose kept run dir is gone or refused, or whose kept work dir is gone, is listed (exit 1). It
   refuses a changed declaration before any judge call, as `run` does. `hillclimb check`'s note on rows that lack a
   metric says whether they predate it (a later row carries it) or come after the last row that does (no scenario
   declares it any more, or a regrade limited by `--variant` / `--case` did not re-measure them). Every `hillclimb run`
@@ -517,11 +520,14 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `meta.regrade_judge_model`); its `judge_usage` / `judge_model` describe every entry it is graded with. A later
   rebuild with no judge call drops both (they were that regrade's, not its own) and keeps `meta.regrade_file`. Every selected row is re-evaluated before any judge call, a case with
   no judged assert included; a row whose rebuild changes nothing stays byte for byte, and each variant reports a
-  `reevaluated` count. `regrade.md`, stderr and the closing summary break each variant's rewritten rows down:
-  `rewritten 3: 1 re-judged ($0.0515 judge), 2 rebuilt without a judge call; agent-failed 0, listed 0`, with this
-  regrade's own judge spend, a fill's note on rows that lacked only their own reference (`(only their own reference
-  was missing: neutral 0.5)`), and the re-measured count where it differs from the rebuilt one; the JSON payload
-  carries `judged` and `judgeUsd` beside the other counts. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
+  `reevaluated` count. `regrade.md`, stderr and the closing summary break each variant's rewritten rows down into
+  parts that sum to it: `rewritten 4: 1 re-judged ($0.0515 judge), 2 rebuilt without a judge call, 1 agent-failed
+  (meta only); listed 0`. The judge figure is this regrade's whole judge spend, rows judged and then listed included
+  (`, incl. 1 row judged then listed`), marked `— a floor, N unpriced` when some grades reported no cost and `judge
+  cost unknown` when none did; a fill notes rows that lacked only their own reference (`(only their own reference was
+  missing: neutral 0.5)`), and the re-measured count shows where it differs from the rebuilt one. The JSON payload
+  carries the same parts (`judged`, `rebuilt`, `ownRefOnly`, `listedAfterJudge`, `judgeUsd`, `judgeUnpriced`) beside
+  the other counts. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
   no judge call. An agent-failed row whose kept run cannot be re-evaluated (an unanswered gate) only has its meta
   brought current, its grade all 0, and is counted as `agentFailed`, never listed. Rewritten rows record
   `meta.regrade_harness_version`, and `meta.regrade_reevaluated: true` when the case has a deterministic or
