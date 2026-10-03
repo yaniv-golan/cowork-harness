@@ -1531,26 +1531,43 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     240_000,
   );
 
-  it("an edit inside a scrubbed literal that this process's scrub reproduces: kept, and named as unknowable, never as unchanged", async () => {
-    // Both values are scrubbed, so the edited assert scrubs to the very form the run recorded: an exact scrubbed match.
-    // Whether the assert changed cannot be told from result.json, so the row must never be told it is unchanged.
-    const both = { COWORK_HARNESS_SCRUB_VALUES: "All done,Nope" };
-    const { rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"], env: both });
+  // Both values are scrubbed, so the edited assert scrubs to the very form the run recorded: an exact scrubbed match.
+  // Whether it changed cannot be told from result.json, and rewriting the row would record the new assert_sig over the
+  // old outcome — so every later regrade would take it as unchanged. The row is listed instead, untouched, every time.
+  const BOTH = { COWORK_HARNESS_SCRUB_VALUES: "All done,Nope" };
+  const CANNOT_APPLY =
+    /assertion 1 \(`\w+`\): its literal is scrubbed in the run's result\.json, so an edit to it cannot be applied — re-run the case/;
+
+  it("an edit inside a scrubbed literal that this process's scrub reproduces: listed, untouched, on every regrade", async () => {
+    const { flow, rows, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"], env: BOTH });
     expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a1: 1 });
     edit(evals, "transcript_contains: All done", "transcript_contains: Nope");
-    const lines: string[] = [];
-    const out = await regradeFlow(
-      ARGS({ variant: "v1", approveHarness: true }),
-      DEPS({ secrets: collectSecrets(), stderr: (l) => lines.push(l) }),
-    );
-    expect(out.exitCode, JSON.stringify(out)).toBe(0);
-    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 1, a1: 1 });
-    const said = lines.join("\n");
-    expect(said).not.toMatch(/assertion 1 \(`transcript_contains`\).*unchanged since the run/);
-    expect(said).toMatch(
-      /alpha rep0: assertion 1 \(`transcript_contains`\) — cannot tell whether this assert changed: its literal is scrubbed in the run's result\.json — re-run the case to apply an edit/,
-    );
-    expect(said).not.toMatch(/All done|Nope/);
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    for (const pass of [1, 2]) {
+      const lines: string[] = [];
+      const out = await regradeFlow(
+        ARGS({ variant: "v1", approveHarness: true }),
+        DEPS({ secrets: collectSecrets(), stderr: (l) => lines.push(l) }),
+      );
+      expect(out.exitCode, `regrade #${pass}: ${JSON.stringify(out)}`).toBe(1);
+      expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(CANNOT_APPLY) }]);
+      expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8"), `regrade #${pass}`).toBe(before);
+      const said = lines.join("\n");
+      expect(said).not.toMatch(/unchanged since the run/);
+      expect(said + JSON.stringify(out)).not.toMatch(/All done|Nope/);
+    }
+  }, 300_000);
+
+  it("an edit inside a judged assert's scrubbed rubric that this process's scrub reproduces: listed, no judge call", async () => {
+    const { flow, evals } = buildFlow({ extra: SCRUBBED_JUDGED, env: BOTH });
+    edit(evals, "rubric: ['says All done']", "rubric: ['says Nope']");
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const { users, deps } = capturing(collectSecrets());
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(out.variants[0]!.listed).toEqual([{ prompt_id: "alpha", rep: 0, why: expect.stringMatching(CANNOT_APPLY) }]);
+    expect(users).toEqual([]);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
   }, 240_000);
 
   it("a scrubbed literal this process's scrub reproduces, scenario unchanged: no cannot-tell line", async () => {

@@ -1227,9 +1227,22 @@ async function regradeFlowInner(
         }
         // An assert matched exactly only once scrubbed, on a row graded under another assertion list: an edit inside
         // its scrubbed literal (one secret for another) scrubs to the form the run recorded, so whether it changed
-        // cannot be told. Its graded outcome is kept, and it is named so — never said to be unchanged.
-        const undecidable = gradedUnderNow(row, c) ? new Set<number>() : new Set(byIdentity.scrubbedExact);
-        for (const i of det.keptLive.filter((x) => !undecidable.has(x)))
+        // cannot be told. Rewriting the row would record the current assert_sig over the old outcome, and every later
+        // regrade would take it as unchanged: the row is listed instead, untouched — by every regrade until a re-run.
+        const cannotApply = (at: readonly number[]): boolean => {
+          if (gradedUnderNow(row, c) || !at.length) return false;
+          vr.listed.push({
+            prompt_id: id,
+            rep,
+            why: `${[...at]
+              .sort((a, b) => a - b)
+              .map((i) => labelOf(c, i))
+              .join(", ")}: its literal is scrubbed in the run's result.json, so an edit to it cannot be applied — re-run the case`,
+          });
+          return true;
+        };
+        if (cannotApply(byIdentity.scrubbedExact)) continue;
+        for (const i of det.keptLive)
           say(
             `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} ${outcomeOf(matched[i]!.pass)} in the run, ${outcomeOf(re.deterministic[i]!.pass)} re-evaluated now — unchanged since the run, so it kept its live outcome (the kept evidence or the evaluator differs, not the grader; harness ${harnessVersion})`,
           );
@@ -1248,11 +1261,7 @@ async function regradeFlowInner(
         // live run could produce). So any re-judge such an assert would need lists the row — no judge call, nothing
         // written — unless the operator, having checked the scrub settings, passes --allow-doc-drift. One matched
         // exactly under this process's scrub is re-judged with its rubric scrubbed as the run sent it.
-        if (!gradedUnderNow(row, c)) for (const i of plan.scrubbedExact) undecidable.add(i);
-        for (const i of [...undecidable].sort((a, b) => a - b))
-          say(
-            `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} — cannot tell whether this assert changed: its literal is scrubbed in the run's result.json — re-run the case to apply an edit`,
-          );
+        if (cannotApply(plan.scrubbedExact)) continue;
         const unknowable = [...new Set([...byIdentity.scrubbedOnly, ...plan.scrubbedOnly])].sort((a, b) => a - b);
         const toJudge = agentFailed ? [] : args.fillRefs ? fillJudged(plan, c, v, refNames) : [...plan.rejudge.keys()];
         const rawRubric = unknowable.filter((i) => toJudge.includes(i));
