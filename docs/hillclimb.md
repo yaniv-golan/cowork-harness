@@ -495,7 +495,10 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   to `answers:` is a gated scenario edit, but it marks no row stale (`meta.assert_sig` covers `assert` and
   `expect_denied` only) and a re-grade cannot answer a question again, so start a fresh flow dir (its own `state-template` and
   `--dry-run --approve-harness` first, as in the [Quick start](#quick-start)) and run the baseline there: in this flow every slot already has a row, and a pass resumes by slot.
-- **Judge variance.** Set `order: both` on a `semantic_pairwise` assert to cancel position bias. The frozen
+- **Judge variance.** Set `order: both` on a `semantic_pairwise` assert to cancel position bias. Each order's own
+  outcome is kept (`pairwise[].orders` in `result.json`, and named in the row's `explanation.win`, e.g.
+  `a1 tie (candidate_first win, ref_first loss): …`): `candidate_first` winning more often than `ref_first` across
+  rows is the judge favouring whichever output it saw first. The frozen
   reference is one sample (the lowest-rep good row), so an unusually good or bad reference shifts every comparison.
 - **The session's effort and sub-agent model are shared by every variant.** The session file's `effort` and
   `agent_env.subagent_model` are covered by the harness gate, so changing either is a gated edit that every later

@@ -2127,7 +2127,9 @@ export interface RunResult {
      *  `graded`: the judge compared the run with the frozen reference — `outcome` from the run's side, `value` 1 win
      *  / 0.5 tie / 0 loss / 0.5 both_bad, `order` which output the judge saw first, `positionFlip` when the two calls
      *  of `order: both` disagreed (a win/loss split scores as a tie; any other disagreement keeps the worse outcome,
-     *  and `rationale` is the kept call's, or both joined by " | " for a win/loss tie). `neutral`: the reference was frozen from this very run's variant,
+     *  and `rationale` is the kept call's, or both joined by " | " for a win/loss tie), `orders` each call's own outcome
+     *  under `order: both` (`candidate_first` / `ref_first`, absent for a single-order grade): over many grades, a judge
+     *  that favours whichever output it saw first shows up as `candidate_first` winning more often than `ref_first`. `neutral`: the reference was frozen from this very run's variant,
      *  so no judge was called and the value is 0.5. `missing` / `integrity`: the reference could not be read (absent,
      *  or failing its recorded sha256), and the assert is evidence-unavailable. `rationale` is the judge's reason
      *  restated from the run's side (untrusted model text). `refDocSha256` is the frozen document's sha256 — constant
@@ -2146,6 +2148,8 @@ export interface RunResult {
       value?: number;
       order?: "candidate_first" | "ref_first" | "both";
       positionFlip?: boolean;
+      /** `order: both` only: each order's own outcome, keyed by which output the judge saw first. */
+      orders?: { candidate_first: "win" | "tie" | "loss" | "both_bad"; ref_first: "win" | "tie" | "loss" | "both_bad" };
       rationale?: string;
       refDocSha256?: string;
       /** The reference was frozen without a live fingerprint to check it against (`ref freeze --allow-unchecked`). */

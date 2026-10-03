@@ -143,6 +143,40 @@ describe("semantic_pairwise — pre-pass and check", () => {
     expect(evaluate([a], c)[0]!.pass).toBe(want);
   });
 
+  it("order: both — each order's outcome is recorded on the comparison, and the check message names them on a flip", async () => {
+    const a = assertOf({ order: "both", pass_if: "win" }); // a failing verdict, so the message is recorded
+    freezeFrom(join(tmp, "baseline"), a, "R");
+    const c = ctx({ finalMessage: "C" });
+    const judgeFor =
+      (model: string): PairwiseJudge =>
+      async () => ({
+        outcome: "tie",
+        value: 0.5,
+        order: "both",
+        positionFlip: true,
+        orders: { candidate_first: "win", ref_first: "loss" },
+        model,
+      });
+    await runPairwiseJudges([a], c, opts(a, { judgeFor }));
+    const [r] = evaluate([a], c);
+    expect(r!.pairwise![0]).toMatchObject({
+      status: "graded",
+      outcome: "tie",
+      order: "both",
+      positionFlip: true,
+      orders: { candidate_first: "win", ref_first: "loss" },
+    });
+    expect(r!.message).toContain("tie (orders disagreed: candidate_first win, ref_first loss)");
+  });
+
+  it("a single-order comparison records no per-order outcomes", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "R");
+    const c = ctx({ finalMessage: "C" });
+    await runPairwiseJudges([a], c, opts(a));
+    expect(evaluate([a], c)[0]!.pairwise![0]).not.toHaveProperty("orders");
+  });
+
   it("the default pass_if is not_worse", async () => {
     const a = assertOf();
     freezeFrom(join(tmp, "baseline"), a, "R");

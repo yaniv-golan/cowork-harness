@@ -882,6 +882,41 @@ describe("allow_stall: a stall the scenario opted out of is graded, not errored_
     expect(c.bucket).toBe("valid");
     expect(c.termination.rule).toBe("stall_allowed");
   });
+  it("a runs.jsonl line keeps a pairwise comparison's per-order outcomes, and no other judge detail", () => {
+    const r = validRep();
+    const pw = {
+      assertion: { semantic_pairwise: { rubric: ["r"], order: "both" } } as unknown as Assertion,
+      pass: true,
+      pairwise: [
+        {
+          ref: "baseline",
+          status: "graded" as const,
+          outcome: "tie" as const,
+          value: 0.5,
+          order: "both" as const,
+          positionFlip: true,
+          orders: { candidate_first: "win" as const, ref_first: "loss" as const },
+          rationale: "untrusted",
+        },
+        { ref: "v1", status: "graded" as const, outcome: "win" as const, value: 1, order: "ref_first" as const, gate: false as const },
+      ],
+    };
+    const line = buildRunsLine({
+      index: 0,
+      arm: "A",
+      scenario: "s",
+      rep: 0,
+      runId: "run-0",
+      runDir: undefined,
+      result: { ...r, assertions: [pw] } as unknown as RunResult,
+      thrown: undefined,
+      evidence: undefined,
+    });
+    expect(line.grades[0]!.assertions[0]!.pairwise).toEqual([
+      { ref: "baseline", status: "graded", outcome: "tie", orders: { candidate_first: "win", ref_first: "loss" } },
+      { ref: "v1", status: "graded", outcome: "win" },
+    ]);
+  });
   it("without allow_stall a stall is still errored_agent (fixture and constructed)", () => {
     expect(classifyTermination({ result: fixture("stalled-on-question") })).toMatchObject({
       bucket: "errored_agent",

@@ -337,8 +337,11 @@ All notable changes to this project are documented here. The format is based on
   evidence options) with a reference document and answers win, tie, loss or `both_bad`. `pass_if` (default
   `not_worse`; also `win`, or `any` for a metric) must hold against every reference in `refs:`. Which output the
   judge sees first is a seeded coin per run, assert and reference; `order: both` judges both orders (a win/loss
-  split scores as a tie, any other disagreement keeps the worse outcome). Each output sits inside random per-call
-  fences; the judge never sees the words "reference" or "baseline", and answers through `--json-schema`
+  split scores as a tie, any other disagreement keeps the worse outcome) and records each order's own outcome as
+  `orders: {candidate_first, ref_first}`, so position bias reads from the records: in `result.json`, `eval`'s
+  `runs.jsonl`, the assert's message on a flip and a hillclimb row's `explanation.win`. `regrade` records fresh
+  per-order outcomes for a comparison it judges again and keeps them on one a fill copies. Each output sits inside
+  random per-call fences; the judge never sees the words "reference" or "baseline", and answers through `--json-schema`
   structured output. A judge model equal to the model under test is warned about.
   Per-reference outcomes land in `assertions[].pairwise`; judge spend is reported like `semantic_matches`'.
   - A missing, damaged or differently-scoped reference, one frozen for a different prompt, or a reference store

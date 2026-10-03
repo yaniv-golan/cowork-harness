@@ -277,6 +277,8 @@ re-graded with it. `regrade` does exactly that: it rebuilds the judged document 
 the scenario's judged asserts again — `semantic_matches`, and `semantic_pairwise`, compared again with its `refs:`
 stores in the order the live run used (seeded by the run's id and the assert's index; every reference must resolve
 before any judge call, and a run whose comparisons were all neutral is drift-checked against its `composedDoc`).
+Under `order: both`, a comparison judged again records its own fresh per-order outcomes (`pairwise[].orders`); a
+comparison a fill copies keeps the ones it was judged with.
 Every other assert is listed as *not re-graded*. The agent does not run again; the judge call is the only spend.
 An entry a judge read records `judgeModel`, the id the judge answered as, and `judgeModelRequested`, the model it
 was asked for (`--judge-model`, else the assert's `judge_model`, else the default).

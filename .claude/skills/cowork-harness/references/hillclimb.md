@@ -367,7 +367,9 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
   tie or both bad, 0 loss; 0.5 on the baseline's own rows. `win_present: 0` means no comparison with the baseline
   could be made; `win` and `both_bad` are then absent. A row also carries `both_bad`, a `win_<vN>` /
   `win_<vN>_present` pair per later reference (a metric only: only the baseline's reference decides `pass`),
-  per-assert `a<i>_win*` drill-down keys, and `meta.pairwise_ref_sha256`. A case with no pairwise assert carries
+  per-assert `a<i>_win*` drill-down keys, and `meta.pairwise_ref_sha256`. Under `order: both` the row's
+  `explanation.win` names each order's outcome (`a1 tie (candidate_first win, ref_first loss): …`); `candidate_first`
+  winning more often than `ref_first` across rows is position bias. A case with no pairwise assert carries
   the `_present` keys as 0; an agent failure scores 0, measured. `check` errors when a reference document changed
   under the flow.
 - **`skill_invoked` is 1 or 0** for whether the run invoked the tracked skill (`meta.skill_tracked` names it);

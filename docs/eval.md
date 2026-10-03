@@ -364,7 +364,7 @@ local lane.
 
 `<eval-dir>/manifest.json` (everything fixed before the first run: arms, snapshot signatures, scenario and
 session hashes, pins, settings), `arms/`, `runs.jsonl` (one line per finished job, with every field the
-report reads), `report.json` (`schemaVersion: 0`) and `report.md` (host paths outside `$HOME` redacted,
+report reads, and a `semantic_pairwise` grade's per-order outcomes under `order: both`, for reading position bias), `report.json` (`schemaVersion: 0`) and `report.md` (host paths outside `$HOME` redacted,
 the count in the header).
 
 The runs themselves are ordinary run dirs under the runs root, labelled `eval:<eval-id>:<arm>`, so

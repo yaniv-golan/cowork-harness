@@ -120,7 +120,10 @@ export function pairwiseRowValues(input: {
   const reasons = idx
     .map((i) => ({ i, o: outcome(i, "baseline") }))
     .filter((x) => x.o?.status === "graded" && x.o.rationale)
-    .map((x) => `a${x.i} ${x.o!.outcome}: ${x.o!.rationale}`);
+    .map((x) => {
+      const ord = x.o!.orders;
+      return `a${x.i} ${x.o!.outcome}${ord ? ` (candidate_first ${ord.candidate_first}, ref_first ${ord.ref_first})` : ""}: ${x.o!.rationale}`;
+    });
   if (grade.win_present === 1 && reasons.length) {
     const text = reasons.join(" | ");
     return { grade, explanation: UNTRUSTED_JUDGE_PREFIX + (text.length > EXPLANATION_CAP ? `${text.slice(0, EXPLANATION_CAP)}…` : text) };

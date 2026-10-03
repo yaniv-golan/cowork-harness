@@ -165,6 +165,43 @@ describe("makePairwiseJudge", () => {
     expect(r.costUsd).toBeCloseTo(0.02);
   });
 
+  // The expectation comes from the PROMPT the judge saw (where CAND sits), never from the seed, so a swapped mapping
+  // is red under either seed value.
+  it("order: both records each order's outcome, keyed by which output the judge saw first, under either seed", async () => {
+    const sessions: string[] = [];
+    for (let i = 0; sessions.length < 2 && i < 64; i++) {
+      const s = `seed-${i}`;
+      if (!sessions.some((x) => candidateFirst(x, 0, "baseline") === candidateFirst(s, 0, "baseline"))) sessions.push(s);
+    }
+    expect(sessions.map((s) => candidateFirst(s, 0, "baseline")).sort()).toEqual([false, true]);
+    for (const sessionId of sessions) {
+      // Candidate first ⇒ the judge picks it (win); reference first ⇒ the judge calls a tie.
+      const complete: CompleteStructured = async (c) => {
+        const candIsA = c.user.indexOf("CAND") < c.user.indexOf("REF");
+        return { structured: { rationale: "r", verdict: candIsA ? "A" : "tie" }, model: "claude-x", usage };
+      };
+      const r = await makePairwiseJudge({ model: "claude-x", complete })({ ...input, sessionId, order: "both" });
+      expect(r.orders).toEqual({ candidate_first: "win", ref_first: "tie" });
+      expect(r).toMatchObject({ outcome: "tie", order: "both", positionFlip: true });
+    }
+  });
+
+  it("order: both records the per-order outcomes when the two orders agree too", async () => {
+    const complete: CompleteStructured = async (c) => {
+      const candIsA = c.user.indexOf("CAND") < c.user.indexOf("REF");
+      return { structured: { rationale: "r", verdict: candIsA ? "B" : "A" }, model: "claude-x", usage }; // always the reference
+    };
+    const r = await makePairwiseJudge({ model: "claude-x", complete })({ ...input, order: "both" });
+    expect(r.orders).toEqual({ candidate_first: "loss", ref_first: "loss" });
+    expect(r.positionFlip).toBe(false);
+  });
+
+  it("a single-order grade records no per-order outcomes: `order` already names the one order judged", async () => {
+    const complete: CompleteStructured = async () => ({ structured: { rationale: "r", verdict: "A" }, model: "claude-x", usage });
+    const r = await makePairwiseJudge({ model: "claude-x", complete })({ ...input, order: "random" });
+    expect(r).not.toHaveProperty("orders");
+  });
+
   it("retries one invalid reply, then throws PairwiseJudgeInvalid carrying the spend of both attempts", async () => {
     let n = 0;
     const complete: CompleteStructured = async () => {
