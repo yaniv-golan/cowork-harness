@@ -349,7 +349,10 @@ All notable changes to this project are documented here. The format is based on
   difference is the reconstruction's), recorded in `meta.regrade_kept_live` and named on stderr. An assert whose
   literal holds a scrubbed secret, recorded `[REDACTED]` in `result.json`, is matched under this process's scrub; one
   this process cannot reproduce is kept unchanged as well (never re-evaluated or re-judged over scrubbed evidence: a re-judge it
-  would need lists the row, with `--allow-doc-drift` the only override) and named on stderr, since whether it was edited cannot be known. **The default
+  would need lists the row, with `--allow-doc-drift` the only override — under it the judge sees the raw rubric against
+  the scrubbed evidence, so its grade may not match the live run's) and named on stderr, since whether it was edited
+  cannot be known. An edit inside a literal this process's scrub reproduces (one scrubbed value for another) cannot be
+  told from no edit either: on a row whose `meta.assert_sig` moved, it lists the row, untouched, until the case is re-run. **The default
   regrade re-judges only what changed:** a judged assert is re-judged only when the assert itself, the judge model
   a re-judge would ask for (`--judge-model`, else the assert's own `judge_model` — so a row re-judged under an
   override goes back to its pin — else `COWORK_HARNESS_JUDGE_MODEL` or the harness default), the judge prompt template, a `semantic_pairwise` assert's

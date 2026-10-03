@@ -84,7 +84,10 @@ export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml 
        judge prompt, the judge model it would ask for — --judge-model, the pin, or the env/default — a pairwise reference or its
        content); the rest keep their entries, at no judge cost. A row whose judged evidence the current harness
        composes differently than it was graded on is listed and kept (--rejudge grades it on the current evidence,
-       unless it is less redacted: then only --rejudge --allow-doc-drift).
+       unless it is less redacted: then only --rejudge --allow-doc-drift). A row that would re-judge an assert whose
+       literal the run scrubbed and this process's scrub does not reproduce is listed too: --allow-doc-drift re-judges
+       it, the judge then seeing the raw rubric against the scrubbed evidence (its grade may not match the live run's).
+       An edit inside a scrubbed literal cannot be applied: that row is listed until the case is re-run.
        --rejudge: re-judge every judged assert. --fill-refs: only the pairwise comparisons a row lacks are judged (a
        reference frozen after it), so pass cannot move and every row carries every win column. Gated like run. Exit 0
        rewritten or nothing to do, 1 some rows listed (not re-graded) or a failure after the first judge call, 2 refused

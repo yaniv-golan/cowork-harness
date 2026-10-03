@@ -242,9 +242,12 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   grader is unchanged, so the difference is the reconstruction's — e.g. a `computer://` link into a connected
   folder, whose host path no run dir records): the row records `meta.regrade_kept_live` and stderr names the assert
   with both outcomes. An assert whose literal holds a scrubbed secret is recorded `[REDACTED]` in `result.json`;
-  it is matched under this process's scrub (`COWORK_HARNESS_SCRUB_VALUES` / `_KEYS`), and one this process cannot
+  it is matched under this process's scrub (`COWORK_HARNESS_SCRUB_VALUES` / `_KEYS`). Matched that way, an edit inside
+  its literal (one scrubbed value for another) cannot be told from no edit: on a row whose `meta.assert_sig` is not
+  the scenario's now, it lists the row, untouched, on every regrade until the case is re-run. One this process cannot
   reproduce is kept unchanged too — never re-evaluated or re-judged over scrubbed evidence; a re-judge it would need
-  lists the row (same scrub settings, or `--allow-doc-drift` after checking) — and named on stderr (an edited one
+  lists the row (same scrub settings, or `--allow-doc-drift` after checking — then the judge sees the RAW rubric
+  against the scrubbed evidence, so its grade may not match the live run's) — and named on stderr (an edited one
   takes a re-run). A row no judge re-grades is re-evaluated too: a case with no judged assert, a row whose judged
   asserts all keep their entries, an agent-failed row (it gains the metric signature and `<id>_present: 0`, never a
   value), and a fill row that needs no comparison. Such a row keeps the judge-side keys of the re-grade whose entries
