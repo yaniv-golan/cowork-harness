@@ -57,9 +57,8 @@ All notable changes to this project are documented here. The format is based on
 
     The same applies to `stats` trends and `eval`/`hillclimb` comparisons that span this release: spend and
     transcripts on either side of it are not like-for-like.
-  - The committed cassettes: `example-pdf-skill` and `dispatch-shell` are re-recorded with auto-memory off, so their
-    init frames carry no `memory_paths`. `hostloop-computer-links` (re-recorded on agent 2.1.286) and
-    `example-multiselect-gate` (re-stamped) were recorded before the switch and still carry `memory_paths`.
+  - The committed cassettes: `example-pdf-skill`, `dispatch-shell`, `hostloop-computer-links` and
+    `example-multiselect-gate` are re-recorded with auto-memory off, so their init frames carry no `memory_paths`.
 - **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
   the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
 - **`hostloop` on an Intel (x64) Mac: the native build pin is per architecture.** `desktop-2.19675.0` records the
