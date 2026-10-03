@@ -829,7 +829,32 @@ export function expandExpectDenied(
   });
 }
 
-export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult["assertions"] {
+/** The shared-capture hazard of a scenario with more than one judged assert and a scoped one (see `evaluate`), as the
+ *  `::warning::` line `evaluate` prints; undefined when there is none. A caller that evaluates one scenario many times
+ *  (a re-grade over many kept runs) says it once with this and passes `quietSharedCapture` to `evaluate`. */
+export function sharedCaptureWarning(assertions: readonly Assertion[]): string | undefined {
+  const sem = assertions.filter((a) => judgedOpts(a) !== undefined);
+  const scopedCount = sem.filter((a) => (judgedOpts(a)?.evidenceFiles?.length ?? 0) > 0).length;
+  // Fires for ANY multi-assert scenario carrying a scope, not only a MIXED one. The interference comes from
+  // `priorityGlobs` being the UNION across asserts plus the per-file-cap exemption, and neither cares whether
+  // the other asserts are scoped — two SCOPED asserts collide harder (both files exempt, so the starvation is
+  // larger), and a `scopedCount < sem.length` condition is silent on exactly that worse case.
+  if (!(sem.length > 1 && scopedCount > 0)) return undefined;
+  return (
+    `::warning:: this scenario has ${sem.length} ${sem.some((x) => x.semantic_pairwise !== undefined) ? "judged (semantic_matches/semantic_pairwise)" : "semantic_matches"} asserts (${scopedCount} scoped) sharing ONE authored-file ` +
+    `capture. An evidence_files scope exempts its files from the per-file cap, so it changes how many bytes the OTHER asserts' ` +
+    `evidence gets — a scoped assert can consume the budget until an unscoped sibling's file is dropped OR kept only as a ` +
+    `truncated prefix (its per-file allowance is min(16 KiB, whatever is left), which can fall to almost nothing), and that ` +
+    `sibling then refuses with nothing in its message pointing back here. Give each the narrowest scope covering its own rubric, and raise ` +
+    `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES so they all fit.\n`
+  );
+}
+
+export function evaluate(
+  assertions: Assertion[],
+  ctx: AssertContext,
+  opts: { quietSharedCapture?: boolean } = {},
+): RunResult["assertions"] {
   // `allow_delete_in` waives per mount across the whole array; resolve it once here since `check()`
   // cannot see sibling entries.
   const deleteWaivedMounts = [...new Set(assertions.flatMap((a) => a.allow_delete_in ?? []))];
@@ -839,21 +864,8 @@ export function evaluate(assertions: Assertion[], ctx: AssertContext): RunResult
   // per-file exemption that grants therefore applies to the SINGLE shared capture — so scoping assert A
   // changes which bytes assert B gets, while B still refuses on any omission. Warned once per evaluation,
   // here, because this is the only place that sees the whole array.
-  const sem = assertions.filter((a) => judgedOpts(a) !== undefined);
-  const scopedCount = sem.filter((a) => (judgedOpts(a)?.evidenceFiles?.length ?? 0) > 0).length;
-  // Fires for ANY multi-assert scenario carrying a scope, not only a MIXED one. The interference comes from
-  // `priorityGlobs` being the UNION across asserts plus the per-file-cap exemption, and neither cares whether
-  // the other asserts are scoped — two SCOPED asserts collide harder (both files exempt, so the starvation is
-  // larger), and a `scopedCount < sem.length` condition is silent on exactly that worse case.
-  if (sem.length > 1 && scopedCount > 0)
-    warn(
-      `::warning:: this scenario has ${sem.length} ${sem.some((x) => x.semantic_pairwise !== undefined) ? "judged (semantic_matches/semantic_pairwise)" : "semantic_matches"} asserts (${scopedCount} scoped) sharing ONE authored-file ` +
-        `capture. An evidence_files scope exempts its files from the per-file cap, so it changes how many bytes the OTHER asserts' ` +
-        `evidence gets — a scoped assert can consume the budget until an unscoped sibling's file is dropped OR kept only as a ` +
-        `truncated prefix (its per-file allowance is min(16 KiB, whatever is left), which can fall to almost nothing), and that ` +
-        `sibling then refuses with nothing in its message pointing back here. Give each the narrowest scope covering its own rubric, and raise ` +
-        `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES so they all fit.\n`,
-    );
+  const hazard = opts.quietSharedCapture ? undefined : sharedCaptureWarning(assertions);
+  if (hazard) warn(hazard);
   return assertions.map((a) => check(a, withWaivers));
 }
 
@@ -1553,6 +1565,9 @@ export function composeJudgedDocument(
 
 const sha256Hex = (t: string): string => createHash("sha256").update(t, "utf8").digest("hex");
 
+/** The prefix every secret-scrub marker starts with (`[REDACTED]`, `[REDACTED:base64]`, `[REDACTED:uri]`). */
+export const REDACTION_MARK = "[REDACTED";
+
 /** Fingerprint the document as SENT. Each section is hashed over the slice of `sent` it occupies, so a
  *  part cut by the aggregate cap is hashed over what survived and a part wholly past the cut is omitted —
  *  both fall out of slicing the sent text rather than being special-cased. Below the cap, `sent` is the
@@ -1567,7 +1582,7 @@ function fingerprintJudgedDoc(
   let off = 0;
   for (let i = 0; i < parts.length && off < limit; i++) {
     const slice = sent.slice(off, Math.min(off + parts[i].length, limit));
-    sections.push({ ...kinds[i], sha256: sha256Hex(slice), chars: slice.length });
+    sections.push({ ...kinds[i], sha256: sha256Hex(slice), chars: slice.length, redactions: slice.split(REDACTION_MARK).length - 1 });
     off += parts[i].length + 2; // the "\n\n" join
   }
   return { sha256: sha256Hex(sent), sections };
@@ -2022,7 +2037,14 @@ export type Authorship =
   | { state: "untouched" }
   /** Cannot be decided — never read as authored. `evidence: true` when the recorded evidence (the manifest, a
    *  pre- or post-run hash) is what is missing, rather than the shape of the path or the turn. */
-  | { state: "undecidable"; why: string; evidence: boolean }
+  | {
+      state: "undecidable";
+      why: string;
+      evidence: boolean;
+      /** `no_manifest`: undecidable only because the run recorded no pre-run manifest (nothing armed it, or it predates
+       *  the manifest) — the one cause a re-run of the case cures. */
+      cause?: "no_manifest";
+    }
   | { state: "unsafe" }
   | { state: "not_found" }
   | { state: "directory" }
@@ -2051,10 +2073,12 @@ export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash
       "this is a --resume turn: authorship is decided per invocation, and a resume turn captures no pre-run manifest of its own (the one on disk is the first turn's), so what THIS turn wrote cannot be told apart from earlier turns' work",
     );
   if (ctx.preRunHashes === undefined)
-    return undecidable(
-      "no pre-run manifest for this run/cassette (it predates the manifest, or nothing armed it) — authorship cannot be decided",
-      true,
-    );
+    return {
+      state: "undecidable",
+      why: "no pre-run manifest for this run/cassette (it predates the manifest, or nothing armed it) — authorship cannot be decided",
+      evidence: true,
+      cause: "no_manifest",
+    };
   const abs = containedPath(ctx.workRoot, p);
   if (!abs) return { state: "unsafe" };
   const lexical = relative(resolve(ctx.workRoot), abs).split(sep).join("/");

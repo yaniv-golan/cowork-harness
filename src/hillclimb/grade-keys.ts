@@ -222,6 +222,69 @@ const declTuple = (m: MetricDecl): string =>
  *  the sha256 of its canonical tuple. A later pass compares it, so a column cannot change meaning mid-flow. */
 export const metricSig = (m: MetricDecl): string => createHash("sha256").update(declTuple(m)).digest("hex").slice(0, 16);
 
+/** A JSON value with every object's keys sorted, so key order never changes it; `undefined` members are dropped, as
+ *  `JSON.stringify` drops them. Two assertions are the same assertion when their canonical JSON is equal. */
+export function canonicalJson(v: unknown): string {
+  const sort = (x: unknown): unknown =>
+    Array.isArray(x)
+      ? x.map(sort)
+      : x !== null && typeof x === "object"
+        ? Object.fromEntries(
+            Object.keys(x)
+              .sort()
+              .map((k) => [k, sort((x as Record<string, unknown>)[k])]),
+          )
+        : x;
+  return JSON.stringify(sort(v)) ?? "null";
+}
+
+/** An assertion as hillclimb identifies it: `semantic_pairwise.refs` left out. `parseScenarioFile` rewrites refs to
+ *  host-absolute paths, and hillclimb ignores them (a flow's references are its own), so a checkout's location must
+ *  not change an assertion's identity. Any other assert is returned as it is, so its canonical JSON is unchanged. */
+function withoutRefs(a: unknown): unknown {
+  const sp = (a as { semantic_pairwise?: unknown } | null)?.semantic_pairwise;
+  if (sp === null || typeof sp !== "object" || !("refs" in sp)) return a;
+  const { refs: _refs, ...rest } = sp as Record<string, unknown>;
+  void _refs;
+  return { ...(a as object), semantic_pairwise: rest };
+}
+
+/** Two assertions are the same assertion when their identities are equal: the canonical JSON (key order never
+ *  changes it) of the assertion as written, `semantic_pairwise.refs` left out. Every judge input an assert carries —
+ *  its rubric, claims, judge model, evidence scope (`include_subagent_text`, `evidence_files`, `include_fork_results`)
+ *  and so its pairwise compose key — is part of it. */
+export const assertIdentity = (a: unknown): string => canonicalJson(withoutRefs(a));
+
+/** The identity of each assertion of one list, with what it reads from its SIBLINGS folded in. `no_delete_in_mounts`
+ *  grades against the mounts `allow_delete_in` waives across the whole list (`evaluate`), so adding or removing a
+ *  sibling waiver changes what it grades: its identity carries the list's waived mounts (sorted, deduped). Every other
+ *  assertion reads only its own object, so its identity is `assertIdentity`'s; so is this one's when nothing is waived. */
+export function assertIdentities(list: readonly unknown[]): string[] {
+  const waived = [
+    ...new Set(
+      list.flatMap((a) => {
+        const w = (a as { allow_delete_in?: unknown } | null)?.allow_delete_in;
+        return Array.isArray(w) ? w.filter((x): x is string => typeof x === "string") : [];
+      }),
+    ),
+  ].sort();
+  return list.map((a) =>
+    waived.length && (a as { no_delete_in_mounts?: unknown } | null)?.no_delete_in_mounts !== undefined
+      ? canonicalJson({ assertion: withoutRefs(a), waivedBySiblings: { allow_delete_in: waived } })
+      : assertIdentity(a),
+  );
+}
+
+/** The assertion set a row was graded under, stamped on every scored row (`meta.assert_sig`): the first 16 hex chars
+ *  of the sha256 of the canonical `{assert, expect_denied}` — key order never changes it, and neither does where the
+ *  checkout lives (`semantic_pairwise.refs` is left out, as in `assertIdentity`). Rows of one case carrying two sigs
+ *  were graded by two graders; `hillclimb regrade` brings them current. */
+export const assertSig = (s: { assert: readonly unknown[]; expect_denied?: readonly string[] }): string =>
+  createHash("sha256")
+    .update(canonicalJson({ assert: s.assert.map(withoutRefs), expect_denied: s.expect_denied ?? [] }))
+    .digest("hex")
+    .slice(0, 16);
+
 /** The union of the cases' scenario-declared metrics, in first-seen order. A metric id declared differently in
  *  another case (any field: the file, the path, the direction, the bound, the floor) is refused, naming both cases:
  *  one column cannot mean two things. Ids are compared case-insensitively, as the scenario compares its own: two

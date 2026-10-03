@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { remeasureMetrics } from "./metrics.js";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,7 +27,6 @@ import {
   buildNextAgentBinary,
 } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
-import { recordedFixtureFileSigs, recordedFixtureRefusal } from "./fixture/workspace.js";
 import {
   executeScenario,
   parseScenarioFile,
@@ -75,7 +73,7 @@ import {
   VERIFY_CASSETTES_USAGE,
 } from "./run/cassette.js";
 import { cmdRunsGc } from "./run/runs-gc.js";
-import { assertContextFromRunDir, parseGatesFromEvents, readTranscriptSidecar } from "./run/verify-context.js";
+import { parseGatesFromEvents, readTranscriptSidecar, reevaluateRun } from "./run/verify-context.js";
 import { cmdRegrade, REGRADE_USAGE } from "./run/regrade.js";
 import { cmdFixture } from "./fixture/cli.js";
 import { cmdHillclimb } from "./hillclimb/cli.js";
@@ -206,7 +204,7 @@ import {
 } from "./run/matrix.js";
 import { pMapBounded } from "./async-pool.js";
 import { computeVerdict } from "./run/verdict.js";
-import { evaluate, hostMatches, budgetFields, type AssertContext, expandExpectDenied } from "./assert.js";
+import { budgetFields, type AssertContext } from "./assert.js";
 import {
   spawnChannel,
   fileChannel,
@@ -275,7 +273,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   hillclimb state-template <scenario.yaml | dir/> [--flow DIR]   print a _state.json skeleton for the loop to save;
                                with --flow, also write <flow>/metrics.md. Pass the same --flow to every hillclimb command
   hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR]   freeze a variant's pairwise references (win_<vN>)
-  hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--fill-refs: add win_<vN>)
+  hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--rejudge: every judged assert; --fill-refs: add win_<vN>)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
@@ -4482,9 +4480,10 @@ async function cmdVerifyRun(args: string[]) {
       isJsonOutput(args),
     );
   }
-  // Evidence loading (run-dir refusals, the scenario load, the AssertContext rebuild) is shared with every
-  // other consumer that re-grades a kept run; see src/run/verify-context.ts.
-  const loaded = assertContextFromRunDir(runDir, () => parseScenarioFile(scenarioFile));
+  // Evidence loading (run-dir refusals, the scenario load, the AssertContext rebuild), the recorded-fixture refusal,
+  // the evaluation (`evaluate` + `expandExpectDenied`) and the metrics re-measure are shared with every other
+  // consumer that re-evaluates a kept run; see `reevaluateRun` in src/run/verify-context.ts.
+  const loaded = reevaluateRun(runDir, () => parseScenarioFile(scenarioFile));
   if (!loaded.ok) {
     if (loaded.kind === "scenario") {
       // The scenario file is the caller's input: absent or not loadable is a usage error, as it is for `run`.
@@ -4498,17 +4497,8 @@ async function cmdVerifyRun(args: string[]) {
     }
     return fail("verify-run", loaded.kind, loaded.message, undefined, isJsonOutput(args));
   }
-  const { ctx, result, scenario, sidecarTranscript, sidecarQuestions } = loaded;
-  // The pre-spawn refusal a live run makes, against the fixture files this kept run recorded: an on-disk
-  // presence/body assertion on one of them with no `authored:` would pass on the fixture alone.
-  const vacuousFixture = recordedFixtureRefusal(scenario, recordedFixtureFileSigs(runDir) ?? result.fingerprint?.workspaceFixtureFileSigs);
-  if (vacuousFixture) return fail("verify-run", "usage", `verify-run: ${vacuousFixture}`, undefined, isJsonOutput(args));
-
-  const assertions = evaluate(scenario.assert, ctx);
-  // Same helper the live run uses (evaluate() does not handle expect_denied). Passing ctx.egressMissing
-  // is the point of routing through it here: this path CAN tell a missing `egress` field from a run that
-  // made no calls, and previously threw that distinction away.
-  assertions.push(...expandExpectDenied(scenario.expect_denied, ctx.egress, ctx.egressMissing));
+  const { ctx, result, scenario, sidecarTranscript, sidecarQuestions, metrics } = loaded;
+  const assertions = loaded.deterministic;
 
   // Answer-COVERAGE check — does the scenario's scripted `answers` actually match the gates the
   // run fired? This is invisible to the assert-only path, so a fragile answer (label/question drift) only
@@ -4636,9 +4626,6 @@ async function cmdVerifyRun(args: string[]) {
   // assert miss. Answer-less scenarios never add any, so their exit code is unchanged.
   const judged: RunResult = { ...result, partlyScriptedGates: partlyScriptedGates.length ? partlyScriptedGates : undefined };
   const verdict = computeVerdict({ ...judged, assertions }, "live");
-  // Metrics are re-measured like the assertions: the CURRENT scenario's declaration, read from the kept work dir,
-  // each file only while its bytes still equal the run's recorded post-run hash — never the live run's values.
-  const metrics = remeasureMetrics(ctx, result, scenario.metrics);
   const failed = assertions.filter((a) => !a.pass);
 
   if (json) {

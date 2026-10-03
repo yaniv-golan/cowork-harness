@@ -139,7 +139,7 @@
             "properties": {
               "id": { "type": "string" },
               "value": { "type": "number" },
-              "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run"] }
+              "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run", "no_manifest"] }
             },
             "oneOf": [
               { "required": ["value"], "properties": { "value": {} }, "not": { "required": ["unavailable"], "properties": { "unavailable": {} } } },
@@ -219,7 +219,11 @@
           "description": "This assert's own document: false also when it carries a file an accepted drift is in."
         },
         "judgeInvalid": { "type": "boolean" },
-        "judgeModel": { "type": "string" },
+        "judgeModel": { "type": "string", "description": "The model id the judge answered as." },
+        "judgeModelRequested": {
+          "type": "string",
+          "description": "The model this re-grade asked its judge for (--judge-model, else the assert's judge_model, else the default), on an entry a judge read. A kept entry carries the one it was graded with, if any."
+        },
         "judgeCostUsd": { "type": "number" },
         "semanticClaims": { "type": "array" }
       }

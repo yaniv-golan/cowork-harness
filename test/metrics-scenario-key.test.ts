@@ -209,6 +209,7 @@ describe("the reason list", () => {
       "remote",
       "pruned",
       "pre_run",
+      "no_manifest",
     ]));
 });
 

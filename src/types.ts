@@ -1278,6 +1278,7 @@ export const METRIC_UNAVAILABLE = [
   "remote",
   "pruned",
   "pre_run",
+  "no_manifest",
 ] as const;
 export type MetricUnavailable = (typeof METRIC_UNAVAILABLE)[number];
 
@@ -1773,6 +1774,10 @@ export interface JudgedDocFingerprint {
     path?: string;
     sha256: string;
     chars: number;
+    /** How many secret-scrub markers (`[REDACTED…`) the section carries as sent. Absent on a fingerprint recorded
+     *  before it was counted (unknown, never 0). `hillclimb regrade` compares it to never re-judge on a document
+     *  less redacted than the graded one. */
+    redactions?: number;
   }>;
 }
 

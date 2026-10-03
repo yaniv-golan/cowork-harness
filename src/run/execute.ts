@@ -211,6 +211,10 @@ export interface ExecuteOptions {
    *  their own command name through; `record`'s live execution (cassette.ts) passes "record" explicitly so
    *  a recording session isn't misread as a `run` invocation in `stats`. */
   command?: "run" | "skill" | "record";
+  /** Capture the pre-run manifest whatever the scenario asserts, as a recording does (`scenarioArmsPreRunManifest`).
+   *  `hillclimb run` sets it on every attempt: a loop adds metrics and asserts after its rows were written, and a
+   *  kept run with no manifest can never be re-measured for them (`no_manifest`) — only a paid re-run would. */
+  armPreRunManifest?: boolean;
   /** Display-translator wiring for a renderer built BEFORE this scenario's LaunchPlan/effective fidelity
    *  exist (cli.ts's `run`/`skill` renderer is constructed ahead of `executeScenario`, unlike chat.ts's,
    *  which builds its own plan first and can call makeDisplayTranslator directly). Same mutable-ref
@@ -974,11 +978,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   warnAmbiguousHookOutputForPlan(plan, effectiveFidelity, scenario.assert, warn);
   // Pre-run baseline capture (the full manifest): only when something will consume it — the scenario
   // asserts one of the keys scenarioArmsPreRunManifest lists, or this is a recording (cassettes always carry
-  // the baseline so a later assert-add stays replayable without re-record). The outputs-delete filesystem
+  // the baseline so a later assert-add stays replayable without re-record), or a hillclimb attempt (a metric or
+  // assert added mid-loop is re-measured from the kept run — `armPreRunManifest`). The outputs-delete filesystem
   // diff does NOT depend on this: it reads its own outputs-only snapshot, taken on every turn.
   // Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs
   // that never look at it; absence stays loud.
-  plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record");
+  plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record" || opts.armPreRunManifest === true);
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity

@@ -525,7 +525,7 @@ describe("scenario metrics", () => {
       const report = checkFlowDir(flowDir(), { profile: "harness" });
       expect(report.findings.filter((f) => f.level === "error")).toEqual([]);
       expect(report.findings.filter((f) => /do not carry metric/.test(f.message)).map((f) => f.message)).toEqual([
-        "2 rows do not carry metric words (baseline 2): added after they were written, or no scenario declares it any more (then remove it from _state.json); its mean covers the rows that carry it only",
+        "2 rows do not carry metric words (baseline 2): written before a row that does, so they predate it (or a re-measure listed them) — `hillclimb regrade` re-measures them; its mean covers the rows that carry it only",
       ]);
     });
 

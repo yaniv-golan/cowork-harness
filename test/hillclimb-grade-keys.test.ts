@@ -7,6 +7,9 @@
 // has the identical assertion list. One producer for the row writer and `state-template`.
 import { describe, it, expect } from "vitest";
 import {
+  assertIdentities,
+  assertIdentity,
+  assertSig,
   caseKeyDecls,
   flowMetricDecls,
   metricSig,
@@ -17,6 +20,9 @@ import {
 import { parseScenarioFile } from "../src/run/execute.js";
 import { UsageError } from "../src/errors.js";
 import type { Assertion, ScenarioMetric } from "../src/types.js";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const real = parseScenarioFile("test/evals/scenarios/eval-14-subagent-dispatch-and-declared-unused.yaml");
 const claimCount = real.assert[0].semantic_matches!.rubric.length;
@@ -220,5 +226,66 @@ describe("presentCompanionOf — the explicit key → companion map the _present
 
   it("a whole-assertion key's companion is a<i>_present (only a refused single-key semantic_pairwise is ever omitted)", () => {
     expect(presentCompanionOf("a0")).toBe("a0_present");
+  });
+});
+
+// `no_delete_in_mounts` grades against the mounts `allow_delete_in` waives across the whole list: a sibling waiver is
+// part of what it grades, so of its identity. No other assert reads outside its own object.
+describe("assertIdentities: what an assert reads from its siblings", () => {
+  const base = [{ result: "success" }, { no_delete_in_mounts: true }];
+  it("folds the list's waived mounts (sorted, deduped) into no_delete_in_mounts only", () => {
+    const plain = assertIdentities(base);
+    expect(plain).toEqual(base.map(assertIdentity));
+    const waived = assertIdentities([...base, { allow_delete_in: ["b", "a"] }, { allow_delete_in: ["a"] }]);
+    expect(waived[0]).toBe(plain[0]);
+    expect(waived[1]).not.toBe(plain[1]);
+    expect(waived[2]).toBe(assertIdentity({ allow_delete_in: ["b", "a"] }));
+    // Order and duplicates of the waived mounts do not matter; another mount does.
+    expect(assertIdentities([...base, { allow_delete_in: ["a", "b"] }])[1]).toBe(waived[1]);
+    expect(assertIdentities([...base, { allow_delete_in: ["a"] }])[1]).not.toBe(waived[1]);
+  });
+});
+
+// `parseScenarioFile` rewrites `semantic_pairwise.refs` to host-absolute paths; hillclimb ignores refs (its references
+// are the flow's), so neither the sig nor an assert's identity may depend on where the checkout lives.
+describe("assertSig and assertIdentity: the same scenario in two checkouts", () => {
+  const YAML = [
+    "name: s",
+    "baseline: latest",
+    "fidelity: protocol",
+    "prompt: hi",
+    "assert:",
+    "  - result: success",
+    "  - semantic_pairwise:",
+    "      rubric: ['answers']",
+    "      refs: [./refs]",
+    "",
+  ].join("\n");
+  const checkout = () => {
+    const d = realpathSync(mkdtempSync(join(tmpdir(), "hc-sig-")));
+    mkdirSync(join(d, "refs"));
+    writeFileSync(join(d, "s.yaml"), YAML);
+    return d;
+  };
+  it("is stable across two checkouts though the parsed refs differ", () => {
+    const [a, b] = [checkout(), checkout()];
+    try {
+      const sa = parseScenarioFile(join(a, "s.yaml"));
+      const sb = parseScenarioFile(join(b, "s.yaml"));
+      // Precondition: the parse made the refs machine-specific.
+      expect(sa.assert[1]!.semantic_pairwise!.refs).not.toEqual(sb.assert[1]!.semantic_pairwise!.refs);
+      expect(assertSig(sa)).toBe(assertSig(sb));
+      expect(assertIdentity(sa.assert[1])).toBe(assertIdentity(sb.assert[1]));
+      // The rubric still counts.
+      const edited = { ...sb.assert[1]!, semantic_pairwise: { ...sb.assert[1]!.semantic_pairwise!, rubric: ["other"] } };
+      expect(assertIdentity(edited)).not.toBe(assertIdentity(sa.assert[1]));
+    } finally {
+      rmSync(a, { recursive: true, force: true });
+      rmSync(b, { recursive: true, force: true });
+    }
+  });
+  it("a scenario with no refs keeps the sig it had (an upgrade does not call every row stale)", () => {
+    // The sha256 prefix of the canonical {assert, expect_denied} for this list, as the sig was computed before refs were dropped.
+    expect(assertSig({ assert: [{ result: "success" }, { transcript_contains: "x" }] as never })).toBe("033cab7ce16421ff");
   });
 });
