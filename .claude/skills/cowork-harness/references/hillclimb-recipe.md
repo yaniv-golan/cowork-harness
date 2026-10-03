@@ -1,7 +1,7 @@
 # Recipe 7 — Climb a skill with `/claude-api hillclimb` and the harness as its runner
 
 Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). It needs a `cowork-harness` whose
-`hillclimb run --help` lists `--skill`. This page is the loop's procedure, step by step, in the order of the
+`hillclimb --help` lists `--skill` (help goes to stderr). This page is the loop's procedure, step by step, in the order of the
 `/claude-api hillclimb` guide. Every mechanic (flags, refusals, the gate, `regrade`, `freeze-ref`, exit codes,
 row keys) is in [`hillclimb.md`](hillclimb.md); the setup and the full list of differences from the guide's own
 runner are in [docs/hillclimb.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/hillclimb.md).
@@ -78,7 +78,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   assertion, or re-running the case, re-grades it.
 - **Triage every zero.** An agent's own failure is a scored row (`meta.failure_class: "errored_agent"`, with
   `meta.termination_rule`). Infrastructure, timeouts, a wrong served model and invalid judge grades are
-  `errors.jsonl` rows, never in the scored denominator.
+  `errors.jsonl` rows, never in the scored denominator. A variant that rewords or batches its questions can miss
+  the scripted `answers:` and end asking for input: read `meta.termination_rule` before blaming quality. A fix to
+  `answers:` marks no row stale and no re-grade can apply it: ask the user to re-run the baseline.
 - **Served model.** A run served by another model, or with no evidence of the pinned one, is an `errors.jsonl`
   row (`serving_substitution`), not a score; a run with no model evidence whose agent failed on its own is a
   scored agent failure.
@@ -96,6 +98,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   `subagent_model`) is shared by every variant and covered by the gate: changing it needs the user's approval,
   and every later resume runs the new value. Cowork's system prompt is not tunable.
 - **`harness_paths`** = what `state-template` printed. A path inside the plugin is refused.
+- **Never have the skill compute its own score.** A metric is read from a file the run writes, so an edit can move
+  it without improving the work; ground truth belongs in the scenario (`artifact_json` expected values, rubric
+  claims).
 
 ## Step 2 — stopping condition and budget
 
@@ -157,11 +162,14 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   assertion need the column too, at no judge cost), then `state-template T --flow F` and merge the new
   `win_vN` entries (it declares them only once no scored row lacks them). Only the baseline's reference
   decides `pass`.
+- **After a rubric re-grade, compare the ranking.** If the order of the variants flipped, tell the user and
+  propose restarting the climb from the baseline.
 
 ## Step 5 — report and hand back
 
 - The headline is the delta in `pass` (or the goal metric) between the baseline and the winning variant, from the
-  rows, labelled directional without a split.
+  rows, labelled directional without a split. Recommend confirming the winner with a paired `eval` of the two
+  plugin versions before merging.
 - Before the user commits `F`, list what it holds: `inputs/` copies of uploads, `out/` copies of outputs, and
   rows with judge rationales. Recommend ignoring `traces/`, `inputs/`, `*/out/`, `*/ref/`, `regrade-*.bak.jsonl` and `.lock`.
 - The kept runs (`meta.run_dir`) and the snapshots are outside `F`. A plain `prune` keeps hillclimb runs; tell the

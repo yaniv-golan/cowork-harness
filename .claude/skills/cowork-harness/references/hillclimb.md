@@ -1,7 +1,7 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). It needs a `cowork-harness` whose `--help`
-lists `hillclimb`. The command reference is
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). It needs a `cowork-harness` whose
+`hillclimb --help` lists `--skill` (help goes to stderr). The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.
 
@@ -86,6 +86,10 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
   `plan.cost.unpriced`. A dry run writes nothing, unless `--approve-harness` is also given: then it records
   the harness sha.
 - One runner per variant: a `.lock` in the variant dir refuses a second live runner.
+- **No spend cap.** `run` takes no `--max-budget-usd`: recompute spend from the flow's files after every round and
+  stop at the budget. `--dry-run` estimates the agent spend only.
+- **A decider needs `--concurrency 1`** (`--decider-cmd`, `--decider-dir`); a scenario's `on_unanswered: llm` does
+  not.
 - **`--skill NAME` picks the skill `skill_invoked` tracks** when the plugin registers more than one; a plugin
   with one skill (one `skills/<name>/`, or a root `SKILL.md`) is tracked without it. Every pass prints which
   skill it tracks, or why none. The selection is part of the harness sha, so the loop's command must pass the
