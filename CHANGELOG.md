@@ -189,7 +189,6 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
-<!-- pending: --effort entry -->
 
 - **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
   When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
