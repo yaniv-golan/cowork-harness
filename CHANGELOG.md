@@ -645,6 +645,10 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
 
 ### Fixed
 
+- **`hillclimb state-template --flow` names the rows lacking a `win_<vN>` column and says to run `hillclimb regrade
+  --fill-refs` without `--case`.** The note now groups those rows by case and variant, and says whether each case's rows
+  need a judge call (a pairwise case) or a judge-free rebuild (a case with no `semantic_pairwise` assert, which a
+  `--case`-scoped fill skips).
 - **`sync --diff` reported 57 gate ids as removed on Desktop 2.19675.0 where 2 were.** That release ships its gate
   defaults as a rule table (`<id>:{rule:…}`), which `provenance.asarGateIds` did not read, so it also missed 2 new
   ids. The table is now read. The shape occurs in no earlier Desktop release, so no committed baseline changes:

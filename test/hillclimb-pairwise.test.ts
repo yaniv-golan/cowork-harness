@@ -297,6 +297,39 @@ describe("state-template", () => {
     expect(t.metricsMd).toContain("`a0_win`");
   });
 
+  it("names the lacking rows by case (at most five), saying why each case's rows lack the column", () => {
+    const cases = ["c1", "c2", "c3", "c4", "c5", "c6"].map((name, i) => ({ name, assertions: i === 0 ? [PW] : [] }));
+    const missing = [
+      { variant: "baseline", caseId: "c1" },
+      { variant: "baseline", caseId: "c2" },
+      { variant: "v1", caseId: "c2" },
+      { variant: "v1", caseId: "c2" },
+      ...["c3", "c4", "c5", "c6", "gone"].map((caseId) => ({ variant: "v1", caseId })),
+    ];
+    const t = stateTemplate({
+      cases,
+      harnessPaths: [],
+      decider: false,
+      pairwiseRefs: [{ ref: "v2", rowsMissing: missing.length, missing }],
+    });
+    expect(t.notes.join("\n")).toBe(
+      "win_v2 is not declared: 9 scored row(s) do not carry it — " +
+        "c1 (baseline ×1: written before v2's reference was frozen, judged against it); " +
+        "c2 (baseline ×1, v1 ×2: no semantic_pairwise assert, rebuilt without a judge call); " +
+        "c3 (v1 ×1: no semantic_pairwise assert, rebuilt without a judge call); " +
+        "c4 (v1 ×1: no semantic_pairwise assert, rebuilt without a judge call); " +
+        "c5 (v1 ×1: no semantic_pairwise assert, rebuilt without a judge call); and 2 more case(s) " +
+        "— run `hillclimb regrade --fill-refs` WITHOUT --case so every case's rows are rebuilt, then re-run this command",
+    );
+    const unloaded = stateTemplate({
+      cases,
+      harnessPaths: [],
+      decider: false,
+      pairwiseRefs: [{ ref: "v2", rowsMissing: 1, missing: [{ variant: "v1", caseId: "gone" }] }],
+    });
+    expect(unloaded.notes.join("\n")).toContain("gone (v1 ×1: not a loaded case)");
+  });
+
   it("without --flow it declares win alone and says to pass --flow", () => {
     const t = stateTemplate({ cases: [{ assertions: [PW] }], harnessPaths: [], decider: false });
     expect(t.state.metrics.map((m) => m.id)).toContain("win");

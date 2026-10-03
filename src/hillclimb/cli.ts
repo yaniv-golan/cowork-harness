@@ -92,23 +92,29 @@ export function stateTemplateFor(
   }
   const assertions = cases.map((c) => ({ assertions: c.scenario.assert ?? [] }));
   // With --flow: each later variant's frozen reference, and how many scored rows (every variant) lack its column.
-  let pairwiseRefs: Array<{ ref: string; rowsMissing: number }> | undefined;
+  // Each lacking row's variant and case are carried, so the note can say which rows they are and how to fill them.
+  let pairwiseRefs: Array<{ ref: string; rowsMissing: number; missing: Array<{ variant: string; caseId: string }> }> | undefined;
   if (opts.flow !== undefined && flowHasPairwise(assertions)) {
     const flowAbs = resolve(cwd, normalizeRootArg(opts.flow));
     pairwiseRefs = [];
     if (lexists(flowAbs)) {
       const snap = loadFlowSnapshot(flowAbs);
-      const rows = Object.values(snap.variants).flatMap((vs) =>
+      const rows = Object.entries(snap.variants).flatMap(([variant, vs]) =>
         (vs.results ?? "").split("\n").flatMap((l) => {
           try {
-            return l.trim() ? [JSON.parse(l) as { grade?: Record<string, unknown> }] : [];
+            const r = l.trim() ? (JSON.parse(l) as { prompt_id?: unknown; grade?: Record<string, unknown> }) : undefined;
+            return r ? [{ variant, caseId: String(r.prompt_id), grade: r.grade }] : [];
           } catch {
             return [];
           }
         }),
       );
-      for (const ref of metricRefNames(discoverFlowRefs(flowAbs)))
-        pairwiseRefs.push({ ref, rowsMissing: rows.filter((r) => r.grade?.[`win_${ref}_present`] === undefined).length });
+      for (const ref of metricRefNames(discoverFlowRefs(flowAbs))) {
+        const missing = rows
+          .filter((r) => r.grade?.[`win_${ref}_present`] === undefined)
+          .map(({ variant, caseId }) => ({ variant, caseId }));
+        pairwiseRefs.push({ ref, rowsMissing: missing.length, missing });
+      }
     }
   }
   const t = stateTemplate({

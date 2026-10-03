@@ -294,7 +294,11 @@ cat "${ENVELOPE}"
     const t = JSON.parse(st.stdout) as { state: { metrics: Array<{ id: string }> }; notes: string[] };
     expect(t.state.metrics.map((m) => m.id)).toEqual(expect.arrayContaining(["win", "win_present", "both_bad"]));
     expect(t.state.metrics.map((m) => m.id)).not.toContain("win_v1");
-    expect(t.notes.join("\n")).toMatch(/win_v1 is not declared: 2 scored row.*hillclimb regrade --fill-refs/);
+    expect(t.notes.join("\n")).toBe(
+      "win_v1 is not declared: 2 scored row(s) do not carry it — alpha (baseline ×1, v1 ×1: written before v1's reference " +
+        "was frozen, judged against it) — run `hillclimb regrade --fill-refs` WITHOUT --case so every case's rows are rebuilt, " +
+        "then re-run this command",
+    );
 
     // --fill-refs judges only what each row lacks: the baseline row against v1 (one call); v1's own row is neutral
     // (no call). pass cannot move; every row then carries win_v1, so state-template declares it.
@@ -334,6 +338,70 @@ cat "${ENVELOPE}"
     expect(resultOf("v1")).toBe(liveResults.v1);
     expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
   }, 180_000);
+
+  it("after a --case-scoped fill, the win_<vN> note names the other cases' rows and says to fill without --case", () => {
+    const plugin = join(work, "plugin", "my-plugin");
+    mkdirSync(join(plugin, "skills", "x"), { recursive: true });
+    writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n");
+    const evals = join(f.cwd, "evals");
+    mkdirSync(evals);
+    writeFileSync(join(evals, "_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
+    writeFileSync(
+      join(evals, "alpha.yaml"),
+      "name: alpha\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n" +
+        "  - semantic_pairwise:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n",
+    );
+    // beta has no semantic_pairwise assert: its rows still gain the flow's win_<vN> columns, without a judge call.
+    writeFileSync(
+      join(evals, "beta.yaml"),
+      "name: beta\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n",
+    );
+    const judge = join(work, "judge.sh");
+    writeFileSync(judge, JUDGE, { mode: 0o755 });
+    const env = {
+      ...f.env,
+      COWORK_MANAGED_CONFIG: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
+      STUB_ARGV: join(work, "argv"),
+      COWORK_HARNESS_CLAUDE_BIN: judge,
+      JUDGE_CALLS: join(work, "judge-calls"),
+    };
+    const cli = (...a: string[]) =>
+      spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
+    const ok = (r: ReturnType<typeof cli>) => expect(r.status, r.stderr).toBe(0);
+    ok(cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1"));
+    ok(cli("run", "evals", "--flow", "flow", "--variant", "v1", "--concurrency", "1"));
+    ok(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1"));
+    const note = () => {
+      const st = cli("state-template", "evals", "--flow", "flow", "--output-format", "json");
+      ok(st);
+      const t = JSON.parse(st.stdout) as { state: { metrics: Array<{ id: string }> }; notes?: string[] };
+      return { ids: t.state.metrics.map((m) => m.id), text: (t.notes ?? []).filter((n) => n.startsWith("win_v1")).join("\n") };
+    };
+
+    // Before any fill: every row lacks it — alpha's need a judge call, beta's a judge-free rebuild.
+    const before = note();
+    expect(before.ids).not.toContain("win_v1");
+    expect(before.text).toMatch(/^win_v1 is not declared: 4 scored row\(s\) do not carry it — /);
+    expect(before.text).toContain("alpha (baseline ×1, v1 ×1: written before v1's reference was frozen, judged against it)");
+    expect(before.text).toContain("beta (baseline ×1, v1 ×1: no semantic_pairwise assert, rebuilt without a judge call)");
+
+    // The natural scoped fill: alpha's rows gain win_v1; beta's are skipped, and the note now names them alone.
+    ok(cli("regrade", "evals", "--flow", "flow", "--fill-refs", "--case", "alpha"));
+    const scoped = note();
+    expect(scoped.ids).not.toContain("win_v1");
+    expect(scoped.text).toBe(
+      "win_v1 is not declared: 2 scored row(s) do not carry it — beta (baseline ×1, v1 ×1: no semantic_pairwise assert, " +
+        "rebuilt without a judge call) — run `hillclimb regrade --fill-refs` WITHOUT --case so every case's rows are rebuilt, " +
+        "then re-run this command",
+    );
+
+    // The printed repair works: an unscoped fill rebuilds beta's rows, and win_v1 is declared.
+    ok(cli("regrade", "evals", "--flow", "flow", "--fill-refs"));
+    const after = note();
+    expect(after.text).toBe("");
+    expect(after.ids).toContain("win_v1");
+  }, 240_000);
 });
 
 describe.runIf(POSIX)("hillclimb regrade refusals and listings (CLI)", () => {

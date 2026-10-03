@@ -40,10 +40,10 @@ export function stateTemplate(opts: {
   cases: ReadonlyArray<{ name?: string; assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>;
   harnessPaths: readonly string[];
   decider: boolean;
-  /** The flow's later-variant references (`v3`, …), each with how many scored rows lack its column. Known only with
-   *  `--flow`. A column is declared only when NO scored row lacks it: rows written before its reference was frozen do
-   *  not carry it, and `check` would then fail every one of them. */
-  pairwiseRefs?: ReadonlyArray<{ ref: string; rowsMissing: number }>;
+  /** The flow's later-variant references (`v3`, …), each with how many scored rows lack its column and, when known,
+   *  which (each row's variant and case id). Known only with `--flow`. A column is declared only when NO scored row
+   *  lacks it: rows written before its reference was frozen do not carry it, and `check` would then fail every one. */
+  pairwiseRefs?: ReadonlyArray<{ ref: string; rowsMissing: number; missing?: ReadonlyArray<{ variant: string; caseId: string }> }>;
   /** The rows will carry skill_invoked (a tracked skill); false leaves it out of perf_fields. Default true. */
   skillInvoked?: boolean;
 }): StateTemplate {
@@ -52,8 +52,8 @@ export function stateTemplate(opts: {
   for (const r of opts.pairwiseRefs ?? [])
     if (r.rowsMissing > 0)
       notes.push(
-        `win_${r.ref} is not declared: ${r.rowsMissing} scored row(s) were written before ${r.ref}'s reference was frozen and do not carry it, ` +
-          `— run \`hillclimb regrade --fill-refs\` to add it to them, then re-run this command`,
+        `win_${r.ref} is not declared: ${r.rowsMissing} scored row(s) do not carry it${missingRows(r.ref, r.missing, opts.cases)} ` +
+          "— run `hillclimb regrade --fill-refs` WITHOUT --case so every case's rows are rebuilt, then re-run this command",
       );
   if (opts.pairwiseRefs === undefined && flowHasPairwise(opts.cases))
     notes.push("pass --flow to declare a win_<vN> column for each later variant's frozen reference (only `win` is declared without it)");
@@ -65,6 +65,39 @@ export function stateTemplate(opts: {
     metricsMd: metricsMd(metrics, metricUnion(opts.cases)),
     notes,
   };
+}
+
+const MAX_CASES_NAMED = 5;
+
+/** ` — alpha (baseline ×1: …); beta (…)`: the rows lacking `win_<ref>`, by case, each case saying why its rows lack
+ *  it. A pairwise case's rows were written before the reference was frozen (a fill judges them against it); a case
+ *  with no `semantic_pairwise` assert still carries the flow's win columns, rebuilt without a judge call — and a
+ *  `--case`-scoped fill skips it. Empty when the rows are not known. */
+function missingRows(
+  ref: string,
+  missing: ReadonlyArray<{ variant: string; caseId: string }> | undefined,
+  cases: ReadonlyArray<{ name?: string; assertions: readonly Assertion[] }>,
+): string {
+  if (!missing?.length) return "";
+  const byCase = new Map<string, Map<string, number>>();
+  for (const m of missing) {
+    const vs = byCase.get(m.caseId) ?? new Map<string, number>();
+    vs.set(m.variant, (vs.get(m.variant) ?? 0) + 1);
+    byCase.set(m.caseId, vs);
+  }
+  const loaded = new Map(cases.filter((c) => c.name !== undefined).map((c) => [c.name!, flowHasPairwise([c])]));
+  const ids = [...byCase.keys()].sort();
+  const parts = ids.slice(0, MAX_CASES_NAMED).map((id) => {
+    const counts = [...byCase.get(id)!].map(([v, n]) => `${v} ×${n}`).join(", ");
+    const why = !loaded.has(id)
+      ? "not a loaded case"
+      : loaded.get(id)
+        ? `written before ${ref}'s reference was frozen, judged against it`
+        : "no semantic_pairwise assert, rebuilt without a judge call";
+    return `${id} (${counts}: ${why})`;
+  });
+  if (ids.length > MAX_CASES_NAMED) parts.push(`and ${ids.length - MAX_CASES_NAMED} more case(s)`);
+  return ` — ${parts.join("; ")}`;
 }
 
 function metricsMd(declared: readonly GradeKeyDecl[], floats: readonly MetricDecl[]): string {
