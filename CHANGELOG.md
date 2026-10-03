@@ -216,6 +216,24 @@ All notable changes to this project are documented here. The format is based on
   no effort selector is not held to its rows' effort, which is only the baseline default. Different values across
   variants are allowed; a `--case` pass whose flag value differs from what the variant's other cases ran warns, once
   per distinct value.
+- **hillclimb records the spend to copy and the billing basis behind it.** Rows carry `judge_usd`, the live judge's
+  recorded spend over the assertions that called it (absent when none did, so a baseline row's neutral comparison
+  against its own reference is neither priced nor unpriced), with `meta.judge_unpriced` counting judged assertions
+  that recorded no cost; error rows carry `meta.judge_usd`, `meta.judge_unpriced` and `meta.decider_usd` beside
+  `meta.cost_usd`. `meta.models` gives each model's `provider` and `cost_basis` (`list`, `managed` or `unknown`).
+  Billing basis is recorded at two levels. Row: `meta.billing` holds the credential source names the agent's own
+  frames report and `basis`, one of `api_key`, `subscription`, `third_party` or `ambiguous`, decided with the tier's
+  entrypoint (an OAuth token wins over an API key at hostloop, container and microvm, the key at protocol); the key
+  is absent when the run recorded no credential frames, and an account's email, organization and plan are never
+  copied. Summary: `summary.json`'s `billing_basis` is always present, the single recorded value, `"mixed"` when rows
+  differ, or `"unrecorded"` when no row records one. `summary.json` also carries the variant's spend over its whole
+  `results.jsonl` and `errors.jsonl`, each run counted once, recomputed after every pass and every `hillclimb
+  regrade` that rewrites its rows: `cost_usd_mean` (`$/run`), `cost_usd_total`, `cost_rows`, `cost_rows_unrecorded`,
+  `judge_usd_mean`, `judge_usd_total`, `judge_rows_unpriced`, `regrade_judge_usd_total`, `decider_usd_total` and
+  `billing_rows_unrecorded`; a row with no cost is counted, never read as $0. The pass prints the figures on one line
+  per variant, and warns once per variant when models other than the main loop's carry more than 25% of its
+  `cost_usd` (`usage` covers the main model only); `hillclimb check` repeats that as a note and checks the new keys'
+  types. The docs say to copy these numbers instead of deriving cost from `model` × `usage`, which undercounts.
 - **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
   When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
   (`plugins.local_plugins` or `remote_plugins`), and the plugin's name differs, the run works here but real Cowork's
