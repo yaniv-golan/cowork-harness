@@ -361,6 +361,34 @@ describe("an authored no_delete_in_mounts arms the outputs check on rwd (it cove
     expect(codes(v)).toContain("outputs_diff_unavailable:warn");
   });
 
+  it("the outputs_delete message on rwd says no_delete_in_mounts armed the check", () => {
+    const v = computeVerdict(
+      rr({ ...FS_ONLY, outputsMountMode: "rwd", assertions: [assn({ no_delete_in_mounts: true }, true)] } as Partial<RunResult>),
+      "live",
+    );
+    const msg = v.signals.find((s) => s.code === "outputs_delete")?.message ?? "";
+    expect(msg).toMatch(/no_delete_in_mounts/);
+    expect(msg).not.toMatch(/^unauthorized/);
+  });
+
+  it("allow_outputs_delete co-authored with no_delete_in_mounts waives the armed check on rwd, as on rw", () => {
+    // Not a no-op here: no_delete_in_mounts arms the default signal, and the waiver suppresses it exactly as on rw.
+    // The roster still reports what the guard saw.
+    for (const mode of ["rwd", "rw"] as const) {
+      const v = computeVerdict(
+        rr({
+          ...FS_ONLY,
+          outputsMountMode: mode,
+          assertions: [assn({ no_delete_in_mounts: true }, true), assn({ allow_outputs_delete: true })],
+        } as Partial<RunResult>),
+        "live",
+      );
+      expect(v.pass).toBe(true);
+      expect(outputsCodes(v)).toEqual([]);
+      expect(roster(v)).toBe("fired");
+    }
+  });
+
   it("with outputs waived by allow_delete_in the check stays off on rwd", () => {
     const v = computeVerdict(
       rr({
