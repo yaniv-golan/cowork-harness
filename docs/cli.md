@@ -838,9 +838,9 @@ paths on disk (`realpath`), so the same dir reached through a symlinked parent, 
 with the run dir's path never counts. A `result.json` that records none of these paths is read from the dir
 given; one that records evidence paths but no `outDir` is refused. `inspect` is a view of the run's own
 record: on a copied or moved dir it warns and skips the artifact previews (which it would read through the
-recorded work dir) instead of refusing. `trace` and `scaffold` read only the dir's own `events.jsonl`, and
-`fixture export` reads the outputs under the dir given, so a copy is safe there. To grade a copy, re-run the
-scenario, or grade the original (move a moved dir back where it ran).
+recorded work dir) instead of refusing. `trace` and `scaffold` read the dir's own files and never follow the
+paths `result.json` records, and `fixture export` reads the outputs under the dir given, so a copy is safe
+there. To grade a copy, re-run the scenario, or grade the original (move a moved dir back where it ran).
 
 Secrets (the injected OAuth token / API key) are scrubbed from every persisted log by value.
 
