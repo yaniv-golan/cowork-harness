@@ -81,12 +81,18 @@ describe("sentEffort", () => {
     expect(sentEffort([userLine, tline({ effort: "high", perTurnEffort: null }), tline({ effort: "high" })])).toEqual({
       values: ["high"],
       unsent: 0,
+      invalid: 0,
       calls: 2,
     });
-    expect(sentEffort([tline({ effort: "medium", perTurnEffort: "max" })])).toEqual({ values: ["max"], unsent: 0, calls: 1 });
+    expect(sentEffort([tline({ effort: "medium", perTurnEffort: "max" })])).toEqual({ values: ["max"], unsent: 0, invalid: 0, calls: 1 });
   });
   it("counts a call with no effort as unsent (the agent retried without one)", () => {
-    expect(sentEffort([tline({ effort: "high" }), tline({ perTurnEffort: null })])).toEqual({ values: ["high"], unsent: 1, calls: 2 });
+    expect(sentEffort([tline({ effort: "high" }), tline({ perTurnEffort: null })])).toEqual({
+      values: ["high"],
+      unsent: 1,
+      invalid: 0,
+      calls: 2,
+    });
   });
   it("keeps every distinct value, in first-seen order", () => {
     expect(sentEffort([tline({ effort: "low" }), tline({ effort: "high" }), tline({ effort: "low" })]).values).toEqual(["low", "high"]);
@@ -99,9 +105,17 @@ describe("sentEffort", () => {
       "not json",
       tline({ effort: "medium" }),
     ];
-    expect(sentEffort(lines)).toEqual({ values: ["medium"], unsent: 0, calls: 1 });
+    expect(sentEffort(lines)).toEqual({ values: ["medium"], unsent: 0, invalid: 0, calls: 1 });
+  });
+  it("counts a value outside the effort levels as invalid, never as a value", () => {
+    expect(sentEffort([tline({ effort: "high" }), tline({ effort: "turbo" }), tline({ perTurnEffort: "extra" })])).toEqual({
+      values: ["high"],
+      unsent: 0,
+      invalid: 2,
+      calls: 3,
+    });
   });
   it("no transcript is no calls", () => {
-    expect(sentEffort([])).toEqual({ values: [], unsent: 0, calls: 0 });
+    expect(sentEffort([])).toEqual({ values: [], unsent: 0, invalid: 0, calls: 0 });
   });
 });

@@ -417,10 +417,6 @@ async function run(
     const runLabel = hillclimbRunLabel(flowArg, v);
     const flowHash = flowHashOf(flowAbs);
     const models = new Set<string>();
-    // What the pass's scored rows asked for and what the agent sent: summary.json records each when it is one value.
-    const requestedModels = new Set<string>();
-    const requestedEfforts = new Set<string>();
-    const sentEfforts = new Set<string>();
     markStarted();
     // A failure to WRITE (a row, an error row) stops the pass: the scaffold's process exits there (l.597-599). Here the
     // pool cannot be killed, so a stop flag keeps every later task from starting, and the pool is awaited —
@@ -505,6 +501,10 @@ async function run(
             // The attempt's spend stays countable; counters it could not report are said, not zeroed.
             meta: {
               failure_rule: "row_build",
+              // What the attempt asked for, as on every other error row.
+              ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
+              ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
+              ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
               retries_unrecorded: true,
               judge_retries_unrecorded: true,
               ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
@@ -564,10 +564,6 @@ async function run(
       writer.appendResult(out.row);
       scored++;
       if (typeof out.row.model === "string") models.add(out.row.model);
-      const rm = out.row.meta as Record<string, unknown>;
-      if (typeof rm.model_requested === "string") requestedModels.add(rm.model_requested);
-      if (typeof rm.effort === "string") requestedEfforts.add(rm.effort);
-      if (typeof rm.effort_sent === "string") sentEfforts.add(rm.effort_sent);
       // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
       // row, which would double-count its spend (runner-scaffold.mjs l.529, 541-548).
       try {
@@ -597,11 +593,10 @@ async function run(
     try {
       writer.mergeSummary({
         ...(models.size === 1 ? { model: [...models][0] } : {}),
-        ...(requestedModels.size === 1 ? { model_requested: [...requestedModels][0] } : {}),
-        ...(requestedEfforts.size === 1 ? { effort: [...requestedEfforts][0] } : {}),
-        ...(sentEfforts.size === 1 ? { effort_sent: [...sentEfforts][0] } : {}),
         ...(variantSig !== undefined ? { source_sig: variantSig } : {}),
       });
+      // What the variant's rows asked for and were sent, over its whole results.jsonl (a --case pass adds to it).
+      writer.setSummaryKeys(requestedSummary(writer.readVariantFile("results.jsonl")));
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
     } catch (e) {
       stepFailures++;
@@ -677,11 +672,39 @@ const trackedText = (s: ReadonlySet<Tracked>): string =>
 /** baseline first, then v1, v2, … */
 const variantOrder = (v: string): number => (v === "baseline" ? 0 : Number(v.slice(1)));
 
+/** summary.json's `model_requested`, `effort` and `effort_sent` over a variant's scored rows: the one value its rows
+ *  carry, `"mixed"` when they carry several, absent when none carries it. `effort_selector: false` when every row's
+ *  model has no effort selector (its `effort` was passed but not sent), `"mixed"` when only some do. */
+export function requestedSummary(results: string | null): Record<string, string | false | undefined> {
+  const seen = { model_requested: new Set<string>(), effort: new Set<string>(), effort_sent: new Set<string>() };
+  let rows = 0;
+  let noSelector = 0;
+  for (const line of (results ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    let meta: Record<string, unknown> | undefined;
+    try {
+      meta = (JSON.parse(line) as { meta?: Record<string, unknown> }).meta;
+    } catch {
+      continue; // schema-check reports malformed lines
+    }
+    rows++;
+    if (meta?.effort_selector === false) noSelector++;
+    for (const k of Object.keys(seen) as Array<keyof typeof seen>) if (typeof meta?.[k] === "string") seen[k].add(meta[k] as string);
+  }
+  const one = (s: Set<string>) => (s.size === 0 ? undefined : s.size === 1 ? [...s][0] : "mixed");
+  return {
+    model_requested: one(seen.model_requested),
+    effort: one(seen.effort),
+    effort_sent: one(seen.effort_sent),
+    effort_selector: noSelector === 0 ? undefined : noSelector === rows ? false : "mixed",
+  };
+}
+
 /** The resume guard over one variant's `results.jsonl` rows, keyed by (variant, prompt_id): pins and sessions are per
  *  case. A row records what it asked for (`meta.model_requested`, `meta.effort`); one that differs from what this pass
  *  asks for its case is a refusal. A row written before those fields existed is held to its SERVED model (a dated
- *  snapshot of the pin is the pin), and warns when it has none; its effort is unknown, which warns only when this pass
- *  sets one with --effort (without it, a row ran the same session file the gate approved). A flag value that differs
+ *  snapshot of the pin is the pin), and warns when it has none; its effort is unknown, which always warns (a
+ *  re-approved session file may have changed its `effort:` since). A flag value that differs
  *  from what the variant's OTHER cases ran warns: the variant's cases then ran different settings. */
 function requestedMix(
   snap: ReturnType<typeof loadFlowSnapshot>,
@@ -725,7 +748,7 @@ function requestedMix(
     if (ef !== undefined) {
       if (ef !== w.effort)
         refusals.add(`variant ${variant}'s rows for case ${id} ran effort ${ef}, and this pass would run effort ${w.effort}`);
-    } else if (flags.effortFlag) noEffort.add(id);
+    } else noEffort.add(id);
   }
   const named = (ids: Iterable<string>) => {
     const xs = [...new Set(ids)].sort();
@@ -740,7 +763,7 @@ function requestedMix(
     );
   if (noEffort.size)
     warnings.push(
-      `warning: variant ${variant}'s earlier rows for ${named(noEffort)} don't record the requested effort (written before it was recorded); this pass requests ${effortsOf(noEffort)} — compare them only knowingly`,
+      `warning: variant ${variant}'s earlier rows for ${named(noEffort)} don't record the requested effort (written before it was recorded): their effort is unknown, and this pass requests ${effortsOf(noEffort)} — compare them only knowingly`,
     );
   // A flag sets every selected case alike: say when the variant's other cases ran something else.
   for (const [what, flag, mine] of [

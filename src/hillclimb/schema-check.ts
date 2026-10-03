@@ -673,9 +673,11 @@ export function checkFlowSnapshot(snap: FlowSnapshot, opts: { profile?: SchemaPr
       if (s !== undefined && !isObj(s)) c.error("summary.json", F, "must be a JSON object");
       else if (isObj(s)) {
         if (s.model !== undefined && typeof s.model !== "string") c.error("summary.model", F, "model must be a string");
-        // ours: what the pass asked for, and the effort the agent sent (each written only when the pass had one value)
+        // ours: what the variant's rows asked for and the effort the agent sent ("mixed" when they differ)
         for (const k of ["model_requested", "effort", "effort_sent"] as const)
           if (s[k] !== undefined && typeof s[k] !== "string") c.error(`summary.${k}`, F, `${k} must be a string`);
+        if (s.effort_selector !== undefined && s.effort_selector !== false && s.effort_selector !== "mixed")
+          c.error("summary.effort_selector", F, 'effort_selector must be false or "mixed"');
       }
     }
 

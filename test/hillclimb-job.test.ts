@@ -219,3 +219,31 @@ describe("makeHillclimbJobRunner", () => {
     );
   });
 });
+
+describe("the agent's own session transcript", () => {
+  it("is the file the events' session id names, not another session's beside it", async () => {
+    const sid = JSON.parse(frames.split("\n")[0]).session_id as string;
+    const mine = JSON.stringify({ type: "assistant", isSidechain: false, effort: "high", message: { model: "claude-sonnet-5" } });
+    const other = JSON.stringify({ type: "assistant", isSidechain: false, effort: "low", message: { model: "claude-sonnet-5" } });
+    const run = makeHillclimbJobRunner(
+      deps({
+        runScenario: async (a) => {
+          const outDir = join(root, a.scenario.name, String(a.extra.runId));
+          const projects = join(outDir, "work", "session", "mnt", ".claude", "projects", "-sessions-x");
+          mkdirSync(projects, { recursive: true });
+          writeFileSync(join(outDir, "events.jsonl"), frames);
+          writeFileSync(join(projects, `${sid}.jsonl`), mine + "\n");
+          writeFileSync(join(projects, "0000-another-session.jsonl"), other + "\n");
+          return {
+            result: "success",
+            outDir,
+            effectiveFidelity: "container",
+            workDir: join(outDir, "work", "session", "mnt"),
+          } as unknown as RunResult;
+        },
+      }),
+    );
+    const report = await run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false });
+    expect(report.transcript).toEqual([mine]);
+  });
+});

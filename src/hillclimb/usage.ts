@@ -40,7 +40,8 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --model ID              concrete model id the agent must be served by; an alias is refused
   --effort LEVEL          the effort the agent is asked for: low|medium|high|xhigh|max (extra = xhigh);
                           default the session's effort:, else the baseline default. Levels are per model:
-                          one the model does not offer is refused before spend. Each row records it
+                          one the model does not offer, or any on a model with no effort
+                          selector, is refused before spend. Each row records it
                           (meta.effort) and the effort the agent sent (meta.effort_sent); a mismatch is
                           an error row. Not in the harness sha: keep one value per variant
   --reps N                reps per case (default 1)

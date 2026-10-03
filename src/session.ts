@@ -690,8 +690,34 @@ export function effortSelector(
   model: string | undefined,
   baseline: Pick<PlatformBaseline, "spawn">,
 ): readonly string[] | false | undefined {
+  if (model !== undefined && agentSendsNoEffort(undatedModelId(model))) return false;
   const entry = modelEffortEntry(model, baseline);
   return entry === undefined ? undefined : (entry.effortLevels ?? false);
+}
+
+/** A model id without a `[1m]` context suffix, lower-cased, and without a snapshot date (`-20251001`, `@20251001`,
+ *  `-2025-10-01`): the key the baseline's per-model map and the agent's own model tables use. */
+export function undatedModelId(model: string): string {
+  return model
+    .replace(/\[\dm\]$/i, "")
+    .toLowerCase()
+    .replace(/[-@](\d{8}|\d{4}-\d{2}-\d{2})$/, "");
+}
+
+/** The models the agent never sends an effort parameter for, whatever `--effort` says. Read from the agent binary
+ *  (2.1.286), its model-supports-effort predicate: after the per-model overrides and the capability table it returns
+ *  false for any id containing `claude-3-` and for `claude-opus-4-0`, `claude-opus-4-1`, `claude-sonnet-4-0`,
+ *  `claude-sonnet-4-5` and `claude-haiku-4-5` — ahead of `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`, so nothing turns it on. The
+ *  baseline's per-model map lists only the models Cowork's picker offers, so it omits most of these. */
+const AGENT_NO_EFFORT_MODELS = new Set([
+  "claude-opus-4-0",
+  "claude-opus-4-1",
+  "claude-sonnet-4-0",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+]);
+function agentSendsNoEffort(undated: string): boolean {
+  return undated.includes("claude-3-") || AGENT_NO_EFFORT_MODELS.has(undated);
 }
 
 function modelEffortEntry(
@@ -700,7 +726,7 @@ function modelEffortEntry(
 ): { effortLevels?: readonly string[]; disallowThinkingDisabled?: boolean } | undefined {
   if (model === undefined) return undefined;
   const spawn = baseline.spawn;
-  const entry = spawn?.effortByModel?.[model];
+  const entry = spawn?.effortByModel?.[model] ?? spawn?.effortByModel?.[undatedModelId(model)];
   if (entry) return entry;
   const regexDefault = spawn?.effortRegexDefault;
   if (regexDefault && new RegExp(regexDefault.pattern).test(model)) return regexDefault;

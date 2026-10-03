@@ -6,10 +6,10 @@
 //   1. the runner's own wall-clock ceiling fired           → errors, `timeout`
 //   2. infrastructure (classifyTermination errored_infra)   → errors, `error` (rule in meta)
 //   3. positive served-model mismatch (runner-scaffold.mjs l.476-494)         → errors, `serving_substitution`
-//   3b. a main-loop call sent with another effort than requested             → errors, `serving_substitution` (effort_not_sent)
+//   3b. a main-loop message sent with another effort, an invalid one, or none → errors, `serving_substitution` (effort_not_sent)
 //   4. the agent's own failure (errored_agent)              → SCORED: every graded key 0, reason in meta
 //   5. no model evidence on an otherwise-valid run     → errors, `serving_substitution`
-//   5b. the requested effort not confirmed on an otherwise-valid run        → errors, `serving_substitution` (effort_not_sent)
+//   5b. no main-loop message in the transcript on an otherwise-valid run       → errors, `serving_substitution` (effort_not_sent)
 //   6. a run built from another snapshot than the variant's → errors, `error` + meta.arm_source_drift
 //   7. an invalid judge grade                               → errors, `judge_invalid` (regrade lists it with the `run` that re-runs it)
 //   8. a grade that does not line up with the scenario      → errors, `error` (never a guessed value)
@@ -295,7 +295,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const requested = {
     ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
     ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
-    ...(sent.values.length === 1 ? { effort_sent: sent.values[0] } : {}),
+    // A model with no effort selector: the effort above was passed, but the agent sends none for it.
+    ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
+    ...(sent.values.length === 1 && sent.invalid === 0 ? { effort_sent: sent.values[0] } : {}),
   };
   const errorRow = (failure_class: string, error: string, metaExtra: Record<string, unknown>): RowOut => ({
     dest: "errors",
@@ -344,12 +346,28 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       failure_rule: "model_pin_not_honored",
     });
 
-  // 3b. Positive evidence of another effort: the agent's transcript shows a main-loop call sent with an effort other
-  // than the one requested (an env override, a cap, a clamp). Like a served-model mismatch, it outranks an agent error.
+  // 3b. Positive evidence the requested effort was not sent: the agent's transcript shows a main-loop assistant message
+  // that went out with another effort (an env override, a cap, a clamp), with a value that is not an effort level, or
+  // with none (the agent retried without it; a model with no effort selector may send none). Like a served-model
+  // mismatch, it outranks an agent error.
   const want = ctx.requestedEffort?.effort;
-  const otherEffort = want !== undefined ? sent.values.find((e) => e !== want) : undefined;
-  if (otherEffort !== undefined)
-    return errorRow("serving_substitution", `sent effort ${otherEffort} != requested ${want}`, { failure_rule: "effort_not_sent" });
+  if (want !== undefined) {
+    const otherEffort = sent.values.find((e) => e !== want);
+    if (otherEffort !== undefined)
+      return errorRow("serving_substitution", `sent effort ${otherEffort} != requested ${want}`, { failure_rule: "effort_not_sent" });
+    if (sent.invalid > 0)
+      return errorRow(
+        "serving_substitution",
+        `a main-loop assistant message records an effort that is not an effort level (requested ${want})`,
+        { failure_rule: "effort_not_sent" },
+      );
+    if (sent.unsent > 0 && !ctx.requestedEffort!.noSelector)
+      return errorRow(
+        "serving_substitution",
+        `the requested effort ${want} was not sent on ${sent.unsent} of ${sent.calls} main-loop assistant message(s)`,
+        { failure_rule: "effort_not_sent" },
+      );
+  }
 
   const rep = classifyRep(evidence, ctx.expectedContentSig !== undefined ? { contentSig: ctx.expectedContentSig } : {});
   const agentFailed = rep.bucket === "errored_agent";
@@ -357,14 +375,13 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     // 5. No model evidence on a success-shaped run.
     if (rep.bucket === "model_mismatch")
       return errorRow("serving_substitution", "no evidence the requested model served this run", { failure_rule: "model_pin_unverified" });
-    // 5b. The requested effort not confirmed on a run whose main loop answered: a call that went out with no effort
-    // (the agent retried without it), or no transcript to read. A model with no effort selector may send none.
-    if (want !== undefined && mains.length > 0 && !ctx.requestedEffort!.noSelector && (sent.calls === 0 || sent.unsent > 0))
+    // 5b. No evidence the requested effort was sent, on a run whose main loop answered (a live main-loop model in the
+    // events, or a pin modelUsage vouches for — a slash-command run's frames say `<synthetic>`): no main-loop assistant
+    // message in the agent's transcript, or no transcript to read. A model with no effort selector may send none.
+    if (want !== undefined && (mains.length > 0 || r?.modelPinHonored === true) && !ctx.requestedEffort!.noSelector && sent.calls === 0)
       return errorRow(
         "serving_substitution",
-        sent.calls === 0
-          ? `the requested effort ${want} is not confirmed: the agent's session transcript records no main-loop call`
-          : `the requested effort ${want} was not sent on ${sent.unsent} of ${sent.calls} main-loop call(s)`,
+        `the requested effort ${want} is not confirmed: the agent's session transcript records no main-loop assistant message`,
         { failure_rule: "effort_not_sent" },
       );
     // 6. Another snapshot's run.

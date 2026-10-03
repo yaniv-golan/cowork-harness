@@ -39,6 +39,17 @@ describe("effortSelector", () => {
   });
 });
 
+describe("effortSelector: dated ids, and the agent's own no-effort models", () => {
+  it("looks a dated id up undated", () => {
+    expect(effortSelector("claude-haiku-4-5-20251001", baseline)).toBe(false);
+    expect(effortSelector("claude-sonnet-4-6-20260101", baseline)).toEqual(["low", "medium", "high", "max"]);
+  });
+  it("treats the models the agent never sends an effort for as having no selector, though the baseline omits them", () => {
+    for (const m of ["claude-opus-4-1", "claude-opus-4-0", "claude-sonnet-4-0", "claude-3-5-haiku-20241022", "claude-opus-4-1-20250805"])
+      expect(effortSelector(m, baseline), m).toBe(false);
+  });
+});
+
 describe("thinkingEffortRefusal", () => {
   it("refuses xhigh or max with extended_thinking off", () => {
     for (const effort of ["xhigh", "max"]) {

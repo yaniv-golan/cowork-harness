@@ -51,12 +51,18 @@ export function servedModelMismatch(pin: string | undefined, models: readonly st
   return undefined;
 }
 
+/** The effort levels an agent request carries (`output_config.effort`). */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
 /** What the agent's own session transcript says about the effort of its main-loop calls. */
 export interface SentEffort {
   /** Distinct efforts sent, in first-seen order. */
   values: string[];
   /** Main-loop calls that went out with no effort (the agent retried without one, or a model with no selector). */
   unsent: number;
+  /** Main-loop calls whose recorded effort is not an effort level. Never kept as a value: the transcript is
+   *  agent-writable evidence, and a row records only a known level. */
+  invalid: number;
   /** Main-loop calls with a live model. */
   calls: number;
 }
@@ -68,10 +74,11 @@ export interface SentEffort {
  *  neither is present when the request went out without one. Main loop only (`isSidechain` false; sub-agents write
  *  their own files); `<synthetic>` API-error lines carry none and are skipped, as `mainLoopModels` skips them.
  *
- *  The whole file is read: a hillclimb attempt is one fresh session (a new run id per attempt), so the file holds
- *  only the current turn. It has no turn marker to scope a resumed session by. */
+ *  The whole file is read, and it holds only the current turn: every hillclimb attempt gets a fresh run id
+ *  (`attemptRunId`, job.ts), and `executeScenario` refuses `--resume` / `--session-id` with a pre-assigned run id, so
+ *  no attempt continues an earlier session. The file has no turn marker to scope a resumed session by. */
 export function sentEffort(transcript: readonly string[]): SentEffort {
-  const out: SentEffort = { values: [], unsent: 0, calls: 0 };
+  const out: SentEffort = { values: [], unsent: 0, invalid: 0, calls: 0 };
   for (const line of transcript) {
     if (!line.includes('"assistant"')) continue;
     let o: { type?: unknown; isSidechain?: unknown; effort?: unknown; perTurnEffort?: unknown; message?: { model?: unknown } };
@@ -89,6 +96,7 @@ export function sentEffort(transcript: readonly string[]): SentEffort {
           ? o.effort
           : undefined;
     if (e === undefined) out.unsent++;
+    else if (!(EFFORT_LEVELS as readonly string[]).includes(e)) out.invalid++;
     else if (!out.values.includes(e)) out.values.push(e);
   }
   return out;

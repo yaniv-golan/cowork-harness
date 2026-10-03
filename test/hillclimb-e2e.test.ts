@@ -151,6 +151,13 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
 
     expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
     expect(cli("check", "--flow", "flow").status).toBe(0);
+    // A non-default --effort reaches the agent's argv, and its own transcript says it was sent.
+    const hi = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--effort", "high", "--concurrency", "1");
+    expect(hi.status, hi.stderr).toBe(0);
+    const hiArgv = argvOf(argvFile);
+    expect(hiArgv[hiArgv.indexOf("--effort") + 1]).toBe("high");
+    const hiRow = JSON.parse(readFileSync(join(flow, "v1", "results.jsonl"), "utf8").trim()) as { meta: Record<string, unknown> };
+    expect(hiRow.meta).toMatchObject({ effort: "high", effort_sent: "high" });
   }, 90_000);
 
   it("a scenario metric runs from the file the agent wrote to the row: value, _present, the unavailable reason, the sigs", () => {

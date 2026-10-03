@@ -334,6 +334,12 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     const f = scenarioInputFindings(c.scenario, undefined, { quiet: true, session: sub, unloadableBaseline: "report" });
     const refusal = f.session ?? f.vacuity ?? f.inputs;
     if (refusal) throw new UsageError(`case ${c.id}: ${refusal.message}`);
+    // A model the agent sends no effort for takes none: the per-model check (the input checks above) knows only the baseline's exact ids.
+    if (selector === false && sub.effort !== undefined)
+      throw new UsageError(
+        `case ${c.id}: model ${sub.model} has no effort selector: remove ${args.effort !== undefined ? "--effort" : "the session's effort:"} (the agent sends no effort for it)`,
+      );
+
     // semantic_pairwise references: the gate a run applies before its run dir exists, once per case, over the
     // substituted session and with the flow's setup — a missing or damaged baseline reference, or a store a mount
     // exposes, refuses up front. A later variant's reference is a metric: unreadable, it blanks its own column.

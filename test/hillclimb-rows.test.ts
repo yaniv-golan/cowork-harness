@@ -613,7 +613,7 @@ describe("requested vs sent effort", () => {
     expect(out.dest).toBe("errors");
     expect(out.row).toMatchObject({
       failure_class: "serving_substitution",
-      error: "the requested effort high was not sent on 1 of 2 main-loop call(s)",
+      error: "the requested effort high was not sent on 1 of 2 main-loop assistant message(s)",
     });
     expect((out.row.meta as Record<string, unknown>).failure_rule).toBe("effort_not_sent");
   });
@@ -623,7 +623,9 @@ describe("requested vs sent effort", () => {
     for (const transcript of [undefined, []]) {
       const out = attemptRow({ result: r }, ctx(r, { ...req("medium"), ...(transcript ? { transcript } : {}) }));
       expect(out.dest).toBe("errors");
-      expect(out.row.error).toBe("the requested effort medium is not confirmed: the agent's session transcript records no main-loop call");
+      expect(out.row.error).toBe(
+        "the requested effort medium is not confirmed: the agent's session transcript records no main-loop assistant message",
+      );
     }
   });
 
@@ -639,6 +641,47 @@ describe("requested vs sent effort", () => {
     const r = fixture("success-semantic");
     const out = attemptRow({ result: r }, ctx(r, { ...req("medium", true), transcript: [t(undefined)] }));
     expect(out.dest).toBe("results");
+  });
+
+  it("a call sent without the effort outranks the agent's own failure: an error row, not a scored 0", () => {
+    const r = fixture("exit-agent");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("high"), transcript: [t("high"), t(undefined)] }));
+    expect(out.dest).toBe("errors");
+    expect(out.row).toMatchObject({
+      error: "the requested effort high was not sent on 1 of 2 main-loop assistant message(s)",
+      meta: { failure_rule: "effort_not_sent" },
+    });
+  });
+
+  it("a main loop vouched for only by modelUsage (a slash-command run, <synthetic> frames) still needs the effort confirmed", () => {
+    const r = { ...fixture("success-semantic"), modelPinHonored: true, models: ["<synthetic>"] } as RunResult;
+    const events = [frames[0], mainFrame("<synthetic>"), frames[1]];
+    // (a) no transcript
+    const a = attemptRow({ result: r }, ctx(r, { ...req("high"), pin: "claude-sonnet-5", events }));
+    expect(a.dest).toBe("errors");
+    expect((a.row.meta as Record<string, unknown>).failure_rule).toBe("effort_not_sent");
+    // (b) one live line with no effort
+    const b = attemptRow({ result: r }, ctx(r, { ...req("high"), pin: "claude-sonnet-5", events, transcript: [t(undefined)] }));
+    expect(b.dest).toBe("errors");
+    expect((b.row.meta as Record<string, unknown>).failure_rule).toBe("effort_not_sent");
+  });
+
+  it("a sent value outside the effort levels is an error row, and the raw value is never recorded", () => {
+    const r = fixture("success-semantic");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("high"), transcript: [t("high"), t("<inject>turbo")] }));
+    expect(out.dest).toBe("errors");
+    expect(out.row.error).toBe("a main-loop assistant message records an effort that is not an effort level (requested high)");
+    expect(JSON.stringify(out.row)).not.toContain("turbo");
+    expect(out.row.meta).not.toHaveProperty("effort_sent");
+  });
+
+  it("a row for a model with no effort selector says so: meta.effort_selector false beside meta.effort", () => {
+    const r = fixture("success-semantic");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("medium", true), transcript: [t(undefined)] }));
+    expect(out.dest).toBe("results");
+    expect(out.row.meta).toMatchObject({ effort: "medium", effort_selector: false });
+    const sel = attemptRow({ result: r }, ctx(r, { ...req("medium"), transcript: [t("medium")] }));
+    expect(sel.row.meta).not.toHaveProperty("effort_selector");
   });
 
   it("nothing requested (a caller outside hillclimb run) checks nothing", () => {

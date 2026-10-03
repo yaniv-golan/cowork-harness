@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/runner.js";
+import { requestedSummary, runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/runner.js";
 import { parseHillclimbRunArgs, type HillclimbRunArgs } from "../src/hillclimb/args.js";
 import type { RunResult } from "../src/types.js";
 import { stateTemplate } from "../src/hillclimb/state-template.js";
@@ -614,7 +614,12 @@ describe("failures inside the pool", () => {
     const r = await runHillclimb(args(), deps());
     expect(r).toMatchObject({ exitCode: 1, ok: 1, failed: 1 });
     expect(rows("baseline", "errors.jsonl")).toMatchObject([
-      { prompt_id: "alpha", failure_class: "error", meta: { failure_rule: "row_build", cost_usd: 0.25, retries_unrecorded: true } },
+      {
+        prompt_id: "alpha",
+        failure_class: "error",
+        // what the attempt asked for, as on every other error row
+        meta: { failure_rule: "row_build", cost_usd: 0.25, retries_unrecorded: true, model_requested: MODEL, effort: "medium" },
+      },
     ]);
     expect(rows("baseline").map((x) => x.prompt_id)).toEqual(["beta"]);
   });
@@ -756,5 +761,34 @@ describe("--dry-run", () => {
     expect(existsSync(flowDir())).toBe(false);
     expect(err).toContain("[baseline] 6 of 6 (id,rep) to run");
     expect(err.join("\n")).toMatch(/harness gate: absent/);
+  });
+});
+
+describe("requestedSummary: summary.json's requested and sent keys over the variant's whole results.jsonl", () => {
+  const row = (meta: Record<string, unknown>) => JSON.stringify({ prompt_id: "a", rep: 0, meta });
+  it("one value is written, several are mixed, none is absent", () => {
+    expect(
+      requestedSummary(
+        [row({ effort: "high", effort_sent: "high", model_requested: "m" }), row({ effort: "high", model_requested: "m" })].join("\n"),
+      ),
+    ).toEqual({
+      model_requested: "m",
+      effort: "high",
+      effort_sent: "high",
+      effort_selector: undefined,
+    });
+    expect(requestedSummary([row({ effort: "high" }), row({ effort: "low" })].join("\n")).effort).toBe("mixed");
+    expect(requestedSummary(null)).toEqual({
+      model_requested: undefined,
+      effort: undefined,
+      effort_sent: undefined,
+      effort_selector: undefined,
+    });
+  });
+  it("effort_selector: false when every row's model has no selector, mixed when only some", () => {
+    expect(requestedSummary([row({ effort: "medium", effort_selector: false })].join("\n")).effort_selector).toBe(false);
+    expect(
+      requestedSummary([row({ effort: "medium", effort_selector: false }), row({ effort: "medium" })].join("\n")).effort_selector,
+    ).toBe("mixed");
   });
 });

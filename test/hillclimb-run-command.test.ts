@@ -1731,6 +1731,32 @@ describe("--effort: the requested effort reaches the agent and every row", () =>
     expect(calls).toEqual([]);
   });
 
+  it("a dated pin of a model with no effort selector: --effort is refused, and without it rows score with effort_selector false", async () => {
+    await approve();
+    const h = await runHillclimbCommand(args("--model", "claude-haiku-4-5-20251001", "--effort", "low", "--approve-harness"), deps());
+    expect(h.exitCode).toBe(2);
+    expect(h.error?.message).toMatch(/case alpha: model claude-haiku-4-5-20251001 has no effort selector: remove --effort/);
+    expect(calls).toEqual([]);
+    sentEffortOverride = null; // the agent sends no effort for it
+    const r = await runHillclimbCommand(args("--model", "claude-opus-4-1", "--variant", "v1", "--approve-harness"), deps());
+    expect(r.exitCode, r.error?.message).not.toBe(2);
+    const row = [
+      ...(existsSync(join(cwd, "flow", "v1", "results.jsonl"))
+        ? readFileSync(join(cwd, "flow", "v1", "results.jsonl"), "utf8")
+            .trim()
+            .split("\n")
+        : []),
+      ...(existsSync(join(cwd, "flow", "v1", "errors.jsonl"))
+        ? readFileSync(join(cwd, "flow", "v1", "errors.jsonl"), "utf8")
+            .trim()
+            .split("\n")
+        : []),
+    ].map((l) => JSON.parse(l))[0];
+    // the fake serves MODEL, so the served-model check fails the row; the effort check must not be what does
+    expect(row.meta.failure_rule).not.toBe("effort_not_sent");
+    expect(row.meta).toMatchObject({ effort: "medium", effort_selector: false, model_requested: "claude-opus-4-1" });
+  });
+
   it("xhigh or max with extended_thinking: false is refused before spend, and so is thinking off where the model disallows it", async () => {
     session("extended_thinking: false\n");
     await approve();
@@ -1790,7 +1816,7 @@ describe("the sent effort, read from the agent's own transcript, decides whether
     await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
     sentEffortOverride = null;
     expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(1);
-    expect(errs()[0]).toMatchObject({ error: "the requested effort medium was not sent on 1 of 1 main-loop call(s)" });
+    expect(errs()[0]).toMatchObject({ error: "the requested effort medium was not sent on 1 of 1 main-loop assistant message(s)" });
   });
 });
 
@@ -1869,10 +1895,12 @@ describe("a variant runs one requested model and effort per case: the resume gua
     legacy("baseline", (r) => (r.model = `${MODEL}-20260101`));
     err = [];
     expect((await runHillclimbCommand(args("--reps", "2"), deps())).exitCode).toBe(0);
-    expect(err.join("\n")).not.toMatch(/warning: variant/);
+    expect(err.filter((l) => l.startsWith("warning: variant") && l.includes("model"))).toEqual([]);
   });
 
-  it("rows written before the requested fields with no served model warn, never refuse; an unrecorded effort warns only under --effort", async () => {
+  it("rows written before the requested fields warn, never refuse: no served model, and an unknown effort with or without --effort", async () => {
+    const effortWarning =
+      "warning: variant baseline's earlier rows for case alpha don't record the requested effort (written before it was recorded): their effort is unknown, and this pass requests medium — compare them only knowingly";
     await approve();
     await runHillclimbCommand(args(), deps());
     legacy("baseline", (r) => delete r.model);
@@ -1880,13 +1908,17 @@ describe("a variant runs one requested model and effort per case: the resume gua
     expect((await runHillclimbCommand(args("--reps", "2"), deps())).exitCode).toBe(0);
     expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([
       `warning: variant baseline's earlier rows for case alpha record neither the requested nor the served model; this pass requests ${MODEL} — compare them only knowingly`,
+      effortWarning,
     ]);
-    legacy("baseline", (r) => (r.model = MODEL)); // served model known: only the effort is unrecorded
-    err = [];
-    expect((await runHillclimbCommand(args("--reps", "3", "--effort", "medium"), deps())).exitCode).toBe(0);
-    expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([
-      "warning: variant baseline's earlier rows for case alpha don't record the requested effort (written before it was recorded); this pass requests medium — compare them only knowingly",
-    ]);
+    // served model known: only the effort is unrecorded — warned without --effort too (a re-approved session
+    // file may have changed its effort: since then)
+    for (const extra of [[], ["--effort", "medium"]]) {
+      legacy("baseline", (r) => (r.model = MODEL));
+      err = [];
+      const reps = String(rowsOf("baseline").length + 1);
+      expect((await runHillclimbCommand(args("--reps", reps, ...extra), deps())).exitCode).toBe(0);
+      expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([effortWarning]);
+    }
   });
 
   it("the guard is per case: a --case pass may run another case at another effort, and warns that the variant's cases differ", async () => {
@@ -1912,6 +1944,29 @@ describe("a variant runs one requested model and effort per case: the resume gua
     expect(plain).toMatch(/^harness gate: approved/);
     expect(await shaOf("--effort", "max")).toBe(plain);
     expect((await runHillclimbCommand(args("--effort", "max"), deps())).exitCode).toBe(0);
+  });
+
+  it("summary.json reads the whole variant: two cases run at two efforts make it mixed", async () => {
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO.replace("name: Alpha", "name: Beta"));
+    await approve();
+    await runHillclimbCommand(args("--case", "alpha", "--effort", "high"), deps());
+    const summary = () => JSON.parse(readFileSync(join(cwd, "flow", "baseline", "summary.json"), "utf8"));
+    expect(summary()).toMatchObject({ effort: "high", effort_sent: "high", model_requested: MODEL });
+    await runHillclimbCommand(args("--case", "beta", "--effort", "low"), deps());
+    expect(summary()).toMatchObject({ effort: "mixed", effort_sent: "mixed", model_requested: MODEL });
+  });
+
+  it("an error row for a model with no effort selector carries meta.effort_selector false", async () => {
+    await approve();
+    sentEffortOverride = null;
+    await runHillclimbCommand(args("--model", "claude-haiku-4-5", "--variant", "v1", "--approve-harness"), deps());
+    // the fake serves another model, so this row is a served-model error
+    const s = JSON.parse(
+      readFileSync(join(cwd, "flow", "v1", "errors.jsonl"), "utf8")
+        .trim()
+        .split("\n")[0],
+    );
+    expect(s.meta).toMatchObject({ effort_selector: false });
   });
 
   it("summary.json records the pass's requested model, requested effort and sent effort", async () => {

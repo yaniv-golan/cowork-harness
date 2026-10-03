@@ -1105,33 +1105,11 @@
         "properties": {
           "id": { "type": "string" },
           "value": { "type": "number" },
-          "unavailable": {
-            "type": "string",
-            "enum": [
-              "missing_artifact",
-              "missing_path",
-              "not_json",
-              "not_a_number",
-              "readonly",
-              "size",
-              "remote",
-              "pruned",
-              "pre_run",
-              "no_manifest"
-            ]
-          }
+          "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run", "no_manifest"] }
         },
         "oneOf": [
-          {
-            "required": ["value"],
-            "properties": { "value": {} },
-            "not": { "required": ["unavailable"], "properties": { "unavailable": {} } }
-          },
-          {
-            "required": ["unavailable"],
-            "properties": { "unavailable": {} },
-            "not": { "required": ["value"], "properties": { "value": {} } }
-          }
+          { "required": ["value"], "properties": { "value": {} }, "not": { "required": ["unavailable"], "properties": { "unavailable": {} } } },
+          { "required": ["unavailable"], "properties": { "unavailable": {} }, "not": { "required": ["value"], "properties": { "value": {} } } }
         ]
       }
     },
