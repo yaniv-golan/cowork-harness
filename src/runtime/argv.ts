@@ -2,7 +2,7 @@ import { DESKTOP_APP_VERSION_MIN_VERSION, cmpVersionStrings, recordedLayoutDiver
 import { warn } from "../io.js";
 import type { PlatformBaseline } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
-import type { LaunchPlan } from "../session.js";
+import { resolveEffort, type LaunchPlan } from "../session.js";
 import { SECRET_ENV_KEYS } from "./host-env.js";
 import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 
@@ -74,7 +74,7 @@ export function baseAgentArgs(
   // unknown) — falling back to the baseline's synced medium default when the session left it unset
   // (per-model validation of an EXPLICIT value already ran in buildLaunchPlan's validateEffort; the
   // trailing "medium" only guards a baseline synced before `spawn.effortDefault` existed).
-  const effort = plan.effort ?? spawn?.effortDefault ?? "medium";
+  const effort = resolveEffort({ session: plan.effort, baseline });
   const tools = [...(spawn?.tools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraTools ?? [])];
   // extraAllowedTools is deliberately NOT defaulted from extraTools: registering a tool and
   // pre-approving it session-wide are different decisions, so each caller states its pre-approval set

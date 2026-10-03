@@ -75,6 +75,10 @@ const Project = z.strictObject({
   from: z.string().min(1), // host path to the project's content
 });
 
+/** The `effort:` tokens a session (and `hillclimb run --effort`) accepts: Cowork's five levels plus `extra`, the UI
+ *  label for `xhigh` (normalized to `xhigh` on load — see `loadSession`). */
+export const SESSION_EFFORT_TOKENS = ["low", "medium", "high", "xhigh", "max", "extra"] as const;
+
 export const SessionConfig = z.strictObject({
   // --- model & reasoning (Cowork model picker + toggles) ---
   model: z.string().optional(), // setModel
@@ -86,7 +90,7 @@ export const SessionConfig = z.strictObject({
   // (`applySessionOverrides` rewrites `model` post-parse, so parse-time validation would check the wrong
   // model in a matrix run). Omitted -> resolved to the baseline's medium fallback at argv emission time
   // (real Cowork always emits `--effort`, never omits it).
-  effort: z.enum(["low", "medium", "high", "xhigh", "max", "extra"]).optional(),
+  effort: z.enum(SESSION_EFFORT_TOKENS).optional(),
   // Rendered into the prompt append's <env> "User name:" line ({{accountName}}, >=1.18286.0
   // reconstruction). Real Cowork uses the signed-in account's name; default "User".
   account_name: z.string().optional(),
@@ -669,6 +673,52 @@ function validateEffort(effort: string | undefined, model: string | undefined, b
       );
   }
   // else: class 4 (unknown model id, or no model declared) — accept any of the six tokens, no throw.
+}
+
+/** The effort a run requests — the ONE resolver: an explicit override (`hillclimb run --effort`), else the session's
+ *  `effort:`, else the baseline's synced `spawn.effortDefault`, else `medium` (a baseline synced before that field
+ *  existed). Real Cowork always emits `--effort`, so there is always a value. The argv builders call it with the
+ *  plan's effort (the override already applied to the session by `applySessionOverrides`). */
+export function resolveEffort(src: { flag?: string; session?: string; baseline?: Pick<PlatformBaseline, "spawn"> }): string {
+  return src.flag ?? src.session ?? src.baseline?.spawn?.effortDefault ?? "medium";
+}
+
+/** The model's effort levels in the baseline's per-model config (the literal map, else the regex-default class);
+ *  `false` for a model the map lists with no levels (no effort selector: claude-haiku-4-5, claude-sonnet-4-5);
+ *  undefined for a model the baseline does not know. */
+export function effortSelector(
+  model: string | undefined,
+  baseline: Pick<PlatformBaseline, "spawn">,
+): readonly string[] | false | undefined {
+  const entry = modelEffortEntry(model, baseline);
+  return entry === undefined ? undefined : (entry.effortLevels ?? false);
+}
+
+function modelEffortEntry(
+  model: string | undefined,
+  baseline: Pick<PlatformBaseline, "spawn">,
+): { effortLevels?: readonly string[]; disallowThinkingDisabled?: boolean } | undefined {
+  if (model === undefined) return undefined;
+  const spawn = baseline.spawn;
+  const entry = spawn?.effortByModel?.[model];
+  if (entry) return entry;
+  const regexDefault = spawn?.effortRegexDefault;
+  if (regexDefault && new RegExp(regexDefault.pattern).test(model)) return regexDefault;
+  return undefined;
+}
+
+/** Why a session's effort and thinking settings cannot run as requested, or undefined. Two combinations the agent
+ *  would not send as configured: `xhigh`/`max` with `extended_thinking: false` (the agent clamps effort when thinking
+ *  is off), and thinking off on a model whose baseline entry sets `disallowThinkingDisabled` (Cowork offers no
+ *  thinking-off toggle for it). Checked over the RESOLVED effort and the session's model. */
+export function thinkingEffortRefusal(session: SessionConfig, baseline: PlatformBaseline): string | undefined {
+  if (session.extended_thinking !== false) return undefined;
+  const effort = resolveEffort({ session: session.effort, baseline });
+  if (effort === "xhigh" || effort === "max")
+    return `effort ${effort} with extended_thinking: false: the agent lowers the effort it sends when thinking is off — turn extended_thinking on, or request high or lower`;
+  if (modelEffortEntry(session.model, baseline)?.disallowThinkingDisabled === true)
+    return `model ${session.model} does not allow thinking to be turned off (the baseline's disallowThinkingDisabled): remove extended_thinking: false`;
+  return undefined;
 }
 
 /** True iff any PLUGIN mount declares runnable hooks. Folder/upload mounts never count even if a
@@ -1265,7 +1315,7 @@ export function loadSession(parsed: unknown): SessionConfig {
 
 /**
  * The matrix runner's session-loading override seam. Pure: returns a new SessionConfig, never
- * mutates `session`. `model` is a plain scalar overwrite. `skillDirSubstitution: [from, to]` swaps ONE
+ * mutates `session`. `model` and `effort` are plain scalar overwrites. `skillDirSubstitution: [from, to]` swaps ONE
  * `plugins.local_plugins` entry — chosen by exact match on `from` — for `to`, leaving every other entry
  * untouched.
  *
@@ -1280,10 +1330,11 @@ export function loadSession(parsed: unknown): SessionConfig {
  */
 export function applySessionOverrides(
   session: SessionConfig,
-  overrides: { model?: string; skillDirSubstitution?: [string, string] },
+  overrides: { model?: string; effort?: SessionConfig["effort"]; skillDirSubstitution?: [string, string] },
 ): SessionConfig {
   let next = session;
   if (overrides.model !== undefined) next = { ...next, model: overrides.model };
+  if (overrides.effort !== undefined) next = { ...next, effort: overrides.effort };
   if (overrides.skillDirSubstitution) {
     const [from, to] = overrides.skillDirSubstitution;
     const idx = next.plugins.local_plugins.indexOf(from);

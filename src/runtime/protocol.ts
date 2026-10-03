@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { SCRUBBED_AGENT_ENV_KEYS } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS, resolveEffort } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
@@ -222,7 +222,7 @@ export function spawnProtocol(
     // is set — never omitted, for every model class (see buildLaunchPlan's validateEffort). The host
     // CLI accepts the flag (live-verified), so L0 is a non-vacuous check of this too.
     "--effort",
-    plan.effort ?? baseline.spawn?.effortDefault ?? "medium",
+    resolveEffort({ session: plan.effort, baseline }),
     ...(plan.mcpConfig ? ["--mcp-config", plan.mcpConfig] : []),
     // Plugin roots, rooted at the tree THIS function staged (`workReal`) — never re-derived by a caller.
     // Shared derivation with container/hostloop/microvm; see pluginDirArgs.
