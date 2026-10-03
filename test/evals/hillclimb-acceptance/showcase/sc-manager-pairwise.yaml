@@ -1,0 +1,23 @@
+# Showcase: the brief as a manager reads it, judged pairwise against a frozen earlier brief, in both orders.
+name: sc-manager-pairwise
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Use the sales-brief skill on orders.csv from my uploads. The brief goes to our sales manager, who has five minutes for it.
+assert:
+- user_visible_artifact: outputs/brief.md
+- semantic_pairwise:
+    order: both
+    evidence_files: [outputs/brief.md]
+    rubric:
+    - Leads with the most important number
+    - Every point is grounded in a number from the data
+    - Ends with a concrete recommended action
+    - Can be read in five minutes
+metrics:
+- {id: amount_total, artifact: outputs/metrics.json, path: columns.amount.sum, better: lower, unbounded: true}

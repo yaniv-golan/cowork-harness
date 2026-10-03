@@ -1,0 +1,7 @@
+# Showcase session: the deliberately weak sales-brief skill the hillclimb loop improves. The CSV is synthetic.
+model: claude-sonnet-5
+uploads:
+  - ./data/orders.csv
+plugins:
+  local_plugins:
+    - ./plugin

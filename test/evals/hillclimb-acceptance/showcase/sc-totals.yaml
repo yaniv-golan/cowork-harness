@@ -1,0 +1,17 @@
+# Showcase: the total and the leading region. 26300 and 24500 are both defensible totals for this file.
+name: sc-totals
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Use the sales-brief skill on orders.csv from my uploads. What is the total revenue, and which region leads?
+assert:
+- user_visible_artifact: outputs/brief.md
+- artifact_json: {artifact: outputs/metrics.json, path: columns.amount.sum, in: [26300, 24500]}
+- artifact_text: {artifact: outputs/brief.md, contains: [North]}
+metrics:
+- {id: amount_total, artifact: outputs/metrics.json, path: columns.amount.sum, better: lower, unbounded: true}

@@ -1,0 +1,15 @@
+# Showcase control: a request the weak skill already meets. It should pass at baseline and keep passing; a change
+# that breaks it is a regression.
+name: sc-control-regions
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Use the sales-brief skill on orders.csv from my uploads. Break the brief down by region.
+assert:
+- user_visible_artifact: outputs/brief.md
+- artifact_text: {artifact: outputs/brief.md, contains: [North, South, East, West]}
