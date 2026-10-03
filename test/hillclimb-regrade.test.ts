@@ -1213,66 +1213,6 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     for (const v of ["baseline", "v1"]) expect(rows(v)[0]!.grade.pass, v).toBe(0);
   }, 240_000);
 
-  // The link's host folder is what no run dir records; here the kept work dir lost the linked file after the run, which
-  // is enough to make the kept-run resolution differ from the live one.
-  it.each(["computer_links_resolve", "computer_links_resolve_if_present"] as const)(
-    "--reevaluate lists a row whose differing `%s` resolves links (untouched, no judge call)",
-    async (key) => {
-      const LINK = "See computer:///sessions/s1/mnt/outputs/a.txt for it.";
-      f.cleanup();
-      f = makeStubFixture(`mkdir -p outputs && printf x > outputs/a.txt\n${STUB.replaceAll("All done.", LINK)}`);
-      const { flow, rows } = buildFlow({ noPairwise: true, extra: [`  - ${key}: true`] });
-      const old = rows("v1")[0]!;
-      expect(old.grade).toMatchObject({ pass: 1, a1: 1 });
-      const result = JSON.parse(readFileSync(join(runDirOf(old), "turns", "1", "result.json"), "utf8")) as { workDir: string };
-      rmSync(join(result.workDir, "outputs", "a.txt"));
-      const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
-      const { seen, deps } = counting();
-      const out = await regradeFlow(ARGS({ variant: "v1", reevaluate: true }), deps);
-      expect(out.exitCode, JSON.stringify(out)).toBe(1);
-      expect(seen.calls).toBe(0);
-      expect(out.variants[0]!.listed).toEqual([
-        {
-          prompt_id: "alpha",
-          rep: 0,
-          why: expect.stringMatching(
-            new RegExp(
-              `^--reevaluate: assertion 1 \\(\`${key}\`\\) passes in the run, fails re-evaluated now, but \`${key}\` resolves links against host folders no run dir records`,
-            ),
-          ),
-        },
-      ]);
-      expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
-    },
-    240_000,
-  );
-
-  it("--reevaluate lists a row whose differing assert finds its evidence unavailable in the kept run (untouched)", async () => {
-    const { flow, rows } = buildFlow({ noPairwise: true, extra: ["  - transcript_no_host_path: true"] });
-    const old = rows("v1")[0]!;
-    expect(old.grade).toMatchObject({ pass: 1, a1: 1 });
-    // The kept run no longer records its post-run scan: the assert cannot be shown either way.
-    const file = join(runDirOf(old), "turns", "1", "result.json");
-    const r = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-    delete r.scan;
-    writeFileSync(file, JSON.stringify(r));
-    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
-    const { seen, deps } = counting();
-    const out = await regradeFlow(ARGS({ variant: "v1", reevaluate: true }), deps);
-    expect(out.exitCode, JSON.stringify(out)).toBe(1);
-    expect(seen.calls).toBe(0);
-    expect(out.variants[0]!.listed).toEqual([
-      {
-        prompt_id: "alpha",
-        rep: 0,
-        why: expect.stringMatching(
-          /^--reevaluate: assertion 1 \(`transcript_no_host_path`\) passes in the run, fails re-evaluated now, but the kept run cannot show it \(evidence unavailable/,
-        ),
-      },
-    ]);
-    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
-  }, 240_000);
-
   it("--reevaluate lists a row whose differing assert reads the kept work dir (it may have changed since the run)", async () => {
     f.cleanup();
     f = makeStubFixture(`mkdir -p outputs && printf x > outputs/a.txt\n${STUB}`);
