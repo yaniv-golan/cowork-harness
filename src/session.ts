@@ -274,7 +274,7 @@ export const SessionConfig = z.strictObject({
  *  (a) is user-settable from a shell, (b) changes agent behaviour this harness models or reports on, and
  *  (c) is NOT set by the Cowork spawn** — so inheriting it makes the two env-inheriting tiers diverge
  *  from the other two with nothing in the baseline to justify the difference. Dozens of keys in the
- *  binary's settable-env table meet (a) alone; (b) and (c) are what select these five.
+ *  binary's settable-env table meet (a) alone; (b) and (c) are what select these eight.
  *  KNOWN AND DELIBERATELY NOT SCRUBBED: `CLAUDE_CODE_COORDINATOR_MODE` itself, which enables the second
  *  key above and swaps the coordinator system prompt and the Task tool description. It fails (b) as
  *  currently written — the harness models no coordinator surface — so scrubbing it would suppress a
@@ -286,6 +286,20 @@ export const SCRUBBED_AGENT_ENV_KEYS = [
   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
   "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
   "CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL",
+  // Effort and thinking. Read from the agent binary (2.1.286): the effort resolver takes
+  // `CLAUDE_CODE_EFFORT_LEVEL` FIRST — `env ?? (env===null ? modelDefault : …) ?? turnEffort ?? sessionEffort ??
+  // modelDefault`, where the session effort is what `--effort` sets, and `unset`/`auto` mean "model default",
+  // which displaces the flag too. Only a hook's effort value outranks it. `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`
+  // forces the model-supports-effort predicate true, so an effort parameter is sent for a model that otherwise
+  // gets none. `CLAUDE_CODE_DISABLE_THINKING` turns thinking off whatever the thinking flag says (and clamps
+  // effort with it). Cowork sets none of the three: they are absent from the constructed spawn env, and the
+  // host-loop spawn copies only PATH/HOME/LOGNAME/SHELL/TERM/USER/CLAUDE_CODE_TMPDIR from Desktop's own
+  // environment — Desktop does adopt a login-shell `CLAUDE_CODE_EFFORT_LEVEL` into that environment, but for
+  // its Code tab, not for the Cowork agent. Unlike the two `_FORCE` keys these have an authored replacement:
+  // the session's `effort` and `extended_thinking`.
+  "CLAUDE_CODE_EFFORT_LEVEL",
+  "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+  "CLAUDE_CODE_DISABLE_THINKING",
 ] as const;
 
 /** Map the authored `agent_env` knob to its exact env keys. An unset field emits NO key — never an empty

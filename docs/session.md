@@ -177,10 +177,14 @@ an operator-exported `CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or
 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` silently affects only the two env-inheriting tiers — the exact
 same session behaves differently depending on which fidelity tier you run it at. `agent_env` is the
 authored, uniform replacement: it applies across **all four execution tiers**
-(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and **five**
+(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and **eight**
 keys are **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers that inherit one)
 before any baseline/knob overlay — so a stray shell value can never leak through on some tiers and not
-others. Three of them are the keys above. The other two have **no `agent_env` knob** and are scrubbed with
+others. Three of them are the keys above. Three more set effort and thinking, and the session's `effort` and
+`extended_thinking` fields are their replacement: `CLAUDE_CODE_EFFORT_LEVEL`, which the agent reads ahead of
+`--effort` (so an export would replace the session's `effort`), `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`, which makes
+it send an effort for a model that otherwise gets none, and `CLAUDE_CODE_DISABLE_THINKING`, which turns thinking
+off whatever `extended_thinking` says. The other two have **no `agent_env` knob** and are scrubbed with
 no authored replacement: `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, which promotes the env model override above a
 sub-agent's frontmatter and a per-dispatch `model:`, and
 `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`, which discards the dispatch `model:` when
