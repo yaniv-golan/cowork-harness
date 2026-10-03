@@ -159,7 +159,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   git-tracked files, taken on its first run. A `--case` canary is that first run, so a fix made after it goes to
   the next variant.
 - **Run** the round's command in the background with a timeout that covers it. Write its output outside `F`
-  (it names host paths), or never commit it. When it exits, verify N×R rows in
+  (it names host paths), or never commit it. In default permission mode the launch (with its `cd`, redirect and
+  `echo $?`) and the shell bookkeeping ask for approval each round; allow rules for the flow dir cover only Edit and
+  Write. For unattended rounds, tell the user to run the session in auto mode. When it exits, verify N×R rows in
   `F/vN/results.jsonl` and that `F/vN/summary.json` exists; if rows are short, re-launch the same command (resume
   is by (case, rep) slot). Slots with only an `errors.jsonl` row re-run on every pass; a permanent fault re-runs
   forever, so read `failure_class` before re-launching again.

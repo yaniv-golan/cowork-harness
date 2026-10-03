@@ -161,6 +161,13 @@ in an interactive session each of those writes asks for approval, every round, a
 refused. The runner's own writes are unaffected: it writes from its own process. Use an absolute `--flow` path
 outside `.claude/` and exclude it from git; allow rules for that path then cover the loop's writes.
 
+Those allow rules cover the loop's Edit and Write tool calls only. In default permission mode the loop still asks a
+few times a round: loading `/claude-api` itself, launching the runner (it wraps the command in a `cd`, an output
+redirect and an `echo $?`, so a prefix allow rule for the runner does not match it), and its shell bookkeeping and
+read-outs (`mkdir`, `cp`, `git`, `node -e` over the flow's files, which Edit rules do not cover). An allow rule for
+the runner covers only a bare runner command. To run rounds with no prompts, run the loop's session in auto mode:
+one live round ran that way with none.
+
 Keep the flow dir out of your repo, or ignore most of it. Rows, traces and the copies under `<variant>/out/`
 hold the run's outputs and judge rationales (secret-scrubbed and host-path-redacted text; binary files copied as
 they are), and `inputs/` holds a copy of the files the session uploads (up to 2 MiB each and 20 MiB per rep), as `inputs/<hash>-<name>`, shared by
