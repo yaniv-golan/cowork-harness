@@ -226,7 +226,11 @@ their sub-agent spend) do not run.
   which the L0 contamination signal already covers. Elsewhere only a managed-settings `env` could do it, and it would
   do the same to Cowork on that machine.
 - **The modeled session shape only.** Production returns no directory for a chat, scheduled or dispatched session
-  whatever the gate says. The harness's rule encodes the ordinary-task arm only.
+  outside a Space, whatever the gate says. The harness's rule encodes the ordinary-task arm only.
+- **Same rule everywhere it applies.** `lane: remote` gets the same rule; the evidence for it is local-lane, and the
+  cloud lane's memory behaviour is unmeasured. A custom baseline with no `provenance` counts as off. There is no
+  knob to turn memory on: `agent_env` cannot carry the key, so a Spaces- or agent-session memory setup cannot be
+  reproduced. `chat --raw` is not a fidelity tier and does not set the key.
 
 **Read the reachability claim precisely, because it is narrower than it looks.** "Unreachable" holds
 for the modeled session shape only. It does **not** hold for a Spaces or agent-type session, where the

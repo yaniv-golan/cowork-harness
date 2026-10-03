@@ -40,10 +40,25 @@ All notable changes to this project are documented here. The format is based on
     assertion on those names needs updating. At `hostloop` the native binary also loads a builtin
     `cc-plugin-sec-default`, which the container ELF does not list. The init event's `capabilities[]` gains
     `sdk_mcp_manifests`, `sdk_mcp_tools_list_changed` and `ui_surface_v1`.
-  - At `protocol` a re-stamp is sound: the agent there is the `claude` on your `PATH`, and the first-party spawn env, the
-    Cowork system prompt, the sub-agent append, the egress allowlist and the spawn tools are unchanged.
+  - At `protocol` the baseline move alone does not need a re-record. The agent there is the `claude` on your
+    `PATH`, and the baseline move leaves the first-party spawn env, the Cowork system prompt, the sub-agent append,
+    the egress allowlist and the spawn tools as they were. This release still changes the spawn env on every tier,
+    protocol included, through the auto-memory switch (next bullet). A protocol re-stamp therefore keeps the
+    verdict but freezes a recording that ran with memory on.
+  - **Auto-memory: re-record, at every tier, protocol included; do not re-stamp.** The agent now starts with
+    auto-memory off on every tier (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, see Fixed). A cassette recorded before this
+    release ran with memory on: its init frame carries `memory_paths`, and the agent's system prompt had a memory
+    section that Cowork's agent never gets. Replay is unaffected and keeps its verdict. A re-stamp, though, would
+    present that memory-on recording as current. Re-record if your scenario:
+    - runs a plugin agent that declares `memory:`, which no longer gets Read/Write/Edit added;
+    - asserts on `memory_paths`;
+    - sets a cost budget, since the post-turn memory forks no longer run and their sub-agent spend disappears.
+
+    The same applies to `stats` trends and `eval`/`hillclimb` comparisons that span this release: spend and
+    transcripts on either side of it are not like-for-like.
   - The committed cassettes: `example-pdf-skill`, `dispatch-shell` and `hostloop-computer-links` are re-recorded, and
-    `example-multiselect-gate` is re-stamped.
+    `example-multiselect-gate` is re-stamped. Those four recordings predate the auto-memory switch. The committed
+    example cassettes are re-recorded with it in this same release, so the shipped ones run with memory off.
 - **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
   the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
 - **`hostloop` on an Intel (x64) Mac: the native build pin is per architecture.** `desktop-2.19675.0` records the
@@ -734,7 +749,8 @@ All notable changes to this project are documented here. The format is based on
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them).
 - **The agent now runs with auto-memory off, as Cowork does.** For an ordinary task Desktop gives the agent an
   auto-memory directory only when server gate `123929380` is on. Otherwise it sends
-  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. The gate is off in every committed baseline, but the harness set nothing, so
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. The gate is off in all 31 committed baselines that record it; the other 9, which
+  predate the gate, have no row. The harness set nothing, so
   the agent loaded a memory section into its system prompt that Cowork's agent never sees. Every tier (protocol,
   container, microvm, hostloop) now sets the key from the baseline's recorded gate row. A baseline with no row
   counts as off. On hostloop and protocol the operator's own export of the key is ignored.
@@ -743,9 +759,8 @@ All notable changes to this project are documented here. The format is based on
       to its tools or the memory prompt.
     - the background memory forks after a turn. They no longer run, and their sub-agent spend stops.
 
-    A fresh run, or a re-record, can produce a different transcript. Replaying an existing cassette is unchanged:
-    the committed cassettes were recorded with memory on and still show `memory_paths` in their init frame. No
-    re-record is needed for replay.
+    A fresh run, or a re-record, can produce a different transcript. Replaying an existing cassette is unchanged.
+    For fidelity, though, re-record rather than re-stamp: see Upgrade notes.
   - **sync changes.** It now checks the shape of Desktop's memory resolver; a change is an unknown delta. It prints
     a warning note when the gate reads on, a mode the harness models only in part.
   - **Wording.** The L0 contamination warning and the `l0_host_config_contamination` message no longer list

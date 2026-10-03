@@ -226,12 +226,26 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.
 - [ ] `npm run ci` (typecheck + build + test) is green locally.
 - [ ] **Live gate: the init frame carries no `memory_paths` when the recorded gate is off.** Every committed
-      baseline records gate `123929380` off, so every tier must start the agent with auto-memory off, as Desktop
-      does for an ordinary task. Run `vitest run --config vitest.config.live.ts live-auto-memory` (protocol), plus one
-      `container` or `hostloop` run, and check that run's `events.jsonl`: its `system`/`init` frame must have no
-      `memory_paths` key. If the frame has the key, the switch did not reach the agent. If there is no init frame,
-      the check proved nothing. The builder unit tests cannot show this. The committed cassettes predate the
-      switch and still carry the key; that is expected, and they are not re-recorded for it.
+      baseline that records gate `123929380` records it off, so every tier must start the agent with auto-memory off,
+      as Desktop does for an ordinary task. The builder unit tests cannot show that the agent honoured it. This step
+      is billed: three short runs.
+      ```
+      npm run build    # the test spawns dist/cli.js
+      export CLAUDE_CODE_OAUTH_TOKEN=$(cat ~/.cowork-harness-token)   # or keep the token in that file
+      for f in protocol container hostloop; do
+        COWORK_LIVE_REQUIRE=1 COWORK_LIVE_AUTO_MEMORY_FIDELITY=$f \
+          npx vitest run --config vitest.config.live.ts test/live-auto-memory.test.ts
+      done
+      ```
+      - **Each run must print `Tests  1 passed (1)`.** `COWORK_LIVE_REQUIRE=1` turns a missing token, `dist/cli.js` or
+        host `claude` into a failure, but any `skipped` count still means that tier was not checked.
+      - Each run prints the `events.jsonl` it checked (`<outDir>/events.jsonl`). The test fails if that file has no
+        `system`/`init` frame, or if the frame has a `memory_paths` key.
+      - `protocol` runs the HOST `claude` on your `PATH`, not the staged agent. `container` (Docker, the agent image,
+        the staged binary) and `hostloop` (macOS, the staged native app) run the staged agent Cowork runs. Those two
+        are the real witnesses.
+      - The committed cassettes predate the switch and still carry `memory_paths`. That is expected, and this step
+        does not re-record them.
 - [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the companion
       skill (`SKILL.md`, `references/`, the bundled `scenario.py` + `assertion-keys.json`), and no internal
       planning notes. The skill ships on BOTH channels: npm carries it alongside everything else, while a
