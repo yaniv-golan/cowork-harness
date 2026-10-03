@@ -510,8 +510,11 @@ All notable changes to this project are documented here. The format is based on
   `--dry-run` included, when the root is a run dir, a dir inside a run dir, a scenario dir, an eval dir or a dir
   of eval dirs, the parent of a runs root (such as `~/.cowork-harness`), or a file. The message says what the
   path looks like and which root to pass instead. The check applies however the root was set: the positional,
-  `--run-dir` or `COWORK_HARNESS_RUNS_DIR`. A runs root that holds another runs root inside it is now refused
-  too; prune each one by its own path. A scenario named `runs`, `turns` or `events.jsonl` still prunes normally.
+  `--run-dir` or `COWORK_HARNESS_RUNS_DIR`. A runs root that holds another runs root inside it (found without
+  following symlinks) is now refused too; prune each one by its own path. The check looks only a few levels deep
+  and is bounded in time; a root it cannot clear in that bound, and that is not itself a runs root (an
+  `index.jsonl` of its own, or only scenario dirs), is refused as well, so `prune ~` refuses instead of
+  scanning the home dir. A scenario named `runs`, `turns` or `events.jsonl` still prunes normally.
 - **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
   registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
   so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a

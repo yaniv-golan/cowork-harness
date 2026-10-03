@@ -754,7 +754,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "  The <runs-dir> (or --run-dir) must be the runs root, which holds <scenario>/<run> dirs. A path that looks like\n" +
     "  a run dir, a dir inside one, a scenario dir, an eval dir or a dir of eval dirs, or the parent of a runs root,\n" +
     "  or that is a file, is refused before anything is deleted, --dry-run included; so is a runs root that holds\n" +
-    "  another runs root.\n" +
+    "  another runs root (found without following symlinks), and a root the bounded check cannot clear that is\n" +
+    "  not itself a runs root.\n" +
     "  exit: 0 done (or nothing to prune) · 2 usage, or a <runs-dir> at the wrong level",
   "migrate-run-dir":
     "usage: migrate-run-dir [<runs-dir>] [--scenario <name>] [--write] [--verbose]\n" +
