@@ -45,8 +45,13 @@ agent on the user's own machine, with an **Apple Virtualization.framework microV
 this harness emulates. Where the agent LOOP runs inside that lane is a separate axis, and on the pinned baseline it is
 the host, not the VM: see "Which Cowork? — both are implemented" under
 [§6, Control protocol mapping](#6-control-protocol-mapping) below, which is authoritative over the
-sandbox-centric description here. The **remote** lane runs the agent in an Anthropic-hosted cloud container instead, and is
-the default for new sessions from 2026-07-07 (local stays available, and both are in active use). The lanes differ
+sandbox-centric description here. The **remote** lane runs the agent in an Anthropic-hosted cloud container instead.
+Anthropic [documents the cloud as Cowork's default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview),
+and says existing desktop deployments can still run sessions on the user's machine; for Pro and Max plans it
+[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new tasks run in
+the cloud from 2026-10-06, with tasks already running on the user's computer finishing there. Both lanes are in active use, and no
+setting reliably decides which one a session gets (see
+[docs/fidelity-gaps.md → Which lane a session actually ran on](./docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)). The lanes differ
 in how a file reaches the user, which is what changes skill behaviour: see
 [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) → "File delivery" for the split and
 [docs/scenario.md](./docs/scenario.md)'s `lane:` key for holding a run to either contract. The local lane:
@@ -221,7 +226,7 @@ The handshake and shapes below were confirmed empirically with an end-to-end run
 
 The full Desktop→agent spawn contract (cwd `/sessions/<id>`, `CLAUDE_CONFIG_DIR=mnt/.claude`, the env object, `--tools`/`--allowedTools`/`--plugin-dir`/`--effort`/`--setting-sources`, permission layers, prompt templates) is documented in [docs/cowork-spawn-contract-1.12603.1.md](./docs/cowork-spawn-contract-1.12603.1.md) — historical, pinned to 1.12603.1 and not updated per release — and encoded in `baseline.spawn`, which is the live source of truth.
 
-**Which Cowork? — both are implemented.** Production runs **host-loop** (the host-loop GrowthBook gate `1143815894`, forced on per the decoded *fcache* — Desktop's on-disk GrowthBook feature-flag cache): the agent loop runs on the host, shell is `mcp__workspace__bash` into the VM, `${CLAUDE_PLUGIN_ROOT}` is a host path. VM-loop (gate off / `requireCoworkFullVmSandbox` orgs) runs the whole agent in the sandbox.
+**Which Cowork? — both are implemented.** Production runs **host-loop** (the host-loop GrowthBook gate `1143815894`, forced on per the decoded *fcache* — Desktop's on-disk GrowthBook feature-flag cache): the agent loop runs on the host, shell is `mcp__workspace__bash` into the VM, `${CLAUDE_PLUGIN_ROOT}` is a host path (which that bash tool rewrites to the plugin's VM mount). VM-loop (gate off / `requireCoworkFullVmSandbox` orgs) runs the whole agent in the sandbox.
 
 - `fidelity: container | microvm` → **VM-loop** (the whole agent in the sandbox).
 - `fidelity: hostloop` → **host-loop**: the agent LOOP is a **native process spawned directly on the host** (Desktop stages this same native macOS binary alongside the Linux/arm64 ELF the other tiers use), with native Bash/WebFetch disabled (`--disallowedTools`) and the agent's shell routed through the **workspace SDK-MCP server** — declared via `sdkMcpServers:["workspace"]` in the `initialize` handshake, with the driver (`src/agent/session.ts` + `src/hostloop/workspace-handler.ts`) handling `mcp_message` JSON-RPC and executing `bash` via `docker exec` into a VM sidecar container (no agent runs inside it) at `/sessions/<id>/mnt`. `${CLAUDE_PLUGIN_ROOT}` for the native process points at the staged plugin copy directly (a real host path); bash's `docker exec` still gets an intentionally-unresolvable sentinel so it self-heals via `find /sessions/<id>/mnt …`, exactly like production. Connected folders are bind-mounted (never copied) into both the native process's view and the VM sidecar, so the native file tools and bash see the same bytes. With no container around the native file tools, a PreToolUse hook (`src/hostloop/pretooluse-path-hook.ts`, a byte-faithful port of production's own containment check) is the security boundary for real filesystem access — see [docs/boundary.md](./docs/boundary.md) for the full safety posture (writable-folder consent, the runtime tripwire).

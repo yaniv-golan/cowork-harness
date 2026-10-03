@@ -14,6 +14,7 @@ import {
   HILLCLIMB_RUN_VALUE_FLAGS,
   HILLCLIMB_USAGE,
 } from "../src/hillclimb/usage.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 const ROOT = join(import.meta.dirname, "..");
 const doc = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -25,7 +26,7 @@ const SUBS = HILLCLIMB_USAGE.split("\n")[0]
   .match(/^usage: hillclimb <([^>]+)>/)![1]
   .split("|")
   .map((s) => s.trim());
-const ALT = SUBS.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+const ALT = SUBS.map(escapeRegExp).join("|");
 const LOOP = new RegExp(`hillclimb (${ALT})(?![\\w-])`);
 const sorted = (xs: Iterable<string>) => [...xs].sort();
 

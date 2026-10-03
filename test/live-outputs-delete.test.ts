@@ -8,6 +8,16 @@ import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
 /**
  * PROVE the outputs-delete guard matches the real product, end to end.
  *
+ * ── WHAT THE PRODUCT DOES, PER RELEASE ───────────────────────────────────────────────────────────
+ *
+ * From Desktop 2.16120.0 a normal Cowork session mounts outputs `rwd`: deletes there succeed (measured on
+ * 2.19675.0: `rm`, `mv` and overwrite-by-rename, no permission card). Before that outputs was `rw` and
+ * `unlink`/`rmdir` failed with EPERM. The harness's DEFAULT verdict follows the baseline's recorded mode
+ * (persisted as `result.outputsMountMode`); `no_delete_in_outputs: true` checks on every baseline. So the
+ * expectations below depend on the `latest` baseline, read from its RAW JSON — never through the harness's own
+ * helper, which is the code under test. `allow_outputs_delete` has no live exercise here while `latest` records
+ * `rwd`: it has nothing to waive there (its verdict side is unit-tested on an `rw`-stamped result).
+ *
  * The scanner is LIVE-ONLY — cassettes carry no `scan` and `no_delete_in_outputs` is in
  * `LIVE_ONLY_KEYS` — so replay is structurally blind to it and unit tests only ever exercise
  * `isOutputsDelete` in isolation. Nothing else covers agent → bash → events.jsonl → scan → verdict,
@@ -59,11 +69,24 @@ import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
  */
 const IMAGE = "cowork-agent-base:2";
 let AGENT = "";
+/** The outputs mode `latest` records, read from the raw baseline file (independent of the code under test). */
+let LATEST_OUTPUTS_MODE: string | undefined;
+let latestVersion: string | undefined;
 try {
-  AGENT = resolveAgentBinary(loadBaseline("latest"));
+  const latest = loadBaseline("latest");
+  latestVersion = latest.appVersion;
+  AGENT = resolveAgentBinary(latest);
 } catch {
   /* baseline/binary missing → skip */
 }
+// Read OUTSIDE the try above: a file-name mismatch must not masquerade as a missing agent and skip silently.
+if (latestVersion !== undefined) {
+  const raw = JSON.parse(readFileSync(resolve("baselines", `desktop-${latestVersion}.json`), "utf8")) as {
+    mountLayout: { mounts: { name: string; mode: string }[] };
+  };
+  LATEST_OUTPUTS_MODE = raw.mountLayout.mounts.find((m) => m.name === "outputs")?.mode;
+}
+const RWD = LATEST_OUTPUTS_MODE === "rwd";
 const dockerOk = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 const imageOk = dockerOk && spawnSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore" }).status === 0;
 const TOKEN =
@@ -88,7 +111,9 @@ interface Case {
   /** Expected count of detected deletes under outputs. */
   deletes: number;
   /** Expected roster status for the outputs-delete guard. */
-  guard: "ok" | "fired";
+  guard: "ok" | "fired" | "na";
+  /** Expected verdict. */
+  pass: boolean;
   /** Files expected to survive in mnt/outputs — the EFFECT check the pinned suite never had. */
   survivors: number;
   why: string;
@@ -96,17 +121,30 @@ interface Case {
 
 const CASES: Case[] = [
   {
-    name: "a task that requires a deletion: the guard fires, and the file is really gone",
+    name: "a task that requires a deletion, nothing asserted: the default verdict follows the baseline's outputs mode",
     prompt:
       "Create two poems in markdown files in the output folder, each 5 lines long.\n" +
       "  Pick one at random and present it to the user, and delete the other one.",
-    // The waiver is what makes this pass, so this case also exercises allow_outputs_delete END TO END —
-    // which the retired pinned case did at a 50% refusal rate and this one does at 0%.
-    assert: "  - allow_outputs_delete: true\n",
+    // No waiver: on an rwd `latest` the delete passes by default (production allows it) and the guard reads
+    // na; on an rw `latest` it fails outputs_delete and the guard fires. Either way the scan records it.
+    assert: "  - result: success\n",
+    deletes: 1,
+    guard: RWD ? "na" : "fired",
+    pass: RWD,
+    survivors: 1,
+    why: "A real delete must reach scan → (default) verdict → guard. Measured 3/3 runs on the waiver form of this task.",
+  },
+  {
+    name: "the same deletion with no_delete_in_outputs asserted: the check is restored on every baseline",
+    prompt:
+      "Create two poems in markdown files in the output folder, each 5 lines long.\n" +
+      "  Pick one at random and present it to the user, and delete the other one.",
+    assert: "  - no_delete_in_outputs: true\n",
     deletes: 1,
     guard: "fired",
+    pass: false,
     survivors: 1,
-    why: "A real delete must reach scan → signal → guard, and the waiver must accept it. Measured 3/3 runs.",
+    why: "The opt-back-in: an authored no_delete_in_outputs fails a real outputs delete whatever the baseline records.",
   },
   {
     name: "a task that touches outputs without deleting: the guard stays silent",
@@ -116,6 +154,7 @@ const CASES: Case[] = [
     assert: "  - no_delete_in_outputs: true\n",
     deletes: 0,
     guard: "ok",
+    pass: true,
     survivors: 1,
     why: "The other polarity: a rename WITHIN outputs must not be read as a delete. Measured 3/3 runs.",
   },
@@ -123,6 +162,7 @@ const CASES: Case[] = [
 
 interface RunOut {
   pass: boolean;
+  outputsMountMode: string | undefined;
   signals: string[];
   deletes: string[];
   guard: string | undefined;
@@ -142,6 +182,7 @@ function runCase(c: Case, dir: string): RunOut {
   expect(res, `no result envelope; stderr: ${r.stderr.slice(-400)}`).toBeTruthy();
   return {
     pass: res.verdict.pass,
+    outputsMountMode: res.outputsMountMode,
     signals: res.verdict.signals.map((s: { code: string }) => s.code),
     deletes: res.scan?.outputsDeletes ?? [],
     guard: res.verdict.guards.find((g: { name: string }) => g.name === "outputs-delete")?.status,
@@ -202,8 +243,13 @@ describe.skipIf(!CAN)("live: the outputs-delete guard matches the real product",
         );
         // A path that merely LOOKS like outputs must not satisfy a firing case.
         for (const d of out.deletes) expect(d, "a detected delete must reference the outputs directory").toMatch(/outputs\b/);
-        expect(out.guard, "the roster reports what the guard OBSERVED, not whether the signal fired").toBe(c.guard);
-        expect(out.pass, c.why).toBe(true);
+        // The producer, end to end: the persisted mode is the raw baseline value (the unit suite can only
+        // source-pin this).
+        expect(out.outputsMountMode, "result.outputsMountMode must be the latest baseline's recorded outputs mode").toBe(
+          LATEST_OUTPUTS_MODE === "rwd" ? "rwd" : "rw",
+        );
+        expect(out.guard, "the roster reports what the guard OBSERVED, or na where outputs is not delete-denied").toBe(c.guard);
+        expect(out.pass, c.why).toBe(c.pass);
         if (c.deletes === 0) expect(out.signals).not.toContain("outputs_delete");
 
         // EFFECT: the pinned suite only ever proved a command was proposed. This proves it happened.

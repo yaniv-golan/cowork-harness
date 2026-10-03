@@ -40,10 +40,26 @@ All notable changes to this project are documented here. The format is based on
     assertion on those names needs updating. At `hostloop` the native binary also loads a builtin
     `cc-plugin-sec-default`, which the container ELF does not list. The init event's `capabilities[]` gains
     `sdk_mcp_manifests`, `sdk_mcp_tools_list_changed` and `ui_surface_v1`.
-  - At `protocol` a re-stamp is sound: the agent there is the `claude` on your `PATH`, and the first-party spawn env, the
-    Cowork system prompt, the sub-agent append, the egress allowlist and the spawn tools are unchanged.
+  - At `protocol` the baseline move alone does not need a re-record. The agent there is the `claude` on your
+    `PATH`, and the baseline move leaves the first-party spawn env, the Cowork system prompt, the sub-agent append,
+    the egress allowlist and the spawn tools as they were. This release still changes the spawn env on every tier,
+    protocol included, through the auto-memory switch (next bullet). A protocol re-stamp therefore keeps the
+    verdict but freezes a recording that ran with memory on.
+  - **Auto-memory: re-record any cassette you keep, at every tier, protocol included; never re-stamp it.** The agent
+    now starts with auto-memory off on every tier (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, see Fixed). A cassette
+    recorded before this release ran with memory on: its init frame carries `memory_paths`, and the agent's system
+    prompt had a memory section that Cowork's agent never gets. Replay is unaffected and keeps its verdict, so
+    nothing breaks if you wait. A re-stamp, though, would present that memory-on recording as current. Re-recording
+    matters most if your scenario:
+    - runs a plugin agent that declares `memory:`, which no longer gets Read/Write/Edit added;
+    - asserts on `memory_paths`;
+    - sets a cost budget, since the post-turn memory forks no longer run and their sub-agent spend disappears.
+
+    The same applies to `stats` trends and `eval`/`hillclimb` comparisons that span this release: spend and
+    transcripts on either side of it are not like-for-like.
   - The committed cassettes: `example-pdf-skill`, `dispatch-shell` and `hostloop-computer-links` are re-recorded, and
-    `example-multiselect-gate` is re-stamped.
+    `example-multiselect-gate` is re-stamped. Those four recordings predate the auto-memory switch. The committed
+    example cassettes are re-recorded with it in this same release, so the shipped ones run with memory off.
 - **CI recipes: `V=2.1.286` and `B=https://downloads.claude.ai/claude-code-releases`.** Agent 2.1.286 is staged from
   the stable channel; the previous recipe pointed at the 2.1.284 release-candidate path, which does not serve 2.1.286.
 - **`hostloop` on an Intel (x64) Mac: the native build pin is per architecture.** `desktop-2.19675.0` records the
@@ -54,7 +70,8 @@ All notable changes to this project are documented here. The format is based on
 - **Cassette format v14: a cassette whose scenario uses `semantic_matches.include_fork_results` or
   `semantic_pairwise` stamps `cassetteVersion` 14.** An older harness (max v13) reports such a cassette as too new; upgrade the harness,
   don't re-record. Every other cassette stamps what it did before (v12, or v13 with the object form of
-  `tool_called` / `tool_not_called`), so no re-record or re-stamp is needed. v14 is one bump shared with the
+  `tool_called` / `tool_not_called`), so the format change alone needs no re-record or re-stamp (the auto-memory
+  bullet above still applies). v14 is one bump shared with the
   other keys of this release that an older harness cannot read. `schema/cassette.v14.json` is the new
   schema; `schema/cassette.v13.json` is retained. A scenario that declares `workspace_fixture`, or an
   assertion using the object form of `file_exists` / `user_visible_artifact` or `authored` on
@@ -64,9 +81,48 @@ All notable changes to this project are documented here. The format is based on
   evidence-unavailable** (it passed as "new this run" before, though the pre-run manifest never looked there). Move
   the assertion to a file the step writes under `outputs/` or a connected folder. A replay of an existing cassette is
   unaffected: such a path is not in the cassette's manifest.
+- **Verdict change at `hostloop`: a skill that forwards `${CLAUDE_PLUGIN_ROOT}` through bash to a host-side
+  reader now fails there, as it does in Cowork.** The workspace bash tool rewrites a plugin's host path in a
+  command to its VM mount (see Fixed), so `python3 build.py --plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, whose
+  script writes the value into a sub-agent's prompt, hands the sub-agent a `/sessions/…` path, and the
+  host-loop `Read` refuses it. The same command passed under `hostloop` before, a false green. The fix is in the
+  skill: let the reader name `${CLAUDE_PLUGIN_ROOT}` in its own text, such as a plugin agent's definition,
+  which is substituted with the host path when the agent loads. The other direction flips too: a skill step
+  such as `bash ${CLAUDE_PLUGIN_ROOT}/scripts/x.sh` that failed under `hostloop` now runs. Exit codes and their
+  meanings are unchanged; only these verdicts move, on a baseline from Desktop 1.40609.0. A replay serves the
+  frozen tool results, so a committed `hostloop` cassette keeps its old verdict until you re-record it.
+- **`lint-skill`: a suppression written for `plugin-root-in-vm-bash` on a braced `${CLAUDE_PLUGIN_ROOT}` site
+  suppresses nothing.** Those sites moved to other rules (see Changed), so such a marker, `--suppressions`
+  entry or `--ignore-rule` reports `lint-skill-ignore-unused` — INFO, but WARN under `--strict-ignores`, so
+  `lint-skill --strict --strict-ignores` can exit 1 on a skill that passed before. A site suppressed as a
+  reviewed-safe forward (`--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, the example the docs used to give) is
+  a real break at host-loop now; it reports `plugin-root-forwarded-from-vm-bash` and fails `--strict` until the
+  skill stops forwarding the root through bash.
+- **Verdict change: `self_heal_ran` also counts a `/sessions/<id>/mnt/.remote-plugins/…` path.** A run whose
+  model located a remote plugin's files there read as not having self-healed; `self_heal_ran: true` now passes
+  on it and `self_heal_ran: false` fails. It is a live-only assertion, so a replay is unaffected.
+- **`hostloop` runs workspace commands with `bash -c` instead of `sh -c`**, so a bash-only construct in a command
+  (process substitution, `[[ … ]]`) that failed under `hostloop` now runs, as it does in Cowork.
+- **An outputs delete no longer fails a run by default on `latest`.** `latest` (`desktop-2.19675.0`) records the
+  `outputs` mount as `rwd`, so a CI gate that relied on the implicit `outputs_delete` failure stops catching a skill
+  that deletes in `outputs/`. To keep that check, author `no_delete_in_outputs: true`; it behaves as before on every
+  baseline. See Changed.
+- **`verify-run` on an older result.json keeps the old outputs-delete verdict.** A result written by 4.2.x or earlier
+  has no `outputsMountMode`, which reads as `rw`. Re-verifying one that recorded an outputs delete on Desktop 2.16120.0 or
+  later therefore still fails, while a fresh run of the same scenario passes. That red is safe; re-run the
+  scenario to get the current verdict.
 
 ### Added
 
+- **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
+  When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
+  (`plugins.local_plugins` or `remote_plugins`), and the plugin's name differs, the run works here but real Cowork's
+  app has refused that typed form. The fix suggests picking the skill from the slash menu or naming it like its
+  plugin; `/<plugin>:<skill>` is offered as not measured with a single copy installed. Plugin and skill names are
+  derived as the agent derives them: `.claude-plugin/plugin.json`'s `name` and `skills` (a root `plugin.json` is
+  ignored), else the directory name, and a skill's sanitized directory name. The rule reads the `session:` file and
+  its plugin directories, and stays silent for an inline `session:`, for marketplace-delivered plugins, and when
+  the files are not on the machine running `lint`.
 - **`prune --include-hillclimb`.** It ranks hillclimb-labelled runs with every other run, so `--keep-last`
   applies to them. It deletes the `hillclimb regrade` and `hillclimb freeze-ref` evidence of every flow under
   the runs root, a loop still running included, and `freeze-ref` re-reads a frozen reference's source run: pass it
@@ -372,8 +428,9 @@ All notable changes to this project are documented here. The format is based on
   `semantic_pairwise` reference store, an empty one, and
   more than 64 MiB (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`), or one file over the pre-run hash cap. An untouched fixture file is pre-run, not
   authored: `semantic_matches` and `semantic_pairwise` judge only what the step created or rewrote, and `RunResult.artifacts[]`
-  marks an untouched one `preRun: true`. Deleting a fixture file fails the run by default (the harness's
-  outputs-delete policy; `allow_outputs_delete` opts out). `RunResult.workspaceFixture` is the ref as the
+  marks an untouched one `preRun: true`. Deleting a fixture file is an outputs delete: it passes by default on a
+  baseline that records `outputs` as `rwd` (Desktop 2.16120.0 and later) and fails by default on an older `rw` one
+  (`allow_outputs_delete` opts out there); see Changed. `RunResult.workspaceFixture` is the ref as the
   scenario file wrote it, and `scaffold` re-emits it verbatim, asserting only what the step produced. The fixture's content signature is part of
   the cassette staleness check: a changed fixture is a `fixture` finding (a warning by default; `--strict`,
   `--fail-on-skill-drift` and an explicit `--session` fail it), and one that cannot be found or scanned is
@@ -504,6 +561,26 @@ All notable changes to this project are documented here. The format is based on
   it is enabled for. The model list itself is never written. A model added to or removed from that set, or the tool
   enabled for every model, changes the digest and shows up as a `sync --diff` line. The tool itself is not modeled
   (see Documentation).
+- **`lint-skill` reports the plugin root in a bash step per form, under three rules.** At host-loop the braced
+  `${CLAUDE_PLUGIN_ROOT}` is replaced with a host path that the bash tool rewrites to the plugin's VM mount, so
+  a step that opens it works, while the bare `$CLAUDE_PLUGIN_ROOT` is still empty there; one rule at one
+  severity could not describe both. Old to new:
+  - bare `$CLAUDE_PLUGIN_ROOT` or `${CLAUDE_PLUGIN_ROOT:-…}`, a braced root glued to other text
+    (`${CLAUDE_PLUGIN_ROOT}-v2`, `x${CLAUDE_PLUGIN_ROOT}`, which the bash tool does not rewrite), and any form in a
+    standalone skill with no `plugin.json` above it → still `plugin-root-in-vm-bash` (WARN), once per line;
+  - the whole braced root as the value of an option named for a location (`root`, `dir`, `path`, `plugin` or
+    `base` in its name: `--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, `--root=${CLAUDE_PLUGIN_ROOT}`), not
+    inside an open quoted string (such as an echo'd sentence) and not to `claude` itself, the shape that forwards it → `plugin-root-forwarded-from-vm-bash`
+    (WARN), reported even inside a block that self-heals;
+  - any other braced use → `plugin-root-braced-in-vm-bash` (INFO), whose message says when the rewrite
+    applies (the path as its own word) and that a value forwarded to a host-side reader arrives as a VM path.
+
+  A line with both forms gets one finding per form, and a fully commented-out line gets none. To migrate a `--suppressions` file: delete an entry that
+  named `plugin-root-in-vm-bash` for a braced site that is now the INFO (an INFO never fails `--strict`); for a
+  forwarding site, fix the skill, or, if the program really opens the path itself, change the entry's `rule`
+  to `plugin-root-forwarded-from-vm-bash`. Markers and `--ignore-rule` migrate the same way. Entries for the
+  bare form need no change.
+
 - **`eval` no longer makes a row of an assertion whose only keys are verdict modifiers** (`allow_stall`,
   `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
   constant across both arms and only enlarged the correction family, which weakened the correction for the
@@ -531,6 +608,26 @@ All notable changes to this project are documented here. The format is based on
     a sub-agent.
   - `tool_result_contains` / `tool_result_matches`, their negations, and the `result:` predicates of
     `tool_called` all see the larger capture.
+- **On baselines recording outputs as `rwd` (Desktop ≥2.16120.0), an outputs delete no longer fails the default
+  verdict; author `no_delete_in_outputs` to keep the check.** This is a default-verdict change made for fidelity. From
+  Desktop 2.16120.0 every mount builder gives `outputs` the mode `rwd` (deletes allowed) for a normal session, and `rw`
+  only for a Dispatch bridge session, which the harness does not model. Measured on 2.19675.0: `rm`, `mv` and
+  overwrite-by-rename in `outputs/` all succeed with no permission card. The harness failed such a run anyway.
+  - Each live run records the baseline's outputs mode as the new `result.json` field `outputsMountMode`. On `rwd`,
+    `outputs_delete`, `outputs_delete_unconfirmed` and `outputs_diff_unavailable` do not fire unless
+    `no_delete_in_outputs` is authored, or `no_delete_in_mounts` without `allow_delete_in` waiving outputs. Otherwise
+    the guard roster shows `outputs-delete —` (not applicable). A move out of
+    `outputs/` is treated the same as an `rm`.
+  - Baselines recording `rw` (every release before 2.16120.0) keep the old verdict. So does `lane: remote`, which
+    records no mode, because Desktop's mount builders are not evidence about Cowork's cloud lane.
+  - `allow_outputs_delete` is still accepted. On an `rwd` baseline it is a no-op with no warning, unless
+    `no_delete_in_mounts` arms the outputs check; then it waives that check's `outputs_delete` signal, as on `rw`.
+  - `no_delete_in_outputs` and `no_delete_in_mounts` keep covering `outputs` on every baseline: authoring either arms
+    the outputs check, so a delete only the filesystem diff saw still fails the run (unless `allow_outputs_delete`
+    waives it). Their failure messages no longer
+    say production denies the delete.
+  - The detection still runs on every live run, and its evidence stays in `scan` / `fsDiff`. Committed cassettes are
+    unaffected: these signals never run on replay.
 
 ### Fixed
 
@@ -538,6 +635,22 @@ All notable changes to this project are documented here. The format is based on
   defaults as a rule table (`<id>:{rule:…}`), which `provenance.asarGateIds` did not read, so it also missed 2 new
   ids. The table is now read. The shape occurs in no earlier Desktop release, so no committed baseline changes:
   re-extracting `desktop-2.16120.0` reproduces its recorded 493 ids exactly.
+- **`hostloop` bash rewrites a plugin's host path to its VM mount, as Cowork does.** A command such as
+  `bash ${CLAUDE_PLUGIN_ROOT}/scripts/build.sh` in a plugin skill reached the workspace shell with the host
+  path the agent substituted, which does not exist in the VM, so it failed under `hostloop` while working in
+  Cowork. The `hostloop` bash tool now rewrites each plugin's staged host path, and the skills dir, to the
+  matching `/sessions/<id>/mnt/…` path before running the command, with Cowork's matching rules: whole-word
+  matches only, longest path first, the `/private/var` spelling of a `/var` path, and escaped or quoted spaces.
+  A path glued to other text (`${CLAUDE_PLUGIN_ROOT}-v2`, `x${CLAUDE_PLUGIN_ROOT}`) is left as written, as in
+  Cowork. Baselines older than Desktop 1.40609.0 are unchanged. The recorded tool input keeps the host path,
+  and the command's output is not mapped back. A bare `$CLAUDE_PLUGIN_ROOT` is still empty in that shell. See
+  Upgrade notes for the forwarding case this turns red.
+- **`hostloop` runs workspace commands with `bash -c`, as Cowork does.** It ran them with `sh -c`, which is
+  dash in the agent image, so a bash-only construct in a skill's command (process substitution, `[[ … ]]`)
+  failed under `hostloop` and worked in Cowork.
+- **`self_heal_ran` counts a VM path under `.remote-plugins/`.** It recognised only `.local-plugins/`, so a skill
+  installed as a remote plugin that located its own files under `/sessions/<id>/mnt/.remote-plugins/…` read as
+  not having self-healed.
 - **`prune` keeps hillclimb runs.** A run labelled `hillclimb:…` is not pruned and takes no `--keep-last` slot, so
   a routine `prune` during a climb leaves the runs `hillclimb regrade` and `hillclimb freeze-ref` read. A run you
   labelled `--label hillclimb:…` yourself is kept the same way. `prune` prints how many it kept per scenario and
@@ -550,6 +663,20 @@ All notable changes to this project are documented here. The format is based on
   updated" uses the status staleness window (`COWORK_HARNESS_STATUS_STALE_MS`, default 15s, read from `prune`'s own
   environment). A run frozen at `running` by a crash, whose process is gone, is pruned as usual. A `status.json`
   that is not a regular file is not read, so a FIFO there cannot hang `prune`.
+- **`prune` deletes only run dirs, and refuses a `<runs-dir>` at the wrong level.** It ranks and deletes only
+  dirs named `local_` followed by lowercase letters and digits (a run's id), and dirs named `sess-` followed by
+  letters, digits, `_` or `-` only under `--pinned-older-than`. Any other dir under a scenario is left alone, and
+  `prune` prints how many it left; a dir that looks like a run but has another name is counted on its own line,
+  with up to three paths. A dir `prune` cannot read is skipped and counted. Before, `prune` given the wrong dir treated the level
+  below it as scenarios and deleted their contents past `--keep-last`. It now exits 2 and deletes nothing,
+  `--dry-run` included, when the root is a run dir, a dir inside a run dir, a scenario dir, an eval dir or a dir
+  of eval dirs, the parent of a runs root (such as `~/.cowork-harness`), or a file. The message says what the
+  path looks like and which root to pass instead. The check applies however the root was set: the positional,
+  `--run-dir` or `COWORK_HARNESS_RUNS_DIR`. A runs root that holds another runs root inside it (found without
+  following symlinks) is now refused too; prune each one by its own path. The check looks only a few levels deep
+  and is bounded in time; a root it cannot clear in that bound, and that is not itself a runs root (an
+  `index.jsonl` of its own, or only scenario dirs), is refused as well, so `prune ~` refuses instead of
+  scanning the home dir. A scenario named `runs`, `turns` or `events.jsonl` still prunes normally.
 - **`critique` and `eval` recognise an invoked skill whose directory name the agent rewrites.** The agent
   registers `skills/<dir>` as `<plugin>:<dir>` with every character outside `[a-zA-Z0-9_-]` replaced by `-`,
   so `skills/my.skill` runs as `<plugin>:my-skill`. Both commands matched the raw directory name, so for such a
@@ -778,9 +905,28 @@ All notable changes to this project are documented here. The format is based on
   2.16120.0 every mount builder takes the outputs mode from one exported function, `outputsMountMode`, which allows
   deletes for a normal session and denies them only for a bridge session. Both baselines said `rw` (delete denied).
   Connected folders keep the approved-list rule. `sync` now pins that function and its non-bridge `"rwd"`, so a change
-  is an unknown delta; the delete-deny resolver's site count could not see this. Nothing the harness runs reads the
-  recorded mode, so no cassette goes stale. The harness's own outputs-delete check is unchanged; see
-  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them).
+  is an unknown delta; the delete-deny resolver's site count could not see this. No cassette goes stale. The default
+  outputs-delete verdict now follows the recorded mode (see Changed); see
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-follow-the-baselines-recorded-mount-mode).
+- **The agent now runs with auto-memory off, as Cowork does.** For an ordinary task Desktop gives the agent an
+  auto-memory directory only when server gate `123929380` is on. Otherwise it sends
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. The gate is off in all 31 committed baselines that record it; the other 9, which
+  predate the gate, have no row. The harness set nothing, so
+  the agent loaded a memory section into its system prompt that Cowork's agent never sees. Every tier (protocol,
+  container, microvm, hostloop) now sets the key from the baseline's recorded gate row. A baseline with no row
+  counts as off. On hostloop and protocol the operator's own export of the key is ignored.
+  - **What changes for a run.** The same switch gates two more things in the agent:
+    - a sub-agent's `memory:` frontmatter. A plugin agent that declares it no longer gets Read/Write/Edit appended
+      to its tools or the memory prompt.
+    - the background memory forks after a turn. They no longer run, and their sub-agent spend stops.
+
+    A fresh run, or a re-record, can produce a different transcript. Replaying an existing cassette is unchanged.
+    For fidelity, though, re-record rather than re-stamp: see Upgrade notes.
+  - **sync changes.** It now checks the shape of Desktop's memory resolver; a change is an unknown delta. It prints
+    a warning note when the gate reads on, a mode the harness models only in part.
+  - **Wording.** The L0 contamination warning and the `l0_host_config_contamination` message no longer list
+    auto-memory.
+  - See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not).
 
 ### Documentation
 
@@ -803,6 +949,28 @@ All notable changes to this project are documented here. The format is based on
   chooses among builds, and the ELF recovery runbook notes the `linux-x64` ELF on an x64 Mac. The troubleshooting
   FAQ and the companion skill list recovering the pinned ELF as the remedy that keeps the exact pin, and the FAQ has
   an entry for a native agent that is not found at `hostloop`.
+- Which Cowork lane a session runs on is documented as an observation, not a setting. The README, `DESIGN.md`,
+  `docs/fidelity-gaps.md`, `docs/scenario.md`, `docs/maintenance.md` and the companion skill described the lane
+  as picked per session or by the "Only on this computer" setting; sessions have run in the cloud with that
+  setting on, and Desktop 2.19675.0 shows no per-session lane picker. The docs cite Anthropic's Help Center for
+  the cloud being Cowork's default and for its announcement that new Pro and Max tasks run in the cloud from 2026-10-06, in place
+  of an unsourced "default since 2026-07-07". A new `docs/fidelity-gaps.md` section, "Which lane a session
+  actually ran on", lists the checks that settle it. The `lane` description in `schema/run-result.json` drops
+  "a per-session human choice", and the note `sync` prints when the sub-agent-override gate is on states the
+  local-lane precondition the same way.
+- The remote lane's device-bridge tools are documented under the names the agent calls,
+  `mcp__remote-devices__<tool>` (and `mcp__remote-devices__<server>__<tool>` for a bridged host MCP server), and
+  `device_commit_files` as taking 1–50 files, each naming a shared file's id (`fileUuid`, preferred) or a staged
+  path (`stagedPath`); both are optional in the schema.
+- The docs on slash-command prompts now say that a slash which runs in the harness may not run when a user types it
+  in Cowork. The harness hands `prompt:` to the agent, which expands a bare plugin-skill name to `plugin:skill`; real
+  Cowork resolves a typed slash command in the Desktop app first, and a refusal ("Unknown skill") creates no task
+  and never reaches the agent. Observed on Desktop 2.19675.0, 2026-10-03, 4 runs: a bare name that differs from its
+  plugin's name was refused, and with two copies of a plugin installed both the bare and the qualified forms were
+  refused; picking from the slash menu always worked. The advice: pick the skill from the menu, or name it like its
+  plugin, and do not install two copies of one plugin. The qualified `/<plugin>:<skill>` was not measured with a
+  single copy installed. The docs also now say a skill registers under its directory name (sanitized for a plugin
+  skill), not its frontmatter `name`.
 
 ## [4.2.1] — 2026-10-01
 

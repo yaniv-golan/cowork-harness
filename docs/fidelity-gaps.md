@@ -24,11 +24,11 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 Every `##` below is one gap (or one scoping note). Grouped, since there are 36 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
-- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/`: the harness refuses them by default, real Cowork allows them](#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
+- **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
-- **Identity & environment** — [Auto-memory: four env-delivered keys the harness never sets](#auto-memory-four-env-delivered-keys-the-harness-never-sets) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
+- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
 - **Permissions & limits** — [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
@@ -36,9 +36,23 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 36 o
 
 Every fidelity tier reproduces Cowork's **desktop-local** lane. Cowork also runs sessions on a
 **remote** lane, server-side in a cloud container that reaches the user's machine over a device
-bridge, and **which lane a real session gets is a Cowork setting** — "Only on this computer"
-(Settings → Cowork). Observed **off** on 2026-09-05, so an otherwise-default Cowork session ran remote — re-check
-Settings → Cowork rather than trusting that date.
+bridge. **No setting reliably decides which lane a real session gets.** As of Desktop 2.19675.0
+(2026-10-02), the composer shows no per-session lane picker, on desktop or on the web, in the two
+organizations checked. Cowork has an "Only on this computer" option, at Settings → Cowork in the older
+composer and at Settings → General → Tasks in the merged interface, and sessions still ran in the cloud
+with it **on** (13+ runs on Desktop 2.19675.0, merged interface, 2026-10-02). In a Personal/Max organization on
+Desktop 2.19675.0 (2026-10-03), sessions started from the older Cowork composer ran locally (2 of 2) and sessions
+started from the merged composer ran in the cloud (2 of 2): in those runs the composer used, not the setting alone,
+went with the lane. Separately, on Desktop 2.16120.0 some new
+sessions ran locally; the setting's state for those runs is not recorded. Anthropic's
+[architecture overview](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) describes
+the cloud as Cowork's default and says existing desktop deployments can still run sessions on the user's
+machine. Anthropic's [web, desktop and mobile article](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) adds,
+for Pro and Max plans, Anthropic's announcement that from 2026-10-06 new tasks run in the cloud and the
+option is removed (the article calls it "Only on your computer"), and that tasks already running on the
+user's computer stay there until they are done. So
+establish the lane from the session itself: see
+[Which lane a session actually ran on](#which-lane-a-session-actually-ran-on).
 
 That matters for how you read the rest of this file. Gaps documented here are gaps against the
 *local* lane. On the remote lane the environment is different in kind, not degree: the cloud
@@ -60,14 +74,15 @@ evidence-unavailable, delivery is reported unobservable.
 triggers, how it sequences tools, which questions it asks, whether it honours a permission gate.
 Environment-shaped conclusions do not: any assertion about a path, a mount, or a delivery mechanism
 is a claim about the local lane only. And if you are probing real Cowork to compare against this
-harness, **turn "Only on this computer" on first** — with it off you are measuring a lane this tool
-does not model, which has already cost one wasted probe. **The remote lane's toolchain is a different
-image, not the local rootfs with extras.** Measured 2026-09-21 with the setting off: `pip list` showed
+harness, **confirm the probe session ran on the local lane first**
+([how](#which-lane-a-session-actually-ran-on)) — a cloud-lane probe measures a lane this tool does not
+model, which has already cost one wasted probe. **The remote lane's toolchain is a different
+image, not the local rootfs with extras.** Measured 2026-09-21 on a cloud-lane session: `pip list` showed
 pandas 3.0.2 and numpy 2.4.4 where the local rootfs manifest
 (`baselines/provisioning/rootfs-provisioning.json`) has pandas 2.3.3 and numpy 2.2.6, plus packages the
 local manifest does not list at all — scipy, scikit-learn, scikit-image, networkx, httpx, Flask, uvicorn,
 starlette, playwright, mediapipe, `claude-agent-sdk`, `mcp`, pydantic. So a provisioning observation made
-with the setting off says nothing about what a local session — or this harness's `container`/`hostloop`
+on a cloud-lane session says nothing about what a local session — or this harness's `container`/`hostloop`
 image — provides, and a pandas-major difference is the kind that changes a skill's behaviour, not just its
 imports. The remote interpreter was Python **3.11.15** at `/usr/bin/python3`; the local manifest records no
 interpreter version, but it places the local rootfs on Ubuntu 22.04 (its `python-apt` is `2.4.0+ubuntu4.1`, a
@@ -76,6 +91,39 @@ interpreter version, but it places the local rootfs on Ubuntu 22.04 (its `python
 remote-only difference: `tesseract`, `pdftoppm`, `soffice` and `pdfplumber` were preinstalled on the remote
 lane, and the local manifest carries them too (`tesseract-ocr`, `poppler-utils` and `libreoffice-core` in
 its apt doc stack, `pdfplumber` in pip).
+
+### Which lane a session actually ran on
+
+No setting reliably decides the lane (see above), so check the session itself before comparing it to a
+run here. This is the one place these checks are listed. Each of these places a session when it is
+present. `CLAUDE_CODE_ENTRYPOINT` read from a hook, and report paths, point both ways; the environment
+heading and the Desktop log lines are positive signals for the local lane only, and their absence proves
+nothing.
+
+- **The agent's environment.** `CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and
+  `remote_cowork` on the cloud lane. Read it from a hook, because hooks run in the agent's own process
+  environment: add a plugin hook on a per-turn event such as `UserPromptSubmit` whose command is
+  `echo "CLAUDE_CODE_ENTRYPOINT=$CLAUDE_CODE_ENTRYPOINT"`. That event's stdout is added to the model's
+  context, so ask the agent to quote the line back. Do not use `SessionStart`: on the cloud lane it fires
+  only on resume (see the measured table below). From the shell it is weaker evidence. On the pinned baseline the local
+  lane runs the agent loop on the host and the shell in the VM, and spawn-env variables are not set in
+  that VM shell, so `remote_cowork` from a shell places a session on the cloud lane, but an empty value
+  from a local-lane VM shell is not evidence of anything. Do not read it through `device_bash` either: on
+  the cloud lane that tool runs on the user's device, not in the session's container. The entrypoint is
+  a reliable lane marker even though remote-only features are not gated on it (next section).
+- **A sub-agent's environment section.** A dispatched sub-agent that reports a section headed
+  `## Cowork environment` (see [subagents.md](./subagents.md)) ran on the local lane. A cloud-lane
+  session's prompt is authored by the server and does not carry it. The server can also override that
+  section on the local lane, though, so a missing heading alone does not prove the session was cloud.
+- **Desktop's log.** When Desktop starts a local-lane session it writes a `Starting local session
+  local_<id> …` line to `~/Library/Logs/Claude/main.log`; match it to the session by its timestamp against when the session
+  started. A
+  `LocalAgentModeSessions.start` line at the same moment corroborates it. A `[sessions-bridge]` line
+  naming a `cse_<id>` session is the positive signal for the cloud lane. The log rotates (`main1.log` …
+  `main4.log`), so search those too. A missing line proves nothing on its own: the log may have rotated
+  past it, or the session may have run from another machine.
+- **Paths in a report.** `/sessions/<id>/mnt/…` means local; `/home/claude/…` or `/root/.claude/uploads/…`
+  means cloud.
 
 ### The boundary is a missing flag, not an entrypoint string
 
@@ -113,23 +161,23 @@ a live bug report can be placed on the right lane before it is compared to a har
 | `CLAUDE_CODE_DESKTOP_APP_VERSION` | **unset** (and the agent reads it only under the `claude-desktop`/`local-agent` entrypoints) | set by Desktop ≥ 2.2553.1 and by this harness at hostloop from the baseline |
 | Hook lifecycle frames | `CLAUDE_CODE_REMOTE=true` turns on `hook_started`/`hook_response` frames for **every** hook event — the same switch as the CLI's `--include-hook-events`, which Desktop never passes. This is why a Stop hook was visible there and is not on a Desktop-local stream | frames for SessionStart/Setup only; the harness passes the flag itself, at every tier including `protocol`, when a staged plugin declares hooks |
 | Plugin root | `/root/.claude/plugins/synced/<org-uuid>_<account-uuid>/<plugin>/` (`CLAUDE_CODE_SYNC_PLUGINS=1`) | `mnt/.local-plugins/…` (docs/plugin-root.md) |
-| Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1 | conditionally stubbed to zero tools by Desktop, never stubbed here (see the plugin-MCP section under "Plugins" for the two conditions — the bridge is a third data point for that open decision) |
+| Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1. The agent-facing name, `mcp__remote-devices__<server>__<tool>`, is from asar 2.19675.0 | conditionally stubbed to zero tools by Desktop, never stubbed here (see the plugin-MCP section under "Plugins" for the two conditions — the bridge is a third data point for that open decision) |
 | Plugin hooks | `Stop` fired (block → resend; no UI notice). `SessionStart` fired only on `source: "resume"`, never `startup` — inferred: plugins sync after the session starts. Cowork ships its **own** Stop hooks here (`stop-hook-reply-gate.py`, `stop-hook-git-check.sh` under `/home/claude/.claude/`) | hooks run at every tier (at `protocol` as native host processes; there, without a sealed managed config dir, a plugin installed on the host runs its hooks too); `hook_event_fired` / `hook_event_blocked` grade them, and `hook_output_contains` / `hook_output_not_contains` what they printed |
 | Other env markers | `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud_default`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `CLAUDE_CODE_WEBFETCH_USE_CCR_PROXY=1`, `CLAUDE_EFFORT` (write-only — the effort that applies is the hook payload's `effort.level`) | none are in the pinned spawn env |
 
-**Placing a live bug report on a lane — do this before comparing it to any harness run.** Look at the paths in
-the report's artifacts and transcript: `/home/claude/…` or `/root/.claude/uploads/…` means remote;
-`/sessions/<id>/mnt/…` means local. If the environment is quoted, `CLAUDE_CODE_ENTRYPOINT` settles it. A week
-went into reproducing a remote-lane report at hostloop fidelity before this check existed; only
-behaviour-shaped conclusions travel between lanes.
+**Placing a live bug report on a lane — do this before comparing it to any harness run**, using the checks in
+[Which lane a session actually ran on](#which-lane-a-session-actually-ran-on) (the paths in the report's
+artifacts and transcript are usually enough). A week went into reproducing a remote-lane report at hostloop
+fidelity before this check existed; only behaviour-shaped conclusions travel between lanes.
 
-Not established: whether the lane is per account or per session; whether at-start attachments land where
+Not established: what decides the lane for a given session (the composer offers no per-session picker on
+Desktop 2.19675.0, and the setting does not reliably decide it); whether at-start attachments land where
 mid-session ones did; whether `/mnt/attach/outputs` is ever populated; the order of Cowork's own Stop hooks
 versus a plugin's. Re-measure before relying on any row.
 
 ---
 
-## Auto-memory: four env-delivered keys the harness never sets
+## Auto-memory: the off switch is modeled, the memory keys are not
 
 **Real Cowork behaviour.** When a session has an auto-memory directory, Desktop ships it to the agent
 through the environment: `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`, `CLAUDE_COWORK_MEMORY_INDEX_CONTENT`,
@@ -148,10 +196,41 @@ investigation before being measured:
 | `1696890383` `memoryGuidelinesEnv` | only `CLAUDE_COWORK_MEMORY_GUIDELINES`, inside the has-a-directory branch. |
 | `2860753854` `memoryExtraGuidelines` | only the *value* of the PII block, not whether the branch runs. On, but inert by default. |
 
-**Harness behaviour.** The harness sets none of the five, and models no memory directory. For the
-session it models — no `spaceId`, no `sessionType`, and `123929380` pinned off — production would send
-`CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, so the modeled configuration is *nearly* faithful and the memory
-keys are genuinely unreachable.
+**Harness behaviour.** The harness never sets the four memory keys and models no memory directory. It does set
+the fifth, `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, on every tier (protocol, container, microvm, hostloop), from the
+`123929380` row recorded in the baseline. For the session it models (no `spaceId`, no `sessionType`) with that gate
+off, which is every committed baseline, this is exactly what production sends: the modeled configuration is faithful
+and the memory keys are genuinely unreachable. The agent then loads no memory section into its prompt, and its init
+frame carries no `memory_paths`. Before this was fixed the harness set nothing, so the agent ran with its default
+auto-memory ON. **The committed cassettes were recorded that way** (their init frames carry `memory_paths`) and stay
+so until re-recorded; replay does not read the field.
+
+The same switch also gates, in the agent:
+- a sub-agent's `memory:` frontmatter, which appends Read/Write/Edit to that sub-agent's tools and a memory prompt to
+  its system prompt;
+- the background memory-extraction and consolidation forks that run after a turn.
+
+With memory off, a plugin agent that declares `memory:` gets neither, as in Cowork, and those post-turn forks (and
+their sub-agent spend) do not run.
+
+- **Gate recorded ON.** The harness leaves the agent's default auto-memory on and models nothing else. Production
+  would also give the session a Desktop-managed directory, the four keys above (including their prompt text), and a
+  built-in memory-tidy skill gated on the same id. Production also skips the directory for a session whose
+  server-delivered `memoryEnabled` flag is false, which the harness cannot read. `sync` prints a WARNING note when it
+  reads the gate ON.
+- **No gate row.** Baselines before 1.18286.0 predate the gate pin and are treated as off. That is an assumption:
+  every baseline that records the gate records it off, and no Desktop bundle older than 1.18286.2 was available to
+  check.
+- **Settings `env`.** A settings file's `env` block reaches the agent's environment at startup and could set the key
+  to `"0"` (forced on). At `protocol` off the managed branch that is the operator's own `~/.claude/settings.json`,
+  which the L0 contamination signal already covers. Elsewhere only a managed-settings `env` could do it, and it would
+  do the same to Cowork on that machine.
+- **The modeled session shape only.** Production returns no directory for a chat, scheduled or dispatched session
+  outside a Space, whatever the gate says. The harness's rule encodes the ordinary-task arm only.
+- **Same rule everywhere it applies.** `lane: remote` gets the same rule; the evidence for it is local-lane, and the
+  cloud lane's memory behaviour is unmeasured. A custom baseline with no `provenance` counts as off. There is no
+  knob to turn memory on: `agent_env` cannot carry the key, so a Spaces- or agent-session memory setup cannot be
+  reproduced. `chat --raw` is not a fidelity tier and does not set the key.
 
 **Read the reachability claim precisely, because it is narrower than it looks.** "Unreachable" holds
 for the modeled session shape only. It does **not** hold for a Spaces or agent-type session, where the
@@ -159,10 +238,11 @@ resolver returns a directory with `123929380` off — such a session receives al
 prompt text, and the harness models none of it. A scenario that grows a `spaceId` or a session type
 walks out of the modeled configuration without any signal.
 
-**Why it is not modeled.** Reproducing it means inventing a memory directory, an index snapshot and a
-guidelines template the harness has no source for — authoring an environment rather than reproducing
-one. The honest position is this entry plus the gate pins, which make a production flip visible as a
-`provenance.gates` diff.
+**Why only the off switch is modeled.** The off switch is a recorded fact: the gate row in the baseline,
+read from the same resolver Desktop uses. The memory keys are not. Reproducing them means inventing a memory
+directory, an index snapshot and a guidelines template the harness has no source for, which would be authoring an
+environment rather than reproducing one. So the honest position has three parts: the off switch, this entry, and
+the gate pins. The pins make a production flip visible as a `provenance.gates` diff and as sync's WARNING note.
 
 ---
 
@@ -233,23 +313,58 @@ added to the prompt (real Cowork does not list a session's files to the model ei
 
 **What follows from it:** a skill that relies on its earlier conversation (an answer the user gave in step 1,
 or a plan the agent stated but never wrote down) cannot resume from a fixture the way it would in the same
-session — the fixture tests only the state the skill persisted to `outputs/`. A run that deletes a fixture
-file fails by default; that is the harness's own outputs-delete policy (`allow_outputs_delete: true` opts
-out), not production behaviour, which lets a skill delete in `outputs/` without asking.
+session — the fixture tests only the state the skill persisted to `outputs/`. Deleting a fixture file is an
+outputs delete: it passes by default on a baseline that records `outputs` as `rwd` (Desktop 2.16120.0 and
+later, matching production, which lets a skill delete there without asking), and fails by default on an
+older `rw` baseline (`allow_outputs_delete: true` opts out there).
 
-## Deletes in `outputs/`: the harness refuses them by default, real Cowork allows them
+## Deletes in `outputs/` follow the baseline's recorded mount mode
 
 **Real Cowork behaviour:** from Desktop 2.16120.0 the `outputs` mount is `rwd` (deletes allowed) for a normal
 session. Every mount builder (the host-loop shell's `computeBashMounts`, the VM-loop builder and the shares builder)
 sets its mode from one exported function, `outputsMountMode`, which returns `"rwd"` unless the session is a bridge
-session (`"rw"`, delete denied). Connected folders are different: they stay `rw` until the user approves deletes for
-that folder (`allow_cowork_file_delete`), as before. Both committed baselines that describe these releases
+session (`"rw"`, delete denied). A bridge session is the Dispatch agent session (session type `agent`, created when a
+message arrives over the Sessions API); ordinary task sessions, Dispatch children, scheduled tasks and chat sessions
+are not, so they get `rwd`. Connected folders are different: they stay `rw` until the user approves deletes for that
+folder (`allow_cowork_file_delete`), as before. Both committed baselines that describe these releases
 (`desktop-2.16120.0`, `desktop-2.19675.0`) record `outputs` as `rwd`, and `sync` flags it if that function changes.
+Before 2.16120.0 outputs went through the same approved-list rule as a folder, so it was `rw`.
 
-**Harness behaviour:** a run whose agent deletes a file in `outputs/` still fails by default, through the harness's own
-outputs-delete check (`allow_outputs_delete: true` opts out). That check is a harness policy, not production
-behaviour. A skill that cleans up its own scratch files in `outputs/` works in real Cowork and goes red here unless the
-scenario opts out.
+Measured on Desktop 2.19675.0 (agent 2.1.286), host loop, a normal session with no folder connected: `rm` of a file in
+`outputs/` succeeded twice with no permission card, and `mv` and overwrite-by-rename inside `outputs/` also succeeded;
+Desktop's log listed the session's mounts as `outputs:rwd` with no delete-approved mounts. A connected folder in the
+same probe was `rw` (`rm` → "Operation not permitted") until approved. The VM loop was not probed live; it uses the
+same function.
+
+**Harness behaviour:** each live run records the baseline's outputs mode as `result.json`'s `outputsMountMode`, and
+the default verdict follows it:
+
+| Baseline records `outputs` as | An outputs delete (or a move out of `outputs/`), nothing authored | Guard roster |
+|---|---|---|
+| `rwd` (2.16120.0 and later) | passes, no signal | `outputs-delete —` (not applicable: outputs is not delete-denied) |
+| `rw` (before 2.16120.0) | fails `outputs_delete` (`allow_outputs_delete: true` accepts it) | `✗` |
+
+`no_delete_in_outputs: true` checks outputs deletes on every baseline, so a scenario that wants the old check
+authors it. `no_delete_in_mounts: true` also keeps covering outputs: unless `allow_delete_in` waives outputs, authoring
+it arms the outputs check on an `rwd` baseline, so a delete only the filesystem diff saw still fails (as
+`outputs_delete`, which `allow_outputs_delete` waives, as on `rw`) and the roster reports it. The detection itself (the bash-command scan and the per-turn filesystem
+diff) runs on every live run and its evidence stays in `result.json`'s `scan` / `fsDiff`.
+
+Two edges the default `rwd` verdict does not distinguish, both silent when nothing is authored:
+
+- **A delete through an outputs symlink into a connected folder.** `rm -rf mnt/outputs/link/`, where `link` points
+  into a `rw` connected folder, is attributed to outputs only, so on an `rwd` baseline it passes by default, while
+  production would return `EPERM` inside the folder. On `rw` it fails, but only because it is read as an outputs
+  delete. The scan does not resolve symlinks.
+- **Removing the outputs directory itself.** `rm -rf mnt/outputs` is an outputs delete; on `rwd` it passes by default.
+  In production outputs is a mountpoint, so its contents go but the directory stays; in the harness the directory
+  itself can vanish, and later turns and delivery may then differ from production.
+
+Not modelled: a bridge session. The harness has no Dispatch agent session, so every scenario is a normal session.
+`lane: remote` records no outputs mode (the Desktop mount builders are not evidence about Cowork's cloud lane), so
+it keeps the delete-denied verdict until the cloud lane is measured. A result written before `outputsMountMode`
+existed also reads as `rw`, so `verify-run` keeps failing an outputs delete in it; re-run the scenario to get the
+current verdict.
 
 ## Folder access in `chat` sessions
 
@@ -948,26 +1063,29 @@ built-in absent from the tier's current set.
 
 ## Hostloop: the substituted plugin path shares the VM path's suffix; real Cowork's does not
 
-**Real Cowork behaviour (host-loop, observed on Desktop 2.9939.4):** the plugin's base directory the
-agent substitutes into a skill's text (the skill's own base dir, the `${CLAUDE_PLUGIN_ROOT}` it expands)
-is a host staging path of the form `$TMPDIR/claude-hostloop-plugins/<hash>/<basename>/…` — a symlink
-Desktop creates only when the host plugin path contains a space; a path with no space is passed
-through as the raw host path. Either way the path does not exist in the VM, and in the VM shell `$CLAUDE_PLUGIN_ROOT` and `$CLAUDE_SKILL_DIR` are empty. The plugin's
-files are reachable in the VM only at `/sessions/<slug>/mnt/.local-plugins/…` or
-`/sessions/<slug>/mnt/.remote-plugins/plugin_<id>/…`.
+**Real Cowork behaviour (host-loop):** the plugin's base directory the agent substitutes into a skill's
+text (the skill's own base dir, the `${CLAUDE_PLUGIN_ROOT}` it expands) is a host path of the form
+`$TMPDIR/claude-hostloop-plugins/<hash>/<basename>/…` — a symlink Desktop creates only when the host
+plugin path contains a space; a path with no space is passed through as the raw host path (observed on
+Desktop 2.9939.4). The path does not exist in the VM, but Cowork's bash tool rewrites it — and the raw
+install path, its `/private/var` spelling and its escaped and quoted forms — to the plugin's
+`/sessions/<slug>/mnt/.local-plugins/…` or `/sessions/<slug>/mnt/.remote-plugins/plugin_<id>/…` mount
+before a command runs (Desktop 1.40609.0 and later; measured on 2.19675.0). In the VM shell
+`$CLAUDE_PLUGIN_ROOT` and `$CLAUDE_SKILL_DIR` are empty.
 
 **Harness behaviour:** the `--plugin-dir` the native agent is given, and so the path it substitutes, is
 the staged copy inside the run dir: `<run-dir>/work/session/mnt/.local-plugins/…` (or
-`…/mnt/.remote-plugins/plugin_<id>/…`) — `src/runtime/hostloop.ts`, `src/runtime/argv.ts`. It is equally
-dead in the VM shell, and both env vars are equally unset, so a shell step that uses the substituted
-path as-is fails the same way in both. (Host-side `Read`/`Grep` of that path works in both.) The
-difference is the suffix: the harness's host path ends in the same `/mnt/.local-plugins/…` or
-`/mnt/.remote-plugins/…` tail as the VM path, and real Cowork's does not.
+`…/mnt/.remote-plugins/plugin_<id>/…`) — `src/runtime/hostloop.ts`, `src/runtime/argv.ts`. The
+`hostloop` bash tool applies the same rewrite to that path (`src/hostloop/plugin-path-rewrite.ts`), and
+both env vars are equally unset, so a bash command that uses the substituted path as its own word
+behaves the same in both. The difference is the shape: the harness's host path ends in the same
+`/mnt/.local-plugins/…` or `/mnt/.remote-plugins/…` tail as the VM path, and real Cowork's does not.
 
-**Consequence:** a skill that converts the substituted host path into a VM path by keeping its suffix
-(strip everything before `/mnt/`, prepend `/sessions/<slug>`) passes under `hostloop` and fails in real
-Cowork. Discover the mount by searching for the skill's own files instead — the recipe is in
-[plugin-root.md](./plugin-root.md#in-vm-bash--the-token-is-not-reliable).
+**Consequence:** the shape is visible wherever the host path is not rewritten — host-side tools, a
+sub-agent's prompt, a file or tool result the shell reads the path from. A skill that converts such a
+path into a VM path by keeping its suffix (strip everything before `/mnt/`, prepend `/sessions/<slug>`)
+passes under `hostloop` and fails in real Cowork. Discover the mount by searching for the skill's own
+files instead — the recipe is in [plugin-root.md](./plugin-root.md#in-vm-bash--what-the-shell-receives).
 
 ---
 
@@ -1134,14 +1252,29 @@ expanded here with no hook involved. Measured against agent 2.1.239 in the harne
   *not* forwarded to the model as literal text, so the run reads as a silent no-op.
 - **Both staging routes register the name.** `skills.local` copies to `<configDir>/skills/<basename>`
   (`src/session.ts`), which `--setting-sources user` loads; plugin sources become `--plugin-dir`
-  (`src/runtime/argv.ts`). Skills resolve by their bare frontmatter `name`, not plugin-qualified.
+  (`src/runtime/argv.ts`). In the agent, a skill resolves by its bare skill-directory name, not plugin-qualified
+  and not its frontmatter `name` (a plugin skill's name is sanitized: `skills/my.skill/` answers to `/my-skill`,
+  see `src/skill-id.ts`; only a `SKILL.md` placed directly in a plugin's skills path is named by its frontmatter `name`).
 - **The slash must be at position 0** — the input is trimmed, then must start with `/`. A slash named
   mid-sentence ("review the deck with /deck-review") is never expanded; it reaches the model as prose, which
   may then pick the `Skill` tool on its own. That is the model-invocation path, i.e. the auto-trigger a
   slash normally bypasses, so the scenario quietly stops testing what it reads as testing.
   `lint` reports it as ⚠ `WARN [prompt-slash-not-leading]`.
+- **Real Cowork resolves a typed slash command earlier, and more strictly.** Everything above is the
+  agent's resolver. In Cowork the Desktop app resolves what the user typed before any agent runs; a refusal
+  shows "Unknown skill", creates no task, and the agent never sees the message. Observed on Desktop
+  2.19675.0, 2026-10-03, 4 runs: a bare `/<skill>` whose name differs from its plugin's name was refused
+  (the agent here would expand it to `plugin:skill`); a bare `/<skill>` whose plugin has the same name
+  worked with one copy installed and was refused with two; the qualified `/<plugin>:<skill>` was refused
+  with two copies too; picking from the slash menu always worked. The harness passes `prompt:` straight to
+  the agent, so it models none of this and cannot see the refusal: a slash scenario that runs here may not
+  run when a user types it in Cowork. Pick the skill from the menu, or name the skill like its plugin, and do
+  not install two copies of a plugin. The qualified form was not measured with a single copy installed (only
+  seen refused with two), so it is not a proven fix. `lint` reports a bare name that differs from its staged
+  plugin's name as ⚠ `WARN [slash-skill-name-differs-from-plugin]`.
 
-The gap is therefore the hook's `additionalContext`, not the expansion.
+The gap is therefore the hook's `additionalContext` for a slash the agent receives, plus the app-side
+resolution above, which no run can observe.
 
 ### What this actually costs you
 
@@ -1616,29 +1749,34 @@ is a false red. It has no file or network effect, so file, artifact and egress a
 of its enabled-model condition, never the model list itself. A model added to or removed from the set, or the tool
 enabled for every model, therefore changes the digest and shows up as a `sync --diff` line.
 
-### Remote device bridge — `internal__remote-devices__*`, deliberately unmodeled
+### Remote device bridge — `mcp__remote-devices__*`, deliberately unmodeled
 
-The remote lane also has an internal MCP server the harness does not model at all, wire-named
-`internal__remote-devices__<tool>` (note the `internal__` prefix, not `mcp__`). Agent-facing tools include
+The remote lane also has an internal MCP server the harness does not model at all. The agent calls its
+tools as `mcp__remote-devices__<tool>`, and a host-side MCP server that Desktop bridges into the session
+nests one level deeper, as `mcp__remote-devices__<server>__<tool>`. Agent-facing tools include
 `device_bash`, `device_list_dir`, `device_stage_files`, `device_commit_files`,
-`device_request_folder_access`, `get_device_info`, and device-artifact tools; `device_commit_files` is the
-remote lane's write-to-disk leg and consumes a `file_uuid` from a prior `SendUserFile`. Desktop 1.37937.0
+`device_request_folder_access`, `get_device_info`, and device-artifact tools. `device_commit_files` is the
+remote lane's write-to-disk leg. A call takes 1–50 files and an optional overall `force`. Each file
+names a destination path on the device (`devicePath`) and a source, which is one of two things: the file id from an earlier `SendUserFile`
+(`fileUuid`), which its description marks as preferred when the file has one, or an absolute staged path under the
+container's outputs root, `/mnt/user-data/outputs/` (`stagedPath`), for an output that was never shared.
+Both source fields are optional in its schema (Desktop 2.19675.0), and a session-host variant of its
+description asks for the staged path only. Desktop 1.37937.0
 added `device_fs` and `device_request_delete_permission` to that set, plus a folder-access announce mode
 (`card` / `dialog` / `off`) — the Desktop half of the six `cowork_*` risk categories that had appeared in
 agent 2.1.237's auto-mode permission rubric. **This list is illustrative, not an inventory** (see the
 feature-gating note below), so it is not kept exhaustive; it is updated when a release moves the shape. Desktop advertises
-these *outward* to a cloud session over a device-OAuth bridge; every handler logs
-`session_type: "cowork-remote"`, and no `internal__*` name appears in the local spawn's tool list.
+these *outward* to a cloud session over a device-OAuth bridge, and Desktop's own telemetry tags these
+calls `session_type: "cowork-remote"`. None of these tools is in the local spawn's tool list.
 
-`device_bash`'s own description states the topology plainly: *"Run a shell command on the user's local
-machine, inside the desktop Cowork workspace (an isolated Linux VM). This is NOT the cloud container — the
-`Bash` tool runs there; device_bash runs on the user's device."* So a remote session reaches back into a
+`device_bash`'s tool description places it on the user's machine, in the local sandbox VM, and separates
+it from the container that hosts the ordinary `Bash` tool. So a remote session reaches back into a
 local VM (process namespace `rcw-<session>`, which the disk janitor's orphan cleanup deliberately skips).
 
 **Deliberately unmodeled.** Emulating it faithfully would mean real command execution and real writes on
 the operator's machine on behalf of a simulated remote session. The exact inventory is also
 feature-gated, so it varies by account. Recorded here so a remote-lane probe diffed against this harness
-is not misfiled as a harness bug — triage the lane first (`CLAUDE_CODE_ENTRYPOINT`).
+is not misfiled as a harness bug — triage the lane first ([how](#which-lane-a-session-actually-ran-on)).
 
 ### Where it bites — it looks like a harness bug
 
@@ -1647,7 +1785,9 @@ required `status`, which diffs against this harness as "wrong name AND wrong sch
 two lanes genuinely disagree, and a harness that adopted `SendUserFile` would green skills that then fail
 on real desktop-local Cowork — inverting the failure class the harness exists to catch. When a probe and
 this harness disagree about file delivery, establish which lane the probe ran on first:
-`CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and `remote_cowork` on the remote one.
+`CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and `remote_cowork` on the remote one (read it
+from a hook, not the VM shell; other
+checks: [Which lane a session actually ran on](#which-lane-a-session-actually-ran-on)).
 
 ### Workarounds
 

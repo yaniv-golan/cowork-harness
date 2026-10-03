@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { escapeRegExp } from "./helpers/regex.js";
 
 // Anti-drift guard: docs/session.md's "Full schema" YAML block + "Field reference" tables hand-document
 // every top-level field in schema/session.schema.json — the session analogue of
@@ -43,7 +44,6 @@ describe("docs/session.md ↔ schema/session.schema.json top-level field sync", 
   //       match a nested key like `config_dir:` (which is indented under `plugins:`).
   //   (b) it appears as a backticked `` `key` `` mention anywhere in the doc (covers the "Field
   //       reference" table rows, which use `| \`model\` | ... |`, plus any prose mention).
-  const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const documented = (key: string): boolean => {
     const yamlKeyLine = new RegExp("^" + escapeRegExp(key) + ":", "m");
     const backtickMention = new RegExp("`" + escapeRegExp(key) + "(?:[.\\[`])");

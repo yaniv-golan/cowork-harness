@@ -4,6 +4,7 @@ import type { PlatformBaseline } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { SECRET_ENV_KEYS } from "./host-env.js";
+import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 
 /**
  * Pure contract layer — builds the agent CLI args, the spawn env, and the full
@@ -222,12 +223,22 @@ export function proxyEnvVars(proxyHost: string): Record<string, string> {
   };
 }
 
+/** The baseline's `spawn.env` (or the minimal cowork marker), minus the auto-memory key: that key is owned by
+ *  `autoMemoryEnv`, so the recorded gate decides it even if a baseline ever carried it in `spawn.env`. */
+function baselineSpawnEnv(baseline: PlatformBaseline): Record<string, string> {
+  const env: Record<string, string> = { ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }) };
+  delete env[AUTO_MEMORY_ENV_KEY];
+  return env;
+}
+
 export function spawnEnv(
   baseline: PlatformBaseline,
   opts: { configGuest: string; proxyHost: string; extra?: Record<string, string> },
 ): Record<string, string> {
   return {
-    ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
+    ...baselineSpawnEnv(baseline),
+    // Desktop's auto-memory switch for the modeled session, from the recorded gate 123929380 (see autoMemoryEnv).
+    ...autoMemoryEnv(baseline),
     CLAUDE_CONFIG_DIR: opts.configGuest,
     HOME: "/tmp",
     ...proxyEnvVars(opts.proxyHost),
@@ -274,7 +285,10 @@ export function hostNativeSpawnEnv(
   },
 ): Record<string, string> {
   return {
-    ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
+    ...baselineSpawnEnv(baseline),
+    // Desktop's auto-memory switch for the modeled session, from the recorded gate 123929380 (see autoMemoryEnv).
+    // The operator's own export of the key is deleted by buildHostLoopNativeEnv before this overlay.
+    ...autoMemoryEnv(baseline),
     CLAUDE_CONFIG_DIR: opts.configDir,
     // Desktop 2.2553.1. Production's W2 base env sets this unconditionally on first-party
     // (`<dep>.type==="3p"?"":app.getVersion()`), and the agent READS it: on the `claude-desktop` /
@@ -378,7 +392,8 @@ export function dockerRunArgv(i: DockerRunInput): string[] {
     `${i.sessionHost}:${i.sessionRoot}`,
     // Per-mount read-only enforcement — a nested `:ro` bind over each `mode:r` subpath makes
     // uploads / plugins unwritable in the guest (matching Cowork: asar uploads = 'ro'), while the rest
-    // of the session tree stays writable. Delete-deny for rw/rwd is the separate FUSE sub-project.
+    // of the session tree stays writable. Delete-deny for `rw` mounts (connected folders, and outputs on
+    // baselines before 2.16120.0) is not enforced here; it is detected post-run.
     ...(i.readOnlyMountPaths ?? []).flatMap((mp) => ["-v", `${i.sessionHost}/mnt/${mp}:${i.sessionRoot}/mnt/${mp}:ro`]),
     // Real folder mounts + `.claude/{skills,projects}`, layered AFTER the overlays above so they
     // correctly shadow the (now-absent, for folders) staged-copy destination.

@@ -28,9 +28,10 @@ per-column statistics or a metrics report.
    python3 "$S" uploads/sales.csv outputs
    ```
 
-   The second line matters in Cowork's default host-loop mode, where the path the agent
-   writes in for `${CLAUDE_PLUGIN_ROOT}` is on the host and the VM shell cannot open it;
-   it then finds the script at the plugin's mount inside the VM.
+   In Cowork's default host-loop mode the bash tool rewrites the host path the agent writes in
+   for `${CLAUDE_PLUGIN_ROOT}` to the plugin's mount inside the VM, so the first line finds the
+   script; the second line is the fallback for a Desktop older than 1.40609.0, or a plugin whose
+   mount path the rewrite skips, and finds the script at that mount.
 
    It writes `outputs/metrics.json` and `outputs/summary.md` and prints a
    one-line summary.

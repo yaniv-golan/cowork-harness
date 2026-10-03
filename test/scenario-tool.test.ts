@@ -27,8 +27,9 @@ function runCli(args: string[], env?: Record<string, string>) {
   return { code: r.status, stdout: r.stdout || "", stderr: r.stderr || "" };
 }
 
+// The bare form: it is empty in the VM shell at host-loop, so it stays a WARN (the braced form is an INFO).
 function writeFootgunSkill(dir: string) {
-  const md = ["# Demo skill", "", "```bash", 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup.sh"', "```", ""].join("\n");
+  const md = ["# Demo skill", "", "```bash", 'bash "$CLAUDE_PLUGIN_ROOT/scripts/setup.sh"', "```", ""].join("\n");
   writeFileSync(join(dir, "SKILL.md"), md);
 }
 

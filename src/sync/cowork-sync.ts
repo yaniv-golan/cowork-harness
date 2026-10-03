@@ -90,7 +90,10 @@ export const PINNED_GATES: Record<string, string> = {
   // Dormant drift-sentinels: the harness models these as OFF or inert-default for a
   // standard interactive cowork session; pinned so a production flip surfaces as a sync diff.
   "2614807392": "skeletonHome", // mnt/.host-home discovery index — absent from fcache (dark, default false)
-  "123929380": "autoMemoryStandardSessions", // auto-memory dir for a plain (non-Spaces) cowork session (off)
+  // NOT dormant: autoMemoryEnv (src/loop-decision.ts) reads this row at runtime. Off (the recorded state) → every
+  // tier sends CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1", as Desktop does for a plain (non-Spaces) task. On → the harness
+  // leaves memory on, a half-modeled mode, so checkAutoMemoryGate puts a WARNING in the sync notes.
+  "123929380": "autoMemoryStandardSessions",
   "1696890383": "memoryGuidelinesEnv", // CLAUDE_COWORK_MEMORY_GUIDELINES env for auto-memory (off)
   "2860753854": "memoryExtraGuidelines", // CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES PII block (on, but inert-default)
   // Sub-agent append server override: gates ONLY whether a server-delivered spSectionPrompts entry
@@ -734,9 +737,26 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "Still one account, one session, and still segment-targetable. " +
       "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
       "for its environment section verbatim, diff the three composed parts) rather than trusting this note. " +
-      "NOTE the probe now has a PRECONDITION: Cowork's `Only on this computer` setting (localAgentMode) is " +
-      "OFF by default, and with it off a session runs server-side with a server-authored prompt that has no " +
-      "`## Cowork environment` section at all. Turn it ON, or you will probe a lane this harness does not model.",
+      "NOTE the probe has a PRECONDITION: the session must run on the LOCAL lane. Cowork's " +
+      "`Only on this computer` setting (localAgentMode) does not reliably select it (cloud runs seen with " +
+      "it ON), and Anthropic announces its removal for Pro/Max from 2026-10-06. Confirm the session ran " +
+      "locally before probing; see docs/fidelity-gaps.md, 'Which lane a session actually ran on'.",
+  ];
+}
+
+/** Gate 123929380 (autoMemoryStandardSessions) has a runtime consumer, `autoMemoryEnv`. When it reads ON the
+ *  harness turns the agent's auto-memory ON on every tier, but models only that switch. A note, not a delta: the
+ *  gate is server-side and Desktop-version-independent, and the baseline records the state faithfully — the note
+ *  says what the harness does NOT reproduce in that state. */
+export function checkAutoMemoryGate(gates: Record<string, GateState> | null): string[] {
+  if (!gates?.["123929380"]?.on) return [];
+  return [
+    "WARNING: gate autoMemoryStandardSessions:123929380 reads ON — Desktop now gives an ordinary local task an " +
+      "auto-memory directory, and runs from this baseline will leave the agent's auto-memory ON (no " +
+      "CLAUDE_CODE_DISABLE_AUTO_MEMORY). That mode is only HALF-modeled: production also ships a Desktop-managed " +
+      "memory directory, the CLAUDE_COWORK_MEMORY_* keys (path override, index content and guideline prompt text) and " +
+      "a memory-tidy skill gated on the same id; the harness reproduces none of them, so the agent's memory prompt " +
+      "differs from production's. See the auto-memory entry in docs/fidelity-gaps.md before relying on a run.",
   ];
 }
 
@@ -901,6 +921,7 @@ export function sync(): SyncResult {
   // It blocked the write while being unable to distinguish the two states it names; a guard that can
   // never clear itself from its own inputs is a permanent block, not a tripwire.
   notes.push(...checkSubagentOverrideGate(gates));
+  notes.push(...checkAutoMemoryGate(gates));
   // NOTE-class only, never a delta — see checkAgentReleaseChannel for why this must not block a write.
   notes.push(...checkAgentReleaseChannel(agentReleaseChannel, agentVersion));
 
@@ -1505,6 +1526,7 @@ function extractFromAsar(
     // drift guard: mountLayout modes are hand-authored (not synced) — verify the binary-verified
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle, bundleFiles)) flag(unknown, f);
+    for (const f of checkAutoMemoryFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
@@ -1756,6 +1778,65 @@ export function checkMountModeFacts(bundle: string, files: Map<string, string>):
       );
   }
   return flags;
+}
+
+/**
+ * Anchor for the auto-memory switch the harness models (`autoMemoryEnv`, src/loop-decision.ts). Pure over the
+ * normalized per-chunk bundle; every flag is an unknown delta.
+ *
+ * Desktop 2.19675.0 (the same shape from 2.2553.1; the same behaviour in every saved asar from 1.18286.2):
+ *   1. the spawn resolves `<s>.memoryEnabled===!1?null:<r>.getAutoMemoryDirForSession(<id>)` (one site);
+ *   2. `getAutoMemoryDirForSession(e){return this.resolveAutoMemoryDir(e,!1)}` (one site);
+ *   3. that resolver's body ends with the session-type chain
+ *      `return r?.sessionType==="agent"?<f>(…):r&&!r?.sessionType&&<g>("123929380")?<h>(…):null` — the ORDINARY
+ *      task (no sessionType) gets a directory only when gate 123929380 is on, otherwise null;
+ *   4. null becomes `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"` on both loops: host-loop's memory-keys ternary
+ *      `…})():{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"}` and VM-loop's
+ *      `.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE||(<x>.env={...<x>.env,CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"})` (one each).
+ *
+ * Accepted limits: it flags on asars before 2.2553.1 (no `resolveAutoMemoryDir` indirection), which is right —
+ * sync only reads the installed Desktop. It does not pin that the ternary's result flows into
+ * `autoMemoryHostDir` at both loop spawns, nor that `<g>` is the GrowthBook reader (pinning a minified callee is
+ * churn); the gate-id literal and the arm structure carry the meaning. The no-account/org guard is not pinned:
+ * it returns null, which is already the disabled outcome.
+ */
+export function checkAutoMemoryFacts(files: Map<string, string>): string[] {
+  const chunks = [...files.values()];
+  const count = (re: RegExp) => chunks.reduce((n, c) => n + (c.match(re)?.length ?? 0), 0);
+  const why: string[] = [];
+  const ternary = count(/(?<![\w$])[\w$]+\.memoryEnabled===!1\?null:[\w$]+\.getAutoMemoryDirForSession\([\w$]+\)/g);
+  if (ternary !== 1) why.push(`the spawn's \`memoryEnabled===!1?null:getAutoMemoryDirForSession(…)\` is at ${ternary} site(s), expected 1`);
+  const delegationRe = /getAutoMemoryDirForSession\(([\w$]+)\)\{return this\.resolveAutoMemoryDir\(\1,!1\)\}/;
+  const sites = chunks.filter((c) => delegationRe.test(c));
+  if (sites.length !== 1)
+    why.push(`getAutoMemoryDirForSession → resolveAutoMemoryDir(…,!1) delegation found in ${sites.length} chunk(s), expected 1`);
+  else {
+    const header = /resolveAutoMemoryDir\(([\w$]+),([\w$]+)\)\{/.exec(sites[0]);
+    const body = header ? braceBodyOf(sites[0], header[0]) : null;
+    if (body === null) why.push("resolveAutoMemoryDir's body does not resolve in the chunk that delegates to it");
+    else if (
+      !/return ([\w$]+)\?\.sessionType==="agent"\?[\w$.]+\(this\.currentAccountId,this\.currentOrgId\):\1&&!\1\?\.sessionType&&[\w$.]+\("123929380"\)\?[\w$.]+\(this\.currentAccountId,this\.currentOrgId\):null$/.test(
+        body,
+      )
+    )
+      why.push(
+        `resolveAutoMemoryDir no longer ends with the ordinary-task arm gated on exactly "123929380" with a null else ` +
+          `(tail: \`${body.slice(-160)}\`)`,
+      );
+  }
+  const hostLoop = count(/\)\(\):\{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"\}/g);
+  if (hostLoop !== 1)
+    why.push(`host-loop's no-directory arm \`…():{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"}\` is at ${hostLoop} site(s), expected 1`);
+  const vmLoop = count(/\.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE\|\|\(([\w$]+)\.env=\{\.\.\.\1\.env,CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"\}\)/g);
+  if (vmLoop !== 1)
+    why.push(
+      `VM-loop's \`CLAUDE_COWORK_MEMORY_PATH_OVERRIDE||(…CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1")\` fallback is at ${vmLoop} site(s), expected 1`,
+    );
+  return why.map(
+    (w) =>
+      `auto-memory: ${w} — Desktop's auto-memory switch for an ordinary task may have changed; re-derive autoMemoryEnv ` +
+      "(src/loop-decision.ts) and the auto-memory entry in docs/fidelity-gaps.md",
+  );
 }
 
 /**
@@ -4017,9 +4098,10 @@ function enclosingFunctionName(chunk: string, at: number): string | null {
  *     s.stepStarted("download_and_sdk_prepare");let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);
  *
  * reached from the `startVM` export (`startVM:()=>KJ`, whose body calls the function holding that step).
- * On this account the local VM now boots only because the cloud lane's device bash starts it, so this is
- * the harness's sole agent supply — if Desktop drops the call or moves it off the startVM path, the agent
- * stops being staged with nothing else noticing. Fail closed.
+ * On this account the local VM has been observed booting because a cloud session's `device_bash`, a scheduled
+ * task, or a local-lane session started it, so this staging path is the harness's agent supply — if Desktop
+ * drops the call or moves it off the startVM path, the agent stops being staged with nothing else noticing.
+ * Fail closed.
  */
 export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];

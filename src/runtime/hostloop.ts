@@ -10,7 +10,14 @@ import { makeSkillsHandler, SKILLS_PLUGINS_TOOL_NAMES } from "../hostloop/skills
 import { makePluginsHandler } from "../hostloop/plugins-handler.js";
 import { makeCoworkHandlerHostLoop } from "../hostloop/cowork-handler-hostloop.js";
 import { listMountedSkills } from "../run/skill-metadata.js";
-import { resolveMounts, resolveAgentBinary, resolveHostAgentBinary, cmpVersionStrings, MOUNT_BARE_NAME_MIN_VERSION } from "../baseline.js";
+import {
+  resolveMounts,
+  resolveAgentBinary,
+  resolveHostAgentBinary,
+  cmpVersionStrings,
+  MOUNT_BARE_NAME_MIN_VERSION,
+  PLUGIN_PATH_VM_REWRITE_MIN_VERSION,
+} from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 
 /**
@@ -22,8 +29,10 @@ import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import type { WebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
-import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars } from "./argv.js";
+import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars, pluginDirArgs } from "./argv.js";
+import { buildPluginPathRewrites, type PluginPathRewrite } from "../hostloop/plugin-path-rewrite.js";
 import { agentSpawnOptions } from "./agent-tree.js";
+import { AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
@@ -82,6 +91,7 @@ export function buildHostLoopNativeEnv(
 ): NodeJS.ProcessEnv {
   const nativeEnv: NodeJS.ProcessEnv = { ...process.env };
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete nativeEnv[k];
+  delete nativeEnv[AUTO_MEMORY_ENV_KEY]; // owned by hostNativeSpawnEnv's autoMemoryEnv overlay — see AUTO_MEMORY_ENV_KEY
   Object.assign(nativeEnv, hostNativeSpawnEnv(baseline, opts));
   delete nativeEnv.MAX_THINKING_TOKENS;
   Object.assign(nativeEnv, opts.agentEnv ?? {});
@@ -202,8 +212,10 @@ export function hostLoopPresentFilesRoots(hostOutputsDir: string, plan: LaunchPl
  * guard guards nothing.
  *
  * Deliberately proxy-only. `CLAUDE_PLUGIN_ROOT` must stay ABSENT: real host-loop leaves it unset in the
- * guest and the agent self-heals by `find`ing the mount, so a value here would re-leak a host path bash
- * cannot resolve. Nothing else belongs in this env either.
+ * guest, so a bare `$CLAUDE_PLUGIN_ROOT` expands empty there, and a value here would leak a host path bash
+ * cannot resolve. (A host plugin path the agent wrote into a command is a different thing: the workspace
+ * handler rewrites it to the VM mount — see src/hostloop/plugin-path-rewrite.ts.) Nothing else belongs in
+ * this env either.
  *
  * No proxy means an empty env, not a default one. Pointing bash at a proxy that isn't there would turn
  * "no egress" into "every request fails against a bogus host" — a worse failure wearing a stranger
@@ -264,13 +276,14 @@ export function spawnHostLoop(
   // production-analog `installPath`) — a REAL host path the native process can resolve directly, unlike
   // the pre-split design where the agent ran in-container. bash's `docker exec` sidecar gets NO
   // CLAUDE_PLUGIN_ROOT at all (the env key is omitted below), matching real host-loop where in-guest bash
-  // sees the var UNSET — the agent's `[ -z "$CLAUDE_PLUGIN_ROOT" ]` self-heal then discovers the mount via
-  // `find /sessions/<id>/mnt ...`, exactly as before, but WITHOUT a bogus /host sentinel leaking into bash.
+  // sees the var UNSET, so a bare `$CLAUDE_PLUGIN_ROOT` expands empty. The substituted host path the agent
+  // writes into a bash command is rewritten to the plugin's VM mount by the workspace handler (see
+  // `hostLoopPluginPathRewrites`).
   const claudePluginRootHost = resolveClaudePluginRootHostPath(plan, mntHost);
 
   const agentNativeHost = resolveHostAgentBinary(baseline);
   // Bind-mounted into the bash sidecar for parity; not run by any harness-spawned process here (sidecar CMD
-  // is a keep-alive, bash is `docker exec … sh -c`, the executed agent is agentNativeHost above — model bash
+  // is a keep-alive, bash is `docker exec … bash -c`, the executed agent is agentNativeHost above — model bash
   // could invoke it inside the hardened sidecar, an accepted patch-only residual). So tolerate a patch-newer
   // VM ELF when the pin was pruned by a Desktop update, instead of hard-failing a run that doesn't execute it.
   const agentVmHost = resolveAgentBinary(baseline, { parityMount: true });
@@ -420,8 +433,9 @@ export function spawnHostLoop(
     agentIn: "/usr/local/bin/claude", // kept bind-mounted for parity/inspection; not run by any harness-spawned process (reachable only by model bash in the hardened sidecar, an accepted patch-only residual)
     image,
     // bash's egress config — `docker exec` inherits the container's env, so these reach every bash call.
-    // Still NO CLAUDE_PLUGIN_ROOT: real host-loop leaves it unset in the VM and the agent self-heals via
-    // `find`. See hostLoopSidecarEnv for why this must not be built inline.
+    // Still NO CLAUDE_PLUGIN_ROOT: real host-loop leaves it unset in the VM, so the bare variable is empty;
+    // a substituted host path in a bash command is rewritten instead (see plugin-path-rewrite.ts). See
+    // hostLoopSidecarEnv for why this must not be built inline.
     env: hostLoopSidecarEnv(opts.egressProxy),
     name: containerName,
     readOnlyMountPaths: plan.mounts.filter((mt) => mt.mode === "r" && mt.kind !== "folder").map((mt) => mt.mountPath),
@@ -461,6 +475,9 @@ export function spawnHostLoop(
   // Host-routed web_fetch bypasses the sidecar proxy, so collect its egress decisions here and
   // surface them to execute.ts → result.egress, making host-loop web_fetch visible to egress assertions.
   const hostEgress: EgressEntry[] = [];
+  // Cowork's workspace bash rewrites a plugin's host path in the command to its VM mount before running it.
+  // Keyed on the SAME mntHost the agent's --plugin-dir uses, valued on the SAME sessionRoot the sidecar binds.
+  const pluginPathRewrites = hostLoopPluginPathRewrites(baseline, plan, mntHost, sessionRoot);
   const workspaceHandle = makeWorkspaceHandler({
     containerName,
     vmMnt: mntRoot,
@@ -471,6 +488,7 @@ export function spawnHostLoop(
     provenanceRef: opts.provenanceRef,
     dedup: opts.dedup,
     execCwd,
+    pluginPathRewrites,
   });
   const workspaceBundle: { servers: string[]; handle: McpHandler } = { servers: ["workspace"], handle: workspaceHandle };
   // Toolset parity with production (F2/F3 in the closure plan: production's `present_files` is
@@ -648,4 +666,30 @@ function hostLoopShellSection(
     throw new Error(`cowork-harness: missing host-loop shell prompt asset: ${dir}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
   }
   return stripComments(content).split("{{vmMnt}}").join(vmMnt).trim();
+}
+
+/**
+ * The host-loop bash rewrite map (see src/hostloop/plugin-path-rewrite.ts), built from the paths this tier
+ * actually produces: each plugin's key is the exact `--plugin-dir` the native agent was given (read from
+ * `pluginDirArgs`, never re-templated) and its value is where the sidecar exposes that plugin
+ * (`<vmSessionRoot>/mnt/<mountPath>`); `<configDir>/skills` maps to the `.claude/skills` bind. `mntHost` must
+ * be the value `spawnHostLoop` passes to `baseAgentArgs`, and `vmSessionRoot` the `sessionRoot` the sidecar
+ * binds. The harness stages no alias dir, so a plugin's staged and installed paths are the same path. Empty
+ * for a baseline older than {@link PLUGIN_PATH_VM_REWRITE_MIN_VERSION}, whose Desktop ran the command as
+ * written.
+ */
+export function hostLoopPluginPathRewrites(
+  baseline: Pick<PlatformBaseline, "appVersion">,
+  plan: Pick<LaunchPlan, "pluginDirs" | "configDir">,
+  mntHost: string,
+  vmSessionRoot: string,
+): PluginPathRewrite[] {
+  if (cmpVersionStrings(baseline.appVersion, PLUGIN_PATH_VM_REWRITE_MIN_VERSION) < 0) return [];
+  const staged = pluginDirArgs(plan, mntHost).filter((_, i) => i % 2 === 1);
+  const vmMntRoot = `${vmSessionRoot}/mnt`;
+  return buildPluginPathRewrites({
+    vmMntRoot,
+    plugins: plan.pluginDirs.map((p, i) => ({ vmPath: `${vmMntRoot}/${p}`, stagedPath: staged[i]!, installPath: join(mntHost, p) })),
+    skills: { hostDirs: [join(resolve(plan.configDir), "skills")] },
+  });
 }

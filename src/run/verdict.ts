@@ -3,7 +3,7 @@ import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
 import { endsOnRequestForInput } from "./input-request.js";
-import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified } from "./outputs-delete-tier.js";
+import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified, outputsCheckArmed } from "./outputs-delete-tier.js";
 
 export interface VerdictSignal {
   code:
@@ -34,7 +34,7 @@ export interface VerdictSignal {
   message: string;
 }
 /** a guard's visibility status this run. `ok` = ran and found nothing; `fired` = caught its failure
- *  mode; `na` = not applicable on this lane/tier; `unverified` = ran but couldn't conclude. NEVER `ok` for a
+ *  mode; `na` = not applicable on this lane/tier or baseline; `unverified` = ran but couldn't conclude. NEVER `ok` for a
  *  guard that didn't run — a false ✓ would be its own silent-false-green. */
 export type GuardStatus = "ok" | "fired" | "na" | "unverified";
 export interface GuardReport {
@@ -109,16 +109,24 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
   // `fired` for ANY outputs-delete evidence, warn-tier included — the roster reports what the guard saw,
   // the signals say what it weighs. A filesystem-proven delete is `fired` even when the text scan is
   // missing; a diff that could not verify is `unverified`, never `ok`.
+  // `na` when the outputs check is not armed (`outputsCheckArmed`): an rwd baseline where nothing authored asks for
+  // it, so the guard's precondition, a delete-denied outputs mount, does not hold (the evidence is still in
+  // `scan` / `fsDiff`). `no_delete_in_outputs`, or `no_delete_in_mounts` with outputs unwaived, arms it.
   const odTier = outputsDeleteTier(result.scan, result.fsDiff);
+  const odArmed = outputsCheckArmed(
+    result.outputsMountMode,
+    result.assertions.map((a) => a.assertion),
+  );
   roster.push({
     name: "outputs-delete",
-    status: !live
-      ? "na"
-      : odTier !== "none"
-        ? "fired"
-        : result.scan === undefined || outputsDiffUnverified(result.fsDiff)
-          ? "unverified"
-          : "ok",
+    status:
+      !live || !odArmed
+        ? "na"
+        : odTier !== "none"
+          ? "fired"
+          : result.scan === undefined || outputsDiffUnverified(result.fsDiff)
+            ? "unverified"
+            : "ok",
   });
   return roster;
 }
@@ -132,7 +140,8 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
  * declared isolation guarantees were not actually met:
  *   - a cowork-parity permissive auto-allow real Cowork would BLOCK (fail unless the scenario opts in
  *     via `allow_permissive_auto_allow`),
- *   - a recorded unauthorized delete in mnt/outputs, or a host-path leak — UNLESS the scenario already
+ *   - a recorded unauthorized delete in mnt/outputs (on a baseline that records outputs `rw`; from Desktop
+ *     2.16120.0 a normal session may delete there), or a host-path leak — UNLESS the scenario already
  *     authored the matching assertion (`no_delete_in_outputs` / `transcript_no_host_path`), in which
  *     case that assertion owns the verdict and we don't double-count.
  *
@@ -503,17 +512,32 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // warn. The waiver suppresses both. An authored `no_delete_in_outputs` suppresses only the FAIL (the
     // assertion owns the verdict); the warn is still raised, because a passing assertion's advisory evidence
     // is visible only in the JSON envelope, and the warn is what keeps an unconfirmed hit on stderr.
-    const optInOutputsDelete = authored.some((a) => a.allow_outputs_delete === true);
+    //
+    // On a baseline that records outputs as `rwd` (Desktop 2.16120.0+, a normal session) production ALLOWS the
+    // delete, so the default check is off: none of the three outputs signals below fires, and
+    // `allow_outputs_delete` has nothing left to waive. `outputsCheckArmed` decides: an authored `no_delete_in_outputs`
+    // arms it exactly as on `rw` (the assertion fails, and both warns keep the evidence on stderr), and so does an
+    // authored `no_delete_in_mounts` with outputs unwaived (the default `outputs_delete` then catches a delete only
+    // the filesystem diff saw, which that key's bash-scan evidence cannot). Only an exact `"rwd"` disarms — an
+    // absent field (a result written before it, replay, the remote lane) keeps the delete-denied behaviour.
     const authoredOutputsDelete = authored.some((a) => a.no_delete_in_outputs !== undefined);
+    const optInOutputsDelete =
+      authored.some((a) => a.allow_outputs_delete === true) || !outputsCheckArmed(result.outputsMountMode, authored);
     const outputsTier = outputsDeleteTier(result.scan, result.fsDiff);
     const outputsEvidence = outputsDeleteEntries(result.scan, result.fsDiff).join("; ");
     if (outputsTier === "fail" && !authoredOutputsDelete && !optInOutputsDelete)
       signals.push({
         code: "outputs_delete",
         severity: "fail",
+        // On rwd the check is only armed here by an authored no_delete_in_mounts (no_delete_in_outputs would own
+        // the fail instead), and production allows the delete — so say what armed it rather than "unauthorized".
         message:
-          `unauthorized delete touched mnt/outputs: ${outputsEvidence} ` +
-          `(assert no_delete_in_outputs to make this explicit, or allow_outputs_delete if the deletion is intended)`,
+          result.outputsMountMode === "rwd"
+            ? `delete touched mnt/outputs, checked because no_delete_in_mounts covers outputs (this baseline mounts ` +
+              `outputs rwd, so Cowork itself allows it): ${outputsEvidence} (waive with allow_delete_in: ["outputs"] or ` +
+              `allow_outputs_delete if the deletion is intended)`
+            : `unauthorized delete touched mnt/outputs: ${outputsEvidence} ` +
+              `(assert no_delete_in_outputs to make this explicit, or allow_outputs_delete if the deletion is intended)`,
       });
     if (outputsTier === "warn" && !optInOutputsDelete)
       signals.push({
@@ -577,8 +601,8 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         `::notice:: [verdict] ${fromInputs} host path(s) in model-visible text came verbatim from the scenario's inputs or prompt; not counted as a leak\n`,
       );
 
-    // L0 (protocol) reading the operator's REAL config dir — their installed plugins, skills, auto-memory
-    // and MCP servers are live alongside the thing under test and can answer INSTEAD of it. Fail unless the
+    // L0 (protocol) reading the operator's REAL config dir — their installed plugins, skills and MCP
+    // servers are live alongside the thing under test and can answer INSTEAD of it. Fail unless the
     // scenario opts in via `allow_l0_host_config_contamination: true`.
     //
     // This used to mean "plugins load via --settings, not --plugin-dir". That is obsolete: protocol now
@@ -592,7 +616,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         code: "l0_host_config_contamination",
         severity: "fail",
         message:
-          "L0 (protocol) ran against your REAL config dir — your installed plugins, skills, auto-memory and MCP servers " +
+          "L0 (protocol) ran against your REAL config dir — your installed plugins, skills and MCP servers " +
           "were visible to the agent and may have answered INSTEAD of the plugin/skill under test, so this run did not " +
           "necessarily measure it. Set COWORK_MANAGED_CONFIG=1 with a token in the environment, use container/microvm, " +
           "or assert allow_l0_host_config_contamination: true to opt in.",

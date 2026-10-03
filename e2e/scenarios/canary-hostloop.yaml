@@ -1,5 +1,5 @@
 # Host-loop canary: proves shell routes through mcp__workspace__bash (not native Bash)
-# and that ${CLAUDE_PLUGIN_ROOT} is a host path bash cannot resolve (self-heal trigger).
+# and that a bare $CLAUDE_PLUGIN_ROOT is empty in the workspace bash (the variable is not set there).
 baseline: latest
 session: ../sessions/skill.yaml
 fidelity: hostloop

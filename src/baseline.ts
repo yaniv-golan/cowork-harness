@@ -112,6 +112,12 @@ export const DESKTOP_APP_VERSION_MIN_VERSION = "2.2553.1";
  *  outputs, as those releases did. */
 export const HOSTLOOP_SYSTEM_EMPTY_CWD_MIN_VERSION = "2.7032.0";
 
+/** First Desktop whose host-loop workspace bash rewrites a plugin's host path, written into the command, to
+ *  the plugin's VM mount before running it (see src/hostloop/plugin-path-rewrite.ts). Absent from every
+ *  backed-up asar through 1.37937.3 and present, with the same rules, in 1.40609.0, 1.40609.1, 1.44121.1,
+ *  2.16120.0 and 2.19675.0. Below it the command runs as written. */
+export const PLUGIN_PATH_VM_REWRITE_MIN_VERSION = "1.40609.0";
+
 /** True iff `found` is a same-major.minor, different-patch bump over `pinned` (both dotted version
  *  strings). The single definition of "patch-only" shared by the native-binary drift classifier and the
  *  VM-ELF parity-mount tolerance, so the two never diverge on what counts as a safe patch bump. */
@@ -810,6 +816,23 @@ export function deriveNativeStagedPath(a: {
     `  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`,
   );
   return { path, warnings };
+}
+
+/** The mode a baseline records for the `outputs` mount, read as one of the two values the outputs-delete
+ *  verdict distinguishes. From Desktop 2.16120.0 every mount builder takes the outputs mode from an exported
+ *  `outputsMountMode(isBridgeSession)`: "rwd" (deletes allowed) for a normal session, "rw" only for a Dispatch
+ *  bridge session, which the harness does not model. Earlier releases put outputs through the approved-list
+ *  resolver, so it is "rw" (delete-denied) there. Fails closed: only an exact "rwd" is "rwd"; a missing outputs
+ *  mount or any other mode reads as "rw", today's behaviour. */
+export function baselineOutputsMountMode(baseline: PlatformBaseline): "rw" | "rwd" {
+  return baseline.mountLayout.mounts.find((m) => m.name === "outputs")?.mode === "rwd" ? "rwd" : "rw";
+}
+
+/** What a live run persists as `RunResult.outputsMountMode`. Nothing for `lane: remote`: Cowork's cloud lane
+ *  never runs Desktop's mount builders, so the baseline's outputs mode is not evidence about it, and an absent
+ *  field keeps the delete-denied verdict there. */
+export function stampedOutputsMountMode(baseline: PlatformBaseline, lane: "local" | "remote" | undefined): "rw" | "rwd" | undefined {
+  return lane === "remote" ? undefined : baselineOutputsMountMode(baseline);
 }
 
 /**

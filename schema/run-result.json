@@ -197,7 +197,7 @@
     "lane": {
       "type": "string",
       "enum": ["local", "remote"],
-      "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because Cowork's lane is a per-session human choice that leaves no trace in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
+      "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because no setting reliably decides Cowork's lane and the lane leaves no trace in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
     },
     "execution": {
       "type": "object",
@@ -661,7 +661,7 @@
         },
         "guards": {
           "type": "array",
-          "description": "the \"guards active this run\" roster \u2014 one entry per fail-when-silent guard, with its visibility status (ok = ran and found nothing; fired = caught its failure mode; na = not applicable on this lane/tier; unverified = ran but couldn't conclude). Never ok for a guard that didn't run.",
+          "description": "the \"guards active this run\" roster \u2014 one entry per fail-when-silent guard, with its visibility status (ok = ran and found nothing; fired = caught its failure mode; na = not applicable on this lane/tier or baseline; unverified = ran but couldn't conclude). Never ok for a guard that didn't run.",
           "items": {
             "type": "object",
             "required": ["name", "status"],
@@ -1227,7 +1227,7 @@
         },
         "mountDeletes": {
           "type": "array",
-          "description": "Per-mount delete detections across every delete-denied (rw) user-visible mount, including outputs. Superset of outputsDeletes, which is unchanged. Reported, not verdict-moving.",
+          "description": "Per-mount delete detections (bash-command scan) across every delete-denied (rw) connected folder, plus outputs on every baseline (no_delete_in_mounts covers it whatever the recorded mode). Superset of outputsDeletes' text hits. A connected-folder hit warns (mount_delete); it moves the verdict only through an authored no_delete_in_mounts.",
           "items": {
             "type": "object",
             "properties": {
@@ -1264,6 +1264,11 @@
       },
       "required": ["status", "findings"],
       "additionalProperties": false
+    },
+    "outputsMountMode": {
+      "type": "string",
+      "enum": ["rw", "rwd"],
+      "description": "The mode the run's baseline records for the outputs mount: rwd (Desktop 2.16120.0 and later, a normal session: deletes allowed) or rw (earlier: delete-denied). On rwd an outputs delete does not fail the default verdict; no_delete_in_outputs still checks it. Absent on lane: remote, replay, chat, and results written before it existed; absent reads as rw."
     },
     "effectiveFidelity": {
       "type": "string",

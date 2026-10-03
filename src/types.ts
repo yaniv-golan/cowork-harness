@@ -844,15 +844,15 @@ export const Assertion = z.strictObject({
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
   // Only `true` is accepted: `false` is rejected as a footgun. The assertion is presence-semantic — authoring
   // `false` reads as "permit deletes" but would behave identically to `true` (a silent no-effect), so it is
-  // rejected. OMITTING the key does NOT permit deletes either: a detected delete still fails the run via the
-  // `outputs_delete` verdict signal, which fires precisely BECAUSE the key was not authored. Authoring it
-  // makes the failure an explicit assertion instead of a signal. To accept a delete, use
-  // `allow_outputs_delete: true`.
+  // rejected. What OMITTING it means depends on the baseline: where outputs is recorded `rw` (Desktop before
+  // 2.16120.0) a detected delete still fails via the `outputs_delete` signal, which fires BECAUSE the key was
+  // not authored (accept one with `allow_outputs_delete: true`); where it is `rwd` (2.16120.0+, deletes allowed
+  // in a normal session) an omitted key means no check. Authoring it checks on every baseline.
   no_delete_in_outputs: z
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, a delete in command/call position has an outputs path as its own operand, or the diff could not verify; a hit resting only on inference with a clean diff passes (the outputs_delete_unconfirmed warn is still raised). Only `true` is valid (writing `false` is a rejected footgun). Omitting the key does NOT allow deletes — a detected delete fails via the outputs_delete signal; use allow_outputs_delete to accept one",
+      "fails if a delete touching mnt/outputs is DETECTED and confirmed (post-run bash-command scan plus a per-turn filesystem diff, not mount-level enforcement — a green means none was detected). Confirmed = the diff proves it, a delete in command/call position has an outputs path as its own operand, or the diff could not verify; a hit resting only on inference with a clean diff passes (the outputs_delete_unconfirmed warn is still raised). Only `true` is valid (writing `false` is a rejected footgun). Checks on every baseline. Omitting it: on a baseline recording outputs `rw` (Desktop before 2.16120.0) a detected delete still fails via the outputs_delete signal (allow_outputs_delete accepts one); on `rwd` (2.16120.0+, where Cowork allows deletes in outputs) nothing checks outputs deletes",
     ),
   no_unexpected_files: z
     .array(z.string().min(1))
@@ -1041,16 +1041,16 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. WAIVES the harness's post-hoc detection; it does NOT model production's allow_cowork_file_delete approval handshake, so a skill relying on the live EPERM still behaves differently here. Mutually exclusive with no_delete_in_outputs",
+      "(verdict modifier) accept a detected outputs delete for this scenario instead of failing the run — for a skill whose deletion is intended. Has an effect on a baseline recording outputs `rw` (Desktop before 2.16120.0); on `rwd` (2.16120.0+) an outputs delete does not fail by default, so it is an accepted no-op, unless no_delete_in_mounts arms the outputs check, where it waives that check's signal as on `rw`. WAIVES the harness's post-hoc detection; it does NOT model a live EPERM. Mutually exclusive with no_delete_in_outputs",
     ),
-  // Production denies unlink/rmdir on EVERY delete-denied (`rw`) mount, not just outputs, and approval is
-  // strictly per-mount. `no_delete_in_outputs` covers only outputs and keeps its exact meaning; this is
-  // the mount-wide form. Deletes in a mount named by `allow_delete_in` are waived (see below).
+  // Production denies unlink/rmdir on EVERY delete-denied (`rw`) connected folder, and approval is strictly
+  // per-mount. `no_delete_in_outputs` covers only outputs; this is the mount-wide form, and it covers outputs
+  // on every baseline too (an authored assertion is never narrowed by a baseline change). Deletes in a mount named by `allow_delete_in` are waived (see below).
   no_delete_in_mounts: z
     .literal(true)
     .optional()
     .describe(
-      "fails if a delete is DETECTED in any delete-denied mount (outputs + every `rw` connected folder) that is not waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on every such mount until per-mount approval",
+      "fails if a delete is DETECTED in outputs (on every baseline, including those where Cowork allows it; unless outputs is waived, authoring the key also arms the outputs check, so a filesystem-proven outputs delete fails the run as the outputs_delete signal, which allow_outputs_delete waives) or in any `rw` connected folder, unless that mount is waived by allow_delete_in — post-run bash-command scan, not mount-level enforcement, so a green means none was detected; only `true` is valid. Production denies unlink/rmdir on a `rw` connected folder until per-mount approval",
     ),
   // A WAIVER of the harness's post-hoc detection for the named mounts, mirroring allow_outputs_delete
   // exactly: detection still RUNS and the hits stay in result.json for forensics — only the verdict is
@@ -1066,7 +1066,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/auto-memory/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
+      "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
     ),
   allow_missing_capability: z
     .literal(true)
@@ -1402,9 +1402,9 @@ export const ScenarioObject = z.strictObject({
   //   fidelity  — the isolation tier the harness runs in (protocol/container/microvm/hostloop)
   //   execution — WHERE the run happens (local; cloud-describe reserved)
   //   lane      — WHICH Cowork product lane's contract the run is held to
-  // Cowork offers the choice per session ("Run this task: In the cloud / On your computer"), with cloud
-  // the default for new sessions, and the two lanes disagree about what "delivered" means. `local` keeps
-  // every existing scenario's meaning unchanged.
+  // Cowork has no per-session lane picker on 2.19675.0 and no setting reliably decides the lane
+  // (docs/fidelity-gaps.md, "Which lane a session actually ran on"); the two lanes disagree about what
+  // "delivered" means. `local` keeps every existing scenario's meaning unchanged.
   lane: z
     .enum(["local", "remote"])
     .default("local")
@@ -1830,8 +1830,8 @@ export interface RunResult {
   scratchpadEvidenceComplete?: boolean;
   /** The scenario's declared Cowork product lane — which delivery contract this run was held to. Distinct
    *  from `execution.location` (where the run PHYSICALLY happened, always local in this harness): the lane
-   *  is DECLARED intent, because Cowork's lane is a per-session human choice that leaves no trace in a
-   *  run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
+   *  is DECLARED intent, because no setting reliably decides Cowork's lane and the lane leaves no trace
+   *  in a run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
   lane?: "local" | "remote";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
@@ -2517,10 +2517,10 @@ export interface RunResult {
      *  outputs path as its own operand; `inferred` = flagged by the detector's inference (unprovable target, relative `cd`).
      *  Absent on results written before it existed — read as "unknown", which fails closed. */
     outputsDeleteBasis?: ("fs-diff" | "named" | "inferred")[];
-    /** Per-mount delete detections across every delete-denied (`rw`) user-visible mount, including
-     *  `outputs`. A SUPERSET of `outputsDeletes`, which is unchanged: production denies unlink/rmdir on
-     *  every such mount, so a delete in a connected folder is a real detection that used to produce no
-     *  signal at all. Reported, not verdict-moving — the harness detects where production ENFORCES. */
+    /** Per-mount delete detections across every delete-denied (`rw`) connected folder, plus `outputs` on every
+     *  baseline (the `no_delete_in_mounts` assertion covers it whatever the recorded mode). A SUPERSET of
+     *  `outputsDeletes`. A connected-folder hit is a delete production denies until approval; it warns
+     *  (`mount_delete`), never moving the verdict on its own — the harness detects where production ENFORCES. */
     mountDeletes?: { mount: string; command: string }[];
     /** A host path that did NOT come from the scenario's inputs appeared in model-visible text. */
     hostPathLeaked: boolean;
@@ -2542,6 +2542,12 @@ export interface RunResult {
    *  an unanswered gate (the diff runs before salvage). Absent on replay, chat, and results written before it
    *  existed. */
   fsDiff?: OutputsFsDiff;
+  /** The mode the run's baseline records for the `outputs` mount, copied when the run executed: `rwd` (Desktop
+   *  2.16120.0 and later, a normal session: deletes allowed) or `rw` (earlier releases: delete-denied). On `rwd`
+   *  an outputs delete does not fail the default verdict; `no_delete_in_outputs` still checks it. Absent on
+   *  `lane: remote` (the Desktop mount fact is not evidence about the cloud lane), replay, chat, and results
+   *  written before it existed — absent reads as `rw`, so those keep the delete-denied verdict. */
+  outputsMountMode?: "rw" | "rwd";
   /** The fidelity tier actually used. Equals `fidelity` unless `fidelity:"cowork"` resolved to a specific tier. */
   effectiveFidelity?: string;
   /** Run-identity metadata for the iterate-across-fixes loop. `runLabel`: the user's `--label` generation
@@ -2601,7 +2607,7 @@ export interface RunResult {
    *  the same inputs `events.jsonl` already carries, secret-scrubbed the same way. */
   toolCalls?: ToolCallRecord[];
   /** true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
-   *  the operator's REAL config dir, so their installed plugins/skills/auto-memory/MCP servers were visible
+   *  the operator's REAL config dir, so their installed plugins/skills/MCP servers were visible
    *  to the agent and may have answered instead of the thing under test. computeVerdict fails on this unless
    *  allow_l0_host_config_contamination is asserted — a warn-only was insufficient since the run could still appear
    *  green. (Pre-`--plugin-dir` this field meant "plugins were not delivered at L0"; delivery is fixed, the

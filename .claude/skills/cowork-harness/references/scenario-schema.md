@@ -264,19 +264,22 @@ with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are t
 (named by id, not plugin name), while `local_plugins` mounts two levels deeper
 (`.local-plugins/marketplaces/local-desktop-app-uploads/<plugin>`). The choice matters to a skill that
 locates its own files from the shell (at host-loop, Cowork's default, the braced `${CLAUDE_PLUGIN_ROOT}` is
-replaced with a HOST path and a bare `$CLAUDE_PLUGIN_ROOT` is empty in the VM shell).
-Do not derive the VM path from the substituted host path by keeping its `/mnt/…` tail: under `hostloop`
-the harness's staged host path happens to end in the same `/mnt/.local-plugins/…` suffix as the VM path,
-so that shortcut passes here and fails in real Cowork, whose host path has no such tail
+replaced with a HOST path that the bash tool rewrites to the plugin's VM mount when it stands as its own
+word, and a bare `$CLAUDE_PLUGIN_ROOT` is empty in the VM shell).
+Do not derive the VM path from a host path the bash tool did not rewrite by keeping its `/mnt/…` tail:
+under `hostloop` the harness's staged host path happens to end in the same `/mnt/.local-plugins/…` suffix
+as the VM path, so that shortcut passes here and fails in real Cowork, whose host path has no such tail
 ([fidelity gap](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)).
 Search for the skill's own `SKILL.md`, not for a directory named after the plugin — that finds nothing
 under `.remote-plugins/plugin_<id>` — and set no `-maxdepth` that stops short of the deeper local layout:
 `find /sessions/*/mnt/.local-plugins /sessions/*/mnt/.remote-plugins -path '*/skills/<skill-name>/SKILL.md' 2>/dev/null | head -1`.
-Details: [docs/plugin-root.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/plugin-root.md#in-vm-bash--the-token-is-not-reliable).
+Details: [docs/plugin-root.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/plugin-root.md#in-vm-bash--what-the-shell-receives).
 
 **Mount enforcement:** `mode:r` mounts get a real per-mount `:ro` bind (a write fails in-guest). The
 `rw` vs `rwd` (write-but-no-delete) distinction is **not** mount-enforced — a delete in `outputs/` or a
-connected folder succeeds and is only caught post-hoc by the `no_delete_in_outputs` assertion. A missing
+connected folder succeeds and is only caught post-hoc (`no_delete_in_outputs`, `no_delete_in_mounts`, and by
+default the `outputs_delete` signal on a baseline that records outputs `rw`; from Desktop 2.16120.0 outputs is
+`rwd` and Cowork allows the delete, so nothing fails it by default there). A missing
 mount source is a **hard error** (set `COWORK_HARNESS_SOFT_MISSING=1` to downgrade to warn-and-skip).
 There is no `folders[].to` field — the mount name is always derived from the folder basename
 (collision-resolved); `.projects` is now only a reserved name.
@@ -530,7 +533,7 @@ debugging a run's behavior. The two are **numbered independently**: a bare "gotc
     `file://` URI forms — stricter than it once was; pin the harness version when teaching it.
 
 15. **Read-only mounts are enforced; delete-deny is not.** `mode:r` → real `:ro` bind; `rw`/`rwd`
-    delete-deny is post-hoc only (`no_delete_in_outputs`).
+    delete-deny is post-hoc only (`no_delete_in_outputs`; outputs is `rwd`, delete-allowed, from Desktop 2.16120.0).
 
 16. **Keep `.env` out of any mounted folder** — it's copied into the sandbox; the token could leak.
     Put it at a working-dir or install root. Token resolution: env > `--dotenv` > `./.env` > install

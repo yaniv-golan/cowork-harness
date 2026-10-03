@@ -56,8 +56,12 @@ Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejec
 `/sessions/<id>`, folders at `/sessions/<id>/mnt/<name>`, delivery via `present_files`. Cowork's
 **remote** lane runs server-side in a cloud container with a different filesystem (`$HOME/mnt/`),
 different delivery (`/mnt/user-data/outputs/` + `SendUserFile`) and a server-authored prompt; no tier
-reproduces it and none can — that container is not something a local tool can stand up. Which lane a
-real session gets is a Cowork setting ("Only on this computer"), observed **off** on a current install.
+reproduces it and none can — that container is not something a local tool can stand up. No setting
+reliably decides which lane a real session gets: sessions ran in the cloud with "Only on this computer"
+**on** (observed 2026-10-02), and for Pro and Max plans Anthropic
+[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new
+tasks run in the cloud from 2026-10-06. Check the session's own lane
+([how](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)).
 So: behaviour conclusions (triggering, tool sequencing, gate handling) travel between lanes; anything
 asserting a **path, mount or delivery mechanism** is a claim about the local lane only. Declare
 `lane: remote` when the scenario is about that lane — the affected assertions then refuse to grade
@@ -253,6 +257,7 @@ cowork-harness lint scenarios/*.yaml
 | `regex-double-quoted` | WARN | a double-quoted regex with an unescaped backslash (YAML strips it) |
 | `replay-noop` | WARN | every assertion is live-only or a verdict modifier, so a replay gate verifies nothing |
 | `slash-prompt-forked-result-anchor` | WARN | a `prompt:` starting with `/<skill>` plus a `tool_result_*` anchored on `forked execution` — a slash-invoked skill makes no `Skill` call, so that tool result never exists; assert `skill_triggered` instead |
+| `slash-skill-name-differs-from-plugin` | WARN | a `prompt:` starting with a bare `/<skill>` that names a skill of a plugin the scenario's session stages, where the plugin's name differs — the agent expands it, but real Cowork's app has refused that typed form; pick it from the slash menu or name the skill like its plugin (`/<plugin>:<skill>` was not measured with a single copy installed). Names follow the agent: `.claude-plugin/plugin.json` `name`/`skills`, else the dir name; a skill's sanitized directory name. Reads the `session:` file and its `local_plugins`/`remote_plugins`; silent for an inline `session:`, for marketplace-delivered plugins, and when the files are not on this machine |
 | `tool-called-always-passes` | INFO | `tool_called` with `count: {min: 0}` and no `max` — it asserts nothing |
 | `tool-input-regex-redactable` | WARN | a `tool_not_called` input literal the redaction policy rewrites in the committed cassette (or a policy pattern it cannot check offline) |
 | `tool-input-shell-tier` | INFO | the object form with `tool: Bash` and a `command` on `hostloop` / `cowork`, where shell runs as `mcp__workspace__bash` — list both |
@@ -272,7 +277,8 @@ cowork-harness lint scenarios/*.yaml
 would reject.
 
 **Lint the skill itself: `cowork-harness lint-skill <skill-dir>`.** It checks the skill, not a scenario:
-Cowork host-loop footguns (`${CLAUDE_PLUGIN_ROOT}` in a VM bash step, hook events, a misplaced
+Cowork host-loop footguns (a bare `$CLAUDE_PLUGIN_ROOT` in a VM bash step, the plugin root forwarded
+through bash to a host-side reader, hook events, a misplaced
 `hooks.json`, an unresolvable `subagent_type`), the evidence corpus a `critique` can package
 (`references/critique.md`), and two size caps. `skill-body-over-reattach-cap` (WARN) fires when the
 `SKILL.md` body, frontmatter excluded, passes 19,000 B — after a compaction the agent re-attaches only the

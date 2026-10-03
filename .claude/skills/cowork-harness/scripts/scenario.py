@@ -51,9 +51,14 @@ lint-skill flags (skill bodies + any sibling hooks.json):
                                so a root-level file is SILENTLY ignored and nothing fires
   I  `hook-event-not-served`   a real hook event that DOES fire (plugin hooks are executed by the agent,
                                live-verified) but has no assertion key, so a scenario can't gate on it
-  W  `plugin-root-in-vm-bash`  `${CLAUDE_PLUGIN_ROOT}` in a VM bash step: in a plugin skill the agent
-                               replaces it at load with a path that, at host-loop, is on the HOST (a bare
-                               `$CLAUDE_PLUGIN_ROOT` is not replaced and is empty in the VM shell there)
+  W  `plugin-root-in-vm-bash`  a bare `$CLAUDE_PLUGIN_ROOT` in a VM bash step: the agent does not replace
+                               it, and the VM shell reads it empty at host-loop
+  I  `plugin-root-braced-in-vm-bash`  `${CLAUDE_PLUGIN_ROOT}` in a VM bash step: replaced at load with a HOST
+                               path, which the host-loop bash tool rewrites to the VM mount (its own word only)
+  W  `plugin-root-forwarded-from-vm-bash`  the whole `${CLAUDE_PLUGIN_ROOT}` as the value of a location option
+                               (root/dir/path/plugin/base): a program that passes it on hands a host-side
+                               reader a VM path it refuses at host-loop (a standalone skill's braced form, with
+                               no plugin.json above it, is the `plugin-root-in-vm-bash` WARN: nothing replaces it)
   W  `hook-host-side-write`    a hook command that exports a var or writes /tmp for the in-VM agent
   W  `skill-body-over-reattach-cap`   SKILL.md body (frontmatter excluded) over 19,000 B — after a
                                compaction the agent re-attaches only the first ~19,900 chars (INFO from 80%)
@@ -785,9 +790,10 @@ def _lint_prompt_slash(doc, path):
     auto-trigger a slash is normally used to bypass. The scenario still runs and can still pass, so the
     failure mode is a scenario that silently tests something other than what it reads as.
 
-    Deliberately silent when the prompt DOES start with `/`: that is the working case. Registration is not
-    checkable statically (it depends on how the skill is staged), so an unresolvable leading name is left
-    to the run itself, where it shows up as `Unknown command: /x` with `num_turns: 0`.
+    Deliberately silent when the prompt DOES start with `/`: that is the working case for the agent.
+    Registration is not checked here (it depends on how the skill is staged), so an unresolvable leading
+    name is left to the run itself, where it shows up as `Unknown command: /x` with `num_turns: 0`. The
+    one staging-aware check on a leading slash is `_lint_slash_skill_plugin_name`.
     """
     findings = []
     prompt = doc.get("prompt")
@@ -817,6 +823,210 @@ def _lint_prompt_slash(doc, path):
             )
         )
     return findings
+
+
+# A prompt that STARTS with a bare (unqualified) slash name: `/<name>` then whitespace or end of prompt.
+_BARE_LEADING_SLASH_RE = re.compile(r"^/([A-Za-z][A-Za-z0-9_-]*)(?:\s|$)")
+
+
+def _session_path_for_lint(doc, path):
+    """The scenario's `session:` file as a Path, or None when there is none to read (inline, absent, or
+    missing on this machine). `session:` resolves relative to the scenario file, as the loader does."""
+    sess = doc.get("session")
+    if not isinstance(sess, str) or not sess.strip() or sess.strip().startswith("("):
+        return None
+    p = Path(os.path.expanduser(sess.strip()))
+    if not p.is_absolute():
+        p = Path(path).parent / p
+    return p if p.is_file() else None
+
+
+def _session_host_path(raw, base):
+    """One session-declared host path, resolved like `resolveSessionPaths`: `~`/`~/x` expand to home,
+    an absolute path stays, anything else is relative to the session file's directory."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    raw = raw.strip()
+    if raw == "~" or raw.startswith("~/"):
+        return Path(os.path.expanduser(raw))
+    if raw.startswith("~"):
+        return None  # `~<user>` — the loader refuses it; nothing to resolve here
+    p = Path(raw)
+    return p if p.is_absolute() else base / p
+
+
+def _sanitize_skill_name(name):
+    """A skill name as the agent's plugin-skill loader writes it into the id (mirrors `sanitizeSkillName`
+    in src/skill-id.ts): every UTF-16 code unit outside [a-zA-Z0-9_-] becomes "-", so a character outside
+    the BMP becomes two."""
+    out = []
+    for ch in name:
+        if re.match(r"[a-zA-Z0-9_-]$", ch):
+            out.append(ch)
+        else:
+            out.append("--" if ord(ch) > 0xFFFF else "-")
+    return "".join(out)
+
+
+_SKILL_MD_MAX_BYTES = 1024 * 1024
+
+
+def _plugin_manifest(plugin_dir):
+    """`.claude-plugin/plugin.json` as a dict, or None. A root-level `plugin.json` is NOT read — the agent
+    does not read it (see `binaryPluginIdentity` in src/session.ts). Never raises."""
+    try:
+        data = json.loads((plugin_dir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _loadable_skill_md(md):
+    try:
+        return md.is_file() and md.stat().st_size <= _SKILL_MD_MAX_BYTES
+    except OSError:
+        return False
+
+
+def _plugin_registered_skills(plugin_dir, yaml_mod):
+    """(plugin name, bare registered skill names) as the agent's plugin skill loader derives them — mirrors
+    `registeredSkills` in src/hillclimb/skill.ts and `registeredSkillId` in src/skill-id.ts:
+      - plugin name: the manifest `name`, else the directory name;
+      - skills paths: `skills/` whenever it exists; then each manifest `skills` entry (a string or a list;
+        `.` or `./`-prefixed, an existing directory inside the plugin, `skills/` itself dropped); the plugin
+        root only when the manifest has no `skills` field at all and there is no `skills/`;
+      - per path: a SKILL.md directly in it is ONE skill, named by its frontmatter `name` (minus a leading
+        `<plugin>:`) or the path's basename; otherwise each subdirectory holding a SKILL.md is a skill named
+        by its DIRECTORY;
+      - every name is sanitized (`_sanitize_skill_name`).
+    The git-tracked-file filter the TS side applies is not modelled. Never raises."""
+    manifest = _plugin_manifest(plugin_dir) or {}
+    name = manifest.get("name") if isinstance(manifest.get("name"), str) and manifest.get("name") else plugin_dir.name
+    skills_dir = plugin_dir / "skills"
+    paths = []
+    has_skills_dir = skills_dir.is_dir()
+    if has_skills_dir:
+        paths.append(skills_dir)
+    if "skills" in manifest:
+        raw = manifest["skills"]
+        try:
+            real_root = plugin_dir.resolve()
+        except OSError:
+            real_root = None
+        for e in raw if isinstance(raw, list) else [raw]:
+            if not isinstance(e, str) or not (e == "." or e.startswith("./")) or real_root is None:
+                continue
+            cand = plugin_dir / e
+            try:
+                real = cand.resolve()
+            except OSError:
+                continue
+            if not (real == real_root or real_root in real.parents) or not cand.is_dir():
+                continue
+            if has_skills_dir and real == skills_dir.resolve():
+                continue
+            paths.append(cand)
+    elif not has_skills_dir:
+        paths.append(plugin_dir)
+    names = set()
+    for sp in paths:
+        md = sp / "SKILL.md"
+        if _loadable_skill_md(md):
+            fm = _agent_name_from_frontmatter(md, yaml_mod) or sp.resolve().name
+            if fm.startswith(name + ":"):
+                fm = fm[len(name) + 1 :]
+            names.add(_sanitize_skill_name(fm))
+            continue
+        try:
+            entries = sorted(sp.iterdir())
+        except OSError:
+            continue
+        for sd in entries:
+            if sd.is_dir() and _loadable_skill_md(sd / "SKILL.md"):
+                names.add(_sanitize_skill_name(sd.name))
+    return name, names
+
+
+def _user_skill_names(skill_dir, yaml_mod):
+    """Names a `skills.local` user skill might answer to — its directory name and its frontmatter `name:`.
+    Generous on purpose: a match here only SILENCES the warning."""
+    names = {skill_dir.name, _sanitize_skill_name(skill_dir.name)}
+    fm = _agent_name_from_frontmatter(skill_dir / "SKILL.md", yaml_mod)
+    if fm:
+        names.add(fm)
+    return names
+
+
+def _lint_slash_skill_plugin_name(doc, path):
+    """W: a leading BARE `/<name>` that names a staged plugin's skill whose plugin is named differently.
+
+    The harness hands `prompt:` to the agent, which expands a bare plugin-skill name to `plugin:skill`.
+    Real Cowork resolves a TYPED slash command in the Desktop app before any agent runs, and refused this
+    shape with "Unknown skill" and no task (observed on Desktop 2.19675.0, 2026-10-03, 4 runs). The refusal
+    never reaches the agent, so no run can catch it — only the static shape can.
+
+    Best effort, and silent whenever it cannot tell: the scenario's `session:` must be a readable file on
+    this machine, and only its `plugins.local_plugins` / `plugins.remote_plugins` directories are read
+    (marketplace-delivered plugins are not resolved), so an inline session is silent too. Plugin and skill
+    names follow the agent's own derivation (`_plugin_registered_skills`). A
+    `skills.local` skill answering to the same name also silences it — that route is not a plugin skill.
+    """
+    prompt = doc.get("prompt")
+    if not isinstance(prompt, str):
+        return []
+    m = _BARE_LEADING_SLASH_RE.match(prompt.lstrip())
+    if not m:
+        return []
+    token = m.group(1)
+    sess_path = _session_path_for_lint(doc, path)
+    if sess_path is None:
+        return []
+    yaml_mod = _require_yaml()
+    try:
+        sess = yaml_mod.safe_load(sess_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(sess, dict):
+        return []
+    base = sess_path.parent
+    plugins = sess.get("plugins") if isinstance(sess.get("plugins"), dict) else {}
+    skills = sess.get("skills") if isinstance(sess.get("skills"), dict) else {}
+
+    for raw in skills.get("local") or []:
+        d = _session_host_path(raw, base)
+        if d is not None and d.is_dir() and token in _user_skill_names(d, yaml_mod):
+            return []
+
+    hits = []
+    for key in ("local_plugins", "remote_plugins"):
+        for raw in plugins.get(key) or []:
+            d = _session_host_path(raw, base)
+            if d is None or not d.is_dir():
+                continue
+            plugin_name, registered = _plugin_registered_skills(d, yaml_mod)
+            if token not in registered:
+                continue
+            if plugin_name == token:
+                return []  # the shape that resolved in Cowork with one copy installed
+            if plugin_name not in hits:
+                hits.append(plugin_name)
+    if not hits:
+        return []
+    plugin_name = hits[0]
+    return [
+        Finding(
+            "WARN",
+            "slash-skill-name-differs-from-plugin",
+            f"`prompt:` starts with the bare `/{token}`, a skill of the staged plugin `{plugin_name}`, whose "
+            "name differs. Real Cowork's app resolves a typed slash command before the agent runs and has "
+            "refused a bare skill name that differs from its plugin's name (\"Unknown skill\", no task); "
+            "this runs in the harness, because the agent expands the bare name, but may not in Cowork.",
+            "Pick the skill from Cowork's slash menu, or name the skill like its plugin. The qualified "
+            f"`/{plugin_name}:{token}` is an option, but it was not measured with a single copy installed (it "
+            "was refused with two copies). Do not install two copies of one plugin.",
+            path,
+        )
+    ]
 
 
 _TOOL_RESULT_KEYS = ("tool_result_contains", "tool_result_not_contains", "tool_result_matches", "tool_result_not_matches")
@@ -1215,6 +1425,8 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
 
     # W: a slash command named mid-prompt is never expanded — see _lint_prompt_slash.
     findings.extend(_lint_prompt_slash(doc, path))
+    # W: a bare leading `/<skill>` whose staged plugin is named differently — see _lint_slash_skill_plugin_name.
+    findings.extend(_lint_slash_skill_plugin_name(doc, path))
 
     # W: unknown assertion keys inside assert items (e.g. invented file_not_empty, kind, path)
     unknown_assert = sorted(assert_keys - ASSERT_KEYS)
@@ -2092,6 +2304,7 @@ LINT_RULES = {
     "regex-double-quoted": "WARN",
     "replay-noop": "WARN",
     "slash-prompt-forked-result-anchor": "WARN",
+    "slash-skill-name-differs-from-plugin": "WARN",
     "tool-called-always-passes": "INFO",
     "tool-input-regex-redactable": "WARN",
     "tool-input-shell-tier": "INFO",
@@ -2202,11 +2415,12 @@ def cmd_lint(args):
 # v1 declines to do.
 
 _PLUGIN_ROOT_TOKEN = re.compile(r"\$\{?CLAUDE_PLUGIN_ROOT\}?")
-# A runtime SELF-HEAL for a ${CLAUDE_PLUGIN_ROOT} path the VM does not have at host-loop: discovering the
+# A runtime SELF-HEAL for a plugin-root path the VM shell cannot use (a bare $CLAUDE_PLUGIN_ROOT, a skill
+# outside a plugin, a path glued to other text the host-loop rewrite leaves alone): discovering the
 # real mount under /sessions at run time (the prescribed pattern — e.g.
 # `[ -d "$X" ] || X=$(find /sessions ... -name ...)`, or an inline `|| python3 "$(find /sessions ...)"`).
 # When a bash block that uses the token ALSO contains a `find` over /sessions, the block rescues that path
-# → downgrade the WARN to INFO. Conservative: we do NOT verify the find pattern actually matches the
+# → report it as INFO. Conservative: we do NOT verify the find pattern actually matches the
 # plugin's layout (hence the INFO's "not validated").
 _SELF_HEAL = re.compile(r"\bfind\b[^\n]*/sessions")
 # Opening/closing fence: ``` or ~~~ (>=3), optional info string (language).
@@ -2228,47 +2442,197 @@ _JSON_FENCE_LANGS = {"json", "jsonc", "json5"}
 # The agent replaces only the literal BRACED token in a plugin skill's text when the skill loads; a bare
 # `$CLAUDE_PLUGIN_ROOT` (or `${CLAUDE_PLUGIN_ROOT:-…}`) is left for the shell, which reads the environment.
 _PLUGIN_ROOT_BRACED = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}")
-# The form as written, for the message: `${CLAUDE_PLUGIN_ROOT:-…}` or a bare `$CLAUDE_PLUGIN_ROOT`.
-_PLUGIN_ROOT_WRITTEN = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT[^}]*\}|\$CLAUDE_PLUGIN_ROOT\b")
+# Every form the agent does NOT replace, as written: `${CLAUDE_PLUGIN_ROOT:-…}` or a bare `$CLAUDE_PLUGIN_ROOT`.
+_PLUGIN_ROOT_UNREPLACED = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT[^}]+\}|\$CLAUDE_PLUGIN_ROOT\b")
+# The forwarding shape: the whole braced root, with nothing appended, as the value of a long option whose name
+# says it carries a location (`--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, `--root=${CLAUDE_PLUGIN_ROOT}`). A
+# program handed the bare plugin root under such an option most often passes it on (into a sub-agent's prompt,
+# say) rather than opening it, and at host-loop the value it receives is the rewritten VM path. A positional
+# argument, a heredoc line, an assignment, an option with another name (`ls --color "${…}"`, which takes no
+# value) and the agent CLI's own `claude --plugin-dir` are left alone: those are as often a path the program
+# opens, which works, and the text cannot tell them apart.
+_PLUGIN_ROOT_OPTION = re.compile(
+    r"""--([A-Za-z0-9][A-Za-z0-9_-]*)(?:=|[ \t]+)(["']?)\$\{CLAUDE_PLUGIN_ROOT\}\2(?=[\s;|&)]|$)"""
+)
+_LOCATION_OPTION_NAME = re.compile(r"root|dir|path|plugin|base", re.IGNORECASE)
+# Where the command that owns an option starts: after a shell separator or an opening subshell.
+_COMMAND_SEPARATOR = re.compile(r"[;|&\n(]")
+# A shell comment (a `#` at the start or after whitespace, to end of line). Stripped before the forwarding
+# check: prose in a comment names the token without passing it anywhere.
+_SHELL_COMMENT = re.compile(r"(^|\s)#.*$")
 _IGNORE_MARKER_EXAMPLE = (
-    "`<!-- lint-skill: ignore-start plugin-root-in-vm-bash: <why the host path is right> -->` … "
+    "`<!-- lint-skill: ignore-start <rule>: <why this site is correct> -->` … "
     "`<!-- lint-skill: ignore-end -->`"
 )
 
 
-def _finding_plugin_root(path, line, ctx_label, text):
-    """The WARN for a plugin-root token in an in-VM bash context. The message states the mechanism for the
-    form written in `text`: the braced token is replaced with a path at skill load (a HOST path at
-    host-loop), the bare form is not replaced at all. Whether the value is then opened in the VM (broken at
-    host-loop) or only forwarded to a host-side file tool (correct) is a property of the receiving program,
-    which the skill text does not show, so both stay WARN and the fix says which is which."""
-    if _PLUGIN_ROOT_BRACED.search(text):
-        message = (
-            f"`${{CLAUDE_PLUGIN_ROOT}}` in an in-VM bash context ({ctx_label}): in a plugin skill the agent "
-            "replaces it with a path when the skill loads, and at host-loop (Cowork's default) that is a HOST "
-            "path that does not exist inside the VM, so a shell step or VM-run program that opens files under "
-            "it fails. Outside a plugin nothing replaces it, and the VM shell expands it empty at host-loop."
+# The host-loop bash rewrite's boundary sets (src/hostloop/plugin-path-rewrite.ts), spelled the same way: a
+# substituted path is rewritten only when the character before it is not a left blocker (or is an opening
+# quote) and the character after it is in the right-boundary set or the end of the command.
+_REWRITE_LEFT_BLOCKERS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" + "_./\\-" + ")}~" + "`'\"")
+_REWRITE_RIGHT_BOUNDARY = set("`'\"" + "&|;<>" + "()[]{}" + "/")
+_REWRITE_QUOTE_OPENER_PRECEDERS = set("=&|;(<{")
+_REWRITE_QUOTES = set("`'\"")
+# JavaScript's `\s`, which the rewrite tests with (Python's str.isspace also counts \x1c-\x1f, `\s` does not).
+_JS_WHITESPACE = set("\t\n\v\f\r \u00a0\u1680\u2028\u2029\u202f\u205f\u3000\ufeff") | {chr(c) for c in range(0x2000, 0x200B)}
+
+
+def _rewrite_is_opening_quote(text, idx):
+    quote = text[idx - 1]
+    if text[:idx].count(quote) % 2 != 1:
+        return False
+    before = text[idx - 2] if idx >= 2 else None
+    return before is None or before in _JS_WHITESPACE or before in _REWRITE_QUOTE_OPENER_PRECEDERS
+
+
+def _glued_plugin_root(text):
+    """True when some braced `${CLAUDE_PLUGIN_ROOT}` in `text` is glued to other text on either side, so the
+    host-loop bash tool does not rewrite the path substituted for it, and the VM shell gets a host path."""
+    for m in _PLUGIN_ROOT_BRACED.finditer(text):
+        prev = text[m.start() - 1] if m.start() > 0 else None
+        nxt = text[m.end()] if m.end() < len(text) else None
+        left_ok = (
+            prev is None
+            or prev not in _REWRITE_LEFT_BLOCKERS
+            or (prev in _REWRITE_QUOTES and _rewrite_is_opening_quote(text, m.start()))
         )
-        fix = (
-            "If the shell or the program you pass it to opens that path, resolve the plugin's VM mount at run "
-            "time instead (see the plugin-root guide). If the value only reaches a host-side file tool (for "
-            "example, it is embedded in a sub-agent's prompt for its Read), the host path is correct: wrap the "
-            f"fence in {_IGNORE_MARKER_EXAMPLE}."
+        right_ok = nxt is None or nxt in _JS_WHITESPACE or nxt in _REWRITE_RIGHT_BOUNDARY
+        if not (left_ok and right_ok):
+            return True
+    return False
+
+
+def _command_word(before):
+    """The program of the command an option at the end of `before` belongs to (its basename), skipping
+    leading `NAME=value` assignments; "" when there is none."""
+    segment = _COMMAND_SEPARATOR.split(before)[-1].split()
+    words = [w for w in segment if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+    return words[0].rsplit("/", 1)[-1] if words else ""
+
+
+def _is_forwarded_plugin_root(text):
+    code = _SHELL_COMMENT.sub(r"\1", text)
+    for m in _PLUGIN_ROOT_OPTION.finditer(code):
+        if not _LOCATION_OPTION_NAME.search(m.group(1)):
+            continue
+        before = code[: m.start()]
+        # Inside an open quote the option is text (an `echo` of instructions, say), not an argument. The
+        # count is naive, as is the host-loop rewrite's own.
+        if before.count('"') % 2 or before.count("'") % 2:
+            continue
+        # The agent CLI loads the plugin from the path itself; it does not pass it on.
+        if _command_word(before) == "claude":
+            continue
+        return True
+    return False
+
+
+def _finding_plugin_root_forwarded(path, line, ctx_label):
+    return Finding(
+        "WARN",
+        "plugin-root-forwarded-from-vm-bash",
+        f"`${{CLAUDE_PLUGIN_ROOT}}` passed whole as a location option's value in an in-VM bash context ({ctx_label}) "
+        "likely breaks at host-loop — a host-side reader it is passed to (a sub-agent's Read, say) receives a VM "
+        "path it refuses. At host-loop (Cowork's default) the bash tool rewrites the plugin's host path to its VM "
+        "mount before the command runs, so the program receives, and passes on, a `/sessions/…` path.",
+        "Do not route the plugin root through bash for a host-side reader: have the reader name "
+        "`${CLAUDE_PLUGIN_ROOT}` in its own text, for example a plugin agent's definition, whose body is "
+        "substituted with the plugin's host path when the agent loads. If the program opens the path itself, "
+        f"the site works: suppress it with {_IGNORE_MARKER_EXAMPLE.replace('<rule>', 'plugin-root-forwarded-from-vm-bash')}.",
+        path,
+        line,
+    )
+
+
+def _findings_plugin_root(path, line, ctx_label, text, in_plugin=True):
+    """The findings for a plugin-root token in an in-VM bash context, one per form written in `text`:
+    - the braced `${CLAUDE_PLUGIN_ROOT}` is replaced at skill load with a path, a HOST path at host-loop, which
+      the host-loop bash tool rewrites to the plugin's VM mount when it stands as its own word. Passed whole as
+      a location option's value it is most likely forwarded, and a forwarded VM path breaks a host-side reader: WARN.
+      Otherwise it most likely works: INFO, since whether the receiving program opens the value or forwards
+      it is not visible in the skill text;
+    - a form the agent does not replace (bare `$CLAUDE_PLUGIN_ROOT`, `${CLAUDE_PLUGIN_ROOT:-…}`) reads the
+      environment variable, empty at host-loop: WARN."""
+    findings = []
+    if _PLUGIN_ROOT_BRACED.search(text) and not in_plugin:
+        findings.append(
+            Finding(
+                "WARN",
+                "plugin-root-in-vm-bash",
+                f"`${{CLAUDE_PLUGIN_ROOT}}` in an in-VM bash context ({ctx_label}) in a skill outside a plugin (no "
+                "plugin.json above it): nothing replaces the token in a standalone skill's text, so the VM shell "
+                "reads the environment variable, which is empty at host-loop (Cowork's default); a path built from "
+                "it points nowhere.",
+                "Ship the skill inside a plugin, or resolve its files at run time (see the plugin-root guide), for "
+                "example by finding this skill's SKILL.md under /sessions.",
+                path,
+                line,
+            )
         )
-    else:
-        m = _PLUGIN_ROOT_WRITTEN.search(text)
+    elif _PLUGIN_ROOT_BRACED.search(text):
+        glued = _glued_plugin_root(text)
+        if glued:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "plugin-root-in-vm-bash",
+                    f"`${{CLAUDE_PLUGIN_ROOT}}` glued to other text in an in-VM bash context ({ctx_label}): the path "
+                    "the agent substitutes is not rewritten here. At host-loop (Cowork's default) the bash tool "
+                    "rewrites the plugin's host path to its VM mount only when the path is a word of its own, so this "
+                    "command gets the HOST path, which does not exist in the VM.",
+                    "Keep the path its own word: follow it with `/`, whitespace, a quote or the end of the command, "
+                    "and put nothing but whitespace, `=`, `:` or an opening quote right before it "
+                    "(`${CLAUDE_PLUGIN_ROOT}-v2` and `x${CLAUDE_PLUGIN_ROOT}` are not rewritten).",
+                    path,
+                    line,
+                )
+            )
+        if _is_forwarded_plugin_root(text):
+            findings.append(_finding_plugin_root_forwarded(path, line, ctx_label))
+        elif not glued:
+            findings.append(
+                Finding(
+                    "INFO",
+                    "plugin-root-braced-in-vm-bash",
+                    f"`${{CLAUDE_PLUGIN_ROOT}}` in an in-VM bash context ({ctx_label}): in a plugin skill the agent "
+                    "replaces it with a path when the skill loads; at host-loop (Cowork's default) that is a HOST "
+                    "path, which the bash tool rewrites to the plugin's VM mount before the command runs, so a "
+                    "shell step or VM-run program that opens it works when the path stands as its own word. A value "
+                    "only forwarded through the shell to a host-side file tool arrives there as a VM path, which "
+                    "host-loop file tools refuse; the linter flags that only for the whole root passed as an option "
+                    "value, and cannot tell a positional forward from a path the program opens.",
+                    "Keep the path its own word: follow it with `/`, whitespace, a quote or the end of the command "
+                    "(`${CLAUDE_PLUGIN_ROOT}-x`, `${CLAUDE_PLUGIN_ROOT}:…` and `x${CLAUDE_PLUGIN_ROOT}` are not "
+                    "rewritten). If the value only reaches a host-side file tool, do not pass it through bash: have "
+                    "the reader name `${CLAUDE_PLUGIN_ROOT}` in its own text, for example a plugin agent's "
+                    "definition. A site you have checked can be suppressed with "
+                    f"{_IGNORE_MARKER_EXAMPLE.replace('<rule>', 'plugin-root-braced-in-vm-bash')}.",
+                    path,
+                    line,
+                )
+            )
+    m = _PLUGIN_ROOT_UNREPLACED.search(text)
+    # One `plugin-root-in-vm-bash` per line: a standalone or glued braced form already reported it.
+    if any(f.rule == "plugin-root-in-vm-bash" for f in findings):
+        return findings
+    if m or not findings:
         written = m.group(0) if m else "$CLAUDE_PLUGIN_ROOT"
-        message = (
-            f"`{written}` in an in-VM bash context ({ctx_label}): the agent does not replace this "
-            "form in a skill's text (only the exact braced `${CLAUDE_PLUGIN_ROOT}`), so the VM shell reads the "
-            "environment variable, which is empty at host-loop (Cowork's default); a path built from it "
-            "points nowhere."
+        findings.append(
+            Finding(
+                "WARN",
+                "plugin-root-in-vm-bash",
+                f"`{written}` in an in-VM bash context ({ctx_label}): the agent does not replace this "
+                "form in a skill's text (only the exact braced `${CLAUDE_PLUGIN_ROOT}`), so the VM shell reads the "
+                "environment variable, which is empty at host-loop (Cowork's default); a path built from it "
+                "points nowhere.",
+                "Use the braced `${CLAUDE_PLUGIN_ROOT}` as a word of its own, or resolve the plugin's VM mount at "
+                "run time (see the plugin-root guide), for example from the script's own location or by finding "
+                "this skill's SKILL.md under /sessions.",
+                path,
+                line,
+            )
         )
-        fix = (
-            "Resolve the plugin's VM mount at run time instead (see the plugin-root guide), for example from "
-            "the script's own location or by finding this skill's SKILL.md under /sessions."
-        )
-    return Finding("WARN", "plugin-root-in-vm-bash", message, fix, path, line)
+    return findings
 
 
 def _finding_plugin_root_guarded(path, line, ctx_label):
@@ -2276,8 +2640,8 @@ def _finding_plugin_root_guarded(path, line, ctx_label):
         "INFO",
         "plugin-root-guarded",
         f"`${{CLAUDE_PLUGIN_ROOT}}` used in an in-VM bash context ({ctx_label}), but the same block "
-        "self-heals it (a runtime `find` under /sessions), so the path the VM does not have at host-loop is "
-        "harmless here.",
+        "self-heals it (a runtime `find` under /sessions), so the block works whether or not the braced path "
+        "is rewritten.",
         "Guard not validated: the linter does not check the `find` pattern actually matches the plugin's "
         "layout. Prefer resolving the mount from the script's own location over a find-fallback.",
         path,
@@ -2458,7 +2822,8 @@ def _lint_skill_text(path, raw_lines, force_json=False):
     fence_len = 0
     fence_lang = ""
     # Per-bash-fence buffer (Item 4): plugin-root token hit line numbers + the whole block's text, so a
-    # ${CLAUDE_PLUGIN_ROOT} use that is self-healed elsewhere IN THE SAME BLOCK downgrades WARN -> INFO.
+    # ${CLAUDE_PLUGIN_ROOT} use that is self-healed elsewhere IN THE SAME BLOCK is reported as the INFO
+    # `plugin-root-guarded` instead of its per-form finding.
     # Emission is deferred to fence close (or EOF) but original 1-based line numbers are preserved.
     bash_token_lines = []
     bash_block_text = []
@@ -2469,6 +2834,7 @@ def _lint_skill_text(path, raw_lines, force_json=False):
     # hooks.json body never enters the "bash" ctx below, so this is otherwise unused).
     skill_name = None
     plugin_name = None
+    in_plugin = False
     self_plugin_tokens = set()
     if not force_json:
         dir_name = Path(path).resolve().parent.name
@@ -2481,6 +2847,7 @@ def _lint_skill_text(path, raw_lines, force_json=False):
         if fm_name:
             self_plugin_tokens.add(fm_name)
         plugin_dir = _find_enclosing_plugin_dir(path)
+        in_plugin = plugin_dir is not None
         if plugin_dir is not None:
             plugin_name = _read_plugin_name(plugin_dir)
             if plugin_name:
@@ -2493,8 +2860,12 @@ def _lint_skill_text(path, raw_lines, force_json=False):
             healed = self_heal_line is not None
             token = _extract_find_path_token(self_heal_line) if healed else None
             for ln, text in bash_token_lines:
-                if not healed:
-                    findings.append(_finding_plugin_root(path, ln, "```bash block", text))
+                # A forwarded value breaks a host-side reader whether or not the block self-heals: a heal
+                # repairs a path the shell opens, not one it passes on.
+                if in_plugin and _PLUGIN_ROOT_BRACED.search(text) and _is_forwarded_plugin_root(text):
+                    findings.extend(_findings_plugin_root(path, ln, "```bash block", text, in_plugin))
+                elif not healed:
+                    findings.extend(_findings_plugin_root(path, ln, "```bash block", text, in_plugin))
                 elif token is not None and token not in self_plugin_tokens:
                     findings.append(
                         _finding_guard_pattern_mismatch(
@@ -2536,7 +2907,8 @@ def _lint_skill_text(path, raw_lines, force_json=False):
 
         if ctx == "bash":
             bash_block_text.append(line)  # buffer the block; token hits emit on flush (self-heal aware)
-            if _PLUGIN_ROOT_TOKEN.search(line):
+            # A fully commented-out line runs nothing, so it gets no finding.
+            if _PLUGIN_ROOT_TOKEN.search(line) and not line.lstrip().startswith("#"):
                 bash_token_lines.append((i, line))
         elif ctx == "json":
             for cm in _HOOK_CMD.finditer(line):
@@ -2546,7 +2918,7 @@ def _lint_skill_text(path, raw_lines, force_json=False):
             # Read/Grep directives are intentionally left alone.
             for bm in _BASH_DIRECTIVE.finditer(line):
                 if _PLUGIN_ROOT_TOKEN.search(bm.group(1)):
-                    findings.append(_finding_plugin_root(path, i, "Bash() directive", bm.group(1)))
+                    findings.extend(_findings_plugin_root(path, i, "Bash() directive", bm.group(1), in_plugin))
     # A bash fence left unclosed at EOF still has buffered token hits — flush them (else a real WARN/INFO
     # would be silently dropped).
     if in_fence and fence_lang in _BASH_FENCE_LANGS:
@@ -3294,6 +3666,8 @@ LINT_SKILL_RULES = {
     "hook-event-not-served": ("INFO", True),
     "hook-host-side-write": ("WARN", True),
     "plugin-root-in-vm-bash": ("WARN", True),
+    "plugin-root-braced-in-vm-bash": ("INFO", True),
+    "plugin-root-forwarded-from-vm-bash": ("WARN", True),
     "plugin-root-guarded": ("INFO", True),
     "guard-pattern-mismatch": ("WARN", True),
     "subagent-type-unresolvable": ("INFO", True),
@@ -3955,11 +4329,16 @@ def main(argv=None):
         description=(
             "Inspect skill bodies (SKILL.md + any sibling hooks.json) for two antipatterns a paid "
             "Cowork host-loop run would expose:\n"
-            "  (a) ${CLAUDE_PLUGIN_ROOT} in an in-VM bash context — in a plugin skill the agent replaces it "
-            "at load with a path that, at host-loop, is on the HOST and does not exist in the VM (a bare "
-            "$CLAUDE_PLUGIN_ROOT is not replaced, and is empty in the VM shell at host-loop). A value only "
-            "forwarded to a host-side file tool is correct; suppress such a reviewed site with a marker "
-            "(below);\n"
+            "  (a) $CLAUDE_PLUGIN_ROOT in an in-VM bash context — a bare $CLAUDE_PLUGIN_ROOT is not replaced "
+            "and is empty in the VM shell at host-loop (WARN plugin-root-in-vm-bash); the braced form is "
+            "replaced at load with a HOST path that the host-loop bash tool rewrites to the plugin's VM mount "
+            "when it stands as its own word (INFO plugin-root-braced-in-vm-bash), so a value forwarded through "
+            "bash to a host-side file tool arrives as a VM path (WARN plugin-root-forwarded-from-vm-bash, for "
+            "the whole root as the value of an option named root/dir/path/plugin/base, not inside an open quoted "
+            "string (such as an echo'd sentence) and not for `claude` itself). The braced form glued to other "
+            "text (${CLAUDE_PLUGIN_ROOT}-v2, x${CLAUDE_PLUGIN_ROOT}) is not rewritten, and in a standalone skill "
+            "(no plugin.json above it) nothing replaces it, so both are the WARN plugin-root-in-vm-bash too. A fully commented-out line is skipped. Suppress a reviewed site with a "
+            "marker (below);\n"
             "  (b) a hook command that exports an env var or writes into /tmp for the in-VM agent — a "
             "host-side hook write is not VM-visible (works in the CLI, silently no-ops in Cowork).\n\n"
             "HONEST LIMITS (v1 is deliberately narrow to bound false positives): an in-VM bash context is "
@@ -4090,7 +4469,7 @@ def main(argv=None):
     sp.add_argument("--web-fetch", dest="web_fetch", action="append", metavar="DOMAIN", help="web_fetch approval rule (repeatable)")
     sp.add_argument("--file", action="append", metavar="PATH", help="file_exists assertion (repeatable)")
     sp.add_argument("--artifact", action="append", metavar="PATH", help="user_visible_artifact assertion (repeatable)")
-    sp.add_argument("--no-delete", action="store_true", help="add no_delete_in_outputs: true")
+    sp.add_argument("--no-delete", action="store_true", help="add no_delete_in_outputs: true (checks outputs deletes on every baseline; from Desktop 2.16120.0 Cowork itself allows them)")
     sp.add_argument("--egress-allowed", dest="egress_allowed", action="append", metavar="HOST", help="egress_allowed assertion (repeatable)")
     sp.add_argument("--egress-denied", dest="egress_denied", action="append", metavar="HOST", help="egress_denied assertion (repeatable)")
     sp.add_argument("--out", help="write to this file (default: stdout)")

@@ -727,7 +727,8 @@ export async function* ttyTurns(rl: readline.Interface, turnPrompt: { open: bool
 }
 
 /** `chat --raw` — native interactive cowork mode (no -p / stream-json), stdio inherited.
- *  Egress sandbox NOT applied. `--fidelity` is ignored. */
+ *  Egress sandbox NOT applied. `--fidelity` is ignored. Not a fidelity tier: it builds its own minimal env and
+ *  skips `spawn.env`, so it also does not set the auto-memory switch (`autoMemoryEnv`) — memory stays on here. */
 function chatRaw(folder: string, model?: string) {
   assertSpawnAllowed("`chat --raw` (docker run of the agent)");
   const baseline = loadBaseline("latest");

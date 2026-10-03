@@ -30,7 +30,8 @@ import { buildFingerprint, skillCommit } from "./cassette.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { deriveOutcome } from "./outcome.js";
-import { loadBaseline } from "../baseline.js";
+import { loadBaseline, stampedOutputsMountMode } from "../baseline.js";
+import { outputsCheckArmed } from "./outputs-delete-tier.js";
 import {
   loadSession,
   resolveSessionPaths,
@@ -1530,12 +1531,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       }
     }
 
+    // The outputs mount mode this run's baseline records ("rwd" from Desktop 2.16120.0: deletes allowed; "rw"
+    // before). Persisted on the result so the verdict — a pure function of RunResult — can follow it. Nothing
+    // on `lane: remote`, where the Desktop mount fact is not evidence (absent reads as rw).
+    const outputsMountMode = stampedOutputsMountMode(baseline, scenario.lane);
     // Detect deletes across every DELETE-DENIED mount, not just outputs — production's denial is a
-    // property of the mount class, so a connected `rw` folder is in scope too.
+    // property of the mount class, so a connected `rw` folder is in scope too. `scanEvents` scans outputs on
+    // every baseline regardless: the authored no_delete_in_outputs / no_delete_in_mounts keys cover it.
     // Host paths the user supplied (the staged input files, captured on the first turn, and this turn's
     // prompt) are not a leak when the agent quotes them back verbatim.
     const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity);
-    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan), inputCorpus);
+    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus);
     // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
     // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
     const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
@@ -1608,7 +1614,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     const fsDiff = outputsFsDiff(readOutputsBaseline(outDir), outputsPostWalk, outputsPathHasher(workRoot));
     scan.outputsDeletes.push(...fsDiff.findings);
     scan.outputsDeleteBasis.push(...fsDiff.findings.map(() => "fs-diff" as const));
-    if (fsDiff.status === "unavailable")
+    // Only when the outputs check is armed: on an rwd run nothing authored reads the diff, so "a delete would go
+    // undetected" would be noise about an operation production allows.
+    if (fsDiff.status === "unavailable" && outputsCheckArmed(outputsMountMode, scenario.assert))
       warn(
         `::warning:: [scan] the outputs filesystem diff could not verify this turn (${fsDiff.reason}) — ` +
           `a delete made without a bash command would go undetected\n`,
@@ -1624,6 +1632,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
+        outputsMountMode,
         turn,
         // Without this the salvage lane reported `modelSource: "unresolved"` on a run that WAS pinned —
         // a positive false statement, and one `CompleteRunResult` cannot catch (it guards the result's
@@ -2222,6 +2231,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           },
       // The outputs filesystem diff — a sibling of `scan`, so a proven delete survives a missing events.jsonl.
       fsDiff,
+      outputsMountMode,
       effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
       fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
       l0HostConfigContamination: l0HostConfigContamination || undefined, // failing fidelity signal for protocol+plugins
@@ -3009,6 +3019,8 @@ export function buildPartialResult(args: {
   unanswered: { message: string; hint?: string };
   /** The turn's outputs filesystem diff, already computed when the salvage branch runs. */
   fsDiff?: OutputsFsDiff;
+  /** The baseline's recorded outputs mode (see `stampedOutputsMountMode`); `args.baseline` is only a name. */
+  outputsMountMode?: "rw" | "rwd";
   /** The model the scenario/session pinned, if any — threaded in so a salvaged run reports the same model
    *  provenance a complete one does. Undefined means nothing pinned it (modelSource "unresolved"). */
   pinnedModel?: string;
@@ -3200,6 +3212,7 @@ export function buildPartialResult(args: {
     scan: undefined,
     // Computed before the salvage branch; a filesystem-proven delete must survive into the partial result.
     fsDiff: args.fsDiff,
+    outputsMountMode: args.outputsMountMode,
     fidelityWarnings: undefined,
     l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
@@ -3299,10 +3312,12 @@ export function hostPathLeaked(text: string): boolean {
 
 export { hostPathTokens };
 
-// Operations that UNLINK a name. Scoped to match the real product's enforcement, which was measured
-// directly against the outputs mount with raw syscalls (not shell commands, which mask the syscall
-// behind fallbacks): `unlink` and `rmdir` fail EPERM; every other operation succeeds, including
-// content destruction and renames. So the token set here is deliberately NARROW.
+// Operations that UNLINK a name. Scoped to match the real product's enforcement on a delete-denied (`rw`) mount,
+// which was measured on 2026-08-04 (before Desktop 2.16120.0, while outputs was still `rw`) directly against the
+// outputs mount with raw syscalls (not shell commands, which mask the syscall behind fallbacks): `unlink` and
+// `rmdir` failed EPERM; every other operation succeeded, including content destruction and renames. A connected
+// folder is still `rw`; outputs is `rwd` from 2.16120.0 (see `outputsCheckArmed`). So the token set here is
+// deliberately NARROW.
 //
 // Deliberately NOT delete tokens, because the product permits them:
 //   - `truncate -s 0 f` / `open(f,"w")` / a statement-leading `> f` — these EMPTY a file without
@@ -3347,9 +3362,10 @@ const DELETE_TOKEN = {
  *  three matchers below are built per mount NAME rather than hardcoding the literal `outputs`.
  *
  *  The mount name is regex-escaped: names come from user-connected folder basenames and can contain `.`,
- *  `+`, `(` and friends. The right boundary `(?![\w.])` is kept exactly as-is and is correct for dotted
+ *  `+`, `(` and friends. The right boundary `(?![\w.-])` is correct for dotted
  *  names in BOTH directions: for a mount `v1.2`, `v1.2/x` matches (next char `/`) while `v1.2.3` does not
- *  (next char `.`, a different path); for a mount `data`, `data.json` correctly does not match. */
+ *  (next char `.`, a different path); for a mount `data`, `data.json` correctly does not match. `-` is excluded too, so a
+ *  sibling folder `outputs-archive` is not read as `outputs` (a folder basename can carry a hyphen). */
 type MountMatchers = { touches: RegExp; under: RegExp; cdInto: RegExp };
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const MOUNT_MATCHERS = new Map<string, MountMatchers>();
@@ -3359,19 +3375,20 @@ function mountMatchers(name: string): MountMatchers {
   const n = escapeRe(name);
   const m: MountMatchers = {
     // MENTIONED as a path segment — broad, used for the conservative rm co-occurrence + ambiguous-mv
-    // branch. The negative lookahead avoids `outputs.txt` / `myoutputs`.
-    touches: new RegExp(`(^|[\\s"'\`(/])(mnt/)?${n}(?![\\w.])`),
+    // branch. The negative lookahead avoids `outputs.txt` / `myoutputs` / a sibling folder `outputs-archive`.
+    touches: new RegExp(`(^|[\\s"'\`(/])(mnt/)?${n}(?![\\w.-])`),
     // A real path COMPONENT (preceded by start/`/`, followed by `/` or end) — used for mv direction so a
     // dst like `/tmp/outputs-backup` is NOT mistaken for being inside outputs/.
     under: new RegExp(`(^|/)(mnt/)?${n}(/|$)`),
-    cdInto: new RegExp(`\\b(cd|pushd)\\s+["']?(mnt/)?${n}(?![\\w.])`),
+    cdInto: new RegExp(`\\b(cd|pushd)\\s+["']?(mnt/)?${n}(?![\\w.-])`),
   };
   MOUNT_MATCHERS.set(name, m);
   return m;
 }
 
-/** Default safe-staging prefixes, always active. Real Cowork denies an outputs-delete STRUCTURALLY at the
- *  resolved target's mount — outputs is a FUSE mount that fails `unlink`/`rmdir` with EPERM — a delete whose target
+/** Default safe-staging prefixes, always active. Where Cowork denies an outputs delete (an `rw` outputs mount:
+ *  Desktop before 2.16120.0, or a Dispatch bridge session), it does so STRUCTURALLY at the resolved target's
+ *  mount — a FUSE mount that fails `unlink`/`rmdir` with EPERM — so a delete whose target
  *  provably lands under `/tmp` (or the literal, unexpanded `$TMPDIR`/`${TMPDIR}` idiom) is genuinely never
  *  an outputs delete in production, so treating it as scratch here is MORE faithful, not less safe. (Prior
  *  rationale for leaving this opt-in — "`/tmp` is NOT assumed scratch" — predated that binary finding.) */
@@ -3709,8 +3726,8 @@ function mvDeletesOutputs(stmt: string, mm: MountMatchers): boolean {
  * exported so the rule is directly unit-testable. RESIDUAL GAP: a delete via a script file / renamed binary
  * / non-bash tool still evades this post-hoc scan — real enforcement is the deferred FUSE/MCP sub-project.
  * Also out of scope: the harness has no counterpart to production's `allow_cowork_file_delete` escalation
- * tool (a sub-agent that hits a real outputs-delete EPERM should call that, not silently fail) — this scan
- * only feeds the `no_delete_in_outputs` assertion, it never blocks execution.
+ * tool (a sub-agent that hits a real delete EPERM should call that, not silently fail) — this scan only feeds
+ * the outputs-delete verdict and assertions, it never blocks execution.
  */
 /** The SECOND outputs-delete detector: a pre/post path diff, independent of the command scanner.
  *  Any path the pre-run manifest recorded under `outputs/` that is absent from the post-run walk is
@@ -4194,8 +4211,8 @@ export function inputProvenanceCorpus(
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
 export function scanEvents(
   file: string,
-  /** Writable (`rw`) user-visible mount names to attribute deletes to. Production denies unlink/rmdir on
-   *  EVERY such mount, not just `outputs`. Defaults to outputs-only so existing callers are unchanged. */
+  /** Delete-denied (`rw`) user-visible mount names to attribute deletes to. Production denies unlink/rmdir on
+   *  EVERY such mount. `outputs` is scanned in addition whether or not it is listed (see below). */
   rwMounts: string[] = ["outputs"],
   /** Host-path tokens the USER supplied (captured from the staged inputs before the agent ran). A matched
    *  token found here verbatim is not a leak; omitted ⇒ every match leaks, as before. */
@@ -4222,6 +4239,10 @@ export function scanEvents(
   // line could have been silently dropped. >0 makes the scan untrustworthy, treated as evidence-unavailable.
   malformedLines: number;
 } {
+  // `outputs` is ALWAYS scanned, and its hits land in both `outputsDeletes` and `mountDeletes`, even on a
+  // baseline that mounts it delete-allowed ("rwd", Desktop 2.16120.0+) and so leaves it out of `rwMounts`:
+  // the authored `no_delete_in_outputs` and `no_delete_in_mounts` keys cover outputs on every baseline, and
+  // they read exactly this evidence. Only the default verdict follows the recorded mode (verdict.ts).
   const mounts = rwMounts.includes("outputs") ? rwMounts : ["outputs", ...rwMounts];
   const out = {
     outputsDeletes: [] as string[],
@@ -4249,7 +4270,7 @@ export function scanEvents(
     out.sidecarMissing = true;
     return out;
   }
-  const selfHealRe = /\/sessions\/[^\s"]*\/mnt\/\.local-plugins/;
+  const selfHealRe = /\/sessions\/[^\s"]*\/mnt\/\.(?:local|remote)-plugins/;
   // A text leaks iff it carries a host-path token that did NOT come from the user's inputs.
   const exempted = new Set<string>();
   const leaks = (text: string): boolean => {
