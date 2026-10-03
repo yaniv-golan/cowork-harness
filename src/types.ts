@@ -1401,9 +1401,9 @@ export const ScenarioObject = z.strictObject({
   //   fidelity  — the isolation tier the harness runs in (protocol/container/microvm/hostloop)
   //   execution — WHERE the run happens (local; cloud-describe reserved)
   //   lane      — WHICH Cowork product lane's contract the run is held to
-  // Cowork offers the choice per session ("Run this task: In the cloud / On your computer"), with cloud
-  // the default for new sessions, and the two lanes disagree about what "delivered" means. `local` keeps
-  // every existing scenario's meaning unchanged.
+  // Cowork has no per-session lane picker on 2.19675.0 and no setting reliably decides the lane
+  // (docs/fidelity-gaps.md, "Which lane a session actually ran on"); the two lanes disagree about what
+  // "delivered" means. `local` keeps every existing scenario's meaning unchanged.
   lane: z
     .enum(["local", "remote"])
     .default("local")
@@ -1825,8 +1825,8 @@ export interface RunResult {
   scratchpadEvidenceComplete?: boolean;
   /** The scenario's declared Cowork product lane — which delivery contract this run was held to. Distinct
    *  from `execution.location` (where the run PHYSICALLY happened, always local in this harness): the lane
-   *  is DECLARED intent, because Cowork's lane is a per-session human choice that leaves no trace in a
-   *  run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
+   *  is DECLARED intent, because no setting reliably decides Cowork's lane and the lane leaves no trace
+   *  in a run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
   lane?: "local" | "remote";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario

@@ -56,8 +56,12 @@ Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejec
 `/sessions/<id>`, folders at `/sessions/<id>/mnt/<name>`, delivery via `present_files`. Cowork's
 **remote** lane runs server-side in a cloud container with a different filesystem (`$HOME/mnt/`),
 different delivery (`/mnt/user-data/outputs/` + `SendUserFile`) and a server-authored prompt; no tier
-reproduces it and none can — that container is not something a local tool can stand up. Which lane a
-real session gets is a Cowork setting ("Only on this computer"), observed **off** on a current install.
+reproduces it and none can — that container is not something a local tool can stand up. No setting
+reliably decides which lane a real session gets: sessions ran in the cloud with "Only on this computer"
+**on** (observed 2026-10-02), and for Pro and Max plans Anthropic
+[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new
+tasks run in the cloud from 2026-10-06. Check the session's own lane
+([how](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)).
 So: behaviour conclusions (triggering, tool sequencing, gate handling) travel between lanes; anything
 asserting a **path, mount or delivery mechanism** is a claim about the local lane only. Declare
 `lane: remote` when the scenario is about that lane — the affected assertions then refuse to grade
