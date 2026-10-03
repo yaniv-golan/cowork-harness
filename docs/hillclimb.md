@@ -508,8 +508,9 @@ that the loop and the lite report builder read, with these differences:
 
 - **Scenarios are single-prompt.** Every case is one prompt (harness-wide); a trace is one conversation.
 - **Anthropic's built-in system prompt is withheld.** A trace's system turn carries the system text the harness
-  appended (its model of Cowork's), as sent. A sub-agent's system turn carries what that sub-agent received, or says none was
-  received (a forked skill, or the `protocol` tier). Anthropic's own built-in prompts are never written.
+  appended (its model of Cowork's), as sent. A sub-agent's system turn carries what that sub-agent received, read from its own
+  transcript (a forked skill included), or says none was received when its transcript shows none (the `protocol`
+  tier sends none). Anthropic's own built-in prompts are never written.
 - **The full report viewer is untested.** These flows are checked against a pinned revision of the lite report
   builder (it reads a fixture flow with no warning).
   The full viewer is not in every install and has not been run against these flows; it may expect a single

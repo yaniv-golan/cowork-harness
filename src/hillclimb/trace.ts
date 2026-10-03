@@ -264,7 +264,8 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
 
   const clean = input.redact;
   // What the child received, said only from its own snapshot: the session's append is never stamped onto a
-  // child whose snapshot does not end with exactly it (a fork, the protocol tier).
+  // child whose snapshot does not end with exactly it (e.g. the protocol tier, which sends none). A forked skill
+  // whose snapshot does end with it is shown as received.
   const childSystem = (head: string, c: ChildTranscript): string => {
     const s = c.promptSnapshot;
     if (s === undefined) return `${head} — not recorded in its transcript]`;
