@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { RunResult } from "../types.js";
 import { requireTurns, turnArtifactPath } from "./turn-layout.js";
-import { relocatedRunDirRefusal } from "./run-dir-identity.js";
+import { decideRunDir, noteRelocation } from "./run-dir-identity.js";
 import { warn } from "../io.js";
 
 /** A compact, depth-1 preview of a JSON artifact: scalars kept inline, arrays shown as a count, nested
@@ -33,8 +33,8 @@ interface InspectDigest {
   durationMs?: number;
   cost?: RunResult["cost"];
   workDirAvailable: boolean;
-  /** Set when the run dir was copied or moved since its run: the dir its result.json still names (previews skipped). */
-  workDirElsewhere?: string;
+  /** Set when the evidence paths result.json records cannot be read as this run's (previews skipped): why. */
+  previewsSkipped?: string;
   artifactsRecorded: boolean; // false = result.artifacts was undefined (replay, or a run whose root vanished) — evidence UNAVAILABLE, distinct from an empty []
   artifacts: { path: string; bytes: number; preview?: Record<string, unknown> | string }[];
 }
@@ -65,12 +65,14 @@ function digestFor(runDir: string): InspectDigest {
   } catch (e) {
     throw new Error("failed to parse result.json at " + resultPath + ": " + (e as Error).message);
   }
-  // A copied or moved run dir's result.json still names the ORIGINAL's work dir: previewing through it would show
-  // another dir's bytes under this run's name. inspect is a view of the run's own record (header, manifest), so it
-  // warns and previews nothing rather than refusing (run-dir-identity.ts).
-  const relocated = relocatedRunDirRefusal(runDir, result, "inspect");
-  if (relocated) warn(`::warning:: ${relocated.replace(/ \(can't verify ⇒ not green\)$/, "")} — artifact previews skipped.\n`);
-  const workDir = relocated ? "" : (result.workDir ?? "");
+  // Where the run's evidence is read from (run-dir-identity.ts). inspect is a view of the run's own record (header,
+  // manifest), so a dir the graders refuse — a copy beside its original, an evidence path outside the run dir — is
+  // still shown, with a warning and no previews: they would read another dir's bytes under this run's name.
+  const placed = decideRunDir(runDir, result, "inspect");
+  if (placed.kind === "refuse")
+    warn(`::warning:: ${placed.message.replace(/ \(can't verify ⇒ not green\)$/, "")} — artifact previews skipped.\n`);
+  else noteRelocation(placed);
+  const workDir = placed.kind === "refuse" ? "" : (placed.paths.workDir ?? "");
   const workDirAvailable = !!workDir && existsSync(workDir);
   // artifacts === undefined means evidence-unavailable (replay, or a run whose root was missing at
   // collection), NOT a genuine zero-artifact run. Distinguish it from [] so `inspect` can't present
@@ -101,7 +103,11 @@ function digestFor(runDir: string): InspectDigest {
     durationMs: result.durationMs,
     ...(result.cost ? { cost: result.cost } : {}),
     workDirAvailable,
-    ...(relocated ? { workDirElsewhere: result.outDir } : {}),
+    ...(placed.kind === "refuse"
+      ? { previewsSkipped: placed.message }
+      : placed.kind === "relocated" && placed.paths.workDir === undefined && result.workDir
+        ? { previewsSkipped: placed.note }
+        : {}),
     artifactsRecorded,
     artifacts,
   };
@@ -141,8 +147,8 @@ export function buildInspectView(runDir: string, opts: { json?: boolean } = {}):
       lines.push(`    ${a.preview}`);
     }
   }
-  if (d.workDirElsewhere !== undefined && d.artifacts.some((a) => a.path.endsWith(".json"))) {
-    lines.push(`  (previews skipped — this run dir was copied or moved from ${d.workDirElsewhere}, whose work dir result.json names)`);
+  if (d.previewsSkipped !== undefined && d.artifacts.some((a) => a.path.endsWith(".json"))) {
+    lines.push(`  (previews skipped — the work dir result.json records is not readable as this run dir's own; see the note above)`);
   } else if (!d.workDirAvailable && d.artifacts.some((a) => a.path.endsWith(".json"))) {
     lines.push(`  (work dir torn down — artifact contents can't be previewed for container/microvm runs)`);
   }

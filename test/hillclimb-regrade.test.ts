@@ -3075,3 +3075,44 @@ describe.runIf(POSIX)("hillclimb regrade --case: per-case checks cover the selec
     expect(dry.stderr).toMatch(/harness gate: approved \(sha256 /);
   }, 300_000);
 });
+
+describe.runIf(POSIX)("hillclimb over a runs root that is not where its runs were written", () => {
+  const files = (dir: string) => (existsSync(dir) ? readdirSync(dir) : []);
+  const regradeDirs = (root: string) => Object.keys(tree(root)).filter((k) => /\/regrade\/$/.test(k));
+
+  it("a runs root copied beside its original: every row listed as refused (exit 1), nothing written; freeze-ref refuses (exit 1)", () => {
+    const { cli, flow } = buildFlow();
+    const copyRoot = join(f.root, "copied-runs");
+    cpSync(f.runsDir, copyRoot, { recursive: true, verbatimSymlinks: true });
+    const before = { baseline: readFileSync(join(flow, "baseline", "results.jsonl")), v1: readFileSync(join(flow, "v1", "results.jsonl")) };
+    const originalTree = tree(f.runsDir);
+    const r = cli("regrade", "evals", "--flow", "flow", "--run-dir", copyRoot);
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/was copied from .*, which is still there/);
+    // The flow's text redacts host paths outside the home dir; the remedy is there, its path redacted.
+    expect(r.stderr).toMatch(/point --run-dir at the runs root it was written under \(/);
+    expect(readFileSync(join(flow, "baseline", "results.jsonl"))).toEqual(before.baseline);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"))).toEqual(before.v1);
+    for (const v of ["baseline", "v1"]) expect(files(join(flow, v)).filter((n) => /^regrade-.*\.bak\.jsonl$/.test(n))).toEqual([]);
+    expect(regradeDirs(copyRoot)).toEqual([]);
+    expect(tree(f.runsDir)).toEqual(originalTree);
+
+    const fr = cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1", "--run-dir", copyRoot);
+    expect(fr.status, fr.stderr).toBe(1);
+    expect(fr.stdout + fr.stderr).toMatch(/was copied from/);
+    expect(files(join(flow, "v1", "ref"))).toEqual([]);
+  }, 120_000);
+
+  it("a runs root moved away (the original gone): rows are re-graded from where it is, not refused", () => {
+    const { cli, flow } = buildFlow();
+    const movedRoot = join(f.root, "moved-runs");
+    renameSync(f.runsDir, movedRoot);
+    const fr = cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1", "--run-dir", movedRoot);
+    expect(fr.status, fr.stderr).toBe(0);
+    expect(files(join(flow, "v1", "ref")).length).toBeGreaterThan(0);
+    const r = cli("regrade", "evals", "--flow", "flow", "--run-dir", movedRoot);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).not.toMatch(/copied from|refused/);
+    expect(r.stderr).toMatch(/no longer there\); reading its evidence from /);
+  }, 120_000);
+});
