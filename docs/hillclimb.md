@@ -178,7 +178,11 @@ at least these, and read what remains before the first commit:
 <flow>/*/regrade-*.bak.jsonl
 <flow>/*/.lock
 <flow>/*/ref/
+<flow>/*.log
 ```
+
+The runner's terminal output names each kept run dir by its absolute host path, so keep a captured log (say
+`hillclimb run … > F/v1.log 2>&1`) out of the flow dir, or out of the commit.
 
 Three things live outside the flow dir, and the loop needs all three for the whole climb:
 

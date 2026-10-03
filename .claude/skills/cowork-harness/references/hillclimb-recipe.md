@@ -158,7 +158,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Apply the change** to the plugin, then `git add` any new file: each variant runs a snapshot of the plugin's
   git-tracked files, taken on its first run. A `--case` canary is that first run, so a fix made after it goes to
   the next variant.
-- **Run** the round's command in the background with a timeout that covers it. When it exits, verify N×R rows in
+- **Run** the round's command in the background with a timeout that covers it. Write its output outside `F`
+  (it names host paths), or never commit it. When it exits, verify N×R rows in
   `F/vN/results.jsonl` and that `F/vN/summary.json` exists; if rows are short, re-launch the same command (resume
   is by (case, rep) slot). Slots with only an `errors.jsonl` row re-run on every pass; a permanent fault re-runs
   forever, so read `failure_class` before re-launching again.
@@ -198,7 +199,7 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   rows, labelled directional without a split. Recommend confirming the winner with a paired `eval` of the two
   plugin versions before merging.
 - Before the user commits `F`, list what it holds: `inputs/` copies of uploads, `out/` copies of outputs, and
-  rows with judge rationales. Recommend ignoring `traces/`, `inputs/`, `*/out/`, `*/ref/`, `regrade-*.bak.jsonl` and `.lock`.
+  rows with judge rationales. Recommend ignoring `traces/`, `inputs/`, `*/out/`, `*/ref/`, `regrade-*.bak.jsonl`, `.lock` and any `*.log` of runner output (it names host paths).
 - The kept runs (`meta.run_dir`) and the snapshots are outside `F`. A plain `prune` keeps hillclimb runs; tell the
   user not to run `prune --include-hillclimb` until the climb is finished, or `regrade` and `freeze-ref` lose their
   evidence.
