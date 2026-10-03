@@ -63,9 +63,9 @@ export interface HillclimbCliDeps<F extends JobFlags> {
 }
 
 /** The scenarios `check` compares the rows' `meta.assert_sig` with, and the target its remedies name: the target passed,
- *  else the scenario files the flow's `_state.json` `harness_paths` records (cwd-relative, as state-template writes
- *  them; a file there is a case's when its stem's id is a row's `prompt_id`, the session files and uploads beside them
- *  matching none). The rows themselves record only the scenario's name, never its file. A recorded file that is gone
+ *  else the scenario files the flow's `_state.json` records: `harness_scenarios` (written by each harness approval),
+ *  else `harness_paths` (as state-template writes them). Both are cwd-relative; a file there is a case's when its
+ *  stem's id is a row's `prompt_id` (the session files and uploads in `harness_paths` match none). The rows themselves record only the scenario's name, never its file. A recorded file that is gone
  *  or does not parse is named in a note and its case left uncompared; with nothing recorded, one note says to pass the
  *  target. Only rows that record an assert_sig are compared. */
 function assertSigScenarios(
@@ -78,19 +78,24 @@ function assertSigScenarios(
   const ids = [...new Set(rowAssertSigs(snap).map((r) => r.promptId))];
   if (!ids.length) return { cases: [], notes: [] };
   const pass = `pass the target (\`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\`)`;
-  let recorded: string[] = [];
+  // The scenario files the last approval hashed (`harness_scenarios`, the runner's own record), else the
+  // measurement files state-template listed (`harness_paths`).
+  let yaml: string[] = [];
+  let key = "harness_paths";
   try {
-    const st = JSON.parse(snap.state ?? "{}") as { harness_paths?: unknown };
-    if (Array.isArray(st?.harness_paths)) recorded = st.harness_paths.filter((p): p is string => typeof p === "string");
+    const st = JSON.parse(snap.state ?? "{}") as Record<string, unknown>;
+    const yamlOf = (v: unknown) => (Array.isArray(v) ? v.filter((p): p is string => typeof p === "string" && /\.ya?ml$/i.test(p)) : []);
+    yaml = yamlOf(st?.harness_scenarios);
+    if (yaml.length) key = "harness_scenarios";
+    else yaml = yamlOf(st?.harness_paths);
   } catch {
     // An unreadable _state.json is check's finding: nothing is recorded.
   }
-  const yaml = recorded.filter((p) => /\.ya?ml$/i.test(p));
   if (!yaml.length)
     return {
       cases: [],
       notes: [
-        `note: _state.json records no scenario files (harness_paths), so the rows' assertion sets were not compared with the scenarios' current ones — pass the target: \`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\``,
+        `note: _state.json records no scenario files (harness_scenarios, harness_paths), so the rows' assertion sets were not compared with the scenarios' current ones — pass the target: \`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\``,
       ],
     };
   const cases: Array<{ id: string; scenario: Scenario }> = [];
@@ -100,11 +105,11 @@ function assertSigScenarios(
     const files = yaml.filter((p) => pathSafeId(basename(p).replace(/\.ya?ml$/i, "")) === id);
     const why =
       files.length === 0
-        ? `_state.json harness_paths records no scenario file for case ${id}`
+        ? `_state.json ${key} records no scenario file for case ${id}`
         : files.length > 1
-          ? `_state.json harness_paths records ${files.length} scenario files for case ${id} (${files.join(", ")})`
+          ? `_state.json ${key} records ${files.length} scenario files for case ${id} (${files.join(", ")})`
           : !existsSync(resolve(cwd, files[0]!))
-            ? `the flow's recorded scenario ${files[0]} (_state.json harness_paths) no longer exists`
+            ? `the flow's recorded scenario ${files[0]} (_state.json ${key}) no longer exists`
             : undefined;
     if (why !== undefined) {
       notes.push(`note: ${why} — ${pass} to compare case ${id}'s rows with its current assertion set`);
@@ -115,7 +120,7 @@ function assertSigScenarios(
       used.push(files[0]!);
     } catch (e) {
       notes.push(
-        `note: the flow's recorded scenario ${files[0]} (_state.json harness_paths) cannot be read (${(e as Error).message}) — ${pass} to compare case ${id}'s rows with its current assertion set`,
+        `note: the flow's recorded scenario ${files[0]} (_state.json ${key}) cannot be read (${(e as Error).message}) — ${pass} to compare case ${id}'s rows with its current assertion set`,
       );
     }
   }

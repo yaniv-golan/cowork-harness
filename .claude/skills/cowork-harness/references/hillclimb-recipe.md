@@ -32,7 +32,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   scored agent failure from the scenario's own shorter `timeout_ms` is the skill's limit.
 - **Workspace fixture, fresh conversation:** a fixture case resumes from saved outputs without the earlier
   conversation; don't credit or blame the skill for context it never had.
-- **`harness_skill` in `_state.json`:** written beside `harness_sha` by the user's `--approve-harness`; leave both.
+- **`harness_skill` and `harness_scenarios` in `_state.json`:** written beside `harness_sha` by the user's
+  `--approve-harness`; leave all three.
 - **`tags` = the scenario's directory name:** a flat directory is one stratum for a stratified split.
 - **No refusal class:** a refusal is graded like any answer; if refusals matter, ask the user for an assertion or
   metric that counts them.

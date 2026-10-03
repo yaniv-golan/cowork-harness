@@ -1,16 +1,8 @@
 {
-  "train_ids": [
-    "extract-table",
-    "long-answer"
-  ],
-  "test_ids": [
-    "summarize-report"
-  ],
-  "harness_paths": [
-    "scenarios/extract-table.yaml",
-    "scenarios/summarize-report.yaml",
-    "scenarios/long-answer.yaml"
-  ],
+  "train_ids": ["extract-table", "long-answer"],
+  "test_ids": ["summarize-report"],
+  "harness_paths": ["scenarios/extract-table.yaml", "scenarios/summarize-report.yaml", "scenarios/long-answer.yaml"],
+  "harness_scenarios": ["scenarios/extract-table.yaml", "scenarios/summarize-report.yaml", "scenarios/long-answer.yaml"],
   "metrics": [
     {
       "id": "pass",

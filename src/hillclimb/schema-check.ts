@@ -343,6 +343,12 @@ function readDeclared(c: Collector, text: string | undefined): Declared {
   // The runner records the --skill an approval hashed beside harness_sha; a gate message names it from here.
   if (st.harness_skill !== undefined && typeof st.harness_skill !== "string")
     c.error("state.harness_skill", F, "`harness_skill` must be a string");
+  // ... and the scenario files it hashed, which `check` compares the rows' assertion sets with.
+  if (
+    st.harness_scenarios !== undefined &&
+    !(Array.isArray(st.harness_scenarios) && st.harness_scenarios.every((p) => typeof p === "string"))
+  )
+    c.error("state.harness_scenarios", F, "`harness_scenarios` must be a list of paths");
   return d;
 }
 

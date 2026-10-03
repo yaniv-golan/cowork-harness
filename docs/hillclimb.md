@@ -269,8 +269,9 @@ that the loop and the lite report builder read, with these differences:
   [`workspace_fixture`](./scenario.md#starting-from-a-saved-workspace-workspace_fixture) resumes from saved
   outputs the way re-invoking the skill in the same Cowork session does, except that in Cowork the earlier
   conversation is still in context and here it is not.
-- **`_state.json` gains `harness_skill`** beside `harness_sha` when you pass `--skill`; both are written only by
-  `--approve-harness`.
+- **`_state.json` gains `harness_skill`** beside `harness_sha` when you pass `--skill`, and `harness_scenarios` (the
+  cwd-relative scenario files the sha covers, which `hillclimb check` compares the rows' assertion sets with); all
+  three are written only by `--approve-harness`, and neither of the two beside the sha is hashed.
 - **`tags`** on a row is the scenario file's directory name. The loop stratifies a split by its first tag, so
   scenarios in one flat directory form one stratum.
 - **No refusal class.** A model refusal is graded like any other answer; to count refusals, add an assertion
@@ -310,8 +311,9 @@ redacted than the graded one (that row stays listed until the run's scrub settin
 doc-drift`). Each row records `meta.assert_sig`, the assertions it was graded under: `hillclimb run` warns when a
 resumed pass would mix them, and `hillclimb check` flags a case whose rows carry more than one, and a case whose
 rows were graded under another assertion set than its scenario's now — compared with the scenario target when one
-is passed (`hillclimb check evals/ --flow <dir>`), else with the scenario files `_state.json` `harness_paths`
-records (state-template writes them; a note says when nothing is recorded or a recorded file is gone).
+is passed (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last approval recorded
+(`_state.json` `harness_scenarios`), else those `harness_paths` lists (a note says when nothing is recorded or a
+recorded file is gone).
 
 ## Guardrails the harness adds
 
