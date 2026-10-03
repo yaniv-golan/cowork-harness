@@ -11,11 +11,12 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { CLI, POSIX, credentialLeaks, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
+import { CLI, POSIX, credentialLeaks, makeStubFixture, stubSessionTranscript, type StubFixture } from "./helpers/stub-agent.js";
 import { checkFlowDir } from "../src/hillclimb/schema-check.js";
 
 const BUILTIN = ["BUILTIN-PART-0", "BUILTIN-PART-1", "BUILTIN-PART-2", "BUILTIN-PART-3"];
 const MODEL = "claude-sonnet-5";
+const argvOf = (file: string) => readFileSync(file, "utf8").split("\0");
 const line = (o: unknown) => `printf '%s\\n' '${JSON.stringify(o)}'`;
 
 const STUB = [
@@ -64,6 +65,7 @@ const STUB = [
     stop_reason: "end_turn",
     modelUsage: { [MODEL]: { inputTokens: 10, outputTokens: 5, costUSD: 0.01 } },
   }),
+  stubSessionTranscript(MODEL),
   "cat >/dev/null",
 ].join("\n");
 
@@ -106,6 +108,9 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
     const row = JSON.parse(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8").trim()) as Record<string, unknown>;
     expect(row).toMatchObject({ prompt_id: "alpha", rep: 0, model: MODEL, grade: { pass: 1 } });
     expect((row.meta as Record<string, unknown>).subagent_turns).toBe("complete");
+    // The effort the agent was launched with is the one its own transcript says it sent: the real argv, the real reader.
+    expect(argvOf(argvFile)).toContain("--effort");
+    expect(row.meta).toMatchObject({ effort: "medium", effort_sent: "medium", model_requested: MODEL });
 
     const turns = JSON.parse(readFileSync(join(flow, "baseline", "traces", "alpha_rep0.json"), "utf8")) as Array<{
       role: string;
@@ -146,6 +151,13 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
 
     expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
     expect(cli("check", "--flow", "flow").status).toBe(0);
+    // A non-default --effort reaches the agent's argv, and its own transcript says it was sent.
+    const hi = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--effort", "high", "--concurrency", "1");
+    expect(hi.status, hi.stderr).toBe(0);
+    const hiArgv = argvOf(argvFile);
+    expect(hiArgv[hiArgv.indexOf("--effort") + 1]).toBe("high");
+    const hiRow = JSON.parse(readFileSync(join(flow, "v1", "results.jsonl"), "utf8").trim()) as { meta: Record<string, unknown> };
+    expect(hiRow.meta).toMatchObject({ effort: "high", effort_sent: "high" });
   }, 90_000);
 
   it("a scenario metric runs from the file the agent wrote to the row: value, _present, the unavailable reason, the sigs", () => {

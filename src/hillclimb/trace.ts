@@ -13,7 +13,7 @@
 // here is scrubbed: the flow writer scrubs every byte it writes.
 
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, type Dirent } from "node:fs";
 import { FsRefusal, NoFollowRoot } from "./fs.js";
 import { join } from "node:path";
 
@@ -351,42 +351,103 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
   return { turns, sidecars, subagentTurns };
 }
 
-/** The sub-agent transcripts a KEPT run dir holds, found by the same per-tier rule the live capture uses
- *  (`resolveSubagentConfigRoot`, src/run/execute.ts:307-323), mapped onto the kept copy:
- *  - hostloop, and protocol with a managed config dir → `<outDir>/claude-config`;
+/** Where an attempt's agent kept its config in a KEPT run dir. `configDir` is the session's pinned
+ *  `plugins.config_dir` (`pinnedConfigDirOf`), which hostloop and protocol run the agent with. */
+export interface KeptRun {
+  outDir: string;
+  fidelity: string;
+  workDir?: string;
+  configDir?: string;
+}
+
+/** The agent's config root in a KEPT run dir, by the same per-tier rule the live capture uses
+ *  (`resolveSubagentConfigRoot`, src/run/execute.ts), mapped onto the kept copy:
+ *  - hostloop, and protocol with a managed config dir → the session's pinned `plugins.config_dir` when it pins one,
+ *    else `<outDir>/claude-config` (the plan's `configDir`, `buildLaunchPlan`);
  *  - container → `<workDir>/.claude` (the bind-mounted session mnt, kept in place);
  *  - microvm → `<workDir>/.claude` (the snapshot of the VM session root, `snapshotMicroVmWorkspace`).
- *  Unmanaged protocol keeps none. Transcripts sit at `<root>/projects/<cwd>/<session>/subagents/`. */
-export function keptChildTranscripts(run: { outDir: string; fidelity: string; workDir?: string }): ChildTranscript[] {
-  const root =
-    run.fidelity === "hostloop" || run.fidelity === "protocol"
-      ? join(run.outDir, "claude-config")
-      : run.fidelity === "container" || run.fidelity === "microvm"
-        ? join(run.workDir ?? join(run.outDir, "work", "session", "mnt"), ".claude")
-        : undefined;
-  if (root === undefined) return [];
-  // The container/microvm root is in the agent-writable session mount: walk it without following anything.
-  let r: NoFollowRoot;
+ *  Unmanaged protocol keeps none. `shared` when the root is a pinned dir: it may hold other runs' sessions, so a
+ *  reader picks by the run's session id only. Opened without following a link. */
+function keptConfigRoot(run: KeptRun): { root: NoFollowRoot | undefined; path: string; shared: boolean } | undefined {
+  const hostTier = run.fidelity === "hostloop" || run.fidelity === "protocol";
+  const path = hostTier
+    ? (run.configDir ?? join(run.outDir, "claude-config"))
+    : run.fidelity === "container" || run.fidelity === "microvm"
+      ? join(run.workDir ?? join(run.outDir, "work", "session", "mnt"), ".claude")
+      : undefined;
+  if (path === undefined) return undefined;
+  const shared = hostTier && run.configDir !== undefined;
   try {
-    r = NoFollowRoot.existing(root);
+    return { root: NoFollowRoot.existing(path), path, shared };
+  } catch (e) {
+    if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT") return { root: undefined, path, shared };
+    throw e;
+  }
+}
+
+/** `<root>/projects/<cwd>` directories, no link followed. */
+function projectDirs(r: NoFollowRoot): string[] {
+  return entries(r, join(r.root, "projects"))
+    .filter((d) => d.isDirectory())
+    .map((d) => join(r.root, "projects", d.name));
+}
+function entries(r: NoFollowRoot, p: string): Dirent[] {
+  try {
+    return r.readdirNoFollow(p);
   } catch (e) {
     if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT") return [];
     throw e;
   }
-  const dirs = (p: string): string[] => {
-    try {
-      return r
-        .readdirNoFollow(p)
-        .filter((d) => d.isDirectory())
-        .map((d) => join(p, d.name));
-    } catch (e) {
-      if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT") return [];
-      throw e;
-    }
-  };
+}
+
+/** The sub-agent transcripts a KEPT run dir holds (`keptConfigRoot`), at `<root>/projects/<cwd>/<session>/subagents/`.
+ *  In a shared (pinned) config dir only the run's own session's, by `sessionId` (none without one). */
+export function keptChildTranscripts(run: KeptRun, sessionId?: string): ChildTranscript[] {
+  const k = keptConfigRoot(run);
+  const r = k?.root;
+  if (r === undefined) return [];
+  if (k!.shared && sessionId === undefined) return [];
+  const dirs = (p: string): string[] =>
+    entries(r, p)
+      .filter((d) => d.isDirectory())
+      .map((d) => join(p, d.name));
   const out: ChildTranscript[] = [];
-  for (const cwd of dirs(join(r.root, "projects")))
-    for (const session of dirs(cwd))
+  for (const cwd of projectDirs(r))
+    for (const session of dirs(cwd)) {
+      if (k!.shared && session !== join(cwd, sessionId!)) continue;
       if (dirs(session).includes(join(session, "subagents"))) out.push(...readChildTranscripts(join(session, "subagents")));
+    }
   return out;
+}
+
+/** The agent's own main session transcript in a KEPT run dir (`keptConfigRoot`): `<root>/projects/<cwd>/<session>.jsonl`,
+ *  the file named by `sessionId`, else — only in the run's own config dir, never a shared (pinned) one — the only
+ *  one there is. `lines` (non-empty) when found; `where` is the file read, or where it was looked for. A regular file
+ *  only: a planted link or FIFO is never read. */
+export function findMainTranscript(run: KeptRun, sessionId: string | undefined): { lines?: string[]; where: string } {
+  const k = keptConfigRoot(run);
+  const where = (root: string) => join(root, "projects", "*", sessionId !== undefined ? `${sessionId}.jsonl` : "<session>.jsonl");
+  if (k === undefined) return { where: run.outDir };
+  const r = k.root;
+  if (r === undefined || (k.shared && sessionId === undefined)) return { where: where(k.path) };
+  const files = projectDirs(r).flatMap((d) =>
+    entries(r, d)
+      .filter((f) => f.isFile() && f.name.endsWith(".jsonl"))
+      .map((f) => ({ name: f.name, path: join(d, f.name) })),
+  );
+  const pick = sessionId !== undefined ? files.filter((f) => f.name === `${sessionId}.jsonl`) : files;
+  if (pick.length !== 1) return { where: where(r.root) };
+  let text: string | null;
+  try {
+    text = r.readIfPresent(pick[0].path);
+  } catch (e) {
+    if (e instanceof FsRefusal || (e as NodeJS.ErrnoException)?.code === "ENOENT") return { where: pick[0].path };
+    throw e;
+  }
+  return text === null ? { where: pick[0].path } : { lines: text.split("\n").filter((l) => l.trim()), where: pick[0].path };
+}
+
+/** `findMainTranscript`'s lines, or undefined when none was found. */
+export function keptMainTranscript(run: KeptRun, sessionId: string | undefined): string[] | undefined {
+  return findMainTranscript(run, sessionId).lines;
 }

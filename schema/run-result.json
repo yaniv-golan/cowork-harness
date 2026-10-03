@@ -284,7 +284,12 @@
             "description": "request_id (UUID) of a question gate \u2014 pairs a decision to its event row by id."
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "The LLM decider's model on a by:'llm' decision (a question gate, or a permission it answered)."
+          },
+          "effort": {
+            "type": "string",
+            "description": "The LLM decider's effort on a by:'llm' decision (a question gate, or a permission it answered): the --effort its host claude call was pinned to. Absent for any other answer source."
           },
           "detail": {},
           "rationale": {
@@ -1330,6 +1335,10 @@
               },
               "model": {
                 "type": "string"
+              },
+              "effort": {
+                "type": "string",
+                "description": "The LLM decider's effort when answeredBy is llm."
               }
             }
           }

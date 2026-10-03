@@ -39,6 +39,7 @@ export function summarizeGateProvenance(decisions: RunResult["decisions"]): Gate
       answeredBy: by,
       answer: entries.map(([q, c]) => `${q}=${String(c)}`).join("; "),
       model: d.model,
+      ...(d.effort !== undefined ? { effort: d.effort } : {}),
     });
   }
   return { total: gates.length, bySource, gates };

@@ -15,7 +15,8 @@ import type { RunResult, Scenario } from "../types.js";
 import type { ExecuteOptions } from "../run/execute.js";
 import { salvagedResult, type ScenarioRunner } from "../eval/job-runner.js";
 import type { JobReport, JobSpec } from "./runner.js";
-import { keptChildTranscripts, mainSystemTurn, sentSubagentAppend } from "./trace.js";
+import { findMainTranscript, keptChildTranscripts, mainSystemTurn, sentSubagentAppend } from "./trace.js";
+import { pinnedConfigDirOf } from "../session.js";
 
 export interface JobDeps<F extends { label?: string; ablateSkill?: boolean }> {
   runScenario: ScenarioRunner<F>;
@@ -39,6 +40,21 @@ function attemptRunId(spec: HillclimbJobSpec): string {
   return `local_${BigInt(`0x${h.slice(0, 16)}`)
     .toString(36)
     .padStart(13, "0")}`;
+}
+
+/** The agent session's id: the last event that names one (the result frame, else an earlier one on a run that ended
+ *  without it). It names the session's transcript file. */
+function sessionIdOf(events: readonly string[]): string | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (!events[i].includes('"session_id"')) continue;
+    try {
+      const sid = (JSON.parse(events[i]) as { session_id?: unknown }).session_id;
+      if (typeof sid === "string" && sid) return sid;
+    } catch {
+      /* not a frame */
+    }
+  }
+  return undefined;
 }
 
 const lines = (p: string): string[] =>
@@ -65,6 +81,7 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
     const deadline = ceilingMs !== undefined ? t0 + ceilingMs : undefined;
     let result: RunResult | undefined;
     let thrown: unknown;
+    const extra = deps.extra?.(spec) ?? {};
     try {
       result = await deps.runScenario({
         scenario,
@@ -72,7 +89,7 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
         flags: { ...deps.flags, label: spec.runLabel, ablateSkill: spec.ablate },
         // Every attempt records the pre-run manifest, whatever its scenario asserts now: a metric or an authorship
         // assert added later in the loop is decided against it when `hillclimb regrade` re-measures the kept run.
-        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...(deps.extra?.(spec) ?? {}), armPreRunManifest: true },
+        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...extra, armPreRunManifest: true },
         rethrowUnanswered: true,
       });
     } catch (e) {
@@ -83,12 +100,22 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
     const outDir = result?.outDir ?? (existsSync(expectedDir) ? expectedDir : undefined);
     const fidelity = result?.effectiveFidelity ?? result?.fidelity;
     const subagentAppend = outDir ? sentSubagentAppend(outDir) : undefined;
+    const events = outDir ? lines(join(outDir, "events.jsonl")) : [];
+    // The session the run got: a pinned config_dir is where hostloop and protocol keep the agent's transcripts.
+    const configDir = extra.session !== undefined ? pinnedConfigDirOf(extra.session) : undefined;
+    const kept =
+      outDir && fidelity
+        ? { outDir, fidelity, ...(result?.workDir ? { workDir: result.workDir } : {}), ...(configDir !== undefined ? { configDir } : {}) }
+        : undefined;
+    const sessionId = sessionIdOf(events);
+    const found = kept ? findMainTranscript(kept, sessionId) : undefined;
     return {
       ...(result !== undefined ? { result } : { result: undefined }),
       ...(thrown !== undefined ? { thrown } : {}),
-      events: outDir ? lines(join(outDir, "events.jsonl")) : [],
-      children:
-        outDir && fidelity ? keptChildTranscripts({ outDir, fidelity, ...(result?.workDir ? { workDir: result.workDir } : {}) }) : [],
+      events,
+      ...(found?.lines !== undefined ? { transcript: found.lines } : {}),
+      ...(found !== undefined ? { transcriptWhere: found.where } : {}),
+      children: kept ? keptChildTranscripts(kept, sessionId) : [],
       ...(subagentAppend !== undefined ? { subagentAppend } : {}),
       ...(outDir !== undefined ? { system: mainSystemTurn(outDir) } : {}),
       attemptS,

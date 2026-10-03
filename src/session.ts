@@ -75,6 +75,10 @@ const Project = z.strictObject({
   from: z.string().min(1), // host path to the project's content
 });
 
+/** The `effort:` tokens a session (and `hillclimb run --effort`) accepts: Cowork's five levels plus `extra`, the UI
+ *  label for `xhigh` (normalized to `xhigh` on load — see `loadSession`). */
+export const SESSION_EFFORT_TOKENS = ["low", "medium", "high", "xhigh", "max", "extra"] as const;
+
 export const SessionConfig = z.strictObject({
   // --- model & reasoning (Cowork model picker + toggles) ---
   model: z.string().optional(), // setModel
@@ -86,7 +90,7 @@ export const SessionConfig = z.strictObject({
   // (`applySessionOverrides` rewrites `model` post-parse, so parse-time validation would check the wrong
   // model in a matrix run). Omitted -> resolved to the baseline's medium fallback at argv emission time
   // (real Cowork always emits `--effort`, never omits it).
-  effort: z.enum(["low", "medium", "high", "xhigh", "max", "extra"]).optional(),
+  effort: z.enum(SESSION_EFFORT_TOKENS).optional(),
   // Rendered into the prompt append's <env> "User name:" line ({{accountName}}, >=1.18286.0
   // reconstruction). Real Cowork uses the signed-in account's name; default "User".
   account_name: z.string().optional(),
@@ -671,6 +675,84 @@ function validateEffort(effort: string | undefined, model: string | undefined, b
   // else: class 4 (unknown model id, or no model declared) — accept any of the six tokens, no throw.
 }
 
+/** The effort a run requests — the ONE resolver: an explicit override (`hillclimb run --effort`), else the session's
+ *  `effort:`, else the baseline's synced `spawn.effortDefault`, else `medium` (a baseline synced before that field
+ *  existed). Real Cowork always emits `--effort`, so there is always a value. The argv builders call it with the
+ *  plan's effort (the override already applied to the session by `applySessionOverrides`). */
+export function resolveEffort(src: { flag?: string; session?: string; baseline?: Pick<PlatformBaseline, "spawn"> }): string {
+  return src.flag ?? src.session ?? src.baseline?.spawn?.effortDefault ?? "medium";
+}
+
+/** The model's effort levels in the baseline's per-model config (the literal map, else the regex-default class);
+ *  `false` for a model the map lists with no levels (no effort selector: claude-haiku-4-5, claude-sonnet-4-5);
+ *  undefined for a model the baseline does not know. */
+export function effortSelector(
+  model: string | undefined,
+  baseline: Pick<PlatformBaseline, "spawn">,
+): readonly string[] | false | undefined {
+  if (model !== undefined && agentSendsNoEffort(undatedModelId(model))) return false;
+  const entry = modelEffortEntry(model, baseline);
+  return entry === undefined ? undefined : (entry.effortLevels ?? false);
+}
+
+/** A model id without a `[1m]` context suffix, lower-cased, and without a snapshot date (`-20251001`, `@20251001`,
+ *  `-2025-10-01`): the key the baseline's per-model map and the agent's own model tables use. */
+export function undatedModelId(model: string): string {
+  return model
+    .replace(/\[\dm\]$/i, "")
+    .toLowerCase()
+    .replace(/[-@](\d{8}|\d{4}-\d{2}-\d{2})$/, "");
+}
+
+/** The models the agent never sends an effort parameter for, whatever `--effort` says. Read from the agent binary
+ *  (2.1.286), its model-supports-effort predicate: after the per-model overrides and the capability table it returns
+ *  false for any id containing `claude-3-` and for `claude-opus-4-0`, `claude-opus-4-1`, `claude-sonnet-4-0`,
+ *  `claude-sonnet-4-5` and `claude-haiku-4-5` — ahead of `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`, so nothing turns it on. The
+ *  baseline's per-model map lists only the models Cowork's picker offers, so it omits most of these. */
+const AGENT_NO_EFFORT_MODELS = new Set([
+  "claude-opus-4-0",
+  "claude-opus-4-1",
+  "claude-sonnet-4-0",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
+]);
+function agentSendsNoEffort(undated: string): boolean {
+  return undated.includes("claude-3-") || AGENT_NO_EFFORT_MODELS.has(undated);
+}
+
+function modelEffortEntry(
+  model: string | undefined,
+  baseline: Pick<PlatformBaseline, "spawn">,
+): { effortLevels?: readonly string[]; disallowThinkingDisabled?: boolean } | undefined {
+  if (model === undefined) return undefined;
+  const spawn = baseline.spawn;
+  const entry = spawn?.effortByModel?.[model] ?? spawn?.effortByModel?.[undatedModelId(model)];
+  if (entry) return entry;
+  const regexDefault = spawn?.effortRegexDefault;
+  if (regexDefault && new RegExp(regexDefault.pattern).test(model)) return regexDefault;
+  return undefined;
+}
+
+/** Why a session's effort and thinking settings cannot run as requested, or undefined. Two combinations the agent
+ *  would not send as configured: `xhigh`/`max` with `extended_thinking: false` (the agent clamps effort when thinking
+ *  is off), and thinking off on a model whose baseline entry sets `disallowThinkingDisabled` (Cowork offers no
+ *  thinking-off toggle for it). Checked over the RESOLVED effort and the session's model. */
+export function thinkingEffortRefusal(session: SessionConfig, baseline: PlatformBaseline): string | undefined {
+  if (session.extended_thinking !== false) return undefined;
+  const effort = resolveEffort({ session: session.effort, baseline });
+  if (effort === "xhigh" || effort === "max")
+    return `effort ${effort} with extended_thinking: false: the agent lowers the effort it sends when thinking is off — turn extended_thinking on, or request high or lower`;
+  if (modelEffortEntry(session.model, baseline)?.disallowThinkingDisabled === true)
+    return `model ${session.model} does not allow thinking to be turned off (the baseline's disallowThinkingDisabled): remove extended_thinking: false`;
+  return undefined;
+}
+
+/** The session's pinned `plugins.config_dir`, `~`-expanded (the agent's `CLAUDE_CONFIG_DIR` on hostloop and on
+ *  protocol under managed config, `buildLaunchPlan`), or undefined for a harness-managed dir. */
+export function pinnedConfigDirOf(session: SessionConfig): string | undefined {
+  return session.plugins.config_dir ? session.plugins.config_dir.replace(/^~(?=$|\/)/, homedir()) : undefined;
+}
+
 /** True iff any PLUGIN mount declares runnable hooks. Folder/upload mounts never count even if a
  *  hooks.json happens to sit inside them — the agent only loads hooks from --plugin-dir roots. */
 export function includeHookEventsFor(mounts: ReadonlyArray<{ kind: string; hostPath: string }>): boolean {
@@ -755,7 +837,7 @@ export function resolveLaunchSources(
   };
 
   // 1. CLAUDE_CONFIG_DIR — clean managed dir unless the session pins one.
-  const pinnedConfigDir = session.plugins.config_dir ? expand(session.plugins.config_dir) : undefined;
+  const pinnedConfigDir = pinnedConfigDirOf(session);
   // Writing settings.json/cowork_settings.json into a user-supplied EXISTING dir would clobber
   // their real Claude config. Require an explicit opt-in; a fresh/non-existent pinned dir is fine.
   if (pinnedConfigDir && existsSync(pinnedConfigDir) && (process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE ?? "") === "")
@@ -1265,7 +1347,7 @@ export function loadSession(parsed: unknown): SessionConfig {
 
 /**
  * The matrix runner's session-loading override seam. Pure: returns a new SessionConfig, never
- * mutates `session`. `model` is a plain scalar overwrite. `skillDirSubstitution: [from, to]` swaps ONE
+ * mutates `session`. `model` and `effort` are plain scalar overwrites. `skillDirSubstitution: [from, to]` swaps ONE
  * `plugins.local_plugins` entry — chosen by exact match on `from` — for `to`, leaving every other entry
  * untouched.
  *
@@ -1280,10 +1362,11 @@ export function loadSession(parsed: unknown): SessionConfig {
  */
 export function applySessionOverrides(
   session: SessionConfig,
-  overrides: { model?: string; skillDirSubstitution?: [string, string] },
+  overrides: { model?: string; effort?: SessionConfig["effort"]; skillDirSubstitution?: [string, string] },
 ): SessionConfig {
   let next = session;
   if (overrides.model !== undefined) next = { ...next, model: overrides.model };
+  if (overrides.effort !== undefined) next = { ...next, effort: overrides.effort };
   if (overrides.skillDirSubstitution) {
     const [from, to] = overrides.skillDirSubstitution;
     const idx = next.plugins.local_plugins.indexOf(from);

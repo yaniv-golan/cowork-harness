@@ -2891,6 +2891,9 @@
         "type": "string",
         "required": true
       },
+      ".decisions[].effort": {
+        "type": "string"
+      },
       ".decisions[].kind": {
         "type": "string",
         "required": true
@@ -3146,6 +3149,9 @@
       ".gateProvenance.gates[].answeredBy": {
         "type": "string",
         "required": true
+      },
+      ".gateProvenance.gates[].effort": {
+        "type": "string"
       },
       ".gateProvenance.gates[].model": {
         "type": "string"

@@ -28,6 +28,8 @@ import { asFlowData, attachmentKind, authoredOutputs, planInputCopy, planOutputC
 import { headroom, pairwiseHints } from "./check.js";
 import { loadFlowSnapshot } from "./schema-check.js";
 import { hillclimbRunLabel } from "../run/run-labels.js";
+import { normalizeModelId } from "../run/model-provenance.js";
+import { servedModelMismatch } from "./served-model.js";
 
 /** What one job hands back. */
 export interface JobReport {
@@ -35,6 +37,11 @@ export interface JobReport {
   thrown?: unknown;
   /** The run's events.jsonl lines. */
   events: string[];
+  /** The agent's own main session transcript lines (the effort each main-loop call was sent with); absent when the
+   *  run kept none. */
+  transcript?: string[];
+  /** The transcript file read, or where it was looked for when none was found. */
+  transcriptWhere?: string;
   children: ChildTranscript[];
   /** The trace's system turn (marker + the append as sent); absent ⇒ no system turn. */
   system?: string;
@@ -64,6 +71,10 @@ export interface RunnerDeps {
   runJob: (job: JobSpec) => Promise<JobReport>;
   /** The concrete model a case's main loop must be served by. */
   pin: (c: HillclimbCase) => string | undefined;
+  /** The effort a case's agent is asked for (the resolved `--effort` / session `effort:` / baseline default), and
+   *  whether its model has no effort selector (then the agent may send none). Required, so no caller skips the
+   *  requested-vs-sent check by omission. */
+  requestedEffort: (c: HillclimbCase) => { effort: string; noSelector: boolean };
   /** Every file that defines the measurement (scenario, session, answers, uploads) — the gate's derived set. */
   derivedPaths: (cases: readonly HillclimbCase[]) => string[];
   /** Named values the gate hashes beside the derived files: what a file's bytes leave out (a fixture's exec bits). */
@@ -282,6 +293,26 @@ async function run(
       );
   }
 
+  // One variant, one requested model and effort per case: a resumed pass that would ask for another fills the case's
+  // remaining slots with a different setting. Refused before spend; across variants a change is the lever, unsaid.
+  if (existing) {
+    const mix = requestedMix(
+      existing,
+      v,
+      cases,
+      (c) => ({ model: deps.pin(c), effort: deps.requestedEffort(c).effort, noSelector: deps.requestedEffort(c).noSelector }),
+      {
+        effortFlag: args.effort !== undefined,
+        modelFlag: args.model !== undefined,
+      },
+    );
+    if (mix.refusals.length)
+      throw new UsageError(
+        `${mix.refusals.join("; ")} — one variant would mix two settings: run the change as a new variant (--variant v<N>), or keep the setting the rows ran with`,
+      );
+    for (const w of mix.warnings) say(w);
+  }
+
   // The harness gate (runner-scaffold.mjs l.238-277). A --skill selection joins the digest as `skill:<name>`: it
   // decides what skill_invoked means, so changing it is a harness change. Without one nothing is added and the sha
   // is the one a flow approved before --skill existed.
@@ -436,8 +467,11 @@ async function run(
         ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
         rep,
         pin: deps.pin(c),
+        requestedEffort: deps.requestedEffort(c),
         ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
         events: report.events,
+        ...(report.transcript !== undefined ? { transcript: report.transcript } : {}),
+        ...(report.transcriptWhere !== undefined ? { transcriptWhere: report.transcriptWhere } : {}),
         attemptS: report.attemptS,
         runnerTimeout: report.runnerTimeout,
         tags: [basename(dirname(c.file))],
@@ -476,6 +510,10 @@ async function run(
             // The attempt's spend stays countable; counters it could not report are said, not zeroed.
             meta: {
               failure_rule: "row_build",
+              // What the attempt asked for, as on every other error row.
+              ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
+              ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
+              ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
               retries_unrecorded: true,
               judge_retries_unrecorded: true,
               ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
@@ -566,6 +604,8 @@ async function run(
         ...(models.size === 1 ? { model: [...models][0] } : {}),
         ...(variantSig !== undefined ? { source_sig: variantSig } : {}),
       });
+      // What the variant's rows asked for and were sent, over its whole results.jsonl (a --case pass adds to it).
+      writer.setSummaryKeys(requestedSummary(writer.readVariantFile("results.jsonl")));
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
     } catch (e) {
       stepFailures++;
@@ -640,6 +680,132 @@ const trackedText = (s: ReadonlySet<Tracked>): string =>
 
 /** baseline first, then v1, v2, … */
 const variantOrder = (v: string): number => (v === "baseline" ? 0 : Number(v.slice(1)));
+
+/** summary.json's `model_requested`, `effort` and `effort_sent` over a variant's scored rows: the one value its rows
+ *  carry, `"mixed"` when they carry several, absent when none carries it. `effort_selector: false` when every row's
+ *  model has no effort selector (its `effort` was passed but not sent), `"mixed"` when only some do. */
+export function requestedSummary(results: string | null): Record<string, string | false | undefined> {
+  const seen = { model_requested: new Set<string>(), effort: new Set<string>(), effort_sent: new Set<string>() };
+  let rows = 0;
+  let noSelector = 0;
+  const lacking = { model_requested: 0, effort: 0, effort_sent: 0 };
+  for (const line of (results ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    let meta: Record<string, unknown> | undefined;
+    try {
+      meta = (JSON.parse(line) as { meta?: Record<string, unknown> }).meta;
+    } catch {
+      continue; // schema-check reports malformed lines
+    }
+    rows++;
+    if (meta?.effort_selector === false) noSelector++;
+    for (const k of Object.keys(seen) as Array<keyof typeof seen>)
+      if (typeof meta?.[k] === "string") seen[k].add(meta[k] as string);
+      else lacking[k]++;
+  }
+  // One value over every row; "mixed" when rows carry several, or some carry it and some do not.
+  const one = (k: keyof typeof seen) =>
+    seen[k].size === 0 ? undefined : seen[k].size === 1 && lacking[k] === 0 ? [...seen[k]][0] : "mixed";
+  return {
+    model_requested: one("model_requested"),
+    effort: one("effort"),
+    effort_sent: one("effort_sent"),
+    effort_selector: noSelector === 0 ? undefined : noSelector === rows ? false : "mixed",
+  };
+}
+
+/** The resume guard over one variant's `results.jsonl` and `errors.jsonl` rows, keyed by (variant, prompt_id): pins and sessions are per
+ *  case. A row records what it asked for (`meta.model_requested`, `meta.effort`); one that differs from what this pass
+ *  asks for its case is a refusal. A row written before those fields existed is held to its SERVED model (a dated
+ *  snapshot of the pin is the pin), and warns when it has none; its effort is unknown, which always warns (a
+ *  re-approved session file may have changed its `effort:` since). A flag value that differs
+ *  from what the variant's OTHER cases ran warns: the variant's cases then ran different settings. */
+function requestedMix(
+  snap: ReturnType<typeof loadFlowSnapshot>,
+  variant: string,
+  cases: readonly HillclimbCase[],
+  want: (c: HillclimbCase) => { model: string | undefined; effort: string; noSelector: boolean },
+  flags: { effortFlag: boolean; modelFlag: boolean },
+): { refusals: string[]; warnings: string[] } {
+  const byId = new Map(cases.map((c) => [c.id, want(c)]));
+  const refusals = new Set<string>();
+  const noModel = new Set<string>();
+  const noEffort = new Set<string>();
+  const others = { model: new Map<string, Set<string>>(), effort: new Map<string, Set<string>>() };
+  // errors.jsonl rows count too: a pass whose attempts all failed still asked for its model and effort. Only what a row
+  // RECORDS it asked for is held against this pass there — an error row's served model is often the very substitution
+  // it reports, and an error row that records nothing says nothing.
+  const lines = [
+    ...(snap.variants[variant]?.results ?? "").split("\n").map((l) => ({ l, scored: true })),
+    ...(snap.variants[variant]?.errors ?? "").split("\n").map((l) => ({ l, scored: false })),
+  ];
+  for (const { l: line, scored } of lines) {
+    if (!line.trim()) continue;
+    let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown; effort?: unknown; effort_selector?: unknown } };
+    try {
+      r = JSON.parse(line);
+    } catch {
+      continue; // schema-check reports malformed lines
+    }
+    const id = String(r.prompt_id);
+    const mr = typeof r.meta?.model_requested === "string" ? r.meta.model_requested : undefined;
+    const ef = typeof r.meta?.effort === "string" ? r.meta.effort : undefined;
+    const w = byId.get(id);
+    if (w === undefined) {
+      // Another case of this variant, not run in this pass.
+      if (mr !== undefined) others.model.set(mr, (others.model.get(mr) ?? new Set()).add(id));
+      if (ef !== undefined) others.effort.set(ef, (others.effort.get(ef) ?? new Set()).add(id));
+      continue;
+    }
+    if (w.model !== undefined) {
+      if (mr !== undefined) {
+        if (normalizeModelId(mr) !== normalizeModelId(w.model))
+          refusals.add(`variant ${variant}'s rows for case ${id} ran model ${mr}, and this pass would run model ${w.model}`);
+      } else if (!scored) {
+        /* an error row that records no requested model */
+      } else if (typeof r.model === "string") {
+        if (servedModelMismatch(w.model, [r.model]) !== undefined)
+          refusals.add(`variant ${variant}'s rows for case ${id} ran model ${r.model} (served), and this pass would run model ${w.model}`);
+      } else noModel.add(id);
+    }
+    // A model with no effort selector sends none: its rows' effort is only the baseline default (a sync may move it),
+    // so it is not held against a pass whose case has no selector either.
+    if (w.noSelector && r.meta?.effort_selector === false) continue;
+    if (ef !== undefined) {
+      if (ef !== w.effort)
+        refusals.add(`variant ${variant}'s rows for case ${id} ran effort ${ef}, and this pass would run effort ${w.effort}`);
+    } else if (scored) noEffort.add(id);
+  }
+  const named = (ids: Iterable<string>) => {
+    const xs = [...new Set(ids)].sort();
+    return `case${xs.length > 1 ? "s" : ""} ${xs.join(", ")}`;
+  };
+  const warnings: string[] = [];
+  const pinsOf = (ids: Set<string>) => [...new Set([...ids].map((id) => byId.get(id)!.model))].join(", ");
+  const effortsOf = (ids: Iterable<string>) => [...new Set([...ids].map((id) => byId.get(id)!.effort))].join(", ");
+  if (noModel.size)
+    warnings.push(
+      `warning: variant ${variant}'s earlier rows for ${named(noModel)} record neither the requested nor the served model; this pass requests ${pinsOf(noModel)} — compare them only knowingly`,
+    );
+  if (noEffort.size)
+    warnings.push(
+      `warning: variant ${variant}'s earlier rows for ${named(noEffort)} don't record the requested effort (written before it was recorded): their effort is unknown, and this pass requests ${effortsOf(noEffort)} — compare them only knowingly`,
+    );
+  // A flag sets every selected case alike: say when the variant's other cases ran something else.
+  for (const [what, flag, mine] of [
+    ["effort", flags.effortFlag, (c: string) => byId.get(c)!.effort],
+    ["model", flags.modelFlag, (c: string) => byId.get(c)!.model ?? ""],
+  ] as const) {
+    if (!flag) continue;
+    const thisPass = new Set([...byId.keys()].map(mine));
+    for (const [value, ids] of others[what])
+      if (!thisPass.has(value))
+        warnings.push(
+          `warning: variant ${variant}'s rows for ${named(ids)} ran ${what} ${value}, and this pass runs ${what} ${[...thisPass].join(", ")} for ${named(byId.keys())}: the variant's cases ran different settings — compare across them only knowingly`,
+        );
+  }
+  return { refusals: [...refusals], warnings };
+}
 
 /** A row in the flow whose `meta.ablated` disagrees with this run, named as `<variant>/<prompt_id>`. */
 function ablationMix(snap: ReturnType<typeof loadFlowSnapshot>, ablate: boolean): string | undefined {

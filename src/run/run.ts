@@ -421,7 +421,8 @@ interface DecisionRecord {
   // older records (positional fallback) and on the synchronous abstain→deny/undelivered/mismatch→deny
   // paths in handleDecision (those already record the true outcome at push time — nothing to reconcile).
   requestId?: string;
-  model?: string; // decider model for by:"llm" gates — surfaced in gate provenance for auditability
+  model?: string; // decider model for by:"llm" decisions (question and permission) — question gates surface it in gate provenance
+  effort?: string; // the LLM decider's effort for by:"llm" decisions, question and permission (its transport's pin) — beside `model`
   detail?: unknown;
   rationale?: string;
   // The FULL offered option set (label + description) as originally presented by the model — present
@@ -475,7 +476,7 @@ export interface RunRecord {
   /** Question batches the scripted rules answered only part of — the whole batch went to the fallback.
    *  Filled by `ScriptedDecider` through `RunContext.notePartlyScripted` (report-only). */
   partlyScriptedGates: PartlyScriptedGate[];
-  unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string }[];
+  unanswered: { question: string; chosen: string; by: string; rationale?: string; model?: string; effort?: string }[];
   toolResults: { toolUseId?: string; isError: boolean; text: string; assertText?: string; assertTextTruncated?: boolean }[]; // captured tool OUTCOMES
   // requestId (the decision's `id`) rides along so post-loop reconciliation (drive()'s gateDeliveries
   // build below) can consult `session.hasUndeliveredReconciliation?.(requestId)` for ground truth on a
@@ -1633,7 +1634,7 @@ export class Run {
     } else if (!skipRecord) {
       // `req` here is the ORIGINAL can_use_tool request (not a synthetic webfetch:<domain> one), so on
       // the web_fetch gate path this is the ONE recorded decision, with name:"mcp__workspace__web_fetch".
-      this.recordDecision(req, decided.response, decided.by, decided.rationale, decided.model);
+      this.recordDecision(req, decided.response, decided.by, decided.rationale, decided.model, decided.effort);
     }
   }
 
@@ -1650,7 +1651,14 @@ export class Run {
 
   // Typed: `resp` is the discriminated DecisionResponse and `by` is the Decision["by"] union (a typo'd
   // attribution is now a compile error). resp fields are read via resp.kind narrowing; req fields via req.
-  private recordDecision(req: DecisionRequest, resp: DecisionResponse, by: Decision["by"], rationale?: string, model?: string) {
+  private recordDecision(
+    req: DecisionRequest,
+    resp: DecisionResponse,
+    by: Decision["by"],
+    rationale?: string,
+    model?: string,
+    effort?: string,
+  ) {
     if (req.kind === "question") {
       const answers = resp.kind === "question" ? resp.answers : {};
       this.rec.decisions.push({
@@ -1660,6 +1668,7 @@ export class Run {
         by,
         requestId: req.id, // for id-keyed pairing in `trace --view questions` (not positional)
         model,
+        ...(effort !== undefined ? { effort } : {}),
         detail: answers,
         rationale,
         questions: req.questions,
@@ -1671,7 +1680,8 @@ export class Run {
       // verify the answer actually reached the model. Independent of `by` — delivery ≠ attribution.
       this.rec.gateAnswers.push({ question: label, toolUseId: req.toolUseId, requestId: req.id, answers });
       for (const [question, chosen] of Object.entries(answers)) {
-        if (by !== "scripted") this.rec.unanswered.push({ question, chosen: String(chosen), by, rationale, model });
+        if (by !== "scripted")
+          this.rec.unanswered.push({ question, chosen: String(chosen), by, rationale, model, ...(effort !== undefined ? { effort } : {}) });
       }
     } else if (req.kind === "permission") {
       const behavior = resp.kind === "permission" ? resp.behavior : undefined;
@@ -1679,7 +1689,18 @@ export class Run {
       // name. The input rides through the same record-time scrub as every other captured value; cap it so
       // a large input can't bloat the record. Allow keeps detail unset (the input isn't diagnostic there).
       const detail = behavior === "deny" ? { input: capDecisionInput(req.input) } : undefined;
-      this.rec.decisions.push({ kind: "tool", name: req.tool, decision: behavior ?? "?", by, requestId: req.id, rationale, detail });
+      this.rec.decisions.push({
+        kind: "tool",
+        name: req.tool,
+        decision: behavior ?? "?",
+        by,
+        requestId: req.id,
+        // The LLM decider's model and effort, as on a question gate (absent for every other source).
+        ...(model !== undefined ? { model } : {}),
+        ...(effort !== undefined ? { effort } : {}),
+        rationale,
+        detail,
+      });
       // A cowork-parity off-registry auto-allow is a SILENT false-green risk — real Cowork blocks for the
       // user. Make it loud (stderr) AND machine-distinguishable (rec.permissiveAutoAllow → the envelope),
       // so a green carrying one isn't mistaken for a faithful pass.

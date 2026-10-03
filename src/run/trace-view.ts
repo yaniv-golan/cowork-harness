@@ -369,6 +369,7 @@ export interface GateTraceRow {
   error?: string; // first line of the error if delivery failed
   answeredBy?: string; // provenance from the sibling result.json (scripted | llm | external | first | human)
   model?: string; // decider model when answeredBy === "llm"
+  effort?: string; // the LLM decider's effort when answeredBy === "llm"
 }
 
 /**
@@ -458,6 +459,7 @@ export function buildGateTrace(file: string): GateTraceRow[] {
           if (d) {
             row.answeredBy = d.by;
             row.model = d.model;
+            if (d.effort !== undefined) row.effort = d.effort;
           }
         }
       } else {
@@ -467,6 +469,7 @@ export function buildGateTrace(file: string): GateTraceRow[] {
           if (!d || d.decision !== "answered") continue;
           rows[i].answeredBy = d.by;
           rows[i].model = d.model;
+          if (d.effort !== undefined) rows[i].effort = d.effort;
         }
       }
     } catch (e) {
@@ -509,7 +512,9 @@ export function formatGateTrace(rows: GateTraceRow[]): string {
   if (!rows.length) return "(no AskUserQuestion gates in this run)";
   const mark = { ok: "✓", error: "✗", unobserved: "?" } as const;
   const lines = rows.map((r) => {
-    const prov = r.answeredBy ? `\n    by: ${labelSource(r.answeredBy)}${r.model ? ` (${r.model})` : ""}` : "";
+    const prov = r.answeredBy
+      ? `\n    by: ${labelSource(r.answeredBy)}${r.model || r.effort ? ` (${[r.model, r.effort !== undefined ? `effort ${r.effort}` : undefined].filter(Boolean).join(", ")})` : ""}`
+      : "";
     // sub-question count is shown only when the gate bundled more than one — reconciles this row
     // against questions_count_max, which counts sub-questions, not gates.
     const subCount = r.subQuestionCount > 1 ? ` (${r.subQuestionCount} sub-questions)` : "";

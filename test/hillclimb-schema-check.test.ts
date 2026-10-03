@@ -859,4 +859,27 @@ describe("schema-check: summary.json", () => {
     m.variants.v1!.summary = JSON.stringify({ model: 3 });
     expectOnly(check(m), "error", "summary.model");
   });
+  it("model_requested, effort and effort_sent, when present, are strings", () => {
+    for (const k of ["model_requested", "effort", "effort_sent"]) {
+      const s = base();
+      s.variants.v1!.summary = JSON.stringify({ [k]: ["high"] });
+      expectOnly(check(s), "error", `summary.${k}`);
+    }
+    const ok = base();
+    ok.variants.v1!.summary = JSON.stringify({ model: "m", model_requested: "m", effort: "mixed", effort_sent: "high" });
+    expect(check(ok).findings.filter((f) => f.rule.startsWith("summary"))).toEqual([]);
+  });
+  it("effort_selector, when present, is false or mixed", () => {
+    for (const [v, bad] of [
+      [false, false],
+      ["mixed", false],
+      [true, true],
+      ["none", true],
+    ] as const) {
+      const s = base();
+      s.variants.v1!.summary = JSON.stringify({ effort_selector: v });
+      if (bad) expectOnly(check(s), "error", "summary.effort_selector");
+      else expect(check(s).findings.filter((f) => f.rule.startsWith("summary"))).toEqual([]);
+    }
+  });
 });

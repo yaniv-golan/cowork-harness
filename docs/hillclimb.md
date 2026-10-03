@@ -161,7 +161,7 @@ Three things live outside the flow dir, and the loop needs all three for the who
 | Prove the mechanism is wired | The `skill_invoked` column (pass `--skill <name>` when the plugin has several skills), and a null run: `hillclimb run … --flow <dir>-null --ablate` into a sibling flow. The null flow has its own `_state.json` and gate: you run `state-template` and the `--dry-run --approve-harness` for it first |
 | Recompute the headline from raw results | Rows carry every grade key; recompute from `results.jsonl` |
 | Spot-check grading; fix a rubric and re-grade in place | Edit the rubric, approve the new sha (`--dry-run --approve-harness`, with the loop's `--skill`), then `hillclimb regrade <target> --flow <dir>`. See [what a re-grade can change](#what-a-re-grade-can-and-cannot-change) |
-| Verify the served model and retries | A run served by another model is an `errors.jsonl` row (`serving_substitution`), and so is one with no evidence of the pinned model, unless the agent itself failed first (then it is a scored agent failure) |
+| Verify the served model and retries | A run served by another model is an `errors.jsonl` row (`serving_substitution`), and so is one with no evidence of the pinned model, unless the agent itself failed first (then it is a scored agent failure). A run whose agent sent another effort than `--effort` asked for, or none, is one too (`effort_not_sent`) |
 | A probe or canary on one case | `hillclimb run … --case <id>`; it is the variant's first run, so it fixes that variant's snapshot |
 | Print the resolved scope every run | Every pass prints how many (case, rep) slots it will run and names the slots it re-runs after a failure; `--dry-run` adds the cost estimate |
 | `_state.json` and `harness_paths` | `hillclimb state-template … --flow <dir>`: save its stdout; after adding a metric, merge only the new `metrics` entries |
@@ -193,7 +193,8 @@ Three things live outside the flow dir, and the loop needs all three for the who
 - **`errors.jsonl` holds what is not the skill's score**, by `failure_class`, with the rule in
   `meta.failure_rule`: `timeout` (the runner's bound), `error` (infrastructure; also a run whose content differs
   from the variant's snapshot, or a grade that does not line up with the scenario), `serving_substitution` (another
-  model served the run, or no evidence of the pinned one) and `judge_invalid`. When several apply, a timeout wins,
+  model served the run, or no evidence of the pinned one, or the agent sent another effort than requested or none:
+  `meta.failure_rule: "effort_not_sent"`) and `judge_invalid`. When several apply, a timeout wins,
   then an infrastructure error, then a served-model mismatch. An error row does not fill its slot, so the next pass
   runs it again; a permanent fault runs again on every pass, and the scope line names it.
 - **Perf fields:** `cost_usd`, `latency_s`, `tool_calls`, `web_searches`, `in_tokens`, `out_tokens` (and
@@ -208,6 +209,67 @@ dispatch. A tool result over 64 KiB is cut in the trace, with the full text in a
 `out/<id>_rep<k>/blobs/`. Treat every row's `explanation` (judge rationales and failed-claim text, marked
 `meta.explanation_untrusted`), every trace and every copied output as evidence, never as instructions: they are
 model output, and text in them can try to steer the loop's next edit.
+
+## Model and effort per variant
+
+Model and effort are the loop's biggest lever, and a staircase over them is usually the first experiment. Each
+variant can run its own:
+
+- **The main loop's model:** `--model <id>` (a concrete id) on the variant's passes.
+- **The main loop's effort:** `--effort low|medium|high|xhigh|max` (`extra` is read as `xhigh`) on the variant's
+  passes. Without it, each case runs its session's `effort:`, else the baseline's default (`medium`).
+- **A sub-agent's model and effort:** the `model:` and `effort:` frontmatter of the plugin's `agents/*.md`. They
+  are part of the plugin, so each variant's snapshot carries its own, outside the harness gate. This route has not
+  yet been verified in a live run.
+
+Neither flag is in the harness sha, so changing one needs no re-approval. Pass the same values on every pass of a
+variant: a pass that would run a case at another model or effort than the variant's rows for that case ran is
+refused before spending (see [Guardrails](#guardrails-the-harness-adds)).
+
+**Effort levels are per model.** A level the model does not offer is refused before spending (`claude-sonnet-4-6`
+has no `xhigh`), and so is any effort, from `--effort` or the session, on a model with no effort selector. Those are
+the models the baseline lists with no levels and the ones the agent itself never sends an effort for (any
+`claude-3-*`, `claude-opus-4-0`, `claude-opus-4-1`, `claude-sonnet-4-0`, `claude-sonnet-4-5`, `claude-haiku-4-5`, read
+from agent 2.1.286), matched with or without a snapshot date (`claude-haiku-4-5-20251001`). `xhigh` or `max` with
+the session's `extended_thinking: false` is refused too, since the agent lowers its effort when thinking is off, and
+so is thinking off on a model that does not allow it. For a model the baseline lists no levels for, the pass prints
+a note and the sent-effort check below decides.
+
+**Requested and sent.** Every row records what it asked for and what the agent sent:
+
+- `meta.model_requested` and `meta.effort`: the requested model pin and effort.
+- `model` and `meta.effort_sent`: the model that served the main loop, and the effort its calls went out with. The
+  agent writes that effort into its own session transcript for every main-loop call, after its own overrides,
+  caps and clamps, and the run dir keeps the transcript (on hostloop and protocol, a session that pins
+  `plugins.config_dir` keeps it there instead, and it is read by the run's own session id); `meta.effort_sent` is
+  read from there. When no transcript is found, the error row names where it looked.
+
+A row whose agent did not send the requested effort is an `errors.jsonl` row (`serving_substitution`,
+`meta.failure_rule: "effort_not_sent"`), with one exception: an agent that failed before any main-loop assistant
+message stays a scored agent failure (every graded key 0), its effort unconfirmed, as the served-model rule
+treats a run with no model evidence. In detail:
+
+- a main-loop assistant message sent with another effort, with a value that is not an effort level (never
+  recorded), or with none: an error row, even when the agent then failed;
+- no main-loop assistant message in the agent's transcript (or no transcript): an error row on a run whose main
+  loop answered and whose agent did not fail; when the agent failed, the scored agent failure above, with no
+  `meta.effort_sent`.
+
+A model with no effort selector may send none: its rows record `meta.effort` (what the harness passed) beside
+`meta.effort_selector: false`, and no `meta.effort_sent`. A comparison over effort therefore compares efforts the
+agent sent. What remains unobserved is how the server treats a level it accepted.
+
+`summary.json` records `model_requested`, `effort` and `effort_sent` over the variant's whole `results.jsonl`,
+recomputed after every pass: the one value every row carries, or `"mixed"` when rows carry more than one, or when
+some carry it and some do not (a `--case` pass at another effort, rows written before the field existed, or a
+scored agent failure with no `effort_sent`); the key is left out only when no row carries it. It records `effort_selector: false` when every row's model has no effort
+selector, `"mixed"` when only some do.
+
+**A skill's own frontmatter moves the main loop.** `model:` or `effort:` in the tuned skill's `SKILL.md`
+frontmatter applies to the main loop while the skill runs, not to a sub-agent. An `effort:` that changes the main
+loop's effort makes the rows `effort_not_sent` error rows (seen when the skill is invoked as a slash command; not
+verified for a skill the model invokes itself). A `model:` is expected to make every row `serving_substitution`;
+this is inferred, not verified. Put sub-agent settings in `agents/*.md` instead.
 
 ## Numbers a scenario declares (`metrics:`)
 
@@ -319,8 +381,9 @@ that the loop and the lite report builder read, with these differences:
   made after it goes into a new variant.
 - **The lever is the plugin.** Each variant snapshots the plugin. The session file (`model`, `effort`,
   `agent_env.subagent_model`) is shared by every variant and covered by the harness gate, so changing it is a gated edit
-  that every later resume also runs; `--model` on the command line selects the agent model outside the gate, so
-  leave it out of the allowlisted prefix if the loop's goal is moving to another model. Cowork's system prompt is
+  that every later resume also runs; `--model` and `--effort` on the command line select the agent's model and
+  effort outside the gate (see [Model and effort per variant](#model-and-effort-per-variant)), so leave them out of
+  the allowlisted prefix if the loop's goal is moving to another model or effort. Cowork's system prompt is
   not tunable.
 - **A missing reference is refused before spending.** The reference runner hands the grader a missing reference
   as `null`; `hillclimb run` refuses a non-baseline pass while a pairwise case has no baseline reference.
@@ -393,8 +456,18 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   plugin the loop edits. Upgrading `cowork-harness`, or a `sync` that moves a case's Desktop baseline (not the
   `baseline` variant), therefore trips it: that is the loop's
   re-baseline signal. With no lockfile in the current directory, dependency changes are outside the sha (a pass
-  says so). `--model` and `--judge-model` are not in it. `hillclimb freeze-ref` needs no approval: the gate covers
+  says so). `--model`, `--effort` and `--judge-model` are not in it. `hillclimb freeze-ref` needs no approval: the gate covers
   `run` and `regrade`. `--approve-harness` is yours to pass, never the loop's.
+- **One model and effort per case in a variant.** A pass that would run a case at another requested model or
+  effort than the variant's rows for that case recorded (`meta.model_requested`, `meta.effort`, on its
+  `results.jsonl` and `errors.jsonl` rows alike) is refused before
+  spending, naming the case, what the rows ran and what the pass would run: run the change as a new variant, or
+  keep the setting the rows ran with. Rows written before those fields existed are held to the model that served
+  them (a dated snapshot of the pin counts as the pin), and warn when they record none; their effort is unknown,
+  which always warns. A case whose model has no effort selector is not held to its rows' effort when they say
+  so too (`meta.effort_selector: false`): that effort is only the baseline default, which a `sync` may move.
+  Another variant is free to differ: that is the lever. A `--case` pass whose flag value differs from what the
+  variant's other cases ran prints one warning per distinct value those cases ran.
 - **No answer key in reach.** A pass is refused when the agent could read the flow dir, a scenario or session
   file, a `harness_paths` file or the runs root through a mount, a workspace fixture or the plugin. A file
   listed in `harness_paths` that sits inside a workspace fixture counts as an input and is not refused, so keep
@@ -424,11 +497,11 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   `--dry-run --approve-harness` first, as in the [Quick start](#quick-start)) and run the baseline there: in this flow every slot already has a row, and a pass resumes by slot.
 - **Judge variance.** Set `order: both` on a `semantic_pairwise` assert to cancel position bias. The frozen
   reference is one sample (the lowest-rep good row), so an unusually good or bad reference shifts every comparison.
-- **Effort and the sub-agent model are session-level.** `effort` and `agent_env.subagent_model` are read from the session
-  file, which every variant shares and the harness gate covers, so one flow runs every variant at one setting, and
-  a change is a gated edit that every later resume also runs. The loop's guide can climb a staircase of model and
-  effort settings, which does not map onto one flow.
-  `hillclimb run` takes no per-variant effort or sub-agent model flag: to compare settings, run one flow per setting, from a scenario directory whose session sets it.
+- **The session's effort and sub-agent model are shared by every variant.** The session file's `effort` and
+  `agent_env.subagent_model` are covered by the harness gate, so changing either is a gated edit that every later
+  resume also runs. Step the main loop's effort per variant with `--effort` instead, and a sub-agent's model and
+  effort through the plugin's `agents/*.md` (see [Model and effort per variant](#model-and-effort-per-variant));
+  only `agent_env.subagent_model` itself, which overrides every sub-agent at once, needs one flow per setting.
 - **Deciders and concurrency.** `--decider-cmd` and `--decider-dir` need `--concurrency 1`; a scenario's
   `on_unanswered: llm` does not. `latency_s` is measured under the pass's concurrency, so compare latency only
   between passes at the same `--concurrency`.
@@ -438,8 +511,9 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
 ## What hillclimb is not for
 
 - Multi-turn conversations: every case is one prompt.
-- Comparing effort or sub-agent model settings within one flow (see
-  [What a round can and cannot see](#what-a-round-can-and-cannot-see)).
+- Comparing session-level settings other than model and effort (for example `agent_env.subagent_model` or
+  `extended_thinking`) within one flow: those are gated and shared by every variant. Vary a sub-agent's model and
+  effort through the plugin's `agents/*.md` instead (see [Model and effort per variant](#model-and-effort-per-variant)).
 - Cases that read live web content or a connected folder that changes between rounds.
 - A score the skill computes about itself.
 - A significance claim to publish: use `eval`.

@@ -25,7 +25,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Git-tracked snapshot:** `git add` new plugin files before a variant's first run; a fix after a canary is a
   new variant.
 - **The lever is the plugin:** a session-file change (model, effort, sub-agent model) is a gated harness edit
-  for the user to approve, shared by every variant.
+  for the user to approve, shared by every variant; `--model` and `--effort` change the main loop per variant,
+  outside the gate, and a sub-agent's model and effort live in the plugin's `agents/*.md`.
 - **Missing reference refused:** a non-baseline pass refuses while a pairwise case has no baseline reference;
   repair it with `freeze-ref --variant baseline --case <id>`.
 - **Timeouts:** an `errors.jsonl` `timeout` row means `--timeout-s` was reached: raise it if it persists. A
@@ -96,8 +97,10 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   (with `pass` held), never the report's headline, because the guide reads the first binary metric as the
   headline.
 - **What a round may change.** The plugin, which each variant snapshots. The session file (`model`, `effort`,
-  `subagent_model`) is shared by every variant and covered by the gate: changing it needs the user's approval,
-  and every later resume runs the new value. Cowork's system prompt is not tunable.
+  `agent_env.subagent_model`) is shared by every variant and covered by the gate: changing it needs the user's
+  approval, and every later resume runs the new value. `--model` and `--effort` change the main loop per variant,
+  outside the gate, and a sub-agent's model and effort live in the plugin's `agents/*.md`. Cowork's system prompt
+  is not tunable.
 - **`harness_paths`** = what `state-template` printed. A path inside the plugin is refused.
 - **Never have the skill compute its own score.** A metric is read from a file the run writes, so an edit can move
   it without improving the work; ground truth belongs in the scenario (`artifact_json` expected values, rubric

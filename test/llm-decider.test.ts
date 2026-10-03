@@ -22,6 +22,14 @@ describe("LlmDecider", () => {
     expect((d as any).model).toBe("test-model");
   });
 
+  it("records the effort the transport reports it called with, and none when it reports none", async () => {
+    const pinned: Complete = async () => ({ ...reply("PDF", "claude-sonnet-5"), effort: "medium" });
+    const d = await new LlmDecider(pinned).decide(ask("Format?", ["Markdown", "PDF"]), ctx());
+    expect((d as any).effort).toBe("medium");
+    const bare = await new LlmDecider(async () => reply("PDF")).decide(ask("Format?", ["Markdown", "PDF"]), ctx());
+    expect(bare).not.toHaveProperty("effort");
+  });
+
   it("records the RESOLVED model the transport reports — not the requested id", async () => {
     const complete: Complete = async () => reply("PDF", "claude-sonnet-5");
     const d = await new LlmDecider(complete, undefined, "sonnet").decide(ask("Format?", ["Markdown", "PDF"]), ctx());

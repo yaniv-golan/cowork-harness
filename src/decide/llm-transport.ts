@@ -644,7 +644,8 @@ async function completeViaCli(prompt: string, model: string, extraArgs: readonly
   let lastErr: Error | undefined;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await spawnOnce(bin, prompt, model, timeoutMs, maxBytes, extraArgs, role);
+      // The `--effort` the call was made with (the role's pin), reported beside the model so a caller can record it.
+      return { ...(await spawnOnce(bin, prompt, model, timeoutMs, maxBytes, extraArgs, role)), effort: GRADER_EFFORT[role] };
     } catch (e) {
       const err = e as Error & { retryable?: boolean; strictMcpRefused?: boolean };
       lastErr = err;

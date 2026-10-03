@@ -1664,6 +1664,8 @@ export interface GateProvenance {
   answeredBy: string;
   answer: string;
   model?: string;
+  /** The LLM decider's effort (the `--effort` its host-`claude` call was pinned to) when `answeredBy === "llm"`. */
+  effort?: string;
 }
 
 /** Run-level rollup of gate provenance: how many gates, a `by`-source histogram, and per-gate detail
@@ -1879,7 +1881,12 @@ export interface RunResult {
     // request_id (UUID) of a question gate — lets `trace --view questions` pair a decision to its event row by id
     // instead of positionally (retried/duplicated gate events would shift a positional pairing). Optional.
     requestId?: string;
+    /** The LLM decider's model on a `by: "llm"` decision: a question gate, or a permission it answered. */
     model?: string;
+    /** The LLM decider's effort on a `by: "llm"` decision (a question gate, or a permission it answered): the `--effort`
+     *  its host-`claude` call was pinned to (`GRADER_EFFORT.decider`). Absent for any other answer source, or a decider
+     *  transport that reported none. */
+    effort?: string;
     detail?: unknown;
     rationale?: string;
     // The full AskUserQuestion option set (label + description) as originally offered by the model —
@@ -2396,7 +2403,7 @@ export interface RunResult {
    * human, or the `first`-option fallback). Scripted answers (by:"scripted") are excluded because
    * they are authoritative and deterministic.
    */
-  nonReproducibleAnswers?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string }>;
+  nonReproducibleAnswers?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string; effort?: string }>;
   usage?: UsageInfo;
   cost?: CostInfo;
   /** USD the LLM decider (`on_unanswered: llm` / `--decider-llm`) spent answering this run's gates: the sum,

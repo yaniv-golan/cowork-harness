@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { CLI, POSIX, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
+import { CLI, POSIX, makeStubFixture, stubSessionTranscript, type StubFixture } from "./helpers/stub-agent.js";
 import { mergeMetrics, regradeFlow, type HillclimbRegradeArgs, type RegradeFlowDeps } from "../src/hillclimb/regrade.js";
 import { regradeRuns, type RegradeOptions, type RegradeRunReport } from "../src/run/regrade.js";
 import { metricSigs } from "../src/hillclimb/metric-keys.js";
@@ -50,6 +50,7 @@ const STUB = [
     stop_reason: "end_turn",
     modelUsage: { [MODEL]: { inputTokens: 10, outputTokens: 5, costUSD: 0.01 } },
   }),
+  stubSessionTranscript(MODEL),
   "cat >/dev/null",
 ].join("\n");
 const ENVELOPE = join(import.meta.dirname, "fixtures", "pairwise-judge", "claude-p-json-schema-envelope.json");
@@ -279,6 +280,8 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps);
     expect(out.exitCode, JSON.stringify(out.variants)).toBe(0);
     expect(rows("v1")[0]!.grade.pass).toBe(0);
+    // A rebuilt row keeps what its run asked for and what the agent sent: regrade never re-runs the agent.
+    expect(rows("v1")[0]!.meta).toMatchObject({ effort: "medium", effort_sent: "medium", model_requested: MODEL });
   }, 180_000);
 
   it("--allow-unchecked reaches the core only when passed; the metrics seam is called once per rewritten row", async () => {

@@ -30,6 +30,16 @@ describe("summarizeGateProvenance", () => {
     ]);
   });
 
+  it("carries the LLM decider's effort beside its model; a gate with none has no effort key", () => {
+    const decisions: Decisions = [
+      { kind: "question", name: "AskUserQuestion", decision: "answered", by: "llm", model: "m", effort: "medium", detail: { "Q?": "a" } },
+      { kind: "question", name: "AskUserQuestion", decision: "answered", by: "scripted", detail: { "R?": "b" } },
+    ];
+    const s = summarizeGateProvenance(decisions);
+    expect(s.gates[0]).toMatchObject({ answeredBy: "llm", model: "m", effort: "medium" });
+    expect(s.gates[1]).not.toHaveProperty("effort");
+  });
+
   it("flattens a multi-question gate into one entry with joined question + answer", () => {
     const decisions: Decisions = [
       { kind: "question", name: "AskUserQuestion", decision: "answered", by: "first", detail: { "A?": "x", "B?": "y" } },

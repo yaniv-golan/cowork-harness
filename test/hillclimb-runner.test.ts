@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/runner.js";
+import { requestedSummary, runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/runner.js";
 import { parseHillclimbRunArgs, type HillclimbRunArgs } from "../src/hillclimb/args.js";
 import type { RunResult } from "../src/types.js";
 import { stateTemplate } from "../src/hillclimb/state-template.js";
@@ -35,6 +35,8 @@ const frames = readFileSync(join(FX, "hillclimb-runs", "result-event-pair.jsonl"
   .split("\n");
 const MODEL = "claude-sonnet-5";
 const events = [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }), frames[1]];
+// The agent's own session transcript: its one main-loop call went out at the requested effort.
+const transcript = [JSON.stringify({ type: "assistant", isSidechain: false, effort: "medium", message: { model: MODEL } })];
 
 const SCENARIO = (name: string) => `name: ${name}
 fidelity: protocol
@@ -73,6 +75,7 @@ function deps(over: Partial<RunnerDeps> = {}): RunnerDeps {
     stderr: (l) => err.push(l),
     virtual: { harnessVersion: "4.3.0", baselineId: "2.9939.4" },
     pin: () => MODEL,
+    requestedEffort: () => ({ effort: "medium", noSelector: false }),
     derivedPaths: (cases) => cases.map((c) => c.file),
     mountRoots: () => [],
     tickMs: 1_000_000,
@@ -80,7 +83,16 @@ function deps(over: Partial<RunnerDeps> = {}): RunnerDeps {
       jobs.push({ id: j.c.id, rep: j.rep, runLabel: j.runLabel });
       const b = behave(j.c.id, j.rep);
       if (b === "throw") throw new Error("runner crashed");
-      return { result: excerpt, events, children: [], attemptS: 12, runnerTimeout: false, runDir: `/tmp/runs/${j.c.id}/${j.rep}`, ...b };
+      return {
+        result: excerpt,
+        events,
+        transcript,
+        children: [],
+        attemptS: 12,
+        runnerTimeout: false,
+        runDir: `/tmp/runs/${j.c.id}/${j.rep}`,
+        ...b,
+      };
     },
     ...over,
   };
@@ -303,7 +315,13 @@ describe("a pass", () => {
     mkdirSync(join(flowDir(), "baseline"), { recursive: true });
     writeFileSync(vfile("baseline", "summary.json"), JSON.stringify({ description: "loop" }));
     await runHillclimb(args(), deps());
-    expect(JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"))).toEqual({ description: "loop", model: MODEL });
+    expect(JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"))).toEqual({
+      description: "loop",
+      model: MODEL,
+      model_requested: MODEL,
+      effort: "medium",
+      effort_sent: "medium",
+    });
   });
 
   it("rows record whether the trace has the sub-agents' turns (meta.subagent_turns)", async () => {
@@ -596,7 +614,12 @@ describe("failures inside the pool", () => {
     const r = await runHillclimb(args(), deps());
     expect(r).toMatchObject({ exitCode: 1, ok: 1, failed: 1 });
     expect(rows("baseline", "errors.jsonl")).toMatchObject([
-      { prompt_id: "alpha", failure_class: "error", meta: { failure_rule: "row_build", cost_usd: 0.25, retries_unrecorded: true } },
+      {
+        prompt_id: "alpha",
+        failure_class: "error",
+        // what the attempt asked for, as on every other error row
+        meta: { failure_rule: "row_build", cost_usd: 0.25, retries_unrecorded: true, model_requested: MODEL, effort: "medium" },
+      },
     ]);
     expect(rows("baseline").map((x) => x.prompt_id)).toEqual(["beta"]);
   });
@@ -738,5 +761,42 @@ describe("--dry-run", () => {
     expect(existsSync(flowDir())).toBe(false);
     expect(err).toContain("[baseline] 6 of 6 (id,rep) to run");
     expect(err.join("\n")).toMatch(/harness gate: absent/);
+  });
+});
+
+describe("requestedSummary: summary.json's requested and sent keys over the variant's whole results.jsonl", () => {
+  const row = (meta: Record<string, unknown>) => JSON.stringify({ prompt_id: "a", rep: 0, meta });
+  it("one value is written, several are mixed, none is absent", () => {
+    expect(
+      requestedSummary(
+        [
+          row({ effort: "high", effort_sent: "high", model_requested: "m" }),
+          row({ effort: "high", effort_sent: "high", model_requested: "m" }),
+        ].join("\n"),
+      ),
+    ).toEqual({
+      model_requested: "m",
+      effort: "high",
+      effort_sent: "high",
+      effort_selector: undefined,
+    });
+    expect(requestedSummary([row({ effort: "high" }), row({ effort: "low" })].join("\n")).effort).toBe("mixed");
+    // a row that records the key beside one that does not (written before it existed) is mixed, not the one value
+    expect(requestedSummary([row({ effort: "high", model_requested: "m" }), row({})].join("\n"))).toMatchObject({
+      effort: "mixed",
+      model_requested: "mixed",
+    });
+    expect(requestedSummary(null)).toEqual({
+      model_requested: undefined,
+      effort: undefined,
+      effort_sent: undefined,
+      effort_selector: undefined,
+    });
+  });
+  it("effort_selector: false when every row's model has no selector, mixed when only some", () => {
+    expect(requestedSummary([row({ effort: "medium", effort_selector: false })].join("\n")).effort_selector).toBe(false);
+    expect(
+      requestedSummary([row({ effort: "medium", effort_selector: false }), row({ effort: "medium" })].join("\n")).effort_selector,
+    ).toBe("mixed");
   });
 });

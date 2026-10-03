@@ -50,3 +50,54 @@ export function servedModelMismatch(pin: string | undefined, models: readonly st
   }
   return undefined;
 }
+
+/** The effort levels an agent request carries (`output_config.effort`). */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+/** What the agent's own session transcript says about the effort of its main-loop calls. */
+export interface SentEffort {
+  /** Distinct efforts sent, in first-seen order. */
+  values: string[];
+  /** Main-loop calls that went out with no effort (the agent retried without one, or a model with no selector). */
+  unsent: number;
+  /** Main-loop calls whose recorded effort is not an effort level. Never kept as a value: the transcript is
+   *  agent-writable evidence, and a row records only a known level. */
+  invalid: number;
+  /** Main-loop calls with a live model. */
+  calls: number;
+}
+
+/** The effort each main-loop call went out with, read from the agent's own session transcript
+ *  (`<config>/projects/<cwd>/<session>.jsonl`, which `events.jsonl` does not carry). The agent stamps every assistant
+ *  line with the effort of the request that produced it — the request's final `output_config.effort`, so after the
+ *  env override, the model's caps and the thinking-off clamp — as `effort`, overridden by `perTurnEffort` when set;
+ *  neither is present when the request went out without one. Main loop only (`isSidechain` false; sub-agents write
+ *  their own files); `<synthetic>` API-error lines carry none and are skipped, as `mainLoopModels` skips them.
+ *
+ *  The whole file is read, and it holds only the current turn: every hillclimb attempt gets a fresh run id
+ *  (`attemptRunId`, job.ts), and `executeScenario` refuses `--resume` / `--session-id` with a pre-assigned run id, so
+ *  no attempt continues an earlier session. The file has no turn marker to scope a resumed session by. */
+export function sentEffort(transcript: readonly string[]): SentEffort {
+  const out: SentEffort = { values: [], unsent: 0, invalid: 0, calls: 0 };
+  for (const line of transcript) {
+    if (!line.includes('"assistant"')) continue;
+    let o: { type?: unknown; isSidechain?: unknown; effort?: unknown; perTurnEffort?: unknown; message?: { model?: unknown } };
+    try {
+      o = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (o?.type !== "assistant" || o.isSidechain === true || !isLiveModelId(o.message?.model)) continue;
+    out.calls++;
+    const e =
+      typeof o.perTurnEffort === "string" && o.perTurnEffort
+        ? o.perTurnEffort
+        : typeof o.effort === "string" && o.effort
+          ? o.effort
+          : undefined;
+    if (e === undefined) out.unsent++;
+    else if (!(EFFORT_LEVELS as readonly string[]).includes(e)) out.invalid++;
+    else if (!out.values.includes(e)) out.values.push(e);
+  }
+  return out;
+}

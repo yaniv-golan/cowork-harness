@@ -69,6 +69,8 @@ let skillActivity: Array<{ skillId: string }> | undefined;
 let inventory: string[];
 let authored: Record<string, string> | undefined;
 let judgeTransport: object | undefined;
+/** The effort the fake agent's transcript says it sent: undefined = the requested one, null = none at all. */
+let sentEffortOverride: string | null | undefined;
 const rows = () =>
   readFileSync(join(cwd, "flow", "baseline", "results.jsonl"), "utf8")
     .trim()
@@ -93,6 +95,25 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
         join(outDir, "events.jsonl"),
         [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }), frames[1]].join("\n"),
       );
+      // The agent's own session transcript, where a container run keeps it, stamped with the effort it sent: the
+      // session's (the requested one) unless a test makes the agent send another.
+      const sentLine = JSON.stringify({
+        type: "assistant",
+        isSidechain: false,
+        message: { model: MODEL },
+        ...(sentEffortOverride !== null ? { effort: sentEffortOverride ?? (a.extra.session as SessionConfig).effort ?? "medium" } : {}),
+        perTurnEffort: null,
+      });
+      const sid = JSON.parse(frames[0]).session_id as string;
+      // Where the agent's config root is: the session's pinned config_dir on hostloop/protocol, else the run's own.
+      const pinnedCfg = (a.extra.session as SessionConfig).plugins.config_dir;
+      const hostTier = a.scenario.fidelity === "hostloop" || a.scenario.fidelity === "protocol";
+      const configRoot = hostTier
+        ? (pinnedCfg ?? join(outDir, "claude-config"))
+        : join(authored ? join(outDir, "work") : join(outDir, "work", "session", "mnt"), ".claude");
+      const projects = join(configRoot, "projects", "-sessions-x");
+      mkdirSync(projects, { recursive: true });
+      writeFileSync(join(projects, `${sid}.jsonl`), sentLine + "\n");
       // A real run stamps the signature of the session it staged; so does this fake.
       const b = loadBaseline(a.scenario.baseline);
       const fp = buildFingerprint(a.scenario.session, b.appVersion, undefined, a.scenario.skills, b, a.extra.session as SessionConfig);
@@ -115,6 +136,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
       return {
         ...excerpt,
         ...authoredFields,
+        fidelity: a.scenario.fidelity,
         outDir,
         assertions,
         ...(skillActivity
@@ -147,6 +169,7 @@ beforeEach(() => {
   inventory = ["my-plugin:x"];
   authored = undefined;
   judgeTransport = undefined;
+  sentEffortOverride = undefined;
 });
 afterEach(() => {
   for (const d of [cwd, join(plugin, ".."), snaps]) rmSync(d, { recursive: true, force: true });
@@ -1664,5 +1687,363 @@ describe("the harness gate names what changed", () => {
     // Re-approving records the per-entry hashes from then on.
     await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
     expect(state()).toHaveProperty("harness_files");
+  });
+});
+
+describe("--effort: the requested effort reaches the agent and every row", () => {
+  const session = (extra: string) =>
+    writeFileSync(join(cwd, "evals", "_session.yaml"), `model: ${MODEL}\n${extra}plugins:\n  local_plugins:\n    - ${plugin}\n`);
+  const approve = () => runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+
+  it("--effort sets the session the run gets, and rows record it as meta.effort beside meta.model_requested", async () => {
+    await approve();
+    const r = await runHillclimbCommand(args("--effort", "high"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    expect((calls[0].extra.session as SessionConfig).effort).toBe("high");
+    const meta = rows()[0].meta as Record<string, unknown>;
+    expect(meta.effort).toBe("high");
+    expect(meta.model_requested).toBe(MODEL);
+  });
+
+  it("without --effort a row records the session's effort:, else the baseline default", async () => {
+    session("effort: low\n");
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    expect((rows()[0].meta as Record<string, unknown>).effort).toBe("low");
+    expect((calls[0].extra.session as SessionConfig).effort).toBe("low");
+    session("");
+    // approved in v1: the baseline variant's rows ran effort low, so re-approving there is refused (the resume guard)
+    await runHillclimbCommand(args("--variant", "v1", "--approve-harness", "--dry-run"), deps());
+    const r1 = await runHillclimbCommand(args("--variant", "v1"), deps());
+    expect(r1.exitCode, err.join("\n")).toBe(0);
+    const v1 = JSON.parse(
+      readFileSync(join(cwd, "flow", "v1", "results.jsonl"), "utf8")
+        .trim()
+        .split("\n")[0],
+    );
+    expect(v1.meta.effort).toBe("medium");
+  });
+
+  it("an effort the pinned model does not offer is refused before spend", async () => {
+    await approve();
+    // claude-sonnet-4-6 offers low, medium, high, max — not xhigh
+    const r = await runHillclimbCommand(args("--model", "claude-sonnet-4-6", "--effort", "xhigh", "--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/effort "xhigh" is not offered by model "claude-sonnet-4-6"/);
+    // a model with no effort selector refuses any --effort
+    const h = await runHillclimbCommand(args("--model", "claude-haiku-4-5", "--effort", "low", "--approve-harness"), deps());
+    expect(h.exitCode).toBe(2);
+    expect(h.error?.message).toMatch(/model "claude-haiku-4-5" has no effort selector/);
+    expect(calls).toEqual([]);
+  });
+
+  it("a dated pin is held to its model's levels: an effort it does not offer is refused before spend", async () => {
+    await approve();
+    const r = await runHillclimbCommand(args("--model", "claude-sonnet-4-6-20251001", "--effort", "xhigh", "--approve-harness"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toBe(
+      'refusing to run: case alpha: effort "xhigh" is not offered by model "claude-sonnet-4-6-20251001" — supported levels: low, medium, high, max',
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("a dated pin of a model with no effort selector: --effort is refused, and without it rows score with effort_selector false", async () => {
+    await approve();
+    const h = await runHillclimbCommand(args("--model", "claude-haiku-4-5-20251001", "--effort", "low", "--approve-harness"), deps());
+    expect(h.exitCode).toBe(2);
+    expect(h.error?.message).toMatch(/case alpha: model claude-haiku-4-5-20251001 has no effort selector: remove --effort/);
+    expect(calls).toEqual([]);
+    sentEffortOverride = null; // the agent sends no effort for it
+    const r = await runHillclimbCommand(args("--model", "claude-opus-4-1", "--variant", "v1", "--approve-harness"), deps());
+    expect(r.exitCode, r.error?.message).not.toBe(2);
+    const row = [
+      ...(existsSync(join(cwd, "flow", "v1", "results.jsonl"))
+        ? readFileSync(join(cwd, "flow", "v1", "results.jsonl"), "utf8")
+            .trim()
+            .split("\n")
+        : []),
+      ...(existsSync(join(cwd, "flow", "v1", "errors.jsonl"))
+        ? readFileSync(join(cwd, "flow", "v1", "errors.jsonl"), "utf8")
+            .trim()
+            .split("\n")
+        : []),
+    ].map((l) => JSON.parse(l))[0];
+    // the fake serves MODEL, so the served-model check fails the row; the effort check must not be what does
+    expect(row.meta.failure_rule).not.toBe("effort_not_sent");
+    expect(row.meta).toMatchObject({ effort: "medium", effort_selector: false, model_requested: "claude-opus-4-1" });
+  });
+
+  it("xhigh or max with extended_thinking: false is refused before spend, and so is thinking off where the model disallows it", async () => {
+    session("extended_thinking: false\n");
+    await approve();
+    const r = await runHillclimbCommand(args("--effort", "max"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/case alpha: effort max with extended_thinking: false/);
+    const o = await runHillclimbCommand(args("--model", "claude-opus-5", "--approve-harness"), deps());
+    expect(o.exitCode).toBe(2);
+    expect(o.error?.message).toMatch(/case alpha: model claude-opus-5 does not allow thinking to be turned off/);
+    expect(calls).toEqual([]);
+  });
+
+  it("the dry run prints each case's requested model and effort, and that the estimate ignores both", async () => {
+    const r = await runHillclimbCommand(args("--dry-run", "--effort", "high"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    const text = err.join("\n");
+    expect(text).toContain(`[baseline] case alpha: model ${MODEL}, effort high (requested)`);
+    expect(text).toMatch(/the estimate ignores the requested model and effort/);
+  });
+
+  it("a model the baseline lists no effort levels for is named once: the sent-effort check decides", async () => {
+    await approve();
+    await runHillclimbCommand(args("--model", "claude-opus-5-5", "--dry-run"), deps());
+    expect(err.filter((l) => l.includes("lists no effort levels"))).toEqual([
+      "[baseline] note: the baseline lists no effort levels for claude-opus-5-5, so the requested effort is not checked against the model before spend; each row's sent-effort check (meta.effort_sent) decides",
+    ]);
+  });
+});
+
+describe("the sent effort, read from the agent's own transcript, decides whether a row is scored", () => {
+  const errs = () =>
+    readFileSync(join(cwd, "flow", "baseline", "errors.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, any>);
+
+  it("sent as requested: a scored row with meta.effort_sent", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    expect((await runHillclimbCommand(args("--effort", "high"), deps())).exitCode).toBe(0);
+    expect(rows()[0].meta).toMatchObject({ effort: "high", effort_sent: "high" });
+  });
+
+  it("the agent sent another effort than requested: an error row (effort_not_sent), never a scored one", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    sentEffortOverride = "medium";
+    const r = await runHillclimbCommand(args("--effort", "high"), deps());
+    expect(r.exitCode).toBe(1);
+    expect(existsSync(join(cwd, "flow", "baseline", "results.jsonl"))).toBe(false);
+    expect(errs()[0]).toMatchObject({
+      failure_class: "serving_substitution",
+      error: "sent effort medium != requested high",
+      meta: { failure_rule: "effort_not_sent", effort: "high", effort_sent: "medium", model_requested: MODEL },
+    });
+  });
+
+  it("the agent sent no effort though one was requested: an error row", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    sentEffortOverride = null;
+    expect((await runHillclimbCommand(args(), deps())).exitCode).toBe(1);
+    expect(errs()[0]).toMatchObject({ error: "the requested effort medium was not sent on 1 of 1 main-loop assistant message(s)" });
+  });
+});
+
+describe("a variant runs one requested model and effort per case: the resume guard", () => {
+  const rowsOf = (variant: string) =>
+    readFileSync(join(cwd, "flow", variant, "results.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, any>);
+  const rewrite = (variant: string, edit: (r: Record<string, any>) => void) => {
+    const rs = rowsOf(variant);
+    rs.forEach(edit);
+    writeFileSync(join(cwd, "flow", variant, "results.jsonl"), rs.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  };
+  /** Rows as written before the requested fields existed. */
+  const legacy = (variant: string, edit: (r: Record<string, any>) => void = () => {}) =>
+    rewrite(variant, (r) => {
+      delete r.meta.model_requested;
+      delete r.meta.effort;
+      delete r.meta.effort_sent;
+      edit(r);
+    });
+  const approve = () => runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+
+  it("a pass that would run another effort in a variant whose rows ran one is refused before spend, dry run too", async () => {
+    await approve();
+    await runHillclimbCommand(args("--effort", "high"), deps());
+    calls = [];
+    for (const extra of [["--dry-run"], []]) {
+      const r = await runHillclimbCommand(args("--effort", "low", "--reps", "2", ...extra), deps());
+      expect(r.exitCode).toBe(2);
+      expect(r.error?.message).toBe(
+        "refusing to run: variant baseline's rows for case alpha ran effort high, and this pass would run effort low — one variant would mix two settings: run the change as a new variant (--variant v<N>), or keep the setting the rows ran with",
+      );
+    }
+    expect(calls).toEqual([]);
+    // the same effort resumes
+    expect((await runHillclimbCommand(args("--effort", "high", "--reps", "2"), deps())).exitCode).toBe(0);
+  });
+
+  it("a pass that would run another model in the variant is refused", async () => {
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    calls = [];
+    const r = await runHillclimbCommand(args("--model", "claude-opus-4-8", "--reps", "2"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(
+      new RegExp(`variant baseline's rows for case alpha ran model ${MODEL}, and this pass would run model claude-opus-4-8 —`),
+    );
+    expect(calls).toEqual([]);
+  });
+
+  it("error rows count too: a case whose only rows are error rows at effort high refuses a pass at low", async () => {
+    await approve();
+    sentEffortOverride = "medium"; // every attempt is an effort_not_sent error row
+    await runHillclimbCommand(args("--effort", "high"), deps());
+    expect(existsSync(join(cwd, "flow", "baseline", "results.jsonl"))).toBe(false);
+    sentEffortOverride = undefined;
+    calls = [];
+    const r = await runHillclimbCommand(args("--effort", "low"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/variant baseline's rows for case alpha ran effort high, and this pass would run effort low —/);
+    expect(calls).toEqual([]);
+    // the same effort re-runs the error slot
+    expect((await runHillclimbCommand(args("--effort", "high"), deps())).exitCode).toBe(0);
+  });
+
+  it("another effort or model in ANOTHER variant runs, with no warning: it is the lever", async () => {
+    await approve();
+    await runHillclimbCommand(args("--effort", "high"), deps());
+    err = [];
+    const r = await runHillclimbCommand(args("--variant", "v1", "--effort", "low"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    expect(err.join("\n")).not.toMatch(/warning: variant/);
+  });
+
+  it("rows written before the requested fields: a served model the pin does not account for refuses", async () => {
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    legacy("baseline", (r) => (r.model = "claude-opus-4-8"));
+    const r = await runHillclimbCommand(args("--reps", "2"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(
+      new RegExp(`variant baseline's rows for case alpha ran model claude-opus-4-8 \\(served\\), and this pass would run model ${MODEL} —`),
+    );
+  });
+
+  it("rows written before the requested fields: a dated snapshot of the pin served is the pin", async () => {
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    legacy("baseline", (r) => (r.model = `${MODEL}-20260101`));
+    err = [];
+    expect((await runHillclimbCommand(args("--reps", "2"), deps())).exitCode).toBe(0);
+    expect(err.filter((l) => l.startsWith("warning: variant") && l.includes("model"))).toEqual([]);
+  });
+
+  it("rows written before the requested fields warn, never refuse: no served model, and an unknown effort with or without --effort", async () => {
+    const effortWarning =
+      "warning: variant baseline's earlier rows for case alpha don't record the requested effort (written before it was recorded): their effort is unknown, and this pass requests medium — compare them only knowingly";
+    await approve();
+    await runHillclimbCommand(args(), deps());
+    legacy("baseline", (r) => delete r.model);
+    err = [];
+    expect((await runHillclimbCommand(args("--reps", "2"), deps())).exitCode).toBe(0);
+    expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([
+      `warning: variant baseline's earlier rows for case alpha record neither the requested nor the served model; this pass requests ${MODEL} — compare them only knowingly`,
+      effortWarning,
+    ]);
+    // served model known: only the effort is unrecorded — warned without --effort too (a re-approved session
+    // file may have changed its effort: since then)
+    for (const extra of [[], ["--effort", "medium"]]) {
+      legacy("baseline", (r) => (r.model = MODEL));
+      err = [];
+      const reps = String(rowsOf("baseline").length + 1);
+      expect((await runHillclimbCommand(args("--reps", reps, ...extra), deps())).exitCode).toBe(0);
+      expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([effortWarning]);
+    }
+  });
+
+  it("a no-selector case's rows are not held to their effort: it is only the baseline default, which a sync may move", async () => {
+    await approve();
+    sentEffortOverride = null;
+    await runHillclimbCommand(args("--model", "claude-haiku-4-5"), deps()); // a served-model error row: rewrite it as scored
+    const errs = readFileSync(join(cwd, "flow", "baseline", "errors.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    const scored = { ...errs[0], meta: { ...errs[0].meta, effort: "low", effort_selector: false } };
+    delete scored.meta.failure_rule;
+    writeFileSync(join(cwd, "flow", "baseline", "results.jsonl"), JSON.stringify(scored) + "\n");
+    rmSync(join(cwd, "flow", "baseline", "errors.jsonl"));
+    calls = [];
+    const r = await runHillclimbCommand(args("--model", "claude-haiku-4-5", "--reps", "2", "--dry-run"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    // a case WITH a selector is still held to it
+    rewrite("baseline", (x) => (x.meta.effort_selector = undefined));
+    const s = await runHillclimbCommand(args("--reps", "2", "--dry-run"), deps());
+    expect(s.exitCode).toBe(2);
+  });
+
+  it("the guard is per case: a --case pass may run another case at another effort, and warns that the variant's cases differ", async () => {
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO.replace("name: Alpha", "name: Beta"));
+    await approve();
+    await runHillclimbCommand(args("--case", "alpha", "--effort", "high"), deps());
+    err = [];
+    const r = await runHillclimbCommand(args("--case", "beta", "--effort", "low"), deps());
+    expect(r.exitCode, r.error?.message).toBe(0);
+    expect(err.filter((l) => l.startsWith("warning: variant"))).toEqual([
+      "warning: variant baseline's rows for case alpha ran effort high, and this pass runs effort low for case beta: the variant's cases ran different settings — compare across them only knowingly",
+    ]);
+  });
+
+  it("--effort is not in the harness sha: an approved flow runs under any --effort without re-approval", async () => {
+    await approve();
+    const shaOf = async (...a: string[]) => {
+      err = [];
+      await runHillclimbCommand(args("--dry-run", ...a), deps());
+      return err.find((l) => l.startsWith("harness gate:"));
+    };
+    const plain = await shaOf();
+    expect(plain).toMatch(/^harness gate: approved/);
+    expect(await shaOf("--effort", "max")).toBe(plain);
+    expect((await runHillclimbCommand(args("--effort", "max"), deps())).exitCode).toBe(0);
+  });
+
+  it("summary.json reads the whole variant: two cases run at two efforts make it mixed", async () => {
+    writeFileSync(join(cwd, "evals", "beta.yaml"), SCENARIO.replace("name: Alpha", "name: Beta"));
+    await approve();
+    await runHillclimbCommand(args("--case", "alpha", "--effort", "high"), deps());
+    const summary = () => JSON.parse(readFileSync(join(cwd, "flow", "baseline", "summary.json"), "utf8"));
+    expect(summary()).toMatchObject({ effort: "high", effort_sent: "high", model_requested: MODEL });
+    await runHillclimbCommand(args("--case", "beta", "--effort", "low"), deps());
+    expect(summary()).toMatchObject({ effort: "mixed", effort_sent: "mixed", model_requested: MODEL });
+  });
+
+  it("an error row for a model with no effort selector carries meta.effort_selector false", async () => {
+    await approve();
+    sentEffortOverride = null;
+    await runHillclimbCommand(args("--model", "claude-haiku-4-5", "--variant", "v1", "--approve-harness"), deps());
+    // the fake serves another model, so this row is a served-model error
+    const s = JSON.parse(
+      readFileSync(join(cwd, "flow", "v1", "errors.jsonl"), "utf8")
+        .trim()
+        .split("\n")[0],
+    );
+    expect(s.meta).toMatchObject({ effort_selector: false });
+  });
+
+  it("summary.json records the pass's requested model, requested effort and sent effort", async () => {
+    await approve();
+    await runHillclimbCommand(args("--effort", "high"), deps());
+    const s = JSON.parse(readFileSync(join(cwd, "flow", "baseline", "summary.json"), "utf8"));
+    expect(s).toMatchObject({ model: MODEL, model_requested: MODEL, effort: "high", effort_sent: "high" });
+  });
+});
+
+describe("a session that pins plugins.config_dir", () => {
+  it("hostloop with a fresh pinned config dir: rows are scored with the effort read from that dir", async () => {
+    const cfg = join(mkdtempSync(join(tmpdir(), "hc-rc-cfg-")), "fresh-config");
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nplugins:\n  config_dir: ${cfg}\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: hostloop"));
+    try {
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      const r = await runHillclimbCommand(args("--effort", "high"), deps());
+      expect(r.exitCode, err.join("\n")).toBe(0);
+      expect(rows()[0].meta).toMatchObject({ effort: "high", effort_sent: "high" });
+    } finally {
+      rmSync(join(cfg, ".."), { recursive: true, force: true });
+    }
   });
 });

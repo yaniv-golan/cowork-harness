@@ -165,6 +165,30 @@ export class FlowWriter {
     this.r.writeFile(p, JSON.stringify({ ...cur, ...redactDeep(missing, this.secrets) }, null, 2) + "\n");
   }
 
+  /** Set `keys` in summary.json, replacing what is there — for keys the runner recomputes over the variant's whole
+   *  `results.jsonl` after every pass (what its rows requested and were sent), never for a key the loop owns. A key
+   *  whose value is undefined is removed. A summary.json that does not parse, or is not an object, is left alone. */
+  setSummaryKeys(keys: Record<string, string | false | undefined>): void {
+    const p = this.vpath("summary.json");
+    const text = this.r.readIfPresent(p);
+    let cur: Record<string, unknown> = {};
+    if (text !== null)
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) cur = parsed;
+        else return;
+      } catch {
+        return;
+      }
+    const next = { ...cur };
+    for (const [k, v] of Object.entries(keys)) {
+      if (v === undefined) delete next[k];
+      else next[k] = v;
+    }
+    if (JSON.stringify(next) === JSON.stringify(cur)) return;
+    this.r.writeFile(p, JSON.stringify(redactDeep(next, this.secrets), null, 2) + "\n");
+  }
+
   /** The one sanctioned `_state.json` write (runner-scaffold.mjs l.262-266): record the approved harness sha and the
    *  `--skill` selection it was approved with (`harness_skill`, removed when there is none, so a stale one never
    *  names a selection this sha did not hash), and the per-entry hashes behind the sha (`harness_files`, so a later
