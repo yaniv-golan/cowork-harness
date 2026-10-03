@@ -256,15 +256,22 @@ All notable changes to this project are documented here. The format is based on
   <scenario.yaml | dir/>` runs every scenario `--reps` times into `<flow>/<variant>/` under the published
   runner-scaffold contract (`results.jsonl`, `errors.jsonl`, `traces/`, `progress.txt`, `summary.json`), with the
   scaffold's flags, defaults and exit codes: `0` every attempt scored, `1` a failed attempt or a mid-run stop, `2`
-  refused before spending; `--timeout-s` bounds the whole attempt, the judge phase included. Every case's session declares exactly one `plugins.local_plugins` entry, the same in
+  refused before spending; `--timeout-s` bounds the whole attempt, the judge phase included. The pass's `done -
+  N ok, M failed` line and the envelope's `failed` count (case, rep) slots; a baseline pass's reference freeze
+  reports on its own line (`reference freeze: skipped` or `failed`), and still exits 1. Every case's session declares exactly one `plugins.local_plugins` entry, the same in
   every case: the plugin the loop tunes. Each variant runs from a snapshot of that plugin taken on its first run, so a resume or
   appended reps measure what the variant was, not the live plugin the loop has since edited. Before spending it
-  refuses an alias model, a scenario or session file the agent could read through a mount, a `harness_paths` entry
+  refuses no usable agent credential at a selected case's tier (`doctor`'s check, as `eval` applies it; at protocol a
+  login only in the real config dir too, as hillclimb runs protocol with a managed config dir), an alias model, a
+  scenario or session file the agent could read through a mount, a `harness_paths` entry
   inside the tuned plugin, a host `claude` that cannot run the judge isolated (as `eval` does), an unknown `--skill`
   (naming the plugin's skills), and an unapproved harness change (`--approve-harness` records it; the harness sha
   covers each scenario, its session file, its uploads and its `workspace_fixture` files, exec bits included; a
   fixture is also a read root, so a scenario or session file inside one is refused like one inside a mounted
-  folder). Under `--case`, the per-case checks (the session and
+  folder; the approval also records a sha256 per hashed entry as `_state.json` `harness_files`, so a refusal names
+  the changed entries first and counts the unchanged ones, and an approval without them still loads and says the
+  change is unknown). A run the agent could not authenticate prints, once per pass, which variables the agent
+  takes at that tier, the order they are looked up in, and what `doctor` sees now. Under `--case`, the per-case checks (the session and
   its model pins, the scenario's inputs, its `semantic_pairwise` references, the isolation check, the mounts) cover the
   selected cases only, so a problem in an unselected case never blocks a pass that does not run it; every scenario
   file must still parse and every case's baseline must still load, the harness gate and the files kept unreadable

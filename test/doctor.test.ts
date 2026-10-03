@@ -1016,3 +1016,32 @@ describe("doctor — container agent remedy for a pruned pin", () => {
       );
   });
 });
+
+describe("authFailureHint — what a run the agent could not authenticate says", () => {
+  const ok = { id: "token", title: "Auth token", status: "ok" as const, detail: "found (env / .env)", required: true };
+  it("names ANTHROPIC_AUTH_TOKEN as unused only where the agent's env is an allowlist (container, microvm)", async () => {
+    const { authFailureHint } = await import("../src/run/doctor.js");
+    const env = { ANTHROPIC_AUTH_TOKEN: "sk-test-SECRET-9" };
+    for (const tier of ["container", "microvm"] as const) {
+      const h = authFailureHint(tier, ok, env);
+      expect(h).toContain(
+        `ANTHROPIC_AUTH_TOKEN is set, but at fidelity ${tier} only CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY reach the agent`,
+      );
+      expect(h).not.toContain("sk-test-SECRET-9");
+    }
+    // hostloop and protocol spawn the agent from the harness's env: the variable reaches it there.
+    for (const tier of ["hostloop", "protocol"] as const) {
+      const h = authFailureHint(tier, ok, env);
+      expect(h).toContain("CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN");
+      expect(h).toContain("a credential is set, so the agent rejected it");
+    }
+  });
+
+  it("with no credential, carries doctor's own detail and remedy", async () => {
+    const { authFailureHint, tokenCheck } = await import("../src/run/doctor.js");
+    const probe = { platform: () => "linux", hasToken: () => false, hasKeychainToken: () => false, worktreeEnv: () => null };
+    const h = authFailureHint("container", tokenCheck("container", probe as never), {});
+    expect(h).toContain("Now: no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN. Fix: export CLAUDE_CODE_OAUTH_TOKEN=");
+    expect(h).toContain("Check with: cowork-harness doctor --tier container");
+  });
+});

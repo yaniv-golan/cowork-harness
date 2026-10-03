@@ -1151,8 +1151,8 @@ def _lint_transcript_command_shaped(items, path):
 _REDACTABLE_SHAPES = [
     re.compile(r"/(?:Users|home|root)/[^/\s]"),
     re.compile(r"/private/(?:tmp|var)/"),
-    re.compile(r"/var/folders/"),
-    re.compile(r"/Volumes/[^/\s]"),
+    re.compile(r"/" r"var/folders/"),  # split so the literal is not itself a host-path token an agent echoes
+    re.compile(r"/" r"Volumes/[^/\s]"),
     re.compile(r"/System/Volumes/"),
     re.compile(r"(?:^|[/\"'\s])-(?:Users|home|root)-[^/\s]"),  # a Claude project slug (-Users-acme-repo)
     re.compile(r"sk-ant-"),  # an Anthropic key: the operator-secret scrubber rewrites it whole to [REDACTED]

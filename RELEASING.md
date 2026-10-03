@@ -250,6 +250,33 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
         are the real witnesses.
       - The committed cassettes are re-recorded with memory off and carry no `memory_paths`
         (`test/auto-memory-env.test.ts` checks that, $0). This step does not re-record them.
+- [ ] **Live gate: nothing in the live suite skips silently.** A live test that cannot find its prerequisites
+      (a token, `dist/cli.js`, host `claude`, Docker) skips instead of failing, so count what will run before running
+      it. `vitest list` on vitest 5 parses files statically by default and lists nothing for suites guarded by
+      `describe.skipIf(...)`, so it must not parse statically ($0, no model call):
+      ```
+      npx vitest list --config vitest.config.live.ts --staticParse=false
+      ```
+      Run it twice: with the token exported, every live test is listed and stderr has no `SKIPPED` warning; with no
+      token resolvable (the negative control: the variable unset, no `~/.cowork-harness-token`, no
+      `COWORK_LIVE_DOTENV`, and run from a worktree with no `.env`), fewer tests are listed and stderr names each
+      skipped suite. A run that
+      lists the same count both ways is not checking skips.
+- [ ] **Live gate: the companion skill sends an agent to the right reference.** Three prompts, each run through
+      the skill on `container` with an LLM decider for any question it asks (billed, three short runs):
+      ```
+      for p in "author a scenario that checks my skill writes a report file" \
+               "my cowork-harness run failed with a verdict I don't understand, help me debug it" \
+               "measure how long each tool call takes in my run"; do
+        node dist/cli.js skill .claude/skills/cowork-harness "$p" --fidelity container --model claude-sonnet-5 --decider-llm
+      done
+      ```
+      The intended reference for each is `references/authoring.md`, `references/debugging.md` and
+      `references/measurement.md`. Read `referencesAccessed` in each run's `result.json`, and the answer itself. A
+      prompt **passes** when the agent reads its intended reference (supporting references the skill's table points
+      to are fine), or reads none and still answers correctly. It **fails** when the agent reads a wrong reference, or
+      gives a wrong answer whatever it read: for the first prompt, run `cowork-harness lint` on the scenario it wrote,
+      and any ERROR is a wrong answer.
 - [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the companion
       skill (`SKILL.md`, `references/`, the bundled `scenario.py` + `assertion-keys.json`), and no internal
       planning notes. The skill ships on BOTH channels: npm carries it alongside everything else, while a

@@ -82,8 +82,9 @@ export interface FreezeCaseInput {
 export type FreezeCaseOutcome =
   | { status: "frozen" | "added"; caseId: string; rep: number; message: string }
   | { status: "exists"; caseId: string; message: string }
-  /** `restart`: no freeze can repair it (a damaged entry, one for another prompt, its recorded run gone) — the flow restarts. */
-  | { status: "refused"; caseId: string; message: string; restart?: true };
+  /** `restart`: no freeze can repair it (a damaged entry, one for another prompt, its recorded run gone) — the flow restarts.
+   *  `noGoodRow`: the variant has no row to freeze from yet (its slots failed, or none measured the evidence). */
+  | { status: "refused"; caseId: string; message: string; restart?: true; noGoodRow?: true };
 
 /** Freeze one case's reference into `<flow>/<variant>/ref`. An entry already holding every compose key the case's
  *  pairwise asserts need is `exists` (benign). An entry missing a key (an assert added, a scope changed) gains it
@@ -136,6 +137,7 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
     return {
       status: "refused",
       caseId: i.caseId,
+      noGoodRow: true,
       message: `case ${i.caseId}: no good row in ${i.variant}/results.jsonl to freeze from (status ok, not an agent failure, verdict and pairwise evidence measured)`,
     };
   // The lowest-rep row whose run is still here and DELIVERED its output: a stalled or deliverable-less run would make

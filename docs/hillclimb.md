@@ -269,8 +269,10 @@ that the loop and the lite report builder read, with these differences:
   [`workspace_fixture`](./scenario.md#starting-from-a-saved-workspace-workspace_fixture) resumes from saved
   outputs the way re-invoking the skill in the same Cowork session does, except that in Cowork the earlier
   conversation is still in context and here it is not.
-- **`_state.json` gains `harness_skill`** beside `harness_sha` when you pass `--skill`; both are written only by
-  `--approve-harness`.
+- **`_state.json` gains `harness_skill`** beside `harness_sha` when you pass `--skill`, and `harness_files` (a
+  sha256 per hashed entry, so a gate refusal names what changed); all are written only by `--approve-harness`. An
+  approval without `harness_files` still loads: its refusal says `changed: unknown (older approval)` and lists
+  every file.
 - **`tags`** on a row is the scenario file's directory name. The loop stratifies a split by its first tag, so
   scenarios in one flat directory form one stratum.
 - **No refusal class.** A model refusal is graded like any other answer; to count refusals, add an assertion
@@ -334,7 +336,10 @@ resumed pass would mix them, and `hillclimb check` flags a case whose rows carry
 
 | Symptom | Cause and fix |
 |---|---|
-| `no approved harness sha` / `harness changed since last approved run` | Review the files the message lists, then `hillclimb run … --dry-run --approve-harness` with the loop's `--skill`. A change you did not make: check the working directory and the target path |
+| `no usable agent credential for fidelity <tier>` | No credential source resolves: put `CLAUDE_CODE_OAUTH_TOKEN` in `./.env` or the environment, or pass `--dotenv <file>` (a git worktree has no copy of the main checkout's `.env`). `cowork-harness doctor --tier <tier>` runs the same check |
+| `run ended error (auth)` | A credential was found but the agent could not authenticate with it (expired or revoked: `claude setup-token`), or at container or microvm only `ANTHROPIC_AUTH_TOKEN` is set, which does not reach the agent there. The pass prints the sources it looks up once |
+| `[baseline] reference freeze: skipped` | The case has no good row to freeze its reference from yet (its slots failed). The next baseline pass that scores one freezes it, or `hillclimb freeze-ref … --variant baseline --case <id>` |
+| `no approved harness sha` / `harness changed since last approved run` | Review the files the message names as changed, then `hillclimb run … --dry-run --approve-harness` with the loop's `--skill`. A change you did not make: check the working directory and the target path |
 | A resumed variant refuses: snapshot missing | The flow dir moved, or the snapshot root was cleaned. Restore it, or run into a new variant |
 | A file the skill needs is missing in the run | It is untracked: `git add` it before the variant's first run (the pass printed a count of untracked files) |
 | `skill_invoked` is blank | The plugin has several skills (pass `--skill <name>`, the bare name, on every pass), it has none, or the run's record could not tell (`meta.skill_tracked` is set but the cell is blank) |

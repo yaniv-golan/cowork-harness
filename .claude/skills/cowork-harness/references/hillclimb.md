@@ -99,8 +99,12 @@ included), the lockfiles in the current directory, the `_state.json` `harness_pa
 version and baseline. It is computed over every case, whatever `--case` selects, so a canary and the full pass
 need the same approval. The plugin the loop edits is never in it, and a `harness_paths` entry inside that
 plugin is refused. Review the change, then run once with `--dry-run --approve-harness` to record the new sha
-without spending (`--approve-harness` on a live pass records it and runs the pass). It is a change detector,
-not a security boundary: the permission allowlist on the loop's command is what bounds an unattended run.
+without spending (`--approve-harness` on a live pass records it and runs the pass). An approval also records a
+sha256 per hashed entry (`_state.json` `harness_files`), so a refusal names the changed entries first (`changed:
+evals/a.yaml; and 13 unchanged`, a new one marked `(new)`, a gone one `(removed)`), as does the dry run's gate
+line; an approval recorded without them still loads, and its refusal says `changed: unknown (older approval)` and
+lists every file. It is a change detector, not a security boundary: the permission allowlist on the loop's command
+is what bounds an unattended run.
 
 `regrade` applies the same gate: a rubric fix is a scenario edit, so `regrade` refuses (exit 2) until the new sha
 is approved. `--approve-harness` on `regrade` records it, and is yours there too.
@@ -112,6 +116,13 @@ is approved. `--approve-harness` on `regrade` records it, and is yours there too
   inline session, or `on_unanswered: prompt`;
 - `fidelity: protocol` without a managed config dir (its traces would miss the sub-agents' turns): set
   `COWORK_MANAGED_CONFIG=1` or use another tier;
+- no usable agent credential at a selected case's tier: `doctor`'s own check (`cowork-harness doctor --tier
+  <tier>`), as `eval` applies it. At protocol, a login only in your Claude config dir (Keychain or
+  `.credentials.json`) is refused too: hillclimb's protocol runs use a managed config dir, where it is not read.
+  Put `CLAUDE_CODE_OAUTH_TOKEN` in `./.env` or the environment, or pass `--dotenv <file>`. A run the agent still
+  could not authenticate (an expired token) is an `errors.jsonl` row (`run ended error (auth)`), and the pass
+  prints once which variables the agent takes at that tier, where they are looked up, in order, and what
+  `doctor` sees now — variable names only, never a value;
 - a scenario or session file, a `harness_paths` file, or the flow dir readable by the agent through a mount, a
   `workspace_fixture` dir or the plugin;
 - a scenario input a run would refuse, or a `semantic_pairwise` reference that is missing, damaged or exposed;
@@ -282,7 +293,10 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
 
 - `run`: `0` every attempted (case, rep) was scored; `1` an attempt failed (an `errors.jsonl` row, or a scored
   row whose trace or copies could not be written), the pass stopped mid-run (rows already written are kept),
-  or `summary.json` could not be written; `2` refused before spending. `--dry-run` exits `0` unless a refusal fires.
+  a baseline pass could not freeze a pairwise case's reference, or `summary.json` could not be written; `2`
+  refused before spending. `--dry-run` exits `0` unless a refusal fires. The `done - N ok, M failed` line and
+  the envelope's `failed` count (case, rep) slots; a reference freeze reports on its own line
+  (`reference freeze: skipped — …` when the case has no good row to freeze from, `failed — …` otherwise).
 - `check`: `0` clean, `1` an error finding, `2` usage.
 - `state-template`: `0`, or `2` on usage or a refusal.
 - `freeze-ref`: `0` no case refused (an entry already complete is reported, not refused); `1` a case refused (no

@@ -343,6 +343,21 @@ function readDeclared(c: Collector, text: string | undefined): Declared {
   // The runner records the --skill an approval hashed beside harness_sha; a gate message names it from here.
   if (st.harness_skill !== undefined && typeof st.harness_skill !== "string")
     c.error("state.harness_skill", F, "`harness_skill` must be a string");
+  // The per-entry hashes an approval records beside harness_sha. A malformed value only costs the refusal its list of
+  // changed files (the gate reads it as no record), so it is a note, never an error.
+  const hf = st.harness_files;
+  if (
+    hf !== undefined &&
+    (hf === null ||
+      typeof hf !== "object" ||
+      Array.isArray(hf) ||
+      !Object.values(hf).every((v) => typeof v === "string" && /^[0-9a-f]{64}$/.test(v)))
+  )
+    c.note(
+      "state.harness_files",
+      F,
+      "`harness_files` is not a map of hashed entry → sha256 hex: a harness refusal cannot name what changed (re-approve to rewrite it)",
+    );
   return d;
 }
 

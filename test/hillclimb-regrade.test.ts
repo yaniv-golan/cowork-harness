@@ -339,6 +339,8 @@ describe.runIf(POSIX)("hillclimb regrade applies run's harness gate to a flow ap
     const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
     expect(out.exitCode, JSON.stringify(out.error)).toBe(0);
     expect(stateOf()).toMatchObject({ harness_skill: "x" });
+    // ...and records the per-entry hashes behind its sha, as run's approval does, so a later refusal names the change.
+    expect((stateOf().harness_files as Record<string, string>)["evals/alpha.yaml"]).toMatch(/^[0-9a-f]{64}$/);
     const r = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--skill", "x", "--dry-run");
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).toMatch(/harness gate: approved/);
@@ -350,7 +352,11 @@ describe.runIf(POSIX)("hillclimb regrade applies run's harness gate to a flow ap
     writeFileSync(sc, readFileSync(sc, "utf8").replace("rubric: ['answers']", "rubric: ['answers', 'is brief']"));
     const out = await regradeFlow(ARGS(), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
     expect(out.exitCode).toBe(2);
-    expect(out.error?.message).toMatch(/harness changed since last approved run/);
+    // The edited scenario is named first, the rest counted, never listed (run's wording).
+    expect(out.error?.message).toMatch(
+      /: harness changed since last approved run \(changed: evals\/alpha\.yaml; and \d+ unchanged\); approved /,
+    );
+    expect(out.error?.message).not.toContain("_session.yaml");
     expect(stateOf()).toMatchObject({ harness_skill: "x" });
   }, 180_000);
 });
