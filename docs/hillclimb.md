@@ -288,8 +288,8 @@ that the loop and the lite report builder read, with these differences:
   this process reproduces the recorded text (the same secrets), it is re-graded like any other, and a re-judge
   sends the redacted rubric the live run sent. When it cannot, the graded outcome is kept and the assertion is
   never re-evaluated or re-judged over scrubbed evidence: a re-judge it would need lists the row, with the remedy
-  (re-grade with the run's scrub settings, or pass `--allow-doc-drift`). An edit inside the scrubbed text is
-  reported as "cannot tell whether this assert changed": re-run the case;
+  (re-grade with the run's scrub settings, or pass `--allow-doc-drift`). Stderr names such an assertion, since
+  whether it was edited cannot be known: an edited one takes a re-run of the case;
 - it re-judges a judged assertion when something the judge sees changed (its rubric or claims, its judge model or
   prompt template, or a `semantic_pairwise` assertion's references), recording why in
   `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
