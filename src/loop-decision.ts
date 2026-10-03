@@ -137,6 +137,46 @@ export function readGateBool(baseline: PlatformBaseline, id: string): boolean | 
   return undefined;
 }
 
+/** GrowthBook gate `autoMemoryStandardSessions`: whether Desktop gives an ordinary local task an auto-memory dir. */
+export const AUTO_MEMORY_GATE = "123929380";
+
+/** The agent env key Desktop sets to "1" when the session has no auto-memory directory.
+ *
+ *  On the two tiers that inherit the operator's shell (hostloop, protocol) the builders DELETE the operator's own
+ *  export of this key before overlaying `autoMemoryEnv`. That only matters when the recorded gate is ON — when it
+ *  is off our "1" overwrites the export anyway — and in that state production sends no such key, and its host-loop
+ *  env never inherits the operator's shell either; letting the export through would make hostloop/protocol differ
+ *  from container/microvm, the asymmetry SCRUBBED_AGENT_ENV_KEYS closes. It is kept out of that list because the
+ *  memory layer owns this key in both states (delete, then set or not), not because of the list's membership rule. */
+export const AUTO_MEMORY_ENV_KEY = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+
+/**
+ * The agent's auto-memory switch, as Desktop sets it for the session this harness models — an ordinary local
+ * task, with no `spaceId` and no `sessionType`. Spread by every env builder (`spawnEnv`, `hostNativeSpawnEnv`,
+ * `buildProtocolEnv`); the single derivation.
+ *
+ * Binary-verified (app.asar 2.19675.0, and the same behaviour in every saved asar from 1.18286.2): the spawn
+ * resolves `memoryEnabled===!1?null:getAutoMemoryDirForSession(id)`, whose resolver gives a no-`sessionType`
+ * session a directory only when `ZW("123929380")` is on, and both loops turn a null directory into
+ * `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"` (host-loop: the memory-keys ternary's else arm; VM-loop: the
+ * `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE||` fallback). The agent reads a truthy value as memory off. `sync` pins
+ * that shape (`checkAutoMemoryFacts`) and warns when the gate reads ON (`checkAutoMemoryGate`).
+ *
+ * - Gate recorded ON → no key: the agent keeps its own default memory. Production would also ship a
+ *   Desktop-managed directory, the `CLAUDE_COWORK_MEMORY_*` prompt keys and a memory-tidy skill gated on the
+ *   same id; none of that is modeled (docs/fidelity-gaps.md).
+ * - No gate row (the baselines before 1.18286.0, which predate the pin) → disabled. Every baseline that records
+ *   the gate records it off, and no saved asar older than 1.18286.2 exists, so this is an assumption for those
+ *   releases, chosen because it matches the nearest observed one.
+ * - ONLY the no-`sessionType` arm. Production returns null for chat / scheduled / dispatch_child sessions
+ *   whatever the gate says, so a future model of one of those must not reuse this as is.
+ *
+ * `readGateBool`, never `readGateFlag`: this is a bare-boolean gate (see readGateBool's doc).
+ */
+export function autoMemoryEnv(baseline: PlatformBaseline): Record<string, string> {
+  return readGateBool(baseline, AUTO_MEMORY_GATE) === true ? {} : { [AUTO_MEMORY_ENV_KEY]: "1" };
+}
+
 /**
  * Resolve the two A2 skills/plugins discovery gates to their effective booleans — the SINGLE source of
  * truth for the precedence chain `explicit session knob ▸ readGateBool ▸ documented default`.

@@ -69,7 +69,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     process.env.ENABLE_TOOL_SEARCH = "auto";
     try {
       const plan = { baseEnv: { ...process.env }, agentEnv: {} } as unknown as LaunchPlan;
-      const env = buildProtocolEnv(plan);
+      const env = buildProtocolEnv(plan, loadBaseline("latest"));
       expect(env.ENABLE_TOOL_SEARCH).toBeUndefined();
     } finally {
       delete process.env.ENABLE_TOOL_SEARCH;
@@ -80,7 +80,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     process.env.CLAUDE_CODE_SUBAGENT_MODEL = "stray-from-shell";
     try {
       const plan = { baseEnv: { ...process.env }, agentEnv: { CLAUDE_CODE_SUBAGENT_MODEL: "claude-haiku-x" } } as unknown as LaunchPlan;
-      const env = buildProtocolEnv(plan);
+      const env = buildProtocolEnv(plan, loadBaseline("latest"));
       expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-haiku-x");
     } finally {
       delete process.env.CLAUDE_CODE_SUBAGENT_MODEL;
@@ -109,7 +109,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
       // matter what the scrub list says. (Written that way first; caught by mutating the list and
       // watching this test keep passing.)
       const plan = { baseEnv: { ...process.env }, agentEnv: {} } as unknown as LaunchPlan;
-      const env = buildProtocolEnv(plan);
+      const env = buildProtocolEnv(plan, loadBaseline("latest"));
       expect(env.CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL).toBeUndefined();
     } finally {
       delete process.env.CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL;

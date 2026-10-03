@@ -24,6 +24,7 @@ import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchP
 import type { WebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars } from "./argv.js";
 import { agentSpawnOptions } from "./agent-tree.js";
+import { AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 import { runtimeAuthEnv } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
@@ -82,6 +83,7 @@ export function buildHostLoopNativeEnv(
 ): NodeJS.ProcessEnv {
   const nativeEnv: NodeJS.ProcessEnv = { ...process.env };
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete nativeEnv[k];
+  delete nativeEnv[AUTO_MEMORY_ENV_KEY]; // owned by hostNativeSpawnEnv's autoMemoryEnv overlay — see AUTO_MEMORY_ENV_KEY
   Object.assign(nativeEnv, hostNativeSpawnEnv(baseline, opts));
   delete nativeEnv.MAX_THINKING_TOKENS;
   Object.assign(nativeEnv, opts.agentEnv ?? {});

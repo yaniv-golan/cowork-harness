@@ -13,15 +13,30 @@ import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { pluginDirArgs } from "./argv.js";
 import { agentSpawnOptions } from "./agent-tree.js";
 import { stageWorkspaceFixture } from "../fixture/workspace.js";
+import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 
 /**
  * Pure builder for L0's spawn env. Protocol spawns the host `claude` over the OPERATOR's full shell env
  * (`{...plan.baseEnv}`) — there is no baseline `spawn.env` overlay here (unlike hostloop/container/microvm),
  * so precedence is the two-layer `knob > operator env (scrubbed)`: scrub `SCRUBBED_AGENT_ENV_KEYS` from
- * the operator layer FIRST, then overlay the authored `agentEnv` knob so it always wins. Extracted from
+ * the operator layer FIRST, then overlay the authored `agentEnv` knob so it always wins. The one
+ * baseline-derived key is the auto-memory switch (`autoMemoryEnv`), which every tier sets. Extracted from
  * `spawnProtocol` so this env-construction step is unit-testable at the actual runtime call site.
  */
-export function buildProtocolEnv(plan: LaunchPlan): NodeJS.ProcessEnv {
+export function buildProtocolEnv(plan: LaunchPlan, baseline: PlatformBaseline): NodeJS.ProcessEnv {
+  const env = protocolOperatorEnv(plan);
+  // Desktop's auto-memory switch for the modeled session (see autoMemoryEnv). The operator's own export is
+  // deleted first — see AUTO_MEMORY_ENV_KEY. The knob cannot carry this key (its schema is strict), so applying it
+  // after the knob changes no precedence. Off the managed branch L0 reads the operator's real config dir; with the
+  // key set, that dir's auto-memory no longer loads either.
+  delete env[AUTO_MEMORY_ENV_KEY];
+  Object.assign(env, autoMemoryEnv(baseline));
+  return env;
+}
+
+/** The operator, knob and credential layers of L0's env — everything `managedConfigMode` reads. Shared by
+ *  `buildProtocolEnv` and `protocolReadsOperatorConfig`, which has no baseline in scope and needs none. */
+function protocolOperatorEnv(plan: LaunchPlan): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...plan.baseEnv };
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete env[k];
   Object.assign(env, plan.agentEnv ?? {});
@@ -87,10 +102,10 @@ export function protocolConfigDirs(
 }
 
 /** Does an L0 agent spawned from this plan read the operator's real config dir? Pre-spawn form of the check
- *  spawnProtocol makes (same env construction, same comparison). Throws as managedConfigMode does on a bad
+ *  spawnProtocol makes (same operator and credential env layers, same comparison). Throws as managedConfigMode does on a bad
  *  COWORK_MANAGED_CONFIG. */
 export function protocolReadsOperatorConfig(plan: LaunchPlan): boolean {
-  return protocolConfigDirs(plan.configDir, managedConfigMode(buildProtocolEnv(plan))).readsOperatorConfig;
+  return protocolConfigDirs(plan.configDir, managedConfigMode(protocolOperatorEnv(plan))).readsOperatorConfig;
 }
 
 /** realpath when the path exists, else the path itself — a config dir that does not exist yet is still
@@ -180,7 +195,7 @@ export function spawnProtocol(
   //   - else (local OAuth): keep the real config dir for auth, and layer our
   //     discovery settings via --settings so plugins/skills/mcp still apply.
   // Scrub the inheritance-asymmetric operator keys, then overlay the agent_env knob — see buildProtocolEnv.
-  const env: NodeJS.ProcessEnv = buildProtocolEnv(plan);
+  const env: NodeJS.ProcessEnv = buildProtocolEnv(plan, baseline);
   const settingsFile = join(plan.configDir, "settings.json");
   const useManagedConfig = managedConfigMode(env);
   const discoveryArgs: string[] = [];
@@ -224,7 +239,7 @@ export function spawnProtocol(
 
   // The L0 divergence is no longer about DELIVERY — --plugin-dir is passed above, so a declared plugin
   // or skill dir now reaches the agent. What remains is CONTAMINATION: off the managed branch the agent
-  // reads the operator's real config dir, so their installed plugins, skills, auto-memory and MCP servers
+  // reads the operator's real config dir, so their installed plugins, skills and MCP servers
   // are all live alongside the thing under test.
   //
   // This stays a FAIL signal (via computeVerdict), not a warn. Nothing else catches it: scanHostInventory
@@ -239,7 +254,7 @@ export function spawnProtocol(
   if (l0HostConfigContamination) {
     warn(
       `::warning:: ${scenario.name}: L0 (protocol) is reading your REAL config dir (${agentConfigDir}), so your ` +
-        `installed plugins, skills, auto-memory and MCP servers are visible to the agent and may answer INSTEAD of ` +
+        `installed plugins, skills and MCP servers are visible to the agent and may answer INSTEAD of ` +
         `the plugin/skill under test. Set COWORK_MANAGED_CONFIG=1 AND provide a token ` +
         `(echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env) — the flag alone yields "Not logged in" — ` +
         `or run 'cowork-harness doctor'. Use container/microvm for full isolation.\n`,

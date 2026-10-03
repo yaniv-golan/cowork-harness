@@ -114,6 +114,8 @@ exports[`golden — container (VM-loop) > dockerRunArgv snapshot 1`] = `
   "-e",
   "MCP_CONNECTION_NONBLOCKING=true",
   "-e",
+  "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1",
+  "-e",
   "CLAUDE_CONFIG_DIR=/sessions/local_TEST/mnt/.claude",
   "-e",
   "HOME=/tmp",
@@ -202,6 +204,7 @@ exports[`golden — container (VM-loop) > dockerRunArgv snapshot 1`] = `
 exports[`golden — container (VM-loop) > spawnEnv snapshot 1`] = `
 {
   "CLAUDE_CODE_DISABLE_AGENTS_FLEET": "1",
+  "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
   "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
   "CLAUDE_CODE_DISABLE_CRON": "1",
   "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",

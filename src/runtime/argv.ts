@@ -4,6 +4,7 @@ import type { PlatformBaseline } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { SECRET_ENV_KEYS } from "./host-env.js";
+import { autoMemoryEnv } from "../loop-decision.js";
 
 /**
  * Pure contract layer — builds the agent CLI args, the spawn env, and the full
@@ -228,6 +229,8 @@ export function spawnEnv(
 ): Record<string, string> {
   return {
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
+    // Desktop's auto-memory switch for the modeled session, from the recorded gate 123929380 (see autoMemoryEnv).
+    ...autoMemoryEnv(baseline),
     CLAUDE_CONFIG_DIR: opts.configGuest,
     HOME: "/tmp",
     ...proxyEnvVars(opts.proxyHost),
@@ -275,6 +278,9 @@ export function hostNativeSpawnEnv(
 ): Record<string, string> {
   return {
     ...(baseline.spawn?.env ?? { CLAUDE_CODE_IS_COWORK: "1" }),
+    // Desktop's auto-memory switch for the modeled session, from the recorded gate 123929380 (see autoMemoryEnv).
+    // The operator's own export of the key is deleted by buildHostLoopNativeEnv before this overlay.
+    ...autoMemoryEnv(baseline),
     CLAUDE_CONFIG_DIR: opts.configDir,
     // Desktop 2.2553.1. Production's W2 base env sets this unconditionally on first-party
     // (`<dep>.type==="3p"?"":app.getVersion()`), and the agent READS it: on the `claude-desktop` /

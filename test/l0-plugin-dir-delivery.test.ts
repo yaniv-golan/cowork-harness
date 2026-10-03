@@ -6,6 +6,7 @@ import { pluginDirArgs } from "../src/runtime/argv.js";
 import { buildProtocolEnv, managedConfigMode } from "../src/runtime/protocol.js";
 import { checkHostHookConsent, pluginRootsWithRunnableHooks, warnUnservedHookEvents } from "../src/run/hook-events.js";
 import type { LaunchPlan } from "../src/session.js";
+import { loadBaseline } from "../src/baseline.js";
 
 const tmps: string[] = [];
 function tmp(): string {
@@ -90,19 +91,19 @@ describe("buildProtocolEnv — auth injection is scoped", () => {
   // be read from process.env. Gating on the plan's copy would be a branch that can never be taken.
   it("injects the token on the managed branch even though baseEnv has none", () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok";
-    expect(buildProtocolEnv(plan()).CLAUDE_CODE_OAUTH_TOKEN).toBe("tok");
+    expect(buildProtocolEnv(plan(), loadBaseline("latest")).CLAUDE_CODE_OAUTH_TOKEN).toBe("tok");
   });
 
   it("does NOT inject on the non-managed branch — that path keeps the real config dir and local login", () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok";
     process.env.COWORK_MANAGED_CONFIG = "0";
-    expect(buildProtocolEnv(plan()).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(buildProtocolEnv(plan(), loadBaseline("latest")).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 
   // Merging runtimeAuthEnv() wholesale would put BOTH credentials in one child env on the CI path.
   it("leaves an API-key run alone rather than adding a second credential", () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok";
-    const env = buildProtocolEnv(plan({ baseEnv: { ANTHROPIC_API_KEY: "k" } }));
+    const env = buildProtocolEnv(plan({ baseEnv: { ANTHROPIC_API_KEY: "k" } }), loadBaseline("latest"));
     expect(env.ANTHROPIC_API_KEY).toBe("k");
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
