@@ -112,7 +112,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   `--model <id> --effort <level>`, one setting per variant. Prompt caching is the agent's, not the skill's: read
   `usage.cache_read_input_tokens` on the rows after each round, and treat a drop as the skill's content breaking the
   cache. Batching, `max_tokens` and stop sequences are not variant settings. Keep `model:`/`effort:` out of the
-  skill's own frontmatter while they are pinned.
+  skill's own frontmatter while they are pinned. Copy each cell's `$/run` and `billing_basis` from its
+  `summary.json` (below), and compare only cells with the same basis.
 - **Agent spend** = Σ `cost_usd` over every `results.jsonl` + Σ `meta.cost_usd` over every `errors.jsonl`.
   `cost_usd` is the agent's whole cost (sub-agents included) and excludes the judge. Don't derive it from
   `model` × `usage`: `usage` is the main model only.

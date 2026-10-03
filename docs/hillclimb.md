@@ -481,8 +481,13 @@ searches a model × effort staircase before it edits prompts. Run each cell of t
   settings a variant can change.
 - **Where to read the texture.** Thinking spend is in `out_tokens`; turns and tool calls are in each rep's trace
   under `traces/`.
-- **Cost per run is the row's `cost_usd`** (see [Cost and spend](#cost-and-spend)).
-- TODO: the billing basis the cost guide's arithmetic assumes, and how it maps onto `cost_usd`.
+- **Copy each cell's cost from its `summary.json`, never from `model` × `usage`.** The cost guide prices a run
+  from tokens; here `cost_usd_mean` is `$/run` (add `judge_usd_mean`, which shares its denominator, when the judge
+  counts), and a figure is a floor when `cost_rows_unrecorded`, `judge_rows_unpriced` or `judge_rows_unrecorded` is
+  not 0 (see [Cost and spend](#cost-and-spend)).
+- **State each cell's `billing_basis` beside its cost, and compare only cells with the same basis.** On
+  `subscription`, `cost_usd` is the agent's list-price estimate, not a charge; on `mixed`, compare only rows of the
+  same basis. It describes the agent only (see [Billing basis](#billing-basis)).
 - **Keep effort out of the skill's own frontmatter.** A `model:` or `effort:` in `SKILL.md` moves the main loop
   mid-run, so rows are expected to fail the requested-model or sent-effort check (`serving_substitution`) while
   `--model`/`--effort` are pinned.
