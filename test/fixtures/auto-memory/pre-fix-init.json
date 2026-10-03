@@ -1,0 +1,6 @@
+{
+  "$comment": "One system/init frame from a recording made with auto-memory ON (before the harness set CLAUDE_CODE_DISABLE_AUTO_MEMORY), trimmed to the fields test/auto-memory-env.test.ts reads. Taken from the 2026-10-02 container recording of examples/scenarios/example-pdf-skill.yaml (agent 2.1.286), before that cassette was re-recorded with memory off. Frozen on purpose: it keeps the memory_paths instrument check from going vacuous once no committed cassette carries the key.",
+  "events": [
+    "{\"type\":\"system\",\"subtype\":\"init\",\"claude_code_version\":\"2.1.286\",\"memory_paths\":{\"auto\":\"/sessions/local_aq0mws9h1v/mnt/.claude/projects/-sessions-local-aq0mws9h1v/memory/\"}}"
+  ]
+}
