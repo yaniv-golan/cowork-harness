@@ -234,8 +234,9 @@ export const SessionConfig = z.strictObject({
   // across ALL FOUR tiers, and FIVE keys are SCRUBBED from the operator layer on
   // hostloop/protocol (the only tiers that inherit it) so an unset stray shell value can never leak
   // through. Precedence is TIER-QUALIFIED: hostloop/container/microvm layer a baseline `spawn.env`, so
-  // it's knob > baseline spawn.env > operator env (scrubbed); protocol has no baseline-env overlay (it
-  // spawns from `{...plan.baseEnv}` only), so it's the two-layer knob > operator env (scrubbed).
+  // it's knob > baseline spawn.env > operator env (scrubbed); protocol has no baseline `spawn.env` overlay
+  // (it spawns from `{...plan.baseEnv}`), so it's the two-layer knob > operator env (scrubbed). Separately,
+  // every tier sets the baseline-derived auto-memory key (autoMemoryEnv), which this knob cannot carry.
   // `tool_search` unset (key absent) = binary mode `tst` — ToolSearch ON first-party; the binary's
   // "standard" mode name means DISABLED (a naming trap) — `tool_search: "off"` emits
   // `ENABLE_TOOL_SEARCH="off"`, the binary's actual disable spelling.

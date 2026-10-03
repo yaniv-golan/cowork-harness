@@ -28,7 +28,7 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 36 o
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
-- **Identity & environment** — [Auto-memory: four env-delivered keys the harness never sets](#auto-memory-four-env-delivered-keys-the-harness-never-sets) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
+- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
 - **Permissions & limits** — [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
@@ -177,7 +177,7 @@ versus a plugin's. Re-measure before relying on any row.
 
 ---
 
-## Auto-memory: four env-delivered keys the harness never sets
+## Auto-memory: the off switch is modeled, the memory keys are not
 
 **Real Cowork behaviour.** When a session has an auto-memory directory, Desktop ships it to the agent
 through the environment: `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`, `CLAUDE_COWORK_MEMORY_INDEX_CONTENT`,
@@ -196,10 +196,41 @@ investigation before being measured:
 | `1696890383` `memoryGuidelinesEnv` | only `CLAUDE_COWORK_MEMORY_GUIDELINES`, inside the has-a-directory branch. |
 | `2860753854` `memoryExtraGuidelines` | only the *value* of the PII block, not whether the branch runs. On, but inert by default. |
 
-**Harness behaviour.** The harness sets none of the five, and models no memory directory. For the
-session it models — no `spaceId`, no `sessionType`, and `123929380` pinned off — production would send
-`CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, so the modeled configuration is *nearly* faithful and the memory
-keys are genuinely unreachable.
+**Harness behaviour.** The harness never sets the four memory keys and models no memory directory. It does set
+the fifth, `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, on every tier (protocol, container, microvm, hostloop), from the
+`123929380` row recorded in the baseline. For the session it models (no `spaceId`, no `sessionType`) with that gate
+off, which is every committed baseline, this is exactly what production sends: the modeled configuration is faithful
+and the memory keys are genuinely unreachable. The agent then loads no memory section into its prompt, and its init
+frame carries no `memory_paths`. Before this was fixed the harness set nothing, so the agent ran with its default
+auto-memory ON. **The committed cassettes were recorded that way** (their init frames carry `memory_paths`) and stay
+so until re-recorded; replay does not read the field.
+
+The same switch also gates, in the agent:
+- a sub-agent's `memory:` frontmatter, which appends Read/Write/Edit to that sub-agent's tools and a memory prompt to
+  its system prompt;
+- the background memory-extraction and consolidation forks that run after a turn.
+
+With memory off, a plugin agent that declares `memory:` gets neither, as in Cowork, and those post-turn forks (and
+their sub-agent spend) do not run.
+
+- **Gate recorded ON.** The harness leaves the agent's default auto-memory on and models nothing else. Production
+  would also give the session a Desktop-managed directory, the four keys above (including their prompt text), and a
+  built-in memory-tidy skill gated on the same id. Production also skips the directory for a session whose
+  server-delivered `memoryEnabled` flag is false, which the harness cannot read. `sync` prints a WARNING note when it
+  reads the gate ON.
+- **No gate row.** Baselines before 1.18286.0 predate the gate pin and are treated as off. That is an assumption:
+  every baseline that records the gate records it off, and no Desktop bundle older than 1.18286.2 was available to
+  check.
+- **Settings `env`.** A settings file's `env` block reaches the agent's environment at startup and could set the key
+  to `"0"` (forced on). At `protocol` off the managed branch that is the operator's own `~/.claude/settings.json`,
+  which the L0 contamination signal already covers. Elsewhere only a managed-settings `env` could do it, and it would
+  do the same to Cowork on that machine.
+- **The modeled session shape only.** Production returns no directory for a chat, scheduled or dispatched session
+  outside a Space, whatever the gate says. The harness's rule encodes the ordinary-task arm only.
+- **Same rule everywhere it applies.** `lane: remote` gets the same rule; the evidence for it is local-lane, and the
+  cloud lane's memory behaviour is unmeasured. A custom baseline with no `provenance` counts as off. There is no
+  knob to turn memory on: `agent_env` cannot carry the key, so a Spaces- or agent-session memory setup cannot be
+  reproduced. `chat --raw` is not a fidelity tier and does not set the key.
 
 **Read the reachability claim precisely, because it is narrower than it looks.** "Unreachable" holds
 for the modeled session shape only. It does **not** hold for a Spaces or agent-type session, where the
@@ -207,10 +238,11 @@ resolver returns a directory with `123929380` off — such a session receives al
 prompt text, and the harness models none of it. A scenario that grows a `spaceId` or a session type
 walks out of the modeled configuration without any signal.
 
-**Why it is not modeled.** Reproducing it means inventing a memory directory, an index snapshot and a
-guidelines template the harness has no source for — authoring an environment rather than reproducing
-one. The honest position is this entry plus the gate pins, which make a production flip visible as a
-`provenance.gates` diff.
+**Why only the off switch is modeled.** The off switch is a recorded fact: the gate row in the baseline,
+read from the same resolver Desktop uses. The memory keys are not. Reproducing them means inventing a memory
+directory, an index snapshot and a guidelines template the harness has no source for, which would be authoring an
+environment rather than reproducing one. So the honest position has three parts: the off switch, this entry, and
+the gate pins. The pins make a production flip visible as a `provenance.gates` diff and as sync's WARNING note.
 
 ---
 

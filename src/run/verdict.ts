@@ -601,8 +601,8 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         `::notice:: [verdict] ${fromInputs} host path(s) in model-visible text came verbatim from the scenario's inputs or prompt; not counted as a leak\n`,
       );
 
-    // L0 (protocol) reading the operator's REAL config dir — their installed plugins, skills, auto-memory
-    // and MCP servers are live alongside the thing under test and can answer INSTEAD of it. Fail unless the
+    // L0 (protocol) reading the operator's REAL config dir — their installed plugins, skills and MCP
+    // servers are live alongside the thing under test and can answer INSTEAD of it. Fail unless the
     // scenario opts in via `allow_l0_host_config_contamination: true`.
     //
     // This used to mean "plugins load via --settings, not --plugin-dir". That is obsolete: protocol now
@@ -616,7 +616,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         code: "l0_host_config_contamination",
         severity: "fail",
         message:
-          "L0 (protocol) ran against your REAL config dir — your installed plugins, skills, auto-memory and MCP servers " +
+          "L0 (protocol) ran against your REAL config dir — your installed plugins, skills and MCP servers " +
           "were visible to the agent and may have answered INSTEAD of the plugin/skill under test, so this run did not " +
           "necessarily measure it. Set COWORK_MANAGED_CONFIG=1 with a token in the environment, use container/microvm, " +
           "or assert allow_l0_host_config_contamination: true to opt in.",
