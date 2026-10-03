@@ -163,14 +163,17 @@ describe("costSummary: the variant's spend over results.jsonl + errors.jsonl", (
 
   it("totals over every row, the mean over scored rows that record a cost; unrecorded rows are counted, never $0; one run counted once", () => {
     const s = costSummary(results, errors);
+    // Rounded to 6 decimals at write: no 0.30000000000000004.
     expect(s.keys).toEqual({
-      cost_usd_mean: expect.closeTo(0.3, 10),
-      cost_usd_total: expect.closeTo(0.7, 10),
+      cost_usd_mean: 0.3,
+      cost_usd_total: 0.7,
       cost_rows: 3,
       cost_rows_unrecorded: 1,
-      judge_usd_mean: 0.01,
-      judge_usd_total: expect.closeTo(0.03, 10),
+      // the same denominator as cost_usd_mean: 0.01 over the 2 scored rows with a cost
+      judge_usd_mean: 0.005,
+      judge_usd_total: 0.03,
       judge_rows_unpriced: 1,
+      judge_rows_unrecorded: 0,
       regrade_judge_usd_total: 0.05,
       decider_usd_total: 0.001,
       billing_basis: "subscription",
@@ -202,13 +205,78 @@ describe("costSummary: the variant's spend over results.jsonl + errors.jsonl", (
 
   it("the end-of-run line names the basis, the totals and what is a floor", () => {
     expect(costLine("v1", costSummary(results, errors))).toBe(
-      "[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $0.7000 over 3 row(s) (1 without a cost), $0.3000/run over 2 scored row(s); judge $0.0300 (1 row(s) with an unpriced judge call — a floor); regrade judge $0.0500; decider $0.0010",
+      "[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge; 1 row(s) record no basis): agent $0.7000 over 3 row(s) (1 without a cost — a floor), $0.3000/run over 2 scored row(s); judge $0.0300 (1 row(s) with an unpriced judge call — a floor); regrade judge $0.0500 (the last regrade per row — a floor); decider $0.0010",
     );
     expect(
       costLine("v2", costSummary(jsonl({ cost_usd: 0.5, meta: { billing: { basis: "api_key", cost_basis: "managed" } } }), null)),
     ).toBe(
       "[v2] cost (variant total; basis api_key; cost basis managed — an organization price table set cost_usd): agent $0.5000 over 1 row(s), $0.5000/run over 1 scored row(s)",
     );
+  });
+});
+
+describe("costSummary: judge_usd_mean, judge_rows_unrecorded and the floor", () => {
+  it("judge_usd_mean shares cost_usd_mean's denominator: 4 scored rows with a cost, 1 judged at 0.02 ⇒ 0.005", () => {
+    const k = costSummary(
+      jsonl(
+        { cost_usd: 0.1, judge_usd: 0.02, meta: { run_id: "a" } },
+        { cost_usd: 0.1, meta: { run_id: "b" } },
+        { cost_usd: 0.1, meta: { run_id: "c" } },
+        { cost_usd: 0.1, meta: { run_id: "d" } },
+      ),
+      null,
+    ).keys;
+    expect(k.judge_usd_mean).toBe(0.005);
+    expect(k.cost_usd_mean).toBe(0.1);
+  });
+
+  it("every sum and mean is rounded to 6 decimals", () => {
+    const k = costSummary(jsonl({ cost_usd: 0.1, meta: { run_id: "a" } }, { cost_usd: 0.2, meta: { run_id: "b" } }), null).keys;
+    expect(k.cost_usd_total).toBe(0.3);
+    expect(k.cost_usd_mean).toBe(0.15);
+    expect(costSummary(jsonl({ cost_usd: 0.1234567891 }), null).keys.cost_usd_total).toBe(0.123457);
+  });
+
+  it("judge_rows_unrecorded: a judge that ran (judge_model or judge_usage) with no judge_usd, no judge_unpriced, no regrade spend", () => {
+    const k = costSummary(
+      jsonl(
+        // old-shape rows, written before judge_usd existed: they count
+        { cost_usd: 0.1, judge_model: "claude-haiku-5", judge_usage: { input_tokens: 1 }, meta: { run_id: "old1" } },
+        { cost_usd: 0.1, judge_usage: { input_tokens: 1 }, meta: { run_id: "old2" } },
+        // a baseline row neutral against its own reference: no judge ran, never counts
+        { cost_usd: 0.1, meta: { run_id: "neutral" } },
+        // a --fill-refs baseline row: its judge spend is the regrade's
+        { cost_usd: 0.1, judge_model: "claude-haiku-5", meta: { run_id: "fill", regrade_judge_usd: 0.03 } },
+        // priced, or marked unpriced: not unrecorded
+        { cost_usd: 0.1, judge_model: "m", judge_usd: 0.01, meta: { run_id: "p" } },
+        { cost_usd: 0.1, judge_model: "m", meta: { run_id: "u", judge_unpriced: 1 } },
+      ),
+      jsonl({ failure_class: "judge_invalid", judge_model: "m", meta: { run_id: "e" } }),
+    ).keys;
+    expect(k.judge_rows_unrecorded).toBe(3);
+    expect(k.judge_rows_unpriced).toBe(1);
+  });
+
+  it("old-shape rows alone: the line names them and says the judge figure is a floor", () => {
+    const line = costLine(
+      "v1",
+      costSummary(jsonl({ cost_usd: 0.1, judge_model: "m", judge_usage: { input_tokens: 1 }, meta: { run_id: "x" } }), null),
+    );
+    expect(line).toContain("judge $0 recorded (1 row(s) whose judge cost was not recorded — a floor)");
+  });
+
+  it("mixed: the line says to compare only rows of the same basis", () => {
+    const line = costLine(
+      "v1",
+      costSummary(
+        jsonl(
+          { cost_usd: 1, meta: { run_id: "a", billing: { basis: "api_key" } } },
+          { cost_usd: 1, meta: { run_id: "b", billing: { basis: "subscription" } } },
+        ),
+        null,
+      ),
+    );
+    expect(line).toContain("basis mixed — compare cost only between rows of the same basis");
   });
 });
 

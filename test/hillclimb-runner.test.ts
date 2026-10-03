@@ -327,6 +327,7 @@ describe("a pass", () => {
       cost_rows: 0,
       cost_rows_unrecorded: 2,
       judge_rows_unpriced: 0,
+      judge_rows_unrecorded: 0,
       billing_basis: "unrecorded",
       billing_rows_unrecorded: 2,
     });
@@ -733,9 +734,18 @@ describe("failures inside the pool", () => {
   it("a row that cannot be built is that attempt's error row; the pass goes on", async () => {
     await approved();
     // SYNTHETIC: a result whose assertions field is not a list, so the row builder throws on it.
-    behave = (id) => (id === "alpha" ? { result: { ...excerpt, assertions: 5 as never, cost: { usd: 0.25 } } } : {});
-    const r = await runHillclimb(args(), deps());
+    // Its credential frames and decider spend are still read: they do not depend on what threw.
+    const acct = JSON.parse(readFileSync(join(FX, "hillclimb-runs", "account-frames.json"), "utf8")) as Record<string, object>;
+    behave = (id) =>
+      id === "alpha"
+        ? {
+            result: { ...excerpt, assertions: 5 as never, cost: { usd: 0.25 }, deciderCostUsd: 0.003 },
+            events: [events[0]!, JSON.stringify(acct.account_key), ...events.slice(1)],
+          }
+        : {};
+    const r = await runHillclimb(args(), deps({ entrypoint: () => undefined }));
     expect(r).toMatchObject({ exitCode: 1, ok: 1, failed: 1 });
+    expect(rows("baseline", "errors.jsonl")[0].meta).toMatchObject({ decider_usd: 0.003, billing: { basis: "api_key" } });
     expect(rows("baseline", "errors.jsonl")).toMatchObject([
       {
         prompt_id: "alpha",

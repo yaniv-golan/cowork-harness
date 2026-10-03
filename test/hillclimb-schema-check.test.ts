@@ -886,6 +886,7 @@ describe("schema-check: summary.json", () => {
       "judge_usd_mean",
       "judge_usd_total",
       "judge_rows_unpriced",
+      "judge_rows_unrecorded",
       "regrade_judge_usd_total",
       "decider_usd_total",
       "billing_rows_unrecorded",

@@ -2002,6 +2002,34 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(summary).toMatchObject({ regrade_judge_usd_total: 0.25, judge_usd_total: live.judge_usd });
   }, 240_000);
 
+  // A rebuilt row keeps what describes its LIVE run: the live judge's spend and the credential the agent billed.
+  it("a re-judged row keeps judge_usd, meta.billing and meta.judge_unpriced", async () => {
+    const { rows, evals, flow } = buildFlow({ extra: SECOND });
+    // The stub agent sends no account frame: put the live row's billing and an unpriced count on it as a pass writes them.
+    const file = join(flow, "v1", "results.jsonl");
+    const live = JSON.parse(readFileSync(file, "utf8").trim()) as Record<string, any>;
+    live.meta.billing = { api_key_source: "none", token_source: "CLAUDE_CODE_OAUTH_TOKEN", provider: "firstParty", basis: "subscription" };
+    live.meta.judge_unpriced = 1;
+    writeFileSync(file, JSON.stringify(live) + "\n");
+    edit(evals, "rubric: ['second']", "rubric: ['second, edited']");
+    const deps = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => ({
+          structured: { rationale: "r", verdict: "A" },
+          model: "claude-haiku-4-5",
+          usage: { "claude-haiku-4-5": { inputTokens: 1, outputTokens: 1, costUSD: 0.25 } },
+          subtype: "success",
+        }),
+      },
+    });
+    expect((await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps)).exitCode).toBe(0);
+    const after = rows("v1")[0]! as Record<string, any>;
+    expect(after.meta.regrade_judge_usd).toBe(0.25); // it was rebuilt
+    expect(after.judge_usd).toBe(live.judge_usd);
+    expect(after.meta.billing).toEqual(live.meta.billing);
+    expect(after.meta.judge_unpriced).toBe(1);
+  }, 240_000);
+
   // A rebuild with no judge call keeps the entries (and so `regrade_file`, which names them) of the regrade that judged
   // them, but none of that regrade's spend: beside a fresh `regraded_at` it would read as this rebuild's own.
   it("a later rebuild with no judge call drops the previous regrade's spend and model, keeps the file it is graded from", async () => {
