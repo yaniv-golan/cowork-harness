@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   CLI,
   POSIX,
@@ -82,6 +83,26 @@ describe.runIf(can)("the LLM decider's spend reaches result.json on both lanes",
       expect(res).not.toHaveProperty("apiRetries");
     } finally {
       f.cleanup();
+    }
+  });
+
+  it("the decider `run` wires is called at --effort medium (the default decider model's own default), not the judge's high", async () => {
+    const argvFile = join(mkdtempSync(join(tmpdir(), "decider-argv-")), "argv");
+    // Record the decider invocation's argv: the only spawn carrying `--output-format json`.
+    const script = stub("A").replace(
+      `case " $* " in *" --output-format json "*) cat`,
+      `case " $* " in *" --output-format json "*) printf '%s\\n' "$@" > '${argvFile}'; cat`,
+    );
+    const f = makeStubFixture(script, { COWORK_HARNESS_LLM_RETRIES: "0" });
+    try {
+      scenario(f, "on_unanswered: llm\n");
+      const r = await run(f);
+      expect(existsSync(argvFile), r.stderr).toBe(true);
+      const argv = readFileSync(argvFile, "utf8").split("\n");
+      expect(argv[argv.indexOf("--effort") + 1]).toBe("medium");
+    } finally {
+      f.cleanup();
+      rmSync(dirname(argvFile), { recursive: true, force: true });
     }
   });
 

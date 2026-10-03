@@ -1576,9 +1576,21 @@
       ".evaluatorTransport.cliVersion": {
         "type": "string"
       },
+      ".evaluatorTransport.effort": {
+        "type": "string"
+      },
       ".evaluatorTransport.isolation": {
         "type": "string",
         "required": true
+      },
+      ".evaluatorTransport.settingsEnvOverride": {
+        "type": "array"
+      },
+      ".evaluatorTransport.settingsEnvOverride[]": {
+        "type": "string"
+      },
+      ".evaluatorTransport.settingsMaxEffort": {
+        "type": "string"
       },
       ".evaluatorTransport.strictMcp": {
         "const": false

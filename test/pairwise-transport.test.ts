@@ -15,7 +15,7 @@ const FAKE = `#!/bin/sh
 # The isolation preflight probes --help / --version first: answer as a current CLI.
 if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
 if [ "$1" = "--help" ]; then
-  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>"; do
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>" "--effort <level>" "--settings <s>"; do
     echo "  $f   x"
   done
   exit 0
@@ -28,11 +28,15 @@ exit 0
 
 let dir: string;
 let prevForbid: string | undefined;
+let prevConfigDir: string | undefined;
 beforeAll(() => {
   prevForbid = process.env.COWORK_HARNESS_FORBID_SPAWN;
   process.env.COWORK_HARNESS_FORBID_SPAWN = "0"; // every spawn here is the fake bin
   dir = mkdtempSync(join(tmpdir(), "pairwise-transport-"));
   writeFileSync(join(dir, "fake-claude.sh"), FAKE, { mode: 0o755 });
+  // The user-settings check reads CLAUDE_CONFIG_DIR: point it at the empty temp dir, never this machine's config.
+  prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = dir;
   process.env.COWORK_HARNESS_CLAUDE_BIN = join(dir, "fake-claude.sh");
   process.env.FAKE_ARGV_FILE = join(dir, "argv");
   process.env.FAKE_STDIN_FILE = join(dir, "stdin");
@@ -46,6 +50,8 @@ afterEach(() => {
 afterAll(() => {
   if (prevForbid === undefined) delete process.env.COWORK_HARNESS_FORBID_SPAWN;
   else process.env.COWORK_HARNESS_FORBID_SPAWN = prevForbid;
+  if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
   for (const k of ["COWORK_HARNESS_CLAUDE_BIN", "FAKE_ARGV_FILE", "FAKE_STDIN_FILE", "FAKE_ENVELOPE"]) delete process.env[k];
   resetIsolationPreflight();
   rmSync(dir, { recursive: true, force: true });
@@ -79,8 +85,12 @@ describe("claudeCliCompleteStructured (real envelope shape)", () => {
       "-p",
       "--model",
       "m",
+      "--effort",
+      "high",
       "--output-format",
       "json",
+      "--settings",
+      JSON.stringify({ env: { CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "" } }),
       "--json-schema",
       JSON.stringify(PAIRWISE_JSON_SCHEMA),
       "--system-prompt",

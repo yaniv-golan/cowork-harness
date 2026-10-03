@@ -220,7 +220,7 @@ describe.runIf(POSIX)("hillclimb + semantic_pairwise through the CLI", () => {
   const JUDGE = `#!/bin/sh
 if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
 if [ "$1" = "--help" ]; then
-  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>"; do echo "  $f   x"; done
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>" "--effort <level>" "--settings <s>"; do echo "  $f   x"; done
   exit 0
 fi
 echo x >> "$JUDGE_CALLS"
@@ -409,7 +409,7 @@ describe.runIf(POSIX)("hillclimb regrade refusals and listings (CLI)", () => {
   const JUDGE = `#!/bin/sh
 if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
 if [ "$1" = "--help" ]; then
-  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>"; do echo "  $f   x"; done
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>" "--effort <level>" "--settings <s>"; do echo "  $f   x"; done
   exit 0
 fi
 echo x >> "$JUDGE_CALLS"

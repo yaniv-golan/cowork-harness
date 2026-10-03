@@ -682,6 +682,32 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
 
 ### Fixed
 
+- **The judge, the LLM decider and the `critique` evaluator no longer inherit an exported effort or thinking setting,
+  and pin their effort.** Their host `claude` calls ran at whatever `CLAUDE_CODE_EFFORT_LEVEL`,
+  `CLAUDE_CODE_DISABLE_THINKING` or `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` the shell exported, or at a user-settings
+  `effortLevel`, so the same answer could be graded differently under two shells. Those three keys are now dropped
+  from the call's environment, and each call passes `--settings` blanking them, which should stop a user-settings or
+  global-config `env` block from setting them too (read from Claude Code 2.1.288, not observed live; the detection
+  below is the backstop). Each call also pins its effort with `--effort`, which outranks a settings
+  `effortLevel`: `high` for the judge and the evaluator, `medium` for the decider. Each is the default effort of
+  that role's default model (`claude-opus-4-8`, and `sonnet`, which resolves to `claude-sonnet-5-5`), so those run as
+  before. A role pointed at a model with another default (`claude-opus-4-7` defaults to `xhigh`) now runs at the pin.
+  The effort is recorded as `effort` in `judgeTransport` (and `judge_transport`) and in a critique's
+  `evaluatorTransport`. A grade recorded before has none, and its absence triggers no re-judge in `hillclimb regrade`
+  and no `eval` exclusion. Before the first call, the harness reads your user settings (`settings.json` and
+  `.claude.json` under `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json` and `~/.claude.json`). If an `env` block sets
+  one of the three keys, it warns, naming the keys (never their values), and records them as `settingsEnvOverride`.
+  A user `maxEffortLevel` still lowers the effort and cannot be raised from the call. It is recorded as
+  `settingsMaxEffort`, with a warning when it is below the role's pin. A host `claude` whose `--help` lacks
+  `--effort` or `--settings` is now refused before any model call, like one lacking an isolation flag.
+- **An exported `CLAUDE_CODE_EFFORT_LEVEL` no longer overrides a scenario's effort on the hostloop and protocol
+  tiers.** The agent reads that variable ahead of `--effort`, and those two tiers start the agent from your shell's
+  environment, so an exported value replaced the session's `effort` for `run`, `record`, `eval` and `hillclimb` alike.
+  `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`, which makes the agent send an effort for a model it has no effort data for,
+  and `CLAUDE_CODE_DISABLE_THINKING`, which turns thinking off whatever `extended_thinking` says, are dropped from
+  the inherited environment too. Real Cowork sets none of the three. On hostloop, container and microvm a value a
+  baseline's spawn environment sets still reaches the agent (protocol applies no baseline spawn environment); no
+  recorded Desktop release sets one. The container and microvm tiers never inherited them.
 - **`hillclimb state-template --flow` names the rows lacking a `win_<vN>` column and says to run `hillclimb regrade
   --fill-refs` without `--case`.** The note now groups those rows by case and variant, and says whether each case's rows
   were written before the reference was frozen (a pairwise case) or need a judge-free rebuild (a case with no

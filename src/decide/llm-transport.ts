@@ -1,19 +1,34 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { assertSpawnAllowed } from "../spawn-guard.js";
 import { warn, envPositiveNumber } from "../io.js";
 import { isUsageLimit } from "../usage-limit.js";
 import type { Complete, CompleteResult } from "./decider.js";
 import type { CompleteStructured } from "./pairwise-judge.js";
+import { EFFORT_THINKING_ENV_KEYS } from "../effort-env.js";
 
-/** Every `claude -p` the harness runs (the LLM judge, the LLM decider, the critique evaluator) runs ISOLATED from the
- *  operator's own setup. The model reads untrusted agent output, so it must be able to call no tool (`--tools ""`;
- *  without it, read-only tools always run and Write/Bash/Web run whenever the operator's settings allow them), and
- *  nothing of the operator's environment may shape its answer: no CLAUDE.md, skills, plugins, hooks or MCP servers
- *  (`--safe-mode`, `--strict-mcp-config`), no project or local settings from the harness's working directory
- *  (`--setting-sources user` — user settings stay, so `apiKeyHelper` auth keeps working), and no transcript written
+/** Every `claude -p` the harness runs (the LLM judge, the LLM decider, the critique evaluator) runs ISOLATED from most
+ *  of the operator's own setup. The model reads untrusted agent output, so it must be able to call no tool
+ *  (`--tools ""`; without it, read-only tools always run and Write/Bash/Web run whenever the operator's settings allow
+ *  them). It loads no CLAUDE.md, skills, plugins, hooks or MCP servers (`--safe-mode`, `--strict-mcp-config`), no
+ *  project or local settings from the harness's working directory (`--setting-sources user`), and writes no transcript
  *  into the operator's session history (`--no-session-persistence`). Every flag exists in Claude Code 2.1.197 and
  *  later; `assertIsolationSupported` refuses an older CLI before any model call.
+ *
+ *  What is NOT isolated, by design: USER settings stay, so `apiKeyHelper` auth keeps working, and the call inherits
+ *  the harness's own environment (auth, PATH, proxy). Three things narrow what that lets through for grading:
+ *  - the effort is pinned per role with `--effort` (`GRADER_EFFORT`), which outranks a user-settings `effortLevel`;
+ *  - the effort/thinking env keys (`EFFORT_THINKING_ENV_KEYS`) are dropped from the inherited environment, since the
+ *    CLI reads `CLAUDE_CODE_EFFORT_LEVEL` ahead of `--effort`;
+ *  - `--settings` blanks the same keys (`GRADER_SETTINGS`): the CLI applies a user-settings or global-config `env`
+ *    block inside itself, after this spawn, and flag settings are applied after both, so a blank wins. Every reader
+ *    takes `""` as unset or false. That is read from the 2.1.288 binary, not observed live, so `userSettingsEffort`
+ *    also DETECTS such a block, warns and records it.
+ *  Not closable from here: a user `maxEffortLevel` below the pin still lowers the effort (across settings files the
+ *  lowest wins, so a flag value cannot raise it back), and a managed (policy) `env` block still applies. The first is
+ *  detected and recorded too.
  *
  *  `--tools` takes a variadic value, so it goes LAST: an empty value followed by more flags parses correctly on the
  *  CLIs measured, but nothing after it can be swallowed if a future parser reads the variadic list greedily.
@@ -28,8 +43,127 @@ export const ISOLATION_ARGS: readonly string[] = [
   "--tools",
   "",
 ];
-/** The flags `ISOLATION_ARGS` needs the host CLI to accept, matched against its `--help`. */
-const ISOLATION_FLAGS = ["--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--setting-sources", "--tools"];
+/** Which harness role a host-`claude` call serves: it sets the pinned effort. */
+export type GraderRole = "judge" | "evaluator" | "decider";
+
+/** The effort each role's calls are made at. Without a pin the CLI picks the model's default, which a server-side
+ *  per-model setting can move between two calls. Each pin is the 2.1.288 binary's catalog default for that role's
+ *  default model, so a default grader or decider runs as it did before the pin:
+ *  - `judge` (`semantic_matches`, `semantic_pairwise`) and `evaluator` (`critique`): `claude-opus-4-8`, default `high`;
+ *  - `decider` (`on_unanswered: llm`, `decide --decider-llm`): the alias `sonnet`, which resolves to
+ *    `claude-sonnet-5-5`, default `medium`.
+ *  A role pointed at a model whose default differs (`claude-opus-4-7` defaults to `xhigh`) now runs at the pin. A
+ *  model that takes no effort parameter is sent none: the CLI drops the level for it. */
+export const GRADER_EFFORT: Readonly<Record<GraderRole, string>> = { judge: "high", evaluator: "high", decider: "medium" };
+
+/** The CLI's effort levels, lowest first (its `maxEffortLevel` enum). */
+const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
+
+/** Flag settings every call carries: the effort/thinking env keys blanked, so a user-settings or global-config `env`
+ *  block cannot set them (see `ISOLATION_ARGS`). */
+export const GRADER_SETTINGS = { env: Object.fromEntries(EFFORT_THINKING_ENV_KEYS.map((k) => [k, ""])) as Record<string, string> };
+
+/** `extraArgs` with the grader `--settings` added — merged into a `--settings` JSON the caller already passes (its
+ *  `env` keeps every other key; the blanked ones win), never a second `--settings`. A `--settings` naming a FILE cannot
+ *  be merged without reading it, and no caller passes one, so it is refused rather than silently overridden. */
+export function withGraderSettings(extraArgs: readonly string[]): string[] {
+  const at = extraArgs.indexOf("--settings");
+  if (at < 0) return ["--settings", JSON.stringify(GRADER_SETTINGS), ...extraArgs];
+  let given: unknown;
+  try {
+    given = JSON.parse(extraArgs[at + 1] ?? "");
+  } catch {
+    given = undefined;
+  }
+  if (!given || typeof given !== "object" || Array.isArray(given))
+    throw new Error(
+      `a host \`claude\` call passed --settings ${JSON.stringify(extraArgs[at + 1])}, which is not inline JSON: cannot merge the grader settings into it`,
+    );
+  const g = given as { env?: Record<string, string> };
+  const merged = { ...g, env: { ...(g.env ?? {}), ...GRADER_SETTINGS.env } };
+  return [...extraArgs.slice(0, at), "--settings", JSON.stringify(merged), ...extraArgs.slice(at + 2)];
+}
+
+/** What the user settings the CLI loads under `--setting-sources user` set that changes a grader's effort: the
+ *  effort/thinking keys an `env` block sets (NAMES only, never values) and a top-level `maxEffortLevel`. The files and
+ *  their paths are the CLI's own (2.1.288): `<CLAUDE_CONFIG_DIR or ~/.claude>/settings.json` and the global config
+ *  `<CLAUDE_CONFIG_DIR or ~>/.claude.json`, whose `env` is applied too. A file that is missing or does not parse
+ *  contributes nothing. `modelSettings.<model>.maxEffortLevel` also clamps, per model, and is not read here. */
+export interface UserSettingsEffort {
+  envKeys: string[];
+  maxEffort?: string;
+}
+export function userSettingsEffort(env: NodeJS.ProcessEnv = process.env): UserSettingsEffort {
+  const dir = env.CLAUDE_CONFIG_DIR;
+  const files = [join(dir || join(homedir(), ".claude"), "settings.json"), join(dir || homedir(), ".claude.json")];
+  const keys = new Set<string>();
+  let maxEffort: string | undefined;
+  for (const [i, f] of files.entries()) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readFileSync(f, "utf8"));
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const o = parsed as { env?: unknown; maxEffortLevel?: unknown };
+    if (o.env && typeof o.env === "object")
+      for (const k of EFFORT_THINKING_ENV_KEYS) if (Object.prototype.hasOwnProperty.call(o.env, k)) keys.add(k);
+    // `max` is the CLI's "no cap", so it is not recorded.
+    if (i === 0 && typeof o.maxEffortLevel === "string" && EFFORT_ORDER.includes(o.maxEffortLevel) && o.maxEffortLevel !== "max")
+      maxEffort = o.maxEffortLevel;
+  }
+  return { envKeys: [...keys].sort(), ...(maxEffort !== undefined ? { maxEffort } : {}) };
+}
+
+let settingsEffortCache: UserSettingsEffort | undefined;
+const settingsWarned = new Set<string>();
+function cachedSettingsEffort(): UserSettingsEffort {
+  return (settingsEffortCache ??= userSettingsEffort());
+}
+
+/** Warn once per process, before a role's first call, about user settings that change a grader's effort. */
+function warnSettingsEffort(role: GraderRole): void {
+  const u = cachedSettingsEffort();
+  if (u.envKeys.length && !settingsWarned.has("env")) {
+    settingsWarned.add("env");
+    warn(
+      `::warning:: your Claude Code user settings set ${u.envKeys.join(", ")} in an \`env\` block. The judge, LLM decider ` +
+        `and critique evaluator calls blank ${u.envKeys.length > 1 ? "them" : "it"} with --settings; if your Claude Code ` +
+        `does not honour that, ${u.envKeys.length > 1 ? "they change" : "it changes"} how answers are graded. Recorded as ` +
+        `settingsEnvOverride in the transport identity.\n`,
+    );
+  }
+  const pin = GRADER_EFFORT[role];
+  if (u.maxEffort !== undefined && EFFORT_ORDER.indexOf(u.maxEffort) < EFFORT_ORDER.indexOf(pin) && !settingsWarned.has(`max:${role}`)) {
+    settingsWarned.add(`max:${role}`);
+    warn(
+      `::warning:: your Claude Code user settings set maxEffortLevel to ${u.maxEffort}, below the ${pin} the ${role} runs at: ` +
+        `the CLI clamps the call down to ${u.maxEffort}, and nothing the harness passes can raise it. Recorded as ` +
+        `settingsMaxEffort in the transport identity.\n`,
+    );
+  }
+}
+
+/** The host-`claude` call's environment: the harness's own, minus the keys that would change its effort or thinking
+ *  (see `ISOLATION_ARGS`). Everything else — auth, PATH, proxy — is kept. */
+export function graderSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const k of EFFORT_THINKING_ENV_KEYS) delete env[k];
+  return env;
+}
+
+/** The flags `ISOLATION_ARGS`, the `--effort` pin and the `--settings` override need the host CLI to accept, matched
+ *  against its `--help`. */
+const ISOLATION_FLAGS = [
+  "--safe-mode",
+  "--strict-mcp-config",
+  "--no-session-persistence",
+  "--setting-sources",
+  "--tools",
+  "--effort",
+  "--settings",
+];
 /** The oldest Claude Code version verified to accept every isolation flag. */
 export const ISOLATION_MIN_CLI = "2.1.197";
 
@@ -137,17 +271,35 @@ export function isolationRefusal(): string | undefined {
 }
 
 /** How a host-`claude` call was made, recorded beside a judge's grade or a critique: the isolation level
- *  (`ISOLATION_ARGS`; bumped when that set changes), the host CLI's version, and `strictMcp: false` when the call left
- *  out `--strict-mcp-config` for an enterprise MCP config (`--safe-mode` still kept MCP servers out). A grade from
- *  another level, or a CLI whose safe mode differs, ran under different conditions — a comparison can tell. */
+ *  (`ISOLATION_ARGS`; bumped when that set changes), the host CLI's version, the `--effort` it was called with, and
+ *  `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config (`--safe-mode` still
+ *  kept MCP servers out). A grade from another level, or a CLI whose safe mode differs, ran under different
+ *  conditions — a comparison can tell. A grade recorded before `effort` existed has none: its effort is unknown (the
+ *  model's default, or whatever the grading shell exported), and no comparison treats the absence as a change. */
 export interface TransportIdentity {
   isolation: "1";
   cliVersion?: string;
+  /** The `--effort` passed (the role's `GRADER_EFFORT`). A model that takes no effort parameter was sent none. */
+  effort?: string;
+  /** The effort/thinking keys a user-settings or global-config `env` block sets (names only), which the call blanks
+   *  with `--settings`. Absent when none does. */
+  settingsEnvOverride?: string[];
+  /** A user-settings `maxEffortLevel`, which clamps the call's effort when it is below `effort`. */
+  settingsMaxEffort?: string;
   strictMcp?: false;
 }
 const cliVersions = new Map<string, string | null>();
-export function transportIdentity(bin: string = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude"): TransportIdentity {
-  const strict = isolationArgs(bin).includes("--strict-mcp-config") ? {} : { strictMcp: false as const };
+export function transportIdentity(
+  role: GraderRole = "judge",
+  bin: string = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude",
+): TransportIdentity {
+  const u = cachedSettingsEffort();
+  const effort = {
+    effort: GRADER_EFFORT[role],
+    ...(u.envKeys.length ? { settingsEnvOverride: u.envKeys } : {}),
+    ...(u.maxEffort !== undefined ? { settingsMaxEffort: u.maxEffort } : {}),
+  };
+  const strict = { ...effort, ...(isolationArgs(bin).includes("--strict-mcp-config") ? {} : { strictMcp: false as const }) };
   // Under the spawn guard nothing is launched, not even a `--version` probe: the version is then unrecorded.
   try {
     assertSpawnAllowed("the host `claude` version probe");
@@ -170,6 +322,8 @@ export function resetIsolationPreflight(managedMcpPath?: string): void {
   strictMcpRefused.clear();
   isolationChecked.clear();
   cliVersions.clear();
+  settingsEffortCache = undefined;
+  settingsWarned.clear();
 }
 
 /** A spawn rejection the retry wrapper may re-attempt: a TRANSIENT non-zero exit. Timeout / maxBytes /
@@ -284,6 +438,7 @@ function spawnOnce(
   timeoutMs: number,
   maxBytes: number,
   extraArgs: readonly string[] = [],
+  role: GraderRole = "judge",
 ): Promise<CompleteResult> {
   // The backstop for every host-`claude` call, whichever caller reaches it: never spawn the model call on a CLI
   // that would drop (or reject) an isolation flag. Cached per binary, so a retry or a batch probes once.
@@ -299,10 +454,23 @@ function spawnOnce(
     // The prompt is delivered on STDIN, not argv: an argv prompt is world-readable via `ps` for the life of
     // the child (verified: `echo '...' | claude -p --output-format json` with no positional prompt reads
     // from stdin and returns the identical success envelope) — stdin is process-private.
-    // The caller's extra flags go BEFORE the isolation flags, so the variadic `--tools ""` stays last.
+    // The caller's extra flags go BEFORE the isolation flags, so the variadic `--tools ""` stays last. The effort is
+    // pinned, and the env keys that would outrank or bypass the pin are dropped (see `ISOLATION_ARGS`).
     const args = isolationArgs(bin);
-    const child = spawn(bin, ["-p", "--model", model, "--output-format", "json", ...extraArgs, ...args], {
+    const argv = [
+      "-p",
+      "--model",
+      model,
+      "--effort",
+      GRADER_EFFORT[role],
+      "--output-format",
+      "json",
+      ...withGraderSettings(extraArgs),
+      ...args,
+    ];
+    const child = spawn(bin, argv, {
       stdio: ["pipe", "pipe", "pipe"],
+      env: graderSpawnEnv(),
     });
     // A child that exits/errors before consuming stdin (e.g. ENOENT, or a fake bin that exits immediately)
     // delivers EPIPE asynchronously as an `error` event on stdin — without a listener Node escalates it to
@@ -435,14 +603,18 @@ function spawnOnce(
  * non-zero-exit class retries; timeout / maxBytes-overflow / spawn-ENOENT are not transient and fail loud on
  * the first attempt. Set `COWORK_HARNESS_LLM_RETRIES=0` to disable (e.g. deterministic CI).
  */
-export const claudeCliComplete: Complete = async (prompt, model) => completeViaCli(prompt, model, []);
+export const claudeCliComplete: Complete = async (prompt, model) => completeViaCli(prompt, model, [], "judge");
+/** `claudeCliComplete` for the LLM decider: the same call at the decider's effort (`GRADER_EFFORT.decider`). */
+export const claudeCliCompleteDecider: Complete = async (prompt, model) => completeViaCli(prompt, model, [], "decider");
+/** `claudeCliComplete` for the `critique` evaluator, at its effort (`GRADER_EFFORT.evaluator`). */
+export const claudeCliCompleteEvaluator: Complete = async (prompt, model) => completeViaCli(prompt, model, [], "evaluator");
 
 /** The structured transport for the pairwise judge: the same `claude -p` spawn, retry and bounds as
  *  `claudeCliComplete`, plus `--json-schema` (the answer arrives validated in the envelope's `structured_output`),
  *  and `--system-prompt` (the untrusted-data instruction belongs in the system turn); it runs isolated and tool-less
  *  like every host-`claude` call (`ISOLATION_ARGS`). The judged documents travel on stdin, never argv; the system prompt and schema are fixed harness text. */
 export const claudeCliCompleteStructured: CompleteStructured = async ({ system, user, schema, model }) => {
-  const r = await completeViaCli(user, model, ["--json-schema", JSON.stringify(schema), "--system-prompt", system]);
+  const r = await completeViaCli(user, model, ["--json-schema", JSON.stringify(schema), "--system-prompt", system], "judge");
   return {
     structured: r.structured,
     model: r.model,
@@ -451,8 +623,9 @@ export const claudeCliCompleteStructured: CompleteStructured = async ({ system, 
   };
 };
 
-async function completeViaCli(prompt: string, model: string, extraArgs: readonly string[]): Promise<CompleteResult> {
+async function completeViaCli(prompt: string, model: string, extraArgs: readonly string[], role: GraderRole): Promise<CompleteResult> {
   assertSpawnAllowed("the --decider-llm transport (`claude -p`)");
+  warnSettingsEffort(role);
   const bin = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude";
   // envPositiveNumber warns LOUD (not a silent revert) when the var is SET but unparseable/non-positive
   // (e.g. "5m", "0", "-1") — the old `Number(...) || dflt` idiom swallowed a typo'd knob with no signal.
@@ -471,7 +644,7 @@ async function completeViaCli(prompt: string, model: string, extraArgs: readonly
   let lastErr: Error | undefined;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      return await spawnOnce(bin, prompt, model, timeoutMs, maxBytes, extraArgs);
+      return await spawnOnce(bin, prompt, model, timeoutMs, maxBytes, extraArgs, role);
     } catch (e) {
       const err = e as Error & { retryable?: boolean; strictMcpRefused?: boolean };
       lastErr = err;

@@ -97,6 +97,17 @@ describe("spawnProtocol — L0 --effort emission (reasoning-config fidelity, Pha
     const args = (spawnMock.mock.calls[0] as unknown as [string, string[]])[1];
     expect(args[args.indexOf("--effort") + 1]).toBe("high");
   });
+
+  it("an operator-exported CLAUDE_CODE_EFFORT_LEVEL does not reach the spawned agent; the plan's effort still rides --effort", () => {
+    // The agent reads that env key ABOVE --effort, so leaking it would silently replace the scenario's effort.
+    const root = mkdtempSync(join(tmpdir(), "proto-effort-env-"));
+    const plan = minimalPlan([], { effort: "high", baseEnv: { CLAUDE_CODE_EFFORT_LEVEL: "low", PATH: "/usr/bin" } });
+    spawnProtocol(SCENARIO, BASELINE, plan, join(root, "out"));
+    const [, args, opts] = spawnMock.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv }];
+    expect(args[args.indexOf("--effort") + 1]).toBe("high");
+    expect(opts.env.PATH).toBe("/usr/bin"); // the operator layer did reach the spawn — the absence below is not vacuous
+    expect(opts.env.CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined();
+  });
 });
 
 // Hook lifecycle frames at L0, on the same rule as the other tiers: only when a staged plugin declares hooks.

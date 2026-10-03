@@ -986,7 +986,18 @@ Rarely needed.
   servers (`--safe-mode`, `--strict-mcp-config`), no project or local settings from the directory the harness runs
   in (`--setting-sources user`), and no session saved (`--no-session-persistence`). Your user settings still apply
   (their `env`, `apiKeyHelper` and model settings), as do managed and policy settings; auth configured only in a
-  project's `.claude/settings.json` is not read. On a machine with an enterprise MCP config — a
+  project's `.claude/settings.json` is not read. Each call pins its effort: `--effort high` for the judges and the
+  `critique` evaluator, `--effort medium` for the LLM decider. Each is the default effort of that role's default
+  model, so an `effortLevel` in your user settings does not change how it grades or answers. `CLAUDE_CODE_EFFORT_LEVEL`,
+  `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` and `CLAUDE_CODE_DISABLE_THINKING` are dropped from the environment it inherits,
+  and blanked with `--settings`, which should stop an `env` block in your user settings or global config (`settings.json`
+  and `.claude.json` under `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json` and `~/.claude.json`) from setting them.
+  That is read from Claude Code 2.1.288, not observed in a live call, so before the first call the harness also reads
+  those files. If one sets any of the three keys it warns, naming the keys, never their
+  values, and records them in the transport identity (`settingsEnvOverride`). A `maxEffortLevel` in your user settings
+  below the pin still lowers the effort: across settings files the lowest wins, so nothing the call passes raises it.
+  The harness records it (`settingsMaxEffort`) and warns when it is below the pin. A managed (policy) `env` block also
+  still applies. On a machine with an enterprise MCP config — a
   `managed-mcp.json` in Claude Code's managed-settings directory
   (`/Library/Application Support/ClaudeCode/` on macOS, `/etc/claude-code/` on Linux, `C:\Program Files\ClaudeCode\`
   on Windows) — the call leaves out `--strict-mcp-config`, which Claude Code refuses beside one; `--safe-mode` still

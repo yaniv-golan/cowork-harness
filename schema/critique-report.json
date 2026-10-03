@@ -323,8 +323,8 @@
     },
     "evaluatorTransport": {
       "type": "object",
-      "description": "how the evaluator's calls were made: `isolation` (the level of isolation from the operator's own Claude Code setup) the host CLI's `cliVersion`, and `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config; present with evaluatorModel",
-      "properties": { "isolation": { "type": "string" }, "cliVersion": { "type": "string" }, "strictMcp": { "const": false } },
+      "description": "how the evaluator's calls were made: `isolation` (the level of isolation from the operator's own Claude Code setup) the host CLI's `cliVersion`, the `effort` it was called with (absent from a report written before it was recorded), `settingsEnvOverride` (the effort/thinking keys a user-settings `env` block sets, names only, which the call blanks) and `settingsMaxEffort` (a user `maxEffortLevel`, which clamps the effort when below it), and `strictMcp: false` when the call left out `--strict-mcp-config` for an enterprise MCP config; present with evaluatorModel",
+      "properties": { "isolation": { "type": "string" }, "cliVersion": { "type": "string" }, "effort": { "type": "string" }, "settingsEnvOverride": { "type": "array", "items": { "type": "string" } }, "settingsMaxEffort": { "type": "string" }, "strictMcp": { "const": false } },
       "required": ["isolation"]
     },
     "items": {

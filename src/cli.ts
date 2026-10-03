@@ -53,7 +53,7 @@ import {
   type RunContext,
   type PartlyScriptedGate,
 } from "./decide/decider.js";
-import { claudeCliComplete, isolationRefusal } from "./decide/llm-transport.js";
+import { claudeCliCompleteDecider, isolationRefusal } from "./decide/llm-transport.js";
 import type { DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName, vmProvisioned, type VmProvisioning } from "./runtime/lima.js";
 import { resolveVmBaselineArg } from "./runtime/vm-baseline-arg.js";
@@ -3953,7 +3953,7 @@ async function cmdDecide(args: string[]) {
   log(`sample question: "${question}"  options: [${opts.join(" | ")}]`);
   try {
     if (deciderLlm) {
-      const d = await new LlmDecider(claudeCliComplete, intent, deciderModel || undefined).decide(req, ctx);
+      const d = await new LlmDecider(claudeCliCompleteDecider, intent, deciderModel || undefined).decide(req, ctx);
       const answer = (d as { response: { answers?: Record<string, string> }; model?: string }).response.answers?.[question];
       if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, answer, by: "llm" }));
       else log(`✓ LLM decider answered: "${question}" → "${answer}"  (non-deterministic)`);

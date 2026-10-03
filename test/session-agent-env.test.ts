@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { loadSession, agentEnvOverrides, SCRUBBED_AGENT_ENV_KEYS } from "../src/session.js";
 import { buildHostLoopNativeEnv } from "../src/runtime/hostloop.js";
 import { buildProtocolEnv } from "../src/runtime/protocol.js";
@@ -9,8 +9,9 @@ import type { LaunchPlan } from "../src/session.js";
 // hostloop AND protocol spawn over the operator's FULL shell env, while container/microvm build a
 // constructed allowlist — so an operator-exported CLAUDE_CODE_SUBAGENT_MODEL / ENABLE_TOOL_SEARCH /
 // CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS silently affects only the env-inheriting tiers. `agent_env` is
-// the authored knob that applies uniformly across all four tiers; the three keys are scrubbed from the
-// OPERATOR layer on hostloop/protocol (the only tiers that inherit it) before any baseline/knob overlay.
+// the authored knob that applies uniformly across all four tiers; those keys (and the rest of
+// SCRUBBED_AGENT_ENV_KEYS) are scrubbed from the OPERATOR layer on hostloop/protocol (the only tiers that
+// inherit it) before any baseline/knob overlay.
 
 describe("agent_env — the tier-uniform gated-env knob", () => {
   it("maps the three fields to their exact env keys", () => {
@@ -129,7 +130,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     }
   });
 
-  it("SCRUBBED_AGENT_ENV_KEYS is exactly the five inheritance-asymmetric keys", () => {
+  it("SCRUBBED_AGENT_ENV_KEYS is exactly the eight inheritance-asymmetric keys", () => {
     expect([...SCRUBBED_AGENT_ENV_KEYS].sort()).toEqual(
       [
         "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
@@ -137,6 +138,9 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
         "ENABLE_TOOL_SEARCH",
         "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
         "CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL",
+        "CLAUDE_CODE_EFFORT_LEVEL",
+        "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+        "CLAUDE_CODE_DISABLE_THINKING",
       ].sort(),
     );
   });
@@ -153,6 +157,65 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     };
     for (const k of SCRUBBED_AGENT_ENV_KEYS) delete env[k];
     expect(env).toEqual({ CLAUDE_CODE_SUBAGENT_MODEL_NOT_A_REAL_KEY: "keep" });
+  });
+});
+
+// The agent reads CLAUDE_CODE_EFFORT_LEVEL ABOVE the `--effort` flag (its effort resolver takes the env value
+// first; `unset`/`auto` there means "model default", which also displaces the flag). CLAUDE_CODE_ALWAYS_ENABLE_EFFORT
+// makes it send an effort parameter for a model that otherwise gets none, and CLAUDE_CODE_DISABLE_THINKING turns
+// thinking off regardless of the thinking flag. Real Cowork's spawn sets none of the three, so an operator's export
+// would change what effort/thinking a run uses on hostloop and protocol only. Driven through the real builders.
+const EFFORT_THINKING_KEYS = ["CLAUDE_CODE_EFFORT_LEVEL", "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "CLAUDE_CODE_DISABLE_THINKING"] as const;
+const OPERATOR_VALUE: Record<(typeof EFFORT_THINKING_KEYS)[number], string> = {
+  CLAUDE_CODE_EFFORT_LEVEL: "low",
+  CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "1",
+  CLAUDE_CODE_DISABLE_THINKING: "1",
+};
+
+describe("effort/thinking env keys exported by the operator do not reach the agent", () => {
+  // stubEnv/unstubAllEnvs RESTORE a developer's real export afterwards; a bare `delete` would lose it for the worker.
+  afterEach(() => vi.unstubAllEnvs());
+
+  for (const k of EFFORT_THINKING_KEYS) {
+    it(`hostloop scrubs an operator-exported ${k}`, () => {
+      vi.stubEnv(k, OPERATOR_VALUE[k]);
+      const env = buildHostLoopNativeEnv(loadBaseline("latest"), { configDir: "/tmp/cfg" });
+      expect(env[k]).toBeUndefined();
+    });
+
+    it(`protocol scrubs an operator-exported ${k}`, () => {
+      vi.stubEnv(k, OPERATOR_VALUE[k]);
+      // `baseEnv` is what buildProtocolEnv scrubs; it must actually carry the key or the assertion is vacuous.
+      const plan = { baseEnv: { ...process.env }, agentEnv: {} } as unknown as LaunchPlan;
+      expect(plan.baseEnv[k]).toBe(OPERATOR_VALUE[k]);
+      const env = buildProtocolEnv(plan, loadBaseline("latest"));
+      expect(env[k]).toBeUndefined();
+    });
+  }
+
+  it("hostloop keeps a BASELINE-provided CLAUDE_CODE_EFFORT_LEVEL over the operator's export", () => {
+    // No recorded Desktop spawn sets it; construct a baseline that does, so the layering is pinned: the scrub
+    // touches the operator layer only, and the baseline overlay that follows it survives.
+    vi.stubEnv("CLAUDE_CODE_EFFORT_LEVEL", "low");
+    const base = loadBaseline("latest");
+    const withKey = { ...base, spawn: { ...base.spawn, env: { ...(base.spawn?.env ?? {}), CLAUDE_CODE_EFFORT_LEVEL: "high" } } };
+    const env = buildHostLoopNativeEnv(withKey as never, { configDir: "/tmp/cfg" });
+    expect(env.CLAUDE_CODE_EFFORT_LEVEL).toBe("high");
+  });
+
+  it("container/microvm keep a BASELINE-provided CLAUDE_CODE_EFFORT_LEVEL and never take the operator's", () => {
+    vi.stubEnv("CLAUDE_CODE_EFFORT_LEVEL", "low");
+    const base = loadBaseline("latest");
+    expect(spawnEnv(base, { configGuest: "/mnt/.claude", proxyHost: "http://p" }).CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined();
+    const withKey = { ...base, spawn: { ...base.spawn, env: { ...(base.spawn?.env ?? {}), CLAUDE_CODE_EFFORT_LEVEL: "high" } } };
+    expect(spawnEnv(withKey as never, { configGuest: "/mnt/.claude", proxyHost: "http://p" }).CLAUDE_CODE_EFFORT_LEVEL).toBe("high");
+  });
+
+  it("the latest baseline's spawn env sets none of the three keys", () => {
+    // If a future sync records one, the scrub still passes the baseline value (test above); this pin makes that
+    // change visible rather than silent.
+    const env: Record<string, string> = loadBaseline("latest").spawn?.env ?? {};
+    for (const k of EFFORT_THINKING_KEYS) expect(env[k]).toBeUndefined();
   });
 });
 

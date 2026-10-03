@@ -1,4 +1,5 @@
 import { warn as warnToStderr } from "./io.js";
+import { EFFORT_THINKING_ENV_KEYS } from "./effort-env.js";
 import { z } from "zod";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, existsSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -274,7 +275,7 @@ export const SessionConfig = z.strictObject({
  *  (a) is user-settable from a shell, (b) changes agent behaviour this harness models or reports on, and
  *  (c) is NOT set by the Cowork spawn** — so inheriting it makes the two env-inheriting tiers diverge
  *  from the other two with nothing in the baseline to justify the difference. Dozens of keys in the
- *  binary's settable-env table meet (a) alone; (b) and (c) are what select these five.
+ *  binary's settable-env table meet (a) alone; (b) and (c) are what select these eight.
  *  KNOWN AND DELIBERATELY NOT SCRUBBED: `CLAUDE_CODE_COORDINATOR_MODE` itself, which enables the second
  *  key above and swaps the coordinator system prompt and the Task tool description. It fails (b) as
  *  currently written — the harness models no coordinator surface — so scrubbing it would suppress a
@@ -286,6 +287,25 @@ export const SCRUBBED_AGENT_ENV_KEYS = [
   "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
   "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
   "CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL",
+  // Effort and thinking. Read from the agent binary (2.1.286): the effort resolver takes
+  // `CLAUDE_CODE_EFFORT_LEVEL` FIRST — `env ?? (env===null ? modelDefault : …) ?? turnEffort ?? sessionEffort ??
+  // modelDefault`, where the session effort is what `--effort` sets, and `unset`/`auto` mean "model default",
+  // which displaces the flag too. Only a hook's effort value outranks it. `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`
+  // makes the model-supports-effort predicate true for a model the agent has no effort data for (a model id
+  // outside its capability tables), so an effort parameter is sent where it otherwise would not be. It is
+  // checked AFTER the per-model overrides, the capability table and a hard-coded no-effort list (claude-3-*,
+  // opus-4-0/4-1, sonnet-4-0/4-5, haiku-4-5), so it cannot turn effort on for those. `CLAUDE_CODE_DISABLE_THINKING` turns thinking off whatever the thinking flag says (and clamps
+  // effort with it). Cowork sets none of the three: they are absent from the constructed spawn env, and the
+  // host-loop spawn copies only PATH/HOME/LOGNAME/SHELL/TERM/USER/CLAUDE_CODE_TMPDIR from Desktop's own
+  // environment — Desktop does adopt a login-shell `CLAUDE_CODE_EFFORT_LEVEL` into that environment, but for
+  // its Code tab, not for the Cowork agent. Unlike the two `_FORCE` keys these have an authored replacement:
+  // the session's `effort` and `extended_thinking`.
+  // KNOWN AND DELIBERATELY NOT SCRUBBED, from the same family: `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING` acts only on
+  // opus-4-6 and sonnet-4-6 (it switches their thinking from adaptive to a fixed budget), and
+  // `DISABLE_INTERLEAVED_THINKING` drops the interleaved-thinking beta header. Neither changes the effort level
+  // or whether thinking is on, which is what the session's `effort` and `extended_thinking` model, so they fail
+  // (b). Revisit if the harness ever models thinking mode or the beta-header set.
+  ...EFFORT_THINKING_ENV_KEYS,
 ] as const;
 
 /** Map the authored `agent_env` knob to its exact env keys. An unset field emits NO key — never an empty

@@ -283,7 +283,7 @@ export function makeSemanticJudge(opts: { model?: string; complete?: Complete } 
     // this closure onto the (necessarily synchronous, factory-time) `.model` property.
     judge.model = resolvedModel;
     // Only the real host transport has an identity to record; an injected `complete` (a test) does not.
-    if (opts.complete === undefined) judge.transport = transportIdentity();
+    if (opts.complete === undefined) judge.transport = transportIdentity("judge");
     return parseJudgeResults(text, rubric);
   };
   // Seed with the requested alias so a caller reading `.model` BEFORE any call still gets something

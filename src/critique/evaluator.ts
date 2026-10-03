@@ -1,4 +1,4 @@
-import { claudeCliComplete } from "../decide/llm-transport.js";
+import { claudeCliCompleteEvaluator } from "../decide/llm-transport.js";
 import type { Complete } from "../decide/decider.js";
 import { extractAllJsonObjects } from "../decide/semantic-judge.js";
 import { validateCitations, type CritiqueItem } from "./evidence.js";
@@ -560,7 +560,7 @@ export async function runCritique(
   const pkg = evidence.text;
   opts.onArmoredEvidence?.(pkg);
   const model = opts.model ?? defaultEvaluatorModel();
-  const complete = opts.complete ?? claudeCliComplete;
+  const complete = opts.complete ?? claudeCliCompleteEvaluator;
   // The shared transport's 600s default is sized for a DECIDER gate: a small prompt and a one-line answer.
   // An evaluator pass is a different workload — a large evidence corpus to prefill plus tens of thousands of
   // reasoning tokens — and its timeout is enforced with SIGKILL and NO retry (timeouts are classed

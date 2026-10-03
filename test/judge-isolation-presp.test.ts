@@ -175,9 +175,15 @@ describe.runIf(POSIX)("a graded run records how its judge was called", () => {
         "#!/bin/sh",
         'if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi',
         'if [ "$1" = "--help" ]; then',
-        ...["--safe-mode", "--strict-mcp-config", "--no-session-persistence", "--setting-sources <s>", "--tools <tools...>"].map(
-          (l) => `  echo "  ${l}   x"`,
-        ),
+        ...[
+          "--safe-mode",
+          "--strict-mcp-config",
+          "--no-session-persistence",
+          "--setting-sources <s>",
+          "--tools <tools...>",
+          "--effort <level>",
+          "--settings <s>",
+        ].map((l) => `  echo "  ${l}   x"`),
         "  exit 0",
         "fi",
         "cat >/dev/null",
@@ -193,7 +199,7 @@ describe.runIf(POSIX)("a graded run records how its judge was called", () => {
     );
     const a = r.assertions.find((x) => x.assertion.semantic_matches !== undefined)!;
     expect(a.judgeModel).toBe("claude-opus-4-8");
-    expect(a.judgeTransport).toEqual({ isolation: "1", cliVersion: "2.1.286" });
+    expect(a.judgeTransport).toEqual({ isolation: "1", cliVersion: "2.1.286", effort: "high" });
   });
 });
 
