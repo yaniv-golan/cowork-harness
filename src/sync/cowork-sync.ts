@@ -1667,8 +1667,11 @@ export function checkCodeTripwires(bundle: string): string[] {
 /** Sites building the delete-deny resolver on the newest baseline (Desktop 1.37937.1): the VM-loop
  *  mount-set builder and host-loop `computeBashMounts`. A FLOOR, not an equality — see its use site. */
 const MOUNT_DELETE_DENY_MIN_SITES = 2;
+/** Call sites of `outputsMountMode` on the newest baselines (2.16120.0, 2.19675.0): the host-loop, VM-loop and shares
+ *  mount builders. A FLOOR — see its use in checkMountModeFacts. */
+const OUTPUTS_MODE_MIN_CALL_SITES = 3;
 
-export function checkMountModeFacts(bundle: string, files?: Map<string, string>): string[] {
+export function checkMountModeFacts(bundle: string, files: Map<string, string>): string[] {
   const flags: string[] = [];
   // The OUTPUTS mount (Desktop >= 2.16120.0). Its mode no longer goes through the delete-deny resolver below:
   // all three mount builders (host-loop computeBashMounts, the VM-loop builder, the shares builder) call the
@@ -1680,21 +1683,45 @@ export function checkMountModeFacts(bundle: string, files?: Map<string, string>)
   // correct: that install does not build what the pinned baselines describe.
   {
     const exportRe = /(?<![\w$])outputsMountMode:\(\)=>([\w$]+)/;
-    const site = files ? [...files.values()].find((c) => exportRe.test(c)) : exportRe.test(bundle) ? bundle : undefined;
+    const exporting = [...files].find(([, c]) => exportRe.test(c));
+    const site = exporting?.[1];
     const local = site ? exportRe.exec(site)![1] : undefined;
     const header = local && site ? new RegExp(`function ${reEsc(local)}\\(([\\w$]+)\\)\\{`).exec(site) : null;
     const body = header && site ? braceBodyOf(site, header[0]) : null;
+    // The CALLERS, so "every mount builder uses it" is pinned and not just the function. The builders live in
+    // another chunk and call it through the module's re-export alias — `defineProperty(exports,"<a>",…return <B>)`,
+    // `<ns>=require("./<exporting chunk>")`, then `<ns>.<a>(` — 3 sites in 2.16120.0 and 2.19675.0 (host-loop
+    // computeBashMounts, the VM-loop builder, the shares builder). Direct calls of <B> inside its own chunk count
+    // too. Only a MOUNT site counts — the call must be the `mode:` value — so an unrelated call of the same alias
+    // cannot stand in for a builder that stopped using it. A FLOOR, as for the resolver below: a builder going back
+    // to a hardcoded mode for outputs must flag, a fourth caller is benign. The real 2.16120.0 and 2.19675.0 asars
+    // each have exactly 3 such `mode:` sites.
+    let callSites = 0;
+    if (exporting && local) {
+      const [chunkName, chunk] = exporting;
+      callSites += (chunk.match(new RegExp(`mode:${reEsc(local)}\\(`, "g")) ?? []).length;
+      const alias = new RegExp(`defineProperty\\(exports,"([\\w$]+)",\\{[^}]*?return ${reEsc(local)}\\}`).exec(chunk)?.[1];
+      if (alias)
+        for (const [name, other] of files) {
+          if (name === chunkName) continue;
+          for (const m of other.matchAll(new RegExp(`(?<![\\w$.])([\\w$]+)=require\\("\\./${reEsc(chunkName)}"\\)`, "g")))
+            callSites += (other.match(new RegExp(`mode:${reEsc(m[1])}\\.${reEsc(alias)}\\(`, "g")) ?? []).length;
+        }
+    }
     const why = !local
       ? "the outputsMountMode export is gone"
       : body === null
         ? `outputsMountMode's function ${local}() does not resolve in its chunk`
         : body !== `return ${header![1]}?"rw":"rwd"`
           ? `outputsMountMode no longer returns exactly \`<isBridgeSession>?"rw":"rwd"\` (body: \`${body.slice(0, 80)}\`)`
-          : undefined;
+          : callSites < OUTPUTS_MODE_MIN_CALL_SITES
+            ? `outputsMountMode is called at ${callSites} call site(s), below the floor of ${OUTPUTS_MODE_MIN_CALL_SITES} — ` +
+              "a mount builder no longer takes the outputs mode from it"
+            : undefined;
     if (why)
       flags.push(
         `mountLayout: ${why} — the outputs mount mode the baselines record ("rwd" for a normal session, "rw" for a bridge ` +
-          "session) may have changed; re-derive mountLayout.mounts outputs.mode (see baselines $comment_modes)",
+          "session) may have changed; re-derive the outputs entry of mountLayout.mounts (its purpose names the construct)",
       );
   }
   // The delete-deny resolver. A bare `.test()` was the same single-anchor hole the per-mount checks below
@@ -4436,9 +4463,10 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   // in whichever chunk comes first. An exact-body match is deliberate: a widened (`||…`), negated, re-keyed or
   // constant predicate must fail. So must a minifier reshape — an arrow predicate (`const P=e=>…`) or optional
   // chaining (`e?.sessionType`) fails closed ON PURPOSE, as S6d/S6f do; update the shapes here when it does.
-  // Zero constructions is a failure only while the bundle still names the key (the bundled CLI declares it):
-  // the construction was removed (drop the allowlist entry together with this check) or reshaped beyond the
-  // counter. A bundle that never mentions the key has nothing to guard.
+  // Zero constructions is a failure only while the bundle still names the key (the bundled CLI declares it). On
+  // an older Desktop (2.7032.0 to 2.16120.0) the CLI declares it but Desktop never built it, so a maintainer who
+  // syncs an un-updated Desktop sees this flag, and the message says so rather than claiming a removal. A bundle
+  // that never mentions the key has nothing to guard.
   {
     const SCHED_KEY = "CLAUDE_CODE_HOST_SCHEDULED_RUN";
     const schedMiss = (why: string) => miss("S6g scheduled-run env key", why);
@@ -4482,8 +4510,10 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     }
     if (ctors === 0 && bundle.includes(SCHED_KEY))
       schedMiss(
-        `${SCHED_KEY} is named in the bundle but constructed nowhere the guard can count — it was removed (drop its ` +
-          "allowlist entry together with this check) or reshaped beyond the counter; reclassify",
+        `${SCHED_KEY} is named in the bundle (the bundled CLI's env schema declares it) but Desktop constructs it nowhere ` +
+          "the guard can count. On a Desktop before 2.19675.0 that is expected — the CLI knew the key before Desktop set " +
+          "it, and sync reads only the installed Desktop. On 2.19675.0 or later the construction was either dropped " +
+          "(remove the allowlist entry together with this check) or reshaped beyond the counter; reclassify",
       );
     else if (ctors !== guarded)
       schedMiss(

@@ -808,7 +808,7 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
     withHome((home) => {
       const flat = loadBaseline("desktop-2.16120.0");
       const ver = pinnedNativeAgentVersion(flat)!;
-      expect(flat.agentBinary?.nativeStagedPath).toMatch(new RegExp(`/${ver.replace(/\./g, "\\.")}/claude\\.app/`)); // precondition: flat
+      expect(flat.agentBinary?.nativeStagedPath).toContain(`/${ver}/claude.app/`); // precondition: flat
       stageBuild(home, ver, "aaaaaaaaaaaa", 100);
       const bin = stageBuild(home, ver, "bbbbbbbbbbbb", 200);
       expect(resolveHostAgentBinary(flat)).toBe(bin);
@@ -818,23 +818,8 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
     });
   });
 
-  // `latest` (desktop-2.19675.0 onwards) pins the BUILD. The pinned build wins over a newer sibling build of
-  // the same version — no drift and no ambiguity, so no note at all.
-  it("latest's build pin with a newer sibling build of the same version staged → ok, the PINNED build", () => {
-    withHome((home) => {
-      const pinnedPath = loadBaseline("latest").agentBinary?.nativeStagedPath ?? "";
-      const build = pinnedPath.match(/\/[\d.]+\/([0-9a-f]{12})\/claude\.app\//)?.[1];
-      expect(build).toBeDefined(); // precondition: latest pins a build
-      const bin = stageBuild(home, pinned(), build!, 100);
-      stageBuild(home, pinned(), "bbbbbbbbbbbb", 200);
-      const r = realProbe.hostAgentBinary();
-      expect(r).toMatchObject({ ok: true, path: bin });
-      expect(r.ok && r.note).toBeFalsy(); // exact build pin: no drift, no ambiguity
-    });
-  });
-
-  // latest (desktop-2.19675.0 onwards) also pins the build PER ARCH. An x64 host is held to the x64 entry, not
-  // to the arm64 build in nativeStagedPath — through the real probe, with the host arch faked.
+  // The host arch, faked so a case never depends on the machine running it (CI is x64 and Linux; a dev Mac is
+  // arm64). latest pins the native build PER ARCH, so which build counts as "pinned" depends on it.
   const asArch = (arch: string, fn: () => void) => {
     const saved = Object.getOwnPropertyDescriptor(process, "arch")!;
     Object.defineProperty(process, "arch", { value: arch, configurable: true });
@@ -844,6 +829,28 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
       Object.defineProperty(process, "arch", saved);
     }
   };
+
+  // `latest` (desktop-2.19675.0 onwards) pins the BUILD, per arch. The build pinned for the host's arch wins over a
+  // newer sibling build of the same version — no drift and no ambiguity, so no note at all. Run on BOTH arches.
+  it.each(["arm64", "x64"] as const)(
+    "latest's build pin (%s host) with a newer sibling build of the same version staged → ok, the PINNED build",
+    (arch) => {
+      const build = loadBaseline("latest").agentBinary?.nativeBuilds?.[arch];
+      expect(build, `precondition: latest pins a ${arch} build`).toMatch(/^[0-9a-f]{12}$/);
+      asArch(arch, () =>
+        withHome((home) => {
+          const bin = stageBuild(home, pinned(), build!, 100);
+          stageBuild(home, pinned(), "bbbbbbbbbbbb", 200);
+          const r = realProbe.hostAgentBinary();
+          expect(r).toMatchObject({ ok: true, path: bin });
+          expect(r.ok && r.note).toBeFalsy(); // exact build pin: no drift, no ambiguity
+        }),
+      );
+    },
+  );
+
+  // An x64 host is held to the x64 entry, not to the arm64 build in nativeStagedPath — through the real probe.
+
   it("x64 host: latest's x64 build staged → ok, no note; another x64 build only → fail, kind build", () => {
     const x64 = loadBaseline("latest").agentBinary?.nativeBuilds?.x64;
     expect(x64, "precondition: latest pins an x64 build").toMatch(/^[0-9a-f]{12}$/);
