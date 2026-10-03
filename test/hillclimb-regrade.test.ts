@@ -1176,9 +1176,40 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(row.grade).toMatchObject({ pass: 0, a0: 1, a1: 0 });
     expect(row.meta.regrade_reevaluated_because).toEqual([{ assert: 1, because: ["reevaluate"] }]);
     expect(row.meta).not.toHaveProperty("regrade_kept_live");
-    // A later default regrade: the row records no re-evaluation of its own any more (a later regrade replaces it).
+    // A later default regrade keeps the taken outcome: it never silently puts the run's back.
     const again = await regradeFlow(ARGS({ variant: "v1" }), DEPS());
     expect(again.exitCode, JSON.stringify(again)).toBe(0);
+    expect(rows("v1")[0]!.grade).toMatchObject({ pass: 0, a1: 0 });
+    expect(rows("v1")[0]!.meta.regrade_reevaluated_because).toEqual([{ assert: 1, because: ["reevaluate"] }]);
+    expect(rows("v1")[0]!.meta).not.toHaveProperty("regrade_kept_live");
+  }, 240_000);
+
+  it("--reevaluate, then --fill-refs: the fill keeps the taken outcome (pass never moves back) and adds the column", async () => {
+    const { cli, rows, evals } = buildFlow();
+    // The run's evaluator passed an expect_denied host the current one fails (no egress decision was recorded).
+    for (const v of ["baseline", "v1"]) {
+      const file = join(runDirOf(rows(v)[0]!), "turns", "1", "result.json");
+      const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: unknown[] };
+      r.assertions.push({ assertion: { egress_denied: "blocked.example" }, pass: true, message: "" });
+      writeFileSync(file, JSON.stringify(r));
+    }
+    edit(evals, "assert:\n", "expect_denied: [blocked.example]\nassert:\n");
+    const { seen, deps } = counting();
+    const re = await regradeFlow(ARGS({ approveHarness: true, reevaluate: true }), deps);
+    expect(re.exitCode, JSON.stringify(re)).toBe(0);
+    for (const v of ["baseline", "v1"]) {
+      expect(rows(v)[0]!.grade.pass).toBe(0);
+      expect(rows(v)[0]!.meta.regrade_reevaluated_because).toEqual([{ assert: 2, because: ["reevaluate"] }]);
+    }
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    const fill = await regradeFlow(ARGS({ fillRefs: true }), deps);
+    expect(
+      fill.variants.flatMap((v) => v.listed),
+      JSON.stringify(fill),
+    ).toEqual([]);
+    expect(seen.calls).toBeGreaterThan(0);
+    expect(rows("baseline")[0]!.grade).toHaveProperty("win_v1");
+    for (const v of ["baseline", "v1"]) expect(rows(v)[0]!.grade.pass, v).toBe(0);
   }, 240_000);
 
   it("--reevaluate lists a row whose differing assert reads the kept work dir (it may have changed since the run)", async () => {
