@@ -281,7 +281,7 @@ that the loop and the lite report builder read, with these differences:
 
 - it re-evaluates a deterministic assertion (`file_exists`, `tool_called`, …) whose definition changed against
   the kept run, and re-measures every declared metric, so an assertion fix or a metric added mid-climb reaches
-  the rows already written (a value already measured is kept if the kept file can no longer be read);
+  the rows already written (a value already measured is kept when the kept file cannot be read);
 - when a harness upgrade changes how an unchanged assertion evaluates, it keeps the recorded outcome and notes
   it; edit the assertion, or re-run the case, to re-grade it;
 - it re-judges a judged assertion when something the judge sees changed (its rubric or claims, its judge model or
