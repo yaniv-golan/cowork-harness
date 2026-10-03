@@ -95,7 +95,7 @@ export function variantSnapshot(
         `variant ${opts.variant}'s plugin snapshot at ${tildeify(dir)} is incomplete (an interrupted copy): it cannot be trusted, and the live plugin may already hold a later round — re-run this variant into a fresh flow`,
       );
     throw new UsageError(
-      `variant ${opts.variant} already has rows, but its plugin snapshot ${tildeify(dir)} is missing: running it now would measure the live plugin, which may hold a later round — restore the snapshot or re-run this variant into a fresh flow`,
+      `variant ${opts.variant} already has rows, but its plugin snapshot ${tildeify(dir)} is missing: running it now would measure the live plugin, which may hold a later round. Snapshots are kept per flow dir path, so a flow dir copied or moved keeps its rows but not its snapshots. Restore the snapshot, re-run this variant into a fresh flow, or run a new variant instead (approve the harness through it: \`--dry-run --approve-harness --variant v<N>\`)`,
     );
   }
   // A dry run checks what a pass would refuse, and stops before writing: the pass would take (or re-take) a snapshot
