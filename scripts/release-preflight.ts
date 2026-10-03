@@ -19,6 +19,10 @@
 //      `observed:false` when no Cowork session ran on the synced Desktop — a routine local state, so it
 //      is allowed in a commit but must not ship. Emergency override: --allow-unobserved-init-surface
 //      (dedicated on purpose: never --allow-empty, which would waive sync's other guards).
+//   8. The covered surface since the last release tag (scripts/check-surface.ts --since-tag): a removed or
+//      changed leaf FAILS unless the package.json version is a MAJOR bump over that tag. The per-PR snapshot
+//      cannot catch this — every PR regenerates it, so it reads +0 at release time. Before the bump
+//      (version == the tag's) it is informational only. SKIPs when the tag predates the snapshot file.
 
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
@@ -26,6 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
+import { checkSurfaceSinceLastTag } from "./check-surface.js";
 import { compareBaselineVersions } from "../src/baseline.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -102,6 +107,8 @@ interface CheckResult {
   name: string;
   status: CheckStatus;
   detail: string;
+  /** Print `detail` even on PASS (a summary worth seeing every run). */
+  alwaysShowDetail?: boolean;
 }
 
 function run(cmd: string, args: string[]): { ok: boolean; status: number | null; stdout: string; stderr: string } {
@@ -350,10 +357,20 @@ function checkForTag(): CheckResult {
   };
 }
 
+function checkReleaseSurface(version: string): CheckResult {
+  const v = checkSurfaceSinceLastTag(version);
+  return {
+    name: "no covered-surface break since the last release tag without a MAJOR bump",
+    status: v.status,
+    detail: v.detail,
+    alwaysShowDetail: true,
+  };
+}
+
 function printResult(res: CheckResult): void {
   const icon = res.status === "PASS" ? "✓" : res.status === "WARN" ? "⚠" : res.status === "SKIP" ? "–" : "✗";
   process.stdout.write(`${icon} [${res.status}] ${res.name}\n`);
-  if (res.status !== "PASS") process.stdout.write(`    ${res.detail.replace(/\n/g, "\n    ")}\n`);
+  if (res.status !== "PASS" || res.alwaysShowDetail) process.stdout.write(`    ${res.detail.replace(/\n/g, "\n    ")}\n`);
 }
 
 function main(): void {
@@ -375,6 +392,7 @@ function main(): void {
     checkTagDoesNotExist(version),
     checkWorkingTreeClean(),
     checkInitSurfaceObserved(newestBaseline(), allowUnobserved),
+    checkReleaseSurface(version),
   ];
   const warnResults = [checkRulesetContexts(), checkLiveSuiteKeyReminder()];
 

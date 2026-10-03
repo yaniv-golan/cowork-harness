@@ -114,6 +114,83 @@ describe.skipIf(!can)("replay --reassert --write — persist a stream-derivable 
     expect(readCassette(cwd).scenario.assert).toEqual([{ transcript_contains: "hello" }]);
   });
 
+  it("(j) a CURRENT block still gets its events rescrubbed (here a built-in command's and agent's description), and nothing else changes", () => {
+    const cwd = tmp();
+    const c = JSON.parse(cassetteJson({ assert: [{ transcript_contains: "hello" }], controlOut: [JSON.stringify({ some: "frame" })] }));
+    c.events.splice(
+      1,
+      0,
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          request_id: "init-1",
+          response: {
+            commands: [
+              { name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE", builtin: true },
+              { name: "p:s", description: "plugin prose" },
+            ],
+            agents: [
+              { name: "Explore", description: "SYNTHETIC BUILT-IN AGENT PROSE" },
+              { name: "p:a", description: "plugin agent prose" },
+            ],
+          },
+        },
+      }),
+    );
+    write(cwd, "c.cassette.json", JSON.stringify(c, null, 2));
+    write(cwd, "c.yaml", scenarioYaml("  - transcript_contains: hello\n"));
+    const before = readCassette(cwd);
+    const w = replay(cwd, ["c.cassette.json", "--reassert", "--write", "--output-format", "json"]);
+    expect(w.code).toBe(0);
+    expect(w.stderr).toMatch(/already matches the on-disk scenario; removed from its events .*\(builtin-description\)/);
+    const after = readCassette(cwd);
+    expect(after.events[1]).not.toContain("SYNTHETIC BUILT-IN PROSE");
+    expect(after.events[1]).not.toContain("SYNTHETIC BUILT-IN AGENT PROSE");
+    expect(after.events[1]).toContain("plugin prose");
+    expect(after.events[1]).toContain("plugin agent prose");
+    expect(after.events.filter((l: string, i: number) => l !== before.events[i])).toHaveLength(1);
+    expect({ ...after, events: [] }).toEqual({ ...before, events: [] }); // block, version, controlOut: untouched
+    // and a second --write is a byte-identical no-op
+    const bytes = readFileSync(join(cwd, "c.cassette.json"), "utf8");
+    expect(replay(cwd, ["c.cassette.json", "--reassert", "--write"]).stderr).toMatch(/no write/);
+    expect(readFileSync(join(cwd, "c.cassette.json"), "utf8")).toBe(bytes);
+  });
+
+  // Both --write rewrites hold the scrub to record's verdict-preservation check. Here the scrub WOULD flip a verdict:
+  // the scenario asserts on the hand-back frame text the scrub removes. So the events are left unscrubbed, with a
+  // warning naming the scrub, and nothing recorded is lost.
+  const FRAME = "[Subagent hand-back] SYNTHETIC FRAME";
+  const framed = (assert: unknown[]) => {
+    const c = JSON.parse(cassetteJson({ assert }));
+    c.events[1] = JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `hello there\n${FRAME}` }] } });
+    return JSON.stringify(c, null, 2);
+  };
+  it("(k) current block: a scrub that would flip a verdict is not applied — no write, warned", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", framed([{ transcript_contains: "[Subagent hand-back]" }]));
+    write(cwd, "c.yaml", scenarioYaml('  - transcript_contains: "[Subagent hand-back]"\n'));
+    const bytes = readFileSync(join(cwd, "c.cassette.json"), "utf8");
+    const w = replay(cwd, ["c.cassette.json", "--reassert", "--write", "--output-format", "json"]);
+    expect(w.code).toBe(0);
+    expect(w.stderr).toMatch(
+      /::warning:: \[replay --write\] c\.cassette\.json: the recorder's scrub \(subagent-hand-back-frame\) could not be verified/,
+    );
+    expect(w.stderr).toMatch(/no write/);
+    expect(readFileSync(join(cwd, "c.cassette.json"), "utf8")).toBe(bytes);
+  });
+  it("(l) changed block: the block is written, the events stay unscrubbed, warned", () => {
+    const cwd = tmp();
+    write(cwd, "c.cassette.json", framed([{ result: "success" }]));
+    write(cwd, "c.yaml", scenarioYaml('  - transcript_contains: "[Subagent hand-back]"\n'));
+    const w = replay(cwd, ["c.cassette.json", "--reassert", "--write", "--output-format", "json"]);
+    expect(w.code).toBe(0);
+    expect(w.stderr).toMatch(/the recorder's scrub \(subagent-hand-back-frame\) could not be verified/);
+    expect(w.stderr).toMatch(/wrote the re-asserted block back to the cassette \(events\/controlOut unchanged\)/);
+    const after = readCassette(cwd);
+    expect(after.scenario.assert).toEqual([{ transcript_contains: "[Subagent hand-back]" }]);
+    expect(JSON.stringify(after.events)).toContain(FRAME);
+  });
+
   it("(f) idempotent: a second --write is a no-op (no churn) once the block already matches", () => {
     const cwd = tmp();
     write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));

@@ -11,7 +11,7 @@
 // agent can write. What bounds an unattended run is the permission allowlist on the runner command.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import { pathsInsideMounts } from "./answer-key.js";
 
@@ -42,11 +42,36 @@ export interface Digest {
   lockfiles: string[];
 }
 
-export function harnessDigest(input: DigestInput): Digest {
+/** The absolute paths a digest reads, sorted: the derived set, the lockfiles in cwd and the listed entries. One
+ *  function, so `hashedPaths` names exactly what `harnessDigest` hashes. */
+function digestPaths(input: Pick<DigestInput, "cwd" | "listed" | "derived">): { all: string[]; derived: Set<string>; lockfiles: string[] } {
   const { cwd } = input;
   const lockfiles = LOCKFILES.filter((f) => existsSync(resolve(cwd, f)));
   const derived = new Set(input.derived.map((p) => resolve(cwd, p)));
   const all = [...new Set([...derived, ...lockfiles.map((f) => resolve(cwd, f)), ...input.listed.map((p) => resolve(cwd, p))])].sort();
+  return { all, derived, lockfiles };
+}
+
+/** The cwd-relative paths `harnessDigest` would hash for these inputs (the keys it records in `entries`, its
+ *  `<…>` virtual entries and tags aside), without reading their bytes: a derived path always (one it cannot read
+ *  refuses the digest), a lockfile or listed entry only when it is a readable file (the digest skips it otherwise). */
+export function hashedPaths(input: Pick<DigestInput, "cwd" | "listed" | "derived">): string[] {
+  const { all, derived } = digestPaths(input);
+  const readable = (p: string): boolean => {
+    try {
+      if (!statSync(p).isFile()) return false;
+      closeSync(openSync(p, "r"));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return all.filter((p) => derived.has(p) || readable(p)).map((p) => relative(input.cwd, p));
+}
+
+export function harnessDigest(input: DigestInput): Digest {
+  const { cwd } = input;
+  const { all, derived, lockfiles } = digestPaths(input);
   const h = createHash("sha256");
   const hashed: string[] = [];
   const entries: Record<string, string> = {};

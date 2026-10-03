@@ -165,6 +165,7 @@ import {
   DEFAULT_SCAN_PATTERNS,
   MANIFEST_SCAN_PATTERNS,
   HOST_INVENTORY_CLS,
+  KNOWN_BUILTIN_SKILLS,
   type ScanFinding,
   type AllowInput,
   type AllowPattern,
@@ -1700,7 +1701,99 @@ function mapStrings(v: unknown, f: (s: string) => string): unknown {
   return v;
 }
 
-export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame";
+/** What replaces the description of a BUILT-IN entry (agent, command or skill) in the registry. Exported so the
+ *  committed-cassette guard compares against it exactly. */
+export const BUILTIN_DESCRIPTION_PLACEHOLDER = "[built-in description withheld]";
+/** What replaces a BUILT-IN command's non-empty `argumentHint` (its usage syntax — still the agent's own text). */
+export const BUILTIN_HINT_PLACEHOLDER = "[built-in hint withheld]";
+
+/** Bump whenever what scrubRecordedAgentData removes changes (a new kind, or a kind that now covers more). The
+ *  pre-commit hook compares the BUILT dist's value with this source's, and blocks on a mismatch: a stale dist would
+ *  otherwise pass a cassette carrying something the current recorder removes. */
+export const RECORDED_SCRUB_VERSION = 2;
+
+/** Plugins the recording itself marks as the agent's own: `system/init` `plugins[]` entries whose `path` is
+ *  `"builtin"` (their `source` ends `@builtin`). A `<plugin>:<name>` entry from one of them is built-in too. */
+function recordedBuiltinPlugins(events: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const l of events) {
+    if (!l.includes('"plugins"') || !l.includes('"init"')) continue;
+    let e: { type?: string; subtype?: string; plugins?: unknown };
+    try {
+      e = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    if (e?.type !== "system" || e.subtype !== "init" || !Array.isArray(e.plugins)) continue;
+    for (const p of e.plugins as Array<{ name?: unknown; path?: unknown; source?: unknown } | null>) {
+      if (typeof p?.name !== "string") continue;
+      if (p.path === "builtin" || (typeof p.source === "string" && p.source.endsWith("@builtin"))) out.add(p.name);
+    }
+  }
+  return out;
+}
+
+/** Replace the description of every BUILT-IN entry in the agent's `initialize` registry response, and a built-in
+ *  command's non-empty `argumentHint` — the agent's own text, not ours to publish. "Built-in" is decided structurally, never by a roster we keep growing:
+ *   - `commands[]`: the row carries `builtin: true`, the agent's own marker (its SDK schema: "True when the command
+ *     is Claude Code's own; absent for a command defined by a user, project, plugin or MCP server"). Only for a
+ *     registry with NO row carrying that marker — an agent older than the marker — does it fall back to the
+ *     `KNOWN_BUILTIN_SKILLS` names — which list skills only, so on such an agent a built-in command that is not a
+ *     skill (`compact`, `init`, …) keeps its text.
+ *   - `agents[]`: no marker exists (rows are `{name, description, model}`), but every plugin agent is namespaced
+ *     `<plugin>:<agent>`, so a bare name is never the plugin under test's. It is the agent's own, or a USER agent
+ *     from the config dir: a session's pinned `plugins.config_dir` (its `agents/` load bare under
+ *     `settingSources: ["user"]`), or the operator's own at a host-inheriting tier. Those are withheld too — a
+ *     deliberate over-reach on text that is not the plugin under test's and that no verdict reads.
+ *   - either list: a `<plugin>:<name>` whose plugin the recording marks built-in (see recordedBuiltinPlugins).
+ *  So the plugin under test's own agents, commands and skills (`<plugin>:<name>`, unmarked) and a scenario's
+ *  config-dir skills (bare, unmarked) keep their descriptions. Every other field stays. Returns the SAME object
+ *  when nothing changes. */
+function scrubBuiltinRegistryDescriptions(
+  m: { response?: { response?: Record<string, unknown> } },
+  builtinPlugins: ReadonlySet<string>,
+): unknown {
+  const body = m.response?.response;
+  if (!body) return m;
+  const fromBuiltinPlugin = (name: string): boolean => {
+    const sep = name.indexOf(":");
+    return sep > 0 && builtinPlugins.has(name.slice(0, sep));
+  };
+  const rows = (v: unknown): Array<Record<string, unknown>> =>
+    Array.isArray(v) ? (v.filter((x) => x !== null && typeof x === "object") as Array<Record<string, unknown>>) : [];
+  const markerPresent = rows(body.commands).some((c) => "builtin" in c);
+  const isBuiltinCommand = (c: Record<string, unknown>): boolean =>
+    typeof c.name === "string" && (c.builtin === true || fromBuiltinPlugin(c.name) || (!markerPresent && KNOWN_BUILTIN_SKILLS.has(c.name)));
+  const isBuiltinAgent = (a: Record<string, unknown>): boolean =>
+    typeof a.name === "string" && (!a.name.includes(":") || fromBuiltinPlugin(a.name));
+  let changed = false;
+  const withhold = (list: unknown, isBuiltin: (r: Record<string, unknown>) => boolean): unknown => {
+    if (!Array.isArray(list)) return list;
+    let touched = false;
+    const out = list.map((r: unknown) => {
+      if (r === null || typeof r !== "object") return r;
+      const row = r as Record<string, unknown>;
+      if (!isBuiltin(row)) return r;
+      const desc = row.description !== undefined && row.description !== BUILTIN_DESCRIPTION_PLACEHOLDER;
+      const hint = typeof row.argumentHint === "string" && row.argumentHint !== "" && row.argumentHint !== BUILTIN_HINT_PLACEHOLDER;
+      if (!desc && !hint) return r;
+      touched = true;
+      return {
+        ...row,
+        ...(desc ? { description: BUILTIN_DESCRIPTION_PLACEHOLDER } : {}),
+        ...(hint ? { argumentHint: BUILTIN_HINT_PLACEHOLDER } : {}),
+      };
+    });
+    if (!touched) return list;
+    changed = true;
+    return out;
+  };
+  const commands = withhold(body.commands, isBuiltinCommand);
+  const agents = withhold(body.agents, isBuiltinAgent);
+  return changed ? { ...m, response: { ...m.response, response: { ...body, commands, agents } } } : m;
+}
+
+export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame" | "builtin-description";
 
 /** What the recorder removes from EVERY cassette before writing it (`--no-redact` included — none of it is
  *  policy content):
@@ -1710,8 +1803,12 @@ export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-han
  *   - `subagent-hand-back-frame`: the agent binary's frame line around a sub-agent's report ("[Subagent
  *     hand-back] …") replaced by a neutral placeholder, and the "(use SendMessage with to: …)" continuation hint
  *     dropped, wherever they occur in an event. The report body (indented below the frame), the agentId and the
- *     usage block stay.
- *  Safe for replay by construction: nothing in `src` reads the menu, `rate_limit*`, or the frame/hint text; the
+ *     usage block stay;
+ *   - `builtin-description`: the description of each BUILT-IN agent, command and skill in the `initialize` registry
+ *     response's `agents[]` and `commands[]`, replaced by BUILTIN_DESCRIPTION_PLACEHOLDER, and a built-in command's
+ *     non-empty `argumentHint`, replaced by BUILTIN_HINT_PLACEHOLDER; the name and every other field stay, and the plugin under test's own entries are untouched (see scrubBuiltinRegistryDescriptions).
+ *  Safe for replay by construction: nothing in `src` reads the menu, `rate_limit*`, the frame/hint text, or a
+ *  registry agent's or command's description or argument hint; the
  *  fingerprint never reads `events`; no hash covers `events`. The record path still holds the result to the
  *  verdict-preservation check. Pure; returns the SAME cassette and no kinds when there is nothing to remove. */
 export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette; kinds: RecordedScrubKind[] } {
@@ -1719,10 +1816,12 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
   const menu = scrubAccountModelMenu(cassette);
   if (menu !== cassette) kinds.add("model-menu");
   let changed = false;
+  let builtinPlugins: Set<string> | undefined; // computed on first need
   const events = (menu.events ?? []).map((l) => {
     const hasRate = l.includes('"rate_limit_info"');
     const hasFrame = l.includes("[Subagent hand-back]") || l.includes("use SendMessage with to:");
-    if (!hasRate && !hasFrame) return l;
+    const hasCommands = l.includes('"commands"');
+    if (!hasRate && !hasFrame && !hasCommands) return l;
     let e: unknown;
     try {
       e = JSON.parse(l);
@@ -1744,11 +1843,19 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
         kinds.add("subagent-hand-back-frame");
       }
     }
+    if (hasCommands && isInitializeRegistryResponse(next as Parameters<typeof isInitializeRegistryResponse>[0])) {
+      builtinPlugins ??= recordedBuiltinPlugins(menu.events ?? []);
+      const described = scrubBuiltinRegistryDescriptions(next as Parameters<typeof scrubBuiltinRegistryDescriptions>[0], builtinPlugins);
+      if (described !== next) {
+        next = described;
+        kinds.add("builtin-description");
+      }
+    }
     if (next === e) return l;
     changed = true;
     return JSON.stringify(next);
   });
-  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame"];
+  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame", "builtin-description"];
   return { cassette: changed ? { ...menu, events } : menu, kinds: order.filter((k) => kinds.has(k)) };
 }
 
@@ -1757,6 +1864,36 @@ export const scrubVerification = {
   verify: (base: Cassette, scrubbed: Cassette, cassetteDir?: string): Promise<void> =>
     assertRedactionVerdictPreserved(base, scrubbed, cassetteDir),
 };
+
+/** Why the scrub's verdict check can trip, for its warning. Not always a harness bug: a scenario may assert on text
+ *  the scrub rewrites (the hand-back frame is in the model-visible transcript), and refusing is then correct. */
+const SCRUB_TRIP_CAUSE =
+  "The usual cause is an assert that reads text the scrub rewrites (e.g. a `transcript_contains` on the sub-agent " +
+  "hand-back frame): assert on the report itself instead. If no assert reads that text, it is a harness bug — please report it.";
+
+/** The recorder's scrub for a REWRITE path (`rehash`, `replay --reassert --write`), held to the same
+ *  verdict-preservation check as `record`. Returns the scrubbed cassette and its kinds when the check passes; when it
+ *  throws or trips, warns (naming the path, the file and the kinds) and returns the input UNSCRUBBED with no kinds,
+ *  so the rewrite still lands and nothing recorded is lost. Skips the check when there is nothing to remove. */
+export async function verifiedRescrub(
+  cassette: Cassette,
+  cassetteDir: string,
+  where: string,
+): Promise<{ cassette: Cassette; kinds: RecordedScrubKind[] }> {
+  const scrub = scrubRecordedAgentData(cassette);
+  if (!scrub.kinds.length) return scrub;
+  try {
+    await scrubVerification.verify(cassette, scrub.cassette, cassetteDir);
+    return scrub;
+  } catch (e) {
+    warn(
+      `::warning:: ${where}: the recorder's scrub (${scrub.kinds.join(", ")}) could not be verified as verdict-preserving — ` +
+        `${(e as Error).message.split("\n")[0]}. Its events are left UNSCRUBBED, so they still carry that data; do not commit ` +
+        `it as is. ${SCRUB_TRIP_CAUSE}\n`,
+    );
+    return { cassette, kinds: [] };
+  }
+}
 
 /** Tiers whose recordings inherit the host environment, so their transcripts can carry the recording
  *  machine's own inventory. `cowork` is included because it resolves to container OR hostloop via a baseline
@@ -5845,8 +5982,7 @@ export async function freezeRecordedRun(
       warn(
         `::warning:: record: the recorder's account-data scrub (${scrub.kinds.join(", ")}) could not be verified as ` +
           `verdict-preserving — ${(e as Error).message.split("\n")[0]}. The cassette is written UNSCRUBBED so this paid run ` +
-          `is not lost; it still carries that data, so do not commit it as is. This is a harness bug (the scrub ` +
-          `touches nothing a verdict reads) — please report it.\n`,
+          `is not lost; it still carries that data, so do not commit it as is. ${SCRUB_TRIP_CAUSE}\n`,
       );
     }
   }
@@ -6515,6 +6651,18 @@ async function writeReassertedAssertBlock(
   const expectSame = JSON.stringify(scn.expect_denied ?? []) === JSON.stringify(nextExpectDenied);
   const metricsSame = JSON.stringify(scn.metrics ?? null) === JSON.stringify(nextMetrics ?? null);
   if (assertSame && expectSame && metricsSame) {
+    // The block is current, but the events may still carry what a NEWER recorder removes (scrubRecordedAgentData):
+    // rewrite the events alone, so this stays the way to bring a committed cassette up to the current scrub
+    // without a paid re-record. Nothing else changes — no restamp, the frozen block and controlOut untouched.
+    const rescrubbed = await verifiedRescrub(rawCassette, dirname(cassetteFile), `[replay --write] ${cassetteFile}`);
+    if (rescrubbed.kinds.length) {
+      (rawCassette as unknown as { events: string[] }).events = rescrubbed.cassette.events;
+      writeFileAtomic(cassetteFile, JSON.stringify(rawCassette, null, 2));
+      warn(
+        `::notice:: [replay --write] ${cassetteFile}: the assert block already matches the on-disk scenario; removed from its events what the recorder no longer keeps (${rescrubbed.kinds.join(", ")}); controlOut unchanged\n`,
+      );
+      return;
+    }
     warn(`::notice:: [replay --write] ${cassetteFile}: assert, expect_denied and metrics already match the on-disk scenario — no write\n`);
     return;
   }
@@ -6533,9 +6681,9 @@ async function writeReassertedAssertBlock(
     raw.cassetteVersion = stamp;
     raw.$schema = cassetteSchemaUrl(stamp);
   }
-  // A rewrite path must not re-publish what the recorder now removes (scrubRecordedAgentData; replay, the verdict
-  // and the fingerprint read none of it). Applied to the events only — the re-asserted block above is untouched.
-  const rescrubbed = scrubRecordedAgentData(rawCassette as unknown as Cassette);
+  // A rewrite path must not re-publish what the recorder now removes (scrubRecordedAgentData), held to record's
+  // verdict-preservation check (verifiedRescrub). Applied to the events only — the re-asserted block is untouched.
+  const rescrubbed = await verifiedRescrub(rawCassette as unknown as Cassette, dirname(cassetteFile), `[replay --write] ${cassetteFile}`);
   if (rescrubbed.kinds.length) (rawCassette as unknown as { events: string[] }).events = rescrubbed.cassette.events;
   writeFileAtomic(cassetteFile, JSON.stringify(rawCassette, null, 2)); // atomic — no partial cassette on a crash
   warn(
@@ -6603,7 +6751,7 @@ export const REPLAY_USAGE =
   "       --explain: after the footer, print the evidence trail for each PASSING assert (which link resolved, which file matched, which value satisfied a bound) — text mode; json already carries assertions[].evidence.\n" +
   "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
   `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
-  "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.\n" +
+  "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical, except that what the recorder no longer keeps is removed from the events (done even when the block is already current).\n" +
   "       --allow-failing waives that verdict gate WHOLESALE — including the skill-drift failure --assert-from forces on. So `--assert-from --write --allow-failing` will persist an assert block validated against a recording whose skill sources have since changed. Re-record instead when the drift is real; the flag is for a verdict you have read and understood.\n" +
   "       text mode writes the footer to STDERR and nothing to stdout (a passing replay is 0 bytes): text is for humans and not a contract, and the exit code is its only signal. Machine output needs --output-format json, or COWORK_HARNESS_OUTPUT_FORMAT=json to set it for a whole CI job; gate on the envelope with jq -e '.ok'. To tell YOUR failing asserts from injected drift/corruption findings, read verdict.failures[].kind (`assertion` vs `staleness`/`cassette-format`), not the exit code, which collapses them: jq '[.results[]? | .verdict.failures[]? | select(.kind==\"assertion\")] | length'.\n" +
   '       --best-effort-future-cassette: override the refusal to replay a cassette recorded by a NEWER format version and attempt it anyway. `verify-cassettes` deliberately does NOT accept this flag — a verification gate has no "read it anyway" path. Cost: an older CLI reading a newer cassette can silently misread a scenario key it does not recognize — this is a best-effort escape hatch, not a safe one.';
@@ -7659,7 +7807,7 @@ export async function cmdVerifyCassettes(args: string[]) {
  *
  *  Anything unprovable is REFUSED, never migrated. `--session` supplies the tree for a cassette that moved.
  *  Safe to run repeatedly: already-current cassettes are reported as skipped. */
-export function cmdRehash(args: string[]): void {
+export async function cmdRehash(args: string[]): Promise<void> {
   // isJsonOutput (not a bare `p.options` read): it works even when parseArgs throws below, and honors the
   // --output-format=json equals-form and the COWORK_HARNESS_OUTPUT_FORMAT env var a bare check would miss.
   const asJson = isJsonOutput(args);
@@ -7839,9 +7987,9 @@ export function cmdRehash(args: string[]): void {
           cassetteVersion: requiredVersion,
           ...(cassette.fingerprint ? { fingerprint: { ...cassette.fingerprint, hashFormat: ACTIVE_HASH_FORMAT } } : {}),
         };
-        // A rewrite path must not re-publish what the recorder now removes (scrubRecordedAgentData — pure, and
-        // verdict-safe by construction: nothing it touches is read by replay, the verdict or the fingerprint).
-        writeFileAtomic(file, JSON.stringify(scrubRecordedAgentData(stamped).cassette, null, 2));
+        // A rewrite path must not re-publish what the recorder now removes (scrubRecordedAgentData), held to record's
+        // verdict-preservation check; if that cannot pass, the migration still lands with the events unscrubbed.
+        writeFileAtomic(file, JSON.stringify((await verifiedRescrub(stamped, dirname(file), `rehash ${file}`)).cassette, null, 2));
       }
       results.push({ file, action: "migrated", reason: `v${recordedVersion} → v${requiredVersion} (metadata only — zero skill sources)` });
       continue;
@@ -7945,8 +8093,8 @@ export function cmdRehash(args: string[]): void {
         cassetteVersion: requiredVersion,
         fingerprint: migrated.fingerprint,
       };
-      // Same as the metadata branch: drop what the recorder removes before rewriting (see scrubRecordedAgentData).
-      writeFileAtomic(file, JSON.stringify(scrubRecordedAgentData(updated).cassette, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
+      // Same as the metadata branch: drop what the recorder removes before rewriting, verdict-checked (verifiedRescrub).
+      writeFileAtomic(file, JSON.stringify((await verifiedRescrub(updated, dirname(file), `rehash ${file}`)).cassette, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
     }
     results.push({
       file,

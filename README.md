@@ -53,6 +53,9 @@ Three ways to use this project. Each row is the whole hook — follow the link f
 | **Have Claude Code drive it** for me | **[docs/companion-skill.md](./docs/companion-skill.md)**<br><br>`/plugin marketplace add yaniv-golan/cowork-harness`<br>`/plugin install cowork-harness@cowork-harness` | Claude Code. The skill self-bootstraps the CLI via `npx "cowork-harness@^4.2.1"` |
 | **Gate my skill in CI** | **[docs/ci.md](./docs/ci.md)**<br><br>`- uses: yaniv-golan/cowork-harness@v4`<br>`  with: { command: replay, path: cassettes/ }` | Nothing for the token-free gate; the live lane needs a self-hosted runner with Docker + an agent binary |
 
+Improving a skill round by round with Claude Code's `/claude-api hillclimb` loop? The harness is its runner:
+[docs/hillclimb.md](./docs/hillclimb.md).
+
 **In short:** three ways in (the table above). Five `fidelity:` tiers — `protocol`, `container`, `microvm`, `hostloop`,
 `cowork` ([Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job)); a scenario must name one (`fidelity:` is
 required since 4.0.0; `container` was the default before). Every run executes locally: `lane: remote` changes only the
@@ -94,7 +97,7 @@ Two more that matter in practice:
 - **A blocking gate you can actually answer.** `AskUserQuestion` *blocks*: it is a question to a human, and `claude -p` has no human. A gated skill under a plain CLI run either stalls at the gate or never reaches the code behind it — so the half of your skill that lives past the first question is untestable, not merely awkward to test. The harness answers over the same `can_use_tool` control protocol Desktop uses, from your scenario's scripted `answers:` — or from a live decider when you're still discovering what it asks — so the gate genuinely fires and is answered deterministically. `on_unanswered:` decides what an *un*scripted gate does (fail loud by default). See [scenario.md](./docs/scenario.md), [decider-dir.md](./docs/decider-dir.md).
 - **Token-free CI.** Record a run once, commit the cassette, and every PR re-runs it deterministically at **zero spend** — assertions, tool stream, gate answers and all. A cassette replays in well under a second with no token, no Docker and no model call (the three shipped examples replay in ~0.6s total), which is what makes an always-on per-PR gate affordable. See [cassette.md](./docs/cassette.md).
 
-**What it doesn't do.** It runs and records; it does not design your experiment. It supplies two measurement primitives: `--ablate-skill` (the with/without control, one arm per invocation) and `eval` (a paired, interleaved before/after comparison of two versions of your plugin, EXPERIMENTAL). Blinding, scrubbing tells, and deciding what to change next stay yours. And it emulates the *contract*, not the Desktop runtime: see [Limitations](#limitations) and [fidelity-gaps.md](./docs/fidelity-gaps.md) for what it deliberately does not reproduce.
+**What it doesn't do.** It runs and records; it does not design your experiment. It supplies two measurement primitives: `--ablate-skill` (the with/without control, one arm per invocation) and `eval` (a paired, interleaved before/after comparison of two versions of your plugin, EXPERIMENTAL), and a runner, `hillclimb`, for Claude Code's `/claude-api hillclimb` loop. Blinding and scrubbing tells stay yours, and so does deciding what to change next, unless that loop decides it. And it emulates the *contract*, not the Desktop runtime: see [Limitations](#limitations) and [fidelity-gaps.md](./docs/fidelity-gaps.md) for what it deliberately does not reproduce.
 
 ---
 
@@ -390,7 +393,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/debugging.md](./docs/debugging.md) | Debugging a run — `inspect`/`trace`/`verify-run`/`diff`/`chat` for a misbehaving skill; the false-green hunt for a green you don't trust; and the **iterate-across-fixes verification loop** (ground findings in run evidence; pair by `fingerprint.skillHash`). |
 | [docs/cassette.md](./docs/cassette.md) | `record`/`replay` cassettes — what replay checks, which assertions are skipped. |
 | [docs/eval.md](./docs/eval.md) | **EXPERIMENTAL** — `eval`: a paired before/after comparison of two versions of a plugin, per assertion and per rubric claim, with pinned models and an exact test. A drop is a signal to investigate, not proof. |
-| [docs/hillclimb.md](./docs/hillclimb.md) | `hillclimb`: the runner for Claude Code's `/claude-api hillclimb` loop — setup, where the flow dir goes, how the loop's steps map to commands, what each row measures, cost, and the differences from the loop's own runner. |
+| [docs/hillclimb.md](./docs/hillclimb.md) | `hillclimb`: the runner for Claude Code's `/claude-api hillclimb` loop — setup, where the flow dir goes, how the loop's steps map to commands, what each row measures, cost, and the differences from the loop's own runner. The harness's own row `meta` keys and the `freeze-ref` / `regrade` payloads are **EXPERIMENTAL**. |
 | [docs/critique.md](./docs/critique.md) | **EXPERIMENTAL** — `critique`: run a skill, ask the agent what confused it, then grade that self-report against a frozen record. Its verdict is an advisory lead, not an attestation. |
 | [docs/run-status.md](./docs/run-status.md) | Checking whether a background run is alive — the `status.json` file + `cowork-harness status [--follow]`. |
 | [docs/stats.md](./docs/stats.md) | The `stats` command + `index.jsonl` — querying pass rate, cost/duration/token/turn percentiles, and last-green across every past run. |

@@ -1,7 +1,7 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). It needs a `cowork-harness` whose `--help`
-lists `hillclimb`. The command reference is
+Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). It needs a `cowork-harness` whose
+`hillclimb --help` lists `--skill` (help goes to stderr). The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.
 
@@ -41,9 +41,17 @@ time:
   `--output-format json`); progress goes to stderr every 30 s and to `progress.txt`.
 - **`hillclimb check --flow <dir>`** checks the flow dir against our reading of the published hillclimb schema
   and the `_state.json` metric declarations, and warns when a baseline case has no headroom (every rep at the
-  ceiling or the floor of the headline metric). The warning never changes the exit code. Exit `1` is an error
-  finding (a malformed row or `_state.json`, or a float metric declared with no `better`): fix it before the
-  loop reads the flow.
+  ceiling or the floor of the headline metric). It also warns about a case whose rows were graded under
+  another assertion set than its scenario's now, naming the `hillclimb regrade <target> --flow <dir> --case <id>`
+  that re-evaluates them. It compares with the scenario target when you pass one
+  (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last `--approve-harness` hashed
+  (`_state.json` `harness_files`), else those `harness_paths` lists, and says so in a note when nothing is
+  recorded, a recorded scenario is not found from the current directory (run `check` where the flow was
+  approved), or a target holds no scenario for a case. The remedy names a `regrade` target that hashes exactly the files
+  the flow was approved over (the scenarios' directory, else the case's own file), so it runs as printed. No
+  warning changes the exit code.
+  Exit `1` is an error finding (a malformed row or `_state.json`, or a float metric declared with no `better`):
+  fix it before the loop reads the flow.
 
 A case is one scenario file. Its id is the file stem, made path-safe; `--case <id>` (repeatable) runs one case
 by its stem or its scenario `name:` (a name two cases share is refused: use the stem). In a directory, YAML
@@ -106,6 +114,10 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
 - **`model:` / `effort:` in the tuned skill's own `SKILL.md` frontmatter move the main loop**, not a sub-agent. An
   `effort:` that changes it makes the rows `effort_not_sent` errors (seen for a slash-command invocation); a
   `model:` is expected to make every row `serving_substitution` (inferred). Put sub-agent settings in `agents/*.md`.
+- **No spend cap.** `run` takes no `--max-budget-usd`: recompute spend from the flow's files after every round and
+  stop at the budget. `--dry-run` estimates the agent spend only.
+- **A decider needs `--concurrency 1`** (`--decider-cmd`, `--decider-dir`); a scenario's `on_unanswered: llm` does
+  not.
 - **`--skill NAME` picks the skill `skill_invoked` tracks** when the plugin registers more than one; a plugin
   with one skill (one `skills/<name>/`, or a root `SKILL.md`) is tracked without it. Every pass prints which
   skill it tracks, or why none. The selection is part of the harness sha, so the loop's command must pass the
@@ -320,8 +332,10 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
 - `check`: `0` clean, `1` an error finding, `2` usage.
 - `state-template`: `0`, or `2` on usage or a refusal.
 - `freeze-ref`: `0` no case refused (an entry already complete is reported, not refused); `1` a case refused (no
-  good row, its run not under the runs root, a damaged entry, a reference frozen for a different prompt, a missing compose key whose run is gone); `2` usage
-  (a bad `--variant`, a variant with no `results.jsonl`, no selected case with `semantic_pairwise`, the variant's
+  good row whose run is under the runs root and delivered its output, a damaged entry, a reference frozen for a
+  different prompt, a missing compose key whose run is gone, a store write that failed, or a run whose judged
+  document cannot be composed, differs from the one its live judge read, or has no live fingerprint); `2` usage
+  (a bad `--variant`, no flow dir, a variant with no `results.jsonl`, no selected case with `semantic_pairwise`, the variant's
   lock held by a live run).
 - `regrade`: `0` every selected row rewritten, or nothing to do; `1` a row listed instead, or a failure after the
   first judge call (it names the variants already rewritten); `2` usage or a refusal before any judge call.

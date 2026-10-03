@@ -11,6 +11,7 @@ import {
   checkStaleness,
   replayCassette,
   buildFingerprint,
+  buildSessionFingerprint,
   type Cassette,
 } from "../src/run/cassette.js";
 import { ScenarioObject } from "../src/types.js";
@@ -217,7 +218,7 @@ function makeSkillDir(files: Record<string, string>): string {
 describe.skipIf(!can)("rehash — conditional re-stamp", () => {
   const liveBaseline = loadBaseline("latest").appVersion;
 
-  function cassetteFixture(lane: "local" | "remote" | undefined, extraEvents: string[] = []): string {
+  function cassetteFixture(lane: "local" | "remote" | undefined, extraEvents: string[] = [], assert: unknown[] = []): string {
     const skillDir = makeSkillDir({ "SKILL.md": "# probe\ndo a thing\n" });
     const dir = mkdtempSync(join(tmpdir(), "cwh-p8-rehash-"));
     const sessionPath = join(dir, "session.yaml");
@@ -244,7 +245,7 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
       prompt: "hi",
       answers: [],
       expect_denied: [],
-      assert: [],
+      assert,
     };
     if (lane !== undefined) scenario.lane = lane;
     const body = {
@@ -298,6 +299,68 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
     const ev = (JSON.parse(raw).events as string[]).map((l) => JSON.parse(l));
     expect(ev.find((e) => e.type === "rate_limit_event").rate_limit_info).toEqual({});
     expect(ev.find((e) => e.type === "control_response").response.response.models).toEqual([]);
+  });
+
+  // The rewrite's scrub is held to record's verdict-preservation check. Here it WOULD flip a verdict: the scenario
+  // asserts on the frame text the scrub removes from the transcript. So the migration lands, the events stay
+  // unscrubbed, and a warning names the scrub — nothing recorded is lost.
+  it("a scrub that would flip a verdict is not applied: migrated, events unscrubbed, warned", () => {
+    const frame = "[Subagent hand-back] SYNTHETIC FRAME";
+    const dir = cassetteFixture(
+      undefined,
+      [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `done\n${frame}` }] } })],
+      [{ transcript_contains: "[Subagent hand-back]" }],
+    );
+    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout.trim()).results[0].action).toBe("migrated");
+    expect(r.stderr).toMatch(
+      /::warning:: rehash .*s\.cassette\.json: the recorder's scrub \(subagent-hand-back-frame\) could not be verified/,
+    );
+    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
+    expect(onDisk.fingerprint.hashFormat).toBe("jcs1"); // the migration itself landed
+    expect(JSON.stringify(onDisk.events)).toContain(frame); // ...with the events left as recorded
+  });
+
+  // The OTHER rewriting branch: a cassette whose session declares zero skill sources migrates metadata-only, and its
+  // scrub is held to the same check.
+  it("metadata-only branch: a scrub that would flip a verdict is not applied — migrated, events unscrubbed, warned", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-meta-"));
+    const sessionPath = join(dir, "session.yaml");
+    writeFileSync(sessionPath, "skills:\n  local: []\n");
+    const frame = "[Subagent hand-back] SYNTHETIC FRAME";
+    const body = {
+      cassetteVersion: 10,
+      scenario: {
+        name: "s",
+        baseline: liveBaseline,
+        session: sessionPath,
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [{ transcript_contains: "[Subagent hand-back]" }],
+      },
+      events: [
+        JSON.stringify({ type: "system", subtype: "init" }),
+        JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `done\n${frame}` }] } }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+      ],
+      sessionFingerprint: buildSessionFingerprint(sessionPath, dir),
+      fingerprint: { baseline: liveBaseline },
+    };
+    writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));
+    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const res = JSON.parse(r.stdout.trim()).results[0];
+    expect(res.action, res.reason).toBe("migrated");
+    expect(res.reason).toMatch(/metadata only/);
+    expect(r.stderr).toMatch(
+      /::warning:: rehash .*s\.cassette\.json: the recorder's scrub \(subagent-hand-back-frame\) could not be verified/,
+    );
+    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
+    expect(onDisk.fingerprint.hashFormat).toBe("jcs1");
+    expect(JSON.stringify(onDisk.events)).toContain(frame);
   });
 
   it("lane: local (explicit) migrates the same way — the floor does not depend on scenario keys", () => {

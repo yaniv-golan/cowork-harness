@@ -13,6 +13,7 @@ import {
   writeFileSync,
   cpSync,
   appendFileSync,
+  renameSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +29,7 @@ import { checkReport, stateTemplateFor } from "../src/hillclimb/cli.js";
 import { parseScenarioFile } from "../src/run/execute.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { collectSecrets } from "../src/secrets.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 const MODEL = "claude-sonnet-5";
 const line = (o: unknown) => `printf '%s\\n' '${JSON.stringify(o)}'`;
@@ -226,8 +228,23 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
       return { pass: g.pass, a0: g.a0, a1: g.a1 };
     };
     const before = { baseline: verdictKeys("baseline"), v1: verdictKeys("v1") };
-    const out = await regradeFlow(ARGS({ fillRefs: true }), DEPS());
+    const lines: string[] = [];
+    const out = await regradeFlow(ARGS({ fillRefs: true }), DEPS({ stderr: (l) => lines.push(l) }));
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    // One counter set, every counter shown (zero included), on each variant's line and in the summary — whatever each
+    // variant did. The two variants' activity differs here (the baseline's alpha row is judged against v1's reference).
+    const COUNTERS = String.raw`rewritten \d+, re-evaluated \d+ \(no judge call\), re-measured \d+ \(no judge call\), agent-failed \d+ \(meta updated\), listed \d+`;
+    for (const v of ["baseline", "v1"])
+      expect(lines.find((l) => l.startsWith(`  [${v}] `))).toMatch(new RegExp(`^  \\[${v}\\] ${COUNTERS}; mean pass `));
+    expect(lines.at(-1)).toMatch(new RegExp(`^hillclimb regrade: baseline ${COUNTERS}; v1 ${COUNTERS}$`));
+    const counts = (v: string) => {
+      const x = out.variants.find((y) => y.variant === v)!;
+      return [x.rewritten, x.reevaluated, x.remeasured, x.agentFailed, x.listed.length];
+    };
+    expect(counts("baseline")).not.toEqual(counts("v1"));
+    // The JSON payload's per-variant fields already carry every counter.
+    for (const x of out.variants)
+      expect(Object.keys(x)).toEqual(expect.arrayContaining(["rewritten", "reevaluated", "remeasured", "agentFailed", "listed"]));
     for (const v of ["baseline", "v1"]) {
       const beta = rows(v).find((r) => r.prompt_id === "beta")!;
       expect(beta.grade).toMatchObject({ win_present: 0, win_v1_present: 0 });
@@ -825,7 +842,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
       expect(readdirSync(join(flow, v)).some((n) => /^regrade-[0-9a-f]{16}\.bak\.jsonl$/.test(n))).toBe(true);
     }
     expect(lines.join("\n")).toMatch(
-      /baseline 1 rewritten, 1 re-evaluated \(no judge call\), 1 re-measured \(no judge call\); v1 1 rewritten, 1 re-evaluated \(no judge call\), 1 re-measured \(no judge call\)/,
+      /baseline rewritten 1, re-evaluated 1 \(no judge call\), re-measured 1 \(no judge call\), agent-failed 0 \(meta updated\), listed 0; v1 rewritten 1, re-evaluated 1 \(no judge call\), re-measured 1 \(no judge call\), agent-failed 0 \(meta updated\), listed 0$/,
     );
   }, 240_000);
 
@@ -1052,7 +1069,8 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
       },
     ]);
     expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before);
-    expect(lines.join("\n")).not.toMatch(/re-measured/);
+    // Every counter is shown, a zero included: none of this flow's rows was re-measured.
+    expect(lines.join("\n")).not.toMatch(/re-measured [1-9]/);
   }, 240_000);
 
   it("a metric whose declaration changed is refused before any re-measure, nothing written", async () => {
@@ -1110,6 +1128,8 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
       expect(out.variants.find((x) => x.variant === v)).toMatchObject({ rewritten: 1, reevaluated: 1, listed: [] });
       // The deterministic move shows in regrade.md's moved table.
       expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/a1 1→0/);
+      // The mean pass is over the variant's scored rows, before and after the rewrite.
+      expect(readFileSync(join(flow, v, "regrade.md"), "utf8")).toMatch(/; mean pass before 1\.00, after 0\.00 over 1 scored row\(s\)\n/);
     }
   }, 240_000);
 
@@ -1259,14 +1279,20 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(rows("v1").find((r) => r.prompt_id === "alpha")!.meta.regrade_remeasured).toBe(true);
     expect(rows("v1").find((r) => r.prompt_id === "beta")!.meta).not.toHaveProperty("regrade_remeasured");
     expect(lines.at(-1)).toMatch(
-      /^hillclimb regrade: baseline 2 rewritten, 2 re-evaluated \(no judge call\), 1 re-measured \(no judge call\)/,
+      /^hillclimb regrade: baseline rewritten 2, re-evaluated 2 \(no judge call\), re-measured 1 \(no judge call\), agent-failed 0/,
     );
   }, 240_000);
 
   it("a row whose re-evaluation changes nothing stays byte for byte and is counted re-evaluated", async () => {
     const { flow } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
     const before = tree(flow);
-    const out = await regradeFlow(ARGS(), DEPS());
+    const lines: string[] = [];
+    const out = await regradeFlow(ARGS(), DEPS({ stderr: (l) => lines.push(l) }));
+    // Nothing rewritten: the mean is still the variant's real one, and says it is unchanged.
+    for (const v of ["baseline", "v1"])
+      expect(lines.find((l) => l.startsWith(`  [${v}] `))).toMatch(
+        /; mean pass before 1\.00, after 1\.00 over 1 scored row\(s\); unchanged \(no rows rewritten\)$/,
+      );
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
     expect(out.variants.map(({ variant, rewritten, reevaluated, listed }) => ({ variant, rewritten, reevaluated, listed }))).toEqual([
       { variant: "baseline", rewritten: 0, reevaluated: 1, listed: [] },
@@ -2321,7 +2347,7 @@ describe.runIf(POSIX)("hillclimb regrade: an agent-failed row whose run cannot b
     expect(row.meta).not.toHaveProperty("metrics_unavailable");
     expect(Object.entries(row.grade).filter(([k, x]) => !k.endsWith("_present") && x !== 0)).toEqual([]);
     expect(row.grade).toMatchObject({ pass: 0, a0: 0, a1: 0, words_present: 0 });
-    expect(lines.join("\n")).toMatch(/1 agent failure\(s\): meta updated/);
+    expect(lines.join("\n")).toMatch(/agent-failed 1 \(meta updated\)/);
   }, 240_000);
 
   it("in a fill too: an agent-failed row whose case gained an assert is never listed (it scores 0 whatever lines up)", async () => {
@@ -2356,18 +2382,21 @@ describe.runIf(POSIX)("hillclimb rows record their assertion set (meta.assert_si
     const fresh = rows("v1").find((x) => x.rep === 1)!.meta.assert_sig;
     expect(fresh).toMatch(SIG);
     expect(fresh).not.toBe(old);
-    const mixed = checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w));
+    const mixed = checkReport("flow", f.cwd).warnings.filter((w) => /^warning: .*assertion set/.test(w));
     expect(mixed).toEqual([
       expect.stringMatching(
         new RegExp(
-          `^warning: case alpha's rows were graded under 2 assertion sets \\(${String(old)}: baseline 1, v1 1; ${String(fresh)}: v1 1\\).*run \`hillclimb regrade <scenarios> --flow flow --case alpha\`.*--approve-harness`,
+          `^warning: case alpha's rows were graded under 2 assertion sets \\(${String(old)}: baseline 1, v1 1; ${String(fresh)}: v1 1\\).*run \`hillclimb regrade evals --flow flow --case alpha\`.*--approve-harness`,
         ),
       ),
+      // The approval recorded the files it hashed (harness_files): the remedy names the scenarios' dir, and the rows
+      // the old asserts graded are named stale too.
+      expect.stringMatching(/^warning: 2 row\(s\) of case alpha \(baseline 1, v1 1\) were graded under a different assertion set/),
     ]);
     const out = await regradeFlow(ARGS(), DEPS());
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
     for (const v of ["baseline", "v1"]) for (const row of rows(v)) expect(row.meta.assert_sig).toBe(fresh);
-    expect(checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w))).toEqual([]);
+    expect(checkReport("flow", f.cwd).warnings.filter((w) => /^warning: .*assertion set/.test(w))).toEqual([]);
     const again = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--reps", "2", "--dry-run");
     expect(again.stderr).not.toMatch(/assertion set/);
     void flow;
@@ -2385,7 +2414,7 @@ describe.runIf(POSIX)("hillclimb rows record their assertion set (meta.assert_si
     expect(now.meta.assert_sig).toMatch(SIG);
     expect(now.meta.assert_sig).not.toBe(old.meta.assert_sig);
     expect(out.variants.map((v) => v.rewritten)).toEqual([1, 1]);
-    expect(checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w))).toEqual([]);
+    expect(checkReport("flow", f.cwd).warnings.filter((w) => /^warning: .*assertion set/.test(w))).toEqual([]);
     void flow;
   }, 240_000);
 
@@ -2416,7 +2445,255 @@ describe.runIf(POSIX)("hillclimb rows record their assertion set (meta.assert_si
     expect(r.stderr).toMatch(
       /warning: 1 row\(s\) were graded under another assertion set than their scenario's now \(baseline alpha rep0\)/,
     );
-    expect(checkReport("flow", f.cwd).warnings.filter((w) => /assertion set/.test(w))).toEqual([]);
+    // The baseline row (old sig) is stale against the scenario the approval recorded; the sig-less v1 row never counts.
+    expect(checkReport("flow", f.cwd).warnings.filter((w) => /^warning: .*assertion set/.test(w))).toEqual([
+      expect.stringMatching(/^warning: 1 row\(s\) of case alpha \(baseline 1\) were graded under a different assertion set/),
+    ]);
+  }, 240_000);
+});
+
+// `hillclimb check` compares each row's `meta.assert_sig` with its case's scenario as it is now: the target passed, else
+// the scenario files `_state.json` `harness_paths` records (state-template writes them). Rows ALL graded under an older
+// assertion set are as stale as a mix, and only `run` used to say so. Warnings and notes never change check's exit code.
+describe.runIf(POSIX)("hillclimb check compares the rows' assertion set with the scenario's current one", () => {
+  const STALE =
+    /^warning: 2 row\(s\) of case alpha \(baseline 1, v1 1\) were graded under a different assertion set than the scenario's current one — run `hillclimb regrade evals --flow flow --case alpha` to re-evaluate them/;
+  /** A flow whose every row was graded under the assert as first written, then the scenario edited: uniform, not mixed. */
+  const staleFlow = () => {
+    const b = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const sc = join(b.evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: Nope"));
+    return b;
+  };
+  /** `harness_paths` as state-template writes it. Without `keepApproval`, the approval's `harness_files` is dropped (a
+   *  flow approved before that record existed), so `harness_paths` is what check reads. */
+  const record = (flow: string, paths: string[], keepApproval = false) => {
+    const file = join(flow, "_state.json");
+    const { harness_files, ...st } = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...st, ...(keepApproval ? { harness_files } : {}), harness_paths: paths }));
+  };
+  /** A flow approved before `harness_files` existed, with no `harness_paths`: nothing recorded. */
+  const unrecord = (flow: string) => {
+    const file = join(flow, "_state.json");
+    const { harness_files: _gone, ...st } = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify(st));
+  };
+  const sigLines = (ws: string[]) => ws.filter((w) => /assertion set|harness_paths|recorded scenario/.test(w));
+  /** Run the `hillclimb regrade …` the (single) warning prints, exactly as printed. */
+  const runPrinted = (cli: (...a: string[]) => { status: number | null; stderr: string }, ws: string[]) => {
+    const cmds = ws.flatMap((w) => [...w.matchAll(/`hillclimb (regrade [^`]+)`/g)].map((m) => m[1]!));
+    expect(cmds).toHaveLength(1);
+    return cli(...cmds[0]!.split(" "));
+  };
+
+  it("with the target: rows all graded under an older assertion set are flagged; the exit code is unchanged", () => {
+    staleFlow();
+    const c = checkReport("flow", f.cwd, "evals");
+    expect(sigLines(c.warnings)).toEqual([expect.stringMatching(STALE)]);
+    expect(c.exitCode).toBe(0);
+    // The CLI takes the target as its positional; the warning goes to stderr, the exit code stays 0.
+    const r = spawnSync(process.execPath, [CLI, "hillclimb", "check", "evals", "--flow", "flow"], { cwd: f.cwd, encoding: "utf8" });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/warning: 2 row\(s\) of case alpha \(baseline 1, v1 1\) were graded under a different assertion set/);
+    const two = spawnSync(process.execPath, [CLI, "hillclimb", "check", "evals", "evals", "--flow", "flow"], {
+      cwd: f.cwd,
+      encoding: "utf8",
+    });
+    expect(two.status).toBe(2);
+  }, 240_000);
+
+  it("without the target, from the scenario files _state.json harness_paths records", () => {
+    const { flow } = staleFlow();
+    record(flow, ["evals/_session.yaml", "evals/alpha.yaml"]);
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([expect.stringMatching(STALE)]);
+  }, 240_000);
+
+  it("a recorded scenario that no longer exists is named, and its case is not compared; the target still wins", () => {
+    const { flow, evals } = staleFlow();
+    record(flow, ["evals/_session.yaml", "evals/gone/alpha.yaml"]);
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([
+      expect.stringMatching(
+        new RegExp(
+          String.raw`^note: the flow's recorded scenario evals/gone/alpha\.yaml \(_state\.json harness_paths\) was not found relative to the current directory \(${escapeRegExp(f.cwd)}\) — run check from the directory the flow was approved in, or pass the target \(\`hillclimb check <scenario\.yaml \| dir/> --flow flow\`\) to compare case alpha's rows with its current assertion set$`,
+        ),
+      ),
+    ]);
+    expect(sigLines(checkReport("flow", f.cwd, "evals").warnings)).toEqual([expect.stringMatching(STALE)]);
+    void evals;
+  }, 240_000);
+
+  /** `harness_files` as an approval records it: per-entry hashes keyed by cwd-relative path, virtual entries too. */
+  const approved = (flow: string, files: string[]) => {
+    const file = join(flow, "_state.json");
+    const st = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    const entries = Object.fromEntries([...files, "<baseline>", "<cowork-harness-version>"].map((k) => [k, "0".repeat(64)]));
+    writeFileSync(file, JSON.stringify({ ...st, harness_files: entries }));
+  };
+
+  it("without the target, from the scenario files the approval recorded (harness_files), read before harness_paths", () => {
+    const { flow } = staleFlow();
+    approved(flow, ["evals/_session.yaml", "evals/alpha.yaml"]);
+    record(flow, ["evals/elsewhere/alpha.yaml"], true);
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([expect.stringMatching(STALE)]);
+  }, 240_000);
+
+  it("a scenario the approval recorded that is since gone is named in a note, from harness_files", () => {
+    // The record buildFlow's approving pass wrote, as the runner writes it.
+    const { evals } = staleFlow();
+    renameSync(join(evals, "alpha.yaml"), join(evals, "alpha.yaml.moved"));
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([
+      expect.stringMatching(
+        new RegExp(
+          String.raw`^note: the flow's recorded scenario evals/alpha\.yaml \(_state\.json harness_files\) was not found relative to the current directory \(${escapeRegExp(f.cwd)}\) — run check from the directory the flow was approved in, or pass the target`,
+        ),
+      ),
+    ]);
+  }, 240_000);
+
+  it("end to end: an approved edit, then a plain check --flow flags the rows graded before it; the sha is unchanged", () => {
+    const { cli, flow, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    const state = () => JSON.parse(readFileSync(join(flow, "_state.json"), "utf8")) as Record<string, unknown>;
+    // buildFlow's first pass approved: the record of what it hashed names the scenario, cwd-relative.
+    expect(Object.keys(state().harness_files as object)).toContain("evals/alpha.yaml");
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: Nope"));
+    const approve = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--dry-run", "--approve-harness");
+    expect(approve.status, approve.stderr).toBe(0);
+    const sha = state().harness_sha;
+    const again = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--dry-run");
+    expect(again.stderr).toMatch(/harness gate: approved/);
+    const c = checkReport("flow", f.cwd);
+    expect(sigLines(c.warnings)).toEqual([expect.stringMatching(STALE)]);
+    expect(c.exitCode).toBe(0);
+    const plain = spawnSync(process.execPath, [CLI, "hillclimb", "check", "--flow", "flow"], { cwd: f.cwd, encoding: "utf8" });
+    expect(plain.status, plain.stderr).toBe(0);
+    expect(plain.stderr).toMatch(
+      /warning: 2 row\(s\) of case alpha \(baseline 1, v1 1\) were graded under a different assertion set .*hillclimb regrade evals --flow flow --case alpha/,
+    );
+    // Reading the record never moves the sha.
+    expect(state().harness_sha).toBe(sha);
+    // The printed remedy runs as printed: exit 0, and the rows are current after it.
+    expect(runPrinted(cli, c.warnings).status).toBe(0);
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([]);
+  }, 240_000);
+
+  it("a session file named after its case, recorded beside the scenario, is not taken for a second scenario", () => {
+    const { cli, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    // The examples' convention: sessions/<case>.yaml. Approved, so harness_files records both alpha.yaml files.
+    mkdirSync(join(f.cwd, "sessions"));
+    writeFileSync(join(f.cwd, "sessions", "alpha.yaml"), readFileSync(join(evals, "_session.yaml"), "utf8"));
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(
+      sc,
+      readFileSync(sc, "utf8")
+        .replace("session: ./_session.yaml", "session: ../sessions/alpha.yaml")
+        .replace("transcript_contains: All done", "transcript_contains: Nope"),
+    );
+    const approve = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--dry-run", "--approve-harness");
+    expect(approve.status, approve.stderr).toBe(0);
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([expect.stringMatching(STALE)]);
+  }, 240_000);
+
+  it("a flow approved on one file of a directory: the remedy names that file, and runs as printed", () => {
+    const { cli, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    // A second scenario beside it that the flow never ran: `regrade evals` would hash it and be refused.
+    writeFileSync(join(evals, "beta.yaml"), readFileSync(join(evals, "alpha.yaml"), "utf8").replace("name: alpha", "name: beta"));
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: Nope"));
+    const approve = cli("run", "evals/alpha.yaml", "--flow", "flow", "--variant", "v1", "--dry-run", "--approve-harness");
+    expect(approve.status, approve.stderr).toBe(0);
+    const ws = sigLines(checkReport("flow", f.cwd).warnings);
+    expect(ws).toEqual([expect.stringMatching(/run `hillclimb regrade evals\/alpha\.yaml --flow flow --case alpha`/)]);
+    const r = runPrinted(cli, ws);
+    expect(r.status, r.stderr).toBe(0);
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([]);
+  }, 240_000);
+
+  it("scenarios recorded from two directories: each case's remedy names its own file, which runs as printed", () => {
+    const { cli, flow, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    // A scenario in another directory the flow lists as a measurement file (state-template's harness_paths): every
+    // approval hashes it, so the recorded scenarios span two directories.
+    mkdirSync(join(f.cwd, "more"));
+    writeFileSync(
+      join(f.cwd, "more", "beta.yaml"),
+      readFileSync(join(evals, "alpha.yaml"), "utf8")
+        .replace("name: alpha", "name: beta")
+        .replace("./_session.yaml", "../evals/_session.yaml"),
+    );
+    const stFile = join(flow, "_state.json");
+    writeFileSync(stFile, JSON.stringify({ ...JSON.parse(readFileSync(stFile, "utf8")), harness_paths: ["more/beta.yaml"] }));
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: Nope"));
+    const approve = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--dry-run", "--approve-harness");
+    expect(approve.status, approve.stderr).toBe(0);
+    const ws = sigLines(checkReport("flow", f.cwd).warnings);
+    expect(ws).toEqual([expect.stringMatching(/run `hillclimb regrade evals\/alpha\.yaml --flow flow --case alpha`/)]);
+    expect(runPrinted(cli, ws).status).toBe(0);
+  }, 240_000);
+
+  it("a scenario listed in harness_paths with its own session: the remedy never names a target that would hash that session", () => {
+    const { cli, flow, evals } = buildFlow({ noPairwise: true, extra: ["  - transcript_contains: All done"] });
+    // beta, beside alpha, listed by hand as a measurement file, with a session file of its own. The approval on
+    // evals/alpha.yaml hashes beta's bytes (listed) but never its session: `regrade evals` would add sessions/b.yaml.
+    mkdirSync(join(f.cwd, "sessions"));
+    writeFileSync(join(f.cwd, "sessions", "b.yaml"), readFileSync(join(evals, "_session.yaml"), "utf8"));
+    writeFileSync(
+      join(evals, "beta.yaml"),
+      readFileSync(join(evals, "alpha.yaml"), "utf8").replace("name: alpha", "name: beta").replace("./_session.yaml", "../sessions/b.yaml"),
+    );
+    const stFile = join(flow, "_state.json");
+    writeFileSync(stFile, JSON.stringify({ ...JSON.parse(readFileSync(stFile, "utf8")), harness_paths: ["evals/beta.yaml"] }));
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("transcript_contains: All done", "transcript_contains: Nope"));
+    const approve = cli("run", "evals/alpha.yaml", "--flow", "flow", "--variant", "v1", "--dry-run", "--approve-harness");
+    expect(approve.status, approve.stderr).toBe(0);
+    const ws = sigLines(checkReport("flow", f.cwd).warnings);
+    expect(ws).toEqual([expect.stringMatching(/run `hillclimb regrade evals\/alpha\.yaml --flow flow --case alpha`/)]);
+    const r = runPrinted(cli, ws);
+    expect(r.status, r.stderr).toBe(0);
+    expect(sigLines(checkReport("flow", f.cwd).warnings)).toEqual([]);
+  }, 240_000);
+
+  it("with a target that holds no scenario for a flow case, a note names the case it did not compare", () => {
+    const { evals } = staleFlow();
+    mkdirSync(join(f.cwd, "ev"));
+    writeFileSync(
+      join(f.cwd, "ev", "beta.yaml"),
+      readFileSync(join(evals, "alpha.yaml"), "utf8").replace("./_session.yaml", "../evals/_session.yaml"),
+    );
+    expect(sigLines(checkReport("flow", f.cwd, "ev").warnings)).toEqual([
+      "note: the target ev has no scenario for case alpha, so its rows were not compared with a current assertion set — pass the target that holds it: `hillclimb check <scenario.yaml | dir/> --flow flow`",
+    ]);
+  }, 240_000);
+
+  it("nothing recorded: a note says to pass the target; the mixed-set warning still fires", () => {
+    const { cli, flow } = staleFlow();
+    unrecord(flow);
+    const c = checkReport("flow", f.cwd);
+    expect(sigLines(c.warnings)).toEqual([
+      "note: _state.json records no scenario files (harness_files, harness_paths), so the rows' assertion sets were not compared with the scenarios' current ones — pass the target: `hillclimb check <scenario.yaml | dir/> --flow flow`",
+    ]);
+    expect(c.exitCode).toBe(0);
+    // A resumed rep under the new assert: the case's rows now mix two sets. Flagged with or without the target; with it,
+    // the old rows are also named stale and the remedy names the target.
+    expect(cli("run", "evals", "--flow", "flow", "--variant", "v1", "--reps", "2", "--concurrency", "1", "--approve-harness").status).toBe(
+      0,
+    );
+    unrecord(flow); // the run's --approve-harness recorded harness_files again
+    const plain = checkReport("flow", f.cwd).warnings.filter((w) => /^warning: .*assertion set/.test(w));
+    expect(plain).toEqual([
+      expect.stringMatching(
+        /^warning: case alpha's rows were graded under 2 assertion sets .*hillclimb regrade <scenarios> --flow flow --case alpha/,
+      ),
+    ]);
+    const withTarget = checkReport("flow", f.cwd, "evals").warnings.filter((w) => /^warning: .*assertion set/.test(w));
+    expect(withTarget).toEqual([
+      expect.stringMatching(
+        /^warning: case alpha's rows were graded under 2 assertion sets .*hillclimb regrade evals --flow flow --case alpha/,
+      ),
+      expect.stringMatching(STALE),
+    ]);
+    void flow;
   }, 240_000);
 });
 
