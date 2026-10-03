@@ -121,7 +121,9 @@ Requirements:
 Keep the flow dir out of your repo, or ignore most of it. Rows, traces and the copies under `<variant>/out/`
 hold the run's outputs and judge rationales (secret-scrubbed and host-path-redacted text; binary files copied as
 they are), and `inputs/` holds a copy of the files the session uploads (up to 2 MiB each and 20 MiB per rep), as `inputs/<hash>-<name>`, shared by
-every variant (`--no-copy-inputs` skips it). `summary.json` is the loop's: the runner only adds keys it lacks.
+every variant (`--no-copy-inputs` skips it). `summary.json` is shared with the loop: the runner adds `model` and
+`source_sig` only when they are missing, and recomputes its own keys (what the rows requested and were sent, and
+the variant's spend) after every pass, leaving every other key as the loop wrote it.
 
 The loop's guide suggests committing the flow dir without its traces, so the history survives. If you do, ignore
 at least these, and read what remains before the first commit:
@@ -200,8 +202,8 @@ Three things live outside the flow dir, and the loop needs all three for the who
 - **Perf fields:** `cost_usd`, `latency_s`, `tool_calls`, `web_searches`, `in_tokens`, `out_tokens` (and
   `skill_invoked` when tracked). `in_tokens` counts the main model's input, cache-read and cache-creation tokens.
   `latency_s` excludes retry backoff; when the run reported no duration it is the attempt's wall time
-  (`meta.latency_basis: "wall"`). Rows also carry `decider_usd` when a decider answers questions, but
-  `state-template` never declares it: add it to `perf_fields` yourself.
+  (`meta.latency_basis: "wall"`). Rows also carry `judge_usd` when an assertion called the judge, and
+  `decider_usd` when a decider answers questions (see [Cost and spend](#cost-and-spend)).
 
 Each trace opens with a system turn holding the system text the harness appended, as sent (Anthropic's built-in
 prompt withheld), or a marker saying none was sent or recorded, and inlines each sub-agent's turns after its
@@ -322,30 +324,60 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
 
 ## Cost and spend
 
-- **`cost_usd` on a row is the agent's whole cost for that run**: the main model, sub-agents and auxiliary calls,
-  as Cowork's agent reports it, across every model the run called. Use it for the loop's `$/run` and `spend`.
-  Don't derive cost from `model` × `usage`: `usage`, `in_tokens` and `out_tokens` cover only the pinned model's
-  id, so a sub-agent or auxiliary call on another model is left out of them.
-- **Judge spend is separate.** It is not in `cost_usd`. A
-  row's `judge_model` and `judge_usage` say who judged its current grades; they are not a spend ledger (a
-  re-grade replaces them).
-- **Spend for a climb:**
-  - agent spend = the sum of `cost_usd` over every `results.jsonl`, plus `meta.cost_usd` on every
-    `errors.jsonl` row (failed attempts are billed; an error row's top-level `usage` is the main model only);
-  - judge and decider spend = for every row's kept run dir (scored and error rows alike), the
-    `judgeCostUsd` of each assertion and the `deciderCostUsd` in that run's `result.json`, plus the
-    top-level `judgeCostUsd` of every re-grade file a `hillclimb regrade` wrote into the same run dir
-    (`turns/<N>/regrade/*.json`). Use the file's top-level figure, never its per-assertion ones: a re-grade file
-    also lists the grades it kept, with their original cost. Those files are never overwritten, a row re-graded
-    with no judge call (deterministic assertions and metrics only) writes none, and a file with no top-level
-    `judgeCostUsd` recorded no judge spend, so the sum counts every judge call once. Unpriced judge grades and
-    failed decider calls are not counted, so the total is a floor.
-    Find each run dir by the row's `meta.run_id`: the runs root's `index.jsonl` maps each `runId` to its
-    `outDir` (`<runs root>/<scenario slug>/<run_id>`, the dir `hillclimb regrade` reads; the root is `~/.cowork-harness/runs`, or `--run-dir` /
-    `COWORK_HARNESS_RUNS_DIR`). A row's `meta.run_dir` is a pointer for reading one rep, and it is redacted
-    when the runs root is outside your home directory.
-    This needs the kept run dirs: the rows alone cannot rebuild judge spend, so a loop that sums only
-    `results.jsonl` and `errors.jsonl`, as the loop's guide describes, undercounts it.
+Copy the cost numbers; never derive them. The loop's guide prices a run as `model` × `usage`, but `usage` (and
+`in_tokens` / `out_tokens`) covers only the main model and its same-model sub-agents, and the agent's own pricing
+adds what that formula misses (1-hour cache writes, regional multipliers, web-search fees). Measured on kept runs,
+the formula undercounts nearly every row. So:
+
+- **`cost_usd` on a row is the agent's whole cost for that run**: its own `total_cost_usd`, across every model the
+  run called (main loop, sub-agents, auxiliary calls). The judge is not in it. `meta.models` lists each model's
+  share (`cost_usd`), with the `provider` that served it and the `cost_basis` its price came from.
+- **`judge_usd` on a row is what the live judge spent grading it**: the sum of every judged assertion's recorded
+  cost. It is absent when no assertion called the judge (a `semantic_pairwise` assertion whose every comparison
+  was neutral, such as a baseline row against its own reference, never calls it). A judged assertion with no
+  recorded cost is counted in `meta.judge_unpriced`, never as $0. `decider_usd` is the LLM decider's spend. On an
+  `errors.jsonl` row these are `meta.cost_usd`, `meta.judge_usd`, `meta.judge_unpriced` and `meta.decider_usd`.
+  After a `hillclimb regrade`, `judge_model` and `judge_usage` describe the judges behind the current grade (the
+  regrade's, after a full re-judge), while `judge_usd` stays the live judge's; the regrade's own spend is
+  `meta.regrade_judge_usd`.
+- **`summary.json` carries the variant's spend**, recomputed over its whole `results.jsonl` and `errors.jsonl`
+  after every pass and after every `hillclimb regrade` that rewrites its rows. A run is counted once (by
+  `meta.run_dir`). Copy these for the loop's `$/run` and `spend`:
+  - `cost_usd_mean`: the mean `cost_usd` over the scored rows that record one (this is `$/run`; agent failures and
+    truncated rows are scored rows, so they count);
+  - `cost_usd_total`: `cost_usd` summed over every row, scored and error rows alike (failed attempts are billed);
+  - `cost_rows` / `cost_rows_unrecorded`: how many rows record a cost and how many do not (a row with no cost is
+    never counted as $0);
+  - `judge_usd_mean` (over the scored rows that record a `judge_usd`) and `judge_usd_total` (every row); add
+    `judge_usd_mean` to `cost_usd_mean` when your `$/run` includes the judge;
+  - `judge_rows_unpriced`: rows with a judged assertion that recorded no cost. When it is not 0, the judge figures
+    are floors;
+  - `regrade_judge_usd_total`: the sum of the rows' current `meta.regrade_judge_usd`, which is only the LAST
+    re-grade of each row, so it is a floor of what re-grading spent;
+  - `decider_usd_total`;
+  - `billing_basis` and `billing_rows_unrecorded` (see below).
+  A sum with nothing to sum is left out, never written as 0.
+- **The pass prints the same figures** after its `done` line:
+  `[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge): agent $X over N row(s) (U without a cost), $Y/run over K scored row(s); judge $Z (J row(s) with an unpriced judge call — a floor); decider $W`.
+  The list-price clause appears only on `subscription`; the line also names `cost basis managed` or
+  `cost basis unknown` when a row records one, and leaves out a part with nothing recorded.
+- **Other models' share.** When models other than each row's main-loop model carry more than 25% of a variant's
+  `cost_usd`, the pass warns once for that variant, and `hillclimb check` repeats it as a note: `usage` covers the
+  main model and its same-model sub-agents only, `cost_usd` covers every model. A small auxiliary helper (a few
+  percent) stays below it.
+- **The full ledger from the kept runs.** Every judge and decider call is also in the kept run dirs: for every
+  row's kept run dir (scored and error rows alike), the `judgeCostUsd` of each assertion and the `deciderCostUsd`
+  in that run's `result.json`, plus the top-level `judgeCostUsd` of every re-grade file a `hillclimb regrade`
+  wrote into the same run dir (`turns/<N>/regrade/*.json`). Use the file's top-level figure, never its
+  per-assertion ones: a re-grade file also lists the grades it kept, with their original cost. Those files are
+  never overwritten, a row re-graded with no judge call (deterministic assertions and metrics only) writes none,
+  and a file with no top-level `judgeCostUsd` recorded no judge spend, so the sum counts every judge call once,
+  including the earlier re-grades the summary's `regrade_judge_usd_total` leaves out. Unpriced judge grades
+  and failed decider calls are not counted, so this total is a floor too.
+  Find each run dir by the row's `meta.run_id`: the runs root's `index.jsonl` maps each `runId` to its
+  `outDir` (`<runs root>/<scenario slug>/<run_id>`, the dir `hillclimb regrade` reads; the root is `~/.cowork-harness/runs`, or `--run-dir` /
+  `COWORK_HARNESS_RUNS_DIR`). A row's `meta.run_dir` is a pointer for reading one rep, and it is redacted
+  when the runs root is outside your home directory.
 - **There is no spend cap on `hillclimb run`.** It takes no `--max-budget-usd`. Recompute spend from the files
   after every round, as the loop's guide does, and stop at your budget. (`--max-budget-usd` on `run` and `eval` is
   a pre-flight refusal priced from the agent's cost history, not a cap on spend: only a `--repeat` batch keeps a running
@@ -358,6 +390,34 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
 - **`--dry-run` prints an estimate** of the agent spend for the slots it would run, from this machine's run
   history; hillclimb runs themselves are left out of that history. On a machine with no history for a scenario,
   the estimate lists it as unpriced and is a lower bound. Judge spend is not in the estimate.
+
+### Billing basis
+
+What `cost_usd` means depends on the credential the agent billed. The harness reads it from the agent's own frames
+(its init frame, the account block it reports at startup and any rate-limit frame), never from the harness's own
+environment, and records source names only, never an account's email, organization or plan. It is recorded at two
+levels:
+
+1. **Row: `meta.billing`**, with `api_key_source`, `token_source`, `provider`, `cost_basis` and `basis`.
+   `meta.billing.basis` is one of `api_key`, `subscription`, `third_party` or `ambiguous`. The key is absent
+   (omitted) when the run recorded no credential frames; it is never guessed.
+   - `third_party`: a provider other than Anthropic's own API served the run (Bedrock, Vertex and others).
+   - `subscription`: an OAuth token or a claude.ai login. When an API key and an OAuth token are both set, which
+     one the agent uses depends on the tier: at hostloop, container and microvm the agent runs under the
+     `local-agent` entrypoint, where the OAuth token wins, so the row says `subscription` when the run reported a
+     subscription rate-limit window and `ambiguous` when it did not; at protocol the API key wins (`api_key`).
+   - `api_key`: an API key and no token.
+   - `ambiguous`: anything else (a bearer `ANTHROPIC_AUTH_TOKEN`, no credential recorded, account frames that
+     disagree).
+   `cost_basis` is `list` (the agent's built-in list prices; also when the agent did not say), `managed` (an
+   organization price table set the price) or `unknown` (no price matched the model, so the agent guessed).
+2. **Summary: `billing_basis`** is always present: the single `meta.billing.basis` the rows record, `"mixed"` when
+   rows record different values, or `"unrecorded"` when no row records one. `billing_rows_unrecorded` counts the
+   rows that record none.
+
+On `subscription`, `cost_usd` is the agent's list-price estimate, not a charge. On `cost_basis: managed`, an
+organization's price table set it. Compare costs only across variants with the same basis. `billing_basis` describes
+the agent only: the judge and the decider run on the host's own credential, which may bill differently.
 
 ## Differences from the loop's own runner
 

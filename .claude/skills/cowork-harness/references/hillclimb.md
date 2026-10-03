@@ -127,6 +127,23 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
   `model:` is expected to make every row `serving_substitution` (inferred). Put sub-agent settings in `agents/*.md`.
 - **No spend cap.** `run` takes no `--max-budget-usd`: recompute spend from the flow's files after every round and
   stop at the budget. `--dry-run` estimates the agent spend only.
+- **Spend, copied, never derived from `model` × `usage`** (`usage` is the main model and its same-model sub-agents
+  only). Rows: `cost_usd` (the agent's own total, every model, judge excluded), `judge_usd` (the live judge's spend
+  over the assertions that called it; absent when none did; `meta.judge_unpriced` counts judged assertions with no
+  recorded cost) and `decider_usd`; error rows carry them in `meta`. `meta.models` adds each model's `provider`
+  and `cost_basis` (`list`, `managed`, `unknown`). `summary.json` gets, over the variant's `results.jsonl` +
+  `errors.jsonl` after every pass and every rewriting `regrade` (each run once): `cost_usd_mean` (`$/run`),
+  `cost_usd_total`, `cost_rows`, `cost_rows_unrecorded`, `judge_usd_mean`, `judge_usd_total`,
+  `judge_rows_unpriced`, `regrade_judge_usd_total` (last regrade per row: a floor), `decider_usd_total`; a sum
+  with nothing to sum is left out. The pass prints them as one `[<variant>] cost (…)` line, and warns once per
+  variant (`check` notes it) when other models than the main loop's carry over 25% of its `cost_usd`.
+- **Billing basis, two levels.** Row: `meta.billing` (`api_key_source`, `token_source`, `provider`, `cost_basis`,
+  `basis`), with `meta.billing.basis` one of `api_key`, `subscription`, `third_party`, `ambiguous`, read from the
+  agent's own frames and the tier's entrypoint (OAuth wins over an API key at hostloop, container and microvm;
+  the key wins at protocol); the key is absent when the run recorded no credential frames. Summary:
+  `billing_basis` is always present: the single recorded value, `"mixed"` when rows differ, or `"unrecorded"`
+  when no row records one, beside `billing_rows_unrecorded`. Names only, never an account's identity. On
+  `subscription`, `cost_usd` is a list-price estimate, not a charge.
 - **A decider needs `--concurrency 1`** (`--decider-cmd`, `--decider-dir`); a scenario's `on_unanswered: llm` does
   not.
 - **`--skill NAME` picks the skill `skill_invoked` tracks** when the plugin registers more than one; a plugin
