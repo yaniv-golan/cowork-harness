@@ -225,6 +225,13 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       A format failure is the most common first-pass CI red.
 - [ ] `npx tsc -p tsconfig.test.json --noEmit` — typecheck including tests.
 - [ ] `npm run ci` (typecheck + build + test) is green locally.
+- [ ] **Live gate: the init frame carries no `memory_paths` when the recorded gate is off.** Every committed
+      baseline records gate `123929380` off, so every tier must start the agent with auto-memory off, as Desktop
+      does for an ordinary task. Run `vitest run --config vitest.config.live.ts live-auto-memory` (protocol), plus one
+      `container` or `hostloop` run, and check that run's `events.jsonl`: its `system`/`init` frame must have no
+      `memory_paths` key. If the frame has the key, the switch did not reach the agent. If there is no init frame,
+      the check proved nothing. The builder unit tests cannot show this. The committed cassettes predate the
+      switch and still carry the key; that is expected, and they are not re-recorded for it.
 - [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the companion
       skill (`SKILL.md`, `references/`, the bundled `scenario.py` + `assertion-keys.json`), and no internal
       planning notes. The skill ships on BOTH channels: npm carries it alongside everything else, while a

@@ -148,10 +148,37 @@ investigation before being measured:
 | `1696890383` `memoryGuidelinesEnv` | only `CLAUDE_COWORK_MEMORY_GUIDELINES`, inside the has-a-directory branch. |
 | `2860753854` `memoryExtraGuidelines` | only the *value* of the PII block, not whether the branch runs. On, but inert by default. |
 
-**Harness behaviour.** The harness sets none of the five, and models no memory directory. For the
-session it models — no `spaceId`, no `sessionType`, and `123929380` pinned off — production would send
-`CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, so the modeled configuration is *nearly* faithful and the memory
-keys are genuinely unreachable.
+**Harness behaviour.** The harness never sets the four memory keys and models no memory directory. It does set
+the fifth, `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"`, on every tier (protocol, container, microvm, hostloop), from the
+`123929380` row recorded in the baseline. For the session it models (no `spaceId`, no `sessionType`) with that gate
+off, which is every committed baseline, this is exactly what production sends: the modeled configuration is faithful
+and the memory keys are genuinely unreachable. The agent then loads no memory section into its prompt, and its init
+frame carries no `memory_paths`. Before this was fixed the harness set nothing, so the agent ran with its default
+auto-memory ON. **The committed cassettes were recorded that way** (their init frames carry `memory_paths`) and stay
+so until re-recorded; replay does not read the field.
+
+The same switch also gates, in the agent:
+- a sub-agent's `memory:` frontmatter, which appends Read/Write/Edit to that sub-agent's tools and a memory prompt to
+  its system prompt;
+- the background memory-extraction and consolidation forks that run after a turn.
+
+With memory off, a plugin agent that declares `memory:` gets neither, as in Cowork, and those post-turn forks (and
+their sub-agent spend) do not run.
+
+- **Gate recorded ON.** The harness leaves the agent's default auto-memory on and models nothing else. Production
+  would also give the session a Desktop-managed directory, the four keys above (including their prompt text), and a
+  built-in memory-tidy skill gated on the same id. Production also skips the directory for a session whose
+  server-delivered `memoryEnabled` flag is false, which the harness cannot read. `sync` prints a WARNING note when it
+  reads the gate ON.
+- **No gate row.** Baselines before 1.18286.0 predate the gate pin and are treated as off. That is an assumption:
+  every baseline that records the gate records it off, and no Desktop bundle older than 1.18286.2 was available to
+  check.
+- **Settings `env`.** A settings file's `env` block reaches the agent's environment at startup and could set the key
+  to `"0"` (forced on). At `protocol` off the managed branch that is the operator's own `~/.claude/settings.json`,
+  which the L0 contamination signal already covers. Elsewhere only a managed-settings `env` could do it, and it would
+  do the same to Cowork on that machine.
+- **The modeled session shape only.** Production returns no directory for a chat, scheduled or dispatched session
+  whatever the gate says. The harness's rule encodes the ordinary-task arm only.
 
 **Read the reachability claim precisely, because it is narrower than it looks.** "Unreachable" holds
 for the modeled session shape only. It does **not** hold for a Spaces or agent-type session, where the

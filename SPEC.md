@@ -406,6 +406,10 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   hostloop only, when connected folders are present — alongside `CLAUDE_CODE_HOST_PLATFORM`,
   which is set on every cowork-spawn tier; binary-verified, see `docs/fidelity-gaps.md` and the
   0.23.0 CHANGELOG entry.)
+- **Auto-memory switch** (gate `123929380`, `autoMemoryStandardSessions`) — every tier sets
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"` unless the baseline's recorded gate row is on (no row → off), as Desktop
+  does for an ordinary task with no auto-memory directory; `sync` anchors the resolver shape and warns when the gate
+  reads on. See `docs/fidelity-gaps.md`.
 
 ## 11. Machine output (`--output-format json`)
 

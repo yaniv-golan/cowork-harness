@@ -732,6 +732,25 @@ All notable changes to this project are documented here. The format is based on
   is an unknown delta; the delete-deny resolver's site count could not see this. Nothing the harness runs reads the
   recorded mode, so no cassette goes stale. The harness's own outputs-delete check is unchanged; see
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them).
+- **The agent now runs with auto-memory off, as Cowork does.** For an ordinary task Desktop gives the agent an
+  auto-memory directory only when server gate `123929380` is on. Otherwise it sends
+  `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`. The gate is off in every committed baseline, but the harness set nothing, so
+  the agent loaded a memory section into its system prompt that Cowork's agent never sees. Every tier (protocol,
+  container, microvm, hostloop) now sets the key from the baseline's recorded gate row. A baseline with no row
+  counts as off. On hostloop and protocol the operator's own export of the key is ignored.
+  - **What changes for a run.** The same switch gates two more things in the agent:
+    - a sub-agent's `memory:` frontmatter. A plugin agent that declares it no longer gets Read/Write/Edit appended
+      to its tools or the memory prompt.
+    - the background memory forks after a turn. They no longer run, and their sub-agent spend stops.
+
+    A fresh run, or a re-record, can produce a different transcript. Replaying an existing cassette is unchanged:
+    the committed cassettes were recorded with memory on and still show `memory_paths` in their init frame. No
+    re-record is needed for replay.
+  - **sync changes.** It now checks the shape of Desktop's memory resolver; a change is an unknown delta. It prints
+    a warning note when the gate reads on, a mode the harness models only in part.
+  - **Wording.** The L0 contamination warning and the `l0_host_config_contamination` message no longer list
+    auto-memory.
+  - See [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#auto-memory-four-env-delivered-keys-the-harness-never-sets).
 
 ### Documentation
 
