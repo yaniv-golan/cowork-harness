@@ -277,7 +277,8 @@ cowork-harness lint scenarios/*.yaml
 would reject.
 
 **Lint the skill itself: `cowork-harness lint-skill <skill-dir>`.** It checks the skill, not a scenario:
-Cowork host-loop footguns (`${CLAUDE_PLUGIN_ROOT}` in a VM bash step, hook events, a misplaced
+Cowork host-loop footguns (a bare `$CLAUDE_PLUGIN_ROOT` in a VM bash step, the plugin root forwarded
+through bash to a host-side reader, hook events, a misplaced
 `hooks.json`, an unresolvable `subagent_type`), the evidence corpus a `critique` can package
 (`references/critique.md`), and two size caps. `skill-body-over-reattach-cap` (WARN) fires when the
 `SKILL.md` body, frontmatter excluded, passes 19,000 B — after a compaction the agent re-attaches only the

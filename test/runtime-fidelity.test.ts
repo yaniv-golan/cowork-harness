@@ -20,8 +20,8 @@ import type { PlatformBaseline } from "../src/types.js";
  *    vmGatewayIp(), but the live HTTP(S)_PROXY value needs a VM);
  *  - that the symlink in the provisioned guest resolves (we assert the GENERATED
  *    `ln -sf` line, not its effect inside a booted VM);
- *  - that host-loop's CLAUDE_PLUGIN_ROOT is unresolvable in-guest (we assert the
- *    sentinel string only; the bash self-heal trigger needs a Docker container).
+ *  - that host-loop's CLAUDE_PLUGIN_ROOT is unset in-guest (we assert the sidecar env
+ *    only; a bash command reading it needs a Docker container).
  */
 
 describe("Lima gateway IP is overridable and threaded into the firewall rule", () => {
@@ -157,8 +157,8 @@ describe("Lima instance name is derived from the config hash", () => {
 
 describe("host-loop sidecar leaves CLAUDE_PLUGIN_ROOT UNSET (matches real host-loop: VM bash sees no value)", () => {
   // Real host-loop leaves CLAUDE_PLUGIN_ROOT unset in the VM (live probe: in-guest bash saw an empty
-  // value); the agent's `[ -z "$CLAUDE_PLUGIN_ROOT" ]` self-heal then fires via `find …/mnt`, exactly as
-  // an unresolvable sentinel used to trigger it — but WITHOUT a bogus /host path leaking into the guest.
+  // value), so a bare `$CLAUDE_PLUGIN_ROOT` expands empty there, with no bogus /host path leaking into the
+  // guest. A substituted host plugin path in a command is rewritten instead (plugin-path-rewrite.ts).
   // spawnHostLoop spawns Docker (not token-free), so we assert at the argv seam it renders through.
   const SRC = join(dirname(fileURLToPath(import.meta.url)), "..", "src");
   const base = { network: "none", lockdown: true, sessionRoot: "/s", sessionHost: "/h", image: "img" } as const;

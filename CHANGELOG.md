@@ -64,6 +64,28 @@ All notable changes to this project are documented here. The format is based on
   evidence-unavailable** (it passed as "new this run" before, though the pre-run manifest never looked there). Move
   the assertion to a file the step writes under `outputs/` or a connected folder. A replay of an existing cassette is
   unaffected: such a path is not in the cassette's manifest.
+- **Verdict change at `hostloop`: a skill that forwards `${CLAUDE_PLUGIN_ROOT}` through bash to a host-side
+  reader now fails there, as it does in Cowork.** The workspace bash tool rewrites a plugin's host path in a
+  command to its VM mount (see Fixed), so `python3 build.py --plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, whose
+  script writes the value into a sub-agent's prompt, hands the sub-agent a `/sessions/…` path, and the
+  host-loop `Read` refuses it. The same command passed under `hostloop` before, a false green. The fix is in the
+  skill: let the reader name `${CLAUDE_PLUGIN_ROOT}` in its own text, such as a plugin agent's definition,
+  which is substituted with the host path when the agent loads. The other direction flips too: a skill step
+  such as `bash ${CLAUDE_PLUGIN_ROOT}/scripts/x.sh` that failed under `hostloop` now runs. Exit codes and their
+  meanings are unchanged; only these verdicts move, on a baseline from Desktop 1.40609.0. A replay serves the
+  frozen tool results, so a committed `hostloop` cassette keeps its old verdict until you re-record it.
+- **`lint-skill`: a suppression written for `plugin-root-in-vm-bash` on a braced `${CLAUDE_PLUGIN_ROOT}` site
+  suppresses nothing.** Those sites moved to other rules (see Changed), so such a marker, `--suppressions`
+  entry or `--ignore-rule` reports `lint-skill-ignore-unused` — INFO, but WARN under `--strict-ignores`, so
+  `lint-skill --strict --strict-ignores` can exit 1 on a skill that passed before. A site suppressed as a
+  reviewed-safe forward (`--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, the example the docs used to give) is
+  a real break at host-loop now; it reports `plugin-root-forwarded-from-vm-bash` and fails `--strict` until the
+  skill stops forwarding the root through bash.
+- **Verdict change: `self_heal_ran` also counts a `/sessions/<id>/mnt/.remote-plugins/…` path.** A run whose
+  model located a remote plugin's files there read as not having self-healed; `self_heal_ran: true` now passes
+  on it and `self_heal_ran: false` fails. It is a live-only assertion, so a replay is unaffected.
+- **`hostloop` runs workspace commands with `bash -c` instead of `sh -c`**, so a bash-only construct in a command
+  (process substitution, `[[ … ]]`) that failed under `hostloop` now runs, as it does in Cowork.
 - **An outputs delete no longer fails a run by default on `latest`.** `latest` (`desktop-2.19675.0`) records the
   `outputs` mount as `rwd`, so a CI gate that relied on the implicit `outputs_delete` failure stops catching a skill
   that deletes in `outputs/`. To keep that check, author `no_delete_in_outputs: true`; it behaves as before on every
@@ -473,6 +495,26 @@ All notable changes to this project are documented here. The format is based on
   it is enabled for. The model list itself is never written. A model added to or removed from that set, or the tool
   enabled for every model, changes the digest and shows up as a `sync --diff` line. The tool itself is not modeled
   (see Documentation).
+- **`lint-skill` reports the plugin root in a bash step per form, under three rules.** At host-loop the braced
+  `${CLAUDE_PLUGIN_ROOT}` is replaced with a host path that the bash tool rewrites to the plugin's VM mount, so
+  a step that opens it works, while the bare `$CLAUDE_PLUGIN_ROOT` is still empty there; one rule at one
+  severity could not describe both. Old to new:
+  - bare `$CLAUDE_PLUGIN_ROOT` or `${CLAUDE_PLUGIN_ROOT:-…}`, a braced root glued to other text
+    (`${CLAUDE_PLUGIN_ROOT}-v2`, `x${CLAUDE_PLUGIN_ROOT}`, which the bash tool does not rewrite), and any form in a
+    standalone skill with no `plugin.json` above it → still `plugin-root-in-vm-bash` (WARN), once per line;
+  - the whole braced root as the value of an option named for a location (`root`, `dir`, `path`, `plugin` or
+    `base` in its name: `--plugin-root-agent "${CLAUDE_PLUGIN_ROOT}"`, `--root=${CLAUDE_PLUGIN_ROOT}`), not
+    inside an open quoted string (such as an echo'd sentence) and not to `claude` itself, the shape that forwards it → `plugin-root-forwarded-from-vm-bash`
+    (WARN), reported even inside a block that self-heals;
+  - any other braced use → `plugin-root-braced-in-vm-bash` (INFO), whose message says when the rewrite
+    applies (the path as its own word) and that a value forwarded to a host-side reader arrives as a VM path.
+
+  A line with both forms gets one finding per form, and a fully commented-out line gets none. To migrate a `--suppressions` file: delete an entry that
+  named `plugin-root-in-vm-bash` for a braced site that is now the INFO (an INFO never fails `--strict`); for a
+  forwarding site, fix the skill, or, if the program really opens the path itself, change the entry's `rule`
+  to `plugin-root-forwarded-from-vm-bash`. Markers and `--ignore-rule` migrate the same way. Entries for the
+  bare form need no change.
+
 - **`eval` no longer makes a row of an assertion whose only keys are verdict modifiers** (`allow_stall`,
   `allow_outputs_delete`, and the other `allow_*` keys). Such an assertion always grades `pass`, so its row was
   constant across both arms and only enlarged the correction family, which weakened the correction for the
@@ -527,6 +569,22 @@ All notable changes to this project are documented here. The format is based on
   defaults as a rule table (`<id>:{rule:…}`), which `provenance.asarGateIds` did not read, so it also missed 2 new
   ids. The table is now read. The shape occurs in no earlier Desktop release, so no committed baseline changes:
   re-extracting `desktop-2.16120.0` reproduces its recorded 493 ids exactly.
+- **`hostloop` bash rewrites a plugin's host path to its VM mount, as Cowork does.** A command such as
+  `bash ${CLAUDE_PLUGIN_ROOT}/scripts/build.sh` in a plugin skill reached the workspace shell with the host
+  path the agent substituted, which does not exist in the VM, so it failed under `hostloop` while working in
+  Cowork. The `hostloop` bash tool now rewrites each plugin's staged host path, and the skills dir, to the
+  matching `/sessions/<id>/mnt/…` path before running the command, with Cowork's matching rules: whole-word
+  matches only, longest path first, the `/private/var` spelling of a `/var` path, and escaped or quoted spaces.
+  A path glued to other text (`${CLAUDE_PLUGIN_ROOT}-v2`, `x${CLAUDE_PLUGIN_ROOT}`) is left as written, as in
+  Cowork. Baselines older than Desktop 1.40609.0 are unchanged. The recorded tool input keeps the host path,
+  and the command's output is not mapped back. A bare `$CLAUDE_PLUGIN_ROOT` is still empty in that shell. See
+  Upgrade notes for the forwarding case this turns red.
+- **`hostloop` runs workspace commands with `bash -c`, as Cowork does.** It ran them with `sh -c`, which is
+  dash in the agent image, so a bash-only construct in a skill's command (process substitution, `[[ … ]]`)
+  failed under `hostloop` and worked in Cowork.
+- **`self_heal_ran` counts a VM path under `.remote-plugins/`.** It recognised only `.local-plugins/`, so a skill
+  installed as a remote plugin that located its own files under `/sessions/<id>/mnt/.remote-plugins/…` read as
+  not having self-healed.
 - **`prune` keeps hillclimb runs.** A run labelled `hillclimb:…` is not pruned and takes no `--keep-last` slot, so
   a routine `prune` during a climb leaves the runs `hillclimb regrade` and `hillclimb freeze-ref` read. A run you
   labelled `--label hillclimb:…` yourself is kept the same way. `prune` prints how many it kept per scenario and

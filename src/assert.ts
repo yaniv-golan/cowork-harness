@@ -534,7 +534,7 @@ export interface AssertContext {
    *  passing over an empty list it never populated. */
   gateOptionsMissing?: boolean;
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
-  selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
+  selfHealRan: boolean; // a bash command the model wrote names a /sessions/<id>/mnt/.{local,remote}-plugins path (plugin-root self-heal)
   subagents: {
     // Optional (not required) so existing hand-built test fixtures that omit it keep compiling — every
     // real construction site (live/replay/verify-run) passes RunResult.subagents through untouched, which
