@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
 import { UnknownBaselineError } from "../src/errors.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 const CLI = resolve("dist/cli.js");
 const py = process.env.PYTHON ?? "python3";
@@ -31,7 +32,7 @@ describe("loadBaseline: an unusable baseline FILE is an UnknownBaselineError wit
     const d = work();
     const e = thrown(() => loadBaseline(d));
     expect(e).toBeInstanceOf(UnknownBaselineError);
-    expect(e.message).toMatch(new RegExp(`^baseline file at "${d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" is a directory`));
+    expect(e.message).toMatch(new RegExp(`^baseline file at "${escapeRegExp(d)}" is a directory`));
   });
 
   it("invalid JSON", () => {

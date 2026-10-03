@@ -8,6 +8,7 @@ import { RECORD_VALUE_FLAGS } from "../src/run/cassette.js";
 import { LINT_VALUE_FLAGS } from "../src/run/lint-load.js";
 import { EVAL_VALUE_FLAGS, EVAL_REPEATED_FLAGS } from "../src/eval/usage.js";
 import { HILLCLIMB_RUN_REPEATED_FLAGS, HILLCLIMB_RUN_VALUE_FLAGS } from "../src/hillclimb/usage.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 // A value-taking flag given a FLAG-LOOKING next token (`--label --dotenv`) must be a usage error naming that
 // flag — never take the flag name as its value and carry on. Until `--dotenv`/`--run-dir` became per-command
@@ -55,7 +56,6 @@ function cli(args: string[], cwd: string) {
   const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", cwd, env: { ...process.env, COWORK_HARNESS_FORBID_SPAWN: "1" } });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
 }
-const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const CASES: Array<[string, string[], string[]]> = [
   ["run", ["run", "s.yaml"], RUN_VALUE_FLAGS],
@@ -84,7 +84,7 @@ describe.skipIf(!can)("every value-taking flag refuses a flag-looking value", ()
         );
         const r = cli([...base, flag, DASH], d);
         expect(r.code, r.out).toBe(2);
-        expect(r.out, r.out).toMatch(new RegExp(esc(flag)));
+        expect(r.out, r.out).toMatch(new RegExp(escapeRegExp(flag)));
         // …and it was not taken as the value and followed by a `--dotenv` missing-path error instead.
         expect(r.out).not.toMatch(/--dotenv requires a path/);
       });

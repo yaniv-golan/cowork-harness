@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { PER_TURN_ARTIFACTS } from "../src/run/turn-layout.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 // The guard for "biggest risk: a reader I did not find".
 //
@@ -44,7 +45,7 @@ const ALLOWED = new Map<string, string>([
 ]);
 
 /** Names a per-turn artifact, or the `<stem>.turn-<N>.<ext>` mangle a pre-layout writer produced. */
-const NAMES_ARTIFACT = new RegExp([...PER_TURN_ARTIFACTS.map((a) => a.replace(".", "\\.")), String.raw`\w+\.turn-`].join("|"));
+const NAMES_ARTIFACT = new RegExp([...PER_TURN_ARTIFACTS.map(escapeRegExp), String.raw`\w+\.turn-`].join("|"));
 
 /** Actually BUILDS or TOUCHES a path, as opposed to naming a file in prose. Without this the scan flags
  *  every user-facing message and doc comment that mentions an artifact by name — which is most of

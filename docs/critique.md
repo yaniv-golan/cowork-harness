@@ -237,7 +237,11 @@ adjudicable". So:
   call (read from the turn's `events.jsonl`, which carries the name the timeline drops), or a leading
   slash token in the prompt that resolves to a *staged skill*. The slash rule is the binary's, measured:
   the `/` must be the first character, the token runs to the first whitespace (`/plugin:skill.` is sent as
-  prose, not expanded), and a bare `/name` resolves to the plugin skill. Expanding one inlines SKILL.md as
+  prose, not expanded), and a bare `/name` resolves to the plugin skill. That is the agent's rule, which
+  the harness exercises; real Cowork's Desktop app resolves a typed slash command first and is stricter
+  (observed on Desktop 2.19675.0, 2026-10-03, 4 runs: it refused a bare name that differs from its
+  plugin's name, and both the bare and qualified forms when two copies of one plugin were installed), so a
+  run observed here is not proof the same typed prompt reaches the agent in Cowork. Expanding one inlines SKILL.md as
   a user message rather than calling the tool, so a slash-command run shows `skillsInvoked: []` and is
   **not** a non-invocation. `false` means all three channels were observable and none fired. The field
   is **absent** when a channel could not be observed or the one that fired is ambiguous — an older
@@ -740,8 +744,11 @@ immediately and survive a reflection turn that never finishes. Prefer them, or `
   false.** `skillInvocationObserved` reads three channels — the main agent's `Skill` tool calls, a
   sub-agent's `Skill` calls (from the turn's `events.jsonl`, which carries the skill name on the parented
   frame), and a leading slash token in the prompt. Two shapes leave a channel readable but the answer
-  undecidable: a bare `/name` that more than one staged skill answers to (the binary resolves it to a
-  plugin skill; the record does not say which when several qualify), and a plugin shipping both
+  undecidable: a bare `/name` that more than one staged skill answers to (the agent resolves it to a
+  plugin skill; the record does not say which when several qualify — and when the several are two copies
+  of one plugin, Cowork's app, which resolves a typed slash before the agent, refused it outright in the
+  runs observed on Desktop 2.19675.0, 2026-10-03; two different plugins sharing a skill name were not
+  measured), and a plugin shipping both
   `commands/<n>.md` and `skills/<n>/SKILL.md`, where the slash entry and the `Skill` tool launch either
   through one registry and the run records the name, not the kind. Both report *absent* rather than a
   guessed `true` — and the text report says so in a NOTE, so "could not observe" never reads like "not
