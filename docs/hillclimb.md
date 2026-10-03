@@ -88,7 +88,7 @@ cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --variant baseline --ca
    fixed flag before it:
 
    ```bash
-   cowork-harness hillclimb run evals/ --flow ~/hc/my-skill [--skill S] [--judge-model J] --variant <v> --reps 3
+   cowork-harness hillclimb run evals/ --flow ~/hc/my-skill [--skill S] [--model M] [--judge-model J] --variant <v> --reps 3
    ```
 
    The loop runs it once per round (`baseline`, then `v1`, `v2`, …); don't run the rounds yourself. Before its
@@ -411,8 +411,8 @@ resumed pass would mix them, and `hillclimb check` flags a case whose rows carry
 - **A variant that rewords or batches its questions can miss the scripted `answers:`.** The run ends asking for
   input and is scored as an agent failure (every key 0): read `meta.termination_rule` before blaming quality. A fix
   to `answers:` is a gated scenario edit, but it marks no row stale (`meta.assert_sig` covers `assert` and
-  `expect_denied` only) and a re-grade cannot answer a question again, so start a fresh flow dir and run the
-  baseline there: in this flow every slot already has a row, and a pass resumes by slot.
+  `expect_denied` only) and a re-grade cannot answer a question again, so start a fresh flow dir (its own `state-template` and
+  `--dry-run --approve-harness` first, as in the [Quick start](#quick-start)) and run the baseline there: in this flow every slot already has a row, and a pass resumes by slot.
 - **Judge variance.** Set `order: both` on a `semantic_pairwise` assert to cancel position bias. The frozen
   reference is one sample (the lowest-rep good row), so an unusually good or bad reference shifts every comparison.
 - **Effort and the sub-agent model are session-level.** `effort` and `agent_env.subagent_model` are read from the session

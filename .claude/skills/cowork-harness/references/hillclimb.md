@@ -304,8 +304,10 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
 - `check`: `0` clean, `1` an error finding, `2` usage.
 - `state-template`: `0`, or `2` on usage or a refusal.
 - `freeze-ref`: `0` no case refused (an entry already complete is reported, not refused); `1` a case refused (no
-  good row, its run not under the runs root, a damaged entry, a reference frozen for a different prompt, a missing compose key whose run is gone); `2` usage
-  (a bad `--variant`, a variant with no `results.jsonl`, no selected case with `semantic_pairwise`, the variant's
+  good row whose run is under the runs root and delivered its output, a damaged entry, a reference frozen for a
+  different prompt, a missing compose key whose run is gone, a store write that failed, or a run whose judged
+  document cannot be composed, differs from the one its live judge read, or has no live fingerprint); `2` usage
+  (a bad `--variant`, no flow dir, a variant with no `results.jsonl`, no selected case with `semantic_pairwise`, the variant's
   lock held by a live run).
 - `regrade`: `0` every selected row rewritten, or nothing to do; `1` a row listed instead, or a failure after the
   first judge call (it names the variants already rewritten); `2` usage or a refusal before any judge call.
