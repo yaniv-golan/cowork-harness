@@ -78,8 +78,12 @@ All notable changes to this project are documented here. The format is based on
 - **`lint` warns on a bare slash skill whose plugin is named differently (`slash-skill-name-differs-from-plugin`).**
   When `prompt:` starts with a bare `/<skill>` that names a skill of a plugin the scenario's session stages
   (`plugins.local_plugins` or `remote_plugins`), and the plugin's name differs, the run works here but real Cowork's
-  app has refused that typed form. The fix suggests `/<plugin>:<skill>` or the slash menu. The rule reads the
-  `session:` file and its plugin directories, and stays silent when they are not on the machine running `lint`.
+  app has refused that typed form. The fix suggests picking the skill from the slash menu or naming it like its
+  plugin; `/<plugin>:<skill>` is offered as not measured with a single copy installed. Plugin and skill names are
+  derived as the agent derives them: `.claude-plugin/plugin.json`'s `name` and `skills` (a root `plugin.json` is
+  ignored), else the directory name, and a skill's sanitized directory name. The rule reads the `session:` file and
+  its plugin directories, and stays silent for an inline `session:`, for marketplace-delivered plugins, and when
+  the files are not on the machine running `lint`.
 - **`prune --include-hillclimb`.** It ranks hillclimb-labelled runs with every other run, so `--keep-last`
   applies to them. It deletes the `hillclimb regrade` and `hillclimb freeze-ref` evidence of every flow under
   the runs root, a loop still running included, and `freeze-ref` re-reads a frozen reference's source run: pass it
@@ -820,8 +824,10 @@ All notable changes to this project are documented here. The format is based on
   Cowork resolves a typed slash command in the Desktop app first, and a refusal ("Unknown skill") creates no task
   and never reaches the agent. Observed on Desktop 2.19675.0, 2026-10-03, 4 runs: a bare name that differs from its
   plugin's name was refused, and with two copies of a plugin installed both the bare and the qualified forms were
-  refused; picking from the slash menu always worked. The advice: prefer a skill named like its plugin, or
-  `/<plugin>:<skill>`, and do not install two copies of one plugin.
+  refused; picking from the slash menu always worked. The advice: pick the skill from the menu, or name it like its
+  plugin, and do not install two copies of one plugin. The qualified `/<plugin>:<skill>` was not measured with a
+  single copy installed. The docs also now say a skill registers under its directory name (sanitized for a plugin
+  skill), not its frontmatter `name`.
 
 ## [4.2.1] — 2026-10-01
 

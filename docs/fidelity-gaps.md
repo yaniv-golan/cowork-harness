@@ -1217,7 +1217,9 @@ expanded here with no hook involved. Measured against agent 2.1.239 in the harne
   *not* forwarded to the model as literal text, so the run reads as a silent no-op.
 - **Both staging routes register the name.** `skills.local` copies to `<configDir>/skills/<basename>`
   (`src/session.ts`), which `--setting-sources user` loads; plugin sources become `--plugin-dir`
-  (`src/runtime/argv.ts`). In the agent, skills resolve by their bare frontmatter `name`, not plugin-qualified.
+  (`src/runtime/argv.ts`). In the agent, a skill resolves by its bare skill-directory name, not plugin-qualified
+  and not its frontmatter `name` (a plugin skill's name is sanitized: `skills/my.skill/` answers to `/my-skill`,
+  see `src/skill-id.ts`; only a `SKILL.md` placed directly in a plugin's skills path is named by its frontmatter `name`).
 - **The slash must be at position 0** — the input is trimmed, then must start with `/`. A slash named
   mid-sentence ("review the deck with /deck-review") is never expanded; it reaches the model as prose, which
   may then pick the `Skill` tool on its own. That is the model-invocation path, i.e. the auto-trigger a
@@ -1231,8 +1233,9 @@ expanded here with no hook involved. Measured against agent 2.1.239 in the harne
   worked with one copy installed and was refused with two; the qualified `/<plugin>:<skill>` was refused
   with two copies too; picking from the slash menu always worked. The harness passes `prompt:` straight to
   the agent, so it models none of this and cannot see the refusal: a slash scenario that runs here may not
-  run when a user types it in Cowork. Prefer a skill whose name equals its plugin's name, or the qualified
-  form, and do not install two copies of a plugin. `lint` reports a bare name that differs from its staged
+  run when a user types it in Cowork. Pick the skill from the menu, or name the skill like its plugin, and do
+  not install two copies of a plugin. The qualified form was not measured with a single copy installed (only
+  seen refused with two), so it is not a proven fix. `lint` reports a bare name that differs from its staged
   plugin's name as ⚠ `WARN [slash-skill-name-differs-from-plugin]`.
 
 The gap is therefore the hook's `additionalContext` for a slash the agent receives, plus the app-side
