@@ -15,6 +15,7 @@ import {
   type Cassette,
 } from "../src/run/cassette.js";
 import { SessionFileError, UsageError } from "../src/errors.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 function work(): string {
   return mkdtempSync(join(tmpdir(), "cwh-session-file-"));
@@ -78,7 +79,7 @@ describe("parseSessionFile: an unreadable session file is a SessionFileError", (
     writeFileSync(p, "model: [unclosed\n");
     const e = thrown(() => parseSessionFile(p)) as Error;
     expect(e).toBeInstanceOf(SessionFileError);
-    expect(e.message).toMatch(new RegExp(`^session file is not valid YAML: ${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: \\S`));
+    expect(e.message).toMatch(new RegExp(`^session file is not valid YAML: ${escapeRegExp(p)}: \\S`));
     expect(e.message).not.toMatch(/\n/);
   });
 

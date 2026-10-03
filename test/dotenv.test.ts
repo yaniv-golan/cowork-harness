@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadDotenv, DotenvReadError } from "../src/dotenv.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 const KEYS = [
   "CC_TEST_A",
@@ -99,9 +100,7 @@ describe("loadDotenv", () => {
         expect.unreachable();
       } catch (err) {
         expect((err as DotenvReadError).path).toBe(dir);
-        expect((err as Error).message).toMatch(
-          new RegExp(`--dotenv file could not be read: ${dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
-        );
+        expect((err as Error).message).toMatch(new RegExp(`--dotenv file could not be read: ${escapeRegExp(dir)}`));
       }
       // non-strict mode swallows the same EISDIR and stays silent — the pre-existing, intentional
       // best-effort behavior for the automatic (non-explicit) source locations.

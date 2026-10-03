@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { FailDecider } from "../src/decide/decider.js";
 import type { DecisionRequest } from "../src/agent/session.js";
 import type { RunContext } from "../src/decide/decider.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 // The unanswered-gate hint (FailDecider, src/decide/decider.ts) is the ONE surface an agent reads at the
 // moment it is stuck, and nothing guarded it. It consequently rotted into naming only two of the four
@@ -201,7 +202,7 @@ function accepts(command: string, positionals: string[], flag: string, value?: s
     throw new Error(`accepts(): probe for \`${command} ${flag}\` was killed by ${r.signal ?? "a signal"} — no verdict`);
   if (!out.trim())
     throw new Error(`accepts(): probe for \`${command} ${flag}\` produced NO output — cannot distinguish acceptance from a failed spawn`);
-  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = escapeRegExp(flag);
   return !new RegExp(`(?:unknown flag|unexpected argument\\(s\\)):[^\\n]*${escaped}`).test(out);
 }
 
