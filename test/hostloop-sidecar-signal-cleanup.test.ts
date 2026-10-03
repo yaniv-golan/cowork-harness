@@ -36,7 +36,9 @@ function alive(pid: number): boolean {
   }
 }
 
-async function signalRun(sig: NodeJS.Signals): Promise<{ status: number | null; stderr: string; argv: string[]; clientPid: number }> {
+async function signalRun(
+  sig: NodeJS.Signals,
+): Promise<{ status: number | null; stderr: string; argv: string[]; clientPid: number; clientSurvived: boolean }> {
   const dir = mkdtempSync(join(tmpdir(), "hl-sidecar-signal-"));
   const runtime = join(dir, "fake-runtime");
   writeFileSync(runtime, FAKE_RUNTIME);
@@ -83,8 +85,10 @@ async function signalRun(sig: NodeJS.Signals): Promise<{ status: number | null; 
     // the client is SIGKILLed synchronously before exit; give the kernel a beat to reap it
     for (let i = 0; i < 20 && Number.isFinite(clientPid) && alive(clientPid); i++) await new Promise((r) => setTimeout(r, 50));
     const argv = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
-    if (Number.isFinite(clientPid) && alive(clientPid)) process.kill(clientPid, "SIGKILL"); // a red test leaks nothing
-    return { status, stderr, argv, clientPid };
+    // Observed BEFORE the leak guard below kills a survivor, so the guard cannot turn a red into a green.
+    const clientSurvived = Number.isFinite(clientPid) && alive(clientPid);
+    if (clientSurvived) process.kill(clientPid, "SIGKILL"); // a red test leaks nothing
+    return { status, stderr, argv, clientPid, clientSurvived };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -104,7 +108,7 @@ describe.runIf(POSIX)("hostloop workspace sidecar: a signal reaps the container,
       expect(rmContainer, r.argv.join("\n")).toBeGreaterThan(-1);
       expect(rmNetwork, r.argv.join("\n")).toBeGreaterThan(rmContainer);
       expect(Number.isFinite(r.clientPid), "precondition: the fake client started").toBe(true);
-      expect(alive(r.clientPid), "the docker run client survived the signal").toBe(false);
+      expect(r.clientSurvived, "the docker run client survived the signal").toBe(false);
     });
 });
 
