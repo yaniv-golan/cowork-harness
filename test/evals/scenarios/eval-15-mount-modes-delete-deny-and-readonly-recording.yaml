@@ -2,16 +2,19 @@ name: eval-15-mount-modes-delete-deny-and-readonly-recording
 baseline: latest
 session: ./_session.yaml
 fidelity: container
-prompt: 'I set a connected folder to `mode: rwd` expecting delete-protection on outputs/, but `rm` succeeded
-  in the run. Separately, for a `mode: r` connected folder, are its files captured in the cassette, and
-  do `file_exists` and `artifact_json` work against them on replay?'
+prompt: 'I set a connected folder to `mode: rw` expecting delete-protection, but `rm` in it succeeded in the
+  run. Is delete-protection enforced on that folder and on outputs/? Separately, for a `mode: r` connected folder,
+  are its files captured in the cassette, and do `file_exists` and `artifact_json` work against them on replay?'
 assert:
 - semantic_matches:
     rubric:
     - 'A mode: r mount gets a real :ro bind, so a write fails in-guest'
-    - 'mode: rw vs rwd (delete protection on outputs/ or connected folders) is NOT mount-enforced — an
+    - 'mode: rw vs rwd (delete protection on a connected folder) is NOT mount-enforced in the harness — an
       rm succeeds in-guest'
-    - rwd delete-protection is only caught post-hoc by the no_delete_in_outputs assertion
+    - A delete in a rw connected folder is only caught post-hoc, by the no_delete_in_mounts assertion (or
+      a mount_delete warning when that is not asserted)
+    - 'outputs/ is delete-allowed (rwd) in Cowork from Desktop 2.16120.0, so on such a baseline an outputs
+      delete does not fail the run by default; asserting no_delete_in_outputs keeps the check'
     - 'A mode: r folder''s contents are recorded body-less (path plus hash, truncated, no body) since
       it''s an input, not a deliverable'
     - file_exists (and computer_links_resolve) still pass on replay against the hash-only placeholder

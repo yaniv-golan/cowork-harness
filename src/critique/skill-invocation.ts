@@ -7,11 +7,15 @@
  * `root` and `skill` all reported `true`, and `root` collided with the `(root)` sentinel itself.
  * Match ids structurally instead.
  *
- * The selector is a bare skill-directory NAME by construction: `resolveCritiquedSkillDir` refuses
- * anything with a separator, a colon or a dot-dir (`safePathSegment`) before this module sees it, so
- * there is no normalisation to do here — and none is attempted, because a second copy of the rule is
- * how the two would drift.
+ * The selector is a skill name: a `skills/<dir>` directory name from critique and eval (a `--skill` value
+ * passes `safePathSegment`: no separator, colon or dot-dir), or the name the agent registers (hillclimb, and
+ * critique's root-SKILL.md case). A directory name can hold characters the agent rewrites when it registers
+ * the skill (`my.skill` registers as `<plugin>:my-skill`), so a qualified id is matched against the name as
+ * the agent writes it, through the one copy of that rule in `src/skill-id.ts` — applying it to an already
+ * registered name changes nothing.
  */
+
+import { sanitizeSkillName } from "../skill-id.js";
 
 /** The two sentinels `TimelineWriter`/`foldSkillActivity` emit for un-attributed activity
  *  (`src/agent/timeline.ts`, `src/run/timeline-fold.ts`). Parenthesized precisely so they cannot
@@ -20,16 +24,18 @@ const SENTINELS = new Set(["(root)", "(unknown)"]);
 
 /** Does an observed skill id name the selected skill? An id is either bare (`deck-review`) or
  *  plugin-qualified (`founder-skills:deck-review`) — both forms occur in the corpus. A bare id must equal
- *  the selector; a qualified id must match the name AND, when the graded plugin's name is known, the
- *  qualifier. `deck-review-lite` must NOT match `deck-review` (what a substring test got wrong), and
+ *  the selector (as written or as the agent rewrites it); a qualified id must match the name as the agent
+ *  registers it (`sanitizeSkillName`) AND, when the graded plugin's name is known, the qualifier.
+ *  `deck-review-lite` must NOT match `deck-review` (what a substring test got wrong), and
  *  `anthropic-skills:skill-creator` must NOT match a critique of `skill-creator:skill-creator` — on
  *  `hostloop`/`protocol` the host's own plugins are in the inventory, and a same-named skill from
  *  another plugin is exactly the kind of thing that is installed on a maintainer's machine. */
 export function matchesSkillId(observedId: string, selector: string, pluginName?: string): boolean {
   if (SENTINELS.has(observedId)) return false;
+  const registered = sanitizeSkillName(selector);
   const colon = observedId.lastIndexOf(":");
-  if (colon === -1) return observedId === selector;
-  if (observedId.slice(colon + 1) !== selector) return false;
+  if (colon === -1) return observedId === selector || observedId === registered;
+  if (observedId.slice(colon + 1) !== registered) return false;
   return pluginName === undefined || observedId.slice(0, colon) === pluginName;
 }
 
@@ -50,6 +56,12 @@ export type SlashInvocation = { kind: "skill"; id: string } | { kind: "none" } |
  *   - a BARE name resolves to the plugin skill (`/deck-review` → `founder-skills:deck-review`), while
  *     the inventory spells every plugin skill qualified — so a bare token is matched by suffix, and one
  *     that more than one staged skill answers to is `unobservable`, never `none`.
+ *  This is the AGENT's resolver, and it is more permissive than real Cowork's: the Desktop app resolves a
+ *  typed slash command before any agent runs and answers a refusal with "Unknown skill", creating no task.
+ *  Observed on Desktop 2.19675.0, 2026-10-03, 4 runs: a bare name differing from its plugin's name was
+ *  refused, as were the bare and the qualified forms with two copies of the plugin installed; picking from
+ *  the slash menu always worked. That refusal never reaches the agent, so no run record can show it — a
+ *  `skill` result here says the agent expanded the prompt, not that Cowork would have let it through.
  *  The match is against the init frame's SKILL inventory, never against `slash_commands` — that list
  *  mixes plugin commands with auto-registered skills and carries no distinguisher, so keying off it
  *  accepts `founder-skills:feedback` and `creative-problem-solving:ideas` (both verified real, both

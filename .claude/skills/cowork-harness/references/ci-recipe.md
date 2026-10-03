@@ -1,6 +1,6 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 4.2.1` (baseline `desktop-2.16120.0`).
+Self-contained reference. Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Stage the agent binary (official channel, sha256-verified against the pinned baseline)
         run: |
-          V=2.1.284   # match your scenario's pinned baseline's agentVersion
+          V=2.1.286   # match your scenario's pinned baseline's agentVersion
           # The release channel is NOT always the stable one. Desktop also stages release CANDIDATES,
           # served from .../claude-code-releases/rc/<commit>/. For some versions the stable path 404s
           # (2.1.255); for others it returns 200 and serves a DIFFERENT BUILD UNDER THE SAME VERSION
@@ -46,7 +46,7 @@ jobs:
           # from your pinned baseline's agentBinary.releaseBaseUrl. The checksum step fails closed if you
           # don't, but it cannot tell you why. Baselines written before that field existed were
           # stable-staged, so their base is the plain https://downloads.claude.ai/claude-code-releases.
-          B=https://downloads.claude.ai/claude-code-releases/rc/16cbb4ddeeb473f57fd8d5b713764903d7928e66
+          B=https://downloads.claude.ai/claude-code-releases
           # The expected digest is baselines/desktop-<ver>.json -> agentBinary.sha256. Paste it here, or
           # read it with jq if you vendor the baseline. An unverified download is an unverified agent:
           # this step FAILS rather than staging one, which is the whole point of naming it "verified".
@@ -467,7 +467,7 @@ in `result.json` and in the stdout envelope, by construction). Each entry is
 - **`assertion`** — one of *your* `assert:` items failed; `assertion` names its key (`file_exists`,
   `semantic_matches`, …).
 - **`guard`** — a signal you didn't author: `stalled`, `permissive_auto_allow`, `missing_capability`, a
-  host-path leak, an `outputs/` delete, an infra or transport error, an unanswered gate.
+  host-path leak, an `outputs/` delete on a baseline where outputs is delete-denied, an infra or transport error, an unanswered gate.
 - **`staleness`** — on `replay --strict` / `--assert-from` / `--reassert`, skill or baseline drift,
   which those modes escalate to a hard failure on purpose (frozen events must not green an edited
   assert against a skill whose current source produces something else).

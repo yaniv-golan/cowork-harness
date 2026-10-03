@@ -25,6 +25,7 @@ import {
   countStringInFile,
   deriveNativeStagedPath,
   nativeManifestBuild,
+  buildNextAgentBinary,
 } from "./baseline.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import { recordedFixtureFileSigs, recordedFixtureRefusal } from "./fixture/workspace.js";
@@ -306,8 +307,13 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
                                for hostloop/protocol recordings; review + tailor the patterns before recording;
                                --force re-copies it to pick up rules added by a later release)
-  prune [--keep-last <n>] [--pinned-older-than <N>d|h|m]
-                               prune accumulated run dirs, keeping N most recent per scenario (default: 5)
+  prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb]
+                               prune accumulated run dirs, keeping N most recent per scenario (default: 5);
+                               pinned sessions and hillclimb-labelled runs are kept; a run whose status.json
+                               says running is kept while it is still being updated or its process is alive (up to 24h);
+                               only run dirs (local_<lowercase letters, digits>, and sess-<id> under
+                               --pinned-older-than) are deleted; a <runs-dir> at the wrong level is refused
+                               (exit 2; see prune --help)
   migrate-run-dir [<runs-dir>] [--scenario <n>] [--write]
                                convert pre-layout run dirs to the per-turn turns/<N>/ layout (DRY RUN by default)
 
@@ -734,7 +740,23 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       (commit what migrated, budget a re-record for the rest). 1 = nothing migrated and at least one\n" +
     "       could not. 2 = usage. The JSON envelope carries the same split as migrated/skipped/errors.",
   prune:
-    "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)",
+    "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)\n" +
+    "  Pinned sess-* sessions and hillclimb-labelled runs (`hillclimb:…`) are kept outside --keep-last; a sess-* dir\n" +
+    "  follows the pinned rule (--pinned-older-than) even with a hillclimb label. A run whose status.json says running\n" +
+    "  is kept while it is still being updated (COWORK_HARNESS_STATUS_STALE_MS, default 15s) or its process is alive\n" +
+    "  (up to 24h), under every flag. --include-hillclimb ranks hillclimb runs with every\n" +
+    "  other run: it deletes the `hillclimb regrade` / `freeze-ref` evidence of EVERY flow under the runs root, a\n" +
+    "  loop still running included (freeze-ref re-reads a frozen reference's source run). Pass it only once every\n" +
+    "  climb is finished, or scope it with an explicit <runs-dir> (the --run-dir the climb used).\n" +
+    "  Only dirs named local_ followed by lowercase letters and digits (a run's id) are ranked and deleted, and\n" +
+    "  dirs named sess- followed by letters, digits, _ or - only under --pinned-older-than; every other dir under a\n" +
+    "  scenario is left alone and counted in the output.\n" +
+    "  The <runs-dir> (or --run-dir) must be the runs root, which holds <scenario>/<run> dirs. A path that looks like\n" +
+    "  a run dir, a dir inside one, a scenario dir, an eval dir or a dir of eval dirs, or the parent of a runs root,\n" +
+    "  or that is a file, is refused before anything is deleted, --dry-run included; so is a runs root that holds\n" +
+    "  another runs root (found without following symlinks), and a root the bounded check cannot clear that is\n" +
+    "  not itself a runs root.\n" +
+    "  exit: 0 done (or nothing to prune) · 2 usage, or a <runs-dir> at the wrong level",
   "migrate-run-dir":
     "usage: migrate-run-dir [<runs-dir>] [--scenario <name>] [--write] [--verbose]\n" +
     "       convert pre-layout run dirs (artifacts at the run-dir root) to the per-turn `turns/<N>/` layout, in place.\n" +
@@ -3268,19 +3290,16 @@ async function cmdSync(args: string[]) {
   }
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
-  const nextAgentBinary = {
-    ...baseAgentBinary,
+  const nextAgentBinary = buildNextAgentBinary(baseAgentBinary, {
     stagedPath: derivedStagedPath,
     nativeStagedPath: derivedNativeStagedPath,
-    // Recomputed from the live asar every sync, never spread from the base: `diffBaselines` is a generic
-    // recursive differ, so this only shows a stable<->RC channel flip if the candidate carries a FRESH
-    // value. A carried-forward one would make the diff silent on exactly the change it exists to catch.
-    releaseBaseUrl: res.agentReleaseBaseUrl ?? undefined,
+    channel: res.agentReleaseChannel,
+    releaseBaseUrl: res.agentReleaseBaseUrl,
     sha256: shaFields.sha256,
     shaProvenance: shaFields.shaProvenance,
     manifestChecksumMatch: shaFields.manifestChecksumMatch,
     stringSentinels,
-  };
+  });
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
   // Gates drive the cowork loop decision (decideLoopFromBaseline) and the dispatch cap; decoding the

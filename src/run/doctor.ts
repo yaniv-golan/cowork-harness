@@ -199,6 +199,10 @@ export function nativeDriftNote(d: NativeStagingDrift): string | undefined {
             (d.pinnedFilePresent ? ", which runs; the pinned flat file is also still present" : "")
         : `pinned build ${d.pinnedBuild} found as a flat install`,
     );
+  if (d.hostArchUnpinned)
+    parts.push(
+      `no ${d.hostArchUnpinned.arch} build pinned (only ${d.hostArchUnpinned.pinnedArchs.join(", ")}): matched ${d.found} by version, build ${d.foundBuild ?? "(flat install)"}`,
+    );
   if (d.others?.length)
     parts.push(`ambiguous: ${d.others.length + 1} builds of ${d.found}, using ${d.foundBuild ?? "the flat install"} (newest .verified)`);
   return parts.length ? parts.join("; ") : undefined;

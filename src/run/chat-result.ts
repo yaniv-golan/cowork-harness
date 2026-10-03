@@ -171,6 +171,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     partlyScriptedGates: undefined,
     scan: undefined,
     fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
+    outputsMountMode: undefined, // no live run here; absent reads as rw
     effectiveFidelity: opts.fidelity,
     fidelityWarnings: undefined,
     l0HostConfigContamination: undefined,

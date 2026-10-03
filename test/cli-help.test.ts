@@ -118,6 +118,20 @@ describe.skipIf(!can)("cli --help: prune documents --pinned-older-than", () => {
     expect(code).toBe(0);
     expect(text).toContain("--pinned-older-than");
   });
+
+  it("`prune --help` mentions --include-hillclimb", () => {
+    const { code, text } = help("prune");
+    expect(code).toBe(0);
+    expect(text).toContain("--include-hillclimb");
+  });
+
+  it("`prune --help` says what root it takes, what it deletes, and its exit codes", () => {
+    const { code, text } = help("prune");
+    expect(code).toBe(0);
+    expect(text).toContain("must be the runs root");
+    expect(text).toContain("Only dirs named local_ followed by lowercase letters and digits");
+    expect(text).toMatch(/exit: 0 .* 2 usage, or a <runs-dir> at the wrong level/);
+  });
 });
 
 // The TOP-LEVEL `--help` summary for `analyze-skill` once lagged the per-command help: it omitted

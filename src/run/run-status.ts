@@ -235,7 +235,7 @@ const RUN_STATUS_STATES = new Set<RunStatus["state"]>(["running", "done", "error
  *  status fresher than the last one" / staleness check keys off it) — plus `toolCounts`/`subagentCount`
  *  being the right basic type, enough to catch a `{}` or hand-truncated file without needing to mirror
  *  every optional field. */
-function isValidRunStatus(value: unknown): value is RunStatus {
+export function isValidRunStatus(value: unknown): value is RunStatus {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return (

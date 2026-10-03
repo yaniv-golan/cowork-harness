@@ -122,7 +122,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.284   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.286   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 # The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
 # from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
 # `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
@@ -165,6 +165,7 @@ For the `hostloop` tier's separate **native macOS** binary (`claude-code/<ver>/c
 - If the pinned version has nothing runnable, a same-major.minor version is used with a stderr note that says whether it is newer or older and, when the pinned version's build dir is present but not runnable, why.
 - If the pinned build is gone but another build of the same version is staged, that is a different binary. It needs `COWORK_HARNESS_ALLOW_AGENT_FALLBACK=1`, like a major/minor drift. A flat-shape pin never triggers this, because it names no build.
 - `sync` writes the full path of the build it chose, preferring the build the asar's own SDK manifest names when that manifest is for the staged version.
+- **The build is per CPU architecture.** The darwin-arm64 and darwin-x64 bundles have different checksums, so one version stages under a different `<build>` on each. `sync` therefore also records `agentBinary.nativeBuilds`, `{ arm64: <build>, x64: <build> }`, read from the asar's SDK descriptor for the pinned version. `nativeStagedPath` stays the syncing machine's own path. At run time the build is checked **only against the host arch's entry**: an x64 Mac is held to the x64 build, never to the arm64 build in the path. A baseline that has the map but no entry for the host arch matches by version alone, with a stderr note (and a `doctor` note). A baseline written before the map existed (every one before `desktop-2.19675.0`) is unchanged: the build in its path, if any, is the pin.
 
 At `hostloop`, the staged **Linux/arm64 ELF** gets the same patch tolerance: there it is bind-mounted into the bash sidecar only for parity and is not run by any harness-spawned process, so a same-major.minor patch-newer sibling is auto-accepted (loud stderr note, advisory sha) via `resolveAgentBinary(baseline, { parityMount: true })` — matching the native binary's policy above. `cowork` gets this same tolerance **only when the synced baseline gate resolves it to host-loop** (`decideLoopFromBaseline(baseline) === "host"`, mirroring `execute.ts`'s dispatch); `doctor --tier cowork` checks that resolution before deciding whether to ask for the tolerant or strict form, so it never reports the ELF `ok` when the real run would hard-fail. On a `cowork` baseline that resolves to **VM-loop**, the ELF is executed directly — same as `container`/`microvm`, which always keep the strict sha-pinned exact-version requirement described earlier in this section, because the ELF is the executed agent there. By the same resolved-loop logic, `doctor --tier cowork` requires the separate **native macOS** binary only when `cowork` resolves to host-loop (where it's the executed agent); a VM-loop-resolving `cowork` runs the ELF instead, so a missing native binary no longer blocks that rig (the mirror of the ELF case — doctor neither false-greens nor false-not-readies on either resolution).
 
@@ -274,12 +275,19 @@ committed baseline and say why in that baseline's `$comment`.
    `vm` always mandatory; `manifest` and `suffix` mandatory together once either is recorded — a partial
    entry is itself a hard-fail), then re-run `cowork-harness sync`.
 
-   > **PRECONDITION for any live probe of real Cowork.** Cowork's "Only on this computer" setting
-   > (Settings → Cowork) selects the lane. With it **off** — observed to be the default state on a
-   > current install — a session runs server-side under a server-authored prompt with no
-   > `## Cowork environment` section at all, and you will be diffing a lane this harness does not
-   > model. Turn it on and start a FRESH session before probing. This cost one wasted probe on
-   > 2026-09-05.
+   > **PRECONDITION for any live probe of real Cowork: the probe session must run on the local lane.**
+   > Cowork's "Only on this computer" setting (Settings → Cowork, or Settings → General → Tasks in the
+   > merged interface) does not reliably select it: sessions have run in the cloud with it **on**
+   > (observed 2026-10-02), and for Pro and Max plans Anthropic
+   > [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new
+   > tasks run in the cloud from 2026-10-06 and the setting is removed. After that date new Pro and Max
+   > sessions are expected to run in the cloud, and the probe needs an account that still gets local
+   > sessions. A cloud-lane session runs under a server-authored prompt with
+   > no `## Cowork environment` section at all, and you will be diffing a lane this harness does not
+   > model. Start a FRESH session and confirm its lane before probing — see
+   > [fidelity-gaps.md → Which lane a session actually ran on](./fidelity-gaps.md#which-lane-a-session-actually-ran-on).
+   > If no new session lands on the local lane, the probe cannot be run from that account. Probing the
+   > wrong lane cost one wasted probe on 2026-09-05.
 
    > **Then REPOINT the baseline at the new asset** — `spawn.subagentAppendHostLoop` (and/or
    > `spawn.subagentAppend`) in the freshly written `baselines/desktop-<new>.json`. These pointers are
@@ -312,9 +320,11 @@ committed baseline and say why in that baseline's `$comment`.
    `missing_boundary`, the session gets a different prompt, and nothing errors anywhere. The anchors pin
    the loud half so the quiet half cannot move unobserved.
 
-   **Includes the mount-mode sentinel.** `checkMountModeFacts` pins five facts about
-   `mountLayout.mounts[].mode`: the delete-deny resolver (`…?"rwd":"rw"`, which is what makes `outputs`
-   and each connected folder `rw`, or `rwd` once approved), plus four mounts whose mode is **hardcoded**
+   **Includes the mount-mode sentinel.** `checkMountModeFacts` pins six facts about
+   `mountLayout.mounts[].mode`: the delete-deny resolver (`…?"rwd":"rw"`, which is what makes each connected
+   folder `rw`, or `rwd` once approved); the exported `outputsMountMode` (Desktop 2.16120.0+), which every mount
+   builder uses for `outputs`: `"rwd"` (deletes allowed) for a normal session and `"rw"` only for a bridge session,
+   pinned by its export and exact body because the resolver's site count cannot see it; plus four mounts whose mode is **hardcoded**
    `"ro"` at the mount-set builder rather than resolved — `uploads`, `.claude/skills`, `.claude/projects`,
    and the per-uuid project attachment `.projects/<uuid>`. Each is pinned individually because a mount
    silently moving from `ro` to a writable mode is a containment change the harness would otherwise model

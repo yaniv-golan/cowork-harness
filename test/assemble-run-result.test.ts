@@ -92,6 +92,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     partlyScriptedGates: undefined,
     scan: undefined,
     fsDiff: undefined,
+    outputsMountMode: undefined,
     effectiveFidelity: undefined,
     fidelityWarnings: undefined,
     staleness: undefined,

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { USAGE_GUARD_REGISTRY, type UsageGuardEntry, RECORD_USAGE, REPLAY_USAGE, VERIFY_CASSETTES_USAGE } from "../src/run/cassette.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 // `record --help` (P3) had two hand-maintained strings that drifted; P9 generalizes the guard P3 built for
 // `record` alone to `replay` and `verify-cassettes` too — both had the SAME two-hand-maintained-strings
@@ -19,7 +20,7 @@ import { USAGE_GUARD_REGISTRY, type UsageGuardEntry, RECORD_USAGE, REPLAY_USAGE,
  *  `.includes("--out")` would silently pass even if the literal `--out` flag were removed from the text,
  *  as long as `--output-format` was still there — defeating the whole point of the guard). */
 function usageDocuments(usage: string, flag: string): boolean {
-  const escaped = flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = escapeRegExp(flag);
   return new RegExp(`${escaped}\\b`).test(usage);
 }
 

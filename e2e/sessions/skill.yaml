@@ -1,5 +1,5 @@
-# e2e session for the host-loop canary: mounts a plugin purely so ${CLAUDE_PLUGIN_ROOT}
-# resolves (the canary asserts that path is a host path bash can't reach → self-heal).
+# e2e session for the host-loop canary: mounts a plugin purely so the canary runs with a plugin
+# in the session (it prints CLAUDE_PLUGIN_ROOT from the workspace bash, where the variable is unset).
 # Reuses the example my-pdf-skill cross-tree — the canary needs *a* mounted plugin, not a
 # specific one. Paths resolve relative to THIS file's dir (see docs/session.md "Path expansion").
 permission_mode: default

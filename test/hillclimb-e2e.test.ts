@@ -1,7 +1,8 @@
 // `hillclimb run` through the real CLI and the real per-scenario runner, with only the agent replaced: the stub
 // `claude` (test/helpers/stub-agent.ts) first on PATH, at the protocol tier under a managed config dir (a made-up
 // token; the stub goes nowhere). It streams one sub-agent dispatch and writes that child's transcript where the
-// real agent does. No model call, no spend.
+// real agent does. No model call, no spend. A second test has the stub write a metrics file, so a scenario metric is
+// read by the real extractor and carried to the row.
 //
 // Every transcript line here is SYNTHETIC (frame shapes with placeholder text); the withheld prompt parts are the
 // BUILTIN-PART placeholders, guarded by test/fixture-transcript-guard.test.ts.
@@ -145,6 +146,69 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
 
     expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
     expect(cli("check", "--flow", "flow").status).toBe(0);
+  }, 90_000);
+
+  it("a scenario metric runs from the file the agent wrote to the row: value, _present, the unavailable reason, the sigs", () => {
+    // The stub writes a SYNTHETIC metrics file in its cwd (the run's work root), before its frames.
+    const mf = makeStubFixture(`mkdir -p outputs && printf '%s' '{"totals":{"score":0.73,"cost":12.5}}' > outputs/m.json\n${STUB}`);
+    try {
+      const plugin = join(work, "plugin", "my-plugin");
+      mkdirSync(join(plugin, "skills", "x"), { recursive: true });
+      writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n");
+      const evals = join(mf.cwd, "evals");
+      mkdirSync(evals);
+      writeFileSync(join(evals, "_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
+      writeFileSync(
+        join(evals, "alpha.yaml"),
+        [
+          "name: alpha",
+          "baseline: latest",
+          "session: ./_session.yaml",
+          "fidelity: protocol",
+          "prompt: hi",
+          "assert:",
+          "  - result: success",
+          "metrics:",
+          "  - { id: score, artifact: outputs/m.json, path: totals.score, better: higher, scale: 1 }",
+          "  - { id: cost, artifact: outputs/m.json, path: totals.cost, better: lower, unbounded: true }",
+          "  - { id: missing, artifact: outputs/none.json, path: x, better: higher, scale: 1 }",
+          "",
+        ].join("\n"),
+      );
+      const env = {
+        ...mf.env,
+        COWORK_MANAGED_CONFIG: "1",
+        CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
+        STUB_ARGV: join(work, "argv"),
+      };
+      const cli = (...a: string[]) =>
+        spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: mf.cwd, env, encoding: "utf8", timeout: 60_000 });
+
+      const r = cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1");
+      expect(r.status, r.stderr).toBe(0);
+      const flow = join(mf.cwd, "flow");
+      const row = JSON.parse(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8").trim()) as {
+        grade: Record<string, number>;
+        meta: Record<string, unknown>;
+      };
+      // Read by core's extractor from the file the stub wrote: the numbers are the file's, not a fixture constant.
+      expect(row.grade).toMatchObject({ score_present: 1, score: 0.73, cost_present: 1, cost: 12.5, missing_present: 0 });
+      expect(row.grade).not.toHaveProperty("missing");
+      expect(row.meta.metrics_unavailable).toEqual({ missing: "missing_artifact" });
+      expect(Object.keys(row.meta.metric_sigs as object)).toEqual(["score", "cost", "missing"]);
+
+      // The state-template's declarations merged in: check accepts the flow, with no row predating a metric.
+      const t = cli("state-template", "evals", "--flow", "flow");
+      expect(t.status, t.stderr).toBe(0);
+      const st = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
+      writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...JSON.parse(t.stdout) }));
+      const report = checkFlowDir(flow, { profile: "harness" });
+      expect(report.errors, JSON.stringify(report.findings)).toBe(0);
+      expect(report.findings.filter((x) => /do not carry metric/.test(x.message))).toEqual([]);
+      expect(cli("check", "--flow", "flow").status).toBe(0);
+    } finally {
+      mf.cleanup();
+    }
   }, 90_000);
 });
 

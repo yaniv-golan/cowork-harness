@@ -516,7 +516,7 @@ export interface AssertContext {
    *  replay (the key is live-only there). */
   outputsDeleteBasis?: ("fs-diff" | "named" | "inferred")[];
   fsDiff?: OutputsFsDiff;
-  /** Per-mount delete detections across every delete-denied mount, incl. outputs. Superset of
+  /** Per-mount delete detections across every delete-denied connected folder, plus outputs on every baseline. Superset of
    *  `outputsDeletes`. OPTIONAL: a run recorded before this field existed simply has none, which is not
    *  the same as evidence-unavailable — that case is `scanMissing`, and it is handled separately. */
   mountDeletes?: { mount: string; command: string }[];
@@ -534,7 +534,7 @@ export interface AssertContext {
    *  passing over an empty list it never populated. */
   gateOptionsMissing?: boolean;
   hostPathLeaked: boolean; // a host path (/Users//opt) appeared in model-visible text
-  selfHealRan: boolean; // a /sessions/<id>/mnt plugin script was invoked (plugin-root self-heal)
+  selfHealRan: boolean; // a bash command the model wrote names a /sessions/<id>/mnt/.{local,remote}-plugins path (plugin-root self-heal)
   subagents: {
     // Optional (not required) so existing hand-built test fixtures that omit it keep compiling — every
     // real construction site (live/replay/verify-run) passes RunResult.subagents through untouched, which
@@ -3271,7 +3271,7 @@ function check(
     const entries = outputsDeleteEntries(ctx.scanMissing ? undefined : scanLike, ctx.fsDiff);
     results.push(
       tier === "fail"
-        ? fail(`delete op(s) touched outputs (forbidden in Cowork): ${entries.slice(0, 3).join("; ")}`)
+        ? fail(`delete op(s) touched outputs (asserted by no_delete_in_outputs): ${entries.slice(0, 3).join("; ")}`)
         : ctx.scanMissing
           ? fail(`evidence unavailable: post-run scan absent from result.json — cannot evaluate no_delete_in_outputs`)
           : // An unreadable post-run walk once mass-reported every output as deleted; it now reports nothing,
@@ -3298,7 +3298,9 @@ function check(
         : hits.length === 0
           ? ok()
           : fail(
-              `delete op(s) touched delete-denied mount(s) (production denies unlink/rmdir there until approved): ` +
+              // Covers outputs on EVERY baseline, including those (Desktop 2.16120.0+) where production allows
+              // an outputs delete, so the message claims nothing about production — only what the author asserted.
+              `delete op(s) touched mount(s) covered by no_delete_in_mounts (${waived.has("outputs") ? "" : "outputs, and "}every rw connected folder not waived by allow_delete_in): ` +
                 hits
                   .slice(0, 3)
                   .map((d) => `${d.mount}: ${d.command}`)

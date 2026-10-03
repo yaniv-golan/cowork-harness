@@ -8,6 +8,7 @@ import { lookup } from "node:dns/promises";
 import { compile } from "../egress/proxy.js";
 import { normalizeUrl } from "./provenance.js";
 import type { WebFetchDedupCache } from "./webfetch-dedup.js";
+import { rewritePluginPaths, type PluginPathRewrite } from "./plugin-path-rewrite.js";
 
 const pexec = promisify(execFile);
 const MAX_REDIRECTS = 5; // Cowork's RZe redirect cap (Path B re-checks U1t per hop)
@@ -260,8 +261,10 @@ const defaultRawFetch: RawFetch = async (url, pinnedAddresses) => {
  * the agent loop (in the container) routes `mcp__workspace__bash`/`web_fetch` calls to
  * the DRIVER (host) over the control protocol; the driver executes them in the VM view
  * (`docker exec` into the agent's container, cwd = /sessions/<id>/mnt). `CLAUDE_PLUGIN_ROOT`
- * is UNSET in that bash (the host-loop sidecar omits it, matching real host-loop) → a skill
- * must self-heal via `find /sessions/<id>/mnt …`, exactly like production.
+ * is UNSET in that bash (the host-loop sidecar omits it, matching real host-loop), so the bare
+ * variable expands empty. A plugin host path written into the command — the path the agent
+ * substituted for the braced token — is rewritten to its VM mount before execution, as Cowork's
+ * bash tool does (`pluginPathRewrites`).
  *
  * The bash tool description is the verbatim Cowork string.
  */
@@ -327,6 +330,10 @@ export interface WorkspaceHandlerOptions {
    *  `!hostLoopMode && coworkWebFetchViaApi` — and never touches Bash, which is why `container` correctly
    *  keeps the built-in shell. Passing `["web_fetch"]` models the VM-loop registration. */
   tools?: ("bash" | "web_fetch")[];
+  /** Host-loop only: plugin host paths to rewrite to their VM mounts in a bash command before it runs
+   *  (`hostLoopPluginPathRewrites`, src/runtime/hostloop.ts). Only the executed string changes; the tool
+   *  input the agent recorded keeps the host path. Absent or empty leaves every command as written. */
+  pluginPathRewrites?: readonly PluginPathRewrite[];
 }
 
 export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler {
@@ -380,7 +387,14 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
       if (!exposed.includes(name as "bash" | "web_fetch")) return { result: textResult(`error: unknown tool "${String(name)}"`, true) };
       if (name === "bash")
         return {
-          result: await execInContainer(runner, containerName, execCwd, String(a.command ?? ""), clampTimeout(a.timeout_ms), onInfraError),
+          result: await execInContainer(
+            runner,
+            containerName,
+            execCwd,
+            rewritePluginPaths(String(a.command ?? ""), opts.pluginPathRewrites ?? []),
+            clampTimeout(a.timeout_ms),
+            onInfraError,
+          ),
         };
       if (name === "web_fetch")
         return {
@@ -487,9 +501,9 @@ async function execInContainer(
 ) {
   if (!command) return textResult("error: missing 'command'", true);
   // Async (execFile, not spawnSync) so the awaited MCP handler yields the event loop while the subprocess
-  // runs — a slow `docker exec` no longer blocks all protocol I/O. Each call independent (fresh sh).
+  // runs — a slow `docker exec` no longer blocks all protocol I/O. Each call independent (a fresh `bash -c`, as Cowork runs it).
   try {
-    const { stdout, stderr } = await pexec(runner, ["exec", "-w", cwd, container, "sh", "-c", command], {
+    const { stdout, stderr } = await pexec(runner, ["exec", "-w", cwd, container, "bash", "-c", command], {
       encoding: "utf8",
       timeout: timeoutMs, // honor the model-requested timeout_ms (clamped at the call site)
       maxBuffer: 8 * 1024 * 1024,

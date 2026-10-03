@@ -17,7 +17,7 @@ import {
   type DoctorCheck,
   type ImageFreshness,
 } from "../src/run/doctor.js";
-import { loadBaseline, pinnedNativeAgentVersion } from "../src/baseline.js";
+import { classifyNativeStagingDrift, loadBaseline, pinnedNativeAgentVersion, resolveHostAgentBinary } from "../src/baseline.js";
 
 const OK_PROBE: DoctorProbe = {
   nodeMajor: () => 22,
@@ -801,14 +801,70 @@ describe("doctor — real hostAgentBinary probe over a temp HOME", () => {
     });
   });
 
+  // A FLAT pin is what every baseline before desktop-2.19675.0 carries, so this case pins one explicitly
+  // rather than reading `latest` (which now names a build). It drives the same three calls the real probe
+  // makes — resolver, classifier, note — so the end-to-end path is the one doctor runs.
   it("two builds of the pinned version (flat pin) → ok, with relocated AND ambiguous notes naming both builds", () => {
     withHome((home) => {
-      stageBuild(home, pinned(), "aaaaaaaaaaaa", 100);
-      const bin = stageBuild(home, pinned(), "bbbbbbbbbbbb", 200);
-      const r = realProbe.hostAgentBinary();
-      expect(r).toMatchObject({ ok: true, path: bin });
-      expect(r.ok && r.note).toMatch(/pinned path uses the flat layout/);
-      expect(r.ok && r.note).toMatch(/ambiguous: 2 builds of [\d.]+, using bbbbbbbbbbbb/);
+      const flat = loadBaseline("desktop-2.16120.0");
+      const ver = pinnedNativeAgentVersion(flat)!;
+      expect(flat.agentBinary?.nativeStagedPath).toContain(`/${ver}/claude.app/`); // precondition: flat
+      stageBuild(home, ver, "aaaaaaaaaaaa", 100);
+      const bin = stageBuild(home, ver, "bbbbbbbbbbbb", 200);
+      expect(resolveHostAgentBinary(flat)).toBe(bin);
+      const note = nativeDriftNote(classifyNativeStagingDrift(flat));
+      expect(note).toMatch(/pinned path uses the flat layout/);
+      expect(note).toMatch(/ambiguous: 2 builds of [\d.]+, using bbbbbbbbbbbb/);
+    });
+  });
+
+  // The host arch, faked so a case never depends on the machine running it (CI is x64 and Linux; a dev Mac is
+  // arm64). latest pins the native build PER ARCH, so which build counts as "pinned" depends on it.
+  const asArch = (arch: string, fn: () => void) => {
+    const saved = Object.getOwnPropertyDescriptor(process, "arch")!;
+    Object.defineProperty(process, "arch", { value: arch, configurable: true });
+    try {
+      fn();
+    } finally {
+      Object.defineProperty(process, "arch", saved);
+    }
+  };
+
+  // `latest` (desktop-2.19675.0 onwards) pins the BUILD, per arch. The build pinned for the host's arch wins over a
+  // newer sibling build of the same version — no drift and no ambiguity, so no note at all. Run on BOTH arches.
+  it.each(["arm64", "x64"] as const)(
+    "latest's build pin (%s host) with a newer sibling build of the same version staged → ok, the PINNED build",
+    (arch) => {
+      const build = loadBaseline("latest").agentBinary?.nativeBuilds?.[arch];
+      expect(build, `precondition: latest pins a ${arch} build`).toMatch(/^[0-9a-f]{12}$/);
+      asArch(arch, () =>
+        withHome((home) => {
+          const bin = stageBuild(home, pinned(), build!, 100);
+          stageBuild(home, pinned(), "bbbbbbbbbbbb", 200);
+          const r = realProbe.hostAgentBinary();
+          expect(r).toMatchObject({ ok: true, path: bin });
+          expect(r.ok && r.note).toBeFalsy(); // exact build pin: no drift, no ambiguity
+        }),
+      );
+    },
+  );
+
+  // An x64 host is held to the x64 entry, not to the arm64 build in nativeStagedPath — through the real probe.
+
+  it("x64 host: latest's x64 build staged → ok, no note; another x64 build only → fail, kind build", () => {
+    const x64 = loadBaseline("latest").agentBinary?.nativeBuilds?.x64;
+    expect(x64, "precondition: latest pins an x64 build").toMatch(/^[0-9a-f]{12}$/);
+    asArch("x64", () => {
+      withHome((home) => {
+        const bin = stageBuild(home, pinned(), x64!, 100);
+        const r = realProbe.hostAgentBinary();
+        expect(r).toMatchObject({ ok: true, path: bin });
+        expect(r.ok && r.note).toBeFalsy();
+      });
+      withHome((home) => {
+        stageBuild(home, pinned(), "cccccccccccc", 100);
+        expect(realProbe.hostAgentBinary()).toMatchObject({ ok: false, kind: "build" });
+      });
     });
   });
 

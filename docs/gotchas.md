@@ -89,9 +89,10 @@
 ## Skill-authoring & host-loop footguns
 
 - **A skill works in the Claude Code CLI but misbehaves under Cowork.** Two common footguns:
-  a `${CLAUDE_PLUGIN_ROOT}` path opened from in-VM bash — at host-loop the agent has already replaced it
-  with a HOST path the VM does not have, and a bare `$CLAUDE_PLUGIN_ROOT` is empty there
-  (see [plugin-root.md](./plugin-root.md); resolve the mount at runtime instead) — and a hook command
+  a bare `$CLAUDE_PLUGIN_ROOT` in in-VM bash — empty there at host-loop; the braced form is rewritten to
+  the plugin's VM mount only when it stands as its own word, and a value forwarded through bash to a
+  host-side `Read` arrives as a VM path the host refuses
+  (see [plugin-root.md](./plugin-root.md)) — and a hook command
   that `export`s an env var or writes into `/tmp` (a host-side
   hook write isn't VM-visible to the agent). `cowork-harness lint-skill <SKILL.md | skill-dir>` (also
   runnable directly as `scenario.py lint-skill <SKILL.md | skill-dir>`) scans a skill's body (and any

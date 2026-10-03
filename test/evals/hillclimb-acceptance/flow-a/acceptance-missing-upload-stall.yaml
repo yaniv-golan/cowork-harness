@@ -1,0 +1,19 @@
+# Acceptance: a case built to end on a request for input. The prompt names an upload that does not exist,
+# so the agent has nothing to work on and should ask for the file. The `stalled` verdict must fire, and the
+# hillclimb row is scored (results.jsonl) with failure_class errored_agent, termination_rule stalled_on_question.
+# on_unanswered: first answers an AskUserQuestion gate with its first option instead of failing the run; the
+# agent still has no file, so it should end on a request for it. A run that never stalls leaves the case
+# unexercised (rewrite the prompt), not passed.
+name: acceptance-missing-upload-stall
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+prompt: >-
+  Fix the assertions in the scenario file I uploaded, weather-check.yaml. It keeps passing even when the
+  skill never writes its report.
+assert:
+- result: success
+- semantic_matches:
+    rubric:
+    - The answer edits or rewrites the assertions of weather-check.yaml

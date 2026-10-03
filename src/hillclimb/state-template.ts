@@ -32,8 +32,12 @@ const PERF: PerfField[] = [
   { id: "skill_invoked", label: "Skill invoked" },
 ];
 
+const PER_INDEX_ID = /^a(\d+)(?:_c(\d+)|(_present))?$/;
+/** A per-index `semantic_pairwise` key: `a<i>_win`, `a<i>_win_<vN>`, each with its `_present` companion. */
+const PER_INDEX_WIN_ID = /^a(\d+)_(win(?:_v[1-9]\d*)?)(_present)?$/;
+
 export function stateTemplate(opts: {
-  cases: ReadonlyArray<{ assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>;
+  cases: ReadonlyArray<{ name?: string; assertions: readonly Assertion[]; metrics?: readonly MetricDecl[] }>;
   harnessPaths: readonly string[];
   decider: boolean;
   /** The flow's later-variant references (`v3`, …), each with how many scored rows lack its column. Known only with
@@ -93,22 +97,25 @@ function metricsMd(declared: readonly GradeKeyDecl[], floats: readonly MetricDec
     );
   for (const m of floats)
     L.push(
-      `- \`${m.id}\` — a scenario-declared number, ${m.better} is better, ${m.scale !== undefined ? `bounded above by ${m.scale}` : "no upper bound"}. ` +
-        `\`${m.id}_present\` is 1 when it was measured; when 0 the value is absent (not 0), so its mean is over measured rows only.`,
+      `- \`${m.id}\` — a scenario-declared number: the value at \`${m.path}\` in \`${m.artifact}\`, ${m.better} is better, ` +
+        `${m.scale !== undefined ? `bounded above by ${m.scale}` : "no upper bound"}, floor ${m.min ?? 0}. ` +
+        `\`${m.id}_present\` is 1 when it was measured; when 0 the value is absent (not 0), so its mean is over measured rows only, ` +
+        "and the row's `meta.metrics_unavailable` says why.",
     );
-  const perIndex = declared.filter((d) => /^a\d+/.test(d.id));
+  // Anchored: a scenario metric may start like one (`a11y_score`) and is a float, defined above.
+  const perIndex = declared.filter((d) => PER_INDEX_ID.test(d.id) || PER_INDEX_WIN_ID.test(d.id));
   L.push("");
   if (perIndex.length) {
     L.push("Per-assertion keys (every case has the same assertion list):", "");
     for (const d of perIndex) {
-      const w = /^a(\d+)_(win(?:_v\d+)?)(_present)?$/.exec(d.id);
+      const w = PER_INDEX_WIN_ID.exec(d.id);
       if (w) {
         L.push(
           `- \`${d.id}\` — ${w[3] ? `1 when assertion ${w[1]}'s \`${w[2]}\` was measured` : `\`${w[2]}\` of assertion ${w[1]} alone`}.`,
         );
         continue;
       }
-      const m = /^a(\d+)(?:_c(\d+)|(_present))?$/.exec(d.id);
+      const m = PER_INDEX_ID.exec(d.id);
       if (!m) continue;
       const what =
         m[2] !== undefined

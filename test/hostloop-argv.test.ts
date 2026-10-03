@@ -93,7 +93,8 @@ describe("hostloop VM sidecar egress env", () => {
   });
 
   it("leaves CLAUDE_PLUGIN_ROOT unset — real host-loop leaves it unset in the guest", () => {
-    // The agent self-heals via `find`; a leaked host path here is the bug 87b4036 removed.
+    // A bare $CLAUDE_PLUGIN_ROOT is empty there, as in Cowork; a leaked host path here is the bug 87b4036 removed.
+    // (A host plugin path the agent writes into a command is rewritten by the workspace handler instead.)
     expect(hostLoopSidecarEnv("http://p:8080")).not.toHaveProperty("CLAUDE_PLUGIN_ROOT");
   });
 

@@ -14,6 +14,7 @@ import {
   HILLCLIMB_RUN_VALUE_FLAGS,
   HILLCLIMB_USAGE,
 } from "../src/hillclimb/usage.js";
+import { escapeRegExp } from "./helpers/regex.js";
 
 const ROOT = join(import.meta.dirname, "..");
 const doc = (p: string) => readFileSync(join(ROOT, p), "utf8");
@@ -25,7 +26,7 @@ const SUBS = HILLCLIMB_USAGE.split("\n")[0]
   .match(/^usage: hillclimb <([^>]+)>/)![1]
   .split("|")
   .map((s) => s.trim());
-const ALT = SUBS.map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+const ALT = SUBS.map(escapeRegExp).join("|");
 const LOOP = new RegExp(`hillclimb (${ALT})(?![\\w-])`);
 const sorted = (xs: Iterable<string>) => [...xs].sort();
 
@@ -128,5 +129,11 @@ describe("the skill's hillclimb reference", () => {
     const ref = doc(REF);
     for (const f of [...HILLCLIMB_REGRADE_BOOLEAN_FLAGS, ...HILLCLIMB_REGRADE_VALUE_FLAGS, "--case"]) expect(ref, f).toContain(`\`${f}`);
     expect(ref).toMatch(/^cowork-harness hillclimb regrade .*--fill-refs/m);
+  });
+
+  it("explains a scenario's numeric metric columns under Reading results", () => {
+    const reading = doc(REF).split("## Reading results")[1] ?? "";
+    for (const s of ["`<id>`", "`<id>_present`", "`meta.metrics_unavailable`", "predate", "refused", "never the headline"])
+      expect(reading, s).toContain(s);
   });
 });

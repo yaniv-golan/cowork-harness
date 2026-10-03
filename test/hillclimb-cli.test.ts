@@ -36,6 +36,27 @@ describe("checkReport", () => {
     expect(r.report.findings.map((f) => f.rule)).toContain("state.metrics");
   });
 
+  it("an out-of-range float is a warning, never an error: exit 0", () => {
+    cpSync(CLEAN_FLOW, join(cwd, "flow"), { recursive: true });
+    const st = JSON.parse(readFileSync(join(cwd, "flow", "_state.json"), "utf8"));
+    writeFileSync(
+      join(cwd, "flow", "_state.json"),
+      JSON.stringify({ ...st, metrics: [...st.metrics, { id: "score", kind: "float", better: "higher", scale: 1 }] }),
+    );
+    const res = join(cwd, "flow", "baseline", "results.jsonl");
+    const rows = readFileSync(res, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    rows.forEach((r, i) => Object.assign(r.grade, { score_present: 1, score: i === 0 ? 12.5 : 0.5 }));
+    writeFileSync(res, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    const r = checkReport("flow", cwd);
+    expect(r.exitCode).toBe(0);
+    expect(r.warnings).toContainEqual(
+      expect.stringMatching(/^warning: grade\.score = 12\.5 is outside its declared range \[0, 1\] \(variant baseline/),
+    );
+  });
+
   it("a missing flow dir is a usage error", () => {
     expect(() => checkReport("nope", cwd)).toThrow(UsageError);
   });
@@ -49,6 +70,69 @@ describe("stateTemplateFor", () => {
     const t = stateTemplateFor("evals", cwd, {});
     expect([...t.state.harness_paths].sort()).toEqual(["evals/_session.yaml", "evals/a.yaml"]);
     expect(t.state.metrics[0].id).toBe("pass");
+  });
+
+  describe("scenario metrics", () => {
+    const head = "baseline: latest\nsession: ./_session.yaml\nfidelity: container\nprompt: p\n";
+    const words = (better = "lower") =>
+      `metrics:\n  - id: words\n    artifact: outputs/stats.json\n    path: totals.words\n    better: ${better}\n    unbounded: true\n    min: 5\n`;
+    const ratio = "metrics:\n  - id: ratio\n    artifact: outputs/stats.json\n    path: ratio\n    better: higher\n    scale: 1\n";
+    beforeEach(() => {
+      mkdirSync(join(cwd, "evals"));
+      writeFileSync(join(cwd, "evals", "_session.yaml"), `model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ${SKILL}\n`);
+      writeFileSync(join(cwd, "evals", "a.yaml"), `name: a\n${head}${words()}`);
+      writeFileSync(join(cwd, "evals", "b.yaml"), `name: b\n${head}${ratio}`);
+      writeFileSync(join(cwd, "evals", "c.yaml"), `name: c\n${head}`);
+    });
+
+    it("declares the union over the cases: companions after pass, floats last, each with better (scale and min only when declared)", () => {
+      const t = stateTemplateFor("evals", cwd, {});
+      expect(t.state.metrics.map((m) => m.id)).toEqual(["pass", "pass_present", "words_present", "ratio_present", "words", "ratio"]);
+      expect(t.state.metrics.find((m) => m.id === "words")).toEqual({
+        id: "words",
+        kind: "float",
+        label: "words",
+        better: "lower",
+        min: 5,
+      });
+      expect(t.state.metrics.find((m) => m.id === "ratio")).toEqual({
+        id: "ratio",
+        kind: "float",
+        label: "ratio",
+        better: "higher",
+        scale: 1,
+      });
+      expect(t.state.metrics.find((m) => m.id === "words_present")).toMatchObject({ kind: "binary" });
+    });
+
+    it("metrics.md defines each metric: the file and path it is read from, its direction and its range", () => {
+      const md = stateTemplateFor("evals", cwd, {}).metricsMd;
+      expect(md).toMatch(/`words`.*`totals\.words` in `outputs\/stats\.json`.*lower is better.*no upper bound.*floor 5/);
+      expect(md).toMatch(/`ratio`.*`ratio` in `outputs\/stats\.json`.*higher is better.*bounded above by 1/);
+    });
+
+    it("with --flow, a float _state.json declares that no scenario declares any more is named: remove its entries", () => {
+      mkdirSync(join(cwd, "flow"));
+      const st = stateTemplateFor("evals", cwd, {}).state;
+      writeFileSync(
+        join(cwd, "flow", "_state.json"),
+        JSON.stringify({
+          ...st,
+          metrics: [...st.metrics, { id: "gone_present", kind: "binary" }, { id: "gone", kind: "float", better: "higher" }],
+        }),
+      );
+      expect(stateTemplateFor("evals", cwd, {}, { flow: "flow" }).notes).toContainEqual(
+        "no scenario declares metric gone any more; remove its entries (gone and gone_present) from _state.json's metrics",
+      );
+      // Every metric still declared: no such note.
+      writeFileSync(join(cwd, "flow", "_state.json"), JSON.stringify(st));
+      expect(stateTemplateFor("evals", cwd, {}, { flow: "flow" }).notes.filter((n) => /no scenario declares/.test(n))).toEqual([]);
+    });
+
+    it("one id declared two ways is a usage error", () => {
+      writeFileSync(join(cwd, "evals", "c.yaml"), `name: c\n${head}${words("higher")}`);
+      expect(() => stateTemplateFor("evals", cwd, {})).toThrow(/metric "words" is declared differently in a and c/);
+    });
   });
 });
 
