@@ -47,6 +47,17 @@ describe("pairwiseRowValues", () => {
     expect(r.explanation).toBe(`${UNTRUSTED_JUDGE_PREFIX}a1 win: why | a2 both_bad: why`);
   });
 
+  it("an order: both comparison names each order's outcome in the win explanation", () => {
+    const flip: Outcome = {
+      ...graded("baseline", "tie"),
+      order: "both",
+      positionFlip: true,
+      orders: { candidate_first: "win", ref_first: "loss" },
+    };
+    const r = run([entry(PW, [flip]), entry(PW, [graded("baseline", "win")])], [PW, PW]);
+    expect(r.explanation).toBe(`${UNTRUSTED_JUDGE_PREFIX}a0 tie (candidate_first win, ref_first loss): why | a1 win: why`);
+  });
+
   it("a neutral baseline row is 0.5, carries no explanation, and both_bad 0", () => {
     const r = run([entry(PW, [{ ref: "baseline", status: "neutral", value: 0.5 }])], [PW]);
     expect(r.grade).toMatchObject({ win_present: 1, win: 0.5, both_bad: 0 });

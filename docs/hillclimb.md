@@ -157,7 +157,7 @@ Three things live outside the flow dir, and the loop needs all three for the who
 | The eval command, and where it writes results | `hillclimb run <target> --flow <dir> --variant <v> --reps <n>`; results in `<flow>/<variant>/` |
 | Does the runner retry failed cases? | No case-level retry, as in the loop's own runner: a failed attempt is an `errors.jsonl` row and runs again on the next pass. API-level retries are counted per row (`meta.retries`) |
 | Per case: transcript, model, usage, grades from one model call | Every row and its `traces/<id>_rep<k>.json` come from the same run; the model is read from the run, not from your config |
-| Prove the eval can detect a win (noise floor, headroom) | Compute the noise floor from the baseline rows. `hillclimb check` and the end of a baseline pass warn about cases at the ceiling or floor. `eval --dry-run --target-effect` is an optional sizing aid from your run history |
+| Prove the eval can detect a win (noise floor, headroom) | Compute the noise floor from the baseline rows. `hillclimb check` and the end of a baseline pass warn about cases at the ceiling or floor (a `semantic_pairwise` case with `pass` at the ceiling gets a note instead: its pairwise assert cannot fail on baseline, neutral against its own reference, so `pass` cannot show a pairwise gain; that shows in `win`). `eval --dry-run --target-effect` is an optional sizing aid from your run history |
 | Prove the mechanism is wired | The `skill_invoked` column (pass `--skill <name>` when the plugin has several skills), and a null run: `hillclimb run … --flow <dir>-null --ablate` into a sibling flow. The null flow has its own `_state.json` and gate: you run `state-template` and the `--dry-run --approve-harness` for it first |
 | Recompute the headline from raw results | Rows carry every grade key; recompute from `results.jsonl` |
 | Spot-check grading; fix a rubric and re-grade in place | Edit the rubric, approve the new sha (`--dry-run --approve-harness`, with the loop's `--skill`), then `hillclimb regrade <target> --flow <dir>`. See [what a re-grade can change](#what-a-re-grade-can-and-cannot-change) |
@@ -495,7 +495,11 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   to `answers:` is a gated scenario edit, but it marks no row stale (`meta.assert_sig` covers `assert` and
   `expect_denied` only) and a re-grade cannot answer a question again, so start a fresh flow dir (its own `state-template` and
   `--dry-run --approve-harness` first, as in the [Quick start](#quick-start)) and run the baseline there: in this flow every slot already has a row, and a pass resumes by slot.
-- **Judge variance.** Set `order: both` on a `semantic_pairwise` assert to cancel position bias. The frozen
+- **Judge variance.** Set `order: both` on a `semantic_pairwise` assert to cancel position bias. Each order's own
+  outcome is kept (`pairwise[].orders` in `result.json`; on a row, `meta.pairwise_orders` for every comparison against
+  every reference, `{"a<i>/<ref>": {candidate_first, ref_first}}`, and named in `explanation.win`, e.g.
+  `a1 tie (candidate_first win, ref_first loss): …`): `candidate_first` winning more often than `ref_first` across
+  rows is the judge favouring whichever output it saw first. The frozen
   reference is one sample (the lowest-rep good row), so an unusually good or bad reference shifts every comparison.
 - **The session's effort and sub-agent model are shared by every variant.** The session file's `effort` and
   `agent_env.subagent_model` are covered by the harness gate, so changing either is a gated edit that every later

@@ -41,7 +41,12 @@ time:
   `--output-format json`); progress goes to stderr every 30 s and to `progress.txt`.
 - **`hillclimb check --flow <dir>`** checks the flow dir against our reading of the published hillclimb schema
   and the `_state.json` metric declarations, and warns when a baseline case has no headroom (every rep at the
-  ceiling or the floor of the headline metric). It also warns about a case whose rows were graded under
+  ceiling or the floor of the headline metric). A `semantic_pairwise` case with `pass` at the ceiling gets a note
+  instead: its pairwise assert cannot fail on baseline (neutral against its own reference), so `pass` cannot show a
+  pairwise gain; that shows in `win`. Without the scenario target, `check` finds such a case by the `a<i>_win_present`
+  key its rows carry (from its rows' keys, so a case whose pairwise assert was since removed still reads as pairwise
+  until it is re-run).
+  It also warns about a case whose rows were graded under
   another assertion set than its scenario's now, naming the `hillclimb regrade <target> --flow <dir> --case <id>`
   that re-evaluates them. It compares with the scenario target when you pass one
   (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last `--approve-harness` hashed
@@ -301,8 +306,15 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   asserts all keep their entries, an agent-failed row (it gains the metric signature and `<id>_present: 0`, never a
   value), and a fill row that needs no comparison. Such a row keeps the judge-side keys of the re-grade whose entries
   it carries (`meta.regrade_file` and the doc-match keys — not that regrade's `regrade_judge_usd` /
-  `regrade_judge_model`, which would read as this rebuild's own), and gains `meta.regrade_remeasured: true` when its case declares a metric (plus `meta.regrade_fill` in
-  a fill); `regrade.md`, stderr and each variant's `reevaluated` and `remeasured` counts report them.
+  `regrade_judge_model`, which would read as this rebuild's own), plus `meta.regrade_fill` in a fill. Every rewritten
+  row of a case that declares a metric (re-judged, rebuilt with no judge call, or agent-failed with only its meta
+  rebuilt) gains `meta.regrade_remeasured: true`. `regrade.md` and stderr break the rewritten rows down into parts
+  that sum to it (`rewritten 4: 1 re-judged ($0.0515 judge), 2 rebuilt without a judge call, 1 agent-failed (meta
+  only); listed 0`). The judge figure is this regrade's whole spend, rows judged then listed included (`incl. N row(s)
+  judged then listed`), marked `— a floor, N unpriced` when some grades reported no cost (or `— a floor, N run's regrade stopped after its judge
+  calls` when a core regrade failed after judging and returned no report for a run); a fill notes rows whose only
+  missing reference was their own (neutral 0.5). The JSON carries the same parts (`judged`, `rebuilt`, `ownRefOnly`,
+  `listedAfterJudge`, `judgeUsd`, `judgeUnpriced`, `judgeStopped`) beside `reevaluated` / `remeasured` / `agentFailed`.
 - **An agent-failed row whose kept run cannot be re-evaluated** (a partial run: an unanswered gate) scores 0
   whatever its asserts say, so only its meta is brought current (`assert_sig`, `metric_sigs`), its grade all 0. It
   is never listed; each variant's `agentFailed` count reports it.
@@ -367,7 +379,11 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
   tie or both bad, 0 loss; 0.5 on the baseline's own rows. `win_present: 0` means no comparison with the baseline
   could be made; `win` and `both_bad` are then absent. A row also carries `both_bad`, a `win_<vN>` /
   `win_<vN>_present` pair per later reference (a metric only: only the baseline's reference decides `pass`),
-  per-assert `a<i>_win*` drill-down keys, and `meta.pairwise_ref_sha256`. A case with no pairwise assert carries
+  per-assert `a<i>_win*` drill-down keys, and `meta.pairwise_ref_sha256`. Under `order: both` the row's
+  `explanation.win` names each order's outcome (`a1 tie (candidate_first win, ref_first loss): …`), and
+  `meta.pairwise_orders` holds them structured for every `order: both` comparison against every reference
+  (`{"a<i>/<ref>": {candidate_first, ref_first}}`); `candidate_first` winning more often than `ref_first` across rows
+  is position bias. A case with no pairwise assert carries
   the `_present` keys as 0; an agent failure scores 0, measured. `check` errors when a reference document changed
   under the flow.
 - **`skill_invoked` is 1 or 0** for whether the run invoked the tracked skill (`meta.skill_tracked` names it);

@@ -217,7 +217,7 @@ export function checkReport(
   return {
     report,
     warnings: [
-      ...headroom(snap).warnings,
+      ...headroom(snap, sig.cases).warnings,
       ...metricRangeWarnings(snap),
       ...assertSigWarnings(snap, flowShown, sig.targetOf),
       ...staleAssertSigWarnings(snap, sig.cases, flowShown, sig.targetOf),

@@ -160,11 +160,21 @@ export interface PairwiseInput {
   order?: "random" | "both";
 }
 
+/** The outcome of each call of an `order: both` grade, from the candidate's side. */
+export interface PairwiseOrders {
+  candidate_first: PairwiseOutcome;
+  ref_first: PairwiseOutcome;
+}
+
 export interface PairwiseResult {
   outcome: PairwiseOutcome;
   value: number;
   order: PairwiseOrder;
   positionFlip?: boolean;
+  /** `order: both` only: each order's own outcome, keyed by which output the judge saw first (`candidate_first`: the
+   *  run's output was Output A). Comparing the two over many grades shows position bias. Absent for a single-order
+   *  grade, whose `order` already names the one order judged and whose `outcome` is that order's. */
+  orders?: PairwiseOrders;
   /** Restated as candidate/reference; untrusted model text, not yet scrubbed or capped (the caller does both). */
   rationale?: string;
   model: string;
@@ -244,6 +254,10 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
       const a = await once(seeded);
       const b = await once(!seeded);
       const { outcome, positionFlip } = combineOrders(a.outcome, b.outcome);
+      // `a` was judged in the seeded order, `b` in the other.
+      const orders: PairwiseOrders = seeded
+        ? { candidate_first: a.outcome, ref_first: b.outcome }
+        : { candidate_first: b.outcome, ref_first: a.outcome };
       // The stored rationale explains the KEPT outcome: the call that produced it, or both for a win/loss tie.
       const rationale = a.outcome === outcome ? a.rationale : b.outcome === outcome ? b.rationale : `${a.rationale} | ${b.rationale}`;
       return {
@@ -251,6 +265,7 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
         value: outcomeValue(outcome, policy),
         order: "both",
         positionFlip,
+        orders,
         rationale,
         model: model!,
         retries,

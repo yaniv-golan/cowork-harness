@@ -111,9 +111,17 @@ export function buildRunsLine(args: {
     // The reason only: the row extractor reads nothing else, and `scope_matched_nothing`'s `paths` is every
     // path the run authored. Without it a refused semantic grade is indistinguishable from a graded fail.
     ...(a.semanticEvidence !== undefined ? { semanticEvidence: { reason: a.semanticEvidence.reason } } : {}),
-    // Per-reference status and outcome only: a reference that could not be read is a refusal, not a fail.
+    // Per-reference status and outcome (plus `order: both`'s per-order outcomes, for reading position bias) only: a
+    // reference that could not be read is a refusal, not a fail.
     ...(a.pairwise !== undefined
-      ? { pairwise: a.pairwise.map((o) => ({ ref: o.ref, status: o.status, ...(o.outcome !== undefined ? { outcome: o.outcome } : {}) })) }
+      ? {
+          pairwise: a.pairwise.map((o) => ({
+            ref: o.ref,
+            status: o.status,
+            ...(o.outcome !== undefined ? { outcome: o.outcome } : {}),
+            ...(o.orders !== undefined ? { orders: o.orders } : {}),
+          })),
+        }
       : {}),
   }));
   const semantic = assertions.filter((a) => a.assertion.semantic_matches !== undefined || a.assertion.semantic_pairwise !== undefined);

@@ -606,7 +606,7 @@ async function run(
       });
       // What the variant's rows asked for and were sent, over its whole results.jsonl (a --case pass adds to it).
       writer.setSummaryKeys(requestedSummary(writer.readVariantFile("results.jsonl")));
-      if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs)).warnings) say(line);
+      if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs), all).warnings) say(line);
     } catch (e) {
       stepFailures++;
       say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);

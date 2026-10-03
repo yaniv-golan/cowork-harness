@@ -2384,7 +2384,13 @@ function check(
               o.status === "neutral"
                 ? "neutral (reference variant)"
                 : o.status === "graded"
-                  ? `${o.outcome}${o.positionFlip ? " (orders disagreed)" : ""}`
+                  ? `${o.outcome}${
+                      o.positionFlip
+                        ? o.orders
+                          ? ` (orders disagreed: candidate_first ${o.orders.candidate_first}, ref_first ${o.orders.ref_first})`
+                          : " (orders disagreed)"
+                        : ""
+                    }`
                   : `${o.status}${o.why ? ` (${o.why})` : ""}`
             }`,
         )

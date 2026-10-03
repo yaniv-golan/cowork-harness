@@ -211,6 +211,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
           value: r.value,
           order: r.order,
           ...(r.positionFlip ? { positionFlip: true } : {}),
+          ...(r.orders ? { orders: r.orders } : {}),
           ...(rationale !== undefined ? { rationale } : {}),
           refDocSha256: got.sha256,
           ...(got.unchecked ? { unchecked: true } : {}),

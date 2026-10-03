@@ -51,7 +51,17 @@ function declaredMetrics(snap: FlowSnapshot): DeclaredMetric[] {
   }
 }
 
-export function headroom(snap: FlowSnapshot): Headroom {
+/** A case as `headroom` reads it: its id and its scenario's asserts. */
+export interface HeadroomCase {
+  id: string;
+  scenario: { assert?: ReadonlyArray<object> };
+}
+
+/** A `semantic_pairwise` case at the `pass` ceiling gets a note, not the ceiling warning: on baseline its pairwise
+ *  assert is neutral against its own reference, so it cannot fail there, and `pass` cannot show a pairwise gain (that
+ *  shows in `win`). Such a case is told apart by its asserts in `cases` (the target's, when the caller has them); with
+ *  none to read, by its baseline rows carrying an `a<i>_win_present` key — its presence only, never its value. */
+export function headroom(snap: FlowSnapshot, cases: readonly HeadroomCase[] = []): Headroom {
   const base = snap.variants.baseline;
   const rows = parseRows(base?.results);
   if (rows.length === 0)
@@ -98,9 +108,24 @@ export function headroom(snap: FlowSnapshot): Headroom {
   }
   const n = byCase.size;
   const warnings: string[] = [];
-  if (ceiling.length)
+  // Detected from the case's asserts, never from its win value; with no cases to read, from the per-assert pairwise
+  // companion key a row of a pairwise case always carries.
+  const pairwise = new Set(
+    cases.length
+      ? cases.filter((c) => (c.scenario.assert ?? []).some((a) => a && "semantic_pairwise" in a)).map((c) => c.id)
+      : rows
+          .filter((r) => Object.keys((r.grade as Record<string, unknown> | undefined) ?? {}).some((k) => /^a\d+_win_present$/.test(k)))
+          .map((r) => String(r.prompt_id ?? "")),
+  );
+  const neutralOnBaseline = head.id === "pass" && better === "higher" ? ceiling.filter((id) => pairwise.has(id)) : [];
+  const atCeiling = ceiling.filter((id) => !neutralOnBaseline.includes(id));
+  if (neutralOnBaseline.length)
     warnings.push(
-      `warning: ${ceiling.length}/${n} baseline cases are at the ceiling on ${head.id} (every rep at the good end): ${ceiling.join(", ")} — they cannot show a gain; consider harder cases, more reps or a finer-grained metric`,
+      `note: ${neutralOnBaseline.join(", ")}: its pairwise assert cannot fail on baseline (neutral against its own reference), so \`pass\` cannot show a pairwise gain; that shows in \`win\``,
+    );
+  if (atCeiling.length)
+    warnings.push(
+      `warning: ${atCeiling.length}/${n} baseline cases are at the ceiling on ${head.id} (every rep at the good end): ${atCeiling.join(", ")} — they cannot show a gain; consider harder cases, more reps or a finer-grained metric`,
     );
   if (floor.length)
     warnings.push(

@@ -103,8 +103,8 @@ const rowFor = (outDir: string) => ({
 const resultBytes = (runDir: string) => readFileSync(turnArtifactPath(runDir, latestTurn(runDir)!, "result.json"));
 
 /** A flow with a frozen baseline reference, and a v1 run judged against it. */
-async function flowWithV1() {
-  const file = scenario();
+async function flowWithV1(extra: string[] = [], liveJudge?: CompleteStructured) {
+  const file = scenario(extra);
   const sc = parseScenarioFile(file);
   const flow = join(dir, "flow");
   mkdirSync(join(flow, "baseline"), { recursive: true });
@@ -129,7 +129,7 @@ async function flowWithV1() {
   const v1 = await executeScenario(sc, {
     runId: `local_seed0000${k}`,
     pairwise: flowPairwiseOptions("alpha", "v1", discoverFlowRefs(flow)),
-    pairwiseComplete: judge(liveCalls),
+    pairwiseComplete: liveJudge ?? judge(liveCalls),
   });
   return { file, sc, flow, base, v1, liveCalls };
 }
@@ -266,6 +266,66 @@ describe.runIf(POSIX)("regrade: semantic_pairwise", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toMatch(/refusing before the run spends anything/);
     expect(calls).toEqual([]);
+  });
+});
+
+/** A judge that answers one fixed verdict whichever output it is shown first. */
+const always =
+  (verdict: "A" | "B" | "tie"): CompleteStructured =>
+  async () => ({ structured: { rationale: "fixed.", verdict }, model: JUDGE, subtype: "success" });
+
+describe.runIf(POSIX)("regrade: semantic_pairwise with order: both", () => {
+  it("a re-judged comparison records fresh per-order outcomes", async () => {
+    const { file, flow, v1 } = await flowWithV1(["      order: both"], always("tie"));
+    expect(v1.assertions[1]!.pairwise![0]).toMatchObject({ order: "both", orders: { candidate_first: "tie", ref_first: "tie" } });
+    // Always "A": a win whenever the candidate is shown first, a loss whenever the reference is.
+    const r = await regradeRuns({
+      runDirs: [v1.outDir],
+      scenarioFile: file,
+      secrets: [],
+      pairwise: flowPairwiseOptions("alpha", "v1", discoverFlowRefs(flow)),
+      pairwiseComplete: always("A"),
+    });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    const g = r.runs[0]!.assertions.find((a) => a.assertionIndex === 1)!;
+    expect(g.pairwise![0]).toMatchObject({
+      ref: "baseline",
+      status: "graded",
+      outcome: "tie",
+      order: "both",
+      positionFlip: true,
+      orders: { candidate_first: "win", ref_first: "loss" },
+    });
+  });
+
+  it("a fill keeps a copied comparison's own per-order outcomes and records fresh ones for the comparison it judges", async () => {
+    const { file, sc, flow, v1 } = await flowWithV1(["      order: both"], always("tie"));
+    expect(
+      freezeCaseRef({
+        flowAbs: flow,
+        variant: "v1",
+        caseId: "alpha",
+        scenarioFile: file,
+        assertions: sc.assert,
+        prompt: sc.prompt,
+        results: JSON.stringify(rowFor(v1.outDir)) + "\n",
+        secrets: [],
+        command: "hillclimb freeze-ref",
+      }).status,
+    ).toBe("frozen");
+    const r = await regradeRuns({
+      runDirs: [v1.outDir],
+      scenarioFile: file,
+      secrets: [],
+      pairwise: { ...flowPairwiseOptions("alpha", "v2", discoverFlowRefs(flow)), onlyRefs: ["v1"] },
+      pairwiseComplete: always("A"),
+    });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    const g = r.runs[0]!.assertions.find((a) => a.assertionIndex === 1)!;
+    expect(g.pairwise![0]).toMatchObject({ ref: "baseline", copied: true, orders: { candidate_first: "tie", ref_first: "tie" } });
+    expect(g.pairwise![1]).toMatchObject({ ref: "v1", gate: false, orders: { candidate_first: "win", ref_first: "loss" } });
   });
 });
 
