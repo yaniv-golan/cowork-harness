@@ -1008,7 +1008,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
           : {}),
         ...(keep.size ? { skip: (i: number) => keep.has(i) } : {}),
         judgeFor: (model) => makePairwiseJudge({ model, complete: opts.pairwiseComplete ?? claudeCliCompleteStructured }),
-        ...(opts.pairwiseComplete ? {} : { transport: () => transportIdentity() }),
+        ...(opts.pairwiseComplete ? {} : { transport: () => transportIdentity("judge") }),
         modelFor: (a) => opts.judgeModel ?? a.semantic_pairwise?.judge_model ?? defaultJudgeModel(),
       });
     }

@@ -54,7 +54,7 @@ const ENVELOPE = join(import.meta.dirname, "fixtures", "pairwise-judge", "claude
 const JUDGE = `#!/bin/sh
 if [ "$1" = "--version" ]; then echo "2.1.286 (Claude Code)"; exit 0; fi
 if [ "$1" = "--help" ]; then
-  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>" "--effort <level>"; do echo "  $f   x"; done
+  for f in "--safe-mode" "--strict-mcp-config" "--no-session-persistence" "--setting-sources <s>" "--tools <tools...>" "--effort <level>" "--settings <s>"; do echo "  $f   x"; done
   exit 0
 fi
 cat >/dev/null

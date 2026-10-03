@@ -1385,7 +1385,14 @@ interface ReportState {
    *  every pass that ran agreed on it. Never the requested alias/default. */
   evaluatorModel?: string;
   /** How the evaluator's calls were made (isolation level, host CLI version) — present with `evaluatorModel`. */
-  evaluatorTransport?: { isolation: string; cliVersion?: string; effort?: string; strictMcp?: false };
+  evaluatorTransport?: {
+    isolation: string;
+    cliVersion?: string;
+    effort?: string;
+    settingsEnvOverride?: string[];
+    settingsMaxEffort?: string;
+    strictMcp?: false;
+  };
   /** The requested model (opts.evaluatorModel ?? defaultEvaluatorModel()) — shown ONLY as unresolved
    *  debugging context when the evaluator never completed (infra failure or evaluator error), clearly
    *  labeled as such; never presented as if it were the resolved provenance value. */
@@ -2631,7 +2638,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       items,
       evaluatorModel,
       // Present only with a completed evaluator (undefined drops out of the JSON otherwise).
-      evaluatorTransport: evaluatorModel ? transportIdentity() : undefined,
+      evaluatorTransport: evaluatorModel ? transportIdentity("evaluator") : undefined,
       requestedModel,
       evaluatorError,
       infraFailure,

@@ -1583,6 +1583,15 @@
         "type": "string",
         "required": true
       },
+      ".evaluatorTransport.settingsEnvOverride": {
+        "type": "array"
+      },
+      ".evaluatorTransport.settingsEnvOverride[]": {
+        "type": "string"
+      },
+      ".evaluatorTransport.settingsMaxEffort": {
+        "type": "string"
+      },
       ".evaluatorTransport.strictMcp": {
         "const": false
       },

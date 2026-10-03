@@ -182,6 +182,7 @@ describe.runIf(POSIX)("a graded run records how its judge was called", () => {
           "--setting-sources <s>",
           "--tools <tools...>",
           "--effort <level>",
+          "--settings <s>",
         ].map((l) => `  echo "  ${l}   x"`),
         "  exit 0",
         "fi",

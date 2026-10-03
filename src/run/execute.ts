@@ -105,7 +105,7 @@ import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "
 import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
-import { claudeCliComplete, isolationRefusal, transportIdentity } from "../decide/llm-transport.js";
+import { claudeCliCompleteDecider, isolationRefusal, transportIdentity } from "../decide/llm-transport.js";
 import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks, unionReferenceAccesses } from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
@@ -1382,7 +1382,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       if (treeAgent) sessionT.observeFrames((msg) => treeAgent!.onFrame(msg));
       // Terminal decider: an explicit external channel, else the LLM decider when `agent` is selected.
       const llmTerminal =
-        onUnanswered === "llm" ? new LlmDecider(claudeCliComplete, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
+        onUnanswered === "llm" ? new LlmDecider(claudeCliCompleteDecider, opts.llmIntent, opts.llmModel || undefined, secrets) : undefined;
       llmDecider = llmTerminal; // an instance that is never consulted reports no spend (undefined), not $0
       const externalTerminal = opts.externalChannel ? new ExternalDecider(opts.externalChannel, secrets) : llmTerminal;
       const policyDecider =
@@ -1932,7 +1932,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // One judge per resolved model; the caller's run-level pin (a paired comparison) wins over a per-assert one.
         judgeFor: (model) => makePairwiseJudge({ model, complete: opts.pairwiseComplete ?? claudeCliCompleteStructured }),
         // How the judge was called — only over the real host-`claude` transport, as for semantic_matches.
-        ...(opts.pairwiseComplete ? {} : { transport: () => transportIdentity() }),
+        ...(opts.pairwiseComplete ? {} : { transport: () => transportIdentity("judge") }),
         modelFor: (a) => opts.judgeModelOverride ?? a.semantic_pairwise?.judge_model ?? defaultJudgeModel(),
         mainModels: record.models ?? [],
       }),

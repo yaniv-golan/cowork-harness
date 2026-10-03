@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import {
   claudeCliComplete,
+  claudeCliCompleteDecider,
+  claudeCliCompleteEvaluator,
   claudeCliCompleteStructured,
+  withGraderSettings,
   defaultManagedMcpPath,
   helpDeclaresFlag,
   isolationRefusal,
@@ -10,7 +13,7 @@ import {
 } from "../src/decide/llm-transport.js";
 import { makeSemanticJudge } from "../src/decide/semantic-judge.js";
 import { PAIRWISE_JSON_SCHEMA } from "../src/decide/pairwise-judge.js";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -46,6 +49,7 @@ if [ "$1" = "--help" ]; then
     echo "  --strict-mcp-config                   Only use MCP servers from --mcp-config"
     echo "  --no-session-persistence              Disable session persistence"
     echo "  --effort <level>                      Effort level for the current session"
+    echo "  --settings <file-or-json>             Load additional settings"
   fi
   echo "  --setting-sources <sources>           Comma-separated list of setting sources"
   echo "  --tools <tools...>                    Specify the list of available tools"
@@ -111,7 +115,15 @@ function resetIsolationPreflight(managedMcpPath = join(dir, "no-managed-mcp.json
   resetPreflight(managedMcpPath);
 }
 
+// The --settings value every grader call carries: the three effort/thinking keys blanked, so a user-settings `env`
+// block cannot set them (flag settings apply after user settings).
+const GRADER_SETTINGS_JSON = JSON.stringify({
+  env: { CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "" },
+});
+
 let prevForbid: string | undefined;
+let prevConfigDir: string | undefined;
+let cfgDir: string;
 beforeAll(() => {
   // Opt out of the unit lane's spawn guard (test/setup/forbid-spawn.ts) for THIS file only: every spawn
   // here is the fake bin below, never a real `claude`. Opting the file out, rather than exempting "any
@@ -121,6 +133,12 @@ beforeAll(() => {
   process.env.COWORK_HARNESS_FORBID_SPAWN = "0";
   dir = mkdtempSync(join(tmpdir(), "cowork-llm-transport-"));
   binPath = join(dir, "fake-claude.sh");
+  // The settings detection reads the user settings the CLI loads: point it at an empty temp dir, never the
+  // developer's own ~/.claude.
+  cfgDir = join(dir, "cfg");
+  mkdirSync(cfgDir);
+  prevConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = cfgDir;
   counterPath = join(dir, "counter");
   writeFileSync(binPath, FAKE, { mode: 0o755 });
   process.env.COWORK_HARNESS_CLAUDE_BIN = binPath;
@@ -146,6 +164,8 @@ afterAll(() => {
   if (prevForbid === undefined) delete process.env.COWORK_HARNESS_FORBID_SPAWN;
   else process.env.COWORK_HARNESS_FORBID_SPAWN = prevForbid;
   delete process.env.COWORK_HARNESS_CLAUDE_BIN;
+  if (prevConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = prevConfigDir;
   resetPreflight();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -306,6 +326,8 @@ describe("claudeCliComplete — retry transport", () => {
       "high",
       "--output-format",
       "json",
+      "--settings",
+      GRADER_SETTINGS_JSON,
       "--safe-mode",
       "--strict-mcp-config",
       "--no-session-persistence",
@@ -425,6 +447,8 @@ describe("claudeCliComplete — retry transport", () => {
         "high",
         "--output-format",
         "json",
+        "--settings",
+        GRADER_SETTINGS_JSON,
         "--safe-mode",
         "--no-session-persistence",
         "--setting-sources",
@@ -554,6 +578,123 @@ describe("transport identity", () => {
     const stub = makeSemanticJudge({ model: "m", complete: async () => ({ text: '{"results":[{"index":0,"pass":true}]}', model: "m" }) });
     await stub(["c"], "doc");
     expect(stub.transport).toBeUndefined();
+  });
+});
+
+describe("per-role effort and the settings counter-override", () => {
+  const argvOf = async (call: (p: string, m: string) => Promise<unknown>) => {
+    process.env.FAKE_COUNTER = counterPath;
+    const argvFile = join(dir, "argv-role.out");
+    process.env.FAKE_ARGV_FILE = argvFile;
+    await call("q", "m");
+    return readFileSync(argvFile, "utf8").split("\n");
+  };
+  it("the LLM decider runs at --effort medium; the judge and the critique evaluator at --effort high", async () => {
+    // The decider's default `sonnet` resolves to a model whose own default is medium: pinning it higher would change
+    // how it answers gates. The judge and evaluator default to a model whose default is high.
+    const decider = await argvOf(claudeCliCompleteDecider);
+    expect(decider[decider.indexOf("--effort") + 1]).toBe("medium");
+    const judge = await argvOf(claudeCliComplete);
+    expect(judge[judge.indexOf("--effort") + 1]).toBe("high");
+    const evaluator = await argvOf(claudeCliCompleteEvaluator);
+    expect(evaluator[evaluator.indexOf("--effort") + 1]).toBe("high");
+  });
+  it("every role carries the --settings counter-override, once", async () => {
+    for (const call of [claudeCliComplete, claudeCliCompleteDecider, claudeCliCompleteEvaluator]) {
+      const argv = await argvOf(call);
+      expect(argv.filter((a) => a === "--settings")).toHaveLength(1);
+      expect(JSON.parse(argv[argv.indexOf("--settings") + 1]!)).toEqual(JSON.parse(GRADER_SETTINGS_JSON));
+    }
+  });
+  it("transportIdentity records the role's effort", () => {
+    resetIsolationPreflight();
+    expect(transportIdentity("decider").effort).toBe("medium");
+    expect(transportIdentity("evaluator").effort).toBe("high");
+    expect(transportIdentity("judge").effort).toBe("high");
+    expect(transportIdentity().effort).toBe("high");
+  });
+  it("a --settings the caller already passes is merged, not clobbered or duplicated", () => {
+    const out = withGraderSettings([
+      "--json-schema",
+      "{}",
+      "--settings",
+      JSON.stringify({ env: { KEEP: "1", CLAUDE_CODE_EFFORT_LEVEL: "max" }, other: true }),
+    ]);
+    expect(out.filter((a) => a === "--settings")).toHaveLength(1);
+    expect(out.slice(0, 2)).toEqual(["--json-schema", "{}"]);
+    expect(JSON.parse(out[out.indexOf("--settings") + 1]!)).toEqual({
+      env: { KEEP: "1", CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "" },
+      other: true,
+    });
+  });
+  it("a --settings given as a file path cannot be merged and is refused", () => {
+    expect(() => withGraderSettings(["--settings", "/some/settings.json"])).toThrow(/--settings/);
+  });
+});
+
+describe("user-settings detection (what the CLI reads under --setting-sources user)", () => {
+  const SECRET = "VALUE-MUST-NOT-PRINT-7c1e";
+  let stderr: string;
+  let spy: ReturnType<typeof vi.spyOn>;
+  const writeSettings = (settings: unknown, global?: unknown) => {
+    writeFileSync(join(cfgDir, "settings.json"), JSON.stringify(settings));
+    if (global !== undefined) writeFileSync(join(cfgDir, ".claude.json"), JSON.stringify(global));
+  };
+  const begin = () => {
+    resetIsolationPreflight();
+    stderr = "";
+    spy = vi.spyOn(process.stderr, "write").mockImplementation(((c: string | Uint8Array) => {
+      stderr += String(c);
+      return true;
+    }) as never);
+  };
+  afterEach(() => {
+    spy?.mockRestore();
+    rmSync(join(cfgDir, "settings.json"), { force: true });
+    rmSync(join(cfgDir, ".claude.json"), { force: true });
+    resetIsolationPreflight();
+  });
+
+  it("an env block setting an effort/thinking key is warned about by NAME and recorded; its value is never printed", async () => {
+    writeSettings({ env: { CLAUDE_CODE_EFFORT_LEVEL: SECRET, UNRELATED: SECRET } }, { env: { CLAUDE_CODE_DISABLE_THINKING: SECRET } });
+    begin();
+    process.env.FAKE_COUNTER = counterPath;
+    await claudeCliComplete("q", "m");
+    await claudeCliComplete("q", "m");
+    expect(stderr).toContain("CLAUDE_CODE_EFFORT_LEVEL");
+    expect(stderr).toContain("CLAUDE_CODE_DISABLE_THINKING");
+    expect(stderr).not.toContain("UNRELATED");
+    expect(stderr).not.toContain(SECRET);
+    expect(stderr.match(/CLAUDE_CODE_EFFORT_LEVEL/g)).toHaveLength(1); // once per process, not per call
+    expect(transportIdentity().settingsEnvOverride).toEqual(["CLAUDE_CODE_DISABLE_THINKING", "CLAUDE_CODE_EFFORT_LEVEL"]);
+    expect(JSON.stringify(transportIdentity())).not.toContain(SECRET);
+  });
+
+  it("a maxEffortLevel below the role's pin is warned about and recorded", async () => {
+    writeSettings({ maxEffortLevel: "low" });
+    begin();
+    process.env.FAKE_COUNTER = counterPath;
+    await claudeCliComplete("q", "m");
+    expect(stderr).toMatch(/maxEffortLevel[\s\S]*low/);
+    expect(transportIdentity().settingsMaxEffort).toBe("low");
+  });
+
+  it("a maxEffortLevel at or above the role's pin is recorded without a warning", async () => {
+    writeSettings({ maxEffortLevel: "medium" });
+    begin();
+    process.env.FAKE_COUNTER = counterPath;
+    await claudeCliCompleteDecider("q", "m"); // the decider's pin is medium: not lowered
+    expect(stderr).not.toContain("maxEffortLevel");
+    expect(transportIdentity("decider").settingsMaxEffort).toBe("medium");
+  });
+
+  it("no settings file, or one without those keys, records nothing", () => {
+    begin();
+    expect(transportIdentity()).not.toHaveProperty("settingsEnvOverride");
+    expect(transportIdentity()).not.toHaveProperty("settingsMaxEffort");
+    writeSettings({ env: { OTHER: "x" }, effortLevel: "low" });
+    resetIsolationPreflight();
+    expect(transportIdentity()).not.toHaveProperty("settingsEnvOverride");
   });
 });
 

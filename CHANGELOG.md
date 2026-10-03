@@ -656,14 +656,19 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   and pin their effort.** Their host `claude` calls ran at whatever `CLAUDE_CODE_EFFORT_LEVEL`,
   `CLAUDE_CODE_DISABLE_THINKING` or `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` the shell exported, or at a user-settings
   `effortLevel`, so the same answer could be graded differently under two shells. Those three keys are now dropped
-  from the call's environment, and every call passes `--effort high`, which outranks a settings `effortLevel`.
-  `high` is the default effort of the default judge and evaluator (`claude-opus-4-8`) and of the decider's `sonnet`,
-  so those grade as before. A judge pinned to a model with another default (`claude-opus-4-7` defaults to `xhigh`)
-  now runs at `high`. A user-settings `env` block that sets one of the three keys still overrides the pin. The
-  effort is recorded as `effort` in `judgeTransport` (and `judge_transport`) and in a critique's
+  from the call's environment, and each call passes `--settings` blanking them, so a user-settings or global-config
+  `env` block cannot set them either. Each call also pins its effort with `--effort`, which outranks a settings
+  `effortLevel`: `high` for the judge and the evaluator, `medium` for the decider. Each is the default effort of
+  that role's default model (`claude-opus-4-8`, and `sonnet`, which resolves to `claude-sonnet-5-5`), so those run as
+  before. A role pointed at a model with another default (`claude-opus-4-7` defaults to `xhigh`) now runs at the pin.
+  The effort is recorded as `effort` in `judgeTransport` (and `judge_transport`) and in a critique's
   `evaluatorTransport`. A grade recorded before has none, and its absence triggers no re-judge in `hillclimb regrade`
-  and no `eval` exclusion. A host `claude` whose `--help` lacks `--effort` is now refused before any model call,
-  like one lacking an isolation flag.
+  and no `eval` exclusion. Before the first call, the harness reads your user settings (`settings.json` and
+  `.claude.json` under `CLAUDE_CONFIG_DIR`, else `~/.claude/settings.json` and `~/.claude.json`). If an `env` block sets
+  one of the three keys, it warns, naming the keys (never their values), and records them as `settingsEnvOverride`.
+  A user `maxEffortLevel` still lowers the effort and cannot be raised from the call. It is recorded as
+  `settingsMaxEffort`, with a warning when it is below the role's pin. A host `claude` whose `--help` lacks
+  `--effort` or `--settings` is now refused before any model call, like one lacking an isolation flag.
 - **An exported `CLAUDE_CODE_EFFORT_LEVEL` no longer overrides a scenario's effort on the hostloop and protocol
   tiers.** The agent reads that variable ahead of `--effort`, and those two tiers start the agent from your shell's
   environment, so an exported value replaced the session's `effort` for `run`, `record`, `eval` and `hillclimb` alike.
