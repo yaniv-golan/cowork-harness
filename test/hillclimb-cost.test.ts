@@ -1,7 +1,7 @@
 // The hillclimb cost path: the billing basis a run's own credential frames record, and the per-variant spend summary.
 //
 // Frames come from test/fixtures/hillclimb-runs/account-frames.json: real frame shapes from kept runs, identity values
-// replaced (see that directory's README). One billing case per row of the credential census of the kept runs.
+// replaced (see that directory's README). One billing case per credential shape the kept runs show.
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,13 +12,16 @@ const FX = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "hillcl
   object
 >;
 const f = (...names: string[]) => names.map((n) => JSON.stringify(FX[n]));
-const LOCAL = "local-agent";
+/** The spawn env keys that make an OAuth token win over an API key: the local-agent entrypoint (the baseline env at
+ *  hostloop, container and microvm); none at a protocol run over a bare operator env. */
+const LOCAL = { CLAUDE_CODE_ENTRYPOINT: "local-agent" };
+const BARE = {};
 const mu = (entries: Record<string, Record<string, unknown>>) => entries;
 const listed = mu({ "claude-opus-5": { costUSD: 0.2, provider: "firstParty", costBasis: "list" } });
 
-describe("billingOf: the basis rule, one case per census row", () => {
+describe("billingOf: the basis rule, one case per credential shape", () => {
   it("hostloop/container/microvm, OAuth token only, rate-limited ⇒ subscription", () => {
-    const b = billingOf({ events: f("init_none", "account_oauth", "rate_limit_five_hour"), modelUsage: listed, entrypoint: LOCAL });
+    const b = billingOf({ events: f("init_none", "account_oauth", "rate_limit_five_hour"), modelUsage: listed, credentialEnv: LOCAL });
     expect(b).toEqual({
       api_key_source: "none",
       token_source: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -29,31 +32,31 @@ describe("billingOf: the basis rule, one case per census row", () => {
   });
 
   it("OAuth token only, no rate-limit frame ⇒ still subscription (the token source decides)", () => {
-    expect(billingOf({ events: f("init_none", "account_oauth"), modelUsage: listed, entrypoint: LOCAL })?.basis).toBe("subscription");
+    expect(billingOf({ events: f("init_none", "account_oauth"), modelUsage: listed, credentialEnv: LOCAL })?.basis).toBe("subscription");
   });
 
   it("API key AND OAuth token under local-agent with a subscription rate limit ⇒ subscription", () => {
     for (const rl of ["rate_limit_five_hour", "rate_limit_seven_day"])
-      expect(billingOf({ events: f("init_api_key", "account_oauth_and_key", rl), modelUsage: listed, entrypoint: LOCAL })?.basis).toBe(
+      expect(billingOf({ events: f("init_api_key", "account_oauth_and_key", rl), modelUsage: listed, credentialEnv: LOCAL })?.basis).toBe(
         "subscription",
       );
   });
 
   it("API key AND OAuth token under local-agent with no rate-limit frame ⇒ ambiguous", () => {
-    expect(billingOf({ events: f("init_api_key", "account_oauth_and_key"), modelUsage: listed, entrypoint: LOCAL })?.basis).toBe(
+    expect(billingOf({ events: f("init_api_key", "account_oauth_and_key"), modelUsage: listed, credentialEnv: LOCAL })?.basis).toBe(
       "ambiguous",
     );
   });
 
-  it("API key AND OAuth token without the local-agent entrypoint (protocol) ⇒ api_key: the key wins there", () => {
-    expect(billingOf({ events: f("init_api_key", "account_oauth_and_key"), modelUsage: listed, entrypoint: undefined })?.basis).toBe(
+  it("API key AND OAuth token with none of the precedence keys in the spawn env (protocol) ⇒ api_key: the key wins there", () => {
+    expect(billingOf({ events: f("init_api_key", "account_oauth_and_key"), modelUsage: listed, credentialEnv: BARE })?.basis).toBe(
       "api_key",
     );
   });
 
   it("protocol, API key, no token ⇒ api_key; microvm with the same frames ⇒ api_key", () => {
-    for (const entrypoint of [undefined, LOCAL])
-      expect(billingOf({ events: f("init_api_key", "account_key"), modelUsage: listed, entrypoint })).toEqual({
+    for (const credentialEnv of [BARE, LOCAL])
+      expect(billingOf({ events: f("init_api_key", "account_key"), modelUsage: listed, credentialEnv })).toEqual({
         api_key_source: "ANTHROPIC_API_KEY",
         token_source: "none",
         provider: "firstParty",
@@ -63,23 +66,53 @@ describe("billingOf: the basis rule, one case per census row", () => {
   });
 
   it("protocol on a claude.ai login (a subscriptionType key, no token source) ⇒ subscription, and no identity value is copied", () => {
-    const b = billingOf({ events: f("init_none", "account_login", "rate_limit_seven_day"), modelUsage: listed, entrypoint: undefined });
+    const b = billingOf({ events: f("init_none", "account_login", "rate_limit_seven_day"), modelUsage: listed, credentialEnv: BARE });
     expect(b).toEqual({ api_key_source: "none", provider: "firstParty", cost_basis: "list", basis: "subscription" });
     const text = JSON.stringify(b);
     for (const leak of ["subscriptionType", "organization", "email", "user@example.invalid", "Example Org", "example-plan"])
       expect(text).not.toContain(leak);
   });
 
+  it("API key AND OAuth token at protocol when the operator env carries a precedence key ⇒ ambiguous (no rate limit)", () => {
+    for (const env of [{ CLAUDE_CODE_ENTRYPOINT: "cli" }, { CLAUDE_CODE_REMOTE: "1" }, { CLAUDE_CODE_HOST_AUTH_ENV_VAR: "X" }])
+      expect(billingOf({ events: f("init_api_key", "account_oauth_and_key"), modelUsage: listed, credentialEnv: env })?.basis).toBe(
+        "ambiguous",
+      );
+  });
+
+  it("an apiKeyHelper-only run (key and token source both apiKeyHelper) ⇒ api_key: the helper is no token", () => {
+    expect(billingOf({ events: f("init_api_key_helper", "account_api_key_helper"), modelUsage: listed, credentialEnv: BARE })).toEqual({
+      api_key_source: "apiKeyHelper",
+      token_source: "apiKeyHelper",
+      provider: "firstParty",
+      cost_basis: "list",
+      basis: "api_key",
+    });
+  });
+
+  it("a claude.ai login shadowed by an API key: api_key at protocol, subscription under a subscription rate limit", () => {
+    expect(billingOf({ events: f("init_api_key", "account_claude_ai_and_key"), modelUsage: listed, credentialEnv: BARE })?.basis).toBe(
+      "api_key",
+    );
+    expect(
+      billingOf({
+        events: f("init_api_key", "account_claude_ai_and_key", "rate_limit_five_hour"),
+        modelUsage: listed,
+        credentialEnv: LOCAL,
+      })?.basis,
+    ).toBe("subscription");
+  });
+
   it("no credential at all (none/none) ⇒ ambiguous", () => {
-    expect(billingOf({ events: f("init_none", "account_none"), modelUsage: {}, entrypoint: LOCAL })?.basis).toBe("ambiguous");
+    expect(billingOf({ events: f("init_none", "account_none"), modelUsage: {}, credentialEnv: LOCAL })?.basis).toBe("ambiguous");
   });
 
   it("ANTHROPIC_AUTH_TOKEN (a bearer token of unknown kind) ⇒ ambiguous", () => {
-    expect(billingOf({ events: f("init_none", "account_auth_token"), modelUsage: listed, entrypoint: undefined })?.basis).toBe("ambiguous");
+    expect(billingOf({ events: f("init_none", "account_auth_token"), modelUsage: listed, credentialEnv: BARE })?.basis).toBe("ambiguous");
   });
 
   it("a provider other than firstParty ⇒ third_party, from the account frame or modelUsage", () => {
-    expect(billingOf({ events: f("init_none", "account_bedrock"), modelUsage: {}, entrypoint: LOCAL })).toMatchObject({
+    expect(billingOf({ events: f("init_none", "account_bedrock"), modelUsage: {}, credentialEnv: LOCAL })).toMatchObject({
       provider: "bedrock",
       basis: "third_party",
     });
@@ -87,25 +120,25 @@ describe("billingOf: the basis rule, one case per census row", () => {
       billingOf({
         events: f("init_api_key", "account_key"),
         modelUsage: mu({ "claude-opus-5": { costUSD: 0.1, provider: "vertex" } }),
-        entrypoint: undefined,
+        credentialEnv: BARE,
       }),
     ).toMatchObject({ provider: "vertex", basis: "third_party" });
   });
 
   it("two account frames that disagree ⇒ ambiguous", () => {
-    expect(billingOf({ events: f("init_api_key", "account_key", "account_oauth"), modelUsage: listed, entrypoint: undefined })?.basis).toBe(
+    expect(billingOf({ events: f("init_api_key", "account_key", "account_oauth"), modelUsage: listed, credentialEnv: BARE })?.basis).toBe(
       "ambiguous",
     );
   });
 
   it("no account frame (a run that never initialized, an older binary) ⇒ absent, never guessed", () => {
-    expect(billingOf({ events: f("init_api_key"), modelUsage: listed, entrypoint: undefined })).toBeUndefined();
-    expect(billingOf({ events: [], modelUsage: undefined, entrypoint: LOCAL })).toBeUndefined();
+    expect(billingOf({ events: f("init_api_key"), modelUsage: listed, credentialEnv: BARE })).toBeUndefined();
+    expect(billingOf({ events: [], modelUsage: undefined, credentialEnv: LOCAL })).toBeUndefined();
   });
 
   it("cost_basis: absent ⇒ list; managed and unknown are kept, unknown first", () => {
     const cb = (m: Record<string, Record<string, unknown>>) =>
-      billingOf({ events: f("init_api_key", "account_key"), modelUsage: m, entrypoint: undefined })?.cost_basis;
+      billingOf({ events: f("init_api_key", "account_key"), modelUsage: m, credentialEnv: BARE })?.cost_basis;
     expect(cb({ a: { costUSD: 1 } })).toBe("list");
     expect(cb({ a: { costUSD: 1, costBasis: "managed" }, b: { costUSD: 1, costBasis: "list" } })).toBe("managed");
     expect(cb({ a: { costUSD: 1, costBasis: "unknown" }, b: { costUSD: 1, costBasis: "managed" } })).toBe("unknown");
@@ -205,7 +238,7 @@ describe("costSummary: the variant's spend over results.jsonl + errors.jsonl", (
 
   it("the end-of-run line names the basis, the totals and what is a floor", () => {
     expect(costLine("v1", costSummary(results, errors))).toBe(
-      "[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge; 1 row(s) record no basis): agent $0.7000 over 3 row(s) (1 without a cost — a floor), $0.3000/run over 2 scored row(s); judge $0.0300 (1 row(s) with an unpriced judge call — a floor); regrade judge $0.0500 (the last regrade per row — a floor); decider $0.0010",
+      "[v1] cost (variant total; basis subscription — cost_usd is the agent's list-price estimate, not a charge; 1 row(s) record no basis): agent $0.7000 over 3 row(s) (1 without a cost — a floor), $0.3000/run over 2 scored row(s); judge $0.0300 (1 row(s) with an unpriced judge call — a floor); regrade judge $0.0500 (the last regrade per row — a floor); decider $0.0010 (a floor)",
     );
     expect(
       costLine("v2", costSummary(jsonl({ cost_usd: 0.5, meta: { billing: { basis: "api_key", cost_basis: "managed" } } }), null)),
@@ -292,6 +325,25 @@ describe("otherModelShareWarning: other models' share of the variant's cost_usd"
     expect(w).toBe(
       "[v1] warning: models other than the main loop's carry 50% of this variant's cost_usd (1 row(s)): `usage` covers the main model and its same-model sub-agents only; `cost_usd` covers every model — copy cost_usd, never derive cost from usage",
     );
+  });
+  it("is silent at exactly 25%", () => {
+    expect(otherModelShareWarning("v1", r("claude-opus-5", { "claude-opus-5": 0.75, "claude-sonnet-5": 0.25 }))).toBeUndefined();
+  });
+  it("counts one run once (meta.run_id), like costSummary", () => {
+    const rowFor = (id: string, models: Record<string, number>) =>
+      row({
+        model: "claude-opus-5",
+        cost_usd: Object.values(models).reduce((x, y) => x + y, 0),
+        meta: { run_id: id, models: Object.fromEntries(Object.entries(models).map(([m, c]) => [m, { cost_usd: c }])) },
+      });
+    // 2 distinct runs at 0% plus one 60% run written twice: 0.6/3 = 20% once, 1.2/4 = 30% if counted twice.
+    const text = [
+      rowFor("a", { "claude-opus-5": 1 }),
+      rowFor("b", { "claude-opus-5": 1 }),
+      rowFor("c", { "claude-opus-5": 0.4, "claude-sonnet-5": 0.6 }),
+      rowFor("c", { "claude-opus-5": 0.4, "claude-sonnet-5": 0.6 }),
+    ].join("\n");
+    expect(otherModelShareWarning("v1", text)).toBeUndefined();
   });
   it("is silent at or below 25% (the haiku helper's traffic)", () => {
     expect(otherModelShareWarning("v1", r("claude-opus-5", { "claude-opus-5": 0.8, "claude-haiku-4-5-20251001": 0.2 }))).toBeUndefined();

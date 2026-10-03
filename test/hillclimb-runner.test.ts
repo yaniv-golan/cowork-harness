@@ -77,7 +77,7 @@ function deps(over: Partial<RunnerDeps> = {}): RunnerDeps {
     virtual: { harnessVersion: "4.3.0", baselineId: "2.9939.4" },
     pin: () => MODEL,
     requestedEffort: () => ({ effort: "medium", noSelector: false }),
-    entrypoint: () => "local-agent",
+    credentialEnv: () => ({ CLAUDE_CODE_ENTRYPOINT: "local-agent" }),
     derivedPaths: (cases) => cases.map((c) => c.file),
     mountRoots: () => [],
     tickMs: 1_000_000,
@@ -653,13 +653,13 @@ describe("the cost path: per-row judge spend and billing, the variant's spend in
     expect(r.usage).toEqual({ input_tokens: 10, output_tokens: 914, cache_read_input_tokens: 97850, cache_creation_input_tokens: 14427 });
   });
 
-  it("the basis follows the TIER's entrypoint: the same frames are api_key without local-agent, ambiguous under it", async () => {
+  it("the basis follows the spawn env's precedence keys: the same frames are api_key without them, ambiguous with local-agent", async () => {
     await approved();
     behave = () => ({ result: judged(0.01), events: withFrames(...fr("account_oauth_and_key")) });
-    await runHillclimb(args(), deps({ entrypoint: () => undefined }));
+    await runHillclimb(args(), deps({ credentialEnv: () => ({}) }));
     expect(rows("baseline").map((r) => r.meta.billing.basis)).toEqual(["api_key", "api_key"]);
     rmSync(join(flowDir(), "baseline"), { recursive: true });
-    await runHillclimb(args(), deps({ entrypoint: () => "local-agent" }));
+    await runHillclimb(args(), deps({ credentialEnv: () => ({ CLAUDE_CODE_ENTRYPOINT: "local-agent" }) }));
     expect(rows("baseline").map((r) => r.meta.billing.basis)).toEqual(["ambiguous", "ambiguous"]);
   });
 
@@ -722,7 +722,11 @@ describe("the cost path: per-row judge spend and billing, the variant's spend in
       ...(id === "beta" ? { runnerTimeout: true } : {}),
     });
     await runHillclimb(args(), deps());
-    const written = ["results.jsonl", "errors.jsonl", "summary.json"].map((f) => readFileSync(vfile("baseline", f), "utf8")).join("\n");
+    // The files and the pass's own stderr.
+    const written = [
+      ...["results.jsonl", "errors.jsonl", "summary.json"].map((f) => readFileSync(vfile("baseline", f), "utf8")),
+      ...err,
+    ].join("\n");
     expect(rows("baseline")[0].meta.billing.basis).toBe("subscription");
     expect(rows("baseline", "errors.jsonl")[0].meta.billing.basis).toBe("subscription");
     for (const leak of ["subscriptionType", "organization", "email", "user@example.invalid", "Example Org", "example-plan"])
@@ -743,7 +747,7 @@ describe("failures inside the pool", () => {
             events: [events[0]!, JSON.stringify(acct.account_key), ...events.slice(1)],
           }
         : {};
-    const r = await runHillclimb(args(), deps({ entrypoint: () => undefined }));
+    const r = await runHillclimb(args(), deps({ credentialEnv: () => ({}) }));
     expect(r).toMatchObject({ exitCode: 1, ok: 1, failed: 1 });
     expect(rows("baseline", "errors.jsonl")[0].meta).toMatchObject({ decider_usd: 0.003, billing: { basis: "api_key" } });
     expect(rows("baseline", "errors.jsonl")).toMatchObject([

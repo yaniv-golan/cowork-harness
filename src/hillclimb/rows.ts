@@ -74,9 +74,9 @@ export interface AttemptContext {
   expectedContentSig?: string;
   /** `events.jsonl` lines of the attempt's run dir (readers scope to the current turn). */
   events: readonly string[];
-  /** The CLAUDE_CODE_ENTRYPOINT the case's TIER spawns the agent with (its baseline's spawn env; undefined at protocol,
-   *  which has none) — the billing basis depends on it. Never the harness's own process env. */
-  entrypoint: string | undefined;
+  /** The credential-precedence keys (CREDENTIAL_PRECEDENCE_ENV_KEYS) the case's TIER spawns the agent with: the
+   *  baseline's spawn env, or the operator's env at protocol — the billing basis depends on them. */
+  credentialEnv: Readonly<Record<string, string>>;
   /** Wall clock of the whole attempt, seconds. */
   attemptS: number;
   /** The runner's ceiling ended the attempt (not the scenario's own timeout_ms). */
@@ -315,7 +315,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   }
   // The judge's spend over the asserts that called it, and the credential the agent billed (names only).
   const judgeSpend = judgeSpendOf(authored(r));
-  const billing = billingOf({ events: ctx.events, modelUsage: r?.modelUsage, entrypoint: ctx.entrypoint });
+  const billing = billingOf({ events: ctx.events, modelUsage: r?.modelUsage, credentialEnv: ctx.credentialEnv });
   const retriesUnrecorded = r?.apiRetries === undefined;
   // What the attempt asked for, beside the evidence of what it got (`model`, `meta.effort_sent`).
   const sent = sentEffort(ctx.transcript ?? []);

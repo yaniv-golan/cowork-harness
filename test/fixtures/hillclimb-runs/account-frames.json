@@ -167,5 +167,55 @@
   },
   "uuid": "00000000-0000-4000-8000-000000000001",
   "session_id": "00000000-0000-4000-8000-000000000002"
+ },
+ "init_api_key_helper": {
+  "type": "system",
+  "subtype": "init",
+  "cwd": "/sessions/local_3h1z67lhbu",
+  "session_id": "a9997992-62b9-4795-9b94-b7fc106bce6f",
+  "model": "claude-opus-4-8",
+  "permissionMode": "default",
+  "apiKeySource": "apiKeyHelper",
+  "claude_code_version": "2.1.280",
+  "output_style": "default",
+  "analytics_disabled": false,
+  "product_feedback_disabled": true,
+  "uuid": "4b3ee25f-ee11-447f-aa4d-724cbdc6fd04",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required"
+ },
+ "account_api_key_helper": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "tokenSource": "apiKeyHelper",
+     "apiKeySource": "apiKeyHelper",
+     "apiProvider": "firstParty"
+    },
+    "pid": 12345,
+    "current_permission_mode": "default",
+    "fast_mode_state": "off"
+   }
+  }
+ },
+ "account_claude_ai_and_key": {
+  "type": "control_response",
+  "response": {
+   "subtype": "success",
+   "request_id": "init-1",
+   "response": {
+    "account": {
+     "tokenSource": "claude.ai",
+     "apiKeySource": "ANTHROPIC_API_KEY",
+     "apiProvider": "firstParty"
+    },
+    "pid": 12345,
+    "current_permission_mode": "default",
+    "fast_mode_state": "off"
+   }
+  }
  }
 }

@@ -2056,9 +2056,10 @@ describe("a session that pins plugins.config_dir", () => {
   });
 });
 
-describe("the billing basis follows the case's tier, from its baseline's spawn env", () => {
-  // Real frame shape (account-frames.json): an API key AND an OAuth token, no rate-limit frame. Under the baseline's
-  // local-agent entrypoint (container) the token wins and nothing says which billed; at protocol the key wins.
+describe("the billing basis follows the env the case's tier spawns the agent with", () => {
+  // Real frame shape (account-frames.json): an API key AND an OAuth token, no rate-limit frame. The key wins only when
+  // the spawn env carries none of CLAUDE_CODE_ENTRYPOINT, CLAUDE_CODE_REMOTE, CLAUDE_CODE_HOST_AUTH_ENV_VAR: container
+  // gets the baseline's local-agent entrypoint; protocol gets the operator's env (`deps.env`), unscrubbed for these.
   const acct = JSON.parse(readFileSync(join(FX, "hillclimb-runs", "account-frames.json"), "utf8")) as Record<string, object>;
   beforeEach(() => {
     credentialFrames = [JSON.stringify(acct.account_oauth_and_key)];
@@ -2071,23 +2072,26 @@ describe("the billing basis follows the case's tier, from its baseline's spawn e
     expect((rows()[0].meta as Record<string, any>).billing).toMatchObject({ token_source: "CLAUDE_CODE_OAUTH_TOKEN", basis: "ambiguous" });
   });
 
-  it("protocol (no baseline spawn env): api_key, whatever this process's own env says", async () => {
+  const protocolBasis = async (env: Record<string, string>): Promise<string> => {
     writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: protocol"));
-    const saved = { m: process.env.COWORK_MANAGED_CONFIG, e: process.env.CLAUDE_CODE_ENTRYPOINT };
+    const saved = process.env.COWORK_MANAGED_CONFIG;
     process.env.COWORK_MANAGED_CONFIG = "1";
-    process.env.CLAUDE_CODE_ENTRYPOINT = "local-agent"; // the harness's own env is never a stand-in for the tier's
     try {
-      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
-      const r = await runHillclimbCommand(args(), deps());
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ env }));
+      const r = await runHillclimbCommand(args(), deps({ env }));
       expect(r.exitCode, err.join("\n")).toBe(0);
-      expect((rows()[0].meta as Record<string, any>).billing.basis).toBe("api_key");
+      return (rows()[0].meta as Record<string, any>).billing.basis;
     } finally {
-      for (const [k, v] of [
-        ["COWORK_MANAGED_CONFIG", saved.m],
-        ["CLAUDE_CODE_ENTRYPOINT", saved.e],
-      ] as const)
-        if (v === undefined) delete process.env[k];
-        else process.env[k] = v;
+      if (saved === undefined) delete process.env.COWORK_MANAGED_CONFIG;
+      else process.env.COWORK_MANAGED_CONFIG = saved;
     }
+  };
+
+  it("protocol over an operator env with none of the precedence keys: api_key (the key wins)", async () => {
+    expect(await protocolBasis({})).toBe("api_key");
+  });
+
+  it("protocol over an operator env that carries a precedence key: ambiguous", async () => {
+    expect(await protocolBasis({ CLAUDE_CODE_REMOTE: "1" })).toBe("ambiguous");
   });
 });

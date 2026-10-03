@@ -6,13 +6,13 @@
 // which credential the agent billed (`meta.billing`), read from the agent's OWN frames, never the harness's env view.
 //
 // Billing basis, in order (agent 2.1.286: under CLAUDE_CODE_ENTRYPOINT=local-agent an OAuth token wins over an API
-// key; without it the key wins):
+// key; CLAUDE_CODE_REMOTE and CLAUDE_CODE_HOST_AUTH_ENV_VAR change the choice too; with none of the three the key wins):
 //   1. a provider other than firstParty                        → third_party
 //   2. an API-key source AND an OAuth token source            → subscription when a five_hour/seven_day rate limit
-//      was reported; else api_key without the local-agent entrypoint; else ambiguous
+//      was reported (any tier); else api_key when the spawn env carries none of the three keys; else ambiguous
 //   3. an OAuth token source, or a claude.ai login (the PRESENCE of the account's `subscriptionType` key; its value is
 //      never read)                                             → subscription
-//   4. an API-key source and no token                          → api_key
+//   4. an API-key source and no token (`none`, or `apiKeyHelper`: the key's own helper) → api_key
 //   5. anything else (a bearer ANTHROPIC_AUTH_TOKEN, none/none, account frames that disagree) → ambiguous
 // The account's identity fields (`email`, `organization`, `subscriptionType`'s value) are never copied.
 
@@ -32,7 +32,17 @@ export interface Billing {
 }
 
 /** The agent's token sources that are an OAuth (subscription) credential. */
-const OAUTH_TOKEN_SOURCES = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "CCR_OAUTH_TOKEN_FILE"]);
+const OAUTH_TOKEN_SOURCES = new Set([
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+  "CCR_OAUTH_TOKEN_FILE",
+  // a claude.ai (Keychain) login the agent reports by name when an API key shadows it
+  "claude.ai",
+]);
+/** Token sources that are no token: none, or the API key's own helper (an apiKeyHelper-only run reports it as both). */
+const NOT_A_TOKEN = new Set(["none", "apiKeyHelper"]);
+/** Spawn-env keys the agent reads when it picks between an API key and an OAuth token. With none set, the key wins. */
+export const CREDENTIAL_PRECEDENCE_ENV_KEYS = ["CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_REMOTE", "CLAUDE_CODE_HOST_AUTH_ENV_VAR"] as const;
 /** Rate-limit windows only a subscription has. */
 const SUBSCRIPTION_LIMITS = ["five_hour", "seven_day"];
 
@@ -68,12 +78,13 @@ function costBasisOf(modelUsage: Record<string, unknown> | undefined): CostBasis
 }
 
 /** A run's billing, from its `events.jsonl` (the `system/init` frame, the `init-1` control_response's `account`, any
- *  `rate_limit_event`) and its result's `modelUsage`. `entrypoint` is the CLAUDE_CODE_ENTRYPOINT the run's TIER spawns
- *  the agent with (its baseline's spawn env; none at protocol). Undefined when the run recorded no account frame. */
+ *  `rate_limit_event`) and its result's `modelUsage`. `credentialEnv` holds the CREDENTIAL_PRECEDENCE_ENV_KEYS the run's
+ *  TIER spawns the agent with (the baseline's spawn env; the operator's env at protocol). Undefined when the run recorded
+ *  no account frame. */
 export function billingOf(input: {
   events: readonly string[];
   modelUsage: Record<string, unknown> | undefined;
-  entrypoint: string | undefined;
+  credentialEnv: Readonly<Record<string, string | undefined>>;
 }): Billing | undefined {
   const accounts: AccountSignals[] = [];
   let initKeySource: string | undefined;
@@ -105,7 +116,8 @@ export function billingOf(input: {
   const provider = thirdParty ?? [...providers][0];
   const apiKeySource = initKeySource ?? acct.apiKeySource;
   const keySource = credential(initKeySource) ?? credential(acct.apiKeySource);
-  const token = credential(acct.tokenSource);
+  const token = acct.tokenSource !== undefined && !NOT_A_TOKEN.has(acct.tokenSource) ? acct.tokenSource : undefined;
+  const keyWins = !CREDENTIAL_PRECEDENCE_ENV_KEYS.some((k) => input.credentialEnv[k]);
   const oauth = token !== undefined && OAUTH_TOKEN_SOURCES.has(token);
   const basis: BillingBasis =
     thirdParty !== undefined
@@ -115,7 +127,7 @@ export function billingOf(input: {
         : keySource !== undefined && oauth
           ? subscriptionLimit
             ? "subscription"
-            : input.entrypoint !== "local-agent"
+            : keyWins
               ? "api_key"
               : "ambiguous"
           : oauth || acct.login
@@ -202,17 +214,22 @@ const judgeUnrecorded = (x: { r: Row; judge: number | undefined }): boolean =>
   x.r.meta?.judge_unpriced === undefined &&
   x.r.meta?.regrade_judge_usd === undefined;
 
-/** A variant's spend over its whole `results.jsonl` (scored rows) and `errors.jsonl` (failed attempts, whose spend sits
- *  in `meta`). One run is counted once (by `meta.run_id`, never redacted; a row without one is its own run). */
-export function costSummary(results: string | null | undefined, errors: string | null | undefined): CostSummary {
+/** A row filter that keeps one row per run (`meta.run_id`, never redacted); a row without one is its own run. */
+function oncePerRun(): (r: Row) => boolean {
   const seen = new Set<string>();
-  const once = (r: Row): boolean => {
+  return (r) => {
     const id = typeof r.meta?.run_id === "string" ? r.meta.run_id : undefined;
     if (id === undefined) return true;
     if (seen.has(id)) return false;
     seen.add(id);
     return true;
   };
+}
+
+/** A variant's spend over its whole `results.jsonl` (scored rows) and `errors.jsonl` (failed attempts, whose spend sits
+ *  in `meta`). One run is counted once (by `meta.run_id`, never redacted; a row without one is its own run). */
+export function costSummary(results: string | null | undefined, errors: string | null | undefined): CostSummary {
+  const once = oncePerRun();
   const rows = [
     ...parseRows(results)
       .filter(once)
@@ -287,7 +304,8 @@ export function costLine(variant: string, s: CostSummary): string {
     );
   if (k.regrade_judge_usd_total !== undefined)
     parts.push(`regrade judge ${usd(k.regrade_judge_usd_total)} (the last regrade per row — a floor)`);
-  if (k.decider_usd_total !== undefined) parts.push(`decider ${usd(k.decider_usd_total)}`);
+  // A decider call that threw is never priced (RunResult.deciderCostUsd), so this is always a floor.
+  if (k.decider_usd_total !== undefined) parts.push(`decider ${usd(k.decider_usd_total)} (a floor)`);
   return `[${variant}] cost (variant total; ${basis}): ${parts.join("; ")}`;
 }
 
@@ -296,12 +314,12 @@ export function costLine(variant: string, s: CostSummary): string {
 export const OTHER_MODEL_SHARE = 0.25;
 
 /** Models other than each row's main-loop model, as a share of the variant's Σ`cost_usd` (rows that record a cost, a
- *  model and `meta.models`). Undefined when there is nothing to measure. */
+ *  model and `meta.models`; one run counted once, as in `costSummary`). Undefined when there is nothing to measure. */
 export function otherModelShare(results: string | null | undefined): { share: number; rows: number } | undefined {
   let total = 0;
   let other = 0;
   let n = 0;
-  for (const r of parseRows(results)) {
+  for (const r of parseRows(results).filter(oncePerRun())) {
     const cost = num(r.cost_usd);
     const models = isObj(r.meta?.models) ? r.meta.models : undefined;
     if (cost === undefined || typeof r.model !== "string" || models === undefined) continue;

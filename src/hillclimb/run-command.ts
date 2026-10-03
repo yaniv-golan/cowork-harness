@@ -10,7 +10,16 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
-import { applySessionOverrides, effortSelector, expandHome, resolveEffort, thinkingEffortRefusal, type SessionConfig } from "../session.js";
+import {
+  agentEnvOverrides,
+  applySessionOverrides,
+  effortSelector,
+  expandHome,
+  resolveEffort,
+  strippedEnv,
+  thinkingEffortRefusal,
+  type SessionConfig,
+} from "../session.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { effectiveTier, loadSessionFromFile, runOutDir, scenarioInputFindings, sessionOriginSources } from "../run/execute.js";
 import { pairwiseRefsRefusal } from "../refs/preflight.js";
@@ -25,6 +34,8 @@ import { runsWriteRoot } from "../run/trace-view.js";
 import { loadCostHistory } from "../eval/plan-history.js";
 import { estimateScheduleCost, scheduleCostJson, scheduleCostLine, type ScheduleCostJson } from "../eval/planner.js";
 import { pkgVersion } from "../run/envelope.js";
+import { protocolOperatorEnv } from "../runtime/protocol.js";
+import { CREDENTIAL_PRECEDENCE_ENV_KEYS } from "./cost.js";
 import { ANSWER_KEY_ADVICE, answerKeyFindings } from "../eval/snapshot.js";
 import { evidenceFacts } from "../eval/invocation.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
@@ -461,11 +472,16 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     },
     pin: prep.pin,
     requestedEffort: (c) => efforts.get(c.id)!,
-    // The entrypoint the case's tier spawns the agent with: the baseline's spawn env at hostloop, container and microvm;
-    // protocol spawns over the operator's env with no baseline overlay, so it has none. Never this process's env.
-    entrypoint: (c) => {
+    // The credential-precedence keys the case's tier spawns the agent with: the baseline's spawn env at hostloop,
+    // container and microvm; at protocol the operator's env as the runtime builds it (bg-env-strip, then the scrub and
+    // the session's knob), which does not scrub these keys.
+    credentialEnv: (c) => {
       const baseline = prep.baseline(c);
-      return effectiveTier(c.scenario.fidelity, baseline) === "protocol" ? undefined : baseline.spawn?.env?.CLAUDE_CODE_ENTRYPOINT;
+      const env =
+        effectiveTier(c.scenario.fidelity, baseline) === "protocol"
+          ? protocolOperatorEnv({ baseEnv: strippedEnv(baseline, deps.env), agentEnv: agentEnvOverrides(prep.session(c).agent_env) })
+          : (baseline.spawn?.env ?? {});
+      return Object.fromEntries(CREDENTIAL_PRECEDENCE_ENV_KEYS.flatMap((k) => (env[k] ? [[k, env[k]!]] : [])));
     },
     inputs: (c) => prep.session(c).uploads.map((u) => resolve(expandHome(u))),
     derivedPaths: prep.derivedPaths,
