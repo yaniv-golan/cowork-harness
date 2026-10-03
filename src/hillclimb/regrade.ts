@@ -598,21 +598,6 @@ function deterministicCheck(
     const fresh = re.deterministic[i]!;
     const prev = matched[i];
     if (prev !== undefined) {
-      // A row an earlier --reevaluate rebuilt already carries the re-evaluated outcome: it stays taken in every mode,
-      // so a later regrade (a fill included) never silently puts the run's back.
-      const sticky = prev.pass !== fresh.pass && alreadyReevaluated(row, c, i, fresh.pass);
-      if (fill) {
-        const graded = gradedPass(row, live, c, i);
-        const used = sticky ? fresh.pass : prev.pass;
-        if (graded !== undefined && graded !== used)
-          return {
-            listed: `the grader changed since the row was graded (${labelOf(c, i)} ${outcomeOf(used)} now, ${outcomeOf(graded)} when graded): run a default \`hillclimb regrade\` first, then --fill-refs (a fill never moves pass; until then this row lacks the new win column)`,
-          };
-      }
-      if (sticky) {
-        taken.push(i);
-        continue;
-      }
       if (prev.pass === fresh.pass) continue;
       if (!reevaluate) {
         keptLive.push(i);
@@ -650,16 +635,6 @@ function unfaithful(a: object, fresh: Entry): string | undefined {
   if (link !== undefined) return `\`${link}\` resolves links against host folders no run dir records`;
   if (/evidence unavailable/i.test(fresh.message ?? "")) return `the kept run cannot show it (${(fresh.message ?? "").slice(0, 160)})`;
   return undefined;
-}
-
-/** Whether an earlier `--reevaluate` took index `i`'s re-evaluated outcome on this row (graded under the current list):
- *  it records the index in `meta.regrade_reevaluated_because`, or its `a<i>` already reads that outcome. */
-function alreadyReevaluated(row: Row, c: HillclimbCase, i: number, fresh: boolean): boolean {
-  if (!gradedUnderNow(row, c)) return false;
-  const rec = row.meta?.regrade_reevaluated_because;
-  if (Array.isArray(rec) && rec.some((x) => (x as { assert?: unknown } | null)?.assert === i)) return true;
-  const v = i < c.scenario.assert.length ? row.grade?.[`a${i}`] : undefined;
-  return typeof v === "number" && (v === 1) === fresh;
 }
 
 /** Whether the row was graded under the scenario's assertion list as it is now (`meta.assert_sig`): then its `a<i>`
