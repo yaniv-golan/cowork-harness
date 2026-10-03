@@ -1565,6 +1565,9 @@ export function composeJudgedDocument(
 
 const sha256Hex = (t: string): string => createHash("sha256").update(t, "utf8").digest("hex");
 
+/** The prefix every secret-scrub marker starts with (`[REDACTED]`, `[REDACTED:base64]`, `[REDACTED:uri]`). */
+export const REDACTION_MARK = "[REDACTED";
+
 /** Fingerprint the document as SENT. Each section is hashed over the slice of `sent` it occupies, so a
  *  part cut by the aggregate cap is hashed over what survived and a part wholly past the cut is omitted —
  *  both fall out of slicing the sent text rather than being special-cased. Below the cap, `sent` is the
@@ -1579,7 +1582,7 @@ function fingerprintJudgedDoc(
   let off = 0;
   for (let i = 0; i < parts.length && off < limit; i++) {
     const slice = sent.slice(off, Math.min(off + parts[i].length, limit));
-    sections.push({ ...kinds[i], sha256: sha256Hex(slice), chars: slice.length });
+    sections.push({ ...kinds[i], sha256: sha256Hex(slice), chars: slice.length, redactions: slice.split(REDACTION_MARK).length - 1 });
     off += parts[i].length + 2; // the "\n\n" join
   }
   return { sha256: sha256Hex(sent), sections };

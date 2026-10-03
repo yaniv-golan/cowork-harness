@@ -408,7 +408,13 @@ function liveDocDrift(
   sameInputs: AssertContext | undefined,
 ):
   | {
-      drift: Array<{ liveIndex: number; sections: DifferingSection[]; recordedSha256: string; currentSha256: string }>;
+      drift: Array<{
+        liveIndex: number;
+        sections: DifferingSection[];
+        recordedSha256: string;
+        currentSha256: string;
+        redaction: RedactionLoss[];
+      }>;
       rebuilt: JudgedDocFingerprint[];
     }
   | { refusal: { kind: "usage" | "runtime"; message: string } } {
@@ -442,7 +448,13 @@ function liveDocDrift(
     ctx = built.ctx;
   }
   const cache = new Map<string, JudgedDocFingerprint>();
-  const drift: Array<{ liveIndex: number; sections: DifferingSection[]; recordedSha256: string; currentSha256: string }> = [];
+  const drift: Array<{
+    liveIndex: number;
+    sections: DifferingSection[];
+    recordedSha256: string;
+    currentSha256: string;
+    redaction: RedactionLoss[];
+  }> = [];
   for (const { r, liveIndex } of live) {
     const o = judgedOpts(r.assertion)!;
     const key = ownScopeKey(r.assertion);
@@ -454,9 +466,39 @@ function liveDocDrift(
     const recorded = liveDoc(r)!;
     const sections = diffSections(recorded, fp, liveIndex);
     if (sections.length || recorded.sha256 !== fp.sha256)
-      drift.push({ liveIndex, sections, recordedSha256: recorded.sha256, currentSha256: fp.sha256 });
+      drift.push({
+        liveIndex,
+        sections,
+        recordedSha256: recorded.sha256,
+        currentSha256: fp.sha256,
+        redaction: redactionLoss(recorded, fp),
+      });
   }
   return { drift, rebuilt: [...cache.values()] };
+}
+
+/** An authored section the current harness would hand a judge LESS redacted than the graded document had it:
+ *  fewer secret-scrub markers now (`less`: a value the run scrubbed is not scrubbed by this process), or a changed
+ *  section whose graded fingerprint recorded no marker count (`unknown`: it cannot be ruled out). Only `authored`
+ *  sections are compared: every other section is composed from the run's own records, which the run scrubbed when it
+ *  wrote them, so its markers are in the bytes read now. Host-path redaction is applied after fingerprinting, by
+ *  the current code, so it is not part of this. Never carries the section's bytes. */
+export interface RedactionLoss {
+  path: string;
+  kind: "less" | "unknown";
+}
+
+function redactionLoss(recorded: JudgedDocFingerprint, now: JudgedDocFingerprint): RedactionLoss[] {
+  const current = new Map(now.sections.filter((s) => s.kind === "authored").map((s) => [s.path ?? "", s]));
+  const out: RedactionLoss[] = [];
+  for (const r of recorded.sections) {
+    if (r.kind !== "authored") continue;
+    const c = current.get(r.path ?? "");
+    if (!c || (c.sha256 === r.sha256 && c.chars === r.chars)) continue;
+    if (r.redactions === undefined) out.push({ path: r.path ?? "", kind: "unknown" });
+    else if ((c.redactions ?? 0) < r.redactions) out.push({ path: r.path ?? "", kind: "less" });
+  }
+  return out;
 }
 
 /** One judged entry whose recorded document is not what the current harness composes from the kept run. */
@@ -468,6 +510,8 @@ export interface GradedDocDrift {
   /** The same document recomposed now from the kept run: the entry's own assert and scope, the capture its list's
    *  `evidence_files` union and `budget` build, this process's secrets — what a re-judge of it would be handed. */
   currentSha256: string;
+  /** Its authored sections the current document would carry less redacted (`RedactionLoss`); empty when none. */
+  redaction: RedactionLoss[];
 }
 
 /** The drift check a re-grade runs before any judge call, over any list of judged entries a row was graded with
@@ -483,7 +527,12 @@ export function gradedDocDrift(
   const checked = liveDocDrift(runDir, entries, scenario, o.secrets, o.budget, undefined);
   if ("refusal" in checked) return { refusal: checked.refusal.message };
   return {
-    drift: checked.drift.map((d) => ({ index: d.liveIndex, recordedSha256: d.recordedSha256, currentSha256: d.currentSha256 })),
+    drift: checked.drift.map((d) => ({
+      index: d.liveIndex,
+      recordedSha256: d.recordedSha256,
+      currentSha256: d.currentSha256,
+      redaction: d.redaction,
+    })),
   };
 }
 

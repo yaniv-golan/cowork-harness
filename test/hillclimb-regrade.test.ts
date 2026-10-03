@@ -1609,6 +1609,65 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(out.variants[0]!.evidenceChanged).toEqual([{ prompt_id: "alpha", rep: 0, evidence: [{ assert: 1 }] }]);
   }, 240_000);
 
+  // --rejudge never sends a judge a document LESS redacted than the one the entry was graded on: an authored file the
+  // run scrubbed a secret out of, recomposed now without that secret, would hand the judge the raw value. Listed, in
+  // either mode, with no judge call — and the value itself is printed nowhere.
+  it("evidence_changed: a scrub-only difference (the run's secret not scrubbed now) is listed even under --rejudge", async () => {
+    const SENTINEL = "SENTINEL-scrub-value-7f3a9c";
+    f.cleanup();
+    f = makeStubFixture(`mkdir -p outputs && printf '%s' 'report: ${SENTINEL} end' > outputs/report.md\n${STUB}`);
+    const { flow, rows } = buildFlow({ env: { COWORK_HARNESS_SCRUB_VALUES: SENTINEL } });
+    delete process.env.COWORK_HARNESS_SCRUB_VALUES;
+    const live = JSON.parse(readFileSync(join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json"), "utf8")) as {
+      assertions: Array<{ judgedDoc?: { sections: Array<{ kind: string; redactions?: number }> } }>;
+    };
+    // The graded document records how many redactions its authored section carried (the branch under test).
+    expect(live.assertions[1]!.judgedDoc!.sections.find((x) => x.kind === "authored")!.redactions).toBe(1);
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const said: string[] = [];
+    const { seen, deps } = counting();
+    for (const rejudge of [true, false]) {
+      const out = await regradeFlow(ARGS({ variant: "v1", rejudge }), { ...deps, stderr: (l) => said.push(l) });
+      expect(out.exitCode, JSON.stringify(out)).toBe(1);
+      expect(out.variants[0]!.listed).toEqual([
+        {
+          prompt_id: "alpha",
+          rep: 0,
+          why: expect.stringMatching(/^the current evidence is less redacted than the graded document \(assert 1: outputs\/report\.md\)/),
+        },
+      ]);
+      expect(JSON.stringify(out)).not.toContain(SENTINEL);
+    }
+    expect(seen.calls).toBe(0);
+    expect(said.join("\n")).not.toContain(SENTINEL);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+    expect(before).not.toContain(SENTINEL);
+  }, 300_000);
+
+  it("evidence_changed: a changed authored section with no recorded redaction count may be less redacted — listed until --allow-doc-drift", async () => {
+    const SENTINEL = "SENTINEL-scrub-value-51be02";
+    f.cleanup();
+    f = makeStubFixture(`mkdir -p outputs && printf '%s' 'report: ${SENTINEL} end' > outputs/report.md\n${STUB}`);
+    const { rows } = buildFlow({ env: { COWORK_HARNESS_SCRUB_VALUES: SENTINEL } });
+    delete process.env.COWORK_HARNESS_SCRUB_VALUES;
+    // A fingerprint recorded before redactions were counted.
+    const file = join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json");
+    const r = JSON.parse(readFileSync(file, "utf8")) as { assertions: Array<{ judgedDoc?: { sections: Array<Record<string, unknown>> } }> };
+    for (const x of r.assertions[1]!.judgedDoc!.sections) delete x.redactions;
+    writeFileSync(file, JSON.stringify(r));
+    const { seen, deps } = counting();
+    const out = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(out.variants[0]!.listed[0]!.why).toMatch(
+      /^the current evidence may be less redacted than the graded document \(assert 1: outputs\/report\.md — its graded document records no redaction count\)/,
+    );
+    expect(seen.calls).toBe(0);
+    // The operator's explicit override, after checking the scrub settings.
+    const forced = await regradeFlow(ARGS({ variant: "v1", rejudge: true, allowDocDrift: true }), deps);
+    expect(forced.exitCode, JSON.stringify(forced)).toBe(0);
+    expect(seen.calls).toBe(1);
+  }, 300_000);
+
   it("evidence_changed: --rejudge grades the current evidence, records both hashes, says so; the next regrade keeps it", async () => {
     const { rows, evals } = buildFlow();
     const graded = rows("v1")[0]!;

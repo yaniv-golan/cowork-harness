@@ -23,7 +23,14 @@ import { tildeify } from "../io.js";
 import { classifyRep } from "../eval/classify.js";
 import { pkgVersion } from "../run/envelope.js";
 import { runOutDir } from "../run/execute.js";
-import { gradedDocDrift, regradeRuns, type RegradeOptions, type RegradeOutcome, type RegradeRunReport } from "../run/regrade.js";
+import {
+  gradedDocDrift,
+  regradeRuns,
+  type RedactionLoss,
+  type RegradeOptions,
+  type RegradeOutcome,
+  type RegradeRunReport,
+} from "../run/regrade.js";
 import { reevaluateRun } from "../run/verify-context.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
@@ -446,6 +453,9 @@ export interface EvidenceChange {
   assert: number;
   gradedDocSha?: string;
   currentDocSha?: string;
+  /** Authored sections the current document would carry less redacted than the graded one (`RedactionLoss`: by
+   *  path, never by content). Such a row is never re-judged unless --allow-doc-drift is also given. */
+  lessRedacted?: RedactionLoss[];
 }
 
 /** The judged entries of a row whose evidence the current harness would show a judge differently: each entry the
@@ -476,7 +486,12 @@ function evidenceDrift(
   if ("refusal" in got) return got;
   const changes = new Map<number, EvidenceChange>();
   for (const d of got.drift)
-    changes.set(d.index, { assert: indexOf(d.index), gradedDocSha: d.recordedSha256, currentDocSha: d.currentSha256 });
+    changes.set(d.index, {
+      assert: indexOf(d.index),
+      gradedDocSha: d.recordedSha256,
+      currentDocSha: d.currentSha256,
+      ...(d.redaction.length ? { lessRedacted: d.redaction } : {}),
+    });
   plan.pool.forEach((e, k) => {
     if (e.judgeModel !== undefined && e.judgedDoc === undefined && e.composedDoc === undefined) changes.set(k, { assert: indexOf(k) });
     // Graded comparisons with no judge recorded (an older fill copied them and dropped their judge's provenance):
@@ -1138,6 +1153,25 @@ async function regradeFlowInner(
         if (drift.changes.length) {
           vr.evidenceChanged.push({ prompt_id: id, rep, evidence: drift.changes });
           const asserts = [...new Set(drift.changes.map((x) => x.assert))].join(", ");
+          // Never a judge call over a document less redacted than the graded one (a secret the run scrubbed, not
+          // scrubbed by this process): listed in either mode — by path, never by content — unless the operator,
+          // having checked the scrub settings, passes --allow-doc-drift.
+          const lossy = drift.changes.flatMap((x) => (x.lessRedacted ?? []).map((r) => ({ assert: x.assert, ...r })));
+          if (lossy.length && !args.allowDocDrift) {
+            const known = lossy.every((r) => r.kind === "less");
+            const where = lossy
+              .map((r) => `assert ${r.assert}: ${r.path}${r.kind === "unknown" ? " — its graded document records no redaction count" : ""}`)
+              .join("; ");
+            vr.listed.push({
+              prompt_id: id,
+              rep,
+              why: shownMessage(
+                `the current evidence ${known ? "is" : "may be"} less redacted than the graded document (${where}): a secret the run scrubbed is not scrubbed now — set the same scrub settings as the run (COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS) and regrade again, or, after checking them, pass --rejudge --allow-doc-drift to grade it anyway`,
+                deps.secrets,
+              ),
+            });
+            continue;
+          }
           if (!args.rejudge) {
             const why = `the evidence the judge would see changed since this grade (assert ${asserts}): ${
               args.fillRefs
