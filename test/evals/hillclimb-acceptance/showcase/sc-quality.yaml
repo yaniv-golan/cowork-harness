@@ -1,0 +1,23 @@
+# Showcase: whether the brief catches problems in the data that the prompt does not mention.
+name: sc-quality
+baseline: latest
+session: ./_session.yaml
+fidelity: container
+on_unanswered: first
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Use the sales-brief skill on orders.csv from my uploads and write the brief.
+assert:
+- user_visible_artifact: outputs/brief.md
+- artifact_text: {artifact: outputs/brief.md, contains: ["1017"]}
+- artifact_text: {artifact: outputs/brief.md, contains: ["1009"]}
+- semantic_matches:
+    evidence_files: [outputs/brief.md]
+    rubric:
+    - Flags order 1017 as a duplicated entry
+    - Flags order 1009 as missing its amount
+    - Says what to do about each data issue before the numbers are relied on
+metrics:
+- {id: amount_total, artifact: outputs/metrics.json, path: columns.amount.sum, better: lower, unbounded: true}
