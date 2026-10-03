@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   changelogHasVersionSection,
+  changelogPlaceholderLines,
   tagExists,
   isValidSemver,
   ciJobNames,
@@ -180,5 +184,50 @@ describe("checkInitSurfaceObserved (check 7)", () => {
 
   it("the override downgrades to WARN, never PASS", () => {
     expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: block(false) }, true).status).toBe("WARN");
+  });
+});
+
+describe("changelogPlaceholderLines", () => {
+  const section = (...body: string[]) =>
+    ["## [Unreleased]", "", "## [4.3.0] — 2026-10-03", "", ...body, "", "## [4.2.1] — 2026-10-01", "", "- older"].join("\n");
+
+  it("flags the visible release-summary TODO line, naming its line number", () => {
+    const text = section("**TODO: release summary — replace before tagging.**", "", "### Added", "- a thing");
+    expect(changelogPlaceholderLines(text, "4.3.0")).toEqual([{ line: 5, text: "**TODO: release summary — replace before tagging.**" }]);
+  });
+
+  it("flags an HTML comment that says placeholder, including one spanning lines", () => {
+    expect(changelogPlaceholderLines(section("<!-- placeholder: release summary text -->", "- a thing"), "4.3.0")).toHaveLength(1);
+    const multi = section("<!--", "  summary placeholder, finalized later", "-->", "- a thing");
+    expect(changelogPlaceholderLines(multi, "4.3.0").map((x) => x.line)).toEqual([5]); // the comment's opening line
+  });
+
+  it("flags plain, list and emphasised TODO markers", () => {
+    for (const l of ["TODO: write this", "- TODO fill in", "* **TODO** summary", "__TODO__: x"])
+      expect(changelogPlaceholderLines(section(l), "4.3.0"), l).toHaveLength(1);
+  });
+
+  it("does not flag prose that mentions a placeholder or a TODO mid-line, or a comment shown as code", () => {
+    const text = section(
+      "- **Bug reports** ask for the version, and the baseline placeholder is current.",
+      "- left out as a calibration TODO pointing at `trace --view questions`.",
+      "- an explicit `<!-- placeholder-ok -->` marker in a code span.",
+      "- `TODO` comments are ignored by the linter.",
+    );
+    expect(changelogPlaceholderLines(text, "4.3.0")).toEqual([]);
+  });
+
+  it("looks only inside the version's own section", () => {
+    const text = ["## [Unreleased]", "", "TODO: next release", "", "## [4.3.0]", "", "- done", "", "## [4.2.1]", "", "TODO: old"].join(
+      "\n",
+    );
+    expect(changelogPlaceholderLines(text, "4.3.0")).toEqual([]);
+  });
+
+  it("the real CHANGELOG has no marker in any released section", () => {
+    const text = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "CHANGELOG.md"), "utf8");
+    const versions = [...text.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]!);
+    expect(versions.length).toBeGreaterThan(10);
+    for (const v of versions) expect(changelogPlaceholderLines(text, v), v).toEqual([]);
   });
 });

@@ -218,7 +218,9 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       `- **X.Y.Z:**` release-note bullet, and you should NOT add one: that per-release section was removed
       in 1.10.0 because SKILL.md is loaded into an agent's context on every invocation and the history
       could never change its behaviour. The CHANGELOG is the release record.)
-- [ ] `npm run preflight` — local pre-release gate (`check:versions`, CHANGELOG heading present + non-empty,
+- [ ] `npm run preflight` — local pre-release gate (`check:versions`, CHANGELOG heading present + non-empty
+      and free of placeholders (a line starting `TODO`, or an HTML comment saying "placeholder", in the
+      new version's section fails, naming the line: a comment renders invisible in the release notes),
       tag `vX.Y.Z` not already used, clean tree; warns if the `ANTHROPIC_API_KEY` repo secret is missing so
       the push-to-main live suite will be skipped and this release won't be live-validated in CI; warns if a
       ruleset **required status check** names no job in `ci.yml`; fails if the newest baseline's
