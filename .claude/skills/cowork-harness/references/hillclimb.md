@@ -190,7 +190,7 @@ every climb there is finished.
   included). With `--rejudge` the row is graded on the current evidence: stderr notes it with both hashes, the row
   records `evidence_changed` and `meta.regrade_evidence` (`[{assert, gradedDocSha, currentDocSha}]`), and no
   `--allow-doc-drift` is needed. Each variant's `evidenceChanged` names those rows in either mode. A judged entry
-  that recorded no document counts changed (one `--rejudge` records it). The run's recorded capture budget is what a
+  that recorded no document, or graded comparisons with no judge recorded, counts changed (one `--rejudge` fixes it). The run's recorded capture budget is what a
   re-judge composes under, so a changed `COWORK_HARNESS_AUTHORED_TOTAL_BYTES` is not a trigger. `check` cannot see
   it: it reads the flow, not the kept runs.
 - **`--rejudge`:** every judged assert of every selected row is re-judged, with the flow's references as they are
