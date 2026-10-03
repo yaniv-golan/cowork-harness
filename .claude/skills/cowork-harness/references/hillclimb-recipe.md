@@ -73,8 +73,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Spot-check grading.** Read the lowest-scoring baseline rows' `explanation` and traces. If a rubric is wrong,
   tell the user; after they edit it and approve the new sha, `cowork-harness hillclimb regrade T --flow F`
   re-evaluates every row in place from its kept run without running the agent: changed deterministic
-  assertions and every metric without a judge call, a judged assertion re-judged because its rubric changed. A
-  fix in the harness's own evaluator needs `--reevaluate` (still no judge, no agent cost).
+  assertions and every metric without a judge call, a judged assertion re-judged because its rubric changed. An
+  unchanged assertion whose evaluation a harness upgrade changed keeps its recorded outcome (noted); editing the
+  assertion, or re-running the case, re-grades it.
 - **Triage every zero.** An agent's own failure is a scored row (`meta.failure_class: "errored_agent"`, with
   `meta.termination_rule`). Infrastructure, timeouts, a wrong served model and invalid judge grades are
   `errors.jsonl` rows, never in the scored denominator.
