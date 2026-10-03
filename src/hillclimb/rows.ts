@@ -67,6 +67,8 @@ export interface AttemptContext {
   /** The agent's own main session transcript (`<config>/projects/<cwd>/<session>.jsonl`), the evidence of the effort
    *  each main-loop call went out with; undefined when the run kept none. */
   transcript?: readonly string[];
+  /** Where the transcript was looked for when none was found (named in the error row). */
+  transcriptWhere?: string;
   /** The variant snapshot's content signature; a run whose fingerprint differs is not this variant. */
   expectedContentSig?: string;
   /** `events.jsonl` lines of the attempt's run dir (readers scope to the current turn). */
@@ -381,7 +383,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     if (want !== undefined && (mains.length > 0 || r?.modelPinHonored === true) && !ctx.requestedEffort!.noSelector && sent.calls === 0)
       return errorRow(
         "serving_substitution",
-        `the requested effort ${want} is not confirmed: the agent's session transcript records no main-loop assistant message`,
+        ctx.transcript === undefined
+          ? `the requested effort ${want} is not confirmed: the agent's session transcript was not found${ctx.transcriptWhere !== undefined ? ` at ${ctx.transcriptWhere}` : ""}`
+          : `the requested effort ${want} is not confirmed: the agent's session transcript records no main-loop assistant message`,
         { failure_rule: "effort_not_sent" },
       );
     // 6. Another snapshot's run.

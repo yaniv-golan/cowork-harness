@@ -620,15 +620,25 @@ describe("requested vs sent effort", () => {
     expect(out.row.meta).not.toHaveProperty("effort_sent");
   });
 
-  it("no transcript to confirm it, though the main loop answered, is an error row", () => {
+  it("a transcript with no main-loop message, though the main loop answered, is an error row saying so", () => {
     const r = fixture("success-semantic");
-    for (const transcript of [undefined, []]) {
-      const out = attemptRow({ result: r }, ctx(r, { ...req("medium"), ...(transcript ? { transcript } : {}) }));
-      expect(out.dest).toBe("errors");
-      expect(out.row.error).toBe(
-        "the requested effort medium is not confirmed: the agent's session transcript records no main-loop assistant message",
-      );
-    }
+    const out = attemptRow({ result: r }, ctx(r, { ...req("medium"), transcript: [] }));
+    expect(out.dest).toBe("errors");
+    expect(out.row.error).toBe(
+      "the requested effort medium is not confirmed: the agent's session transcript records no main-loop assistant message",
+    );
+  });
+
+  it("no transcript found is an error row naming where it was looked for", () => {
+    const r = fixture("success-semantic");
+    const out = attemptRow({ result: r }, ctx(r, { ...req("medium"), transcriptWhere: "/cfg/projects/*/s1.jsonl" }));
+    expect(out.dest).toBe("errors");
+    expect(out.row.error).toBe(
+      "the requested effort medium is not confirmed: the agent's session transcript was not found at /cfg/projects/*/s1.jsonl",
+    );
+    // with no location known, it still says it was not found
+    const bare = attemptRow({ result: r }, ctx(r, { ...req("medium") }));
+    expect(bare.row.error).toBe("the requested effort medium is not confirmed: the agent's session transcript was not found");
   });
 
   it("absence does not outrank the agent's own failure: an agent that failed is still scored", () => {

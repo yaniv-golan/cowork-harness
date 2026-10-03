@@ -105,7 +105,13 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
         perTurnEffort: null,
       });
       const sid = JSON.parse(frames[0]).session_id as string;
-      const projects = join(authored ? join(outDir, "work") : join(outDir, "work", "session", "mnt"), ".claude", "projects", "-sessions-x");
+      // Where the agent's config root is: the session's pinned config_dir on hostloop/protocol, else the run's own.
+      const pinnedCfg = (a.extra.session as SessionConfig).plugins.config_dir;
+      const hostTier = a.scenario.fidelity === "hostloop" || a.scenario.fidelity === "protocol";
+      const configRoot = hostTier
+        ? (pinnedCfg ?? join(outDir, "claude-config"))
+        : join(authored ? join(outDir, "work") : join(outDir, "work", "session", "mnt"), ".claude");
+      const projects = join(configRoot, "projects", "-sessions-x");
       mkdirSync(projects, { recursive: true });
       writeFileSync(join(projects, `${sid}.jsonl`), sentLine + "\n");
       // A real run stamps the signature of the session it staged; so does this fake.
@@ -1879,6 +1885,21 @@ describe("a variant runs one requested model and effort per case: the resume gua
     expect(calls).toEqual([]);
   });
 
+  it("error rows count too: a case whose only rows are error rows at effort high refuses a pass at low", async () => {
+    await approve();
+    sentEffortOverride = "medium"; // every attempt is an effort_not_sent error row
+    await runHillclimbCommand(args("--effort", "high"), deps());
+    expect(existsSync(join(cwd, "flow", "baseline", "results.jsonl"))).toBe(false);
+    sentEffortOverride = undefined;
+    calls = [];
+    const r = await runHillclimbCommand(args("--effort", "low"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/variant baseline's rows for case alpha ran effort high, and this pass would run effort low —/);
+    expect(calls).toEqual([]);
+    // the same effort re-runs the error slot
+    expect((await runHillclimbCommand(args("--effort", "high"), deps())).exitCode).toBe(0);
+  });
+
   it("another effort or model in ANOTHER variant runs, with no warning: it is the lever", async () => {
     await approve();
     await runHillclimbCommand(args("--effort", "high"), deps());
@@ -2005,5 +2026,24 @@ describe("a variant runs one requested model and effort per case: the resume gua
     await runHillclimbCommand(args("--effort", "high"), deps());
     const s = JSON.parse(readFileSync(join(cwd, "flow", "baseline", "summary.json"), "utf8"));
     expect(s).toMatchObject({ model: MODEL, model_requested: MODEL, effort: "high", effort_sent: "high" });
+  });
+});
+
+describe("a session that pins plugins.config_dir", () => {
+  it("hostloop with a fresh pinned config dir: rows are scored with the effort read from that dir", async () => {
+    const cfg = join(mkdtempSync(join(tmpdir(), "hc-rc-cfg-")), "fresh-config");
+    writeFileSync(
+      join(cwd, "evals", "_session.yaml"),
+      `model: ${MODEL}\nplugins:\n  config_dir: ${cfg}\n  local_plugins:\n    - ${plugin}\n`,
+    );
+    writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: hostloop"));
+    try {
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+      const r = await runHillclimbCommand(args("--effort", "high"), deps());
+      expect(r.exitCode, err.join("\n")).toBe(0);
+      expect(rows()[0].meta).toMatchObject({ effort: "high", effort_sent: "high" });
+    } finally {
+      rmSync(join(cfg, ".."), { recursive: true, force: true });
+    }
   });
 });

@@ -15,6 +15,7 @@ import {
   readChildTranscripts,
   keptChildTranscripts,
   keptMainTranscript,
+  findMainTranscript,
   type ChildTranscript,
 } from "../src/hillclimb/trace.js";
 
@@ -343,4 +344,35 @@ describe("keptMainTranscript — the agent's own session transcript, by the same
       rmSync(out, { recursive: true, force: true });
     }
   });
+});
+
+describe("a session that pins plugins.config_dir: the agent's config root is that dir, shared across runs", () => {
+  const line = (e: string) => JSON.stringify({ type: "assistant", isSidechain: false, effort: e, message: { model: "claude-sonnet-5" } });
+  for (const tier of ["hostloop", "protocol"])
+    it(`${tier}: the transcript is read from the pinned dir, by the run's session id only`, () => {
+      const out = mkdtempSync(join(tmpdir(), `hc-pinned-${tier}-`));
+      const pinned = mkdtempSync(join(tmpdir(), `hc-pinned-cfg-`));
+      try {
+        const dir = join(pinned, "projects", "-cwd");
+        mkdirSync(join(dir, "mine", "subagents"), { recursive: true });
+        mkdirSync(join(dir, "theirs", "subagents"), { recursive: true });
+        writeFileSync(join(dir, "mine.jsonl"), line("high") + "\n");
+        writeFileSync(join(dir, "theirs.jsonl"), line("low") + "\n");
+        cpSync(join(DIR, "subagents"), join(dir, "theirs", "subagents"), { recursive: true });
+        const run = { outDir: out, fidelity: tier, configDir: pinned };
+        expect(keptMainTranscript(run, "mine")).toEqual([line("high")]);
+        // another session's sub-agents in the shared dir are not this run's
+        expect(keptChildTranscripts(run, "mine")).toEqual([]);
+        expect(keptChildTranscripts(run, "theirs").map((c) => c.toolUseId)).toEqual(["toolu_01XB9SXzRHWjKtHwT5nWZn3x"]);
+        // no session id: nothing, never the "only file" in a shared dir
+        rmSync(join(dir, "theirs.jsonl"));
+        expect(keptMainTranscript(run, undefined)).toBeUndefined();
+        expect(keptChildTranscripts(run, undefined)).toEqual([]);
+        // not found: where it looked
+        expect(findMainTranscript(run, "gone")).toEqual({ where: join(pinned, "projects", "*", "gone.jsonl") });
+      } finally {
+        rmSync(out, { recursive: true, force: true });
+        rmSync(pinned, { recursive: true, force: true });
+      }
+    });
 });

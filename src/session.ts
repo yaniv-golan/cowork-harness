@@ -747,6 +747,12 @@ export function thinkingEffortRefusal(session: SessionConfig, baseline: Platform
   return undefined;
 }
 
+/** The session's pinned `plugins.config_dir`, `~`-expanded (the agent's `CLAUDE_CONFIG_DIR` on hostloop and on
+ *  protocol under managed config, `buildLaunchPlan`), or undefined for a harness-managed dir. */
+export function pinnedConfigDirOf(session: SessionConfig): string | undefined {
+  return session.plugins.config_dir ? session.plugins.config_dir.replace(/^~(?=$|\/)/, homedir()) : undefined;
+}
+
 /** True iff any PLUGIN mount declares runnable hooks. Folder/upload mounts never count even if a
  *  hooks.json happens to sit inside them — the agent only loads hooks from --plugin-dir roots. */
 export function includeHookEventsFor(mounts: ReadonlyArray<{ kind: string; hostPath: string }>): boolean {
@@ -831,7 +837,7 @@ export function resolveLaunchSources(
   };
 
   // 1. CLAUDE_CONFIG_DIR — clean managed dir unless the session pins one.
-  const pinnedConfigDir = session.plugins.config_dir ? expand(session.plugins.config_dir) : undefined;
+  const pinnedConfigDir = pinnedConfigDirOf(session);
   // Writing settings.json/cowork_settings.json into a user-supplied EXISTING dir would clobber
   // their real Claude config. Require an explicit opt-in; a fresh/non-existent pinned dir is fine.
   if (pinnedConfigDir && existsSync(pinnedConfigDir) && (process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE ?? "") === "")

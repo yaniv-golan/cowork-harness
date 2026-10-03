@@ -15,7 +15,8 @@ import type { RunResult, Scenario } from "../types.js";
 import type { ExecuteOptions } from "../run/execute.js";
 import { salvagedResult, type ScenarioRunner } from "../eval/job-runner.js";
 import type { JobReport, JobSpec } from "./runner.js";
-import { keptChildTranscripts, keptMainTranscript, mainSystemTurn, sentSubagentAppend } from "./trace.js";
+import { findMainTranscript, keptChildTranscripts, mainSystemTurn, sentSubagentAppend } from "./trace.js";
+import { pinnedConfigDirOf } from "../session.js";
 
 export interface JobDeps<F extends { label?: string; ablateSkill?: boolean }> {
   runScenario: ScenarioRunner<F>;
@@ -80,6 +81,7 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
     const deadline = ceilingMs !== undefined ? t0 + ceilingMs : undefined;
     let result: RunResult | undefined;
     let thrown: unknown;
+    const extra = deps.extra?.(spec) ?? {};
     try {
       result = await deps.runScenario({
         scenario,
@@ -87,7 +89,7 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
         flags: { ...deps.flags, label: spec.runLabel, ablateSkill: spec.ablate },
         // Every attempt records the pre-run manifest, whatever its scenario asserts now: a metric or an authorship
         // assert added later in the loop is decided against it when `hillclimb regrade` re-measures the kept run.
-        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...(deps.extra?.(spec) ?? {}), armPreRunManifest: true },
+        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...extra, armPreRunManifest: true },
         rethrowUnanswered: true,
       });
     } catch (e) {
@@ -99,14 +101,21 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
     const fidelity = result?.effectiveFidelity ?? result?.fidelity;
     const subagentAppend = outDir ? sentSubagentAppend(outDir) : undefined;
     const events = outDir ? lines(join(outDir, "events.jsonl")) : [];
-    const kept = outDir && fidelity ? { outDir, fidelity, ...(result?.workDir ? { workDir: result.workDir } : {}) } : undefined;
-    const transcript = kept ? keptMainTranscript(kept, sessionIdOf(events)) : undefined;
+    // The session the run got: a pinned config_dir is where hostloop and protocol keep the agent's transcripts.
+    const configDir = extra.session !== undefined ? pinnedConfigDirOf(extra.session) : undefined;
+    const kept =
+      outDir && fidelity
+        ? { outDir, fidelity, ...(result?.workDir ? { workDir: result.workDir } : {}), ...(configDir !== undefined ? { configDir } : {}) }
+        : undefined;
+    const sessionId = sessionIdOf(events);
+    const found = kept ? findMainTranscript(kept, sessionId) : undefined;
     return {
       ...(result !== undefined ? { result } : { result: undefined }),
       ...(thrown !== undefined ? { thrown } : {}),
       events,
-      ...(transcript !== undefined ? { transcript } : {}),
-      children: kept ? keptChildTranscripts(kept) : [],
+      ...(found?.lines !== undefined ? { transcript: found.lines } : {}),
+      ...(found !== undefined ? { transcriptWhere: found.where } : {}),
+      children: kept ? keptChildTranscripts(kept, sessionId) : [],
       ...(subagentAppend !== undefined ? { subagentAppend } : {}),
       ...(outDir !== undefined ? { system: mainSystemTurn(outDir) } : {}),
       attemptS,

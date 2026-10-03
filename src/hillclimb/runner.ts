@@ -40,6 +40,8 @@ export interface JobReport {
   /** The agent's own main session transcript lines (the effort each main-loop call was sent with); absent when the
    *  run kept none. */
   transcript?: string[];
+  /** The transcript file read, or where it was looked for when none was found. */
+  transcriptWhere?: string;
   children: ChildTranscript[];
   /** The trace's system turn (marker + the append as sent); absent ⇒ no system turn. */
   system?: string;
@@ -469,6 +471,7 @@ async function run(
         ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
         events: report.events,
         ...(report.transcript !== undefined ? { transcript: report.transcript } : {}),
+        ...(report.transcriptWhere !== undefined ? { transcriptWhere: report.transcriptWhere } : {}),
         attemptS: report.attemptS,
         runnerTimeout: report.runnerTimeout,
         tags: [basename(dirname(c.file))],
@@ -711,7 +714,7 @@ export function requestedSummary(results: string | null): Record<string, string 
   };
 }
 
-/** The resume guard over one variant's `results.jsonl` rows, keyed by (variant, prompt_id): pins and sessions are per
+/** The resume guard over one variant's `results.jsonl` and `errors.jsonl` rows, keyed by (variant, prompt_id): pins and sessions are per
  *  case. A row records what it asked for (`meta.model_requested`, `meta.effort`); one that differs from what this pass
  *  asks for its case is a refusal. A row written before those fields existed is held to its SERVED model (a dated
  *  snapshot of the pin is the pin), and warns when it has none; its effort is unknown, which always warns (a
@@ -729,7 +732,14 @@ function requestedMix(
   const noModel = new Set<string>();
   const noEffort = new Set<string>();
   const others = { model: new Map<string, Set<string>>(), effort: new Map<string, Set<string>>() };
-  for (const line of (snap.variants[variant]?.results ?? "").split("\n")) {
+  // errors.jsonl rows count too: a pass whose attempts all failed still asked for its model and effort. Only what a row
+  // RECORDS it asked for is held against this pass there — an error row's served model is often the very substitution
+  // it reports, and an error row that records nothing says nothing.
+  const lines = [
+    ...(snap.variants[variant]?.results ?? "").split("\n").map((l) => ({ l, scored: true })),
+    ...(snap.variants[variant]?.errors ?? "").split("\n").map((l) => ({ l, scored: false })),
+  ];
+  for (const { l: line, scored } of lines) {
     if (!line.trim()) continue;
     let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown; effort?: unknown; effort_selector?: unknown } };
     try {
@@ -751,6 +761,8 @@ function requestedMix(
       if (mr !== undefined) {
         if (normalizeModelId(mr) !== normalizeModelId(w.model))
           refusals.add(`variant ${variant}'s rows for case ${id} ran model ${mr}, and this pass would run model ${w.model}`);
+      } else if (!scored) {
+        /* an error row that records no requested model */
       } else if (typeof r.model === "string") {
         if (servedModelMismatch(w.model, [r.model]) !== undefined)
           refusals.add(`variant ${variant}'s rows for case ${id} ran model ${r.model} (served), and this pass would run model ${w.model}`);
@@ -762,7 +774,7 @@ function requestedMix(
     if (ef !== undefined) {
       if (ef !== w.effort)
         refusals.add(`variant ${variant}'s rows for case ${id} ran effort ${ef}, and this pass would run effort ${w.effort}`);
-    } else noEffort.add(id);
+    } else if (scored) noEffort.add(id);
   }
   const named = (ids: Iterable<string>) => {
     const xs = [...new Set(ids)].sort();
