@@ -1,6 +1,6 @@
 // The run-outcome rollup. `result` ("did the agent finish?"), `verdict.pass` ("did it satisfy the
 // asserts/guards?") and the process exit code are three separate signals that legitimately disagree — a
-// fail-severity signal like `outputs_delete` flips the verdict while `result.result` stays "success"
+// fail-severity signal like `outputs_delete` (on a baseline that records outputs `rw`) flips the verdict while `result.result` stays "success"
 // (docs/scenario.md documents that trap). Every consumer driving an iterative loop has to answer "did this
 // iteration deliver something usable?" on every turn, and had to reconstruct it from all three.
 //

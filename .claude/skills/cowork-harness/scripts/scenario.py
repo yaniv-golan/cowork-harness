@@ -4261,7 +4261,7 @@ def main(argv=None):
     sp.add_argument("--web-fetch", dest="web_fetch", action="append", metavar="DOMAIN", help="web_fetch approval rule (repeatable)")
     sp.add_argument("--file", action="append", metavar="PATH", help="file_exists assertion (repeatable)")
     sp.add_argument("--artifact", action="append", metavar="PATH", help="user_visible_artifact assertion (repeatable)")
-    sp.add_argument("--no-delete", action="store_true", help="add no_delete_in_outputs: true")
+    sp.add_argument("--no-delete", action="store_true", help="add no_delete_in_outputs: true (checks outputs deletes on every baseline; from Desktop 2.16120.0 Cowork itself allows them)")
     sp.add_argument("--egress-allowed", dest="egress_allowed", action="append", metavar="HOST", help="egress_allowed assertion (repeatable)")
     sp.add_argument("--egress-denied", dest="egress_denied", action="append", metavar="HOST", help="egress_denied assertion (repeatable)")
     sp.add_argument("--out", help="write to this file (default: stdout)")

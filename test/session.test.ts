@@ -726,7 +726,16 @@ describe("connected projects — .projects/<uuid>, read-only, never the cwd", ()
     // The distinction that made this item worth getting right: modelling a project as writable-but-
     // delete-denied would have put it in the delete guard's scope and reported deletes that production
     // makes impossible.
-    expect(deleteDeniedRootsFromPlan(withProject().plan)).toEqual(["outputs"]);
+    expect(deleteDeniedRootsFromPlan(withProject().plan, "rw")).toEqual(["outputs"]);
+  });
+
+  it("outputs is delete-denied only on a baseline that records it rw; a rw folder is delete-denied on both", () => {
+    // Desktop >= 2.16120.0 mounts outputs rwd for a normal session; connected folders keep the approved-list rule.
+    expect(deleteDeniedRootsFromPlan(withProject().plan, "rwd")).toEqual([]);
+    const withFolder = plan({ folders: [{ from: tmpdir(), mode: "rw" }] }).plan;
+    const folderName = withFolder.mounts.find((m) => m.kind === "folder")!.mountPath;
+    expect(deleteDeniedRootsFromPlan(withFolder, "rw")).toEqual(["outputs", folderName]);
+    expect(deleteDeniedRootsFromPlan(withFolder, "rwd")).toEqual([folderName]);
   });
 
   it("never becomes the session cwd — a project-only session keeps workspaceFolder at outputs", () => {

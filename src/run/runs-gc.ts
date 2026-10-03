@@ -1,9 +1,10 @@
-import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
-import { existsSync, readdirSync, statSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { applyParsedCommandGlobals, runDirFlagGiven, withCommandGlobals } from "./command-globals.js";
+import { existsSync, readdirSync, statSync, rmSync, type Dirent } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
-import { runsWriteRoot } from "./trace-view.js";
-import { classifyRunDir, hasTurnDirs } from "./turn-layout.js";
+import { defaultRunsHome, runsWriteRoot } from "./trace-view.js";
+import { MANIFEST_FILE } from "../eval/manifest.js";
+import { classifyRunDir } from "./turn-layout.js";
 import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
 import { evalIdOfLabel, isHillclimbLabel, isSymlink, readSmallJson, runLabelOf } from "./run-labels.js";
 import { isStatusStale, isValidRunStatus } from "./run-status.js";
@@ -70,22 +71,307 @@ function parseRetentionMs(s: string): number | undefined {
   return n * mult;
 }
 
-/** A "real run" — has completed at least one turn (`turns/<N>/`, current layout — no writer produces a
- *  root `result.json` compat copy to check for anymore) OR has an `events.jsonl` (a session started, so
- *  the run is in-flight or threw — e.g. an unanswered gate under on_unanswered:fail writes no turn dir but
- *  DOES leave events.jsonl). A never-started empty `scaffold`/failed-before-session dir has neither → it
- *  is what GC should drop first. `events.jsonl` exists from session start, so an in-flight run is
- *  protected without a wall-clock guard. */
-const isRealRun = (dir: string) => {
-  if (hasTurnDirs(dir) || existsSync(join(dir, "events.jsonl"))) return true;
-  // A PRE-LAYOUT dir is still a real run. This predicate reasons about the RANKING population, which is
-  // history — not about what current writers produce. Keying it on `hasTurnDirs` alone demoted an
-  // unmigrated legacy dir (root result.json, no events.jsonl) into the junk tier, so prune deleted it
-  // ahead of an empty scaffold: silent destruction of exactly the history `migrate-run-dir` exists to
-  // preserve, in the same file whose journal guard calls that the most expensive outcome in this feature.
+/** The run-dir names prune ranks and deletes. Every writer mints one of these (see `PINNED_RUN_ID_RE` for the
+ *  pinned form):
+ *  - `local_<base36>`: an ordinary run's id, `process.hrtime.bigint().toString(36)` (execute.ts, chat.ts), or a
+ *    pre-assigned one (`^local_[0-9a-z]{8,32}$`, execute.ts) made from a hash for an eval job (eval/schedule.ts)
+ *    or a hillclimb attempt (hillclimb/job.ts). base36 from `toString(36)` is lowercase.
+ *  Any other child of a scenario dir is left alone and counted, so a wrong root that the shape check cannot
+ *  recognise (a home dir, a repo, a hillclimb flow dir) loses nothing. */
+export const LOCAL_RUN_ID_RE = /^local_[0-9a-z]+$/;
+/** `sess-<id>`: a pinned run, `--session-id <id>` with `<id>` limited to `[A-Za-z0-9_-]+` (execute.ts), or a
+ *  critique's `sess-crit-<uuid>`. Deleted only under `--pinned-older-than`. */
+export const PINNED_RUN_ID_RE = /^sess-[A-Za-z0-9_-]+$/;
+
+/** `p` is a regular file, following a symlink as the deletion loop does. A DIRECTORY named `status.json` or
+ *  `events.jsonl` is a scenario slug, not a marker. */
+function isFile(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+function isDir(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** What marks a dir as a run dir. ONE reader for both the keep-slot ranking (`isRealRun`) and the level check
+ *  (`looksLikeRunDir`), so the two cannot drift. Markers are regular files, or numbered `turns/<N>` dirs. */
+export interface RunDirEvidence {
+  /** status.json (any content: a damaged one still marks a run dir). */
+  status: boolean;
+  /** .origin, the pinned-run marker written before status.json. */
+  origin: boolean;
+  events: boolean;
+  /** `turns/<N>/` with a canonical numeric N. A bare `turns/` dir is not enough: `turns` can be a scenario slug. */
+  turns: boolean;
+  /** Pre-layout per-turn files at the dir's root (`classifyRunDir`'s markers that are regular files). */
+  legacy: string[];
+}
+export function runDirEvidence(dir: string): RunDirEvidence {
   const shape = classifyRunDir(dir);
-  return shape.kind === "legacy" || shape.kind === "mixed";
-};
+  return {
+    status: isFile(join(dir, "status.json")),
+    origin: isFile(join(dir, ".origin")),
+    events: isFile(join(dir, "events.jsonl")),
+    turns: shape.kind === "turns" || shape.kind === "mixed",
+    legacy: shape.kind === "legacy" || shape.kind === "mixed" ? shape.markers.filter((m) => isFile(join(dir, m))) : [],
+  };
+}
+
+/** A "real run" — has completed at least one turn (`turns/<N>/`) OR has an `events.jsonl` (a session started, so
+ *  the run is in-flight or threw — e.g. an unanswered gate under on_unanswered:fail writes no turn dir but DOES
+ *  leave events.jsonl) OR is a PRE-LAYOUT dir. A never-started empty `scaffold`/failed-before-session dir has none
+ *  of these (status.json alone does not count) → it is what GC should drop first. `events.jsonl` exists from
+ *  session start, so an in-flight run is protected without a wall-clock guard.
+ *  The legacy arm: this predicate reasons about the RANKING population, which is history, not about what
+ *  current writers produce. Without it an unmigrated legacy dir (root result.json, no events.jsonl) dropped into
+ *  the junk tier and prune deleted it ahead of an empty scaffold: silent destruction of exactly the history
+ *  `migrate-run-dir` exists to preserve. */
+const isRealRunFrom = (e: RunDirEvidence): boolean => e.turns || e.events || e.legacy.length > 0;
+export const isRealRun = (dir: string): boolean => isRealRunFrom(runDirEvidence(dir));
+const looksLikeRunDirFrom = (e: RunDirEvidence): boolean => e.status || e.origin || isRealRunFrom(e);
+/** Anything that marks `dir` as a run dir, the scaffold tier (status.json or .origin only) included.
+ *  `isRealRun(d)` implies `looksLikeRunDir(d)`. */
+export const looksLikeRunDir = (dir: string): boolean => looksLikeRunDirFrom(runDirEvidence(dir));
+
+/** Up to three markers, in a fixed order, for a message. */
+function markerList(e: RunDirEvidence): string {
+  return [e.status && "status.json", e.events && "events.jsonl", e.origin && ".origin", e.turns && "turns/", ...e.legacy]
+    .filter((m): m is string => typeof m === "string")
+    .slice(0, 3)
+    .join(", ");
+}
+
+/** The level scan's bounds. It runs on whatever path the user typed, a home dir included, so its DEEP part (below
+ *  the root's direct children) is charged to a budget: LEVEL_SCAN_BUDGET units (one per entry, more per run-dir
+ *  probe) or LEVEL_SCAN_DEADLINE_MS, whichever runs out first. The deadline bounds the work started; it cannot
+ *  interrupt a call that is already blocked, which is why the scan never stats a plain entry and never follows a
+ *  symlink below the root (a stat inside a cloud-storage folder can block for minutes).
+ *  The root's own listing and the cheap marker probes on its direct children are NOT charged (only the per-dir
+ *  child cap bounds them), so the refusals that rest on them never depend on the budget. If the charged part runs
+ *  out, the check fails CLOSED unless the root is positively a runs root. */
+const LEVEL_SCAN_MAX_CHILDREN = 2000;
+const LEVEL_SCAN_BUDGET = 20_000;
+const LEVEL_SCAN_DEADLINE_MS = 3000;
+/** Test seam: the deep scan's budget and deadline. */
+export interface LevelScanLimits {
+  budget?: number;
+  deadlineMs?: number;
+}
+/** The current level scan's state; undefined outside `pruneLevelRefusal` (no bound). */
+let scan: { left: number; until: number; exhausted: boolean } | undefined;
+/** Spend `n` units of the deep-scan budget; false (and the scan marked exhausted) once it or the deadline is
+ *  spent. Always true outside a scan. */
+function charge(n: number): boolean {
+  if (scan === undefined) return true;
+  scan.left -= n;
+  if (scan.left >= 0 && Date.now() < scan.until) return true;
+  scan.exhausted = true;
+  return false;
+}
+/** Run `fn` with the budget off: for the root's own listing and the direct-child probes. */
+function uncharged<T>(fn: () => T): T {
+  const saved = scan;
+  scan = undefined;
+  try {
+    return fn();
+  } finally {
+    scan = saved;
+  }
+}
+
+/** Dir children of `dir` for the level scan, sorted. Dot entries (`.migrating`, `.git`, `.Trash`, ...) are never
+ *  descended into: no writer names a scenario or a run with a leading dot. Symlinks are not followed, and the
+ *  entry type comes from the directory listing, so no entry is stat'ed. An unreadable dir (EPERM, EACCES) has
+ *  no children. */
+function dirChildren(dir: string): string[] {
+  if (!charge(1)) return [];
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out = entries
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+    .map((e) => e.name)
+    .sort()
+    .slice(0, LEVEL_SCAN_MAX_CHILDREN);
+  return charge(out.length) ? out : [];
+}
+/** `looksLikeRunDir`, charged to the deep-scan budget (false once it is spent). A probe is several fs calls. */
+const scanLooksLikeRunDir = (dir: string): boolean => charge(6) && looksLikeRunDir(dir);
+const looksLikeScenarioDir = (dir: string): boolean => dirChildren(dir).some((x) => scanLooksLikeRunDir(join(dir, x)));
+/** Every non-dot child of `dir` is named like a run id (a scenario whose runs are all empty scaffold dirs). */
+function runIdNamed(dir: string): boolean {
+  if (!charge(1)) return false;
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((n) => !n.startsWith("."));
+  } catch {
+    return false;
+  }
+  return names.length > 0 && names.every((n) => LOCAL_RUN_ID_RE.test(n) || PINNED_RUN_ID_RE.test(n));
+}
+/** The file markers of a runs root: cheap, fixed-name probes. */
+function runsRootMarker(dir: string): string | undefined {
+  if (isFile(join(dir, "index.jsonl"))) return "index.jsonl";
+  if (isFile(join(dir, "capability-cache.json"))) return "capability-cache.json";
+  if (isDir(join(dir, MIGRATION_JOURNAL_DIR))) return `${MIGRATION_JOURNAL_DIR}/`;
+  return undefined;
+}
+/** A `<scenario>/<run>` dir two levels under `dir` (charged). Never descends into a run-shaped dir: a run dir's
+ *  `turns/1/result.json` would read as a pre-layout run one level down. */
+function nestedRunEvidence(dir: string): string | undefined {
+  for (const x of dirChildren(dir)) {
+    const px = join(dir, x);
+    if (scanLooksLikeRunDir(px)) continue;
+    const y = dirChildren(px).find((n) => scanLooksLikeRunDir(join(px, n)));
+    if (y !== undefined) return `a <scenario>/<run> dir, ${x}/${y}`;
+  }
+  return undefined;
+}
+
+/** At most this many non-run-named dirs are probed for run markers per prune, for the diagnostic count. */
+const ODD_RUN_PROBES = 500;
+
+const DEFAULT_RUNS_DIR_NAME = basename(defaultRunsHome());
+
+/** Why `root` is not at the runs-root level, as a two-line message, or undefined. Checked once, before anything
+ *  is deleted and whatever the flags (`--dry-run` included). First match wins, outermost evidence first: a dir
+ *  inside a run dir, a run dir, an eval dir, a scenario dir, then a dir holding a runs root. A root this cannot
+ *  recognise (a home dir, a repo) is left to the name allowlist: nothing in it is named like a run id.
+ *  ANY run-shaped child refuses: a false refusal costs a re-typed path, a false delete costs history.
+ *  `source` is appended to the path in the message (e.g. where the root came from). `limits` is a test seam for
+ *  the deep scan's bounds (see LEVEL_SCAN_BUDGET). */
+export function pruneLevelRefusal(root: string, source = "", limits: LevelScanLimits = {}): string | undefined {
+  scan = {
+    left: limits.budget ?? LEVEL_SCAN_BUDGET,
+    until: Date.now() + (limits.deadlineMs ?? LEVEL_SCAN_DEADLINE_MS),
+    exhausted: false,
+  };
+  try {
+    return levelRefusal(root, source);
+  } finally {
+    scan = undefined;
+  }
+}
+
+/** At most this many runs roots are looked for under the given root; the message lists three. */
+const MAX_ROOTS_FOUND = 4;
+
+function levelRefusal(root: string, source: string): string | undefined {
+  const abs = resolve(root);
+  const refuse = (what: string, hint: string) => `prune: ${root}${source} ${what}. Nothing was deleted.\n  ${hint}`;
+  /** A hint that points at a WIDER root must say what pruning it does. */
+  const wider = (w: string) =>
+    `prune takes the runs root, which holds <scenario>/<run> dirs; that looks like ${w}. prune has no per-scenario scope: on ${w} it ` +
+    `applies --keep-last to every scenario there. Preview it first: cowork-harness prune --dry-run ${w}`;
+
+  if (!isDir(abs)) return refuse("is not a directory", "prune takes the runs root, a directory that holds <scenario>/<run> dirs.");
+
+  // Inside a run dir (`<run>/work`, `<run>/turns`, `<run>/turns/1`, `<run>/work/outputs`): the loop would treat
+  // `outputs/` and the like as scenarios. Checked BEFORE the root's own shape, so `<run>/turns/1` (which has a
+  // result.json of its own) names the run dir it is in, not itself. A VALID harness status.json is required, not
+  // any marker: the ancestors of a correct root are dirs like ~ or /tmp, where a stray result.json is plausible
+  // and a harness status file is not.
+  let a = abs;
+  for (let i = 0; i < 3; i++) {
+    const up = dirname(a);
+    if (up === a) break;
+    a = up;
+    const st = join(a, "status.json");
+    if (isFile(st) && isValidRunStatus(readSmallJson(st))) return refuse(`is inside the run dir ${a}`, wider(dirname(dirname(a))));
+  }
+
+  const own = runDirEvidence(abs);
+  if (looksLikeRunDirFrom(own))
+    return refuse(`looks like a run dir, not a runs root (it has ${markerList(own)})`, wider(dirname(dirname(abs))));
+
+  const evalHint =
+    "prune does not prune evals. An eval's runs live in the runs root it ran against (by default ~/.cowork-harness/runs), " +
+    "and `eval report <eval-dir>` rebuilds a report from the eval dir alone.";
+  if (isFile(join(abs, MANIFEST_FILE))) return refuse(`looks like an eval dir (it has ${MANIFEST_FILE}), not a runs root`, evalHint);
+
+  // UNCHARGED: the root's listing and fixed-name probes on each direct child.
+  const children = uncharged(() => dirChildren(abs));
+  const childMarker = new Map<string, string>();
+  const evalChildren: string[] = [];
+  for (const c of children) {
+    const pc = join(abs, c);
+    const e = runDirEvidence(pc);
+    if (looksLikeRunDirFrom(e))
+      return refuse(`looks like a scenario dir, not a runs root: ${join(root, c)} is a run dir (${markerList(e)})`, wider(dirname(abs)));
+    const m = runsRootMarker(pc);
+    if (m !== undefined) childMarker.set(c, m);
+    if (isFile(join(pc, MANIFEST_FILE))) evalChildren.push(c);
+  }
+  const rootMarker = runsRootMarker(abs);
+
+  // CHARGED from here: anything that lists a child's children.
+  // Is the root itself a runs root? Then a child holding manifest.json is just a dir the allowlist leaves alone,
+  // and a child that is a runs root is a NESTED one.
+  const scenarioChildren = new Set(children.filter((c) => !childMarker.has(c) && looksLikeScenarioDir(join(abs, c))));
+  const isRootItself = rootMarker !== undefined || scenarioChildren.size > 0;
+
+  if (!isRootItself && evalChildren.length > 0)
+    return refuse(`looks like a dir of eval dirs, not a runs root: ${join(root, evalChildren[0])} has ${MANIFEST_FILE}`, evalHint);
+
+  // A child that is itself a runs root, or carries the default runs-dir name. A scenario that happens to be
+  // named like that is exempt: it has run-shaped children, or (only scaffold dirs) run-id-named ones. The
+  // default-name child is judged uncharged: one listing, and a budget cut must not turn a scenario named `runs`
+  // into a refusal.
+  const roots: Array<{ name: string; why: string }> = [];
+  for (const c of children) {
+    if (roots.length >= MAX_ROOTS_FOUND) break;
+    if (scenarioChildren.has(c)) continue;
+    const pc = join(abs, c);
+    const ev = childMarker.get(c) ?? nestedRunEvidence(pc);
+    if (ev !== undefined) roots.push({ name: c, why: ev });
+    else if (c === DEFAULT_RUNS_DIR_NAME && uncharged(() => !looksLikeScenarioDir(pc) && !runIdNamed(pc)))
+      roots.push({ name: c, why: "the default runs-dir name" });
+  }
+  if (roots.length === 0) {
+    // The deep scan ran out before it could clear this root: fail CLOSED, unless the root is positively a runs
+    // root (a file marker of its own, or every child a scenario or a scenario of run-id-named scaffold dirs).
+    if (scan?.exhausted !== true) return undefined;
+    const positive =
+      (rootMarker !== undefined && rootMarker !== `${MIGRATION_JOURNAL_DIR}/`) ||
+      (children.length > 0 && children.every((c) => scenarioChildren.has(c) || uncharged(() => runIdNamed(join(abs, c)))));
+    if (positive) return undefined;
+    return refuse(
+      `could not be checked: the level check did not finish under ${abs}`,
+      "pass the runs root itself, the dir that holds <scenario>/<run> dirs (by default ~/.cowork-harness/runs). Preview first: cowork-harness prune --dry-run <runs-root>",
+    );
+  }
+  // The default name first: it is the likeliest one meant.
+  roots.sort((x, y) => Number(y.name === DEFAULT_RUNS_DIR_NAME) - Number(x.name === DEFAULT_RUNS_DIR_NAME));
+  const shown = roots.slice(0, 3);
+  const more = roots.length > shown.length ? ", and more" : "";
+  const list = shown.map((r) => `${join(root, r.name)} (${r.why})`).join(", ") + more;
+  const first = join(abs, shown[0].name);
+  if (isRootItself)
+    return refuse(
+      `holds ${roots.length === 1 ? "a nested runs root" : "nested runs roots"}, so prune cannot run on it: ${list}`,
+      `Prune each nested runs root by its own path (preview first: cowork-harness prune --dry-run ${first}), or move it out of ${abs}.`,
+    );
+  return refuse(
+    `looks like the parent of ${roots.length === 1 ? "a runs root" : "runs roots"}: ${list}`,
+    `prune takes the runs root itself. Did you mean: cowork-harness prune --dry-run ${first}` +
+      (shown.length > 1
+        ? ` (or ${shown
+            .slice(1)
+            .map((r) => join(abs, r.name))
+            .join(", ")})`
+        : ""),
+  );
+}
 
 /** `cowork-harness prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb] [--dry-run] [<runs-dir>]`
  *
@@ -109,6 +395,11 @@ const isRealRun = (dir: string) => {
  *  still being updated or its recorded process is alive (up to 24h) — see liveRunReason.
  *  The default root is the flat, machine-global `~/.cowork-harness/runs` (shared across projects), so a
  *  bare `prune` prunes ephemeral runs from ALL projects; pass an explicit <runs-dir> to scope it.
+ *  THE ROOT MUST BE AT THE RUNS-ROOT LEVEL, whatever set it (positional, --run-dir, the env var, the default):
+ *  pruneLevelRefusal refuses a run dir, a dir inside one, an eval dir, a scenario dir, or a dir holding a runs
+ *  root, with exit 2 and nothing deleted, --dry-run included. Below that, only dirs named like a run id
+ *  (LOCAL_RUN_ID_RE, and PINNED_RUN_ID_RE under --pinned-older-than) are ever deleted; every other child of a
+ *  scenario dir is left alone and counted.
  *  Safe by default (dry-run-able). */
 export function cmdRunsGc(args: string[]): void {
   let p;
@@ -156,8 +447,33 @@ export function cmdRunsGc(args: string[]): void {
     log(`✓ prune: ${runsRoot} does not exist — nothing to prune`);
     return process.exit(0);
   }
+  // ONE check, before anything is deleted and before every flag: a per-scenario check inside the loop would
+  // delete earlier-sorted children before refusing.
+  const fromEnv = p.positionals[0] === undefined && !runDirFlagGiven() && process.env.COWORK_HARNESS_RUNS_DIR !== undefined;
+  const refusal = pruneLevelRefusal(runsRoot, fromEnv ? " (from COWORK_HARNESS_RUNS_DIR)" : "");
+  if (refusal !== undefined) {
+    log(refusal);
+    return process.exit(2);
+  }
 
   let deleted = 0;
+  // Children of a scenario dir that are not named like a run id: left alone, counted. The run-shaped ones are
+  // counted apart, with a few paths, since they are the ones a user may have expected prune to manage.
+  let otherDirs = 0;
+  const oddRuns: string[] = [];
+  let runNamed = 0;
+  let oddProbes = 0;
+  const rootIsRunsRoot = isFile(join(runsRoot, "index.jsonl")) || isFile(join(runsRoot, "capability-cache.json"));
+  // A dir prune may not read (EPERM/EACCES, e.g. ~/.Trash) is skipped and counted, not a crash.
+  const unreadable: string[] = [];
+  const readNames = (dir: string): string[] | undefined => {
+    try {
+      return readdirSync(dir);
+    } catch {
+      unreadable.push(dir);
+      return undefined;
+    }
+  };
   let kept = 0;
   let skippedRunning = 0;
   // Protected hillclimb runs, counted per "<scenario>\0<label>" for the summary.
@@ -188,7 +504,7 @@ export function cmdRunsGc(args: string[]): void {
     return true;
   };
 
-  for (const scenarioSlug of readdirSync(runsRoot).sort()) {
+  for (const scenarioSlug of (readNames(runsRoot) ?? []).sort()) {
     if (scenarioSlug === MIGRATION_JOURNAL_DIR) continue; // the journal store is not a scenario
     const scenarioDir = join(runsRoot, scenarioSlug);
     let st: ReturnType<typeof statSync>;
@@ -219,19 +535,41 @@ export function cmdRunsGc(args: string[]): void {
     // hillclimb partition and the eval note. A dir that yields no label is an ordinary run: if neither file
     // parses, `regrade`/`freeze-ref` cannot use it either. The one window with no label yet — between a run's
     // mkdir and its status.json write, a few synchronous calls apart — has no guard.
-    const sorted = readdirSync(scenarioDir)
-      .map((name) => ({ name, path: join(scenarioDir, name), label: runLabelOf(join(scenarioDir, name)) }))
-      .filter(({ path }) => {
-        try {
-          return statSync(path).isDirectory();
-        } catch {
-          return false;
-        }
+    // Only dirs named like a run id are candidates (see LOCAL_RUN_ID_RE / PINNED_RUN_ID_RE). Dotfiles are not
+    // counted (.DS_Store and the like).
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(scenarioDir, { withFileTypes: true });
+    } catch {
+      unreadable.push(scenarioDir);
+      continue;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // A run-id-named entry is followed through a symlink, as before (a symlinked run dir is pruned as a link).
+    // Anything else is typed from the listing alone, never stat'ed: under a wrong root that can be a cloud-storage
+    // folder, where a stat can block for minutes.
+    const isRunId = (name: string) => LOCAL_RUN_ID_RE.test(name) || PINNED_RUN_ID_RE.test(name);
+    // Which of the others look like runs is a diagnostic only, and the probe stats inside arbitrary dirs. So it
+    // runs only under a root that is positively a runs root, never inside a symlinked scenario dir, and at most
+    // ODD_RUN_PROBES times.
+    const probe = rootIsRunsRoot && !isSymlink(scenarioDir);
+    for (const e of entries) {
+      if (e.name.startsWith(".") || isRunId(e.name) || !e.isDirectory()) continue;
+      if (probe && oddProbes < ODD_RUN_PROBES && (oddProbes++, looksLikeRunDir(join(scenarioDir, e.name))))
+        oddRuns.push(join(scenarioDir, e.name));
+      else otherDirs++;
+    }
+    const runIdDirs = entries
+      .filter((e) => isRunId(e.name) && (e.isDirectory() || (e.isSymbolicLink() && isDir(join(scenarioDir, e.name)))))
+      .map((e) => e.name);
+    runNamed += runIdDirs.length;
+    const sorted = runIdDirs
+      .map((name) => {
+        const path = join(scenarioDir, name);
+        return { name, path, label: runLabelOf(path), real: isRealRun(path) };
       })
       .sort((a, b) => {
-        const aReal = isRealRun(a.path),
-          bReal = isRealRun(b.path);
-        if (aReal !== bReal) return aReal ? -1 : 1; // a real run ranks ahead of an empty/incomplete dir
+        if (a.real !== b.real) return a.real ? -1 : 1; // a real run ranks ahead of an empty/incomplete dir
         let aMtime = 0,
           bMtime = 0;
         try {
@@ -253,8 +591,8 @@ export function cmdRunsGc(args: string[]): void {
     // slot either, or a retained pinned dir would evict a newer ephemeral `local_*` that should be kept.
     // Only ephemeral `local_*` runs are subject to --keep-last.
     // A `sess-*` dir follows the pinned rule even when it carries a hillclimb label.
-    const pinned = sorted.filter((d) => d.name.startsWith("sess-"));
-    const rest = sorted.filter((d) => !d.name.startsWith("sess-"));
+    const pinned = sorted.filter((d) => PINNED_RUN_ID_RE.test(d.name));
+    const rest = sorted.filter((d) => LOCAL_RUN_ID_RE.test(d.name));
     // HILLCLIMB runs are the second protected partition, for the same reason: kept, and outside the
     // --keep-last count, so a flow's reps never evict the newest plain runs of the same scenario. Only
     // --include-hillclimb returns them to the ranking below.
@@ -291,6 +629,25 @@ export function cmdRunsGc(args: string[]): void {
     }
   }
 
+  if (unreadable.length > 0)
+    log(
+      `↷ prune: skipped ${unreadable.length} dir(s) it could not read: ${unreadable.slice(0, 3).join(", ")}` +
+        (unreadable.length > 3 ? ` (+${unreadable.length - 3} more)` : ""),
+    );
+  if (otherDirs > 0)
+    log(
+      `↷ prune: left alone ${otherDirs} dir(s) not named like a run (prune only touches dirs named local_ followed by lowercase ` +
+        `letters and digits, and sess- ones under --pinned-older-than)`,
+    );
+  if (oddRuns.length > 0)
+    log(
+      `↷ prune: left ${oddRuns.length} run-shaped dir(s) with an unrecognised name alone: ${oddRuns.slice(0, 3).join(", ")}` +
+        (oddRuns.length > 3 ? ` (+${oddRuns.length - 3} more)` : ""),
+    );
+  if (runNamed === 0 && otherDirs + oddRuns.length > 0)
+    log(
+      `  no <scenario>/<run> dirs found under ${runsRoot}; the default runs root is ~/.cowork-harness/runs (or $COWORK_HARNESS_RUNS_DIR)`,
+    );
   const protectedHillclimb = [...hillclimbKept.values()].reduce((a, b) => a + b, 0);
   if (protectedHillclimb > 0) {
     // Grouped by scenario and FULL label. The label carries the flow dir's basename only, so two projects on

@@ -784,7 +784,7 @@ scenario checked so far) can differ from `error.budget`, which describes the ref
 `ok = error===null && results.length>0 && results.every(r => r.result==="success" && r.assertions.every(a=>a.pass) && computeVerdict(r).pass)`.
 `result:"success"` and passing assertions are necessary but **not sufficient** — `computeVerdict` adds a
 verdict-signal layer that can still fail a run (e.g. `stalled` — ended on a question or a closing request for input with no productive work after its last gate, `transport_error`,
-`missing_capability`, `permissive_auto_allow`, `outputs_delete`, `host_path_leak`, `l0_host_config_contamination`),
+`missing_capability`, `permissive_auto_allow`, `outputs_delete` (on a baseline that records outputs `rw`), `host_path_leak`, `l0_host_config_contamination`),
 each suppressible only by the matching `allow_*` modifier. `result` means "the agent turn didn't error," NOT
 "the task completed."
 
@@ -854,6 +854,7 @@ abridged to the fields most consumers branch on. The complete field list is
   "skillToolAvailable?": bool,                    // Wave 1: whether the agent's init tool list included "Skill" — false ⇒ skill_triggered/no_skill_triggered fail as evidence-unavailable (agent-version drift)
   "scan?": { "outputsDeletes": ["string"], "outputsDeleteBasis?": ["fs-diff|named|inferred"], "hostPathLeaked": bool, "inputHostPathTokens?": number, "hostPathsFromInputs?": number, "selfHealRan?": bool, … }, // post-run scan signals (live lane only). outputsDeleteBasis is positional with outputsDeletes: fs-diff = proven by the filesystem diff; named = a delete in command/call position has an outputs path as its own operand; inferred = flagged by the detector's inference. hostPathLeaked excludes host paths that came verbatim from the scenario's inputs (container/microvm): inputHostPathTokens = how many distinct host-path tokens those inputs carried, hostPathsFromInputs = how many matches they exempted (both omitted when zero)
   "fsDiff?": { "status": "clean|findings|unavailable", "reason?": "baseline-incomplete|post-walk-incomplete", "findings": ["string"] }, // the outputs-delete filesystem diff for this turn (live lane only): outputs/ at turn start vs. after the turn. clean = no path present at turn start was deleted; unavailable = it could not verify. A sibling of scan so a filesystem-proven delete survives a missing events.jsonl
+  "outputsMountMode?": "rw|rwd",                 // the baseline's recorded outputs mount mode (live lane, local lane only); rwd = an outputs delete does not fail the default verdict; absent reads as rw
   "evidenceErrors?": { "taskTracking?": number, "webSearchParse?": number, "presentFilesMalformed?": number, "egressParse?": number } // dropped/malformed telemetry lines per stream; a >0 taskTracking/presentFilesMalformed count fails the dependent assertion "malformed" rather than silently dropping bad entries; webSearchParse/egressParse are observability-only
 }
 ```
