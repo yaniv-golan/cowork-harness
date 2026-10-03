@@ -79,7 +79,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v14.json`](htt
 
 ## Recipe 3 — Set up redaction BEFORE your first hostloop/protocol record
 
-`hostloop` and `protocol` runs execute on the host, so real host paths (`/Users/you/…`) land in
+`hostloop` and `protocol` runs execute on the host, so real host paths (your home directory's) land in
 the transcript and would be committed inside the cassette. Set the policy up **before** the first
 record — retrofitting means re-recording:
 
