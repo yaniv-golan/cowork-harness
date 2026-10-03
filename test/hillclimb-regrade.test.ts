@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { CLI, POSIX, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
 import { mergeMetrics, regradeFlow, type HillclimbRegradeArgs, type RegradeFlowDeps } from "../src/hillclimb/regrade.js";
@@ -1245,6 +1246,74 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(rows("v1")[0]!.grade.pass).toBe(0);
   }, 240_000);
 
+  // A default regrade that applied a change grades the row under the scenario as it is now; the run's result.json, which
+  // no regrade touches, still holds the old list. A fill compares with what the row was GRADED with, so it is not
+  // listed "run a default regrade first" for a change that default regrade already applied.
+  it.each([
+    ["an inserted assert (the list shifts)", "assert:\n", "assert:\n  - transcript_contains: done\n"],
+    ["a value change that flipped an outcome", "transcript_contains: All done", "transcript_contains: Nope"],
+  ] as const)(
+    "%s: default regrade, then --fill-refs fills (never listed for the applied change)",
+    async (_n, from, to) => {
+      const { cli, rows, evals } = buildFlow({ extra: ["  - transcript_contains: All done"] });
+      expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+      edit(evals, from, to);
+      const { seen, deps } = counting();
+      const first = await regradeFlow(ARGS({ approveHarness: true }), deps);
+      expect(first.exitCode, JSON.stringify(first)).toBe(0);
+      const graded = { b: rows("baseline")[0]!.grade, v1: rows("v1")[0]!.grade };
+      const fill = await regradeFlow(ARGS({ fillRefs: true }), deps);
+      expect(
+        fill.variants.flatMap((v) => v.listed),
+        JSON.stringify(fill),
+      ).toEqual([]);
+      expect(fill.exitCode).toBe(0);
+      expect(seen.calls).toBeGreaterThan(0);
+      // The fill added the column and moved no outcome the default regrade graded.
+      expect(rows("baseline")[0]!.grade).toHaveProperty("win_v1");
+      for (const [v, g] of [
+        ["baseline", graded.b],
+        ["v1", graded.v1],
+      ] as const) {
+        const now = rows(v)[0]!.grade;
+        for (const k of Object.keys(g).filter((k) => /^(pass|a\d+)$/.test(k))) expect(now[k], `${v} ${k}`).toBe(g[k]);
+      }
+    },
+    240_000,
+  );
+
+  it("a fill reads a kept outcome's reference by the assert it grades now, not by its index in the run's list", async () => {
+    const { cli, flow, rows, evals } = buildFlow();
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    // Precondition: v1's run compared against baseline's frozen document.
+    const v1Run = JSON.parse(readFileSync(join(runDirOf(rows("v1")[0]!), "turns", "1", "result.json"), "utf8")) as {
+      assertions: Array<{ pairwise?: Array<{ ref: string; refDocSha256?: string }> }>;
+    };
+    expect(v1Run.assertions[1]!.pairwise!.find((o) => o.ref === "baseline")!.refDocSha256).toEqual(expect.any(String));
+    // A default regrade applies the inserted assert: the pairwise one is index 2 now, index 1 in the run's list.
+    edit(evals, "assert:\n", "assert:\n  - transcript_contains: done\n");
+    const { deps } = counting();
+    expect((await regradeFlow(ARGS({ approveHarness: true }), deps)).exitCode).toBe(0);
+    // baseline's frozen document is changed after it (re-frozen by hand): v1's kept outcome was judged against another.
+    const walk = (d: string): string[] =>
+      readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(d, e.name)) : [join(d, e.name)]));
+    const docs = walk(join(flow, "baseline", "ref")).filter((p) => /doc-[^/]+\.txt$/.test(p));
+    expect(docs.length).toBeGreaterThan(0);
+    for (const doc of docs) {
+      const text = readFileSync(doc, "utf8") + "\nedited";
+      writeFileSync(doc, text);
+      const side = doc.replace(/\.txt$/, ".json");
+      const meta = JSON.parse(readFileSync(side, "utf8")) as Record<string, unknown>;
+      writeFileSync(side, JSON.stringify({ ...meta, sha256: createHash("sha256").update(text).digest("hex"), chars: text.length }));
+    }
+    const before = readFileSync(join(flow, "v1", "results.jsonl"), "utf8");
+    const fill = await regradeFlow(ARGS({ variant: "v1", fillRefs: true }), deps);
+    expect(fill.variants[0]!.listed, JSON.stringify(fill)).toEqual([
+      { prompt_id: "alpha", rep: 0, why: "its kept outcome against baseline was judged against a reference that has changed since" },
+    ]);
+    expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(before);
+  }, 240_000);
+
   it("--fill-refs with a deterministic grader change: listed (run a default regrade first), pass never moves, no judge call", async () => {
     const { cli, flow, evals } = buildFlow({ extra: ["  - transcript_contains: All done"] });
     expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
@@ -1262,7 +1331,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
         {
           prompt_id: "alpha",
           rep: 0,
-          why: expect.stringMatching(/the grader changed since the run.*run a default `hillclimb regrade` first/),
+          why: expect.stringMatching(/the grader changed since the row was graded.*run a default `hillclimb regrade` first/),
         },
       ]);
     expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before.b);

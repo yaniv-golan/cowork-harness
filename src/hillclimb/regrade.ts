@@ -511,15 +511,16 @@ function evidenceDrift(
  *    an evaluator fixed since, evidence a kept run does not record) — `keptLive` names those, never listed, never
  *    written as a moved outcome;
  *  - an assert CHANGED or added since the run is always the re-evaluation's; in a fill, one whose outcome differs from
- *    the run's at that index is LISTED: a fill never moves `pass`, so a grader fix waits for a default regrade. */
+ *    the outcome the row was GRADED with (`gradedPass`) is LISTED: a fill never moves `pass`, so a grader change waits
+ *    for a default regrade — and one a default regrade already applied is not listed again. */
 function deterministicCheck(
+  row: Row,
   live: RunResult,
   c: HillclimbCase,
   re: Reevaluation,
   matched: ReadonlyArray<Entry | undefined>,
   fill: boolean,
 ): { listed: string } | { keptLive: number[] } {
-  const was = authoredOf(live);
   const keptLive: number[] = [];
   for (const i of deterministicIndexes(c)) {
     const fresh = re.deterministic[i]!;
@@ -528,12 +529,29 @@ function deterministicCheck(
       if (prev.pass !== fresh.pass) keptLive.push(i);
       continue;
     }
-    if (fill && was[i] !== undefined && was[i]!.pass !== fresh.pass)
+    const graded = fill ? gradedPass(row, live, c, i) : undefined;
+    if (graded !== undefined && graded !== fresh.pass)
       return {
-        listed: `the grader changed since the run (${labelOf(c, i)} ${outcomeOf(fresh.pass)} now, ${outcomeOf(was[i]!.pass)} in the run): run a default \`hillclimb regrade\` first, then --fill-refs (a fill never moves pass; until then this row lacks the new win column)`,
+        listed: `the grader changed since the row was graded (${labelOf(c, i)} ${outcomeOf(fresh.pass)} now, ${outcomeOf(graded)} when graded): run a default \`hillclimb regrade\` first, then --fill-refs (a fill never moves pass; until then this row lacks the new win column)`,
       };
   }
   return { keptLive };
+}
+
+/** Whether the row was graded under the scenario's assertion list as it is now (`meta.assert_sig`): then its `a<i>`
+ *  keys name the current asserts — a default regrade rebuilt it, or `run` wrote it under this list. */
+const gradedUnderNow = (row: Row, c: HillclimbCase): boolean => row.meta?.assert_sig === assertSig(c.scenario);
+
+/** The outcome the row was GRADED with for authored index `i` — what a fill must not move. A row graded under the
+ *  current list records it as its `a<i>` key (`expect_denied` hosts have none: undefined, nothing to compare); any
+ *  other row was graded from its run, so it is the run's entry at that index (undefined when the run had none). A
+ *  regrade never touches result.json, so after a default regrade the run's list is not what the row was graded with. */
+function gradedPass(row: Row, live: RunResult, c: HillclimbCase, i: number): boolean | undefined {
+  if (gradedUnderNow(row, c)) {
+    const v = i < c.scenario.assert.length ? row.grade?.[`a${i}`] : undefined;
+    return typeof v === "number" ? v === 1 : undefined;
+  }
+  return authoredOf(live)[i]?.pass;
 }
 
 const outcomeOf = (p: boolean) => (p ? "passes" : "fails");
@@ -763,6 +781,9 @@ function withOwnNeutral(result: RunResult, c: HillclimbCase, variant: string, re
   return { ...result, assertions };
 }
 
+/** The pairwise outcomes a row is graded with, by the scenario index of the assert each grades now. */
+const gradedPairwise = (plan: JudgedPlan) => [...plan.entries].map(([assertionIndex, e]) => ({ assertionIndex, pairwise: e.pairwise }));
+
 /** The references whose COPIED outcome (kept from the live run by a fill) recorded a document other than the one the
  *  flow's store holds now. */
 function staleCopied(
@@ -785,10 +806,13 @@ function staleCopied(
   return [...out];
 }
 
-/** Why a row's live result no longer lines up with the scenario's assertion list — a different count, a different
- *  key at an index, or a pairwise assert with another evidence scope — decided before any judge call (a re-grade
- *  substitutes entries by index, so a shifted list would grade one assert into another's place). */
-function shapeMismatch(result: RunResult, c: HillclimbCase): string | undefined {
+/** Why the list a row was GRADED under no longer lines up with the scenario's assertion list — a different count, a
+ *  different key at an index, or a pairwise assert with another evidence scope — decided before any judge call (a fill
+ *  copies what it does not judge, so a shifted list would carry one assert's outcome into another's place). A row
+ *  graded under the current list (`gradedUnderNow`: a default regrade applied the change, or `run` wrote it so) lines
+ *  up whatever its run's result.json says — no regrade touches that file; any other row was graded under its run's. */
+function shapeMismatch(row: Row, result: RunResult, c: HillclimbCase): string | undefined {
+  if (gradedUnderNow(row, c)) return undefined;
   const live = authoredOf(result);
   const now = c.scenario.assert;
   const hosts = c.scenario.expect_denied?.length ?? 0;
@@ -1076,27 +1100,10 @@ async function regradeFlowInner(
         // An agent-failed row scores 0 whatever lines up (a partial run graded no assert at all), so neither fill check
         // has anything to protect on it.
         const failedAgent = row.meta?.failure_class === "errored_agent";
-        const mismatch = args.fillRefs && !failedAgent ? shapeMismatch(result, c) : undefined;
+        const mismatch = args.fillRefs && !failedAgent ? shapeMismatch(row, result, c) : undefined;
         if (mismatch) {
           vr.listed.push({ prompt_id: id, rep, why: `${mismatch} — run a default \`hillclimb regrade\` first, then --fill-refs` });
           continue;
-        }
-        // A fill keeps every live outcome: one judged against a reference that has since changed (re-frozen by hand)
-        // would mix two references in one row — listed before any spend, never written.
-        if (args.fillRefs && !failedAgent) {
-          let k = 0;
-          const entries = (result.assertions ?? []).flatMap((e) =>
-            e.source === undefined ? [{ assertionIndex: k++, pairwise: e.pairwise }] : [],
-          );
-          const stale = staleCopied(entries, c, refs, false);
-          if (stale.length) {
-            vr.listed.push({
-              prompt_id: id,
-              rep,
-              why: `its kept outcome against ${stale.join(", ")} was judged against a reference that has changed since`,
-            });
-            continue;
-          }
         }
         // Every selected row is re-evaluated from its kept run here, before any judge call: a row whose context cannot be
         // rebuilt is listed, never re-measured as unavailable.
@@ -1110,7 +1117,7 @@ async function regradeFlowInner(
         }
         // Decided here, before batching: a row listed by the deterministic step costs no judge call.
         const matched = liveByIdentity(result, c);
-        const det = deterministicCheck(result, c, re, matched, args.fillRefs);
+        const det = deterministicCheck(row, result, c, re, matched, args.fillRefs);
         if ("listed" in det) {
           vr.listed.push({ prompt_id: id, rep, why: det.listed });
           continue;
@@ -1127,6 +1134,20 @@ async function regradeFlowInner(
           variant: v,
           refs,
         });
+        // A fill keeps every outcome the row was graded with: one judged against a reference that has since changed
+        // (re-frozen by hand) would mix two references in one row — listed before any spend, never written. Read from
+        // the graded entries by the assert each grades now (`plan.entries`), never by its index in the run's list.
+        if (args.fillRefs && !agentFailed) {
+          const stale = staleCopied(gradedPairwise(plan), c, refs, false);
+          if (stale.length) {
+            vr.listed.push({
+              prompt_id: id,
+              rep,
+              why: `its kept outcome against ${stale.join(", ")} was judged against a reference that has changed since`,
+            });
+            continue;
+          }
+        }
         // A fill copies every judged outcome it does not add: one whose assert changed since it was graded would be
         // stamped with the current assertion set over an old rubric's outcome — listed before any judge call.
         if (args.fillRefs && !agentFailed) {
@@ -1377,9 +1398,10 @@ async function regradeFlowInner(
           continue;
         }
         const remeasured = withRemeasured(built.result, report);
-        // A fill re-judged no gating comparison and moved no deterministic outcome: the live verdict stands, so `pass`
-        // cannot move by construction. A full re-grade recomputes it (a persisted verdict would otherwise win in
-        // `gradeFor` and hide every change).
+        // A fill re-judged no gating comparison and moved no deterministic outcome from the one the row was GRADED with
+        // (`deterministicCheck`): the live verdict stands when its authored entries are still the run's, else it is
+        // recomputed over the entries the row was graded with — either way `pass` is the graded row's. A full re-grade
+        // recomputes it (a persisted verdict would otherwise win in `gradeFor` and hide every change).
         const copy = args.fillRefs && sameAuthored(remeasured, t.result) ? remeasured : withVerdict(remeasured);
         const got = rebuiltRow(
           t.line.row!,
@@ -1418,11 +1440,7 @@ async function regradeFlowInner(
       // A fill keeps every live outcome of a row it does not judge: the same changed-reference rule applies (an
       // agent-failed row aside: it scores 0 whatever it carries).
       if (args.fillRefs && t.line.row?.meta?.failure_class !== "errored_agent") {
-        let k = 0;
-        const entries = (t.result.assertions ?? []).flatMap((e) =>
-          e.source === undefined ? [{ assertionIndex: k++, pairwise: e.pairwise }] : [],
-        );
-        const stale = staleCopied(entries, t.c, refs, false);
+        const stale = staleCopied(gradedPairwise(t.plan), t.c, refs, false);
         if (stale.length) {
           perVariant.get(t.variant)!.v.listed.push({
             prompt_id: t.c.id,

@@ -206,9 +206,10 @@ every climb there is finished.
   copied outcomes keep their judge's provenance. Every other
   outcome and every `semantic_matches` grade stays the one the row carries, so `pass` cannot move. Every scored row
   then carries every `win_<vN>` column, so `state-template --flow` can declare it: merge the new `metrics` entry. A
-  row whose assert list does not line up with the scenario as it is now, whose deterministic outcome changed since
-  the run (a grader fix), or whose judged assert (a rubric) changed since it was graded is listed instead, before any
-  judge call: run a default `regrade` first, then `--fill-refs`. Until then that row lacks the
+  row whose assert list, deterministic outcome or judged assert (a rubric) changed since it was graded is listed
+  instead, before any judge call: run a default `regrade` first, then `--fill-refs`. "Since it was graded" is what
+  the row carries, not its run's `result.json` (which no regrade touches): a change a default regrade already applied
+  is not listed again. Until then that row lacks the
   new `win_<vN>` column, and `check` reports it missing once `_state.json` declares it.
 
 Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant with rows), `--case ID`
@@ -232,7 +233,9 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   behind every entry it is graded with (kept ones included), so sum `meta.regrade_judge_usd` for a regrade's cost.
 - **Every selected row is re-evaluated from its kept run**, before any judge call and in either mode: its
   deterministic asserts and `expect_denied` hosts with `verify-run`'s own evaluation (without its answer-coverage
-  and skill-drift checks), and its metrics re-measured. Asserts are matched to the run's by identity, not position.
+  and skill-drift checks), and its metrics re-measured. Asserts are matched to the run's by identity, not position
+  (`no_delete_in_mounts`'s identity includes the mounts its list's `allow_delete_in` waives, since it grades with
+  them: adding or removing that waiver re-evaluates it).
   One unchanged since the run keeps the run's own outcome even when the kept run re-evaluates differently (its
   grader is unchanged, so the difference is the reconstruction's — e.g. a `computer://` link into a connected
   folder, whose host path no run dir records): the row records `meta.regrade_kept_live` and stderr names the assert

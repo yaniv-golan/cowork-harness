@@ -339,7 +339,8 @@ All notable changes to this project are documented here. The format is based on
   `hillclimb regrade <scenarios>` rebuilds each scored row from its kept run dir, through the same producer `hillclimb
   run` writes rows with, without running the agent, from the scenario as it is now (a changed, added or removed
   assert is applied). Every assert no judge grades and every `expect_denied` host is re-evaluated from the kept run
-  with `verify-run`'s own evaluation, matched to the run's by identity, not position; one unchanged since the run
+  with `verify-run`'s own evaluation, matched to the run's by identity, not position (`no_delete_in_mounts`'s
+  identity includes the mounts its list's `allow_delete_in` waives); one unchanged since the run
   keeps the run's own outcome even when the kept run re-evaluates differently (its grader is unchanged, so the
   difference is the reconstruction's), recorded in `meta.regrade_kept_live` and named on stderr. **The default
   regrade re-judges only what changed:** a judged assert is re-judged only when the assert itself, the judge model
@@ -359,7 +360,8 @@ All notable changes to this project are documented here. The format is based on
   only the pairwise comparisons a row lacks, read from the entries it is graded with (a comparison an earlier
   regrade judged is never judged again, and copied outcomes keep their judge's provenance), so `pass` cannot move
   and every row gains the `win_<vN>` columns of references frozen after it (a row whose deterministic outcome or
-  judged rubric changed since it was graded is listed before any judge call: run a default regrade first). A row a
+  judged rubric changed since it was graded is listed before any judge call: run a default regrade first; compared with
+  what the row carries, never its run's `result.json`, so a change a default regrade applied is not listed again). A row a
   judge re-graded records this regrade's own spend and model (`meta.regrade_judge_usd`,
   `meta.regrade_judge_model`); its `judge_usage` / `judge_model` describe every entry it is graded with. Every selected row is re-evaluated before any judge call, a case with
   no judged assert included; a row whose rebuild changes nothing stays byte for byte, and each variant reports a
