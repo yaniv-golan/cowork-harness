@@ -308,7 +308,10 @@ when the evidence its judge read has changed since it was graded (an edited kept
 the document is composed or scrubbed); `--rejudge` grades the latter, unless the current evidence would be less
 redacted than the graded one (that row stays listed until the run's scrub settings are set, or `--rejudge --allow-
 doc-drift`). Each row records `meta.assert_sig`, the assertions it was graded under: `hillclimb run` warns when a
-resumed pass would mix them, and `hillclimb check` flags a case whose rows carry more than one.
+resumed pass would mix them, and `hillclimb check` flags a case whose rows carry more than one, and a case whose
+rows were graded under another assertion set than its scenario's now — compared with the scenario target when one
+is passed (`hillclimb check evals/ --flow <dir>`), else with the scenario files `_state.json` `harness_paths`
+records (state-template writes them; a note says when nothing is recorded or a recorded file is gone).
 
 ## Guardrails the harness adds
 

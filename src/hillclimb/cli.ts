@@ -1,7 +1,8 @@
 // `hillclimb` command family: `run`, `check`, `state-template`. The scenario runner comes from src/cli.ts (its
 // per-scenario runner and decider channel live there); everything else is composed here.
 
-import { join, relative, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { UsageError } from "../errors.js";
 import { writeAllSync } from "../io.js";
@@ -12,7 +13,15 @@ import { isolationRefusal } from "../decide/llm-transport.js";
 import type { ScenarioRunner } from "../eval/job-runner.js";
 import { HILLCLIMB_RUN_DEFAULTS, parseHillclimbRunArgs } from "./args.js";
 import { loadCases } from "./cases.js";
-import { assertSigWarnings, headroom, metricRangeWarnings, pairwiseHints, pairwiseRefFindings, stateMetricFindings } from "./check.js";
+import {
+  assertSigWarnings,
+  headroom,
+  metricRangeWarnings,
+  pairwiseHints,
+  pairwiseRefFindings,
+  staleAssertSigWarnings,
+  stateMetricFindings,
+} from "./check.js";
 import { prepareCases } from "./command.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
 import { redactDeep } from "./flow.js";
@@ -34,7 +43,11 @@ import { regradeFlow } from "./regrade.js";
 import { freezeRefCommand } from "./freeze-ref.js";
 import { flowHasPairwise } from "./grade-keys.js";
 import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
-import { flowMetricUnion } from "./metric-keys.js";
+import { flowMetricUnion, rowAssertSigs } from "./metric-keys.js";
+import { pathSafeId } from "./ids.js";
+import { parseScenarioFile } from "../run/execute.js";
+import type { Scenario } from "../types.js";
+import type { FlowSnapshot } from "./schema-check.js";
 
 const CMD = "hillclimb";
 
@@ -49,22 +62,93 @@ export interface HillclimbCliDeps<F extends JobFlags> {
   };
 }
 
-/** `hillclimb check`: our schema reading (harness profile) plus `_state.json`'s metric rule; headroom and a float
- *  outside its declared range only warn. */
-export function checkReport(flowArg: string, cwd: string): { report: SchemaCheckReport; warnings: string[]; exitCode: 0 | 1 } {
+/** The scenarios `check` compares the rows' `meta.assert_sig` with, and the target its remedies name: the target passed,
+ *  else the scenario files the flow's `_state.json` `harness_paths` records (cwd-relative, as state-template writes
+ *  them; a file there is a case's when its stem's id is a row's `prompt_id`, the session files and uploads beside them
+ *  matching none). The rows themselves record only the scenario's name, never its file. A recorded file that is gone
+ *  or does not parse is named in a note and its case left uncompared; with nothing recorded, one note says to pass the
+ *  target. Only rows that record an assert_sig are compared. */
+function assertSigScenarios(
+  snap: FlowSnapshot,
+  cwd: string,
+  flowShown: string,
+  target: string | undefined,
+): { target?: string; cases: Array<{ id: string; scenario: Scenario }>; notes: string[] } {
+  if (target !== undefined) return { target, cases: loadCases(resolve(cwd, target)).cases, notes: [] };
+  const ids = [...new Set(rowAssertSigs(snap).map((r) => r.promptId))];
+  if (!ids.length) return { cases: [], notes: [] };
+  const pass = `pass the target (\`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\`)`;
+  let recorded: string[] = [];
+  try {
+    const st = JSON.parse(snap.state ?? "{}") as { harness_paths?: unknown };
+    if (Array.isArray(st?.harness_paths)) recorded = st.harness_paths.filter((p): p is string => typeof p === "string");
+  } catch {
+    // An unreadable _state.json is check's finding: nothing is recorded.
+  }
+  const yaml = recorded.filter((p) => /\.ya?ml$/i.test(p));
+  if (!yaml.length)
+    return {
+      cases: [],
+      notes: [
+        `note: _state.json records no scenario files (harness_paths), so the rows' assertion sets were not compared with the scenarios' current ones — pass the target: \`hillclimb check <scenario.yaml | dir/> --flow ${flowShown}\``,
+      ],
+    };
+  const cases: Array<{ id: string; scenario: Scenario }> = [];
+  const used: string[] = [];
+  const notes: string[] = [];
+  for (const id of ids) {
+    const files = yaml.filter((p) => pathSafeId(basename(p).replace(/\.ya?ml$/i, "")) === id);
+    const why =
+      files.length === 0
+        ? `_state.json harness_paths records no scenario file for case ${id}`
+        : files.length > 1
+          ? `_state.json harness_paths records ${files.length} scenario files for case ${id} (${files.join(", ")})`
+          : !existsSync(resolve(cwd, files[0]!))
+            ? `the flow's recorded scenario ${files[0]} (_state.json harness_paths) no longer exists`
+            : undefined;
+    if (why !== undefined) {
+      notes.push(`note: ${why} — ${pass} to compare case ${id}'s rows with its current assertion set`);
+      continue;
+    }
+    try {
+      cases.push({ id, scenario: parseScenarioFile(resolve(cwd, files[0]!)) });
+      used.push(files[0]!);
+    } catch (e) {
+      notes.push(
+        `note: the flow's recorded scenario ${files[0]} (_state.json harness_paths) cannot be read (${(e as Error).message}) — ${pass} to compare case ${id}'s rows with its current assertion set`,
+      );
+    }
+  }
+  // One directory holds them all: regrade takes it whole, its --case picking the one. Several: a placeholder.
+  const dirs = [...new Set(used.map((p) => dirname(p)))];
+  return { ...(dirs.length === 1 ? { target: dirs[0] } : {}), cases, notes };
+}
+
+/** `hillclimb check`: our schema reading (harness profile) plus `_state.json`'s metric rule; headroom, a float outside
+ *  its declared range and rows graded under another assertion set than the scenario's now (`target`, else the
+ *  scenario files `_state.json` records) only warn. */
+export function checkReport(
+  flowArg: string,
+  cwd: string,
+  target?: string,
+): { report: SchemaCheckReport; warnings: string[]; exitCode: 0 | 1 } {
   const flowAbs = resolve(cwd, normalizeRootArg(flowArg));
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
   const base = checkFlowDir(flowAbs, { profile: "harness" });
   const snap = loadFlowSnapshot(flowAbs);
   const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap)];
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
+  const flowShown = normalizeRootArg(flowArg);
+  const sig = assertSigScenarios(snap, cwd, flowShown, target);
   return {
     report,
     warnings: [
       ...headroom(snap).warnings,
       ...metricRangeWarnings(snap),
-      ...assertSigWarnings(snap, normalizeRootArg(flowArg)),
-      ...pairwiseHints(snap, normalizeRootArg(flowArg)),
+      ...assertSigWarnings(snap, flowShown, sig.target),
+      ...staleAssertSigWarnings(snap, sig.cases, flowShown, sig.target ?? "<scenarios>"),
+      ...sig.notes,
+      ...pairwiseHints(snap, flowShown, sig.target),
     ],
     exitCode: report.errors ? 1 : 0,
   };
@@ -125,7 +209,7 @@ export function stateTemplateFor(
     skillInvoked: tracked.name !== undefined,
   });
   // With --flow: a float the flow's _state.json still declares that no scenario declares any more. Only here are both
-  // the scenarios and the flow at hand (`check` reads the flow alone), so this is where a removal's leftover is named.
+  // the scenarios and the flow at hand (`check` reads no scenario's metrics), so this is where a removal's leftover is named.
   if (opts.flow !== undefined) {
     const flowAbs = resolve(cwd, normalizeRootArg(opts.flow));
     if (lexists(flowAbs)) {
@@ -269,8 +353,8 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     const flow = flowGiven ?? HILLCLIMB_RUN_DEFAULTS.flow;
     try {
       if (sub === "check") {
-        if (p.positionals.length) return usage(`hillclimb check takes no positional argument`, HILLCLIMB_CHECK_USAGE);
-        const c = checkReport(flow, process.cwd());
+        if (p.positionals.length > 1) return usage(`hillclimb check takes at most one scenario file or directory`, HILLCLIMB_CHECK_USAGE);
+        const c = checkReport(flow, process.cwd(), p.positionals[0]);
         if (json)
           writeAllSync(
             1,

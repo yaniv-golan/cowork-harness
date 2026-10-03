@@ -336,7 +336,9 @@ All notable changes to this project are documented here. The format is based on
   sigs). A `hillclimb run` resumed after an approved scenario edit warns, naming the rows the old asserts graded and
   the `hillclimb regrade <target> --flow <dir> --case <id>` that re-evaluates them; `hillclimb check` warns per case
   whose rows carry more than one, naming the same command, so a comparison over them never silently mixes two
-  graders. Both say that a scenario edited since the flow's last approval also needs `--approve-harness`, the
+  graders. `hillclimb check [<scenario.yaml | dir/>]` also warns about a case whose rows were all graded under an
+  older set than its scenario's now, comparing with the target when given, else with the scenario files
+  `_state.json` `harness_paths` records; a note says when nothing is recorded or a recorded file is gone. Both say that a scenario edited since the flow's last approval also needs `--approve-harness`, the
   user's to give.
 
 - **`hillclimb regrade` re-grades a flow's rows in place; `regrade` re-grades `semantic_pairwise` too.**

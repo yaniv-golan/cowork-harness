@@ -6,7 +6,7 @@
 // this only ever warns: it never changes an exit code.
 
 import type { FlowSnapshot, SchemaFinding } from "./schema-check.js";
-import { rowAssertSigs } from "./metric-keys.js";
+import { rowAssertSigs, staleAssertSigRows } from "./metric-keys.js";
 
 interface DeclaredMetric {
   id: string;
@@ -155,6 +155,27 @@ export function assertSigWarnings(snap: FlowSnapshot, flowArg = "<flow>", target
     );
   }
   return out;
+}
+
+/** One warning per case whose rows (any variant) were graded under another assertion set than its scenario holds now —
+ *  every row of the case included, so a flow graded wholly under an older set is flagged, not only a mix. Each variant
+ *  is named with its stale row count. Warnings: they never change an exit code. */
+export function staleAssertSigWarnings(
+  snap: FlowSnapshot,
+  cases: ReadonlyArray<{ id: string; scenario: { assert: readonly unknown[]; expect_denied?: readonly string[] } }>,
+  flowArg: string,
+  target: string,
+): string[] {
+  const byCase = new Map<string, Map<string, number>>();
+  for (const r of staleAssertSigRows(snap, cases)) {
+    const per = byCase.get(r.promptId) ?? new Map<string, number>();
+    per.set(r.variant, (per.get(r.variant) ?? 0) + 1);
+    byCase.set(r.promptId, per);
+  }
+  return [...byCase].map(([id, per]) => {
+    const n = [...per.values()].reduce((s, x) => s + x, 0);
+    return `warning: ${n} row(s) of case ${id} (${[...per].map(([v, k]) => `${v} ${k}`).join(", ")}) were graded under a different assertion set than the scenario's current one — run \`hillclimb regrade ${target} --flow ${flowArg} --case ${id}\` to re-evaluate them (a scenario edited since the flow's last approval also needs --approve-harness on it, which is the user's to give)`;
+  });
 }
 
 /** Ours, on `_state.json`: a declared float needs `better`. The upstream default is "higher", which on a

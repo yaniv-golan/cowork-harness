@@ -54,9 +54,12 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --output-format text|json   json: one envelope on stdout at exit
   --dotenv FILE  --run-dir DIR   as on every command`;
 
-export const HILLCLIMB_CHECK_USAGE = `usage: hillclimb check [--flow DIR] [--output-format text|json]
+export const HILLCLIMB_CHECK_USAGE = `usage: hillclimb check [<scenario.yaml | dir/>] [--flow DIR] [--output-format text|json]
        Checks a flow dir against our reading of the published hillclimb schema, plus _state.json's metric
-       declarations, and warns when a baseline case has no headroom. Exit 0 clean, 1 findings, 2 usage.`;
+       declarations, and warns when a baseline case has no headroom. It warns about a case whose rows were graded
+       under another assertion set than its scenario's now: the scenario target given, else the scenario files
+       _state.json harness_paths records (a note when none is, or one is gone). Warnings never change the exit
+       code. Exit 0 clean, 1 findings, 2 usage (a target that does not load included).`;
 
 export const HILLCLIMB_STATE_TEMPLATE_USAGE = `usage: hillclimb state-template <scenario.yaml | dir/> [--flow DIR] [--skill NAME] [--output-format text|json]
        Prints a _state.json skeleton for the loop to save: the metrics every row carries, the perf columns and
