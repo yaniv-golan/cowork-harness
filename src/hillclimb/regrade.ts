@@ -608,15 +608,10 @@ function reportEntry(g: RegradeRunReport["assertions"][number]): Entry {
  *  scores 0 whatever it says. */
 const notJudged = (a: object): Entry => ({ assertion: a as never, pass: false, message: "not judged: the agent failed" });
 
-/** The keys a re-grade wrote about the judged entries it produced, kept on a row rebuilt with those entries. */
-const JUDGE_SIDE_META = [
-  "regrade_file",
-  "regrade_doc_matches_live",
-  "regrade_unchecked",
-  "regrade_fill",
-  "regrade_judge_usd",
-  "regrade_judge_model",
-] as const;
+/** The keys a re-grade wrote about the judged entries it produced, kept on a row rebuilt with those entries (no judge
+ *  call). Not its spend or its judge (`regrade_judge_usd`, `regrade_judge_model`): those say what THAT regrade did,
+ *  and beside this rebuild's own `regraded_at` they would read as this one's — `regrade_file` still names it. */
+const JUDGE_SIDE_META = ["regrade_file", "regrade_doc_matches_live", "regrade_unchecked", "regrade_fill"] as const;
 const carriedJudgeMeta = (row: Row): Record<string, unknown> =>
   Object.fromEntries(JUDGE_SIDE_META.flatMap((k) => (row.meta && k in row.meta ? [[k, row.meta[k]]] : [])));
 

@@ -363,7 +363,8 @@ All notable changes to this project are documented here. The format is based on
   judged rubric changed since it was graded is listed before any judge call: run a default regrade first; compared with
   what the row carries, never its run's `result.json`, so a change a default regrade applied is not listed again). A row a
   judge re-graded records this regrade's own spend and model (`meta.regrade_judge_usd`,
-  `meta.regrade_judge_model`); its `judge_usage` / `judge_model` describe every entry it is graded with. Every selected row is re-evaluated before any judge call, a case with
+  `meta.regrade_judge_model`); its `judge_usage` / `judge_model` describe every entry it is graded with. A later
+  rebuild with no judge call drops both (they were that regrade's, not its own) and keeps `meta.regrade_file`. Every selected row is re-evaluated before any judge call, a case with
   no judged assert included; a row whose rebuild changes nothing stays byte for byte, and each variant reports a
   `reevaluated` count. A row with an assert the recorded `workspace_fixture` satisfies on its own is listed and costs
   no judge call. An agent-failed row whose kept run cannot be re-evaluated (an unanswered gate) only has its meta

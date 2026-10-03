@@ -1402,6 +1402,40 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(meta).not.toHaveProperty("regrade_fill");
   }, 240_000);
 
+  // A rebuild with no judge call keeps the entries (and so `regrade_file`, which names them) of the regrade that judged
+  // them, but none of that regrade's spend: beside a fresh `regraded_at` it would read as this rebuild's own.
+  it("a later rebuild with no judge call drops the previous regrade's spend and model, keeps the file it is graded from", async () => {
+    const { rows, evals } = buildFlow({ extra: [...SECOND, "  - transcript_contains: All done"] });
+    edit(evals, "rubric: ['second']", "rubric: ['second, edited']");
+    let calls = 0;
+    const deps = DEPS({
+      regradeOptions: {
+        pairwiseComplete: async () => {
+          calls++;
+          return {
+            structured: { rationale: "r", verdict: "A" },
+            model: "claude-haiku-4-5",
+            usage: { "claude-haiku-4-5": { inputTokens: 1, outputTokens: 1, costUSD: 0.25 } },
+            subtype: "success",
+          };
+        },
+      },
+    });
+    expect((await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps)).exitCode).toBe(0);
+    const first = rows("v1")[0]!.meta;
+    expect(first).toMatchObject({ regrade_judge_usd: 0.25, regrade_judge_model: "claude-haiku-4-5", regrade_file: expect.any(String) });
+    // A deterministic edit: rebuilt with no judge call, every judged entry kept from that regrade's file.
+    edit(evals, "transcript_contains: All done", "transcript_contains: Nope");
+    calls = 0;
+    expect((await regradeFlow(ARGS({ variant: "v1", approveHarness: true }), deps)).exitCode).toBe(0);
+    expect(calls).toBe(0);
+    const meta = rows("v1")[0]!.meta;
+    expect(meta.regraded_at).not.toBe(first.regraded_at);
+    expect(meta.regrade_file).toBe(first.regrade_file);
+    expect(meta).not.toHaveProperty("regrade_judge_usd");
+    expect(meta).not.toHaveProperty("regrade_judge_model");
+  }, 240_000);
+
   it("--rejudge re-judges every judged assert of every row", async () => {
     buildFlow({ extra: SECOND });
     const { seen, deps } = counting();

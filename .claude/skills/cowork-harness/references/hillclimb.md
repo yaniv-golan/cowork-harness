@@ -242,7 +242,8 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   with both outcomes. A row no judge re-grades is re-evaluated too: a case with no judged assert, a row whose judged
   asserts all keep their entries, an agent-failed row (it gains the metric signature and `<id>_present: 0`, never a
   value), and a fill row that needs no comparison. Such a row keeps the judge-side keys of the re-grade whose entries
-  it carries, and gains `meta.regrade_remeasured: true` when its case declares a metric (plus `meta.regrade_fill` in
+  it carries (`meta.regrade_file` and the doc-match keys — not that regrade's `regrade_judge_usd` /
+  `regrade_judge_model`, which would read as this rebuild's own), and gains `meta.regrade_remeasured: true` when its case declares a metric (plus `meta.regrade_fill` in
   a fill); `regrade.md`, stderr and each variant's `reevaluated` and `remeasured` counts report them.
 - **An agent-failed row whose kept run cannot be re-evaluated** (a partial run: an unanswered gate) scores 0
   whatever its asserts say, so only its meta is brought current (`assert_sig`, `metric_sigs`), its grade all 0. It
