@@ -59,8 +59,9 @@ export interface PairwisePrepassOpts {
 type Outcome = NonNullable<RunResult["assertions"][number]["pairwise"]>[number];
 
 /** One model, however it is spelled: case-folded, without a context-window suffix (`[1m]`) or a trailing release
- *  date (`-20250101`). Used only for the self-judge warning, so an alias and its dated id are the same model. */
-function sameModelKey(m: string): string {
+ *  date (`-20250101`). Used for the self-judge warning, so an alias and its dated id are the same model, and by
+ *  `hillclimb regrade` to compare a requested judge model with a served id when no request was recorded. */
+export function sameModelKey(m: string): string {
   return m
     .trim()
     .toLowerCase()

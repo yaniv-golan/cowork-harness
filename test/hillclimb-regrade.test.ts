@@ -1333,6 +1333,21 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(seen.calls).toBe(1);
   }, 300_000);
 
+  // An assert that pins its own judge_model is graded by that pin unless --judge-model overrides it: a row re-judged
+  // under an override goes back to the pin on the next plain regrade, as a new run would grade it.
+  it("judge_model: after a --judge-model override, a plain regrade re-judges a pinned assert back to its pin, once", async () => {
+    const { rows } = buildFlow();
+    const { seen, deps } = counting();
+    expect((await regradeFlow(ARGS({ variant: "v1", judgeModel: "claude-sonnet-5" }), deps)).exitCode).toBe(0);
+    expect(seen.calls).toBe(1);
+    const out = await regradeFlow(ARGS({ variant: "v1" }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(seen.calls).toBe(2);
+    expect(rows("v1")[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["judge_model"] }]);
+    expect((await regradeFlow(ARGS({ variant: "v1" }), deps)).exitCode).toBe(0);
+    expect(seen.calls).toBe(2);
+  }, 300_000);
+
   it.each([
     ["judge_prompt", "it was graded under another judge prompt template"],
     ["reference_changed", "the reference it was judged against is not the store's now"],
