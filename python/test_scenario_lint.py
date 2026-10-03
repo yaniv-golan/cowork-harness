@@ -2345,9 +2345,23 @@ def test_slash_skill_honours_custom_skills_path(tmp_path):
     (d / ".claude-plugin").mkdir(parents=True)
     (d / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "pkg", "skills": "./my-skills"}), encoding="utf-8")
     _write_skill(d / "my-skills" / "deck-review")
-    _write_skill(d / "skills" / "decoy")
+    _write_skill(d / "skills" / "also-loaded")
     assert len(_lint_slash_with(tmp_path, "plugin-pkg", "/deck-review x")) == 1
-    assert _lint_slash_with(tmp_path, "plugin-pkg", "/decoy x") == []
+    # The agent loads skills/ whenever it exists, beside the manifest's paths.
+    assert len(_lint_slash_with(tmp_path, "plugin-pkg", "/also-loaded x")) == 1
+
+
+def test_slash_skill_custom_skills_path_list_and_schema(tmp_path):
+    d = tmp_path / "plugin-pkg"
+    (d / ".claude-plugin").mkdir(parents=True)
+    (d / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "pkg", "skills": ["./a", "b"]}), encoding="utf-8"
+    )
+    _write_skill(d / "a" / "in-a")
+    _write_skill(d / "b" / "in-b")
+    assert len(_lint_slash_with(tmp_path, "plugin-pkg", "/in-a x")) == 1
+    # An entry that is not "." or "./"-prefixed is refused by the agent's manifest schema.
+    assert _lint_slash_with(tmp_path, "plugin-pkg", "/in-b x") == []
 
 
 def test_slash_skill_matches_sanitized_directory_name(tmp_path):

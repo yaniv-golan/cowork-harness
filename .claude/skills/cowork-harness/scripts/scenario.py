@@ -863,40 +863,83 @@ def _sanitize_skill_name(name):
     return "".join(out)
 
 
-def _binary_plugin_identity(plugin_dir):
-    """The plugin name and skills directory exactly as the agent derives them (mirrors
-    `binaryPluginIdentity` in src/session.ts): `.claude-plugin/plugin.json`'s `name` and `skills` when
-    present and non-empty, else the directory name and `skills`. A root-level `plugin.json` is NOT read —
-    the agent does not read it. Never raises."""
-    name, skills_subdir = plugin_dir.name, "skills"
+_SKILL_MD_MAX_BYTES = 1024 * 1024
+
+
+def _plugin_manifest(plugin_dir):
+    """`.claude-plugin/plugin.json` as a dict, or None. A root-level `plugin.json` is NOT read — the agent
+    does not read it (see `binaryPluginIdentity` in src/session.ts). Never raises."""
     try:
         data = json.loads((plugin_dir / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     except Exception:
-        data = None
-    if isinstance(data, dict):
-        if isinstance(data.get("name"), str) and data["name"]:
-            name = data["name"]
-        if isinstance(data.get("skills"), str) and data["skills"]:
-            skills_subdir = re.sub(r"^\./", "", data["skills"])
-    return name, plugin_dir / skills_subdir
+        return None
+    return data if isinstance(data, dict) else None
 
 
-def _plugin_skill_names(plugin_name, skills_dir, yaml_mod):
-    """The bare names the agent registers for a plugin's skills path (mirrors `registeredSkillId` in
-    src/skill-id.ts): each skill DIRECTORY registers under its sanitized directory name; a SKILL.md
-    directly in the skills path registers under its frontmatter `name` (minus a leading `<plugin>:`) or
-    the path's basename, sanitized the same way."""
+def _loadable_skill_md(md):
+    try:
+        return md.is_file() and md.stat().st_size <= _SKILL_MD_MAX_BYTES
+    except OSError:
+        return False
+
+
+def _plugin_registered_skills(plugin_dir, yaml_mod):
+    """(plugin name, bare registered skill names) as the agent's plugin skill loader derives them — mirrors
+    `registeredSkills` in src/hillclimb/skill.ts and `registeredSkillId` in src/skill-id.ts:
+      - plugin name: the manifest `name`, else the directory name;
+      - skills paths: `skills/` whenever it exists; then each manifest `skills` entry (a string or a list;
+        `.` or `./`-prefixed, an existing directory inside the plugin, `skills/` itself dropped); the plugin
+        root only when the manifest has no `skills` field at all and there is no `skills/`;
+      - per path: a SKILL.md directly in it is ONE skill, named by its frontmatter `name` (minus a leading
+        `<plugin>:`) or the path's basename; otherwise each subdirectory holding a SKILL.md is a skill named
+        by its DIRECTORY;
+      - every name is sanitized (`_sanitize_skill_name`).
+    The git-tracked-file filter the TS side applies is not modelled. Never raises."""
+    manifest = _plugin_manifest(plugin_dir) or {}
+    name = manifest.get("name") if isinstance(manifest.get("name"), str) and manifest.get("name") else plugin_dir.name
+    skills_dir = plugin_dir / "skills"
+    paths = []
+    has_skills_dir = skills_dir.is_dir()
+    if has_skills_dir:
+        paths.append(skills_dir)
+    if "skills" in manifest:
+        raw = manifest["skills"]
+        try:
+            real_root = plugin_dir.resolve()
+        except OSError:
+            real_root = None
+        for e in raw if isinstance(raw, list) else [raw]:
+            if not isinstance(e, str) or not (e == "." or e.startswith("./")) or real_root is None:
+                continue
+            cand = plugin_dir / e
+            try:
+                real = cand.resolve()
+            except OSError:
+                continue
+            if not (real == real_root or real_root in real.parents) or not cand.is_dir():
+                continue
+            if has_skills_dir and real == skills_dir.resolve():
+                continue
+            paths.append(cand)
+    elif not has_skills_dir:
+        paths.append(plugin_dir)
     names = set()
-    if (skills_dir / "SKILL.md").is_file():
-        fm = _agent_name_from_frontmatter(skills_dir / "SKILL.md", yaml_mod) or skills_dir.name
-        if fm.startswith(plugin_name + ":"):
-            fm = fm[len(plugin_name) + 1 :]
-        names.add(_sanitize_skill_name(fm))
-        return names
-    for sd in sorted(skills_dir.iterdir()):
-        if (sd / "SKILL.md").is_file():
-            names.add(_sanitize_skill_name(sd.name))
-    return names
+    for sp in paths:
+        md = sp / "SKILL.md"
+        if _loadable_skill_md(md):
+            fm = _agent_name_from_frontmatter(md, yaml_mod) or sp.resolve().name
+            if fm.startswith(name + ":"):
+                fm = fm[len(name) + 1 :]
+            names.add(_sanitize_skill_name(fm))
+            continue
+        try:
+            entries = sorted(sp.iterdir())
+        except OSError:
+            continue
+        for sd in entries:
+            if sd.is_dir() and _loadable_skill_md(sd / "SKILL.md"):
+                names.add(_sanitize_skill_name(sd.name))
+    return name, names
 
 
 def _user_skill_names(skill_dir, yaml_mod):
@@ -920,7 +963,7 @@ def _lint_slash_skill_plugin_name(doc, path):
     Best effort, and silent whenever it cannot tell: the scenario's `session:` must be a readable file on
     this machine, and only its `plugins.local_plugins` / `plugins.remote_plugins` directories are read
     (marketplace-delivered plugins are not resolved), so an inline session is silent too. Plugin and skill
-    names follow the agent's own derivation (`_binary_plugin_identity`, `_plugin_skill_names`). A
+    names follow the agent's own derivation (`_plugin_registered_skills`). A
     `skills.local` skill answering to the same name also silences it — that route is not a plugin skill.
     """
     prompt = doc.get("prompt")
@@ -955,8 +998,8 @@ def _lint_slash_skill_plugin_name(doc, path):
             d = _session_host_path(raw, base)
             if d is None or not d.is_dir():
                 continue
-            plugin_name, skills_dir = _binary_plugin_identity(d)
-            if not skills_dir.is_dir() or token not in _plugin_skill_names(plugin_name, skills_dir, yaml_mod):
+            plugin_name, registered = _plugin_registered_skills(d, yaml_mod)
+            if token not in registered:
                 continue
             if plugin_name == token:
                 return []  # the shape that resolved in Cowork with one copy installed
