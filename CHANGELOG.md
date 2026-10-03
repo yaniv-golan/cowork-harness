@@ -217,9 +217,9 @@ All notable changes to this project are documented here. The format is based on
   variants are allowed; a `--case` pass whose flag value differs from what the variant's other cases ran warns, once
   per distinct value.
 - **hillclimb records the spend to copy and the billing basis behind it.** Rows carry `judge_usd`, the live judge's
-  recorded spend over the assertions that called it (absent when none did, so a baseline row's neutral comparison
-  against its own reference is neither priced nor unpriced), with `meta.judge_unpriced` counting judged assertions
-  that recorded no cost; error rows carry `meta.judge_usd`, `meta.judge_unpriced` and `meta.decider_usd` beside
+  recorded spend over the assertions that called it. It is absent when no assertion called the judge (so a baseline
+  row's neutral comparison against its own reference is neither priced nor unpriced) and when the judge was called
+  but recorded no cost, which `meta.judge_unpriced` marks by counting those assertions; error rows carry `meta.judge_usd`, `meta.judge_unpriced` and `meta.decider_usd` beside
   `meta.cost_usd`. `meta.models` gives each model's `provider` and `cost_basis` (`list`, `managed` or `unknown`).
   Billing basis is recorded at two levels. Row: `meta.billing` holds the credential source names the agent's own
   frames report and `basis`, one of `api_key`, `subscription`, `third_party` or `ambiguous`, decided with the tier's
@@ -229,8 +229,10 @@ All notable changes to this project are documented here. The format is based on
   differ, or `"unrecorded"` when no row records one. `summary.json` also carries the variant's spend over its whole
   `results.jsonl` and `errors.jsonl`, each run counted once, recomputed after every pass and every `hillclimb
   regrade` that rewrites its rows: `cost_usd_mean` (`$/run`), `cost_usd_total`, `cost_rows`, `cost_rows_unrecorded`,
-  `judge_usd_mean`, `judge_usd_total`, `judge_rows_unpriced`, `regrade_judge_usd_total`, `decider_usd_total` and
-  `billing_rows_unrecorded`; a row with no cost is counted, never read as $0. The pass prints the figures on one line
+  `judge_usd_mean` (over the same rows and count as `cost_usd_mean`, so the two add up to `$/run`),
+  `judge_usd_total`, `judge_rows_unpriced`, `judge_rows_unrecorded` (rows whose judge ran but that record none of its
+  spend), `regrade_judge_usd_total`, `decider_usd_total` and `billing_rows_unrecorded`, each sum and mean rounded to
+  6 decimal places; a row with no cost is counted, never read as $0, and a figure with such rows is called a floor. The pass prints the figures on one line
   per variant, and warns once per variant when models other than the main loop's carry more than 25% of its
   `cost_usd` (`usage` covers the main model only); `hillclimb check` repeats that as a note and checks the new keys'
   types. The docs say to copy these numbers instead of deriving cost from `model` × `usage`, which undercounts.
