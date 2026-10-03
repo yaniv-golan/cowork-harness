@@ -166,9 +166,10 @@ export class FlowWriter {
   }
 
   /** Set `keys` in summary.json, replacing what is there — for keys the runner recomputes over the variant's whole
-   *  `results.jsonl` after every pass (what its rows requested and were sent), never for a key the loop owns. A key
+   *  `results.jsonl` (and `errors.jsonl`) after every pass (what its rows requested and were sent, what they cost),
+   *  never for a key the loop owns. A key
    *  whose value is undefined is removed. A summary.json that does not parse, or is not an object, is left alone. */
-  setSummaryKeys(keys: Record<string, string | false | undefined>): void {
+  setSummaryKeys(keys: Record<string, string | number | false | undefined>): void {
     const p = this.vpath("summary.json");
     const text = this.r.readIfPresent(p);
     let cur: Record<string, unknown> = {};

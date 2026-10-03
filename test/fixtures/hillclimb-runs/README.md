@@ -25,4 +25,12 @@ Excerpts of real kept runs of the repo's own public examples, and labelled SYNTH
 - `forked-skill/`: SYNTHETIC, written by hand. It mirrors the shape of a real hostloop run in which the main loop called
   `Skill` on a `context: fork` skill: the parent stream carries the fork's 17 tool calls and results as parented events,
   and the fork's `subagents/` transcript repeats them with the same tool ids. Its `.meta.json` has no `toolUseId`, as a
-  real fork's meta does not. All text is `<trimmed>`.
+  real fork's meta does not. All text is `<trimmed>`.- `account-frames.json`: the credential frames the billing-basis reader reads, keyed by what each one shows. The
+  `init_*` frames are the `system/init` frame of `result-event-pair.jsonl` with `apiKeySource` set as each census
+  row recorded it. Each `account_*` frame is the `init-1` `control_response` of a kept run, reduced to its
+  `account` block, `pid`, `current_permission_mode` and `fast_mode_state` (the command, agent and model lists were
+  removed). Every identity value was replaced: `email` became `user@example.invalid`, `organization` became
+  `Example Org`, the `subscriptionType` value became `example-plan`, and the `pid` became `12345`. The
+  `rate_limit_*` frames are kept `rate_limit_event` frames with their ids replaced by placeholders.
+  `account_auth_token` and `account_bedrock` are SYNTHETIC: no kept run used those sources. Their shape follows the
+  agent's own account schema (agent 2.1.286), with the identity fields left out as it leaves them out.

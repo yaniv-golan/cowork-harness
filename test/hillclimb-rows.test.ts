@@ -37,6 +37,7 @@ function ctx(r: RunResult | undefined, over: Partial<AttemptContext> = {}): Atte
     rep: 0,
     pin: model,
     events: eventsFor(model),
+    entrypoint: "local-agent",
     attemptS: 41.5,
     runnerTimeout: false,
     tags: ["evals"],

@@ -461,6 +461,12 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     },
     pin: prep.pin,
     requestedEffort: (c) => efforts.get(c.id)!,
+    // The entrypoint the case's tier spawns the agent with: the baseline's spawn env at hostloop, container and microvm;
+    // protocol spawns over the operator's env with no baseline overlay, so it has none. Never this process's env.
+    entrypoint: (c) => {
+      const baseline = prep.baseline(c);
+      return effectiveTier(c.scenario.fidelity, baseline) === "protocol" ? undefined : baseline.spawn?.env?.CLAUDE_CODE_ENTRYPOINT;
+    },
     inputs: (c) => prep.session(c).uploads.map((u) => resolve(expandHome(u))),
     derivedPaths: prep.derivedPaths,
     derivedValues: prep.derivedValues,

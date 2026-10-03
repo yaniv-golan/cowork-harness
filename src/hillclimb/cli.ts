@@ -30,6 +30,7 @@ import { redactDeep } from "./flow.js";
 import { runHillclimbCommand } from "./run-command.js";
 import { termSafe } from "./runner.js";
 import { checkFlowDir, loadFlowSnapshot, type SchemaCheckReport } from "./schema-check.js";
+import { otherModelShareNotes } from "./cost.js";
 import { trackedSkill } from "./skill.js";
 import { stateTemplate, type StateTemplate } from "./state-template.js";
 import {
@@ -223,6 +224,7 @@ export function checkReport(
       ...staleAssertSigWarnings(snap, sig.cases, flowShown, sig.targetOf),
       ...sig.notes,
       ...pairwiseHints(snap, flowShown, sig.target),
+      ...otherModelShareNotes(snap),
     ],
     exitCode: report.errors ? 1 : 0,
   };
