@@ -565,6 +565,19 @@ function writeNew(dir: string, stem: string, body: string): string {
   }
 }
 
+/** An entry's judge provenance: what the judge that graded it was, read, cost and was asked. */
+const JUDGE_FIELDS = [
+  "judgeModel",
+  "judgeCostUsd",
+  "judgeUsage",
+  "judgedDoc",
+  "composedDoc",
+  "judgePromptHash",
+  "judgeTransport",
+  "judgeAttempts",
+  "judgeInvalid",
+] as const;
+
 interface Prepared {
   runDir: string;
   dirAsGiven: string;
@@ -904,11 +917,23 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
           `${CMD}: internal: assert ${sc.assert.indexOf(a)} was predicted to refuse its evidence but a judge was called for it`,
         );
     // In fill mode a semantic_matches entry is the live one, unchanged: nothing about it was re-graded. A kept assert's
-    // entry is the caller's, as it is.
+    // entry is the caller's, as it is. A fill's semantic_pairwise assert no judge read (every outcome it has copied, the
+    // rest neutral or missing) carries its outcomes as the fill composed them and the judge provenance of the entry
+    // they were copied from — a judge-less entry would read as one no judge ever graded, and a later judge-model or
+    // prompt change would never re-judge it.
+    const copiedOnly = new Set<Assertion>();
     const graded = evaluate(semantic, p.ctx, { quietSharedCapture: opts.quietSharedCapture === true }).map((e, k) => {
-      const i = sc.assert.indexOf(semantic[k]!);
+      const a = semantic[k]!;
+      const i = sc.assert.indexOf(a);
       const kept = base(i);
-      return (keep.has(i) || (fill && semantic[k]!.semantic_matches !== undefined)) && kept ? (kept as typeof e) : e;
+      if ((keep.has(i) || (fill && a.semantic_matches !== undefined)) && kept) return kept as typeof e;
+      if (fill && kept && a.semantic_pairwise !== undefined && !p.ctx.judgeModels?.has(a) && !p.ctx.semanticRefused?.has(a)) {
+        copiedOnly.add(a);
+        const own = Object.fromEntries(Object.entries(e).filter(([key]) => !(JUDGE_FIELDS as readonly string[]).includes(key)));
+        const from = Object.fromEntries(Object.entries(kept).filter(([key]) => (JUDGE_FIELDS as readonly string[]).includes(key)));
+        return { ...own, ...from } as typeof e;
+      }
+      return e;
     });
     const metrics = remeasureMetrics(p.ctx, { workspaceFiles: p.workspaceFiles }, sc.metrics);
 
@@ -920,7 +945,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       const assertionIndex = sc.assert.indexOf(a);
       // A fill kept this semantic_matches entry from the live run (or the caller kept the assert): nothing re-read it, so
       // it carries no new document comparison and is marked as kept.
-      if (keep.has(assertionIndex) || (fill && a.semantic_matches !== undefined))
+      if (keep.has(assertionIndex) || (fill && a.semantic_matches !== undefined) || copiedOnly.has(a))
         return { ...g, assertionIndex, docMatchesLive: "not_graded", copied: true } as RegradedAssertion;
       // Over the fingerprint of what the judge was handed, not the drift check's copy.
       const refusedNow = g.semanticEvidence !== undefined && g.semanticEvidence.reason !== "graded";

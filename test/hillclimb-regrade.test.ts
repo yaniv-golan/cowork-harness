@@ -1302,6 +1302,36 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(rows("v1")[0]!.grade).toMatchObject({ pass: 0, a2: 0 });
   }, 300_000);
 
+  // A fill reads what a row is graded with (its last regrade file), never the run's result.json: a comparison a default
+  // regrade already judged is not "missing", and the row keeps that regrade's judge provenance (model, prompt hash), so a
+  // later --judge-model or prompt change still re-judges it.
+  it("default regrade → fill → --judge-model: the fill rewrites nothing, and every judged row is re-judged after", async () => {
+    const { cli, flow, rows, evals } = buildFlow();
+    expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
+    edit(evals, "rubric: ['answers']", "rubric: ['answers in French']");
+    const { seen, deps } = counting();
+    expect((await regradeFlow(ARGS({ approveHarness: true }), deps)).exitCode).toBe(0);
+    // The baseline row against v1, the v1 row against the baseline.
+    expect(seen.calls).toBe(2);
+    const graded = {
+      b: readFileSync(join(flow, "baseline", "results.jsonl"), "utf8"),
+      v1: readFileSync(join(flow, "v1", "results.jsonl"), "utf8"),
+    };
+    for (let k = 0; k < 2; k++) {
+      const fill = await regradeFlow(ARGS({ fillRefs: true }), deps);
+      expect(fill.exitCode, JSON.stringify(fill)).toBe(0);
+      expect(fill.variants.map((v) => v.rewritten)).toEqual([0, 0]);
+      expect(seen.calls).toBe(2);
+      expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(graded.b);
+      expect(readFileSync(join(flow, "v1", "results.jsonl"), "utf8")).toBe(graded.v1);
+    }
+    const out = await regradeFlow(ARGS({ judgeModel: "claude-opus-4-8" }), deps);
+    expect(out.exitCode, JSON.stringify(out)).toBe(0);
+    expect(seen.calls).toBe(4);
+    for (const v of ["baseline", "v1"])
+      expect(rows(v)[0]!.meta.regrade_rejudged_because).toEqual([{ assert: 1, because: ["judge_model"] }]);
+  }, 300_000);
+
   // A fill copies every judged outcome it does not add. Over a rubric changed since the row was graded it would stamp
   // the current assertion set on an old rubric's outcome — listed before any judge call, nothing written.
   it.each([

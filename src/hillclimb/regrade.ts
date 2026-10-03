@@ -683,10 +683,6 @@ function staleCopied(
   return [...out];
 }
 
-/** The references a row's pairwise asserts have no live outcome against (its own variant's included: neutral, no
- *  judge call, but the column must be there). An outcome that exists but could not be compared live (`missing`,
- *  `integrity`) counts as present: re-judging it could move a gating comparison, which a fill never does — a full
- *  re-grade is the tool for that. */
 /** Why a row's live result no longer lines up with the scenario's assertion list — a different count, a different
  *  key at an index, or a pairwise assert with another evidence scope — decided before any judge call (a re-grade
  *  substitutes entries by index, so a shifted list would grade one assert into another's place). */
@@ -706,11 +702,15 @@ function shapeMismatch(result: RunResult, c: HillclimbCase): string | undefined 
   return undefined;
 }
 
-function missingRefs(result: RunResult, c: HillclimbCase, refNames: readonly string[]): string[] {
+/** The references a row's pairwise asserts have no outcome against (its own variant's included: neutral, no judge
+ *  call, but the column must be there). An outcome that exists but could not be compared (`missing`, `integrity`)
+ *  counts as present: re-judging it could move a gating comparison, which a fill never does — a full re-grade is the
+ *  tool for that. Read from the entries the row is GRADED with (`judgedPlan`: its last regrade file, else its run's
+ *  result), never the run's result.json alone: a comparison an earlier regrade judged is the row's, not missing. */
+function missingRefs(plan: JudgedPlan, c: HillclimbCase, refNames: readonly string[]): string[] {
   const pairwiseIdx = c.scenario.assert.map((a, i) => (a.semantic_pairwise !== undefined ? i : -1)).filter((i) => i >= 0);
   if (!pairwiseIdx.length) return [];
-  const authored = (result.assertions ?? []).filter((e) => e.source === undefined);
-  return refNames.filter((ref) => pairwiseIdx.some((i) => !(authored[i]?.pairwise ?? []).some((o) => o.ref === ref)));
+  return refNames.filter((ref) => pairwiseIdx.some((i) => !(plan.entries.get(i)?.pairwise ?? []).some((o) => o.ref === ref)));
 }
 
 /** Whether a row's `a<i>` keys before and after a rebuild name the same asserts: its assertion set is the scenario's
@@ -834,18 +834,15 @@ async function regradeFlowInner(
         const runDir = runDirOf(row, c);
         const result = runDir ? readResult(runDir) : undefined;
         if (!runDir || !result || classifyRep({ result: result as never }, {}).bucket === "errored_agent") continue;
-        if (args.fillRefs ? missingRefs(result, c, refNames).some((r) => r !== v) : args.rejudge === true) return true;
-        if (
-          !args.fillRefs &&
-          judgedPlan(row, c, runDir, result, {
-            rejudge: false,
-            ...(args.judgeModel !== undefined ? { judgeModel: args.judgeModel } : {}),
-            fill: false,
-            variant: v,
-            refs,
-          }).rejudge.size
-        )
-          return true;
+        if (!args.fillRefs && args.rejudge === true) return true;
+        const plan = judgedPlan(row, c, runDir, result, {
+          rejudge: false,
+          ...(args.judgeModel !== undefined ? { judgeModel: args.judgeModel } : {}),
+          fill: args.fillRefs,
+          variant: v,
+          refs,
+        });
+        if (args.fillRefs ? missingRefs(plan, c, refNames).some((r) => r !== v) : plan.rejudge.size > 0) return true;
       }
     return false;
   };
@@ -1046,7 +1043,7 @@ async function regradeFlowInner(
           line,
           runDir,
           result,
-          missing: args.fillRefs ? missingRefs(result, c, refNames) : [],
+          missing: args.fillRefs ? missingRefs(plan, c, refNames) : [],
           re,
           live: matched,
           keptLive: det.keptLive,

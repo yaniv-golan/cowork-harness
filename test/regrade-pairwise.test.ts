@@ -212,6 +212,35 @@ describe.runIf(POSIX)("regrade: semantic_pairwise", () => {
     expect(g.pass).toBe(live.pass);
   });
 
+  it("a fill that judges nothing for an assert keeps that entry's judge provenance (model, prompt hash, document)", async () => {
+    const { file, flow, v1 } = await flowWithV1();
+    const live = v1.assertions[1]!;
+    expect(live.judgeModel).toBeDefined();
+    const calls: Array<{ candidateFirst: boolean }> = [];
+    // Every comparison the fill would add is already there: each outcome is copied, no judge reads the assert.
+    const r = await regradeRuns({
+      runDirs: [v1.outDir],
+      scenarioFile: file,
+      secrets: [],
+      pairwise: { ...flowPairwiseOptions("alpha", "v2", discoverFlowRefs(flow)), onlyRefs: ["baseline"] },
+      pairwiseComplete: judge(calls),
+    });
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    if (!r.ok) return;
+    expect(calls).toHaveLength(0);
+    const g = r.runs[0]!.assertions.find((a) => a.assertionIndex === 1)!;
+    expect(g).toMatchObject({
+      judgeModel: live.judgeModel,
+      judgePromptHash: live.judgePromptHash,
+      judgedDoc: live.judgedDoc,
+      copied: true,
+      docMatchesLive: "not_graded",
+    });
+    expect(g.pairwise).toMatchObject([{ ...live.pairwise![0], copied: true }]);
+    // Nothing was judged: no spend, and the run counts none re-graded.
+    expect(r.runs[0]!.judgeCostUsd).toBeUndefined();
+  });
+
   it("a scenario whose only judged assert is semantic_pairwise is not 'no semantic asserts'", async () => {
     const { file, flow, v1 } = await flowWithV1();
     const r = await regradeRuns({
