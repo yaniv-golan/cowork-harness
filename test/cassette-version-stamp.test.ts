@@ -217,7 +217,7 @@ function makeSkillDir(files: Record<string, string>): string {
 describe.skipIf(!can)("rehash — conditional re-stamp", () => {
   const liveBaseline = loadBaseline("latest").appVersion;
 
-  function cassetteFixture(lane: "local" | "remote" | undefined, extraEvents: string[] = []): string {
+  function cassetteFixture(lane: "local" | "remote" | undefined, extraEvents: string[] = [], assert: unknown[] = []): string {
     const skillDir = makeSkillDir({ "SKILL.md": "# probe\ndo a thing\n" });
     const dir = mkdtempSync(join(tmpdir(), "cwh-p8-rehash-"));
     const sessionPath = join(dir, "session.yaml");
@@ -244,7 +244,7 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
       prompt: "hi",
       answers: [],
       expect_denied: [],
-      assert: [],
+      assert,
     };
     if (lane !== undefined) scenario.lane = lane;
     const body = {
@@ -298,6 +298,27 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
     const ev = (JSON.parse(raw).events as string[]).map((l) => JSON.parse(l));
     expect(ev.find((e) => e.type === "rate_limit_event").rate_limit_info).toEqual({});
     expect(ev.find((e) => e.type === "control_response").response.response.models).toEqual([]);
+  });
+
+  // The rewrite's scrub is held to record's verdict-preservation check. Here it WOULD flip a verdict: the scenario
+  // asserts on the frame text the scrub removes from the transcript. So the migration lands, the events stay
+  // unscrubbed, and a warning names the scrub — nothing recorded is lost.
+  it("a scrub that would flip a verdict is not applied: migrated, events unscrubbed, warned", () => {
+    const frame = "[Subagent hand-back] SYNTHETIC FRAME";
+    const dir = cassetteFixture(
+      undefined,
+      [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `done\n${frame}` }] } })],
+      [{ transcript_contains: "[Subagent hand-back]" }],
+    );
+    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout.trim()).results[0].action).toBe("migrated");
+    expect(r.stderr).toMatch(
+      /::warning:: rehash .*s\.cassette\.json: the recorder's scrub \(subagent-hand-back-frame\) could not be verified/,
+    );
+    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
+    expect(onDisk.fingerprint.hashFormat).toBe("jcs1"); // the migration itself landed
+    expect(JSON.stringify(onDisk.events)).toContain(frame); // ...with the events left as recorded
   });
 
   it("lane: local (explicit) migrates the same way — the floor does not depend on scenario keys", () => {

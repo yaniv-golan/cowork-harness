@@ -47,7 +47,9 @@ describe("committed cassettes carry no agent-binary text", () => {
 // tests): a staged cassette carrying a sentinel is blocked; the same cassette without it is not blocked for it.
 describe("pre-commit hook: a staged cassette with agent-binary text is blocked", () => {
   // `scrubModule`: the body of the scratch repo's dist/run/cassette.js — absent by default (a stub-only dist).
-  const run = (cassetteBody: string, scrubModule?: string): { code: number; out: string } => {
+  // `srcCassette`: the body of its src/run/cassette.ts, where the hook reads RECORDED_SCRUB_VERSION — by default the
+  // real source whenever a scrub module is given; `null` leaves it out.
+  const run = (cassetteBody: string, scrubModule?: string, srcCassette?: string | null): { code: number; out: string } => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-transcript-hook-"));
     const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
     git("init", "-q");
@@ -64,6 +66,11 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
     if (scrubModule !== undefined) {
       mkdirSync(join(dir, "dist", "run"), { recursive: true });
       writeFileSync(join(dir, "dist", "run", "cassette.js"), scrubModule);
+      const src = srcCassette === undefined ? readFileSync(join(REPO, "src", "run", "cassette.ts"), "utf8") : srcCassette;
+      if (src !== null) {
+        mkdirSync(join(dir, "src", "run"), { recursive: true });
+        writeFileSync(join(dir, "src", "run", "cassette.ts"), src);
+      }
     }
     mkdirSync(join(dir, "test", "evals"), { recursive: true });
     writeFileSync(join(dir, "test", "evals", "x.cassette.json"), cassetteBody);
@@ -126,7 +133,7 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
     if (!statSync(REAL_SCRUB, { throwIfNoEntry: false })) throw new Error("dist/run/cassette.js missing — run `npm run build`");
     const r = run(registry("SYNTHETIC BUILT-IN PROSE"), realScrub);
     expect(r.code).not.toBe(0);
-    expect(r.out).toMatch(/carries the description of a Claude Code built-in agent or command/);
+    expect(r.out).toMatch(/carries the description or argument hint of a Claude Code built-in agent or command/);
     expect(r.out).toContain("test/evals/x.cassette.json");
   });
   it("control: the placeholder (and a plugin's own description) is not blocked by it", async () => {
@@ -135,6 +142,20 @@ describe("pre-commit hook: a staged cassette with agent-binary text is blocked",
     const r = run(registry(BUILTIN_DESCRIPTION_PLACEHOLDER), realScrub);
     expect(r.out).not.toMatch(/built-in agent or command/);
     expect(r.code).toBe(0);
+  });
+  // A STALE dist: built before the scrub learned something new, it would pass what the current recorder removes.
+  // The hook compares the built RECORDED_SCRUB_VERSION with the source's and blocks on any mismatch.
+  it.each([
+    ["an older version", `export * from ${JSON.stringify(REAL_SCRUB)};\nexport const RECORDED_SCRUB_VERSION = 1;\n`, undefined],
+    ["no version at all (predates the export)", `export { scrubRecordedAgentData } from ${JSON.stringify(REAL_SCRUB)};\n`, undefined],
+    ["a source that names no version", realScrub, null],
+  ] as const)("blocks a stale dist — %s — even on a clean cassette", async (_label, mod, src) => {
+    if (!statSync(REAL_SCRUB, { throwIfNoEntry: false })) throw new Error("dist/run/cassette.js missing — run `npm run build`");
+    const { BUILTIN_DESCRIPTION_PLACEHOLDER } = await import("../src/run/cassette.js");
+    const r = run(registry(BUILTIN_DESCRIPTION_PLACEHOLDER), mod, src);
+    expect(r.code).not.toBe(0);
+    expect(r.out).toMatch(/dist\/ is stale/);
+    expect(r.out).toMatch(/npm run build/);
   });
   it("blocks when the check cannot run (the probe crashes), rather than passing", () => {
     const r = run(registry("SYNTHETIC BUILT-IN PROSE"), 'throw new Error("broken build");\n');
