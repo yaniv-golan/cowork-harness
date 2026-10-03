@@ -173,7 +173,9 @@ A scenario can declare numbers it measures from an artifact the run writes ([sce
 - `hillclimb check` warns when a value falls outside `[min, scale]` (an unbounded metric is not range-checked).
 - **Adding a metric** is allowed: re-run `state-template --flow`, merge only the new `metrics` entries into
   `_state.json`, and approve the new sha. Rows written before it lack the key (`check` notes them) until
-  `hillclimb regrade` fills it from their kept runs.
+  `hillclimb regrade` fills it from their kept runs, except on a row whose run recorded no pre-run manifest (its
+  case declared no metric and no judged assertion when it ran): it reads `no_manifest`, and only re-running the
+  case measures it. Declaring a metric before the baseline pass avoids that.
 - **Changing a metric** (its artifact, path, direction, `scale`, `unbounded` or `min`) is refused on `run` and `regrade`.
   Start a new flow, or declare it under a new id.
 - **Removing a metric** is allowed, with a warning to drop `<id>` and `<id>_present` from `_state.json`. Declaring
@@ -216,8 +218,10 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
     `judgeCostUsd` of each assertion and the `deciderCostUsd` in that run's `result.json`, plus the
     top-level `judgeCostUsd` of every re-grade file a `hillclimb regrade` wrote into the same run dir
     (`turns/<N>/regrade/*.json`). Use the file's top-level figure, never its per-assertion ones: a re-grade file
-    also lists the grades it kept, with their original cost. Those files are never overwritten, and a re-grade
-    that makes no judge call writes none, so the sum counts every judge call once.
+    also lists the grades it kept, with their original cost. Those files are never overwritten, a row re-graded
+    with no judge call (deterministic assertions and metrics only) writes none, and a file with no top-level
+    `judgeCostUsd` recorded no judge spend, so the sum counts every judge call once. Unpriced judge grades and
+    failed decider calls are not counted, so the total is a floor.
     Find each run dir the way `hillclimb regrade` does, by the row's `meta.run_id`: the runs root's
     `index.jsonl` maps each `runId` to its `outDir` (the root is `~/.cowork-harness/runs`, or `--run-dir` /
     `COWORK_HARNESS_RUNS_DIR`). A row's `meta.run_dir` is a pointer for reading one rep, and it is redacted
@@ -278,16 +282,19 @@ that the loop and the lite report builder read, with these differences:
 - it re-evaluates every deterministic assertion (`file_exists`, `tool_called`, …) against the kept run, and
   re-measures every declared metric, so an assertion fix or a metric added mid-climb reaches the rows already
   written;
-- it re-judges a judged assertion when something the judge sees changed (its rubric, its claims, its judge
-  settings), recording why in `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
+- it re-judges a judged assertion when something the judge sees changed (its rubric or claims, its judge model or
+  prompt template, or a `semantic_pairwise` assertion's references), recording why in
+  `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
 - it recomputes `pass`;
 - `--fill-refs` judges only the pairwise comparisons a row lacks, so `pass` cannot move. After a grader edit, run
   a default re-grade first: a fill lists the rows whose grader changed instead of filling them.
 
-A row is listed instead of re-graded when its kept run dir is gone, or when the evidence its judge read has
-changed since it was graded (an edited kept run, or a harness change to how the document is composed or
-scrubbed); `--rejudge` grades the latter. Each row records `meta.assert_sig`, the assertions it was graded
-under: `hillclimb run` warns when a resumed pass would mix them, and `hillclimb check` flags a variant that does.
+A row is listed instead of re-graded when, among other cases (see the reference), its kept run dir is gone, or
+when the evidence its judge read has changed since it was graded (an edited kept run, or a harness change to how
+the document is composed or scrubbed); `--rejudge` grades the latter, unless the current evidence would be less
+redacted than the graded one (that row stays listed until the run's scrub settings are set, or `--rejudge --allow-
+doc-drift`). Each row records `meta.assert_sig`, the assertions it was graded under: `hillclimb run` warns when a
+resumed pass would mix them, and `hillclimb check` flags a case whose rows carry more than one.
 
 ## Guardrails the harness adds
 
@@ -320,4 +327,4 @@ under: `hillclimb run` warns when a resumed pass would mix them, and `hillclimb 
 | A non-baseline pass refuses on a pairwise case | The baseline reference is missing: `hillclimb freeze-ref … --variant baseline --case <id>`, or, when the message says freezing cannot repair it, a fresh flow dir |
 | The same slots run on every pass | They are `errors.jsonl` rows with a permanent fault; read `failure_class` and `error` |
 | `regrade` lists rows "kept run dir is gone" | Pass the `--run-dir` the runs were written with; a removed run cannot be re-graded (`prune --include-hillclimb` removes them) |
-| A new metric or `win_<vN>` column is missing on older rows | They were written before it: fill a metric with `hillclimb regrade`, a reference's column with `hillclimb regrade --fill-refs`, before comparing |
+| A new metric or `win_<vN>` column is missing on older rows | They were written before it: fill a metric with `hillclimb regrade` (a row whose run recorded no pre-run manifest reads `no_manifest`: re-run it), a reference's column with `hillclimb regrade --fill-refs`, before comparing |

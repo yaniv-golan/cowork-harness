@@ -143,12 +143,12 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 
 - **Grader drift.** If a rubric is wrong, the user edits it and approves the sha; then
   `cowork-harness hillclimb regrade T --flow F` re-grades every variant's rows (default `--variant all`) and writes
-  `F/<variant>/regrade.md` with what moved. A row whose judge evidence itself changed since it was graded is
+  `F/<variant>/regrade.md` when a row moved or was listed. A row whose judge evidence itself changed since it was graded is
   listed instead: ask the user before re-running with `--rejudge`.
 - **A new metric.** Add `metrics:` to the scenario, have the user approve the sha, re-run
   `cowork-harness hillclimb state-template T --flow F` and merge only the new `metrics` entries into
   `_state.json`. Rows written before it lack the key (`check` notes them); `hillclimb regrade T --flow F` fills it
-  from their kept runs. Changing a declared metric is refused (new flow or new id); removing one warns.
+  from their kept runs (a row whose run recorded no pre-run manifest reads `no_manifest`: only a re-run measures it). Changing a declared metric is refused (new flow or new id); removing one warns.
 - **Pairwise saturation.** When `check` notes a variant scoring 0.9 or more against the newest reference:
   `cowork-harness hillclimb freeze-ref T --flow F --variant vN`, then
   `cowork-harness hillclimb regrade T --flow F --fill-refs`, then `state-template T --flow F` and merge the new
