@@ -1,7 +1,8 @@
 # Hill-climbing a skill: `hillclimb` and the `/claude-api hillclimb` loop
 
-`/claude-api hillclimb` is a loop in Claude Code's bundled `claude-api` skill. It improves an artifact round by
-round against an eval: it baselines, proposes a change, runs the eval again, keeps or reverts the change, and
+`/claude-api hillclimb` is a loop in `claude-api`, a skill built into Claude Code: there is nothing to install. It is
+verified on Claude Code 2.1.260 and later. It improves
+an artifact round by round against an eval: it baselines, proposes a change, runs the eval again, keeps or reverts the change, and
 repeats. It does not run your eval itself. It asks for a runner that writes each case's transcript, served model,
 token usage and grades into a fixed directory layout, which it and its report builders then read.
 
@@ -10,8 +11,42 @@ and every round runs your scenarios in the sandboxed agent, grades them with you
 layout the loop expects. The harness makes no keep-or-revert decision of its own. The goal, the best round, the
 stopping rule and the edits to your skill stay the loop's.
 
+The `claude-api` guides read as if the target were "a Claude-powered app", but the loop explicitly allows a specific
+skill or instruction file the agent reads as the thing it iterates on. cowork-harness is what lets that skill run
+under Cowork's runtime for every round.
+
 `eval` compares two versions of a skill you already have; `hillclimb` runs each round of the loop that produces them;
 `critique` finds what is wrong with a skill; `skill` and `run` check that it works.
+
+## When hillclimb pays off
+
+Each of these is a goal, what the loop varies between rounds, and what it measures:
+
+- **Raise a skill's output quality on representative tasks** under Cowork's real runtime (the sandbox, uploads,
+  default-deny egress). The loop edits the skill's instructions; a rubric (`semantic_matches`) or a frozen earlier
+  output (`semantic_pairwise`) grades the result, beside any number the scenario declares (`metrics:`).
+- **Cut a skill's cost or latency without losing quality.** The loop walks models and effort levels per variant
+  (`--model`, `--effort`), a sub-agent's model in `agents/*.md`, or edits that cut tool calls; `cost_usd`,
+  `latency_s` and `tool_calls` move while quality is held. See [When the goal is cost](#when-the-goal-is-cost).
+- **Adapt a skill to a new model release.** Pin the new model on a variant with `--model` and re-tune the
+  instructions on it, with the old model's baseline as the bar.
+- **Make a skill behave under Cowork's constraints:** delivering its files to `outputs/`, stalling less often on a
+  question, not relying on blocked egress. Deterministic assertions (`user_visible_artifact`, `egress_denied`, a
+  scored stall) are the guardrails each round must keep.
+- **Tighten a sub-agent workflow:** what each sub-agent does and which model it runs, through the plugin's
+  `agents/*.md` (this route is not yet verified in a live run).
+
+Not worth a loop: a one-off edit (compare the two versions with `eval`), "does it work at all" (`skill` or `run`),
+"what is wrong with it" (`critique`). See also [What hillclimb is not for](#what-hillclimb-is-not-for).
+
+**A real example (n = 3 reps per variant, the repo's own acceptance plugin).** One edit asked the skill to "name every
+region with its total amount, and flag any row whose amount or units is zero as an anomaly, with one concrete
+action". It was 29% cheaper than the baseline ($0.114 against $0.161 per run) at similar latency (21.9 s against 20.5 s), and
+plain `pass` could not tell the variants apart. Head to head, the pairwise judge ranked it below another variant in
+all three comparisons (tie, loss, loss: a mean `win` of 0.17), saying "the candidate's product figures don't
+reconcile". An edit that looks better on cost can quietly cost quality, and the pairwise signal is what shows it.
+Three reps are directional, not proof: the same run left a deliberately weakened variant inconclusive against the
+baseline.
 
 The command, its flags and defaults, its exit codes and the run envelope are a covered surface. The harness's own
 row `meta` keys, the `out/` copies, the `metrics.md` wording, `hillclimb check`'s findings text, the `freeze-ref` and
@@ -23,6 +58,7 @@ This page is for the person setting the loop up. With the companion skill instal
 each step of the loop) and [`references/hillclimb.md`](../.claude/skills/cowork-harness/references/hillclimb.md)
 (every command, flag, refusal and exit code). The CLI reference is [cli.md](./cli.md).
 
+- [When hillclimb pays off](#when-hillclimb-pays-off)
 - [Terms](#terms)
 - [Quick start](#quick-start)
 - [Where the flow dir goes](#where-the-flow-dir-goes)
@@ -31,6 +67,7 @@ each step of the loop) and [`references/hillclimb.md`](../.claude/skills/cowork-
 - [Numbers a scenario declares (`metrics:`)](#numbers-a-scenario-declares-metrics)
 - [Judging against a frozen reference (`semantic_pairwise`)](#judging-against-a-frozen-reference-semantic_pairwise)
 - [Cost and spend](#cost-and-spend)
+- [When the goal is cost](#when-the-goal-is-cost)
 - [Differences from the loop's own runner](#differences-from-the-loops-own-runner)
 - [Guardrails the harness adds](#guardrails-the-harness-adds)
 - [What a round can and cannot see](#what-a-round-can-and-cannot-see)
@@ -98,8 +135,8 @@ cowork-harness hillclimb run evals/ --flow ~/hc/my-skill --variant baseline --ca
 6. Once the loop has run a round, `cowork-harness hillclimb check --flow ~/hc/my-skill` checks the flow against
    the loop's schema and warns about cases with no headroom.
 
-Every command defaults to `--flow .claude/hillclimb/flow`, inside your repo; the examples put it outside instead
-(see the next section).
+Every command defaults to `--flow .claude/hillclimb/flow`, inside your repo; the examples put it outside instead,
+and outside `.claude/` (see the next section).
 
 Requirements:
 
@@ -117,6 +154,12 @@ Requirements:
   rounds by the model that served them).
 
 ## Where the flow dir goes
+
+Put the flow dir outside `.claude/`. Claude Code treats `.claude/` as a protected path: an allow rule does not
+pre-approve the loop's own Edit or Write there (its `_state.json`, `change.md`, `change.patch`, `narrative.md`), so
+in an interactive session each of those writes asks for approval, every round, and in a headless (`-p`) run it is
+refused. The runner's own writes are unaffected: it writes from its own process. Use an absolute `--flow` path
+outside `.claude/` and exclude it from git; allow rules for that path then cover the loop's writes.
 
 Keep the flow dir out of your repo, or ignore most of it. Rows, traces and the copies under `<variant>/out/`
 hold the run's outputs and judge rationales (secret-scrubbed and host-path-redacted text; binary files copied as
@@ -326,8 +369,9 @@ Only the baseline's reference decides `pass`; a later reference is a metric.
 
 Copy the cost numbers; never derive them. The loop's guide prices a run as `model` × `usage`, but `usage` (and
 `in_tokens` / `out_tokens`) covers only the main model and its same-model sub-agents, and the agent's own pricing
-adds what that formula misses (1-hour cache writes, regional multipliers, web-search fees). Measured on kept runs,
-the formula undercounts nearly every row. So:
+prices what that formula does not see (1-hour cache writes, which subscription logins make; regional multipliers;
+web-search fees). On kept runs the formula's figure differs from the agent's own, by different amounts on different
+rows, and no fixed multiplier reproduces it. So:
 
 - **`cost_usd` on a row is the agent's whole cost for that run**: its own `total_cost_usd`, across every model the
   run called (main loop, sub-agents, auxiliary calls). The judge is not in it. `meta.models` lists each model's
@@ -429,6 +473,31 @@ levels:
 On `subscription`, `cost_usd` is the agent's list-price estimate, not a charge. On `cost_basis: managed`, an
 organization's price table set it. Compare costs only across variants with the same basis. `billing_basis` describes
 the agent only: the judge and the decider run on the host's own credential, which may bill differently.
+
+## When the goal is cost
+
+If you pick "cut cost" as the loop's goal, it follows the `claude-api` skill's cost guide (`cost-hillclimb.md`), which
+searches a model × effort staircase before it edits prompts. Run each cell of that walk as its own variant:
+`hillclimb run … --flow <dir> --variant vN --model <id> --effort <level>`, and keep one model and effort per variant
+(see [Model and effort per variant](#model-and-effort-per-variant)). What carries over to a Cowork skill:
+
+- **Caching health is read-only.** The cost guide checks prompt caching first and after every change. For a Cowork
+  skill the agent sets the cache breakpoints, not you: read `usage.cache_read_input_tokens` on the rows after each
+  round, and treat a drop as your skill's content breaking the cache.
+- **Some levers do not exist here.** Batching, `max_tokens`, stop sequences and a mid-session effort switch are not
+  settings a variant can change.
+- **Where to read the texture.** Thinking spend is in `out_tokens`; turns and tool calls are in each rep's trace
+  under `traces/`.
+- **Copy each cell's cost from its `summary.json`, never from `model` × `usage`.** The cost guide prices a run
+  from tokens; here `cost_usd_mean` is `$/run` (add `judge_usd_mean`, which shares its denominator, when the judge
+  counts), and a figure is a floor when `cost_rows_unrecorded`, `judge_rows_unpriced` or `judge_rows_unrecorded` is
+  not 0 (see [Cost and spend](#cost-and-spend)).
+- **State each cell's `billing_basis` beside its cost, and compare only cells with the same basis.** On
+  `subscription`, `cost_usd` is the agent's list-price estimate, not a charge; on `mixed`, compare only rows of the
+  same basis. It describes the agent only (see [Billing basis](#billing-basis)).
+- **Keep effort out of the skill's own frontmatter.** A `model:` or `effort:` in `SKILL.md` moves the main loop
+  mid-run, so rows are expected to fail the requested-model or sent-effort check (`serving_substitution`) while
+  `--model`/`--effort` are pinned.
 
 ## Differences from the loop's own runner
 
