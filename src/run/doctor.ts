@@ -463,15 +463,20 @@ export function tokenCheck(tier: Tier, probe: DoctorProbe = realProbe): DoctorCh
  *  `token` row for the same tier), and how to supply one. Variable NAMES only — never a value. `env` is the
  *  harness's process env, the one every source below is resolved into. */
 export function authFailureHint(tier: Tier, check: DoctorCheck, env: NodeJS.ProcessEnv): string {
-  // runtimeAuthEnv (src/runtime/host-env.ts) passes CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY, at every tier but
-  // protocol; protocol hands the agent the operator's env, and without a managed config dir its own login too.
-  const vars =
-    tier === "protocol"
+  // container and microvm hand the agent only what runtimeAuthEnv (src/runtime/host-env.ts) picks: CLAUDE_CODE_OAUTH_TOKEN,
+  // else ANTHROPIC_API_KEY. hostloop and protocol spawn it from the harness's own env, so ANTHROPIC_AUTH_TOKEN reaches
+  // it there too; protocol without a managed config dir also leaves it the login in the real config dir.
+  const sealed = tier === "container" || tier === "microvm";
+  const vars = sealed
+    ? "CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY"
+    : tier === "protocol"
       ? "CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN (else, without a managed config dir only, the Claude Code login in your config dir)"
-      : "CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY";
+      : tier === "hostloop"
+        ? "CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN"
+        : "CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY (ANTHROPIC_AUTH_TOKEN only when it runs on the host loop)";
   const sources =
     "each looked up in the process environment, then --dotenv <path>, then ./.env, then <install>/.env (the first that sets it wins)";
-  const authTokenOnly = tier !== "protocol" && !!env.ANTHROPIC_AUTH_TOKEN && !env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY;
+  const authTokenOnly = sealed && !!env.ANTHROPIC_AUTH_TOKEN && !env.CLAUDE_CODE_OAUTH_TOKEN && !env.ANTHROPIC_API_KEY;
   const now = authTokenOnly
     ? `ANTHROPIC_AUTH_TOKEN is set, but at fidelity ${tier} only CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY reach the agent: put the token in CLAUDE_CODE_OAUTH_TOKEN`
     : check.status === "ok"
