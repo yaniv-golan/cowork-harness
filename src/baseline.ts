@@ -699,6 +699,38 @@ export function nativeManifestBuild(
   return channel && build ? { version: channel.sdkVersion, build } : undefined;
 }
 
+/** `sync`'s next `agentBinary`: the base's hand-authored fields, overridden by what this sync re-derived. Two of the
+ *  overrides are NEVER carried from the base and must be computed fresh every time: `nativeBuilds` (the native build
+ *  per CPU arch, from this asar's SDK descriptor — a carried map would pin the previous version's builds beside a new
+ *  path, and every hostloop host would then fail on `kind:"build"`) and `releaseBaseUrl` (a carried channel would hide
+ *  a stable<->RC flip from `sync --diff`). `undefined` values are dropped by JSON.stringify, so a field this sync could
+ *  not derive is absent from the written file rather than stale. Pure. */
+export function buildNextAgentBinary(
+  base: Record<string, unknown>,
+  d: {
+    stagedPath: string;
+    nativeStagedPath: string;
+    channel: { sdkVersion: string; nativeBuilds?: Partial<Record<string, string>> } | null | undefined;
+    releaseBaseUrl: string | null | undefined;
+    sha256?: string;
+    shaProvenance?: string;
+    manifestChecksumMatch?: boolean | "unknown";
+    stringSentinels?: Record<string, number>;
+  },
+): Record<string, unknown> {
+  return {
+    ...base,
+    stagedPath: d.stagedPath,
+    nativeStagedPath: d.nativeStagedPath,
+    nativeBuilds: nativeBuildsForPin(d.channel, d.nativeStagedPath),
+    releaseBaseUrl: d.releaseBaseUrl ?? undefined,
+    sha256: d.sha256,
+    shaProvenance: d.shaProvenance,
+    manifestChecksumMatch: d.manifestChecksumMatch,
+    stringSentinels: d.stringSentinels,
+  };
+}
+
 /** `sync`'s `agentBinary.nativeBuilds`: the asar SDK descriptor's darwin build per arch, recorded only when the
  *  descriptor is for the version `nativeStagedPath` pins (after an auto-update Desktop can run a version the asar
  *  does not describe, and another version's builds would be wrong for it). Undefined otherwise. Pure. */
