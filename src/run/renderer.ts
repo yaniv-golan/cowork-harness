@@ -392,7 +392,7 @@ export function renderFooter(
  * lines off the footer, paste them back as `--answer …` for a deterministic re-run. Scripted answers
  * are not echoed (they're already in the command). No-op when nothing was auto-answered.
  */
-// the "guards active this run" roster. ✓ ran clean · ✗ fired · — N/A this lane/tier · ? unverified.
+// the "guards active this run" roster. ✓ ran clean · ✗ fired · — N/A this lane/tier or baseline · ? unverified.
 // The load-bearing rule (no silent-false-green): a guard that didn't run renders — / ?, never ✓.
 /** Warn-severity verdict signals, one line each. `·` (not ✗) — a warn never changes pass/fail, and a
  *  footer that marked it like a failure would train readers to ignore it. Never truncated: a warn's

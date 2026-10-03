@@ -812,6 +812,23 @@ export function deriveNativeStagedPath(a: {
   return { path, warnings };
 }
 
+/** The mode a baseline records for the `outputs` mount, read as one of the two values the outputs-delete
+ *  verdict distinguishes. From Desktop 2.16120.0 every mount builder takes the outputs mode from an exported
+ *  `outputsMountMode(isBridgeSession)`: "rwd" (deletes allowed) for a normal session, "rw" only for a Dispatch
+ *  bridge session, which the harness does not model. Earlier releases put outputs through the approved-list
+ *  resolver, so it is "rw" (delete-denied) there. Fails closed: only an exact "rwd" is "rwd"; a missing outputs
+ *  mount or any other mode reads as "rw", today's behaviour. */
+export function baselineOutputsMountMode(baseline: PlatformBaseline): "rw" | "rwd" {
+  return baseline.mountLayout.mounts.find((m) => m.name === "outputs")?.mode === "rwd" ? "rwd" : "rw";
+}
+
+/** What a live run persists as `RunResult.outputsMountMode`. Nothing for `lane: remote`: Cowork's cloud lane
+ *  never runs Desktop's mount builders, so the baseline's outputs mode is not evidence about it, and an absent
+ *  field keeps the delete-denied verdict there. */
+export function stampedOutputsMountMode(baseline: PlatformBaseline, lane: "local" | "remote" | undefined): "rw" | "rwd" | undefined {
+  return lane === "remote" ? undefined : baselineOutputsMountMode(baseline);
+}
+
 /**
  * Resolve a baseline by `latest`, an absolute path, or a name under `baselines/`. A non-absolute name
  * is treated as a BARE FILENAME resolved under BASELINES_DIR — both `desktop-x` and `desktop-x.json`

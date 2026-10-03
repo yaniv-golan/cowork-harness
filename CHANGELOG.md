@@ -64,6 +64,14 @@ All notable changes to this project are documented here. The format is based on
   evidence-unavailable** (it passed as "new this run" before, though the pre-run manifest never looked there). Move
   the assertion to a file the step writes under `outputs/` or a connected folder. A replay of an existing cassette is
   unaffected: such a path is not in the cassette's manifest.
+- **An outputs delete no longer fails a run by default on `latest`.** `latest` (`desktop-2.19675.0`) records the
+  `outputs` mount as `rwd`, so a CI gate that relied on the implicit `outputs_delete` failure stops catching a skill
+  that deletes in `outputs/`. To keep that check, author `no_delete_in_outputs: true`; it behaves as before on every
+  baseline. See Changed.
+- **`verify-run` on an older result.json keeps the old outputs-delete verdict.** A result written by 4.2.x or earlier
+  has no `outputsMountMode`, which reads as `rw`. Re-verifying one that recorded an outputs delete on Desktop 2.16120.0 or
+  later therefore still fails, while a fresh run of the same scenario passes. That red is safe; re-run the
+  scenario to get the current verdict.
 
 ### Added
 
@@ -323,8 +331,9 @@ All notable changes to this project are documented here. The format is based on
   `semantic_pairwise` reference store, an empty one, and
   more than 64 MiB (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`), or one file over the pre-run hash cap. An untouched fixture file is pre-run, not
   authored: `semantic_matches` and `semantic_pairwise` judge only what the step created or rewrote, and `RunResult.artifacts[]`
-  marks an untouched one `preRun: true`. Deleting a fixture file fails the run by default (the harness's
-  outputs-delete policy; `allow_outputs_delete` opts out). `RunResult.workspaceFixture` is the ref as the
+  marks an untouched one `preRun: true`. Deleting a fixture file is an outputs delete: it passes by default on a
+  baseline that records `outputs` as `rwd` (Desktop 2.16120.0 and later) and fails by default on an older `rw` one
+  (`allow_outputs_delete` opts out there); see Changed. `RunResult.workspaceFixture` is the ref as the
   scenario file wrote it, and `scaffold` re-emits it verbatim, asserting only what the step produced. The fixture's content signature is part of
   the cassette staleness check: a changed fixture is a `fixture` finding (a warning by default; `--strict`,
   `--fail-on-skill-drift` and an explicit `--session` fail it), and one that cannot be found or scanned is
@@ -482,6 +491,26 @@ All notable changes to this project are documented here. The format is based on
     a sub-agent.
   - `tool_result_contains` / `tool_result_matches`, their negations, and the `result:` predicates of
     `tool_called` all see the larger capture.
+- **On baselines recording outputs as `rwd` (Desktop ≥2.16120.0), an outputs delete no longer fails the default
+  verdict; author `no_delete_in_outputs` to keep the check.** This is a default-verdict change made for fidelity. From
+  Desktop 2.16120.0 every mount builder gives `outputs` the mode `rwd` (deletes allowed) for a normal session, and `rw`
+  only for a Dispatch bridge session, which the harness does not model. Measured on 2.19675.0: `rm`, `mv` and
+  overwrite-by-rename in `outputs/` all succeed with no permission card. The harness failed such a run anyway.
+  - Each live run records the baseline's outputs mode as the new `result.json` field `outputsMountMode`. On `rwd`,
+    `outputs_delete`, `outputs_delete_unconfirmed` and `outputs_diff_unavailable` do not fire unless
+    `no_delete_in_outputs` is authored, or `no_delete_in_mounts` without `allow_delete_in` waiving outputs. Otherwise
+    the guard roster shows `outputs-delete —` (not applicable). A move out of
+    `outputs/` is treated the same as an `rm`.
+  - Baselines recording `rw` (every release before 2.16120.0) keep the old verdict. So does `lane: remote`, which
+    records no mode, because Desktop's mount builders are not evidence about Cowork's cloud lane.
+  - `allow_outputs_delete` is still accepted. On an `rwd` baseline it is a no-op with no warning, unless
+    `no_delete_in_mounts` arms the outputs check; then it waives that check's `outputs_delete` signal, as on `rw`.
+  - `no_delete_in_outputs` and `no_delete_in_mounts` keep covering `outputs` on every baseline: authoring either arms
+    the outputs check, so a delete only the filesystem diff saw still fails the run (unless `allow_outputs_delete`
+    waives it). Their failure messages no longer
+    say production denies the delete.
+  - The detection still runs on every live run, and its evidence stays in `scan` / `fsDiff`. Committed cassettes are
+    unaffected: these signals never run on replay.
 
 ### Fixed
 
@@ -743,9 +772,9 @@ All notable changes to this project are documented here. The format is based on
   2.16120.0 every mount builder takes the outputs mode from one exported function, `outputsMountMode`, which allows
   deletes for a normal session and denies them only for a bridge session. Both baselines said `rw` (delete denied).
   Connected folders keep the approved-list rule. `sync` now pins that function and its non-bridge `"rwd"`, so a change
-  is an unknown delta; the delete-deny resolver's site count could not see this. Nothing the harness runs reads the
-  recorded mode, so no cassette goes stale. The harness's own outputs-delete check is unchanged; see
-  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-the-harness-refuses-them-by-default-real-cowork-allows-them).
+  is an unknown delta; the delete-deny resolver's site count could not see this. No cassette goes stale. The default
+  outputs-delete verdict now follows the recorded mode (see Changed); see
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#deletes-in-outputs-follow-the-baselines-recorded-mount-mode).
 
 ### Documentation
 

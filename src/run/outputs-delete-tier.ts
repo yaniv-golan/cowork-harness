@@ -1,4 +1,19 @@
-import type { OutputsFsDiff } from "../types.js";
+import type { Assertion, OutputsFsDiff } from "../types.js";
+
+/** Is the outputs-delete check armed for this run? The ONE rule the verdict's default outputs signals, the guard
+ *  roster and execute.ts's stderr warning all read.
+ *
+ *  Armed when the run's baseline does not record outputs as exactly `"rwd"` (Desktop before 2.16120.0, a result
+ *  written before the field, the remote lane — production denies or may deny the delete), OR the scenario authored
+ *  `no_delete_in_outputs`, OR it authored `no_delete_in_mounts` without `allow_delete_in` waiving outputs: that key
+ *  covers outputs on every baseline, and the delete only the filesystem diff can see reaches it through this check.
+ *  Off only on an `rwd` run where nothing asked for it — production allows the delete there. */
+export function outputsCheckArmed(mode: string | undefined, assertions: readonly Assertion[]): boolean {
+  if (mode !== "rwd") return true;
+  if (assertions.some((a) => a.no_delete_in_outputs !== undefined)) return true;
+  const outputsWaived = assertions.some((a) => a.allow_delete_in?.includes("outputs"));
+  return !outputsWaived && assertions.some((a) => a.no_delete_in_mounts !== undefined);
+}
 
 /** The outputs-delete evidence a tier decision reads — exactly what `result.json` persists, so the live
  *  verdict, `verify-run` and the authored assertion reach the same answer without recomputing anything. */
