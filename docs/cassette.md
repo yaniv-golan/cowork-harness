@@ -116,7 +116,9 @@ a cassette you did not record.
 
 A validated re-check does **not** reach a plain `replay` (which reads the frozen block) until it is written
 back. Add **`--write`** to `--reassert` to persist the re-validated block into the cassette — free, no re-record —
-when **only** the `assert:`/`expect_denied:` block changed; `events`/`controlOut` stay byte-identical. It refuses
+when **only** the `assert:`/`expect_denied:` block changed; `controlOut` stays byte-identical, and `events` do too
+except that what the recorder now always removes is dropped from them (see "Always removed" below) — done even when
+the block is already current, which is how an older cassette adopts a newer scrub without a re-record. It refuses
 any key that would silently skip on this cassette (needs an artifact manifest, pre-run hashes, or `controlOut`)
 and, without `--allow-failing`, a failing verdict — so `--write` can't bake in a green a plain `replay` won't
 reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci) for the full propagation chain.
@@ -1260,7 +1262,8 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   can only be one your scenario attached deliberately via `mcp.config` — a supported feature — and flagging
   it would fail a legitimate fixture.
   **What it does NOT cover.** Only the name fields above are checked. The catalogs — `slash_commands[]`,
-  `skills[]`, `plugins[]`, and command *descriptions* — are **not** gated: `slash_commands` legitimately
+  `skills[]`, `plugins[]`, and command *descriptions* — are **not** gated by this scan (the recorder separately
+  withholds the descriptions of Claude Code's built-in agents and commands; see "Always removed" below): `slash_commands` legitimately
   varies between clean fixtures and descriptions are unbounded free text, so there is no clean predicate,
   only an arbitrary threshold. In the leak that actually shipped, the gated fields were about **11% of the
   removed bytes** and the ungated catalogs about **89%** (the registry command catalog alone ~80%);
@@ -1322,11 +1325,18 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 > account is offered, their display copy and, on a pay-per-token account, per-Mtok pricing); a subscription
 > account's **`rate_limit_info`** (utilization, reset times, overage state), emptied to `{}`; and the agent's own
 > **frame around a sub-agent's report** (the hand-back line before the report, and the "use SendMessage" continuation
-> hint after it), replaced by `[subagent report]` with the report body and `agentId` kept. Nothing in replay, the
-> verdict, staleness or the fingerprint reads any of it. The write is still held to the same verdict-preservation
-> check as redaction; if that check cannot pass, the cassette is written unscrubbed with a warning rather than
-> losing the run. `rehash` and `replay --reassert --write` apply the same scrub when they rewrite a cassette. A
-> cassette recorded by an older harness may still carry these; re-record (or run either rewrite) to drop them.
+> hint after it), replaced by `[subagent report]` with the report body and `agentId` kept; and the **description of
+> each Claude Code built-in agent, command and skill** in that `initialize` response's `agents` and `commands` lists
+> (Anthropic's text), replaced by `[built-in description withheld]` with the name and every other field kept.
+> Built-in is read from the recording, not from a list: a command the agent marks `builtin: true`, an agent with no
+> `<plugin>:` prefix, or an entry from a plugin the recording marks built-in (only a recording from an agent too old
+> to mark its commands falls back to the known built-in skill names). The plugin under test's own agents, commands
+> and skills, and a scenario's own skills, keep theirs. Nothing in replay, the verdict, staleness or the fingerprint
+> reads any of it. The write is still held to the same verdict-preservation check as redaction; if that check cannot pass, the cassette is written unscrubbed with a warning rather than
+> losing the run. `rehash` and `replay --reassert --write` apply the same scrub when they rewrite a cassette, and
+> `replay --reassert --write` rewrites the events alone when the assert block is already current but the events
+> still carry something the recorder removes. A cassette recorded by an older harness may still carry these;
+> re-record (or run `replay --reassert --write`) to drop them.
 
 ### Reading the result
 

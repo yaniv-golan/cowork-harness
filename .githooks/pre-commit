@@ -60,6 +60,45 @@ if [ -n "$transcript_hits" ]; then
   exit 1
 fi
 
+#
+# A staged *.cassette.json must not carry the DESCRIPTION of a Claude Code built-in agent, command or skill (Anthropic's
+# text) in the agent's initialize registry response: the recorder replaces it with a placeholder. Decided by the
+# recorder's own scrubRecordedAgentData, so the hook and the recorder share one definition of "built-in". It needs the build:
+# with no dist/run/cassette.js this check cannot run, and a staged cassette then falls to the dist check below,
+# which fails CLOSED when dist/cli.js is missing. Exit 3 from the probe = a description found; any other non-zero
+# = the check could not run, which also blocks.
+builtin_desc_hits=""
+builtin_desc_errors=""
+if [ -f dist/run/cassette.js ]; then
+  for f in $(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.cassette\.json$' || true); do
+    s=0
+    git show ":$f" 2>/dev/null | node --input-type=module -e '
+      import { pathToFileURL } from "node:url";
+      const { scrubRecordedAgentData } = await import(pathToFileURL(process.argv[1]).href);
+      let s = "";
+      for await (const d of process.stdin) s += d;
+      let c;
+      try { c = JSON.parse(s); } catch { process.exit(0); } // unreadable JSON: the verify-cassettes block below owns that
+      if (!c || !Array.isArray(c.events)) process.exit(0);
+      process.exit(scrubRecordedAgentData(c).kinds.includes("builtin-description") ? 3 : 0);
+    ' "$PWD/dist/run/cassette.js" >/dev/null 2>&1 || s=$?
+    if [ "$s" = "3" ]; then builtin_desc_hits="$builtin_desc_hits $f"; elif [ "$s" != "0" ]; then builtin_desc_errors="$builtin_desc_errors $f"; fi
+  done
+fi
+if [ -n "$builtin_desc_hits" ] || [ -n "$builtin_desc_errors" ]; then
+  if [ -n "$builtin_desc_hits" ]; then
+    echo "✖ pre-commit: a staged cassette carries the description of a Claude Code built-in agent or command (Anthropic's text):"
+    printf '    %s\n' $builtin_desc_hits
+    echo "  Drop it with: cowork-harness replay <file> --reassert --write (or re-record)."
+  fi
+  if [ -n "$builtin_desc_errors" ]; then
+    echo "✖ pre-commit: could not check a staged cassette for built-in descriptions (run 'npm run build'):"
+    printf '    %s\n' $builtin_desc_errors
+  fi
+  echo "  (Bypass with 'git commit --no-verify' if you must.)"
+  exit 1
+fi
+
 # Block committing a new/moved baseline (baselines/desktop-*.json) without re-stamping or
 # re-recording the committed example cassettes against it first.
 #

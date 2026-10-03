@@ -1058,7 +1058,8 @@ until it is written back into the cassette — this is the load-bearing step con
   lacks (e.g. `input_unmodified` needs pre-run hashes). This also re-freezes the assert block as a side effect.
 - **`cowork-harness replay <cassette> --reassert --write`** — **free**, when **only** the `assert:` block
   changed. It re-runs the token-free re-check above and, on a pass, persists the re-validated block back into
-  the cassette; `events`/`controlOut` stay byte-identical. It **refuses** any key that would silently skip on
+  the cassette; `controlOut` stays byte-identical, and `events` do too except that what the recorder now always
+  removes is dropped from them (also when the block is already current). It **refuses** any key that would silently skip on
   that cassette (needs an artifact manifest, pre-run hashes, or `controlOut`) and — without `--allow-failing` —
   refuses a failing verdict, so `--write` can't bake in a green that plain `replay` won't reproduce.
 

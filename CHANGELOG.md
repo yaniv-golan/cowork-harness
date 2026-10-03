@@ -27,6 +27,18 @@ All notable changes to this project are documented here. The format is based on
   cassette unscrubbed with a warning naming the scrub, instead of refusing and losing the paid run. The committed
   cassettes are scrubbed. The pre-commit hook and the repo guard now refuse a staged or committed `*.cassette.json`
   carrying the agent's hand-back frame or other agent-binary text, as they already did for `.jsonl` transcripts.
+- **`record` also withholds the descriptions of Claude Code's built-in agents, commands and skills.** The agent's
+  `initialize` response lists every slash command and agent with its description, and for the agent's own entries
+  (`claude-api`, `code-review`, `security-review`, `init`, `Explore`, `general-purpose`, …) that description is
+  Anthropic's own text. `record` now replaces each with `[built-in description withheld]`, keeping the name and
+  every other field. Built-in is decided from the recording itself, not from a list: a command the agent marks
+  `builtin: true`, an agent with no `<plugin>:` prefix (every plugin agent carries one), or an entry from a plugin the
+  recording marks built-in. Only a recording from an agent too old to mark its commands falls back to the known
+  built-in skill names. The plugin under test's own agents, commands and skills, and a scenario's own skills, keep
+  their descriptions. Nothing in `src` reads a registry agent's or command's description. `replay --reassert
+  --write` now also rewrites a cassette whose assert block is already current when its events still carry something
+  the recorder removes, so an existing cassette can adopt a newer scrub without a re-record. The committed cassettes
+  are scrubbed, and the pre-commit hook and the repo guard refuse a cassette that carries a built-in description.
 
 ### Upgrade notes
 

@@ -165,6 +165,7 @@ import {
   DEFAULT_SCAN_PATTERNS,
   MANIFEST_SCAN_PATTERNS,
   HOST_INVENTORY_CLS,
+  KNOWN_BUILTIN_SKILLS,
   type ScanFinding,
   type AllowInput,
   type AllowPattern,
@@ -1700,7 +1701,82 @@ function mapStrings(v: unknown, f: (s: string) => string): unknown {
   return v;
 }
 
-export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame";
+/** What replaces the description of a BUILT-IN entry (agent, command or skill) in the registry. Exported so the
+ *  committed-cassette guard compares against it exactly. */
+export const BUILTIN_DESCRIPTION_PLACEHOLDER = "[built-in description withheld]";
+
+/** Plugins the recording itself marks as the agent's own: `system/init` `plugins[]` entries whose `path` is
+ *  `"builtin"` (their `source` ends `@builtin`). A `<plugin>:<name>` entry from one of them is built-in too. */
+function recordedBuiltinPlugins(events: readonly string[]): Set<string> {
+  const out = new Set<string>();
+  for (const l of events) {
+    if (!l.includes('"plugins"') || !l.includes('"init"')) continue;
+    let e: { type?: string; subtype?: string; plugins?: unknown };
+    try {
+      e = JSON.parse(l);
+    } catch {
+      continue;
+    }
+    if (e?.type !== "system" || e.subtype !== "init" || !Array.isArray(e.plugins)) continue;
+    for (const p of e.plugins as Array<{ name?: unknown; path?: unknown; source?: unknown } | null>) {
+      if (typeof p?.name !== "string") continue;
+      if (p.path === "builtin" || (typeof p.source === "string" && p.source.endsWith("@builtin"))) out.add(p.name);
+    }
+  }
+  return out;
+}
+
+/** Replace the description of every BUILT-IN entry in the agent's `initialize` registry response — the agent's own
+ *  text, not ours to publish. "Built-in" is decided structurally, never by a roster we keep growing:
+ *   - `commands[]`: the row carries `builtin: true`, the agent's own marker (its SDK schema: "True when the command
+ *     is Claude Code's own; absent for a command defined by a user, project, plugin or MCP server"). Only for a
+ *     registry with NO row carrying that marker — an agent older than the marker — does it fall back to the
+ *     `KNOWN_BUILTIN_SKILLS` names.
+ *   - `agents[]`: no marker exists (rows are `{name, description, model}`), but every plugin agent is namespaced
+ *     `<plugin>:<agent>` and the harness stages no bare-named agent, so a bare name is the agent's own (or, at a
+ *     host-inheriting tier, the operator's — not the plugin under test's either).
+ *   - either list: a `<plugin>:<name>` whose plugin the recording marks built-in (see recordedBuiltinPlugins).
+ *  So the plugin under test's own agents, commands and skills (`<plugin>:<name>`, unmarked) and a scenario's
+ *  config-dir skills (bare, unmarked) keep their descriptions. Every other field stays. Returns the SAME object
+ *  when nothing changes. */
+function scrubBuiltinRegistryDescriptions(
+  m: { response?: { response?: Record<string, unknown> } },
+  builtinPlugins: ReadonlySet<string>,
+): unknown {
+  const body = m.response?.response;
+  if (!body) return m;
+  const fromBuiltinPlugin = (name: string): boolean => {
+    const sep = name.indexOf(":");
+    return sep > 0 && builtinPlugins.has(name.slice(0, sep));
+  };
+  const rows = (v: unknown): Array<Record<string, unknown>> =>
+    Array.isArray(v) ? (v.filter((x) => x !== null && typeof x === "object") as Array<Record<string, unknown>>) : [];
+  const markerPresent = rows(body.commands).some((c) => "builtin" in c);
+  const isBuiltinCommand = (c: Record<string, unknown>): boolean =>
+    typeof c.name === "string" && (c.builtin === true || fromBuiltinPlugin(c.name) || (!markerPresent && KNOWN_BUILTIN_SKILLS.has(c.name)));
+  const isBuiltinAgent = (a: Record<string, unknown>): boolean =>
+    typeof a.name === "string" && (!a.name.includes(":") || fromBuiltinPlugin(a.name));
+  let changed = false;
+  const withhold = (list: unknown, isBuiltin: (r: Record<string, unknown>) => boolean): unknown => {
+    if (!Array.isArray(list)) return list;
+    let touched = false;
+    const out = list.map((r: unknown) => {
+      if (r === null || typeof r !== "object") return r;
+      const row = r as Record<string, unknown>;
+      if (!isBuiltin(row) || row.description === undefined || row.description === BUILTIN_DESCRIPTION_PLACEHOLDER) return r;
+      touched = true;
+      return { ...row, description: BUILTIN_DESCRIPTION_PLACEHOLDER };
+    });
+    if (!touched) return list;
+    changed = true;
+    return out;
+  };
+  const commands = withhold(body.commands, isBuiltinCommand);
+  const agents = withhold(body.agents, isBuiltinAgent);
+  return changed ? { ...m, response: { ...m.response, response: { ...body, commands, agents } } } : m;
+}
+
+export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-hand-back-frame" | "builtin-description";
 
 /** What the recorder removes from EVERY cassette before writing it (`--no-redact` included — none of it is
  *  policy content):
@@ -1710,8 +1786,12 @@ export type RecordedScrubKind = "model-menu" | "rate-limit-info" | "subagent-han
  *   - `subagent-hand-back-frame`: the agent binary's frame line around a sub-agent's report ("[Subagent
  *     hand-back] …") replaced by a neutral placeholder, and the "(use SendMessage with to: …)" continuation hint
  *     dropped, wherever they occur in an event. The report body (indented below the frame), the agentId and the
- *     usage block stay.
- *  Safe for replay by construction: nothing in `src` reads the menu, `rate_limit*`, or the frame/hint text; the
+ *     usage block stay;
+ *   - `builtin-description`: the description of each BUILT-IN agent, command and skill in the `initialize` registry
+ *     response's `agents[]` and `commands[]`, replaced by BUILTIN_DESCRIPTION_PLACEHOLDER; the name and every other
+ *     field stay, and the plugin under test's own entries are untouched (see scrubBuiltinRegistryDescriptions).
+ *  Safe for replay by construction: nothing in `src` reads the menu, `rate_limit*`, the frame/hint text, or a
+ *  registry agent's or command's description; the
  *  fingerprint never reads `events`; no hash covers `events`. The record path still holds the result to the
  *  verdict-preservation check. Pure; returns the SAME cassette and no kinds when there is nothing to remove. */
 export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette; kinds: RecordedScrubKind[] } {
@@ -1719,10 +1799,12 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
   const menu = scrubAccountModelMenu(cassette);
   if (menu !== cassette) kinds.add("model-menu");
   let changed = false;
+  let builtinPlugins: Set<string> | undefined; // computed on first need
   const events = (menu.events ?? []).map((l) => {
     const hasRate = l.includes('"rate_limit_info"');
     const hasFrame = l.includes("[Subagent hand-back]") || l.includes("use SendMessage with to:");
-    if (!hasRate && !hasFrame) return l;
+    const hasCommands = l.includes('"commands"');
+    if (!hasRate && !hasFrame && !hasCommands) return l;
     let e: unknown;
     try {
       e = JSON.parse(l);
@@ -1744,11 +1826,19 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
         kinds.add("subagent-hand-back-frame");
       }
     }
+    if (hasCommands && isInitializeRegistryResponse(next as Parameters<typeof isInitializeRegistryResponse>[0])) {
+      builtinPlugins ??= recordedBuiltinPlugins(menu.events ?? []);
+      const described = scrubBuiltinRegistryDescriptions(next as Parameters<typeof scrubBuiltinRegistryDescriptions>[0], builtinPlugins);
+      if (described !== next) {
+        next = described;
+        kinds.add("builtin-description");
+      }
+    }
     if (next === e) return l;
     changed = true;
     return JSON.stringify(next);
   });
-  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame"];
+  const order: RecordedScrubKind[] = ["model-menu", "rate-limit-info", "subagent-hand-back-frame", "builtin-description"];
   return { cassette: changed ? { ...menu, events } : menu, kinds: order.filter((k) => kinds.has(k)) };
 }
 
@@ -6515,6 +6605,18 @@ async function writeReassertedAssertBlock(
   const expectSame = JSON.stringify(scn.expect_denied ?? []) === JSON.stringify(nextExpectDenied);
   const metricsSame = JSON.stringify(scn.metrics ?? null) === JSON.stringify(nextMetrics ?? null);
   if (assertSame && expectSame && metricsSame) {
+    // The block is current, but the events may still carry what a NEWER recorder removes (scrubRecordedAgentData):
+    // rewrite the events alone, so this stays the way to bring a committed cassette up to the current scrub
+    // without a paid re-record. Nothing else changes — no restamp, the frozen block and controlOut untouched.
+    const rescrubbed = scrubRecordedAgentData(rawCassette);
+    if (rescrubbed.kinds.length) {
+      (rawCassette as unknown as { events: string[] }).events = rescrubbed.cassette.events;
+      writeFileAtomic(cassetteFile, JSON.stringify(rawCassette, null, 2));
+      warn(
+        `::notice:: [replay --write] ${cassetteFile}: the assert block already matches the on-disk scenario; removed from its events what the recorder no longer keeps (${rescrubbed.kinds.join(", ")}); controlOut unchanged\n`,
+      );
+      return;
+    }
     warn(`::notice:: [replay --write] ${cassetteFile}: assert, expect_denied and metrics already match the on-disk scenario — no write\n`);
     return;
   }
@@ -6603,7 +6705,7 @@ export const REPLAY_USAGE =
   "       --explain: after the footer, print the evidence trail for each PASSING assert (which link resolved, which file matched, which value satisfied a bound) — text mode; json already carries assertions[].evidence.\n" +
   "       by default the assertions FROZEN in the cassette drive the verdict (deterministic); a sibling scenario whose assert: differs only prints a notice.\n" +
   `       --assert-from <file> / --reassert: token-free re-check against the on-disk assert:/expect_denied: — recording-shaping drift (${RECORDING_SHAPING_FIELDS.join("/")}) and skill staleness HARD-FAIL.\n` +
-  "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical.\n" +
+  "       --write (reassert path only): persist the re-validated block back into the cassette when ONLY the assert block changed — no paid re-record. Refuses keys that would silently skip (need a manifest/hashes/controlOut) and, without --allow-failing, a failing verdict; events/controlOut stay byte-identical, except that what the recorder no longer keeps is removed from the events (done even when the block is already current).\n" +
   "       --allow-failing waives that verdict gate WHOLESALE — including the skill-drift failure --assert-from forces on. So `--assert-from --write --allow-failing` will persist an assert block validated against a recording whose skill sources have since changed. Re-record instead when the drift is real; the flag is for a verdict you have read and understood.\n" +
   "       text mode writes the footer to STDERR and nothing to stdout (a passing replay is 0 bytes): text is for humans and not a contract, and the exit code is its only signal. Machine output needs --output-format json, or COWORK_HARNESS_OUTPUT_FORMAT=json to set it for a whole CI job; gate on the envelope with jq -e '.ok'. To tell YOUR failing asserts from injected drift/corruption findings, read verdict.failures[].kind (`assertion` vs `staleness`/`cassette-format`), not the exit code, which collapses them: jq '[.results[]? | .verdict.failures[]? | select(.kind==\"assertion\")] | length'.\n" +
   '       --best-effort-future-cassette: override the refusal to replay a cassette recorded by a NEWER format version and attempt it anyway. `verify-cassettes` deliberately does NOT accept this flag — a verification gate has no "read it anyway" path. Cost: an older CLI reading a newer cassette can silently misread a scenario key it does not recognize — this is a best-effort escape hatch, not a safe one.';

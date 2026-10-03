@@ -114,6 +114,48 @@ describe.skipIf(!can)("replay --reassert --write — persist a stream-derivable 
     expect(readCassette(cwd).scenario.assert).toEqual([{ transcript_contains: "hello" }]);
   });
 
+  it("(j) a CURRENT block still gets its events rescrubbed (here a built-in command's and agent's description), and nothing else changes", () => {
+    const cwd = tmp();
+    const c = JSON.parse(cassetteJson({ assert: [{ transcript_contains: "hello" }], controlOut: [JSON.stringify({ some: "frame" })] }));
+    c.events.splice(
+      1,
+      0,
+      JSON.stringify({
+        type: "control_response",
+        response: {
+          request_id: "init-1",
+          response: {
+            commands: [
+              { name: "claude-api", description: "SYNTHETIC BUILT-IN PROSE", builtin: true },
+              { name: "p:s", description: "plugin prose" },
+            ],
+            agents: [
+              { name: "Explore", description: "SYNTHETIC BUILT-IN AGENT PROSE" },
+              { name: "p:a", description: "plugin agent prose" },
+            ],
+          },
+        },
+      }),
+    );
+    write(cwd, "c.cassette.json", JSON.stringify(c, null, 2));
+    write(cwd, "c.yaml", scenarioYaml("  - transcript_contains: hello\n"));
+    const before = readCassette(cwd);
+    const w = replay(cwd, ["c.cassette.json", "--reassert", "--write", "--output-format", "json"]);
+    expect(w.code).toBe(0);
+    expect(w.stderr).toMatch(/already matches the on-disk scenario; removed from its events .*\(builtin-description\)/);
+    const after = readCassette(cwd);
+    expect(after.events[1]).not.toContain("SYNTHETIC BUILT-IN PROSE");
+    expect(after.events[1]).not.toContain("SYNTHETIC BUILT-IN AGENT PROSE");
+    expect(after.events[1]).toContain("plugin prose");
+    expect(after.events[1]).toContain("plugin agent prose");
+    expect(after.events.filter((l: string, i: number) => l !== before.events[i])).toHaveLength(1);
+    expect({ ...after, events: [] }).toEqual({ ...before, events: [] }); // block, version, controlOut: untouched
+    // and a second --write is a byte-identical no-op
+    const bytes = readFileSync(join(cwd, "c.cassette.json"), "utf8");
+    expect(replay(cwd, ["c.cassette.json", "--reassert", "--write"]).stderr).toMatch(/no write/);
+    expect(readFileSync(join(cwd, "c.cassette.json"), "utf8")).toBe(bytes);
+  });
+
   it("(f) idempotent: a second --write is a no-op (no churn) once the block already matches", () => {
     const cwd = tmp();
     write(cwd, "c.cassette.json", cassetteJson({ assert: [{ result: "success" }] }));
