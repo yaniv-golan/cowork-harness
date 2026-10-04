@@ -40,7 +40,7 @@ Not worth a loop: a one-off edit (compare the two versions with `eval`), "does i
 "what is wrong with it" (`critique`). See also [What hillclimb is not for](#what-hillclimb-is-not-for).
 
 **A worked example you can run: [examples/hillclimb/](../examples/hillclimb/README.md).** A deliberately weak skill
-(it never uses its own profiler script) and four cases: deterministic checks, a metric, a judged rubric and a
+(it never tells the agent to run its own profiler script) and four cases: deterministic checks, a metric, a judged rubric and a
 head-to-head against a frozen reference. In one measured climb (five reps per case), the loop rejected two changes,
 each with its own diagnosis (a relative `outputs/` path the user never sees; a brief that led with a total still
 counting a duplicate order), and kept two. Pass went from 0.75 to 0.95, and the defect fix cleared noise (10/15 to 15/15

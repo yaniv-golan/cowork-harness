@@ -84,7 +84,9 @@ per case, concurrency 2.
   grows with each frozen reference the head-to-head case is compared with. A pass took 6-11 minutes, plus the loop's
   own reading and editing.
 - **A whole climb** (the loop's no-skill check, the baseline and four rounds): about $21 at list price (agent $15.84,
-  judge $5.35), plus the loop's own Claude Code usage, which the harness doesn't count.
+  judge $5.35), plus the loop's own Claude Code usage, which the harness doesn't count. In the measured run round 3's
+  brief was also frozen as a second reference by hand after round 3: re-judging the earlier rows against it cost
+  about $2.23 more, and it doubled round 4's head-to-head judge calls.
 - These are the agent's own cost figures. On a claude.ai subscription login they are list-price estimates, not
   charges (`billing_basis` in each variant's `summary.json`). `--dry-run` prices from runs already on your machine,
   so on a fresh install it shows a lower bound of $0.
@@ -116,7 +118,7 @@ measured here:
   candidate ends with a dedicated, concrete sales recommendation".
 
 **Read it honestly.**
-- **The real defect was fixed beyond noise.** A skill that never used its own tool: pass on the three cases without
+- **The real defect was fixed beyond noise.** A skill that never told the agent to run its own profiler: pass on the three cases without
   the head-to-head went from 10/15 to 15/15 (one-sided Fisher p = 0.021).
 - **Round 4's head-to-head win is directional, not proven.** Four wins and one loss at five runs.
 - **One expected weakness didn't show up.** The data-quality case was meant to fail without an instruction to check
