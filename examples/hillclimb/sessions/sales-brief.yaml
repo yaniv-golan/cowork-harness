@@ -1,0 +1,8 @@
+# The session every case runs: the agent model, the synthetic CSV as an upload, and the example plugin.
+# Paths are relative to this file.
+model: claude-sonnet-5
+uploads:
+  - ../data/orders.csv
+plugins:
+  local_plugins:
+    - ../plugin

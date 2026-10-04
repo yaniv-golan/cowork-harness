@@ -1,9 +1,13 @@
-# Showcase: the total and the leading region. 26300 and 24500 are both defensible totals for this file.
-name: sc-totals
+# The total and the leading region. 26300 and 24500 are both defensible totals for this file (with and
+# without the repeated order).
+name: totals
 baseline: latest
-session: ./_session.yaml
+session: ../sessions/sales-brief.yaml
 fidelity: container
+# An unscripted question gets its first option and a Cowork dialog is cancelled; tool permissions follow `answers:`
+# below and the harness's defaults. Keeps a round unattended.
 on_unanswered: first
+# Bash runs unless it deletes, fetches or installs.
 answers:
 - when_tool: Bash
   allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
@@ -13,5 +17,6 @@ assert:
 - user_visible_artifact: outputs/brief.md
 - artifact_json: {artifact: outputs/metrics.json, path: columns.amount.sum, in: [26300, 24500]}
 - artifact_text: {artifact: outputs/brief.md, contains: [North]}
+# A presence check more than a goal: it is reported only when the profiler's metrics.json reaches outputs/.
 metrics:
 - {id: amount_total, artifact: outputs/metrics.json, path: columns.amount.sum, better: lower, unbounded: true}

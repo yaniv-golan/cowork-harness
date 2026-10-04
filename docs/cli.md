@@ -132,7 +132,7 @@ this table is the readable summary of it, and deliberately omits the infrastruct
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
 | Committed replay fixtures (`examples/replays/`) | ✓ | ✓ |
 | `python/` (the `cowork` pytest lane helper package) | ✓ | ✓ |
-| Runnable worked examples on disk (`examples/scenarios/`, `examples/sessions/`, `examples/skills/`, `examples/data/`) | ✓ | ✓ |
+| Runnable worked examples on disk (`examples/scenarios/`, `examples/sessions/`, `examples/skills/`, `examples/data/`, `examples/hillclimb/`) | ✓ | ✓ |
 | `examples/matrices/`, `examples/answer-policies/`, `examples/probes/` | ✗ | ✓ |
 
 A global install is enough for CI `lint`, reading the teaching skill, replaying the committed cassettes,

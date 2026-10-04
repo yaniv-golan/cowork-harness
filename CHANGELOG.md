@@ -189,6 +189,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **A runnable hillclimb walkthrough in `examples/hillclimb/`**, shipped in the npm package: a deliberately weak
+  `sales-brief` skill, synthetic data, a session and four cases (deterministic checks, a metric, a judged rubric and
+  a head-to-head against a frozen reference), with the commands, costs and one measured climb, round by round.
 - **`hillclimb run --effort LEVEL`** sets the main loop's effort for a pass (`low`, `medium`, `high`, `xhigh`, `max`;
   `extra` is read as `xhigh`), so a variant can step effort without editing the gated session file. Without it each
   case runs its session's `effort:`, else the baseline default. It is outside the harness sha, like `--model`. Refused

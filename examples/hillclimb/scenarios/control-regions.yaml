@@ -1,0 +1,18 @@
+# A control: a request the weak skill already meets. It should pass at baseline and keep passing; a change that
+# breaks it is a regression.
+name: control-regions
+baseline: latest
+session: ../sessions/sales-brief.yaml
+fidelity: container
+# An unscripted question gets its first option and a Cowork dialog is cancelled; tool permissions follow `answers:`
+# below and the harness's defaults. Keeps a round unattended.
+on_unanswered: first
+# Bash runs unless it deletes, fetches or installs.
+answers:
+- when_tool: Bash
+  allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
+  else: deny
+prompt: Use the sales-brief skill on orders.csv from my uploads. Break the brief down by region.
+assert:
+- user_visible_artifact: outputs/brief.md
+- artifact_text: {artifact: outputs/brief.md, contains: [North, South, East, West]}

@@ -167,7 +167,7 @@ jobs:
         # vacuous-gate-assert could fire on the corpus and CI would still be green. --min-severity WARN
         # is --strict's own default floor since 4.0.0; it stays explicit so the step means the same
         # thing on any CLI version (on 3.x, bare --strict also failed on the advisory INFO class).
-        run: node dist/cli.js lint examples/scenarios/*.yaml examples/scenarios/trigger-accuracy-sweep/*.yaml e2e/scenarios/*.yaml --strict --min-severity WARN
+        run: node dist/cli.js lint examples/scenarios/*.yaml examples/scenarios/trigger-accuracy-sweep/*.yaml examples/hillclimb/scenarios/*.yaml e2e/scenarios/*.yaml --strict --min-severity WARN
 
   # ── Stage 1a: the heavy unit suite, SHARDED across parallel runners (the former `unit` 15-min pole).
   # 4328 tests; ~45 files gate CLI-integration cases on dist/cli.js via describe.skipIf — each shard

@@ -1,9 +1,12 @@
-# Showcase: whether the brief catches problems in the data that the prompt does not mention.
-name: sc-quality
+# Whether the brief catches problems in the data that the prompt does not mention.
+name: data-quality
 baseline: latest
-session: ./_session.yaml
+session: ../sessions/sales-brief.yaml
 fidelity: container
+# An unscripted question gets its first option and a Cowork dialog is cancelled; tool permissions follow `answers:`
+# below and the harness's defaults. Keeps a round unattended.
 on_unanswered: first
+# Bash runs unless it deletes, fetches or installs.
 answers:
 - when_tool: Bash
   allow_if: '!/\brm\b/.test(command) && !command.includes("curl") && !command.includes("pip")'
@@ -19,5 +22,6 @@ assert:
     - Flags order 1017 as a duplicated entry
     - Flags order 1009 as missing its amount
     - Says what to do about each data issue before the numbers are relied on
+# A presence check more than a goal: it is reported only when the profiler's metrics.json reaches outputs/.
 metrics:
 - {id: amount_total, artifact: outputs/metrics.json, path: columns.amount.sum, better: lower, unbounded: true}
