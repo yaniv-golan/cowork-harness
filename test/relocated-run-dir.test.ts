@@ -580,3 +580,29 @@ describe("decideRunDir — the rule", () => {
     }
   });
 });
+
+describe("hillclimb freeze-ref: which run dir a row resolves to", () => {
+  // A row records its run's own path (meta.run_dir). On Linux a tmp path is recorded verbatim and still exists, so
+  // preferring it read the ORIGINAL even when --run-dir named a copy; on macOS the path is redacted and the lookup
+  // fell through to the copy. The runs root the user named must win, as hillclimb regrade resolves it.
+  it("prefers the run under the current runs root over the row's recorded run dir", async () => {
+    const { rowRunDir } = await import("../src/hillclimb/freeze-ref.js");
+    const root = mkdtempSync(join(tmpdir(), "rowrundir-"));
+    const prev = process.env.COWORK_HARNESS_RUNS_DIR;
+    try {
+      const original = join(root, "orig-runs", "scen", "run1");
+      const copy = join(root, "copy-runs", "scen", "run1");
+      for (const d of [original, copy]) mkdirSync(join(d, "turns"), { recursive: true });
+      process.env.COWORK_HARNESS_RUNS_DIR = join(root, "copy-runs");
+      const row = { meta: { run_dir: original, run_id: "run1", scenario_name: "scen" } };
+      expect(rowRunDir(row)).toBe(copy);
+      // With no run under the current root, the recorded run dir is still found.
+      rmSync(copy, { recursive: true });
+      expect(rowRunDir(row)).toBe(original);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_RUNS_DIR;
+      else process.env.COWORK_HARNESS_RUNS_DIR = prev;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -3173,8 +3173,9 @@ describe.runIf(POSIX)("hillclimb over a runs root that is not where its runs wer
     expect(tree(f.runsDir)).toEqual(originalTree);
 
     const fr = cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1", "--run-dir", copyRoot);
+    // The reason first: an exit code alone passed on macOS for a path-spelling reason while Linux froze the original.
+    expect(fr.stdout + fr.stderr).toMatch(/was copied from .*, which is still there/);
     expect(fr.status, fr.stderr).toBe(1);
-    expect(fr.stdout + fr.stderr).toMatch(/was copied from/);
     expect(files(join(flow, "v1", "ref"))).toEqual([]);
   }, 120_000);
 
