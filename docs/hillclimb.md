@@ -161,6 +161,13 @@ in an interactive session each of those writes asks for approval, every round, a
 refused. The runner's own writes are unaffected: it writes from its own process. Use an absolute `--flow` path
 outside `.claude/` and exclude it from git; allow rules for that path then cover the loop's writes.
 
+Those allow rules cover the loop's Edit and Write tool calls only. In default permission mode the loop still asks a
+few times a round: loading `/claude-api` itself, launching the runner (it wraps the command in a `cd`, an output
+redirect and an `echo $?`, so a prefix allow rule for the runner does not match it), and its shell bookkeeping and
+read-outs (`mkdir`, `cp`, `git`, `node -e` over the flow's files, which Edit rules do not cover). An allow rule for
+the runner covers only a bare runner command. To run rounds with no prompts, run the loop's session in auto mode:
+one live round ran that way with none.
+
 Keep the flow dir out of your repo, or ignore most of it. Rows, traces and the copies under `<variant>/out/`
 hold the run's outputs and judge rationales (secret-scrubbed and host-path-redacted text; binary files copied as
 they are), and `inputs/` holds a copy of the files the session uploads (up to 2 MiB each and 20 MiB per rep), as `inputs/<hash>-<name>`, shared by
@@ -178,7 +185,11 @@ at least these, and read what remains before the first commit:
 <flow>/*/regrade-*.bak.jsonl
 <flow>/*/.lock
 <flow>/*/ref/
+<flow>/*.log
 ```
+
+The runner's terminal output names each kept run dir by its absolute host path, so keep a captured log (say
+`hillclimb run … > F/v1.log 2>&1`) out of the flow dir, or out of the commit.
 
 Three things live outside the flow dir, and the loop needs all three for the whole climb:
 
@@ -508,8 +519,9 @@ that the loop and the lite report builder read, with these differences:
 
 - **Scenarios are single-prompt.** Every case is one prompt (harness-wide); a trace is one conversation.
 - **Anthropic's built-in system prompt is withheld.** A trace's system turn carries the system text the harness
-  appended (its model of Cowork's), as sent. A sub-agent's system turn carries what that sub-agent received, or says none was
-  received (a forked skill, or the `protocol` tier). Anthropic's own built-in prompts are never written.
+  appended (its model of Cowork's), as sent. A sub-agent's system turn carries what that sub-agent received, read from its own
+  transcript (a forked skill included), or says none was received when its transcript shows none (the `protocol`
+  tier sends none). Anthropic's own built-in prompts are never written.
 - **The full report viewer is untested.** These flows are checked against a pinned revision of the lite report
   builder (it reads a fixture flow with no warning).
   The full viewer is not in every install and has not been run against these flows; it may expect a single

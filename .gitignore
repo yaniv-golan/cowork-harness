@@ -4,6 +4,7 @@ runs/
 cassettes/
 .claude/skills/*-workspace/
 .claude/hillclimb/
+/hc-flows/
 *.log
 .DS_Store
 docs/internal/

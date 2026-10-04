@@ -461,6 +461,81 @@ describe.runIf(POSIX)("hillclimb regrade: the judge spend and the breakdown", ()
     );
   }, 300_000);
 
+  // An assert that refuses its evidence (an evidence_files scope the run authored nothing under) is decided before any
+  // judge call: no judge model, no usage, nothing to price. Its row is rebuilt without a judge call, never "re-judged"
+  // and never an unpriced grade that makes the figure a floor.
+  it.each([
+    ["a default regrade", false],
+    ["--rejudge", true],
+  ] as const)(
+    "%s: a row whose only judged assert refused its evidence is rebuilt without a judge call, not an unpriced re-judge",
+    async (_n, rejudge) => {
+      const { evals, rows } = buildFlow({ withBeta: true });
+      const NOWHERE = "  - semantic_matches:\n      rubric: ['answers']\n      evidence_files: ['outputs/nowhere.md']\n";
+      // beta: its only judged assert refuses. alpha: a changed pairwise rubric (re-judged) beside the same refusal — a
+      // MIXED row, judged, whose refused assert adds nothing unpriced.
+      // beta also declares a metric since the runs: its rebuilt row is re-measured (unavailable: nothing authored), as
+      // a row no judge reads is, and counted so — no "; re-measured N" clause that differs from the rebuilt count.
+      appendFileSync(
+        join(evals, "beta.yaml"),
+        `${NOWHERE}metrics:\n  - { id: gone, artifact: outputs/none.json, path: x, better: higher, scale: 1 }\n`,
+      );
+      const alpha = join(evals, "alpha.yaml");
+      writeFileSync(alpha, readFileSync(alpha, "utf8").replace("rubric: ['answers']", "rubric: ['answers well']") + NOWHERE);
+      const makeJudge = () =>
+        Object.assign(
+          async () => {
+            throw new Error("no semantic_matches judge may be called for an assert that refused its evidence");
+          },
+          { model: "claude-opus-4-8", promptHash: JUDGE_PROMPT_HASH },
+        );
+      const run = async (pairwiseComplete: CompleteStructured, again = rejudge) => {
+        const lines: string[] = [];
+        const out = await regradeFlow(
+          ARGS({ variant: "v1", approveHarness: true, rejudge: again }),
+          DEPS({ stderr: (l) => lines.push(l), regradeOptions: { makeJudge: makeJudge as never, pairwiseComplete } }),
+        );
+        expect(out.exitCode, JSON.stringify(out)).toBe(0);
+        return { out, lines };
+      };
+      const { out, lines } = await run(priced("A", 0.0123));
+      expect(out.variants[0]).toMatchObject({
+        rewritten: 2,
+        judged: 1,
+        rebuilt: 1,
+        reevaluated: 1,
+        remeasured: 1,
+        listedAfterJudge: 0,
+        judgeUsd: 0.0123,
+        judgeUnpriced: 0,
+      });
+      const line = lines.find((l) => l.startsWith("  [v1] "))!;
+      expect(line).toContain(
+        "  [v1] rewritten 2: 1 re-judged ($0.0123 judge), 1 rebuilt without a judge call, 0 agent-failed (meta only); listed 0",
+      );
+      expect(lines.join("\n")).not.toContain("unpriced");
+      expect(lines.join("\n")).not.toContain("a floor");
+      expect(line).not.toContain("re-measured");
+      expect(rows("v1").find((r) => r.prompt_id === "beta")!.meta).toMatchObject({ regrade_remeasured: true, regrade_reevaluated: true });
+      const beta = rows("v1").find((r) => r.prompt_id === "beta")!;
+      expect(beta.meta).not.toHaveProperty("regrade_judge_usd");
+      expect(beta.meta).not.toHaveProperty("regrade_judge_model");
+      expect(beta.meta.regrade_file).toEqual(expect.any(String)); // it did go through the core re-grade
+      const alphaRow = rows("v1").find((r) => r.prompt_id === "alpha")!;
+      expect(alphaRow.meta).toMatchObject({ regrade_judge_usd: 0.0123, regrade_judge_model: "claude-haiku-4-5" });
+
+      // The mixed row's judged assert unpriced: one unpriced grade, the refused one is not a second (--rejudge: nothing
+      // changed since the regrade above).
+      const unpriced = await run(
+        priced("A", () => undefined),
+        true,
+      );
+      expect(unpriced.out.variants[0]).toMatchObject({ judged: 1, rebuilt: 1, judgeUnpriced: 1 });
+      expect(unpriced.out.variants[0]).not.toHaveProperty("judgeUsd");
+    },
+    300_000,
+  );
+
   it("a fill of only rows lacking their own reference: every one is said to be neutral", async () => {
     const { cli } = buildFlow();
     expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
