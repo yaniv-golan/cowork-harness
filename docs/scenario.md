@@ -767,8 +767,8 @@ Only twelve codes are **warn**-severity (informational, never flip pass/fail):
 - `ended_with_question` (**warn**, live lane) — the agent's final answer contains a question (or closes on
   a request for input, the same test `stalled` uses) and the run wrote no deliverable to `outputs/` — a
   likely dead-end that still exited `result:"success"`. The lenient sibling of the strict, fail-severity
-  `stalled` (which catches a final turn that ends on a question or a closing request for input, with no
-  post-gate tool work); this covers the residual (mid-message `?`, or tool work after the last gate that
+  `stalled` (which catches a final turn that ends on a question or, after an `AskUserQuestion` gate, a closing
+  request for input, with no post-gate tool work); this covers the residual (mid-message `?`, or tool work after the last gate that
   still ended asking). Heuristic — read the final message before acting; a question-posing answer that
   wrote a file never fires. Fix by scripting/steering the answer; assert `allow_stall: true` if intended.
 - `undelivered_deliverables` (**warn**) — the skill produced file(s) outside every user-visible root and
@@ -1322,7 +1322,7 @@ run's own `.origin`/`result.json` timestamps, not directory mtime, and prints th
 `--verbose` shows the transcript for every scenario, `--quiet` shows only the verdict. `--output-format
 json` emits the machine envelope `{tool, version, command, ok, results[], error}` on stdout (one
 `RunResult` per scenario; overall pass = `result==="success" && assertions.every(pass)` **AND a clean
-`computeVerdict`** — a verdict signal like `stalled` (ended on a question or a request for input with no productive work after its last gate), `transport_error`, or a
+`computeVerdict`** — a verdict signal like `stalled` (ended on a question, or after an `AskUserQuestion` gate on a request for input, with no productive work after its last gate), `transport_error`, or a
 missing-capability/boundary signal can still fail a run whose `result` is `success` and whose assertions all
 pass, unless the matching `allow_*` modifier is asserted) — full schema
 in [SPEC §11](../SPEC.md). Human output is stderr; stdout stays machine-only under `--output-format json`.

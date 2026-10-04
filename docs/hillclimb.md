@@ -11,6 +11,10 @@ and every round runs your scenarios in the sandboxed agent, grades them with you
 layout the loop expects. The harness makes no keep-or-revert decision of its own. The goal, the best round, the
 stopping rule and the edits to your skill stay the loop's.
 
+cowork-harness supports the loop in full, every round of it, end to end, with the differences listed
+[below](#differences-from-the-loops-own-runner). The lite report builder is verified against these flows; the
+full report viewer is not yet.
+
 The `claude-api` guides read as if the target were "a Claude-powered app", but the loop explicitly allows a specific
 skill or instruction file the agent reads as the thing it iterates on. cowork-harness is what lets that skill run
 under Cowork's runtime for every round.

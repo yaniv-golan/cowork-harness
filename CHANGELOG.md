@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.3.0] — 2026-10-04
+
+Full support for Claude Code's `/claude-api hillclimb` loop, with `cowork-harness hillclimb` as its runner,
+verified end to end with a live loop run; a runnable walkthrough ships in `examples/hillclimb/`.
+
 ### Security
 
 - **The host-`claude` isolation check from 4.2.1 now refuses earlier, and covers more.** `eval` refuses up front,
@@ -156,9 +161,9 @@ All notable changes to this project are documented here. The format is based on
 - **Verdict change: a top-level `Skill` result is captured up to 32,768 characters (10,240 in 4.2.x).** A
   `tool_result_not_contains` / `tool_result_not_matches` over a longer `Skill` result sees the whole text, so it can
   fail where it passed, on a live run and on replay of an existing cassette. See Changed.
-- **Verdict change: `stalled` catches a closing request for input that has no `?`.** After an `AskUserQuestion`
-  gate, a run, a replay or an `eval` rep that ends "Please share X so I can …" fails `stalled`, so an existing
-  cassette with that ending fails on replay. Author `allow_stall: true` if that ending is intended. See Fixed.
+- **Verdict change: after an `AskUserQuestion` gate, `stalled` catches a closing request for input that has no `?`.**
+  A run, a replay or an `eval` rep that ends "Please share X so I can …" after such a gate fails `stalled`, so an
+  existing cassette with that ending fails on replay. Author `allow_stall: true` if that ending is intended. See Fixed.
 - **Verdict change at `protocol`: `hook_event_fired` / `hook_event_blocked` see every hook event.** That tier now
   passes `--include-hook-events`, so a plugin's Stop or PostToolUse hook that read "never fired" there is seen, and
   an assertion on such an event can change outcome at `protocol`. See Fixed.
@@ -189,6 +194,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Full support for Claude Code's `/claude-api hillclimb` loop.** `cowork-harness hillclimb` is a runner the
+  loop drives round after round: it writes every per-case file and field the loop and its lite report builder
+  read, gates the harness the way the loop's own runner does, resumes by (case, rep), keeps each variant on its
+  own snapshot of the plugin, and re-grades a flow in place, with no agent cost, after a rubric, assertion, metric
+  or reference change. The differences from the loop's own runner are listed in
+  [docs/hillclimb.md](docs/hillclimb.md#differences-from-the-loops-own-runner); the loop's full report viewer is
+  not yet verified against these flows. Verified end to end with a live loop run. To try it, follow
+  [examples/hillclimb/](examples/hillclimb/README.md): a deliberately weak skill the loop improves, at about $21 at
+  list price per climb.
 - **A runnable hillclimb walkthrough in `examples/hillclimb/`**, shipped in the npm package: a deliberately weak
   `sales-brief` skill, synthetic data, a session and four cases (deterministic checks, a metric, a judged rubric and
   a head-to-head against a frozen reference), with the commands, costs and one measured climb, round by round.
@@ -317,7 +331,7 @@ All notable changes to this project are documented here. The format is based on
 - **`question_option_count` counts the options a gate offered whose label matches a regex, on every sub-question.**
   `{matches, exactly | min/max, when_question?, case_sensitive?}` passes only when the count satisfies the
   bound on every selected sub-question, so a rule over gates the model composes, such as "exactly one option
-  per gate carries the reserved no-change prefix", no longer needs a script over `events.jsonl`. Zero
+  per gate carries the reserved no-change prefix", needs no script over `events.jsonl`. Zero
   sub-questions asked fails, never passes vacuously; unreadable gate evidence, or a count that a
   redaction-rewritten label could change, fails as evidence-unavailable. It grades live, on `verify-run`, and on
   replay of a cassette with `controlOut`. Every sub-question a gate asks counts, one asked again after a denial
@@ -981,10 +995,11 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   `stall_allowed` in `report.json`). A stall in a scenario without `allow_stall` still fails every row.
   `eval report <eval-dir>` applies the fix to an existing eval dir at no cost.
 
-- **Verdict change: `stalled` now fails a run that ends by asking for input without a `?`, on `run`,
-  `replay` and `eval`.** After an `AskUserQuestion` gate, a run that closed on "Please share your
+- **Verdict change: after an `AskUserQuestion` gate, `stalled` fails a run that ends by asking for input
+  without a `?`, on `run`, `replay` and `eval`.** A gated run that closed on "Please share your
   pre-money valuation and the total amount you're raising so I can run the numbers." passed, while the
   same run ending "…for the Series A?" failed. The check only looked for a trailing `?` on the raw text.
+  A run with no gate, such as "Go ahead and paste the file — I'll take a look", still passes unless it ends in `?`.
   - Once a gate has fired, the final turn's closing sentence now also counts when:
     - it ends in `?` after trailing bold, quotes, a closing parenthesis or an emoji
       (`**Which scenario should I model?**`);
