@@ -95,7 +95,16 @@ export function composeFromRunDir(
     priorityGlobs: evidenceGlobs(liveJudged.length ? liveJudged.map((e) => e.assertion) : pairwise),
     ...(result.authoredCapture ? { totalBytes: result.authoredCapture.totalBytes, perFileBytes: result.authoredCapture.perFileBytes } : {}),
   });
-  if (!built.ok) return { refused: built.kind === "scenario" ? String((built.error as Error)?.message ?? built.error) : built.message };
+  // The builder's messages lead with the command label; this composition's refusals carry none (its caller adds it).
+  if (!built.ok)
+    return {
+      refused:
+        built.kind === "scenario"
+          ? String((built.error as Error)?.message ?? built.error)
+          : built.message.startsWith(`${cmd}: `)
+            ? built.message.slice(cmd.length + 2)
+            : built.message,
+    };
   const ctx: AssertContext = built.ctx;
   const live = liveFingerprints(result);
   const docs: ComposedForFreeze["docs"] = [];

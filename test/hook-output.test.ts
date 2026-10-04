@@ -2,7 +2,7 @@
 // (parseMessage over the committed recording test/fixtures/hook-frames/), and through `verify-run` over real kept run
 // dirs (copied first — verify-run reads them; nothing here writes into ~/.cowork-harness).
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -128,7 +128,8 @@ describe("hook_output_*: load time and cassette version", () => {
 });
 
 // The kept run dirs that motivated the keys: a Stop hook that exits 0 and says on stderr it found no handover.txt.
-// Copied to a temp dir; skipped where they do not exist (another machine, CI).
+// Verified where they are (verify-run only reads; a copy is refused, its result.json naming the original); skipped
+// where they do not exist (another machine, CI).
 const RUNS = join(homedir(), ".cowork-harness", "runs");
 const KEPT = {
   red: ["market-sizing-remote-lane/local_7qcmp24hnu", "competitive-positioning-smoke/local_8744vvfe2j"],
@@ -140,8 +141,7 @@ const have = existsSync(CLI) && [...KEPT.red, ...KEPT.green].every((d) => exists
 describe.runIf(have)("verify-run over the kept run dirs (positive controls)", () => {
   const verify = (rel: string, assertYaml: string) => {
     const tmp = mkdtempSync(join(tmpdir(), "hook-output-kept-"));
-    const dir = join(tmp, "run");
-    cpSync(join(RUNS, rel), dir, { recursive: true });
+    const dir = join(RUNS, rel);
     const sc = join(tmp, "probe.yaml");
     writeFileSync(sc, `name: probe\nfidelity: hostloop\nprompt: "x"\nassert:\n${assertYaml}`);
     return spawnSync(process.execPath, [CLI, "verify-run", dir, sc], { encoding: "utf8", cwd: tmp, timeout: 120_000 });

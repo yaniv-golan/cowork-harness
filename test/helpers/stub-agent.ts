@@ -112,8 +112,12 @@ export function credentialLeaks(envDump: string): string[] {
   return leaks;
 }
 
-export function spawnCli(f: StubFixture, args: string[]): ChildProcess & { stdoutText: () => string; stderrText: () => string } {
-  const child = spawn(process.execPath, [CLI, ...args], { cwd: f.cwd, env: f.env, stdio: ["ignore", "pipe", "pipe"] });
+export function spawnCli(
+  f: StubFixture,
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): ChildProcess & { stdoutText: () => string; stderrText: () => string } {
+  const child = spawn(process.execPath, [CLI, ...args], { cwd: f.cwd, env: { ...f.env, ...extraEnv }, stdio: ["ignore", "pipe", "pipe"] });
   let out = "";
   let err = "";
   child.stdout!.on("data", (b) => (out += b));

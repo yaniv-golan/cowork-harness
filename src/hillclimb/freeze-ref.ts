@@ -52,15 +52,17 @@ export function goodRefRows(resultsText: string | null | undefined, caseId: stri
   return out.sort((a, b) => Number(a.rep) - Number(b.rep));
 }
 
-/** The kept run dir a row points at: its recorded `meta.run_dir` when it still exists (a `~/` path expanded), else
- *  the run id under the CURRENT runs root (`--run-dir` / `COWORK_HARNESS_RUNS_DIR`). Undefined when neither has a
- *  result.json — the run was pruned or the runs root moved. */
+/** The kept run dir a row points at: the run id under the CURRENT runs root (`--run-dir` / `COWORK_HARNESS_RUNS_DIR`),
+ *  as `hillclimb regrade` resolves it, else its recorded `meta.run_dir` when that still exists (a `~/` path expanded).
+ *  The runs root the user named comes first, so a copy named there is the one judged (and refused when its original
+ *  is still there), never the original read behind it. Undefined when neither has a result.json — the run was pruned
+ *  or the runs root moved. */
 export function rowRunDir(row: Record<string, unknown>): string | undefined {
   const meta = (row.meta ?? {}) as Record<string, unknown>;
   const candidates: string[] = [];
-  if (typeof meta.run_dir === "string" && !meta.run_dir.includes("<")) candidates.push(expandHome(meta.run_dir));
   if (typeof meta.run_id === "string" && typeof meta.scenario_name === "string")
     candidates.push(runOutDir(meta.scenario_name, meta.run_id));
+  if (typeof meta.run_dir === "string" && !meta.run_dir.includes("<")) candidates.push(expandHome(meta.run_dir));
   return candidates.find((d) => existsSync(join(d, "turns")));
 }
 

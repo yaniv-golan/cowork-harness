@@ -100,6 +100,8 @@ already happened.
    re-check the scenario's assertions against the kept run dir with no live re-record (~1s). When the
    scenario scripts answers, it also re-checks they still match the run's actual gates — so a reworded gate
    or a chosen option the run never offered fails here in a second instead of on a paid re-record.
+   A run dir moved or downloaded (a CI artifact) verifies from where it is; a copy beside its still-present
+   original is refused, because its `result.json` names the original's files — verify the original instead.
    `verify-run` never calls the semantic judge; to re-grade `semantic_matches` or `semantic_pairwise` after a rubric change, use
    `regrade <run-dir> --scenario <scenario.yaml>` (the judge call is the only spend). It writes the new grade
    beside the run and says whether the judge read the same document the live judge did; content the live judge
