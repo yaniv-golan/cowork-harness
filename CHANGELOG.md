@@ -749,6 +749,13 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
   per-PR snapshot (which every PR regenerates, so it reads no change at release time). A removed or changed leaf
   fails unless `package.json` is a major bump over that tag; added and widened leaves pass. Before the bump the
   diff is reported without being enforced. `npm run check:surface -- --since-tag` runs it alone.
+- **Every command that reopens a kept run dir applies one rule to where it was recorded.** `regrade`,
+  `hillclimb regrade`, `hillclimb freeze-ref`, `--fill-refs` and `ref freeze`, like `verify-run` and `diff`, refuse a
+  run dir copied beside its original (its recorded run dir still exists and is another dir), naming both dirs and the
+  way out (for `hillclimb`, point `--run-dir` at the runs root the runs were written under): `regrade` and
+  `ref freeze` exit 2, while `hillclimb regrade` lists the row as refused and `hillclimb freeze-ref` refuses the
+  case, each exiting 1. A run dir whose recorded location is gone is read from where it is, with its recorded paths
+  re-rooted onto it and the move noted once, so a regrade never judges another run's evidence.
 
 ### Changed
 
@@ -848,22 +855,18 @@ backstop, any row whose rebuilt `pass` would differ from its own is listed and l
 
 ### Fixed
 
-- **A run dir copied beside its original is refused, and one whose recorded location is gone is read from where it
-  is.** `result.json` names a run's evidence by absolute path (`outDir`, `workDir`, `outputsDir`), and a copy keeps
-  those paths, so `regrade`, `verify-run`, `hillclimb regrade`, `hillclimb freeze-ref`, `--fill-refs`, `ref freeze`
-  and `diff` judged a copy on the original's files while reporting, and writing its regrade file into, the copy: a
-  deliverable edited in a copy was graded as the original with no drift reported. When the recorded run dir still
-  exists and is another dir, each now refuses, naming both dirs and the way out (re-run the scenario or grade the
-  original; for `hillclimb`, point `--run-dir` at the runs root the runs were written under). `regrade`,
-  `verify-run`, `ref freeze` and `diff` exit 2; `hillclimb regrade` lists the row as refused and `hillclimb
-  freeze-ref` refuses the case, each exiting 1 as for any other. When the recorded run dir is gone (a moved dir, a
-  downloaded CI artifact, a runs root restored on another machine), each reads the run from the dir given, every
-  recorded path inside the recorded run dir re-rooted onto it, and notes the move once; a recorded path outside it,
+- **`verify-run` and `diff` refuse a run dir copied beside its original, and read one whose recorded location is
+  gone from where it is.** `result.json` names a run's evidence by absolute path (`outDir`, `workDir`,
+  `outputsDir`), and a copy keeps those paths, so `verify-run` checked a copy against the original's files and
+  `diff` hashed the original's artifacts while naming the copy: a deliverable edited in a copy read as unchanged.
+  When the recorded run dir still exists and is another dir, both now refuse (exit 2), naming both dirs and the way
+  out (re-run the scenario, or point the command at the original). When the recorded run dir is gone (a moved dir, a
+  downloaded CI artifact, a runs root restored on another machine), both read the run from the dir given, every
+  recorded path inside the recorded run dir re-rooted onto it, and note the move once; a recorded path outside it,
   or one a link resolves outside the dir given, is unavailable and never read where it was recorded. The same dir
   reached through a symlinked parent, or `/var` and `/private/var`, is still the run's own. A recorded path with a
   `.`, `..` or `//` segment is refused (a link followed by `..` would leave the run dir). `inspect` warns and skips
-  its artifact previews where the others refuse, and previews a moved run from where it is.
-- **`ref freeze` no longer prints its command name twice** in a refusal from the run dir it was given.
+  its artifact previews of a copy, and previews a moved run from where it is.
 - **The judge, the LLM decider and the `critique` evaluator no longer inherit an exported effort or thinking setting,
   and pin their effort.** Their host `claude` calls ran at whatever `CLAUDE_CODE_EFFORT_LEVEL`,
   `CLAUDE_CODE_DISABLE_THINKING` or `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` the shell exported, or at a user-settings

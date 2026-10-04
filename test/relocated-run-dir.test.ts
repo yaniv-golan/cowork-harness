@@ -6,6 +6,7 @@
 // no agent, no spend).
 import { describe, it, expect, vi } from "vitest";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -483,6 +484,24 @@ describe("decideRunDir — the rule", () => {
       t.done();
     }
   });
+
+  // Root reads through a mode-000 dir, so the unreadable case cannot be built as root.
+  it.runIf(POSIX && process.getuid?.() !== 0)(
+    "(B) a recorded dir that cannot be read (not proven gone) is present: refused, never re-rooted",
+    () => {
+      const t = tree();
+      const locked = join(t.root, "locked");
+      try {
+        const orig = join(locked, "abc");
+        mkdirSync(orig, { recursive: true });
+        chmodSync(locked, 0o000);
+        expect(msg(decideRunDir(t.run, paths(orig), "x"))).toMatch(/which is still there/);
+      } finally {
+        chmodSync(locked, 0o755);
+        t.done();
+      }
+    },
+  );
 
   it("(B) names the way out: the original for a run-dir command, the runs root for hillclimb", () => {
     const t = tree();
