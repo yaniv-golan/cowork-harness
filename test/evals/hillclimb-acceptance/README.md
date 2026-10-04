@@ -19,7 +19,7 @@ The operator checks expect the flow dirs under `hc-flows/` at the repo root (`hc
 `operator/o-mount-session.yaml` mounts that folder, and `o-ref-in-mount` names a reference store inside it.
 `hc-flows/` is git-ignored.
 
-The loop-driven half of the acceptance run climbs the shipped example in
+The acceptance run's showcase climb runs the shipped example in
 [`examples/hillclimb/`](../../../examples/hillclimb/README.md); it is not copied here.
 
 The fixture files under `flow-b/fixtures/` must stay tracked by git: `workspace_fixture` stages tracked

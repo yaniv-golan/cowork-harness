@@ -3,7 +3,8 @@ name: data-quality
 baseline: latest
 session: ../sessions/sales-brief.yaml
 fidelity: container
-# A question with options gets its first option; any other permission dialog is cancelled. Keeps a round unattended.
+# An unscripted question gets its first option and a Cowork dialog is cancelled; tool permissions follow `answers:`
+# below and the harness's defaults. Keeps a round unattended.
 on_unanswered: first
 # Bash runs unless it deletes, fetches or installs.
 answers:

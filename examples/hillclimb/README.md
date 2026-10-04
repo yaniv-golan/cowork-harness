@@ -26,13 +26,14 @@ This example lets you watch Claude Code's `/claude-api hillclimb` loop improve a
 ## Before you start
 
 - **Claude Code with the `/claude-api` skill's `hillclimb` mode** (2.1.260 or later), to run the loop.
+- **The cowork-harness companion skill in Claude Code**, which holds the recipe the loop follows:
+  `/plugin marketplace add yaniv-golan/cowork-harness`, then `/plugin install cowork-harness@cowork-harness`.
 - **What a `container` case needs**: Docker, the Cowork agent staged by Claude Desktop (open Desktop once) or
   `COWORK_AGENT_BINARY`, and a credential the agent can use. Check all of it with
   `cowork-harness doctor --tier container`; see [docs/cli.md](../../docs/cli.md#prerequisites-for-anything-above-protocol-fidelity).
 - **A copy of this folder outside the installed package.** The loop edits the skill; don't let it edit your install.
   If you put the copy inside a git repository, `git add` the whole folder: inside a git work tree the harness stages
-  only tracked files, and an untracked plugin is refused with "the plugin hashes to nothing". The upload stays empty
-  too.
+  only tracked files, and an untracked plugin is refused with "the plugin hashes to nothing".
 - **A flow dir outside `.claude/`.** Claude Code protects `.claude/`, so an allow rule cannot cover the loop's own
   writes there ([docs/hillclimb.md](../../docs/hillclimb.md#where-the-flow-dir-goes)).
 
@@ -49,9 +50,10 @@ cowork-harness doctor --tier container
 mkdir -p ~/hc-demo-flow
 cowork-harness hillclimb state-template scenarios/ --flow ~/hc-demo-flow > ~/hc-demo-flow/_state.json
 
-# 2. Review what the harness gate covers, then record its sha. Spends nothing.
-cowork-harness hillclimb run scenarios/ --flow ~/hc-demo-flow --model claude-sonnet-5 --judge-model claude-opus-4-8 --dry-run
-cowork-harness hillclimb run scenarios/ --flow ~/hc-demo-flow --model claude-sonnet-5 --judge-model claude-opus-4-8 --dry-run --approve-harness
+# 2. Review what the harness gate covers, then record its sha. Spends nothing. (From a copied folder it notes that
+#    there is no lockfile in the current directory; that is expected here.)
+cowork-harness hillclimb run scenarios/ --flow ~/hc-demo-flow --model claude-sonnet-5 --judge-model claude-opus-4-8 --concurrency 2 --reps 5 --dry-run
+cowork-harness hillclimb run scenarios/ --flow ~/hc-demo-flow --model claude-sonnet-5 --judge-model claude-opus-4-8 --concurrency 2 --reps 5 --dry-run --approve-harness
 ```
 
 Then start Claude Code in `~/hc-demo` and send this as the first message:
@@ -65,8 +67,9 @@ the scenarios, the data and the session are off-limits.
 ```
 
 When it asks: the goal is `pass`. "One round at a time" lets you look at each round before the next. Give it a
-budget. The loop never passes `--approve-harness`; if a round stops on the harness gate, look at the change and
-re-run step 2's second command yourself.
+budget. Before the baseline it runs a no-skill check in a sibling flow, `~/hc-demo-flow-null`: run steps 1 and 2
+again with that `--flow` when it asks. The loop never passes `--approve-harness`; if a round stops on the harness
+gate, look at the change and re-run step 2's second command yourself, with that round's `--flow`.
 
 **Permission prompts.** In default permission mode the loop wraps the runner in its own shell command (a `cd`, a log
 redirect, an exit-code echo) and keeps its records with shell commands, so expect a few prompts each round. An allow
@@ -77,11 +80,11 @@ rule for the runner covers only the bare command. In auto mode, rounds can run w
 Measured on one run of this example: agent `claude-sonnet-5` in the container tier, judge `claude-opus-4-8`, five reps
 per case, concurrency 2.
 
-- **Per round** (20 agent runs): about $2.40-$2.80 of agent spend and $0.40-$2.10 of judge spend. The judge share
+- **Per round** (20 agent runs): about $2.40-$2.80 for the agent and $0.35-$2.15 for the judge, at list price. The judge share
   grows with each frozen reference the head-to-head case is compared with. A pass took 6-11 minutes, plus the loop's
   own reading and editing.
-- **A whole climb** (the loop's no-skill check, the baseline and four rounds): about $21 across agent and judge, plus
-  the loop's own Claude Code usage, which the harness doesn't count.
+- **A whole climb** (the loop's no-skill check, the baseline and four rounds): about $21 at list price (agent $15.84,
+  judge $5.35), plus the loop's own Claude Code usage, which the harness doesn't count.
 - These are the agent's own cost figures. On a claude.ai subscription login they are list-price estimates, not
   charges (`billing_basis` in each variant's `summary.json`). `--dry-run` prices from runs already on your machine,
   so on a fresh install it shows a lower bound of $0.
@@ -102,7 +105,7 @@ measured here:
 
 - **Round 1.** The loop read the traces: the agent listed `scripts/`, read `profile.py`, then ignored it. It added a
   "run the profiler" step. Pass fell, and the loop rejected the change, naming two causes: a relative `outputs/`,
-  which Cowork resolves against the session root, a folder the user never sees; and a "corrected vs raw total" aside
+  which Cowork resolves against the session root, a folder the user never sees; and a raw-versus-corrected total
   that muddled the brief's opening. The judge preferred the baseline brief on all five runs, in both orders.
 - **Round 2.** The profiler wrote to the absolute user-visible folder, and the brief instruction was dropped. `totals`
   went to 5/5, but the brief lost every head-to-head again: "the candidate flags order 1017 as a duplicate yet still
@@ -110,7 +113,7 @@ measured here:
 - **Round 3.** The brief computes its own figures with the flagged rows left out. Three of five head-to-heads became
   ties. The two losses: "ends on an italic file-pointer note rather than an action".
 - **Round 4.** The loop's own next lever. The brief won four of five head-to-heads, consistently in both orders: "the
-  candidate closes with a dedicated, concrete sales recommendation".
+  candidate ends with a dedicated, concrete sales recommendation".
 
 **Read it honestly.**
 - **The real defect was fixed beyond noise.** A skill that never used its own tool: pass on the three cases without
@@ -118,8 +121,8 @@ measured here:
 - **Round 4's head-to-head win is directional, not proven.** Four wins and one loss at five runs.
 - **One expected weakness didn't show up.** The data-quality case was meant to fail without an instruction to check
   the data; Sonnet 5 flagged both problems on every run anyway.
-- **The measured run predates two cosmetic changes.** The cases had different file names, and SKILL.md had no
-  frontmatter comment. The prompts, checks, rubrics, data and skill body are the same.
+- **The measured run predates some renaming.** The cases and the plugin had different names, and the skill files had
+  no comments. The prompts, checks, rubrics, data and skill body are the same.
 
 ## Practices worth copying
 
