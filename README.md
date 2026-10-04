@@ -53,8 +53,9 @@ Three ways to use this project. Each row is the whole hook — follow the link f
 | **Have Claude Code drive it** for me | **[docs/companion-skill.md](./docs/companion-skill.md)**<br><br>`/plugin marketplace add yaniv-golan/cowork-harness`<br>`/plugin install cowork-harness@cowork-harness` | Claude Code. The skill self-bootstraps the CLI via `npx "cowork-harness@^4.3.0"` |
 | **Gate my skill in CI** | **[docs/ci.md](./docs/ci.md)**<br><br>`- uses: yaniv-golan/cowork-harness@v4`<br>`  with: { command: replay, path: cassettes/ }` | Nothing for the token-free gate; the live lane needs a self-hosted runner with Docker + an agent binary |
 
-Improving a skill round by round with Claude Code's `/claude-api hillclimb` loop? The harness is its runner:
-[docs/hillclimb.md](./docs/hillclimb.md).
+Improving a skill round by round with Claude Code's `/claude-api hillclimb` loop? The harness is its runner, with
+full support for the loop ([docs/hillclimb.md](./docs/hillclimb.md)); try it on the walkthrough in
+[examples/hillclimb/](./examples/hillclimb/README.md).
 
 **In short:** three ways in (the table above). Five `fidelity:` tiers — `protocol`, `container`, `microvm`, `hostloop`,
 `cowork` ([Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job)); a scenario must name one (`fidelity:` is
