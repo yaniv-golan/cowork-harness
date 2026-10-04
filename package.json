@@ -36,6 +36,7 @@
     "examples/skills",
     "examples/scenarios",
     "examples/data",
+    "examples/hillclimb",
     "fixtures",
     "docker",
     "schema",

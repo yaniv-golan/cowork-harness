@@ -138,9 +138,9 @@ describe("T-G2 · shipped docs link only to shipped files", () => {
 
 describe("T-G2 · shipped example scenarios resolve from the payload alone", () => {
   const packed = new Set(packedPaths());
-  const scenarios = [...packed].filter((p) => /^examples\/scenarios\/.+\.ya?ml$/.test(p)).sort();
+  const scenarios = [...packed].filter((p) => /^examples\/(scenarios|hillclimb\/scenarios)\/.+\.ya?ml$/.test(p)).sort();
 
-  /** `session:`, plus the skill/plugin roots that session stages — each resolved relative to its own file. */
+  /** `session:`, plus the skill/plugin roots and uploads that session stages — each resolved relative to its own file. */
   function referencesOf(scenario: string): string[] {
     const doc = parseYaml(readFileSync(scenario, "utf8")) as { session?: string };
     if (typeof doc?.session !== "string") return [];
@@ -149,8 +149,9 @@ describe("T-G2 · shipped example scenarios resolve from the payload alone", () 
     const sess = parseYaml(readFileSync(sessionPath, "utf8")) as {
       skills?: { local?: string[] };
       plugins?: { local_plugins?: string[] };
+      uploads?: string[];
     };
-    const roots = [...(sess?.skills?.local ?? []), ...(sess?.plugins?.local_plugins ?? [])];
+    const roots = [...(sess?.skills?.local ?? []), ...(sess?.plugins?.local_plugins ?? []), ...(sess?.uploads ?? [])];
     return [sessionPath, ...roots.map((r) => posix.normalize(posix.join(posix.dirname(sessionPath), r)))];
   }
 

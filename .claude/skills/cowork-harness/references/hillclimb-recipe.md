@@ -4,7 +4,8 @@ Tracks `cowork-harness 4.2.1` (baseline `desktop-2.19675.0`). It needs a `cowork
 `hillclimb --help` lists `--skill` (help goes to stderr). This page is the loop's procedure, step by step, in the order of the
 `/claude-api hillclimb` guide. Every mechanic (flags, refusals, the gate, `regrade`, `freeze-ref`, exit codes,
 row keys) is in [`hillclimb.md`](hillclimb.md); the setup and the full list of differences from the guide's own
-runner are in [docs/hillclimb.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/hillclimb.md).
+runner are in [docs/hillclimb.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/hillclimb.md). A runnable walkthrough
+(a deliberately weak skill, four cases, the commands) is in [examples/hillclimb](https://github.com/yaniv-golan/cowork-harness/blob/main/examples/hillclimb/README.md).
 
 Throughout: `F` is the flow dir and `T` the scenario file or directory. Put `F` outside `.claude/`: Claude Code
 protects `.claude/`, so an allow rule does not cover your own writes there and each one asks for approval every round

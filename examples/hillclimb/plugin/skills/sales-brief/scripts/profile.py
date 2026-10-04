@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sales-brief profiler (a copy of the csv-metrics producer) — compute per-column summary statistics for a CSV.
+"""sales-brief profiler — compute per-column summary statistics for a CSV.
 
 Bundled with the sales-brief skill. Standard library ONLY (csv, json, math,
 statistics) — no third-party deps, no network — so it runs unchanged under

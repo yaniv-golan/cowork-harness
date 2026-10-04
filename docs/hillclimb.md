@@ -39,14 +39,13 @@ Each of these is a goal, what the loop varies between rounds, and what it measur
 Not worth a loop: a one-off edit (compare the two versions with `eval`), "does it work at all" (`skill` or `run`),
 "what is wrong with it" (`critique`). See also [What hillclimb is not for](#what-hillclimb-is-not-for).
 
-**A real example (n = 3 reps per variant, the repo's own acceptance plugin).** One edit asked the skill to "name every
-region with its total amount, and flag any row whose amount or units is zero as an anomaly, with one concrete
-action". It was 29% cheaper than the baseline ($0.114 against $0.161 per run) at similar latency (21.9 s against 20.5 s), and
-plain `pass` could not tell the variants apart. Head to head, the pairwise judge ranked it below another variant in
-all three comparisons (tie, loss, loss: a mean `win` of 0.17), saying "the candidate's product figures don't
-reconcile". An edit that looks better on cost can quietly cost quality, and the pairwise signal is what shows it.
-Three reps are directional, not proof: the same run left a deliberately weakened variant inconclusive against the
-baseline.
+**A worked example you can run: [examples/hillclimb/](../examples/hillclimb/README.md).** A deliberately weak skill
+(it never uses its own profiler script) and four cases: deterministic checks, a metric, a judged rubric and a
+head-to-head against a frozen reference. In one measured climb (five reps per case), the loop rejected two changes,
+each with its own diagnosis (a relative `outputs/` path the user never sees; a brief that led with a total still
+counting a duplicate order), and kept two. Pass went from 0.75 to 0.95, and the defect fix cleared noise (10/15 to 15/15
+on the cases without the head-to-head). The final brief beat the baseline's head to head four times in five: the judge
+named its closing recommendation. Five reps make that last result directional, not proof.
 
 The command, its flags and defaults, its exit codes and the run envelope are a covered surface. The harness's own
 row `meta` keys, the `out/` copies, the `metrics.md` wording, `hillclimb check`'s findings text, the `freeze-ref` and

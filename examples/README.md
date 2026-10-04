@@ -8,7 +8,7 @@ the workflow (main-repo pushes/PRs) — it's skipped on fork PRs, which never re
 See `.github/workflows/ci.yml`.
 
 > **Reading this on npm?** The flagship replay works as documented — `replays/`, `scenarios/`,
-> `sessions/`, `skills/` and `data/` all ship, so the zero-token `replay` below runs straight from an
+> `sessions/`, `skills/`, `data/` and `hillclimb/` all ship, so the zero-token `replay` below runs straight from an
 > install. `matrices/`, `answer-policies/` and `probes/` still need a source checkout
 > (`git clone https://github.com/yaniv-golan/cowork-harness`).
 >
@@ -47,6 +47,8 @@ examples/
                     `skill`/`decide` (or authored inline via a scenario's `answers:` block) — see
                     docs/scenario.md § Reusable answer policies (--answer-policy)
   probes/      live-contract probe scenarios (driven by test/live-contract.test.ts — not part of the copyable starter set)
+  hillclimb/   a `/claude-api hillclimb` walkthrough: a deliberately weak skill, its data, a session and four cases —
+               see hillclimb/README.md (paid: every round runs the agent and a judge)
 ```
 
 Answer policies: see [docs/scenario.md § Reusable answer policies](../docs/scenario.md#reusable-answer-policies---answer-policy).
