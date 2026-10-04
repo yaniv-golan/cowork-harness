@@ -845,11 +845,11 @@ and `--fill-refs`, `ref freeze`, `diff`, `inspect`) first decides which tree the
 - **A run dir whose recorded location is gone** — moved, downloaded as a CI artifact, or a runs root restored
   on another machine. Nothing can be read there, so the run is read from where it is: each recorded path inside
   the recorded `outDir` is re-rooted onto the dir given, and stderr notes it once per command (`note: <dir> was
-  recorded at <path> (no longer there); reading its evidence from <dir>`). A recorded path outside the recorded
+  recorded at <path> (not there any more); reading its evidence from <dir>`). A recorded path outside the recorded
   `outDir`, or one a link in the moved tree resolves outside the dir given, is unavailable: never read where it
   was recorded, so an assert that needs it fails closed (a missing work dir refuses the filesystem assertions,
-  as for a torn-down container run). A `computer://` link the run recorded under its old host path no longer
-  falls under the run's work dir and resolves as evidence-unavailable.
+  as for a torn-down container run). A `computer://` link the run recorded under its old host path falls
+  outside the run's work dir and resolves as evidence-unavailable.
 
 Either way, a recorded path that is not absolute, or not normalized (a `.`, `..` or `//` segment, which the
 harness never writes; a link followed by `..` would leave the run dir), is refused, as is a `result.json` that

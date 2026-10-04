@@ -275,7 +275,7 @@ describe.runIf(can)("(C) a run dir whose recorded location is gone is read from 
       }
       if (!out.ok) throw new Error(out.message);
       expect(out.runs[0].docMatchesLive).toBe(true);
-      expect(written.join("").match(/no longer there\); reading its evidence from /g)).toHaveLength(1);
+      expect(written.join("").match(/not there any more\); reading its evidence from /g)).toHaveLength(1);
     } finally {
       f.cleanup();
     }
@@ -288,7 +288,7 @@ describe.runIf(can)("(C) a run dir whose recorded location is gone is read from 
       writeFileSync(join(outputsOf(moved), "only-here.md"), "x");
       const v = await verify(f, moved, DETERMINISTIC + "  - file_exists: outputs/only-here.md\n");
       expect(v.code, v.err).toBe(0);
-      const notes = v.err.match(/note: .* was recorded at .* \(no longer there\); reading its evidence from /g) ?? [];
+      const notes = v.err.match(/note: .* was recorded at .* \(not there any more\); reading its evidence from /g) ?? [];
       expect(notes).toHaveLength(1);
       expect(v.err).toContain(`was recorded at ${dir}`);
     } finally {
@@ -391,7 +391,7 @@ describe.runIf(can)("(A) the run's own dir", () => {
       const viaLink = join(link, basename(dirname(dir)), basename(dir));
       expect(realpathSync.native(viaLink)).toBe(realpathSync.native(dir));
       const v = await verify(f, viaLink, DETERMINISTIC);
-      expect(v.err).not.toMatch(/copied from|no longer there/);
+      expect(v.err).not.toMatch(/copied from|not there any more/);
       expect(v.code, v.err).toBe(0);
       const calls: string[] = [];
       const out = await regradeRuns({
@@ -514,7 +514,7 @@ describe("decideRunDir — the rule", () => {
         { field: "stderrLogPath", recorded: "/home/runner/elsewhere.log", why: "outside the recorded run dir" },
       ]);
       expect(d.note).toBe(
-        `note: ${t.run} was recorded at ${gone} (no longer there); reading its evidence from ${t.run}; unavailable: stderrLogPath (outside the recorded run dir)`,
+        `note: ${t.run} was recorded at ${gone} (not there any more); reading its evidence from ${t.run}; unavailable: stderrLogPath (outside the recorded run dir)`,
       );
     } finally {
       t.done();

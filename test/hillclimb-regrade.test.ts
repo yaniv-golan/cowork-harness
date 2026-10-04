@@ -3113,6 +3113,6 @@ describe.runIf(POSIX)("hillclimb over a runs root that is not where its runs wer
     const r = cli("regrade", "evals", "--flow", "flow", "--run-dir", movedRoot);
     expect(r.status, r.stderr).toBe(0);
     expect(r.stderr).not.toMatch(/copied from|refused/);
-    expect(r.stderr).toMatch(/no longer there\); reading its evidence from /);
+    expect(r.stderr).toMatch(/not there any more\); reading its evidence from /);
   }, 120_000);
 });

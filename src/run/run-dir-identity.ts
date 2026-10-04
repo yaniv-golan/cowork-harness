@@ -164,7 +164,7 @@ export function decideRunDir(runDir: string, result: RecordedRunPaths, cmd: stri
     paths[k] = moved;
   }
   const note =
-    `note: ${runDir} was recorded at ${outDir} (no longer there); reading its evidence from ${runDir}` +
+    `note: ${runDir} was recorded at ${outDir} (not there any more); reading its evidence from ${runDir}` +
     (unavailable.length ? `; unavailable: ${unavailable.map((u) => `${u.field} (${u.why})`).join(", ")}` : "");
   return { kind: "relocated", recordedOutDir: outDir, paths, unavailable, note };
 }
