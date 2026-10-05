@@ -2440,7 +2440,15 @@
       },
       "<oneOf:1>.error.code": {
         "type": "string",
-        "enum": ["doc_drift", "unchecked_content", "no_semantic_asserts"]
+        "enum": [
+          "doc_drift",
+          "unchecked_content",
+          "task_unverifiable",
+          "rubric_unverifiable",
+          "evidence_unverifiable",
+          "reference_unverifiable",
+          "no_semantic_asserts"
+        ]
       },
       "<oneOf:1>.error.hint": {
         "type": "string"
@@ -2461,8 +2469,21 @@
       },
       "<oneOf:1>.refusals[].code": {
         "type": "string",
-        "enum": ["doc_drift", "unchecked_content"],
+        "enum": [
+          "doc_drift",
+          "unchecked_content",
+          "task_unverifiable",
+          "rubric_unverifiable",
+          "evidence_unverifiable",
+          "reference_unverifiable"
+        ],
         "required": true
+      },
+      "<oneOf:1>.refusals[].evidenceSections": {
+        "type": "array"
+      },
+      "<oneOf:1>.refusals[].evidenceSections[]": {
+        "ref": "#/definitions/UncheckedSection"
       },
       "<oneOf:1>.refusals[].liveDocDrift": {
         "type": "array"
@@ -2470,9 +2491,36 @@
       "<oneOf:1>.refusals[].liveDocDrift[]": {
         "ref": "#/definitions/LiveDocDrift"
       },
+      "<oneOf:1>.refusals[].references": {
+        "type": "array"
+      },
+      "<oneOf:1>.refusals[].references[]": {
+        "type": "string"
+      },
+      "<oneOf:1>.refusals[].rubricLines": {
+        "type": "array"
+      },
+      "<oneOf:1>.refusals[].rubricLines[]": {
+        "type": "object"
+      },
+      "<oneOf:1>.refusals[].rubricLines[].assertionIndex": {
+        "type": "integer",
+        "required": true
+      },
+      "<oneOf:1>.refusals[].rubricLines[].lines": {
+        "type": "array",
+        "required": true
+      },
+      "<oneOf:1>.refusals[].rubricLines[].lines[]": {
+        "type": "integer"
+      },
       "<oneOf:1>.refusals[].runDir": {
         "type": "string",
         "required": true
+      },
+      "<oneOf:1>.refusals[].scrubSet": {
+        "type": "string",
+        "enum": ["legacy", "mangled", "key", "smaller"]
       },
       "<oneOf:1>.refusals[].uncheckedCount": {
         "type": "integer"
@@ -2695,6 +2743,9 @@
       "definitions.Run.scenarioSha256": {
         "type": "string",
         "required": true
+      },
+      "definitions.Run.scrubAcceptedBy": {
+        "type": "string"
       },
       "definitions.Run.turn": {
         "type": "integer",
@@ -3585,6 +3636,25 @@
       },
       ".scratchpadEvidenceComplete": {
         "type": "boolean"
+      },
+      ".scrubSet": {
+        "type": "object",
+        "closed": true
+      },
+      ".scrubSet.keyId": {
+        "type": "string",
+        "required": true
+      },
+      ".scrubSet.v": {
+        "const": 1,
+        "required": true
+      },
+      ".scrubSet.values": {
+        "type": "array",
+        "required": true
+      },
+      ".scrubSet.values[]": {
+        "type": "string"
       },
       ".skillActivity": {
         "type": "array"

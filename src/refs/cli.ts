@@ -27,6 +27,9 @@ export interface ComposedForFreeze {
   scenario: string;
   taskSha256: string;
   docs: Array<{ key: string; text: string; live: "match" | "differs" | "unknown" }>;
+  /** How many distinct strings the documents were scrubbed with (recorded in each document's sidecar: a count, never
+   *  a key name or value — the store may be committed). */
+  scrubCount?: number;
 }
 
 export interface FreezeDeps {
@@ -103,7 +106,13 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
         caseId,
         c.source,
         Object.fromEntries(c.docs.map((d) => [d.key, { text: d.text, unchecked: unchecked.has(d.key) }])),
-        { harnessVersion: c.harnessVersion, composerId: c.composerId, scenario: c.scenario, taskSha256: c.taskSha256 },
+        {
+          harnessVersion: c.harnessVersion,
+          composerId: c.composerId,
+          scenario: c.scenario,
+          taskSha256: c.taskSha256,
+          ...(c.scrubCount !== undefined ? { scrubCount: c.scrubCount } : {}),
+        },
       );
       if (r.status === "exists")
         return exists(`ref freeze: a reference for case ${caseId} appeared in ${opts.out} concurrently; nothing written`, caseId);
@@ -122,7 +131,12 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
       opts.out,
       caseId,
       c.docs.map((d) => ({ key: d.key, text: d.text, unchecked: unchecked.has(d.key) })),
-      { resultSha256: c.source.resultSha256, composerId: c.composerId, taskSha256: c.taskSha256 },
+      {
+        resultSha256: c.source.resultSha256,
+        composerId: c.composerId,
+        taskSha256: c.taskSha256,
+        ...(c.scrubCount !== undefined ? { scrubCount: c.scrubCount } : {}),
+      },
     );
     if (added.length === 0)
       return exists(

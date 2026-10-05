@@ -58,6 +58,12 @@ export interface PairwisePrepassOpts {
 
 type Outcome = NonNullable<RunResult["assertions"][number]["pairwise"]>[number];
 
+/** Scrub markers in a text. */
+const markers = (t: string): number => t.split(REDACTION_MARK).length - 1;
+/** How many distinct strings a scrub set holds (the count a reference sidecar records, `scrubCount`). */
+export const distinct = (secrets: readonly string[]): number => new Set(secrets.filter((x) => x.length > 0)).size;
+const REDACTION_MARK = "[REDACTED]";
+
 /** One model, however it is spelled: case-folded, without a context-window suffix (`[1m]`) or a trailing release
  *  date (`-20250101`). Used for the self-judge warning, so an alias and its dated id are the same model, and by
  *  `hillclimb regrade` to compare a requested judge model with a served id when no request was recorded. */
@@ -101,6 +107,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
   const secrets = ctx.secrets ?? [];
   const task = secrets.length ? scrub(opts.task, secrets) : opts.task;
   const taskSha256 = createHash("sha256").update(opts.task, "utf8").digest("hex");
+  const warnedWeakerRef = new Set<string>();
   for (let i = 0; i < assertions.length; i++) {
     const a = assertions[i]!;
     const p = a.semantic_pairwise;
@@ -186,12 +193,24 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
             `kind of output is a known bias; pin a different judge_model.\n`,
         );
       }
+      // The stored reference is scrubbed with THIS set before the judge reads it, as the candidate was: a value the
+      // reference was frozen with unscrubbed (a smaller set at freeze time) never reaches the judge, and the two
+      // outputs carry the same redactions. Its integrity and identity (`refDocSha256`) stay the stored bytes'.
+      const reference = secrets.length ? scrub(got.text, secrets) : got.text;
+      const refRedactions = markers(reference) - markers(got.text);
+      if (got.scrubCount !== undefined && distinct(secrets) > got.scrubCount && !warnedWeakerRef.has(ref.name)) {
+        warnedWeakerRef.add(ref.name);
+        warn(
+          `::notice:: [semantic_pairwise] reference ${ref.name} was frozen with a smaller scrub set than this process's; it is scrubbed ` +
+            `with this process's set before the judge reads it (ref_scrub_weaker).\n`,
+        );
+      }
       try {
         const r = await opts.judgeFor(resolved)({
           task,
           rubric,
           candidate: built.candidate,
-          reference: got.text,
+          reference,
           sessionId: opts.sessionId,
           assertIndex: i,
           refName: ref.name,
@@ -214,6 +233,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
           ...(r.orders ? { orders: r.orders } : {}),
           ...(rationale !== undefined ? { rationale } : {}),
           refDocSha256: got.sha256,
+          refRedactions,
           ...(got.unchecked ? { unchecked: true } : {}),
         });
       } catch (e) {
@@ -223,7 +243,8 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         cost = addCost(cost, e.costUsd);
         usage = addTokenUsage(usage, e.usage);
         model = e.model ?? model;
-        const why = e.message.split("\n")[0]!;
+        // The message can quote the judge's reply, which can quote either output: scrubbed before it is stored or warned.
+        const why = scrub(e.message.split("\n")[0]!, secrets);
         if (!gate) {
           // A metric-only reference: this comparison is lost, the verdict is not.
           outcomes.push({ ref: ref.name, ...tag, status: "invalid", why });

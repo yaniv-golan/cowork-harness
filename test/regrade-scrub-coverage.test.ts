@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
 import type { CompleteStructured } from "../src/decide/pairwise-judge.js";
 import { regradeRuns, type RegradeOptions } from "../src/run/regrade.js";
@@ -314,7 +315,7 @@ describe.runIf(POSIX)("regrade scrub coverage: core regrade", () => {
     const file = writeScenario({ prompt: `what is the answer ${TASK}?` });
     const { flow, v1 } = await flowRun({ file });
     rmSync(join(f.runsDir, "scrubset.key"));
-    writeFileSync(join(f.runsDir, "scrubset.key"), "x".repeat(64), { mode: 0o600 });
+    writeFileSync(join(f.runsDir, "scrubset.key"), randomBytes(32).toString("hex") + "\n", { mode: 0o600 });
     writeScenario({ prompt: `what is the answer ${TASK}?`, pairwise: ["gives the answer", "is polite"] });
     const out = await regradeRuns(regradeOpts(file, flow, v1.outDir, []));
     expect(out.ok).toBe(false);
@@ -341,7 +342,7 @@ describe.runIf(POSIX)("regrade scrub coverage: core regrade", () => {
     expect(refused.ok).toBe(false);
     if (refused.ok) return;
     expect(refused.refusals?.map((x) => x.code)).toEqual(["rubric_unverifiable"]);
-    expect(refused.message).toMatch(/re-run the case/);
+    expect(refused.message).toMatch(/re-run the case/i);
     expect(refused.message).toContain("--allow-scrub-change");
     // --allow-doc-drift does not imply it.
     const drift = await regradeRuns(regradeOpts(file, flow, v1.outDir, [], { allowDocDrift: true, allowUnchecked: true }));
@@ -406,7 +407,47 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     expect(users[0]).not.toContain(ANS);
     expect(users[0]).toContain("[REDACTED]");
     const pw = (v1.assertions ?? []).find((a) => a.pairwise !== undefined)!.pairwise!;
-    expect(pw.find((o) => o.ref === "baseline")).toMatchObject({ status: "graded", refRedactions: 1 });
+    const graded = pw.find((o) => o.ref === "baseline")!;
+    expect(graded.status).toBe("graded");
+    // The answer appears in the final message and the transcript: one marker each.
+    expect(graded.refRedactions).toBe(2);
+  });
+
+  it("a reference whose live grade scrubbed a value is refused reference_unverifiable under a smaller set; ref_scrub_weaker is noticed", async () => {
+    const file = writeScenario({});
+    const sc = parseScenarioFile(file);
+    const flow = join(dir, "flow");
+    mkdirSync(join(flow, "baseline"), { recursive: true });
+    const base = await executeScenario(sc, { pairwise: flowPairwiseOptions("alpha", "baseline", discoverFlowRefs(flow)) });
+    freezeCaseRef({
+      flowAbs: flow,
+      variant: "baseline",
+      caseId: "alpha",
+      scenarioFile: file,
+      assertions: sc.assert,
+      prompt: sc.prompt,
+      results: JSON.stringify(rowFor(base.outDir)) + "\n",
+      secrets: [],
+      command: "hillclimb run",
+    });
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", ANS);
+    const err = captureStderr();
+    let v1;
+    try {
+      v1 = await executeScenario(sc, {
+        pairwise: flowPairwiseOptions("alpha", "v1", discoverFlowRefs(flow)),
+        pairwiseComplete: capture([]),
+      });
+    } finally {
+      err.restore();
+    }
+    expect(err.text()).toContain("ref_scrub_weaker");
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", undefined);
+    const users: string[] = [];
+    const out = await regradeRuns(regradeOpts(file, flow, v1.outDir, users));
+    expect(users.join("\n")).not.toContain(ANS);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.refusals?.map((r) => r.code)).toEqual(["reference_unverifiable"]);
   });
 
   it("the committed reference sidecar records a count, never key names", async () => {
@@ -453,7 +494,7 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     setEnv("COWORK_HARNESS_SCRUB_VALUES", undefined);
     const smaller = freeze(sc2, collectSecrets());
     expect(smaller.status).toBe("refused");
-    expect(smaller.message).toMatch(/re-run the variant/);
+    expect(smaller.message).toMatch(/re-run the variant/i);
     const entry = join(flow, "baseline", "ref", "alpha");
     expect(
       readdirSync(entry)

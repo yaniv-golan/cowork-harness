@@ -26,13 +26,16 @@ import { runOutDir } from "../run/execute.js";
 import {
   gradedDocDrift,
   regradeRuns,
+  SCRUB_REFUSAL_CODES,
   type RedactionLoss,
+  type RegradeRefusal,
   type RegradeOptions,
   type RegradeOutcome,
   type RegradeRunReport,
 } from "../run/regrade.js";
 import { reevaluateRun } from "../run/verify-context.js";
 import { scrub } from "../secrets.js";
+import { coverageWhy } from "../scrub-set.js";
 import { hasRedactionToken, REDACTION_TOKEN_RE } from "../redactable-literal.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
@@ -70,6 +73,9 @@ export interface HillclimbRegradeArgs {
   allowUnchecked: boolean;
   /** Re-judge every judged assert, changed or not (default: only one whose judge inputs changed — `judgedPlan`). */
   rejudge?: boolean;
+  /** `--allow-scrub-change`: re-judge a row even when a part of its judge input cannot be proven scrubbed with a set
+   *  covering the run's (otherwise the row is listed). Never implied by `rejudge` or `allowDocDrift`. */
+  allowScrubChange?: boolean;
 }
 
 export interface RegradeFlowDeps {
@@ -424,6 +430,29 @@ function gradedSource(row: Row, runDir: string, result: RunResult): { entries: E
   } catch {
     return undefined;
   }
+}
+
+/** A listed row's reason for its scrub refusals (`regradeRuns`' `*_unverifiable`): which parts, why the run's set is
+ *  not proven covered, and the remedy. Never a value. */
+function scrubListing(rs: readonly RegradeRefusal[]): string {
+  const part = (r: RegradeRefusal): string => {
+    switch (r.code) {
+      case "task_unverifiable":
+        return "the pairwise task line (the prompt, changed or scrubbed differently since the run)";
+      case "rubric_unverifiable":
+        return `rubric text the run did not record (${(r.rubricLines ?? []).map((x) => `assert ${x.assertionIndex} line(s) ${x.lines.join(",")}`).join("; ")})`;
+      case "evidence_unverifiable":
+        return `evidence no run-scrubbed record vouches for (${(r.evidenceSections ?? []).map((x) => `assert ${x.assertionIndex}: ${x.kind}${x.path !== undefined ? ` ${x.path}` : ""}`).join(", ")})`;
+      default:
+        return `the reference(s) ${(r.references ?? []).join(", ")} (its live grade scrubbed a value from it)`;
+    }
+  };
+  const why = rs[0]!.scrubSet;
+  return (
+    `${rs.map(part).join("; ")} cannot be proven scrubbed with the run's scrub set` +
+    (why ? ` — ${coverageWhy({ covered: false, why })}` : "") +
+    `: nothing was sent to the judge. Re-run the case, run with the scrub settings the run used, or pass --allow-scrub-change after checking them`
+  );
 }
 
 /** Why a judged assert is re-judged. Everything that changes what its judge reads or how it grades:
@@ -1338,12 +1367,12 @@ async function regradeFlowInner(
         const unknowable = [...new Set([...byIdentity.scrubbedOnly, ...plan.scrubbedOnly])].sort((a, b) => a - b);
         const toJudge = agentFailed ? [] : args.fillRefs ? fillJudged(plan, c, v, refNames) : [...plan.rejudge.keys()];
         const rawRubric = unknowable.filter((i) => toJudge.includes(i));
-        if (rawRubric.length && !args.allowDocDrift) {
+        if (rawRubric.length && !args.allowScrubChange) {
           vr.listed.push({
             prompt_id: id,
             rep,
             why: shownMessage(
-              `${rawRubric.map((i) => labelOf(c, i)).join(", ")} ${rawRubric.length === 1 ? "is" : "are"} scrubbed in the run's result.json and this process's secrets do not reproduce ${rawRubric.length === 1 ? "it" : "them"}: a re-judge would send the rubric as written against the scrubbed evidence the run's judge read — run with the same scrub settings the run used (COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS), or pass --allow-doc-drift explicitly after checking them`,
+              `${rawRubric.map((i) => labelOf(c, i)).join(", ")} ${rawRubric.length === 1 ? "is" : "are"} scrubbed in the run's result.json and this process's secrets do not reproduce ${rawRubric.length === 1 ? "it" : "them"}: a re-judge would send the rubric as written against the scrubbed evidence the run's judge read — run with the same scrub settings the run used (COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS), or pass --allow-scrub-change explicitly after checking them`,
               deps.secrets,
             ),
           });
@@ -1352,7 +1381,7 @@ async function regradeFlowInner(
         for (const i of unknowable)
           say(
             rawRubric.includes(i)
-              ? `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it — re-judged anyway (--allow-doc-drift): its rubric is sent as written against the scrubbed evidence`
+              ? `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it — re-judged anyway (--allow-scrub-change): its rubric is sent as written against the scrubbed evidence`
               : `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} is scrubbed in the run's result.json and this process's secrets do not reproduce it, so whether it changed since the run is unknowable — its graded outcome kept, never re-evaluated over the scrubbed evidence (an unchanged assert matches exactly under the run's COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS; an edited one takes a re-run of the case)`,
           );
         // A fill keeps every outcome the row was graded with: one judged against a reference that has since changed
@@ -1403,7 +1432,7 @@ async function regradeFlowInner(
           // scrubbed by this process): listed in either mode — by path, never by content — unless the operator,
           // having checked the scrub settings, passes --allow-doc-drift.
           const lossy = drift.changes.flatMap((x) => (x.lessRedacted ?? []).map((r) => ({ assert: x.assert, ...r })));
-          if (lossy.length && !args.allowDocDrift) {
+          if (lossy.length && !args.allowScrubChange) {
             const known = lossy.every((r) => r.kind === "less");
             const where = lossy
               .map((r) => `assert ${r.assert}: ${r.path}${r.kind === "unknown" ? " — its graded document records no redaction count" : ""}`)
@@ -1412,7 +1441,7 @@ async function regradeFlowInner(
               prompt_id: id,
               rep,
               why: shownMessage(
-                `the current evidence ${known ? "is" : "may be"} less redacted than the graded document (${where}): a secret the run scrubbed is not scrubbed now — set the same scrub settings as the run (COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS) and regrade again, or, after checking them, pass --rejudge --allow-doc-drift to grade it anyway`,
+                `the current evidence ${known ? "is" : "may be"} less redacted than the graded document (${where}): a secret the run scrubbed is not scrubbed now — set the same scrub settings as the run (COWORK_HARNESS_SCRUB_VALUES / COWORK_HARNESS_SCRUB_KEYS) and regrade again, or, after checking them, pass --rejudge --allow-scrub-change to grade it anyway`,
                 deps.secrets,
               ),
             });
@@ -1504,6 +1533,8 @@ async function regradeFlowInner(
       ...(args.allowDocDrift || args.rejudge ? { allowDocDrift: true } : {}),
       ...(args.rejudge && !args.allowDocDrift ? { driftAcceptedBy: "--rejudge" } : {}),
       ...(args.allowUnchecked ? { allowUnchecked: true } : {}),
+      // Only its own flag: never implied by --rejudge or --allow-doc-drift.
+      ...(args.allowScrubChange ? { allowScrubChange: true } : {}),
       pairwise: { ...flowPairwiseOptions(b.c.id, b.variant, refs), ...(b.onlyRefs ? { onlyRefs: b.onlyRefs } : {}) },
       // What each row is graded with now, and (default mode) the judged asserts it keeps: never sent to a judge.
       graded: (dir: string) => {
@@ -1529,13 +1560,33 @@ async function regradeFlowInner(
       if (pre.ok || ("code" in pre && pre.code !== undefined)) continue;
       batches.splice(batches.indexOf(b), 1, ...b.targets.map((t) => ({ ...b, targets: [t] })));
     }
+    // A row whose judge input cannot be proven scrubbed with a set covering its run's is listed, untouched (exit 1):
+    // not a flow refusal, so the rest of the batch is still graded. Counted for one summary line on a pre-4.4 run.
+    let legacyListed = 0;
     for (const b of batches) {
       const pre = (await regrade(optsFor(b, true))) as RegradeOutcome | { ok: true };
       if (pre.ok) continue;
       const vr = perVariant.get(b.variant)!.v;
-      if ("code" in pre && (pre.code === "doc_drift" || pre.code === "unchecked_content")) {
-        for (const r of pre.refusals ?? []) {
+      const scrubRefused = (pre.refusals ?? []).filter((r) => (SCRUB_REFUSAL_CODES as readonly string[]).includes(r.code));
+      const evidenceRefused = (pre.refusals ?? []).filter((r) => r.code === "doc_drift" || r.code === "unchecked_content");
+      const batchTargets = b.targets;
+      if (scrubRefused.length) {
+        const byRow = new Map<Target, RegradeRefusal[]>();
+        for (const r of scrubRefused) {
           const t = b.targets.find((x) => real(x.runDir) === real(r.runDir));
+          if (t) byRow.set(t, [...(byRow.get(t) ?? []), r]);
+        }
+        for (const [t, rs] of byRow) {
+          if (rs.some((r) => r.scrubSet === "legacy")) legacyListed++;
+          vr.listed.push({ prompt_id: b.c.id, rep: Number(t.line.row?.rep), why: shownMessage(scrubListing(rs), deps.secrets) });
+        }
+        b.targets = b.targets.filter((t) => !byRow.has(t));
+        if (!b.targets.length) skip.add(b);
+        if (!evidenceRefused.length) continue;
+      }
+      if (evidenceRefused.length) {
+        for (const r of evidenceRefused) {
+          const t = batchTargets.find((x) => real(x.runDir) === real(r.runDir));
           const where = t ? `${b.variant} ${b.c.id} rep${String(t.line.row?.rep)}` : `${b.variant} ${b.c.id}`;
           evidence.push(`${where}: ${r.code}${r.uncheckedCount ? ` (${r.uncheckedCount} unchecked section(s))` : ""}`);
         }
@@ -1555,6 +1606,10 @@ async function regradeFlowInner(
           why: shownMessage(`refused: ${pre.message.split("\n")[0]}`, deps.secrets),
         });
     }
+    if (legacyListed)
+      say(
+        `hillclimb regrade: ${legacyListed} row(s) listed whose run predates the scrub-set record (harness < 4.4): new or edited rubric text (or another part of the judge input not identical to the run's record) cannot be proven scrubbed with the run's set — re-run the case to record it, or pass --allow-scrub-change after checking this process's scrub settings`,
+      );
     if (evidence.length)
       return refuse(
         `the kept evidence cannot be re-graded as the live judge read it — nothing was re-graded or written:\n  ${evidence.join("\n  ")}\n  (--allow-doc-drift / --allow-unchecked accept it, after reading why)`,

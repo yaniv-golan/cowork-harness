@@ -274,7 +274,15 @@ every climb there is finished.
   markers than the graded one (a secret the run scrubbed that this process does not), or a changed authored file
   whose graded fingerprint has no marker count, is listed even under `--rejudge`, by path only, with no judge call.
   Set the run's `COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS` and regrade again, or, after checking
-  them, `--rejudge --allow-doc-drift` grades it anyway.
+  them, `--rejudge --allow-scrub-change` grades it anyway (`--allow-doc-drift` does not).
+- **Never a part the run scrubbed, unproven.** A run records a keyed fingerprint of its scrub set (`result.json`
+  `scrubSet`; the key is `scrubset.key` in the runs root). When this process's set provably covers it, every part of
+  the judge's input is covered. Otherwise each part must equal the run's own scrubbed record: the pairwise `## Task`
+  line (the prompt), each rubric line, each evidence note, and each reference whose live grade scrubbed a value from
+  it. A row with a part proven neither way is listed, with no judge call. A run from before 4.4 has no fingerprint, so
+  its new or edited rubric text is listed (one stderr line says so); so is a run from another machine, or one whose
+  token has rotated since. Re-run the case, or pass `--allow-scrub-change` after checking the scrub settings: the
+  regrade file then records `scrubAcceptedBy`. Neither `--rejudge` nor `--allow-doc-drift` implies it.
 - **`--rejudge`:** every judged assert of every selected row is re-judged, with the flow's references as they are
   now. Use it after a judge change the triggers above do not see. Not with `--fill-refs`.
 - **`--fill-refs`:** only the `semantic_pairwise` comparisons a row lacks are judged (a reference frozen after the
@@ -293,7 +301,7 @@ every climb there is finished.
 
 Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant with rows), `--case ID`
 (repeatable), `--judge-model ID`, `--fill-refs`, `--rejudge`, `--approve-harness`, `--allow-doc-drift`, `--allow-unchecked`,
-`--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
+`--allow-scrub-change`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
 - **Everything that can refuse does so before the first judge call**, and then writes nothing: a host `claude`
   that cannot run the judge isolated (asked only when a judge would be called — again under the locks when a
@@ -323,7 +331,7 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   its literal (one scrubbed value for another) cannot be told from no edit: on a row whose `meta.assert_sig` is not
   the scenario's now, it lists the row, untouched, on every regrade until the case is re-run. One this process cannot
   reproduce is kept unchanged too — never re-evaluated or re-judged over scrubbed evidence; a re-judge it would need
-  lists the row (same scrub settings, or `--allow-doc-drift` after checking — then the judge sees the RAW rubric
+  lists the row (same scrub settings, or `--allow-scrub-change` after checking — then the judge sees the RAW rubric
   against the scrubbed evidence, so its grade may not match the live run's) — and named on stderr (an edited one
   takes a re-run). A row no judge re-grades is re-evaluated too: a case with no judged assert, a row whose judged
   asserts all keep their entries, an agent-failed row (it gains the metric signature and `<id>_present: 0`, never a

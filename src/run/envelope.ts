@@ -164,8 +164,19 @@ export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEn
  *  `unchecked_content` are `regrade`'s two evidence refusals (the kept evidence differs from what the live judge
  *  read; content the live judge never read would be graded), listed per run dir in the payload's `refusals[]`.
  *  `no_semantic_asserts` is `regrade`'s refusal of a scenario with neither a `semantic_matches` nor a `semantic_pairwise`
- *  assert (nothing to re-grade): a `usage` error a caller may treat as "nothing to do" rather than as a failure. */
-export type ErrCode = "budget_exceeded" | "doc_drift" | "unchecked_content" | "no_semantic_asserts";
+ *  assert (nothing to re-grade): a `usage` error a caller may treat as "nothing to do" rather than as a failure. The four
+ *  `*_unverifiable` codes are `regrade`'s scrub refusals: a part of the judge's input (the pairwise task line, a rubric
+ *  line, a section of the evidence, a reference) cannot be proven scrubbed with a set covering the run's, listed per run
+ *  dir in `refusals[]` beside the evidence refusals. */
+export type ErrCode =
+  | "budget_exceeded"
+  | "doc_drift"
+  | "unchecked_content"
+  | "task_unverifiable"
+  | "rubric_unverifiable"
+  | "evidence_unverifiable"
+  | "reference_unverifiable"
+  | "no_semantic_asserts";
 
 /** Additive extras for the error envelope. `error` fields merge into the `error` object beside the
  *  covered `category`/`message`/`hint` (typed so they cannot collide with them); `payload` keys sit at the top level

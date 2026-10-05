@@ -11,7 +11,7 @@ import { tildeify } from "../io.js";
 import { scrub } from "../secrets.js";
 import { parseScenarioFile } from "../run/execute.js";
 import { pkgVersion } from "../run/envelope.js";
-import { candidateDocument, pairwiseComposeKey } from "../run/pairwise-prepass.js";
+import { candidateDocument, distinct, pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { assertContextFromRunDir } from "../run/verify-context.js";
 import { NoFollowRoot } from "../hillclimb/fs.js";
@@ -146,5 +146,6 @@ export function composeFromRunDir(
     scenario: redactDeep(scenarioRef.name ?? "", secrets),
     taskSha256: createHash("sha256").update(scenarioRef.prompt, "utf8").digest("hex"),
     docs,
+    scrubCount: distinct(secrets),
   };
 }

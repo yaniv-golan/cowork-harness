@@ -457,6 +457,10 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(out.message).toContain("COWORK_HARNESS_SCRUB_VALUES");
     expect(out.message).not.toContain(SECRET);
     expect(judge.calls).toHaveLength(0);
+    // Accepting the drift does not accept the scrub loss in it: the file now carries fewer markers.
+    const drift = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
+    expect(drift).toMatchObject({ ok: false, code: "evidence_unverifiable" });
+    expect(judge.calls).toHaveLength(0);
   });
 
   it("a changed scope does not hide a secret the live run scrubbed: the live document is rebuilt and checked too", async () => {
@@ -1124,6 +1128,8 @@ describe("regrade: spend, provenance and invalid grades", () => {
         `  - semantic_matches:\n      rubric: ["the report never mentions ${SECRET}"]\n      evidence_files: ["outputs/report.md"]\n`,
       ),
       makeJudge: judgeFactory(() => false).make, // a failing claim, so the message echoes it too
+      // A pre-4.4 run (no scrubSet) with rubric text it did not record: accepted, so the output sinks are what is tested.
+      allowScrubChange: true,
     });
     if (!out.ok) throw new Error(out.message);
     expect(out.runs[0].assertions[0].semanticClaims?.[0].claim).toContain(SECRET); // the in-memory report is raw
@@ -1183,6 +1189,8 @@ describe("regrade: spend, provenance and invalid grades", () => {
         `  - semantic_matches:\n      rubric: ["the report never mentions ${SECRET}"]\n      evidence_files: ["outputs/report.md"]\n`,
       ),
       makeJudge: judgeFactory(() => true).make,
+      // A pre-4.4 run (no scrubSet) with rubric text it did not record: accepted, so the file's scrub is what is tested.
+      allowScrubChange: true,
     });
     if (!out.ok) throw new Error(out.message);
     const text = readFileSync(out.runs[0].regradeFile, "utf8");
@@ -1378,7 +1386,8 @@ describe("regrade: content the live judge never read, and accepted drift", () =>
       assertYaml: SCOPED,
     });
     const judge = judgeFactory(() => true);
-    const out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50 }));
+    // A pre-4.4 run cannot prove the new note covered (see the next test): accepted here, so the unchecked rule is tested.
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50, allowScrubChange: true }));
     if (!out.ok) throw new Error(out.message);
     expect(judge.calls).toHaveLength(1);
     expect(judge.calls[0].answer).toContain("## Evidence health");

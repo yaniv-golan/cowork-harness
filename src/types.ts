@@ -1837,6 +1837,11 @@ export interface RunResult {
   lane?: "local" | "remote";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
+  /** A keyed fingerprint of the scrub set this run's records were scrubbed with (`src/scrub-set.ts`): one HMAC per
+   *  scrubbed string under the installation key in the runs root (`scrubset.key`), never a value. A re-grade proves
+   *  with it that its own scrub set covers the run's. Absent on a run recorded before it existed, on a non-live lane,
+   *  and when no key could be made — such a run's set cannot be proven covered. */
+  scrubSet?: { v: 1; keyId: string; values: string[] };
   fidelity: string;
   baseline: string;
   result: "success" | "error";
@@ -2152,6 +2157,11 @@ export interface RunResult {
       orders?: { candidate_first: "win" | "tie" | "loss" | "both_bad"; ref_first: "win" | "tie" | "loss" | "both_bad" };
       rationale?: string;
       refDocSha256?: string;
+      /** How many scrub markers this grade's send-time scrub of the stored reference added: the reference is scrubbed
+       *  with the grading process's set before the judge reads it, so a value the reference was frozen with unscrubbed
+       *  never reaches the judge. 0 when the stored text already had none of the set's values. Absent on an outcome
+       *  graded before this field existed (such a grade sent the stored text as it was). */
+      refRedactions?: number;
       /** The reference was frozen without a live fingerprint to check it against (`ref freeze --allow-unchecked`). */
       unchecked?: boolean;
       why?: string;
