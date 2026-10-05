@@ -306,19 +306,29 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   - each evidence-health and scratch note: a section of the same kind and bytes must be in a document the run
     recorded; and a drift accepted with `--allow-doc-drift` whose authored file carries fewer scrub markers than the graded one
     (or whose graded fingerprint recorded no count) is never proven this way;
-  - each reference judged: no live grade against it may have recorded `refRedactions` above 0.
+  - each reference a comparison will send: this process's scrub of the stored reference must hash to the
+    `refSentSha256` a live grade of this run recorded for the same reference and compose key (what that judge was
+    sent). A grade recorded before 4.4 has no such hash, but its judge received the stored text unscrubbed, so a
+    stored text whose sha256 still equals its `refDocSha256` discloses nothing new. A reference re-frozen since, one
+    the run never judged (a `--fill-refs` column), or one with no recorded grade proves nothing.
 
   A part proven neither way is refused (exit `2`) with `error.code` `task_unverifiable`, `rubric_unverifiable`,
   `evidence_unverifiable` or `reference_unverifiable`, listed per run dir in `refusals[]` (`scrubSet`:
-  `legacy` | `mangled` | `key` | `smaller` says why the set is not proven; `rubricLines`, `evidenceSections` and
-  `references` name the parts, never their text). `--allow-scrub-change` grades anyway, with a warning, and the
+  `legacy` | `unrecorded` | `mangled` | `key` | `smaller` says why the set is not proven, `unrecorded` with the
+  run's own reason in `scrubSetDetail`; `rubricLines`, `evidenceSections` and
+  `references` name the parts, never their text, by the index of the assert in the scenario re-graded). `--allow-scrub-change` grades anyway, with a warning, and the
   regrade file and `runs[]` entry record `scrubAcceptedBy`. Neither `--allow-doc-drift` nor `--allow-unchecked`
   implies it. A run can't prove its set when it predates the fingerprint (harness < 4.4), was recorded on
   another machine or under a replaced key, or when a token it scrubbed has since rotated (named-key values are
-  part of the set). Its unchanged task and rubric lines still re-grade; new or edited ones are refused, with one
-  summary line naming the remedy: re-run the case (a new run records its set), or pass `--allow-scrub-change`
+  part of the set). Its task line, rubric lines and references still re-grade while each equals its record as
+  above; new or edited text, and a reference re-frozen since, is refused, with one summary line naming the remedy: re-run the case (a new run records its set), or pass `--allow-scrub-change`
   after checking the scrub settings. A literal made only of the letters the fingerprint uses (`ghjkmnpqrstvwxyz`)
   can change the stored fingerprint when the result is scrubbed; it then reads as unverifiable, never as covered.
+  When the installation key cannot be used (a symlink, a file readable by others, another owner, not a key), the run
+  warns once, naming the key's path and the defect, and records why in `result.json` `scrubSetUnavailable`; a
+  re-grade then says "this run recorded no scrub set (its key …)" rather than calling the run older than 4.4. A
+  0-byte key left by an interrupted create is recreated, and a new key is written whole before it is linked into
+  place.
   **Not covered by the proof:** content accepted with `--allow-unchecked`, and the document of an `unknown` or
   `live_refused` assert (no live fingerprint to compare with), are protected only by this process's scrub set;
   both are named in a `::warning::` before the judge call.
@@ -491,7 +501,7 @@ re-running every step before it.
 
 ### Frozen references for `semantic_pairwise` (`ref`)
 
-`cowork-harness ref freeze <run-dir> --scenario <scenario.yaml> --out <store> [--case-id <id>] [--allow-unchecked] [--output-format json]`
+`cowork-harness ref freeze <run-dir> --scenario <scenario.yaml> --out <store> [--case-id <id>] [--allow-unchecked] [--allow-scrub-change] [--output-format json]`
 `cowork-harness ref verify <store>… [--output-format json]`
 
 A `semantic_pairwise` assert compares a run's judged document with a **frozen reference**: the document an
@@ -505,7 +515,10 @@ earlier run produced, stored once and never regenerated, so a win rate keeps one
     `semantic_matches` or `semantic_pairwise` assert in that run). A document that **differs** — a file in the
     kept run changed after it — is refused, with no override. A run with **no** such fingerprint is refused unless
     `--allow-unchecked`; the document is then stored marked unchecked. To get a fingerprint, run the baseline with a
-    `semantic_matches` assert over the same evidence options.
+    `semantic_matches` assert over the same evidence options. An unchecked document is composed with this
+    process's scrub set and written to a store meant to be committed, so it is frozen only when that set provably
+    covers the one the run recorded (`result.json` `scrubSet`); otherwise it is refused unless
+    `--allow-scrub-change` is also passed. `--allow-unchecked` does not imply it.
   - The run must be of `--scenario`: a different scenario name, or a different prompt, is refused. The entry records
     the scenario and a hash of its prompt, and a later run of a different prompt is refused before it spends anything.
   - A run that ended in an error, a partial run, a replay or a chat run is refused, as is evidence the judge could

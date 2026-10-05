@@ -22,7 +22,10 @@ All notable changes to this project are documented here. The format is based on
   - Before any judge call, a re-grade proves each part it sends: covered when the run's set is a subset of this
     process's under the same key (a grown set included), else by equality with the run's own scrubbed record —
     the task line (checked only when a pairwise comparison will be judged), each rubric line, each evidence-health
-    and scratch note, and each reference whose live grade scrubbed nothing from it. A part proven neither way is
+    and scratch note, and each reference: its send now must hash to what the run's live judge was sent
+    (`pairwise[].refSentSha256`, new), or, for a grade recorded before 4.4 (whose judge got the stored text raw),
+    the stored text must still be the one that grade recorded (`refDocSha256`). A reference re-frozen since, or one
+    the run never judged (a `--fill-refs` column), proves nothing. A part proven neither way is
     refused by `regrade` (exit 2, `error.code` `task_unverifiable`, `rubric_unverifiable`, `evidence_unverifiable`
     or `reference_unverifiable`, in `refusals[]` beside `doc_drift`) and listed by `hillclimb regrade` (exit 1),
     naming the parts, never their text.
@@ -34,14 +37,20 @@ All notable changes to this project are documented here. The format is based on
     sidecar records `scrubCount`, a count only, and a reference frozen with fewer strings is noted
     (`ref_scrub_weaker`).
   - `hillclimb freeze-ref` and a baseline pass add a missing compose key to a reference only when this process's set
-    provably covers the run's; otherwise the case is refused with "re-run the variant".
+    provably covers the run's; otherwise the case is refused with "re-run the variant". `ref freeze` freezes an
+    unchecked document (`--allow-unchecked`) under the same proof, or with `--allow-scrub-change`.
+  - An unusable installation key (a symlink, a file readable by others, another owner, not a key) is warned about
+    once, naming its path and the defect, and recorded on the result as `scrubSetUnavailable`, so a re-grade names
+    that cause instead of calling the run older than 4.4. A key is written whole before it is linked into place, and
+    a 0-byte key left by an interrupted create is recreated.
   - An invalid pairwise judge reply that quotes its input is scrubbed before it is warned on stderr or stored.
 
 ### Changed
 
 - **Re-grading a run from before 4.4.** Such a run records no scrub-set fingerprint, so nothing can prove its set
-  is covered. Its unchanged task and rubric lines still re-grade. New or edited rubric text, a changed evidence
-  note, or a reference its live grade scrubbed something from is refused by `regrade` and listed by
+  is covered. Its unchanged task and rubric lines still re-grade, and so does a reference still byte-identical to the
+  one its live grade recorded. New or edited rubric text, a changed evidence note, or a reference re-frozen since (or
+  never judged by the run, as a `--fill-refs` column is) is refused by `regrade` and listed by
   `hillclimb regrade`, with one summary line naming the remedy: re-run the case (a new run records its set), or
   pass `--allow-scrub-change` after checking the scrub settings. The same applies to a run recorded on another
   machine, and to a run whose auth token has rotated since, since a named key's value is part of the set.

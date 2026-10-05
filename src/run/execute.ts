@@ -1036,7 +1036,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // post-run file scrub. Same set is reused for the file scrub at the end.
   const secrets = collectSecrets();
   // The fingerprint of that set, recorded on the result so a later re-grade can prove its own set covers it. Made
-  // under the installation key in the runs root (created here on the first run); undefined when no key can be made.
+  // under the installation key beside the runs root (created here on the first run); when no key can be made, the
+  // result records why (`scrubSetUnavailable`) and a warning names the key.
   const scrubState = runScrubSet(secrets, runsWriteRoot());
   const scrubSet = "record" in scrubState ? scrubState.record : undefined;
   const scrubSetUnavailable = "unavailable" in scrubState ? scrubState.unavailable : undefined;

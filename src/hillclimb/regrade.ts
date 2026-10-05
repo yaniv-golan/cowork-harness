@@ -589,7 +589,7 @@ export interface EvidenceChange {
   gradedDocSha?: string;
   currentDocSha?: string;
   /** Authored sections the current document would carry less redacted than the graded one (`RedactionLoss`: by
-   *  path, never by content). Such a row is never re-judged unless --allow-doc-drift is also given. */
+   *  path, never by content). Such a row is never re-judged unless --allow-scrub-change is also given. */
   lessRedacted?: RedactionLoss[];
 }
 
@@ -1363,7 +1363,7 @@ async function regradeFlowInner(
         // said, since that is unknowable. Its live judge read the rubric and the document both scrubbed; a re-judge here
         // would send the rubric as written against the scrubbed evidence (for a negative claim, a leak turned green no
         // live run could produce). So any re-judge such an assert would need lists the row — no judge call, nothing
-        // written — unless the operator, having checked the scrub settings, passes --allow-doc-drift. One matched
+        // written — unless the operator, having checked the scrub settings, passes --allow-scrub-change. One matched
         // exactly under this process's scrub is re-judged with its rubric scrubbed as the run sent it.
         if (cannotApply(plan.scrubbedExact)) continue;
         const unknowable = [...new Set([...byIdentity.scrubbedOnly, ...plan.scrubbedOnly])].sort((a, b) => a - b);
@@ -1432,7 +1432,7 @@ async function regradeFlowInner(
           const asserts = [...new Set(drift.changes.map((x) => x.assert))].join(", ");
           // Never a judge call over a document less redacted than the graded one (a secret the run scrubbed, not
           // scrubbed by this process): listed in either mode — by path, never by content — unless the operator,
-          // having checked the scrub settings, passes --allow-doc-drift.
+          // having checked the scrub settings, passes --allow-scrub-change.
           const lossy = drift.changes.flatMap((x) => (x.lessRedacted ?? []).map((r) => ({ assert: x.assert, ...r })));
           if (lossy.length && !args.allowScrubChange) {
             const known = lossy.every((r) => r.kind === "less");

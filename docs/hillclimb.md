@@ -582,9 +582,10 @@ that the loop and the lite report builder read, with these differences:
 - it never sends a judge a part of its input the run scrubbed unless it can prove it. A run records a keyed
   fingerprint of its scrub set (`result.json` `scrubSet`, under `scrubset.key` beside the runs root). When this
   process's set provably covers it, everything is covered. Otherwise the pairwise task line, each rubric line,
-  each evidence note and each reference must equal the run's own scrubbed record, or the row is listed with the
-  parts it could not prove. A run from before 4.4 records no fingerprint: its unchanged lines re-grade, but a new
-  or edited rubric line is listed (one stderr line says how many such rows and the remedy). So is a row from a run
+  each evidence note and each reference must equal what the run recorded (for a reference, what its live judge was
+  sent; for a pre-4.4 grade, the stored text it recorded), or the row is listed with the parts it could not prove.
+  A run from before 4.4 records no fingerprint: its unchanged lines and unchanged references re-grade, but a new
+  or edited rubric line, a reference re-frozen since, or a `--fill-refs` reference the run never judged is listed (one stderr line says how many such rows and the remedy). So is a row from a run
   on another machine, or one whose token has rotated since. Re-run the case, or pass `--allow-scrub-change` after
   checking the scrub settings; the regrade file then records `scrubAcceptedBy`. Neither `--rejudge` nor
   `--allow-doc-drift` implies it;
