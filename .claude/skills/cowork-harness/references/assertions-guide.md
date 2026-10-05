@@ -1,6 +1,6 @@
 # Assertions guide
 
-Tracks `cowork-harness 4.4.0` (baseline `desktop-2.19675.0`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog is `assertion-catalog.md`.
+Tracks `cowork-harness 4.4.1` (baseline `desktop-2.19675.0`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog is `assertion-catalog.md`.
 
 ### Assertions: two orthogonal axes
 
