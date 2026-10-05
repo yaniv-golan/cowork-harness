@@ -2,7 +2,7 @@
 // installation key proves coverage only when it is a private regular file with the run's key id, and an unusable key
 // is said (once, with its path and the defect) and recorded instead of failing silently.
 import { describe, it, expect, afterEach } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -74,21 +74,44 @@ describe.runIf(process.platform !== "win32")("scrub-set fingerprint", () => {
     expect(readdirSync(dirname(root))).toEqual([SCRUB_KEY_FILE]);
   });
 
-  it("a 0-byte key (an interrupted create) is recreated; any other unusable file is left alone and named", () => {
+  it("an empty key (an interrupted create) is reported as unusable and never removed; neither is any other unusable file", () => {
     const root = fresh();
     mkdirSync(dirname(root), { recursive: true });
     writeFileSync(scrubKeyPath(root), "", { mode: 0o600 });
-    expect("key" in scrubKey(root)).toBe(true);
+    expect(scrubKey(root)).toEqual({
+      why: `${scrubKeyPath(root)} is empty (an interrupted create): remove it to let the next run create a key`,
+    });
+    expect(readFileSync(scrubKeyPath(root), "utf8")).toBe("");
     const bad = fresh();
     mkdirSync(dirname(bad), { recursive: true });
     writeFileSync(scrubKeyPath(bad), "not a key\n", { mode: 0o600 });
-    const got = scrubKey(bad);
-    expect(got).toEqual({ why: `${scrubKeyPath(bad)} does not hold a 64-hex-digit key` });
+    expect(scrubKey(bad)).toEqual({ why: `${scrubKeyPath(bad)} does not hold a 64-hex-digit key` });
+    expect(readFileSync(scrubKeyPath(bad), "utf8")).toBe("not a key\n");
     const loose = fresh();
     mkdirSync(dirname(loose), { recursive: true });
     writeFileSync(scrubKeyPath(loose), randomBytes(32).toString("hex") + "\n", { mode: 0o644 });
     chmodSync(scrubKeyPath(loose), 0o644);
     expect("why" in scrubKey(loose) && (scrubKey(loose) as { why: string }).why).toMatch(/readable or writable by others \(mode 644/);
+  });
+
+  it("a filesystem with no hard links: the key is created exclusively in place, and an existing one is never replaced", () => {
+    const noLinks = () => {
+      throw Object.assign(new Error("operation not supported"), { code: "ENOTSUP" });
+    };
+    const root = fresh();
+    const made = scrubKey(root, noLinks);
+    expect("key" in made).toBe(true);
+    expect(readdirSync(dirname(root))).toEqual([SCRUB_KEY_FILE]);
+    // A second create (a racing run) finds the key and keeps it.
+    const again = scrubKey(root, noLinks);
+    expect(again).toEqual(made);
+    // Any other link failure is not taken for "no hard links": nothing is created.
+    const other = fresh();
+    const denied = () => {
+      throw Object.assign(new Error("no space"), { code: "ENOSPC" });
+    };
+    expect(scrubKey(other, denied)).toEqual({ why: expect.stringMatching(/could not be created \(no space\)/) });
+    expect(readdirSync(dirname(other))).toEqual([]);
   });
 
   it("an unusable key is warned about once, naming its path, and recorded as unavailable", () => {

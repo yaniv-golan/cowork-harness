@@ -47,7 +47,7 @@ const hmacOf = (key: Buffer, s: string): string => encode(createHmac("sha256", k
 
 /** Read a key file: a regular file (not a link), owned by this user, readable by no one else, 64 hex. Anything
  *  else is not a key — it proves nothing and is never used. `why` names the defect (never the key). */
-function readKeyFile(path: string): { key: Buffer } | { why: string; empty?: true; absent?: true } {
+function readKeyFile(path: string): { key: Buffer } | { why: string; absent?: true } {
   let st;
   try {
     st = lstatSync(path);
@@ -58,7 +58,7 @@ function readKeyFile(path: string): { key: Buffer } | { why: string; empty?: tru
   if ((st.mode & 0o077) !== 0)
     return { why: `${path} is readable or writable by others (mode ${(st.mode & 0o777).toString(8)}; it must be 600)` };
   if (typeof process.getuid === "function" && st.uid !== process.getuid()) return { why: `${path} is owned by another user` };
-  if (st.size === 0) return { why: `${path} is empty (an interrupted create)`, empty: true };
+  if (st.size === 0) return { why: `${path} is empty (an interrupted create): remove it to let the next run create a key` };
   let hex: string;
   try {
     hex = readFileSync(path, "utf8").trim();
@@ -71,36 +71,55 @@ function readKeyFile(path: string): { key: Buffer } | { why: string; empty?: tru
 /** Where the installation key of a runs root lives: beside it, in its parent directory. */
 export const scrubKeyPath = (runsRoot: string): string => join(dirname(resolve(runsRoot)), SCRUB_KEY_FILE);
 
-/** Write a fresh key next to `path` and link it into place: a reader sees either no key or a complete one, never a
- *  partial file, and a concurrent creator's key is never replaced (`link` does not overwrite). */
-function createKey(path: string): void {
-  const tmp = `${path}.tmp-${randomBytes(6).toString("hex")}`;
-  const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+const KEY_FLAGS = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0);
+/** Errors a filesystem with no hard links gives `link`. */
+const NO_LINKS = new Set(["ENOTSUP", "EOPNOTSUPP", "EPERM", "ENOSYS", "EXDEV", "EMLINK"]);
+
+function writeNewFile(path: string, body: string): void {
+  const fd = openSync(path, KEY_FLAGS, 0o600);
   try {
-    writeSync(fd, randomBytes(32).toString("hex") + "\n");
+    writeSync(fd, body);
   } finally {
     closeSync(fd);
   }
+}
+
+/** Write a fresh key next to `path` and link it into place: a reader sees either no key or a complete one, never a
+ *  partial file, and a concurrent creator's key is never replaced (`link` does not overwrite). On a filesystem with
+ *  no hard links the key is created at `path` directly, exclusively (O_EXCL), so an existing key is still never
+ *  replaced; a reader racing that create, or a crash during it, sees an incomplete file, which reads as unusable —
+ *  never as a key — and is named in the diagnostic, not reused. */
+function createKey(path: string, link: (from: string, to: string) => void): void {
+  const body = randomBytes(32).toString("hex") + "\n";
+  const tmp = `${path}.tmp-${randomBytes(6).toString("hex")}`;
+  writeNewFile(tmp, body);
   try {
-    linkSync(tmp, path);
+    link(tmp, path);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    const code = (e as NodeJS.ErrnoException).code ?? "";
+    if (code === "EEXIST") return;
+    if (!NO_LINKS.has(code)) throw e;
+    try {
+      writeNewFile(path, body);
+    } catch (e2) {
+      if ((e2 as NodeJS.ErrnoException).code !== "EEXIST") throw e2;
+    }
   } finally {
     rmSync(tmp, { force: true });
   }
 }
 
-/** The installation key for `runsRoot`, created (0600) when absent. A 0-byte key file (a create interrupted by an
- *  older harness) is removed and recreated. Otherwise an unusable file is never touched: `why` says what is wrong. */
-export function scrubKey(runsRoot: string): { key: Buffer } | { why: string } {
+/** The installation key for `runsRoot`, created (0600) when absent. Any existing file that is not a usable key — an
+ *  empty one included — is never touched or replaced (two processes can then never replace each other's key): `why`
+ *  names the defect. `link` is a test seam. */
+export function scrubKey(runsRoot: string, link: (from: string, to: string) => void = linkSync): { key: Buffer } | { why: string } {
   const path = scrubKeyPath(runsRoot);
   let got = readKeyFile(path);
   if ("key" in got) return got;
-  if (!got.absent && !got.empty) return got;
+  if (!got.absent) return got;
   try {
     mkdirSync(dirname(path), { recursive: true });
-    if (got.empty) rmSync(path);
-    createKey(path);
+    createKey(path, link);
   } catch (e) {
     return { why: `${path} could not be created (${(e as Error).message})` };
   }
