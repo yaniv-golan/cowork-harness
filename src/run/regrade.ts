@@ -771,7 +771,8 @@ function unprovenParts(o: {
   onlyRefs: string[] | undefined;
   acceptedDrift: Array<{ liveIndex: number; redaction: RedactionLoss[] }>;
 }): Array<{ refusal: RegradeRefusal; line: string }> {
-  if (o.sent.length === 0 && o.acceptedDrift.length === 0) return [];
+  // Nothing is sent to a judge: nothing to prove.
+  if (o.sent.length === 0) return [];
   const coverage = scrubCoverage(o.result.scrubSet, o.runDir, o.secrets, runsWriteRoot());
   if (coverage.covered) return [];
   const why = coverage.why;

@@ -711,6 +711,17 @@ Two evidence refusals are decided before any judge call, for every run dir:
   secrets) are never unchecked content, so a smaller budget — which only drops or truncates file content, and may
   add a health note saying so — is never refused as unchecked; content it truncates makes that assert refuse its
   own evidence. An assert whose evidence will be refused sends nothing and is not measured.
+- **Scrub coverage.** A run records `scrubSet` (`{v, keyId, values}`: one HMAC-SHA256 per string its scrub used,
+  under a per-installation key, `scrubset.key`, beside the runs root). When this process's set provably covers the
+  run's (every recorded HMAC recomputed under the same key), every part of the judge's input is covered. Otherwise
+  each part sent must equal the run's own scrubbed record: the `semantic_pairwise` task line (only when a pairwise
+  comparison is judged), each rubric line, each evidence-health or scratch note, an accepted drift's authored file
+  that carries fewer scrub markers, and each reference a live grade recorded `refRedactions` above 0 for. An
+  unproven part refuses unless `--allow-scrub-change` is passed, with `task_unverifiable`, `rubric_unverifiable`,
+  `evidence_unverifiable` or `reference_unverifiable`; accepted, the run's entry and file record `scrubAcceptedBy`.
+  Neither `--allow-doc-drift` nor `--allow-unchecked` implies it. A run with no `scrubSet` (harness < 4.4), another
+  key, or a set lacking a string the run scrubbed (a rotated token included) proves nothing: only parts equal to its
+  record are sent.
 
 Not checked: a run in which no live assert recorded a `judgedDoc` has no rebuilt document to measure against — its
 asserts are `unknown` or `live_refused`, neither drift- nor secret-checked, and are warned about before the judge
@@ -720,11 +731,12 @@ so its extra content can refuse. The envelope is scrubbed with the same secret s
 **Exit codes:** `0` every re-graded assert passes · `1` any fails or is judge-invalid · `2`, with three meanings:
 a usage error; a refusal before any judge call (a multi-turn, partial, replay or chat run dir, a pruned work dir,
 a missing transcript sidecar, a run that did not record `authoredCapture` without `--authored-total-bytes`, an
-alias judge model, a scenario with neither a `semantic_matches` nor a `semantic_pairwise` assert (`error.code: "no_semantic_asserts"`), and the two evidence refusals above); or a failure
+alias judge model, a scenario with neither a `semantic_matches` nor a `semantic_pairwise` assert (`error.code: "no_semantic_asserts"`), and the evidence and scrub refusals above); or a failure
 writing a regrade file after earlier run dirs were graded. Each is the shared error envelope. The evidence
 refusals are collected over every run dir and carry `error.code` — `doc_drift` when any dir drifted, else
-`unchecked_content` — and a top-level `refusals[]`, one entry per run dir and code: `{runDir, code,
-uncheckedCount?, uncheckedSections?, liveDocDrift?}`; every other refusal stops at the first run dir that
+`unchecked_content`, else the first of `task_unverifiable`, `rubric_unverifiable`, `evidence_unverifiable`,
+`reference_unverifiable` — and a top-level `refusals[]`, one entry per run dir and code: `{runDir, code,
+uncheckedCount?, uncheckedSections?, liveDocDrift?, scrubSet?, rubricLines?, evidenceSections?, references?}`; every other refusal stops at the first run dir that
 fires it and carries no code. So `refusals[]` is complete only when no other refusal fires: a batch with a
 drifted dir and a later dir refused for another reason (a pruned work dir, say) reports only the latter, with no
 code and no `refusals[]`.
@@ -878,11 +890,11 @@ assertions (never user-authored themselves):
   "results":[],  // [] except record's post-run refusal: the refused run, beside the non-null error
   "budget?": { /* §11 --max-budget-usd marker — present when a pre-flight ran */ },
   "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string",
-             "code?": "budget_exceeded|doc_drift|unchecked_content|no_semantic_asserts", "budget?": { /* §11 --max-budget-usd */ } } }
+             "code?": "budget_exceeded|doc_drift|unchecked_content|task_unverifiable|rubric_unverifiable|evidence_unverifiable|reference_unverifiable|no_semantic_asserts", "budget?": { /* §11 --max-budget-usd */ } } }
 ```
 `error.code` narrows a category, never replaces it: `budget_exceeded` is the `--max-budget-usd` refusal (§11);
-`doc_drift` and `unchecked_content` are `regrade`'s evidence refusals, whose error envelope also carries a
-top-level `refusals[]` (see `regrade` above); `no_semantic_asserts` is `regrade`'s `usage` refusal of a scenario
+`doc_drift` and `unchecked_content` are `regrade`'s evidence refusals and the four `*_unverifiable` codes its scrub
+refusals, whose error envelope also carries a top-level `refusals[]` (see `regrade` above); `no_semantic_asserts` is `regrade`'s `usage` refusal of a scenario
 with neither a `semantic_matches` nor a `semantic_pairwise` assert (nothing to re-grade).
 Categories come from TYPED errors (`UnansweredError`→`unanswered`, `BoundaryError`→`boundary`).
 `results` is `[]` with one exception: when `record` refuses to write a cassette after the agent finished,
@@ -1157,6 +1169,7 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `assertions[]` entry, only `assertionIndex`, `docMatchesLive`, `pass`, `judgeInvalid`, `judgeModel`,
   `judgeModelRequested`, `judgeCostUsd` and `semanticClaims` (its other keys follow the `RunResult` assertion entry, which is not
   pinned field by field); and the error envelope's `error.code` values (`doc_drift`, `unchecked_content`,
+  `task_unverifiable`, `rubric_unverifiable`, `evidence_unverifiable`, `reference_unverifiable`,
   `no_semantic_asserts`),
   `refusals[]` and post-write-failure `runs[]`. The enums are covered as sets: `docMatchesLive`, `change`,
   `authoredCapture.source`, a section's `kind`, `error.code`. **Adding a key or an enum value is MINOR** — a

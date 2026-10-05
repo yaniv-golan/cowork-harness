@@ -16,8 +16,9 @@ All notable changes to this project are documented here. The format is based on
   and the frozen pairwise reference, which was sent as stored on every lane, live included. The judge's rationale,
   which can quote its input, is then stored in the regrade file and in `results.jsonl`. Now:
   - A run records a keyed fingerprint of its scrub set, `result.json` `scrubSet` (`{v, keyId, values}`): one
-    HMAC-SHA256 per scrubbed string under a random per-installation key, `scrubset.key` in the runs root (mode
-    0600, never inside a run dir). It holds no value, and without the key there is nothing to brute-force.
+    HMAC-SHA256 per scrubbed string under a random per-installation key, `scrubset.key` beside the runs root (mode
+    0600; `~/.cowork-harness/scrubset.key` for the default root), so a runs root uploaded or shared carries no key.
+    It holds no value, and without the key there is nothing to brute-force.
   - Before any judge call, a re-grade proves each part it sends: covered when the run's set is a subset of this
     process's under the same key (a grown set included), else by equality with the run's own scrubbed record —
     the task line (checked only when a pairwise comparison will be judged), each rubric line, each evidence-health
@@ -48,9 +49,9 @@ All notable changes to this project are documented here. The format is based on
   scrubbed literal cannot be reproduced, or because its evidence would be less redacted than the graded document,
   was released by `--allow-doc-drift` (with `--rejudge` for the latter). It now takes `--allow-scrub-change`.
 
-### Corrections to 4.3.0
+### Fixed
 
-- 4.3.0 said a `hillclimb regrade` re-judge over a scrubbed literal "lists the row, with `--allow-doc-drift` the only
+- **Corrections to the 4.3.0 notes.** 4.3.0 said a `hillclimb regrade` re-judge over a scrubbed literal "lists the row, with `--allow-doc-drift` the only
   override", and the docs described the drift and less-redacted checks as what keeps a value the run scrubbed from
   the judge. Those checks covered the judged documents only: the pairwise task line, an edited or added rubric line
   and the frozen reference were not covered, and core `regrade` had no rubric check. The `ref freeze` docs said the

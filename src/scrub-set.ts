@@ -3,8 +3,9 @@
  * scrubs with covers every string the run scrubbed — never by comparing values, which are never recorded.
  *
  * Each string the run's scrub used (every `collectSecrets()` entry: a named key's value, a literal, and their
- * encodings) is recorded as an HMAC-SHA256 under a random per-installation key, `scrubset.key` in the runs root
- * (0600, created on the first run, never inside a run dir). With no public verifier, a shared result.json gives
+ * encodings) is recorded as an HMAC-SHA256 under a random per-installation key, `scrubset.key` BESIDE the runs root
+ * (`~/.cowork-harness/scrubset.key` for the default root; 0600, created on the first run). Never inside the runs root,
+ * so a runs root shared or uploaded as an artifact carries the HMACs without the key that could test guesses. With no public verifier, a shared result.json gives
  * nothing to brute-force. A re-grade recomputes the HMACs of its own set under the same key: when every recorded
  * one is among them, the run's set is a subset of this one (a grown set included). A missing or different key
  * (another machine), or a run recorded before the field existed, proves nothing.
@@ -15,7 +16,7 @@
  */
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, writeSync, constants } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 export const SCRUB_KEY_FILE = "scrubset.key";
 const ALPHABET = "ghjkmnpqrstvwxyz";
@@ -57,13 +58,16 @@ function readKeyFile(path: string): Buffer | undefined {
   }
 }
 
-/** The installation key in `root`, created (0600, exclusive) when absent. Undefined when it cannot be made or read. */
-export function scrubKey(root: string): Buffer | undefined {
-  const path = join(root, SCRUB_KEY_FILE);
+/** Where the installation key of a runs root lives: beside it, in its parent directory. */
+export const scrubKeyPath = (runsRoot: string): string => join(dirname(resolve(runsRoot)), SCRUB_KEY_FILE);
+
+/** The installation key for `runsRoot`, created (0600, exclusive) when absent. Undefined when it cannot be made or read. */
+export function scrubKey(runsRoot: string): Buffer | undefined {
+  const path = scrubKeyPath(runsRoot);
   const existing = readKeyFile(path);
   if (existing) return existing;
   try {
-    mkdirSync(root, { recursive: true });
+    mkdirSync(dirname(path), { recursive: true });
     const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
     try {
       if ((fstatSync(fd).mode & 0o077) !== 0) return undefined;
@@ -105,15 +109,15 @@ export type ScrubCoverage = { covered: true } | { covered: false; why: "legacy" 
 
 /**
  * Whether `secrets` provably covers the scrub set the run in `runDir` recorded (`recorded`: its result.json
- * `scrubSet`). The key is looked up in the runs root that holds the run (`<root>/<scenario>/<run>`) and in the
- * current runs root. Read only: never creates a key.
+ * `scrubSet`). The key is looked up beside the runs root that holds the run (`<root>/<scenario>/<run>`), then beside
+ * the current runs root. Read only: never creates a key.
  */
 export function scrubCoverage(recorded: unknown, runDir: string, secrets: readonly string[], currentRunsRoot: string): ScrubCoverage {
   if (recorded === undefined) return { covered: false, why: "legacy" };
   const run = parseScrubSet(recorded);
   if (!run) return { covered: false, why: "mangled" };
   const key = [dirname(dirname(runDir)), currentRunsRoot]
-    .map((root) => readKeyFile(join(root, SCRUB_KEY_FILE)))
+    .map((root) => readKeyFile(scrubKeyPath(root)))
     .find((k) => k !== undefined && keyIdOf(k) === run.keyId);
   if (!key) return { covered: false, why: "key" };
   const now = new Set(scrubSetRecord(secrets, key).values);

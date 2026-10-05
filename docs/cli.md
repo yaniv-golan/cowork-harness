@@ -293,9 +293,11 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   any change in the evidence. The checks below refuse what this could leak.
 - **Nothing the run scrubbed is sent unproven.** A run records a keyed fingerprint of its scrub set in
   `result.json` `scrubSet` (`{v, keyId, values}`: one HMAC-SHA256 per scrubbed string, value and encodings, under
-  a random per-installation key, `scrubset.key` in the runs root, mode 0600; never a value, and nothing to
-  brute-force without the key). Before any judge call, `regrade` recomputes the HMACs of its own set under that key
-  (looked up in the runs root holding the run, then the current one). When every recorded HMAC is among them, this
+  a random per-installation key, `scrubset.key` beside the runs root — `~/.cowork-harness/scrubset.key` for the
+  default root, mode 0600; never a value, and nothing to brute-force without the key). The key is never inside the
+  runs root, so an artifact upload of the runs root does not carry it; when the runs root sits in a repo (e.g.
+  `--run-dir runs`), keep `scrubset.key` out of version control. Before any judge call, `regrade` recomputes the HMACs of its own set under that key
+  (looked up beside the runs root holding the run, then beside the current one). When every recorded HMAC is among them, this
   process's set covers the run's (a grown set included) and every part is covered. Otherwise each part of the
   judge's input must equal the run's own scrubbed record:
   - the `semantic_pairwise` `## Task` line: the scenario prompt scrubbed now must equal the run's recorded `prompt`

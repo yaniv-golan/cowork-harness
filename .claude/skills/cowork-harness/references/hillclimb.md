@@ -276,7 +276,7 @@ every climb there is finished.
   Set the run's `COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS` and regrade again, or, after checking
   them, `--rejudge --allow-scrub-change` grades it anyway (`--allow-doc-drift` does not).
 - **Never a part the run scrubbed, unproven.** A run records a keyed fingerprint of its scrub set (`result.json`
-  `scrubSet`; the key is `scrubset.key` in the runs root). When this process's set provably covers it, every part of
+  `scrubSet`; the key is `scrubset.key` beside the runs root). When this process's set provably covers it, every part of
   the judge's input is covered. Otherwise each part must equal the run's own scrubbed record: the pairwise `## Task`
   line (the prompt), each rubric line, each evidence note, and each reference whose live grade scrubbed a value from
   it. A row with a part proven neither way is listed, with no judge call. A run from before 4.4 has no fingerprint, so

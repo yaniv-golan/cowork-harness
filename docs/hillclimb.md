@@ -580,7 +580,7 @@ that the loop and the lite report builder read, with these differences:
   grade may not match the live run's). Stderr names such an assertion, since whether it was edited cannot be
   known: an edited one takes a re-run of the case;
 - it never sends a judge a part of its input the run scrubbed unless it can prove it. A run records a keyed
-  fingerprint of its scrub set (`result.json` `scrubSet`, under `scrubset.key` in the runs root). When this
+  fingerprint of its scrub set (`result.json` `scrubSet`, under `scrubset.key` beside the runs root). When this
   process's set provably covers it, everything is covered. Otherwise the pairwise task line, each rubric line,
   each evidence note and each reference must equal the run's own scrubbed record, or the row is listed with the
   parts it could not prove. A run from before 4.4 records no fingerprint: its unchanged lines re-grade, but a new

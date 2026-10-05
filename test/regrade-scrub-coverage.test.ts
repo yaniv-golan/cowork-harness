@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
@@ -197,7 +197,7 @@ const regradeFileText = (runDir: string): string => {
 };
 
 describe.runIf(POSIX)("regrade scrub coverage: the run records its scrub set", () => {
-  it("a run records a keyed fingerprint of its scrub set; the key sits in the runs root at 0600, never in the run dir", async () => {
+  it("a run records a keyed fingerprint of its scrub set; the key sits beside the runs root at 0600, never inside it", async () => {
     setEnv("COWORK_HARNESS_SCRUB_VALUES", `${TASK},${RUB}`);
     const file = writeScenario({ prompt: `what is the answer ${TASK}?` });
     const { v1 } = await flowRun({ file });
@@ -207,9 +207,10 @@ describe.runIf(POSIX)("regrade scrub coverage: the run records its scrub set", (
     expect(r.scrubSet!.values.length).toBeGreaterThan(0);
     const text = readFileSync(resultPath(v1.outDir), "utf8");
     expect(text).not.toContain(TASK);
-    const key = join(f.runsDir, "scrubset.key");
+    const key = join(dirname(f.runsDir), "scrubset.key");
     expect(existsSync(key)).toBe(true);
     expect((await import("node:fs")).statSync(key).mode & 0o777).toBe(0o600);
+    expect(existsSync(join(f.runsDir, "scrubset.key"))).toBe(false);
     expect(existsSync(join(v1.outDir, "scrubset.key"))).toBe(false);
   });
 
@@ -314,8 +315,8 @@ describe.runIf(POSIX)("regrade scrub coverage: core regrade", () => {
     setEnv("COWORK_HARNESS_SCRUB_VALUES", TASK);
     const file = writeScenario({ prompt: `what is the answer ${TASK}?` });
     const { flow, v1 } = await flowRun({ file });
-    rmSync(join(f.runsDir, "scrubset.key"));
-    writeFileSync(join(f.runsDir, "scrubset.key"), randomBytes(32).toString("hex") + "\n", { mode: 0o600 });
+    rmSync(join(dirname(f.runsDir), "scrubset.key"));
+    writeFileSync(join(dirname(f.runsDir), "scrubset.key"), randomBytes(32).toString("hex") + "\n", { mode: 0o600 });
     writeScenario({ prompt: `what is the answer ${TASK}?`, pairwise: ["gives the answer", "is polite"] });
     const out = await regradeRuns(regradeOpts(file, flow, v1.outDir, []));
     expect(out.ok).toBe(false);

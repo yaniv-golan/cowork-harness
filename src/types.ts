@@ -1838,7 +1838,7 @@ export interface RunResult {
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   /** A keyed fingerprint of the scrub set this run's records were scrubbed with (`src/scrub-set.ts`): one HMAC per
-   *  scrubbed string under the installation key in the runs root (`scrubset.key`), never a value. A re-grade proves
+   *  scrubbed string under the installation key beside the runs root (`scrubset.key`), never a value. A re-grade proves
    *  with it that its own scrub set covers the run's. Absent on a run recorded before it existed, on a non-live lane,
    *  and when no key could be made — such a run's set cannot be proven covered. */
   scrubSet?: { v: 1; keyId: string; values: string[] };

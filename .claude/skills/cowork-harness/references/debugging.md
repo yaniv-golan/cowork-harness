@@ -40,7 +40,10 @@ rubric changed (or you want another judge model) on a run you already paid for, 
 kept run without re-running the agent — unlike the tools above it is not token-free (the judge call is its
 spend) — writes the grade beside the run, and says whether the judge read the same document the live judge did.
 Content the live judge never read (a widened `evidence_files` / `include_subagent_text` / `include_fork_results` scope, or a larger
-`--authored-total-bytes`) is refused unless you pass `--allow-unchecked`.
+`--authored-total-bytes`) is refused unless you pass `--allow-unchecked`. A `task_unverifiable` /
+`rubric_unverifiable` / `evidence_unverifiable` / `reference_unverifiable` refusal means a part of the judge's input
+cannot be proven scrubbed with the run's scrub set (typically a pre-4.4 run with an edited rubric): re-run the
+case, or pass `--allow-scrub-change` after checking `COWORK_HARNESS_SCRUB_VALUES` / `_KEYS`.
 
 **microvm: "control-protocol write failed" with `env: 'claude': No such file or directory` in the agent
 stderr** usually means the VM never finished provisioning (the agent never reached PATH). Check
