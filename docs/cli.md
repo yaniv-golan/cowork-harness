@@ -319,8 +319,9 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   summary line naming the remedy: re-run the case (a new run records its set), or pass `--allow-scrub-change`
   after checking the scrub settings. A literal made only of the letters the fingerprint uses (`ghjkmnpqrstvwxyz`)
   can change the stored fingerprint when the result is scrubbed; it then reads as unverifiable, never as covered.
-  Content accepted with `--allow-unchecked` and a `unknown` / `live_refused` assert's document stay protected only
-  by this process's scrub set, as warned.
+  **Not covered by the proof:** content accepted with `--allow-unchecked`, and the document of an `unknown` or
+  `live_refused` assert (no live fingerprint to compare with), are protected only by this process's scrub set;
+  both are named in a `::warning::` before the judge call.
 - **Whether it matches is measured, not assumed.** Each assert's document is fingerprinted and compared, section
   by section, with the `judgedDoc` the live run recorded. `docMatchesLive` is `true` (the same bytes), `false`
   (they differ; the differing sections are listed by kind and path), `scope_changed` (the rubric's

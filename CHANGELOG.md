@@ -45,9 +45,14 @@ All notable changes to this project are documented here. The format is based on
   `hillclimb regrade`, with one summary line naming the remedy: re-run the case (a new run records its set), or
   pass `--allow-scrub-change` after checking the scrub settings. The same applies to a run recorded on another
   machine, and to a run whose auth token has rotated since, since a named key's value is part of the set.
-- **`hillclimb regrade`'s scrub overrides moved to `--allow-scrub-change`.** A row listed because an assert's
-  scrubbed literal cannot be reproduced, or because its evidence would be less redacted than the graded document,
-  was released by `--allow-doc-drift` (with `--rejudge` for the latter). It now takes `--allow-scrub-change`.
+- **`--allow-doc-drift` no longer unlocks `hillclimb regrade`'s scrubbed-literal or less-redacted listings;
+  `--allow-scrub-change` replaces it for those.** A row listed because an assert's scrubbed literal cannot be
+  reproduced, or because its evidence would be less redacted than the graded document, was released by
+  `--allow-doc-drift` in 4.3.0 (with `--rejudge` for the latter). Passing `--allow-doc-drift` now leaves such a row
+  listed; pass `--allow-scrub-change` (with `--rejudge` for a less-redacted row) after checking the scrub settings.
+- **What the scrub-set proof does not cover.** Content accepted with `--allow-unchecked`, and the documents of
+  `unknown` / `live_refused` asserts (no live fingerprint to compare with), are still protected only by the
+  re-grading process's scrub set, as before; `regrade` warns about both before any judge call.
 
 ### Fixed
 
