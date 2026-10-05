@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -47,8 +47,12 @@ function commands(): string[] {
 
 function helpText(args: string[]): { code: number | null; text: string } {
   const cwd = mkdtempSync(join(tmpdir(), "cc-flagcov-")); // isolated cwd: no stray .env is loaded
-  const r = spawnSync("node", [CLI, ...args, "--help"], { encoding: "utf8", cwd });
-  return { code: r.status, text: (r.stderr || "") + (r.stdout || "") };
+  try {
+    const r = spawnSync("node", [CLI, ...args, "--help"], { encoding: "utf8", cwd });
+    return { code: r.status, text: (r.stderr || "") + (r.stdout || "") };
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
 }
 
 /** Every long flag in every command's help, with the commands that print it, and any help that failed. */
