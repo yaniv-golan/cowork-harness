@@ -180,6 +180,21 @@
     "prompt": {
       "type": "string"
     },
+    "scrubSet": {
+      "type": "object",
+      "description": "A keyed fingerprint of the scrub set this run's records were scrubbed with: one HMAC-SHA256 per scrubbed string under the installation key `scrubset.key` beside the runs root, never a value. A re-grade proves with it that its own scrub set covers the run's. Absent on a run recorded before it existed, on a non-live lane, and when no key could be made.",
+      "required": ["v", "keyId", "values"],
+      "additionalProperties": false,
+      "properties": {
+        "v": { "const": 1 },
+        "keyId": { "type": "string", "pattern": "^[ghjkmnpqrstvwxyz]{16}$" },
+        "values": { "type": "array", "items": { "type": "string", "pattern": "^[ghjkmnpqrstvwxyz]{32}$" } }
+      }
+    },
+    "scrubSetUnavailable": {
+      "type": "string",
+      "description": "Why this run recorded no `scrubSet`: its installation key was unusable (the key's path and the defect, never the key). Distinguishes such a run from one recorded before the fingerprint existed."
+    },
     "fidelity": {
       "type": "string"
     },

@@ -167,6 +167,7 @@ function buildFlow(
     // The judge transport's user-settings check reads CLAUDE_CONFIG_DIR ahead of HOME: keep it off this machine's config.
     CLAUDE_CONFIG_DIR: join(f.env.HOME!, ".claude"),
     COWORK_MANAGED_CONFIG: "1",
+    CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
     ...(opts.env ?? {}),
   })) {
     if (!(k in saved)) saved[k] = process.env[k];
@@ -198,7 +199,9 @@ const verdict =
 const DEPS = (over: Partial<RegradeFlowDeps> = {}): RegradeFlowDeps => ({
   cwd: f.cwd,
   env: process.env,
-  secrets: [],
+  // The set the runs were scrubbed with (buildFlow's env, the stub token included), as the CLI collects it: a re-grade
+  // must prove it covers the run's set before it sends a part the run did not record.
+  secrets: collectSecrets(),
   stderr: () => {},
   isolationCheck: () => undefined,
   ...over,
@@ -1917,7 +1920,8 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
   // The live run sent the judge the rubric and the document both scrubbed (`[REDACTED]`). A re-judge from a process
   // whose scrub does not reproduce the recorded rubric would send the RAW rubric against the scrubbed document — for a
   // negative claim, a leak turned green no live run could produce. Any re-judge such an assert would need lists the row
-  // (no judge call, nothing written) until --allow-doc-drift, after checking the scrub settings.
+  // (no judge call, nothing written) until --allow-scrub-change, after checking the scrub settings (--allow-doc-drift
+  // does not imply it).
   const SCRUBBED_JUDGED = ["  - semantic_pairwise:", "      rubric: ['says All done']", "      judge_model: claude-haiku-4-5-20251001"];
   const capturing = (secrets: readonly string[]) => {
     const users: string[] = [];
@@ -1934,7 +1938,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     });
     return { users, lines, deps };
   };
-  const SCRUB_REMEDY = /run with the same scrub settings the run used.*or pass --allow-doc-drift explicitly after checking/;
+  const SCRUB_REMEDY = /run with the same scrub settings the run used.*or pass --allow-scrub-change explicitly after checking/;
 
   it.each([
     ["--rejudge", { rejudge: true }],
@@ -1980,10 +1984,13 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(readFileSync(join(flow, "baseline", "results.jsonl"), "utf8")).toBe(before);
   }, 300_000);
 
-  it("a judged assert scrubbed in its run that this process cannot reproduce: --allow-doc-drift lets the re-judge through", async () => {
+  it("a judged assert scrubbed in its run that this process cannot reproduce: --allow-scrub-change lets the re-judge through, --allow-doc-drift does not", async () => {
     const { rows } = buildFlow({ extra: SCRUBBED_JUDGED, env: SCRUBBED });
     const { users, lines, deps } = capturing([]);
-    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true, rejudge: true, allowDocDrift: true }), deps);
+    const drift = await regradeFlow(ARGS({ variant: "v1", approveHarness: true, rejudge: true, allowDocDrift: true }), deps);
+    expect(drift.exitCode, JSON.stringify(drift)).toBe(1);
+    expect(users).toEqual([]);
+    const out = await regradeFlow(ARGS({ variant: "v1", approveHarness: true, rejudge: true, allowScrubChange: true }), deps);
     expect(out.exitCode, JSON.stringify(out)).toBe(0);
     expect(out.variants[0]!.listed).toEqual([]);
     expect(users.length).toBeGreaterThan(0);
@@ -2551,7 +2558,7 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
     expect(before).not.toContain(SENTINEL);
   }, 300_000);
 
-  it("evidence_changed: a changed authored section with no recorded redaction count may be less redacted — listed until --allow-doc-drift", async () => {
+  it("evidence_changed: a changed authored section with no recorded redaction count may be less redacted — listed until --allow-scrub-change", async () => {
     const SENTINEL = "SENTINEL-scrub-value-51be02";
     f.cleanup();
     f = makeStubFixture(`mkdir -p outputs && printf '%s' 'report: ${SENTINEL} end' > outputs/report.md\n${STUB}`);
@@ -2569,8 +2576,12 @@ describe.runIf(POSIX)("hillclimb regrade re-evaluates deterministic asserts from
       /^the current evidence may be less redacted than the graded document \(assert 1: outputs\/report\.md — its graded document records no redaction count\)/,
     );
     expect(seen.calls).toBe(0);
+    // --allow-doc-drift is not the override for a scrub loss.
+    const drift = await regradeFlow(ARGS({ variant: "v1", rejudge: true, allowDocDrift: true }), deps);
+    expect(drift.exitCode, JSON.stringify(drift)).toBe(1);
+    expect(seen.calls).toBe(0);
     // The operator's explicit override, after checking the scrub settings.
-    const forced = await regradeFlow(ARGS({ variant: "v1", rejudge: true, allowDocDrift: true }), deps);
+    const forced = await regradeFlow(ARGS({ variant: "v1", rejudge: true, allowScrubChange: true }), deps);
     expect(forced.exitCode, JSON.stringify(forced)).toBe(0);
     expect(seen.calls).toBe(1);
   }, 300_000);

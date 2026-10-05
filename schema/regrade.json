@@ -30,7 +30,7 @@
     },
     {
       "title": "ErrorEnvelope",
-      "description": "The shared error envelope (exit 2): a usage error; a refusal before any judge call — a drift or unchecked-content refusal carries `error.code` and lists every refused run dir in `refusals[]`, any other refusal carries no code; or a failure writing a regrade file after earlier run dirs were graded, whose reports are in `runs`.",
+      "description": "The shared error envelope (exit 2): a usage error; a refusal before any judge call — a drift, unchecked-content or scrub refusal carries `error.code` and lists every refused run dir in `refusals[]`, any other refusal carries no code; or a failure writing a regrade file after earlier run dirs were graded, whose reports are in `runs`.",
       "type": "object",
       "required": ["tool", "version", "command", "ok", "results", "error"],
       "properties": {
@@ -41,16 +41,43 @@
         "results": { "type": "array", "maxItems": 0 },
         "refusals": {
           "type": "array",
-          "description": "Every run dir refused for its evidence, one entry per run dir and code (a dir with both gets two).",
+          "description": "Every run dir refused for its evidence or because a part of the judge's input cannot be proven scrubbed with a set covering the run's, one entry per run dir and code (a dir refused for several gets one per code).",
           "items": {
             "type": "object",
             "required": ["runDir", "code"],
             "properties": {
               "runDir": { "type": "string" },
-              "code": { "type": "string", "enum": ["doc_drift", "unchecked_content"] },
+              "code": {
+                "type": "string",
+                "enum": ["doc_drift", "unchecked_content", "task_unverifiable", "rubric_unverifiable", "evidence_unverifiable", "reference_unverifiable"]
+              },
               "uncheckedCount": { "type": "integer", "minimum": 1 },
               "uncheckedSections": { "type": "array", "items": { "$ref": "#/definitions/UncheckedSection" } },
-              "liveDocDrift": { "type": "array", "items": { "$ref": "#/definitions/LiveDocDrift" } }
+              "liveDocDrift": { "type": "array", "items": { "$ref": "#/definitions/LiveDocDrift" } },
+              "scrubSet": {
+                "type": "string",
+                "enum": ["legacy", "unrecorded", "mangled", "key", "smaller"],
+                "description": "A scrub refusal: why the run's scrub set is not proven covered — the run records no fingerprint (`legacy`, harness < 4.4), it recorded why it has none (`unrecorded`: its key was unusable; see `scrubSetDetail`), its fingerprint is unreadable (`mangled`), it was made under another installation key (`key`), or this process's set lacks a string the run scrubbed (`smaller`)."
+              },
+              "scrubSetDetail": { "type": "string", "description": "`scrubSet: unrecorded`: the run's own reason (its key's path and defect)." },
+              "rubricLines": {
+                "type": "array",
+                "description": "`rubric_unverifiable`: per assert, the rubric line indexes not proven.",
+                "items": {
+                  "type": "object",
+                  "required": ["assertionIndex", "lines"],
+                  "properties": {
+                    "assertionIndex": { "type": "integer", "minimum": 0 },
+                    "lines": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+                  }
+                }
+              },
+              "evidenceSections": {
+                "type": "array",
+                "description": "`evidence_unverifiable`: the sections not proven, each by the index of the assert (in the scenario re-graded) whose document to be sent carries it.",
+                "items": { "$ref": "#/definitions/UncheckedSection" }
+              },
+              "references": { "type": "array", "description": "`reference_unverifiable`: the reference names.", "items": { "type": "string" } }
             }
           }
         },
@@ -68,8 +95,16 @@
             "hint": { "type": "string" },
             "code": {
               "type": "string",
-              "enum": ["doc_drift", "unchecked_content", "no_semantic_asserts"],
-              "description": "On an evidence refusal: `doc_drift` when any run dir's kept evidence differs from what the live judge read, else `unchecked_content`. `no_semantic_asserts` (category usage): the scenario has no semantic_matches or semantic_pairwise assert, so there is nothing to re-grade."
+              "enum": [
+                "doc_drift",
+                "unchecked_content",
+                "task_unverifiable",
+                "rubric_unverifiable",
+                "evidence_unverifiable",
+                "reference_unverifiable",
+                "no_semantic_asserts"
+              ],
+              "description": "On an evidence refusal: `doc_drift` when any run dir's kept evidence differs from what the live judge read, else `unchecked_content`, else the first scrub refusal in the order `task_unverifiable`, `rubric_unverifiable`, `evidence_unverifiable`, `reference_unverifiable` (a part of the judge's input — the pairwise task line, a rubric line, a section of the evidence, a reference — cannot be proven scrubbed with a set covering the run's; `--allow-scrub-change` accepts it). `no_semantic_asserts` (category usage): the scenario has no semantic_matches or semantic_pairwise assert, so there is nothing to re-grade."
             }
           }
         }
@@ -129,6 +164,10 @@
       "properties": {
         "runDir": { "type": "string" },
         "turn": { "type": "integer", "minimum": 1 },
+        "scrubAcceptedBy": {
+          "type": "string",
+          "description": "Present when a part of the judge's input could not be proven scrubbed with a set covering the run's and was graded anyway: the flag that accepted it (`--allow-scrub-change`). Absent when every part was proven."
+        },
         "metrics": {
           "type": "array",
           "description": "The scenario's declared metrics, re-read from the kept work dir as it is now, in the RunResult.metrics shape (one entry per declared id, in order; exactly one of value / unavailable). A file whose bytes no longer match the run's own recorded post-run hash (RunResult.workspaceFiles) is `pruned`. Absent when the scenario declares none.",

@@ -19,3 +19,6 @@ __pycache__/
 docs/superpowers/
 .worktrees/
 .cursor/rules/git-no-push-without-approval.mdc
+
+# The scrub-set installation key (beside a runs root such as `--run-dir runs`): never commit it.
+scrubset.key

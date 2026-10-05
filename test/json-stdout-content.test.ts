@@ -17,7 +17,11 @@ function cli(args: string[], cwd?: string) {
   const r = spawnSync("node", [CLI, ...args], {
     encoding: "utf8",
     cwd,
-    env: { ...inheritedEnv, COWORK_HARNESS_MODEL: "", COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "stdout-content-runs-")) },
+    env: {
+      ...inheritedEnv,
+      COWORK_HARNESS_MODEL: "",
+      COWORK_HARNESS_RUNS_DIR: join(mkdtempSync(join(tmpdir(), "stdout-content-runs-")), "runs"),
+    },
   });
   return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }

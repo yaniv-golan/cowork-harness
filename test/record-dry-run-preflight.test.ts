@@ -28,7 +28,7 @@ function cli(args: string[], extraEnv: Record<string, string> = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
-      COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "rec-dry-runs-")),
+      COWORK_HARNESS_RUNS_DIR: join(mkdtempSync(join(tmpdir(), "rec-dry-runs-")), "runs"),
       // A run must resolve a model (4.0.0), and that refusal precedes the ones this file is about.
       COWORK_HARNESS_MODEL: "claude-sonnet-5",
       ...extraEnv,

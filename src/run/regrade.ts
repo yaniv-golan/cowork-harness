@@ -23,13 +23,16 @@ import { basename, join, resolve } from "node:path";
 import { claudeCliCompleteStructured, transportIdentity } from "../decide/llm-transport.js";
 import { makePairwiseJudge, type CompleteStructured } from "../decide/pairwise-judge.js";
 import { pairwiseRefsRefusal, scenarioPairwiseSetup, type PairwiseSetup } from "../refs/preflight.js";
-import { runPairwiseJudges, type PairwiseRef } from "./pairwise-prepass.js";
+import { pairwiseComposeKey, runPairwiseJudges, type PairwiseRef } from "./pairwise-prepass.js";
+import { readRefDoc } from "../refs/store.js";
 import { composeJudgedDocument, evaluate, judgedOpts, runSemanticJudges, semanticRefusal, type AssertContext } from "../assert.js";
 import { parseArgs } from "../cli-args.js";
 import { isolationRefusal } from "../decide/llm-transport.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
 import { collectSecrets, scrub } from "../secrets.js";
+import { coverageWhy, scrubCoverage } from "../scrub-set.js";
+import { runsWriteRoot } from "./trace-view.js";
 import type { Assertion, JudgedDocFingerprint, RunResult, Scenario } from "../types.js";
 import { DEFAULT_AUTHORED_TOTAL_BYTES, parseAuthoredTotalBytes } from "./artifacts.js";
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
@@ -104,13 +107,37 @@ export interface LiveDocDrift {
   sections: Array<Omit<DifferingSection, "assertionIndex">>;
 }
 
-/** One run dir's evidence refusal, decided before any judge call. A dir with both gets two entries. */
+/** A part of the judge's input a re-grade cannot prove is scrubbed with a set covering the run's: the pairwise task
+ *  line (`task_unverifiable`), a rubric line (`rubric_unverifiable`), a section of the judged evidence — an evidence
+ *  note, or an accepted drift's authored file carrying fewer scrub markers (`evidence_unverifiable`)
+ *  — or a reference this process would send other than the run's live judge was sent it: re-frozen or changed since,
+ *  never judged by the run (a `--fill-refs` column), or scrubbed differently now (`reference_unverifiable`). */
+export type ScrubRefusalCode = "task_unverifiable" | "rubric_unverifiable" | "evidence_unverifiable" | "reference_unverifiable";
+export const SCRUB_REFUSAL_CODES: readonly ScrubRefusalCode[] = [
+  "task_unverifiable",
+  "rubric_unverifiable",
+  "evidence_unverifiable",
+  "reference_unverifiable",
+];
+
+/** One run dir's evidence refusal, decided before any judge call. A dir refused for several reasons gets one entry
+ *  per code. */
 export interface RegradeRefusal {
   runDir: string;
-  code: "doc_drift" | "unchecked_content";
+  code: "doc_drift" | "unchecked_content" | ScrubRefusalCode;
   uncheckedCount?: number;
   uncheckedSections?: UncheckedSection[];
   liveDocDrift?: LiveDocDrift[];
+  /** A scrub refusal: why the run's scrub set is not proven covered by this process's (`ScrubCoverage`). */
+  scrubSet?: "legacy" | "unrecorded" | "mangled" | "key" | "smaller";
+  /** `scrubSet: "unrecorded"`: why the run could record none (its key's path and defect). */
+  scrubSetDetail?: string;
+  /** `rubric_unverifiable`: per assert (its index in the new scenario), the rubric line indexes not proven. */
+  rubricLines?: Array<{ assertionIndex: number; lines: number[] }>;
+  /** `evidence_unverifiable`: the sections not proven. */
+  evidenceSections?: UncheckedSection[];
+  /** `reference_unverifiable`: the reference names. */
+  references?: string[];
 }
 
 export interface RegradeRunReport extends JudgeSpend {
@@ -139,6 +166,9 @@ export interface RegradeRunReport extends JudgeSpend {
   /** The scenario's declared metrics, re-read from the kept work dir as it is now and checked against the run's own
    *  post-run hashes (a file changed since the run is `pruned`). Absent when the scenario declares none. */
   metrics?: NonNullable<RunResult["metrics"]>;
+  /** Set when a part of the judge's input could not be proven scrubbed with a set covering the run's and was sent
+   *  anyway: the flag that accepted it (`--allow-scrub-change`). Absent when every part was proven. */
+  scrubAcceptedBy?: string;
 }
 
 export type RegradeOutcome =
@@ -150,7 +180,7 @@ export type RegradeOutcome =
       /** Set on an evidence refusal (`refusals` lists every refused run dir): `doc_drift` when any dir drifted,
        *  else `unchecked_content`. `no_semantic_asserts`: the scenario has no judged (`semantic_matches` / `semantic_pairwise`) assert, so there is
        *  nothing to re-grade (a caller can tell this refusal from a failure without reading the message). */
-      code?: "doc_drift" | "unchecked_content" | "no_semantic_asserts";
+      code?: "doc_drift" | "unchecked_content" | ScrubRefusalCode | "no_semantic_asserts";
       refusals?: RegradeRefusal[];
       /** A failure writing a regrade file after earlier run dirs were graded and written: their reports. */
       completed?: RegradeRunReport[];
@@ -236,6 +266,12 @@ export interface RegradeOptions {
   /** The flag named in the warning when a drift is accepted (default `--allow-doc-drift`): a caller that accepts it
    *  for its own reason names that. */
   driftAcceptedBy?: string;
+  /** Grade even when a part of the judge's input cannot be proven scrubbed with a set covering the run's (the
+   *  `*_unverifiable` refusals), which is otherwise refused before any judge call. Independent of `allowDocDrift` /
+   *  `allowUnchecked`: neither implies it. A re-grade that used it records `scrubAcceptedBy`. */
+  allowScrubChange?: boolean;
+  /** The flag recorded as `scrubAcceptedBy` (default `--allow-scrub-change`). */
+  scrubAcceptedBy?: string;
 }
 
 /** `RegradeOptions` for an evidence preflight. Kept out of `RegradeOptions` itself so a caller that never asks for
@@ -611,13 +647,15 @@ const liveDriftLabel = (drift: LiveDocDrift[]): string =>
 
 /** Scrub a refusal's string fields (the run dir and section paths) one by one. Scrubbing the serialized JSON would
  *  break it on a secret that matches JSON syntax, and the parse back would throw. */
-function scrubRefusal(r: RegradeRefusal, secrets: string[]): RegradeRefusal {
+export function scrubRefusal(r: RegradeRefusal, secrets: string[]): RegradeRefusal {
   const sp = <T extends { path?: string }>(x: T): T => (x.path !== undefined ? { ...x, path: scrub(x.path, secrets) } : x);
   return {
     ...r,
     runDir: scrub(r.runDir, secrets),
     ...(r.uncheckedSections ? { uncheckedSections: r.uncheckedSections.map(sp) } : {}),
     ...(r.liveDocDrift ? { liveDocDrift: r.liveDocDrift.map((d) => ({ ...d, sections: d.sections.map(sp) })) } : {}),
+    ...(r.evidenceSections ? { evidenceSections: r.evidenceSections.map(sp) } : {}),
+    ...(r.references ? { references: r.references.map((n) => scrub(n, secrets)) } : {}),
   };
 }
 
@@ -704,6 +742,139 @@ interface Prepared {
   workspaceFiles: RunResult["workspaceFiles"];
   /** The live result's assertion entries, by scenario index (a fill-mode re-grade keeps the ones it does not redo). */
   liveEntries: RunResult["assertions"];
+  /** A part of the judge's input was not proven covered and was accepted by `allowScrubChange`. */
+  scrubAccepted: boolean;
+}
+
+/** The judged rubric lines of an assert (`semantic_matches` claims, `semantic_pairwise` criteria). */
+const rubricOf = (a: Assertion | undefined): readonly string[] => a?.semantic_matches?.rubric ?? a?.semantic_pairwise?.rubric ?? [];
+
+/**
+ * The parts of the judge's input this re-grade would send that are NOT proven scrubbed with a set covering the run's.
+ * When the run's recorded scrub set (`RunResult.scrubSet`) is a subset of this process's, under the same installation
+ * key, every part is covered and nothing is returned. Otherwise each part must be proven on its own:
+ *  - the `## Task` line (only when a `semantic_pairwise` comparison will be judged): this process's scrub of the prompt
+ *    equals the run's recorded (scrubbed) `prompt`;
+ *  - each rubric line: this process's scrub of it is a line the run recorded (in any of its judged asserts);
+ *  - each evidence-health and scratch note in a document to be sent: a section of the same kind and bytes is in a
+ *    document the run recorded; and every drift accepted with `allowDocDrift` whose authored file now carries fewer
+ *    scrub markers than the graded one (or whose graded fingerprint recorded no count) — a detected loss;
+ *  - each judged reference, by bytes whatever its name: this process's send of it hashes to the `refSentSha256` of any
+ *    live comparison of the run under the same compose key (a pre-4.4 grade, sent the stored text raw: the stored text
+ *    hashes to such a comparison's `refDocSha256`).
+ * Bytes equal to the run's own scrubbed record are what the run already wrote; a part neither equal nor covered by a
+ * proven set can carry a value only the run knew to scrub.
+ */
+function unprovenParts(o: {
+  runDir: string;
+  result: RunResult;
+  sc: Scenario;
+  sent: Assertion[];
+  docs: Map<Assertion, JudgedDocFingerprint>;
+  secrets: string[];
+  setup: PairwiseSetup;
+  onlyRefs: string[] | undefined;
+  acceptedDrift: Array<{ redaction: RedactionLoss[] }>;
+}): Array<{ refusal: RegradeRefusal; line: string }> {
+  // The comparisons that will call a judge: a non-neutral reference (in a fill, only those it judges). A pairwise
+  // assert whose every comparison is neutral (its own variant's reference) sends nothing to a judge.
+  const judgedRefs = (a: Assertion): string[] =>
+    o.setup
+      .refsFor(a)
+      .map((r) => r.name)
+      .filter((n) => !o.setup.neutralRefs.has(n) && (o.onlyRefs === undefined || o.onlyRefs.includes(n)));
+  const sent = o.sent.filter((a) => a.semantic_pairwise === undefined || judgedRefs(a).length > 0);
+  // Nothing is sent to a judge: nothing to prove.
+  if (sent.length === 0) return [];
+  const coverage = scrubCoverage(o.result, o.runDir, o.secrets, runsWriteRoot());
+  if (coverage.covered) return [];
+  const why = coverage.why;
+  const detail = coverage.why === "unrecorded" ? { scrubSetDetail: coverage.detail } : {};
+  const reason = coverageWhy(coverage);
+  const sc = o.secrets.length ? (t: string) => scrub(t, o.secrets) : (t: string) => t;
+  const out: Array<{ refusal: RegradeRefusal; line: string }> = [];
+  const remedy =
+    "Nothing was sent to the judge. Re-run the case (a new run records its scrub set), run with the scrub settings the run used, " +
+    "or pass --allow-scrub-change after checking them. (can't verify ⇒ not green)";
+  const recordedEntries = (o.result.assertions ?? []).filter((e) => e.assertion !== undefined);
+  const pairwiseSent = sent.filter((a) => a.semantic_pairwise !== undefined);
+  if (pairwiseSent.length && (typeof o.result.prompt !== "string" || o.result.prompt !== sc(o.sc.prompt)))
+    out.push({
+      refusal: { runDir: o.runDir, code: "task_unverifiable", scrubSet: why, ...detail },
+      line:
+        `the pairwise task line (the scenario prompt) ${typeof o.result.prompt === "string" ? "differs from the run's recorded prompt once scrubbed" : "has no recorded prompt to compare with"}, ` +
+        `and ${reason}. ${remedy}`,
+    });
+  const recordedLines = new Set(recordedEntries.flatMap((e) => rubricOf(e.assertion)));
+  const rubricLines = sent.flatMap((a) => {
+    const lines = rubricOf(a).flatMap((l, k) => (recordedLines.has(sc(l)) ? [] : [k]));
+    return lines.length ? [{ assertionIndex: o.sc.assert.indexOf(a), lines }] : [];
+  });
+  if (rubricLines.length)
+    out.push({
+      refusal: { runDir: o.runDir, code: "rubric_unverifiable", scrubSet: why, ...detail, rubricLines },
+      line:
+        `rubric text the run did not record (${rubricLines.map((r) => `assert ${r.assertionIndex} line(s) ${r.lines.join(",")}`).join("; ")}: ` +
+        `new or edited since the run, or scrubbed differently) cannot be proven scrubbed with the run's set — ${reason}. ${remedy}`,
+    });
+  const recordedSections = new Set(
+    recordedEntries.flatMap((e) => (e.judgedDoc ?? e.composedDoc)?.sections.map((s) => `${s.kind}\0${s.sha256}`) ?? []),
+  );
+  const evidence: UncheckedSection[] = [];
+  const seen = new Set<string>();
+  const add = (x: UncheckedSection) => {
+    const k = `${x.assertionIndex}\0${x.kind}\0${x.path ?? ""}`;
+    if (!seen.has(k)) (seen.add(k), evidence.push(x));
+  };
+  for (const a of sent) {
+    const fp = o.docs.get(a);
+    for (const s of fp?.sections ?? [])
+      if ((s.kind === "health" || s.kind === "scratch_note") && !recordedSections.has(`${s.kind}\0${s.sha256}`))
+        add({ assertionIndex: o.sc.assert.indexOf(a), kind: s.kind });
+  }
+  // An accepted drift's authored file that lost scrub markers, named by the asserts (new scenario index) whose
+  // document to be sent carries it: a file no sent document carries reaches no judge.
+  const lossy = new Set(o.acceptedDrift.flatMap((d) => d.redaction.map((r) => r.path)));
+  for (const a of sent)
+    for (const s of o.docs.get(a)?.sections ?? [])
+      if (s.kind === "authored" && lossy.has(s.path ?? "")) add({ assertionIndex: o.sc.assert.indexOf(a), kind: "authored", path: s.path });
+  if (evidence.length)
+    out.push({
+      refusal: { runDir: o.runDir, code: "evidence_unverifiable", scrubSet: why, ...detail, evidenceSections: evidence },
+      line: `evidence no run-scrubbed record vouches for (${uncheckedLabel(evidence)}) cannot be proven scrubbed with the run's set — ${reason}. ${remedy}`,
+    });
+  // Each reference a comparison will send, proven by its BYTES, whatever it is called now (a plain `regrade` names a
+  // reference after its store dir, a hillclimb flow after its variant): what reaches a judge depends only on the text
+  // sent. Proven when any live comparison of this run under the same compose key was sent the same text — a 4.4
+  // outcome records the sent text's sha256 (`refSentSha256`), which this process's send must equal; an older
+  // outcome's judge received the stored text unscrubbed, so a stored text whose sha256 equals the one it recorded
+  // (`refDocSha256`) discloses nothing new. No such outcome (a reference re-frozen since, one the run never judged,
+  // an older run's invalid comparison) proves nothing.
+  const unprovenRefs = new Set<string>();
+  for (const a of pairwiseSent) {
+    const key = pairwiseComposeKey(a);
+    const live = recordedEntries.filter((e) => e.assertion.semantic_pairwise !== undefined && pairwiseComposeKey(e.assertion) === key);
+    for (const ref of o.setup.refsFor(a)) {
+      if (!judgedRefs(a).includes(ref.name)) continue;
+      const got = readRefDoc(ref.store, o.setup.caseId, key);
+      // A reference that cannot be read, or was frozen for another task, is not sent (the comparison is `missing`).
+      if (got.status !== "ok" || got.taskSha256 !== createHash("sha256").update(o.sc.prompt, "utf8").digest("hex")) continue;
+      const sent = sha256Hex(sc(got.text));
+      const proven = live.some((e) =>
+        (e.pairwise ?? []).some((x) => (x.refSentSha256 !== undefined ? x.refSentSha256 === sent : x.refDocSha256 === got.sha256)),
+      );
+      if (!proven) unprovenRefs.add(ref.name);
+    }
+  }
+  const references = [...unprovenRefs].sort();
+  if (references.length)
+    out.push({
+      refusal: { runDir: o.runDir, code: "reference_unverifiable", scrubSet: why, ...detail, references },
+      line:
+        `the reference(s) ${references.join(", ")} would be sent as no live grade of this run was sent them (re-frozen since, ` +
+        `never judged by the run, or scrubbed differently now), and ${reason}. ${remedy}`,
+    });
+  return out;
 }
 
 /** What a re-grade's `semantic_pairwise` comparisons read: the caller's setup (a hillclimb flow's references, its
@@ -904,7 +1075,29 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
           `Nothing was sent to the judge; pass --allow-unchecked to grade anyway. (can't verify ⇒ not green)`,
       );
     }
+    // The scrub-set proof, before any judge call: every part this re-grade will send must be proven scrubbed with a set
+    // covering the one the run scrubbed its records with (see `unprovenParts`). Not implied by --allow-doc-drift or
+    // --allow-unchecked: an accepted drift that lost scrub markers is part of what is proven here.
+    const fillHere = opts.pairwise?.onlyRefs !== undefined;
+    const sent = newSemantic.filter((a) => !willRefuse.has(a) && (!fillHere || a.semantic_pairwise !== undefined));
+    const unproven = unprovenParts({
+      runDir,
+      result: second.result,
+      sc,
+      sent,
+      docs: newDocs,
+      secrets,
+      setup: pairwiseSetupFor(sc, opts),
+      onlyRefs: opts.pairwise?.onlyRefs,
+      acceptedDrift: opts.allowDocDrift ? checked.drift : [],
+    });
+    if (unproven.length && !opts.allowScrubChange)
+      for (const u of unproven) {
+        refusals.push(u.refusal);
+        refusalLines.push(`${CMD}: ${dir}: ${u.line}`);
+      }
     prepared.push({
+      scrubAccepted: unproven.length > 0,
       liveEntries: second.result.assertions ?? [],
       runDir,
       dirAsGiven: dir,
@@ -921,14 +1114,23 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     });
   }
 
-  if (refusals.length)
+  if (refusals.length) {
+    const legacy = refusals.filter((r) => r.scrubSet === "legacy").length;
+    if (legacy)
+      refusalLines.push(
+        `${CMD}: ${legacy} refusal(s) are on a run recorded before the scrub-set fingerprint (harness < 4.4): new or edited ` +
+          `rubric text (and any other part not identical to the run's own record) cannot be proven scrubbed with the run's set. ` +
+          `Re-run the case to record it, or pass --allow-scrub-change after checking this process's scrub settings.`,
+      );
+    const order = ["doc_drift", "unchecked_content", ...SCRUB_REFUSAL_CODES] as const;
     return {
       ok: false,
       kind: "runtime",
       message: scrub(refusalLines.join("\n"), secrets),
-      code: refusals.some((r) => r.code === "doc_drift") ? "doc_drift" : "unchecked_content",
+      code: order.find((c) => refusals.some((r) => r.code === c))!,
       refusals: refusals.map((r) => scrubRefusal(r, secrets)),
     };
+  }
 
   // The preflight ends here: everything above is what a real re-grade decides before its first judge call. The
   // values are those a real re-grade's `runs[]` carries, unscrubbed in-process as those are.
@@ -961,6 +1163,15 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
             `(${uncheckedLabel(p.unchecked)}) — brought in by a widened scope (evidence_files / include_subagent_text / include_fork_results) or a larger ` +
             `--authored-total-bytes. They were never checked for drift or for a secret the live run scrubbed; this process's scrub set ` +
             `is all that protects them (--allow-unchecked).`,
+          secrets,
+        ),
+      );
+    // Accepted with --allow-scrub-change (refused above otherwise), and said before the spend.
+    if (p.scrubAccepted)
+      warn(
+        scrub(
+          `::warning:: ${CMD}: ${p.dirAsGiven}: a part of the judge's input could not be proven scrubbed with a set covering the run's — ` +
+            `grading anyway (${opts.scrubAcceptedBy ?? "--allow-scrub-change"}); recorded as scrubAcceptedBy.`,
           secrets,
         ),
       );
@@ -1107,6 +1318,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       notRegraded,
       original: { resultSha256: p.resultSha256, turn: p.turn },
       ...(metrics ? { metrics } : {}),
+      ...(p.scrubAccepted ? { scrubAcceptedBy: opts.scrubAcceptedBy ?? "--allow-scrub-change" } : {}),
     };
     // Scrubbed as a whole document, as result.json is: the rationales are scrubbed at grade time, but the
     // rubric and messages echo scenario text, and one pass over the serialized body leaves no field out.
@@ -1144,6 +1356,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       notRegraded,
       authoredCapture: p.budget,
       ...(metrics ? { metrics } : {}),
+      ...(p.scrubAccepted ? { scrubAcceptedBy: opts.scrubAcceptedBy ?? "--allow-scrub-change" } : {}),
     });
   }
   return { ok: true, exitCode: runs.every((r) => r.pass) ? 0 : 1, runs };
@@ -1287,6 +1500,7 @@ export async function cmdRegrade(args: string[]): Promise<never> {
     authoredTotalBytes,
     allowDocDrift: p.flags["--allow-doc-drift"] === true,
     allowUnchecked: p.flags["--allow-unchecked"] === true,
+    allowScrubChange: p.flags["--allow-scrub-change"] === true,
   });
   if (!outcome.ok) {
     if (json) {

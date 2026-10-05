@@ -10,6 +10,7 @@ import { applyParsedCommandGlobals, withCommandGlobals } from "../run/command-gl
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "../run/envelope.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { composeFromRunDir } from "./compose.js";
+import { coverageWhy, type ScrubCoverage } from "../scrub-set.js";
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "./cli-usage.js";
 import { join } from "node:path";
 import { FsRefusal, lexists } from "../hillclimb/fs.js";
@@ -27,6 +28,13 @@ export interface ComposedForFreeze {
   scenario: string;
   taskSha256: string;
   docs: Array<{ key: string; text: string; live: "match" | "differs" | "unknown" }>;
+  /** Whether this process's scrub set provably covers the one the run recorded (`scrubCoverage`): a document no live
+   *  fingerprint vouches for (`live: "unknown"`) is composed with this process's set, so it is written only when this
+   *  holds or `allowScrubChange` accepts it. Absent ⇒ not proven. */
+  scrubCoverage?: ScrubCoverage;
+  /** How many distinct strings the documents were scrubbed with (recorded in each document's sidecar: a count, never
+   *  a key name or value — the store may be committed). */
+  scrubCount?: number;
 }
 
 export interface FreezeDeps {
@@ -39,6 +47,9 @@ export interface FreezeOptions {
   out: string;
   caseId?: string;
   allowUnchecked: boolean;
+  /** Freeze an unchecked document even when this process's scrub set cannot be proven to cover the run's. Never
+   *  implied by `allowUnchecked`. */
+  allowScrubChange?: boolean;
 }
 
 export interface FreezeOutcome {
@@ -94,6 +105,16 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
         `pass --allow-unchecked to freeze it anyway, marked unchecked`,
       caseId,
     );
+  // An unchecked document is composed now, with this process's scrub set, and written to a store meant to be committed:
+  // only when that set provably covers the one the run scrubbed its records with, or the caller accepts it.
+  if (unknown.length && !opts.allowScrubChange && !c.scrubCoverage?.covered)
+    return refuse(
+      `ref freeze: compose key(s) ${unknown.join(", ")} have no live fingerprint, and ${
+        c.scrubCoverage && !c.scrubCoverage.covered ? coverageWhy(c.scrubCoverage) : "the run's scrub set cannot be proven covered"
+      } — the document would be composed with this process's scrub set and written to the store. Freeze under the run's ` +
+        `scrub settings, or pass --allow-scrub-change after checking them`,
+      caseId,
+    );
   const unchecked = new Set(unknown);
   try {
     if (!REF_EXTS.some((ext) => lexists(join(opts.out, caseId + ext)))) {
@@ -103,7 +124,13 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
         caseId,
         c.source,
         Object.fromEntries(c.docs.map((d) => [d.key, { text: d.text, unchecked: unchecked.has(d.key) }])),
-        { harnessVersion: c.harnessVersion, composerId: c.composerId, scenario: c.scenario, taskSha256: c.taskSha256 },
+        {
+          harnessVersion: c.harnessVersion,
+          composerId: c.composerId,
+          scenario: c.scenario,
+          taskSha256: c.taskSha256,
+          ...(c.scrubCount !== undefined ? { scrubCount: c.scrubCount } : {}),
+        },
       );
       if (r.status === "exists")
         return exists(`ref freeze: a reference for case ${caseId} appeared in ${opts.out} concurrently; nothing written`, caseId);
@@ -122,7 +149,12 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
       opts.out,
       caseId,
       c.docs.map((d) => ({ key: d.key, text: d.text, unchecked: unchecked.has(d.key) })),
-      { resultSha256: c.source.resultSha256, composerId: c.composerId, taskSha256: c.taskSha256 },
+      {
+        resultSha256: c.source.resultSha256,
+        composerId: c.composerId,
+        taskSha256: c.taskSha256,
+        ...(c.scrubCount !== undefined ? { scrubCount: c.scrubCount } : {}),
+      },
     );
     if (added.length === 0)
       return exists(
@@ -177,7 +209,14 @@ export async function cmdRef(args: string[]): Promise<never> {
   const secrets = collectSecrets();
   const [sub, ...rest] = p.positionals;
   if (sub === "verify") {
-    if (!rest.length || p.options["--scenario"] || p.options["--out"] || p.options["--case-id"] || p.flags["--allow-unchecked"])
+    if (
+      !rest.length ||
+      p.options["--scenario"] ||
+      p.options["--out"] ||
+      p.options["--case-id"] ||
+      p.flags["--allow-unchecked"] ||
+      p.flags["--allow-scrub-change"]
+    )
       return fail(CMD, "usage", REF_USAGE, undefined, json);
     const v = verifyStores(rest);
     if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, v.exitCode === 0, { stores: v.stores }), secrets) + "\n");
@@ -197,7 +236,14 @@ export async function cmdRef(args: string[]): Promise<never> {
   const out = p.options["--out"];
   if (sub !== "freeze" || rest.length !== 1 || !scenarioFile || !out) return fail(CMD, "usage", REF_USAGE, undefined, json);
   const o = freezeFromRun(
-    { runDir: rest[0]!, scenarioFile, out, caseId: p.options["--case-id"], allowUnchecked: p.flags["--allow-unchecked"] === true },
+    {
+      runDir: rest[0]!,
+      scenarioFile,
+      out,
+      caseId: p.options["--case-id"],
+      allowUnchecked: p.flags["--allow-unchecked"] === true,
+      allowScrubChange: p.flags["--allow-scrub-change"] === true,
+    },
     freezeDeps(secrets),
   );
   if (o.exitCode !== 0) return fail(CMD, "runtime", scrub(o.message, secrets), undefined, json, 2);

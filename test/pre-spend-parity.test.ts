@@ -105,7 +105,7 @@ describe("the unresolved-model refusal: the preview carries the real path's mess
     const sc = parseScenarioFile(join(w, "s.yaml"));
     const prev = { model: process.env.COWORK_HARNESS_MODEL, runs: process.env.COWORK_HARNESS_RUNS_DIR };
     delete process.env.COWORK_HARNESS_MODEL;
-    process.env.COWORK_HARNESS_RUNS_DIR = mkdtempSync(join(tmpdir(), "cwh-ps-runs-"));
+    process.env.COWORK_HARNESS_RUNS_DIR = join(mkdtempSync(join(tmpdir(), "cwh-ps-runs-")), "runs");
     let real = "";
     try {
       real = ((await executeScenario(sc).catch((e: unknown) => e)) as Error).message;

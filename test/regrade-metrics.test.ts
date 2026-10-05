@@ -26,7 +26,7 @@ const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 let savedRuns: string | undefined;
 beforeEach(() => {
   savedRuns = process.env.COWORK_HARNESS_RUNS_DIR;
-  process.env.COWORK_HARNESS_RUNS_DIR = mkdtempSync(join(tmpdir(), "rgm-runs-"));
+  process.env.COWORK_HARNESS_RUNS_DIR = join(mkdtempSync(join(tmpdir(), "rgm-runs-")), "runs");
 });
 afterEach(() => {
   if (savedRuns === undefined) delete process.env.COWORK_HARNESS_RUNS_DIR;
@@ -90,7 +90,15 @@ function keptRun(metricsYaml: string, recordHashes = true) {
 }
 const METRIC = `metrics:\n  - {id: words, artifact: outputs/m.json, path: words, better: higher, scale: 5000}\n`;
 const regrade = (k: ReturnType<typeof keptRun>, extra = {}) =>
-  regradeRuns({ runDirs: [k.runDir], scenarioFile: k.scenarioFile, makeJudge: () => judge(), allowUnchecked: true, ...extra });
+  // A synthetic pre-4.4 run that recorded no assertions: its rubric cannot be proven covered, so it is accepted here.
+  regradeRuns({
+    runDirs: [k.runDir],
+    scenarioFile: k.scenarioFile,
+    makeJudge: () => judge(),
+    allowUnchecked: true,
+    allowScrubChange: true,
+    ...extra,
+  });
 
 describe("regrade: metrics", () => {
   it("a re-extracted metric is in the regrade file and in runs[]; the envelope validates", async () => {

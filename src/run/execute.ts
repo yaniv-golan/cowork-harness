@@ -110,6 +110,7 @@ import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, typ
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
+import { runScrubSet } from "../scrub-set.js";
 import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { indexRowFromResult, appendIndexRow } from "./run-index.js";
 import {
@@ -1034,6 +1035,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Secrets are needed BEFORE the decider is built — the external channel emits live, ahead of the
   // post-run file scrub. Same set is reused for the file scrub at the end.
   const secrets = collectSecrets();
+  // The fingerprint of that set, recorded on the result so a later re-grade can prove its own set covers it. Made
+  // under the installation key beside the runs root (created here on the first run); when no key can be made, the
+  // result records why (`scrubSetUnavailable`) and a warning names the key.
+  const scrubState = runScrubSet(secrets, runsWriteRoot());
+  const scrubSet = "record" in scrubState ? scrubState.record : undefined;
+  const scrubSetUnavailable = "unavailable" in scrubState ? scrubState.unavailable : undefined;
   // Dialog auto-cancel: faithful 6s by default; relaxed (∞) under the external decider since the
   // caller is authoritative; `COWORK_HARNESS_DIALOG_TIMEOUT_MS` overrides either way.
   // parse the dialog timeout env var. The special values "inf", "infinite", and "-1" mean Infinity
@@ -1662,6 +1669,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         scenarioName: scenario.name,
         lane: scenario.lane, // a salvaged partial keeps the contract it was run under
         prompt: scenario.prompt,
+        scrubSet,
+        scrubSetUnavailable,
         fidelity: scenario.fidelity,
         baseline: baseline.appVersion,
         record,
@@ -2141,6 +2150,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       execution: { location: "local" }, // live local run — no scheduled-trigger lane exists yet (no taskKind)
       scenario: scenario.name,
       prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
+      scrubSet,
+      scrubSetUnavailable,
       fidelity: scenario.fidelity,
       baseline: baseline.appVersion,
       result: record.result,
@@ -3014,6 +3025,10 @@ export function buildPartialResult(args: {
   /** The scenario's declared Cowork lane — see `Scenario.lane`. Absent ⇒ local. */
   lane?: "local" | "remote";
   prompt: string;
+  /** The run's scrub-set fingerprint (`RunResult.scrubSet`); absent when none could be made. */
+  scrubSet?: RunResult["scrubSet"];
+  /** Why no fingerprint could be made (`RunResult.scrubSetUnavailable`). */
+  scrubSetUnavailable?: string;
   fidelity: string;
   baseline: string;
   record: RunRecord;
@@ -3136,6 +3151,8 @@ export function buildPartialResult(args: {
     execution: { location: "local" }, // live local run (salvaged partial) — same basis as the success path
     scenario: args.scenarioName,
     prompt: args.prompt,
+    scrubSet: args.scrubSet,
+    scrubSetUnavailable: args.scrubSetUnavailable,
     fidelity: args.fidelity,
     baseline: args.baseline,
     result: "error",

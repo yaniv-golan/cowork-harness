@@ -28,6 +28,7 @@ export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = [
   "--rejudge",
   "--allow-doc-drift",
   "--allow-unchecked",
+  "--allow-scrub-change",
 ] as const;
 
 export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--effort LEVEL] [--reps N]
@@ -82,12 +83,13 @@ export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario
        Freezes each selected semantic_pairwise case's reference into <flow>/<variant>/ref from the variant's
        lowest-rep good row (status ok, not an agent failure, verdict and pairwise evidence measured), under the
        variant's lock. A baseline pass freezes the baseline's itself; freeze a later variant's to compare the next
-       ones with it (win_<vN>). An entry already complete is reported, never rewritten. Exit 0 nothing refused,
-       1 a case refused, 2 usage.`;
+       ones with it (win_<vN>). An entry already complete is reported, never rewritten. An entry lacking a compose
+       key gains it from its own run only when this process's scrub set provably covers that run's (else the case is
+       refused: re-run the variant). Exit 0 nothing refused, 1 a case refused, 2 usage.`;
 
 export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml | dir/> [--flow DIR] [--variant all|baseline|vN] [--case ID]...
        [--judge-model ID] [--fill-refs | --rejudge] [--approve-harness] [--allow-doc-drift] [--allow-unchecked]
-       [--output-format text|json] [--dotenv FILE] [--run-dir DIR]
+       [--allow-scrub-change] [--output-format text|json] [--dotenv FILE] [--run-dir DIR]
        Rebuilds a flow's scored rows from the scenario as it is now and their kept run dirs (no agent run), rewriting
        results.jsonl atomically (the prior file kept as regrade-<sha>.bak.jsonl, a before/after in <variant>/regrade.md).
        Every row is re-evaluated first, with no judge call: its deterministic asserts and expect_denied hosts with
@@ -96,9 +98,13 @@ export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml 
        judge prompt, the judge model it would ask for — --judge-model, the pin, or the env/default — a pairwise reference or its
        content); the rest keep their entries, at no judge cost. A row whose judged evidence the current harness
        composes differently than it was graded on is listed and kept (--rejudge grades it on the current evidence,
-       unless it is less redacted: then only --rejudge --allow-doc-drift). A row that would re-judge an assert whose
-       literal the run scrubbed and this process's scrub does not reproduce is listed too: --allow-doc-drift re-judges
+       unless it is less redacted: then only --rejudge --allow-scrub-change). A row that would re-judge an assert whose
+       literal the run scrubbed and this process's scrub does not reproduce is listed too: --allow-scrub-change re-judges
        it, the judge then seeing the raw rubric against the scrubbed evidence (its grade may not match the live run's).
+       A row whose judge input (the pairwise task line, a new or edited rubric line, an evidence note, a reference)
+       cannot be proven scrubbed with a set covering its run's is listed (a run before 4.4 records no scrub-set
+       fingerprint, so its new or edited rubric text is listed until the case is re-run): --allow-scrub-change sends it
+       anyway, recorded as scrubAcceptedBy. Neither --rejudge nor --allow-doc-drift implies it.
        An edit inside a scrubbed literal cannot be applied: that row is listed until the case is re-run.
        --rejudge: re-judge every judged assert. --fill-refs: only the pairwise comparisons a row lacks are judged (a
        reference frozen after it), so pass cannot move and every row carries every win column. Gated like run. Exit 0

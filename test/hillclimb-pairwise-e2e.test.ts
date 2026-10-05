@@ -9,6 +9,7 @@ import { freezeCaseRef, freezeRefCommand, goodRefRows } from "../src/hillclimb/f
 import { flowPairwiseOptions, discoverFlowRefs } from "../src/hillclimb/pairwise.js";
 import { readRefDoc, readRefEntry, verifyStore } from "../src/refs/store.js";
 import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
+import { collectSecrets } from "../src/secrets.js";
 import { POSIX, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
 
 // The flow loop end to end, over the REAL executeScenario with only the agent and the judge transport stubbed: a
@@ -182,7 +183,8 @@ describe.runIf(POSIX)("hillclimb pairwise: baseline → freeze → a later varia
       assertions,
       prompt: "what is the answer?",
       results: res,
-      secrets: [],
+      // The set the run was scrubbed with: adding a key needs it proven covered.
+      secrets: collectSecrets(),
       command: "hillclimb freeze-ref" as const,
     });
     expect(freezeCaseRef(input()).status).toBe("frozen");

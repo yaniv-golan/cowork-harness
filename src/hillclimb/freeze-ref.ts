@@ -18,6 +18,8 @@ import { composeFromRunDir } from "../refs/compose.js";
 import { freezeFromRun, type FreezeOutcome } from "../refs/cli.js";
 import { readRefEntry, readRefDoc } from "../refs/store.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
+import { runsWriteRoot } from "../run/trace-view.js";
+import { coverageWhy, scrubCoverage } from "../scrub-set.js";
 import type { Assertion } from "../types.js";
 
 /** A results.jsonl row a reference may be frozen from: status `ok` (not truncated), not an agent failure, its
@@ -130,6 +132,23 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
           `case ${i.caseId}: its reference lacks compose key(s) ${lacking.join(", ")} and the run it was frozen from (${existing.source.runDir}) is gone — ` +
           `a reference never mixes runs, so start a fresh flow dir for the changed assertions`,
       };
+    // The new document is composed now, with this process's scrub set, and written to a store that may be committed:
+    // it is added only when that set provably covers the one the run scrubbed its records with.
+    const coverage = scrubCoverage(
+      { scrubSet: runResultField(runDir, "scrubSet"), scrubSetUnavailable: runResultField(runDir, "scrubSetUnavailable") },
+      runDir,
+      i.secrets,
+      runsWriteRoot(),
+    );
+    if (!coverage.covered)
+      return {
+        status: "refused",
+        caseId: i.caseId,
+        message:
+          `case ${i.caseId}: its reference lacks compose key(s) ${lacking.join(", ")}, and ${coverageWhy(coverage)} — the new document ` +
+          `would be composed with this process's scrub set and written to the store. Re-run the variant to freeze a complete reference ` +
+          `(or add it under the scrub settings the run used)`,
+      };
     // The run never composed the new key, so no live fingerprint can check it: it is added marked `unchecked`, which
     // every later comparison against it shows (`pairwise[].unchecked`).
     return run(i, runDir, rep, store, true);
@@ -162,16 +181,21 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
   return { status: "refused", caseId: i.caseId, message: `case ${i.caseId}: no good row's run can be frozen — ${skipped.join("; ")}` };
 }
 
-/** The run's recorded `outcome`, from its latest turn's result.json. */
-function runOutcome(runDir: string): string | undefined {
+/** One field of the run's latest-turn result.json (undefined when unreadable). */
+function runResultField(runDir: string, field: string): unknown {
   try {
     const turn = latestTurn(runDir);
     if (turn === undefined) return undefined;
-    const r = JSON.parse(readFileSync(turnArtifactPath(runDir, turn, "result.json"), "utf8")) as { outcome?: unknown };
-    return typeof r.outcome === "string" ? r.outcome : undefined;
+    return (JSON.parse(readFileSync(turnArtifactPath(runDir, turn, "result.json"), "utf8")) as Record<string, unknown>)[field];
   } catch {
     return undefined;
   }
+}
+
+/** The run's recorded `outcome`, from its latest turn's result.json. */
+function runOutcome(runDir: string): string | undefined {
+  const o = runResultField(runDir, "outcome");
+  return typeof o === "string" ? o : undefined;
 }
 
 function run(i: FreezeCaseInput, runDir: string, rep: number, store: string, allowUnchecked = false): FreezeCaseOutcome {

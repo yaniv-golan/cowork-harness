@@ -6,6 +6,80 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+
+- **A re-grade no longer sends a judge a value the run scrubbed.** Before, `regrade` and `hillclimb regrade`
+  (`--rejudge` and `--fill-refs` included) rebuilt the judge's input with the scrub set of the process re-grading.
+  When that set was smaller than the run's, a value the run had scrubbed reached the host `claude` judge raw, and
+  nothing was listed or refused: the `semantic_pairwise` `## Task` line (the scenario prompt), a new or edited
+  rubric line (core `regrade` had no rubric check; `hillclimb regrade` checked only asserts matched to the run's),
+  and the frozen pairwise reference, which was sent as stored on every lane, live included. The judge's rationale,
+  which can quote its input, is then stored in the regrade file and in `results.jsonl`. Now:
+  - A run records a keyed fingerprint of its scrub set, `result.json` `scrubSet` (`{v, keyId, values}`): one
+    HMAC-SHA256 per scrubbed string under a random per-installation key, `scrubset.key` beside the runs root (mode
+    0600; `~/.cowork-harness/scrubset.key` for the default root), so a runs root uploaded or shared carries no key.
+    It holds no value, and without the key there is nothing to brute-force.
+  - Before any judge call, a re-grade proves each part it sends: covered when the run's set is a subset of this
+    process's under the same key (a grown set included), else by equality with the run's own scrubbed record —
+    the task line (checked only when a pairwise comparison will be judged), each rubric line, each evidence-health
+    and scratch note, and each reference, by its bytes whatever it is called: its send now must hash to what a live comparison of
+    the run under the same compose key was sent (`pairwise[].refSentSha256`, new), or, for a grade recorded before
+    4.4 (whose judge got the stored text raw), the stored text must be one such a comparison recorded
+    (`refDocSha256`). A reference re-frozen since, or one
+    the run never judged (a `--fill-refs` column), proves nothing. A part proven neither way is
+    refused by `regrade` (exit 2, `error.code` `task_unverifiable`, `rubric_unverifiable`, `evidence_unverifiable`
+    or `reference_unverifiable`, in `refusals[]` beside `doc_drift`) and listed by `hillclimb regrade` (exit 1),
+    naming the parts, never their text: each `refusals[]` entry carries `scrubSet` (why the set is not proven),
+    `scrubSetDetail` (the run's own reason, when it recorded one), and `rubricLines`, `evidenceSections` or
+    `references`.
+  - The new `--allow-scrub-change` flag (both commands) sends such a part anyway, recorded as `scrubAcceptedBy` on
+    the regrade file and `runs[]`. `--allow-doc-drift`, `--allow-unchecked` and `--rejudge` never imply it; an
+    accepted drift whose authored file lost scrub markers is part of what is proven.
+  - Every pairwise comparison scrubs the stored reference with the grading process's set before the judge reads it,
+    live runs included, and records how many markers that added (`pairwise[].refRedactions`). A reference document's
+    sidecar records `scrubCount`, a count only, and a reference frozen with fewer strings is noted
+    (`ref_scrub_weaker`).
+  - `hillclimb freeze-ref` and a baseline pass add a missing compose key to a reference only when this process's set
+    provably covers the run's; otherwise the case is refused with "re-run the variant". `ref freeze` freezes an
+    unchecked document (`--allow-unchecked`) under the same proof, or with `--allow-scrub-change` (which
+    `ref verify` refuses, like the other freeze-only flags).
+  - An unusable installation key (a symlink, a file readable by others, another owner, an empty file, not a key) is warned about
+    once, naming its path and the defect, and recorded on the result as `scrubSetUnavailable`, so a re-grade names
+    that cause instead of calling the run older than 4.4. An existing key file is never removed or replaced. A new
+    key is written whole before it is linked into place; on a filesystem with no hard links it is created
+    exclusively in place instead.
+  - An invalid pairwise judge reply that quotes its input is scrubbed before it is warned on stderr or stored.
+
+### Changed
+
+- **Re-grading a run from before 4.4.** Such a run records no scrub-set fingerprint, so nothing can prove its set
+  is covered. Its unchanged task and rubric lines still re-grade, and so does a reference still byte-identical to the
+  one its live grade recorded. New or edited rubric text, a changed evidence note, or a reference re-frozen since (or
+  never judged by the run, as a `--fill-refs` column is) is refused by `regrade` and listed by
+  `hillclimb regrade`, with one summary line naming the remedy: re-run the case (a new run records its set), or
+  pass `--allow-scrub-change` after checking the scrub settings. The same applies to a run recorded on another
+  machine, and to a run whose auth token has rotated since, since a named key's value is part of the set.
+- **`--allow-doc-drift` no longer unlocks `hillclimb regrade`'s scrubbed-literal or less-redacted listings;
+  `--allow-scrub-change` replaces it for those.** A row listed because an assert's scrubbed literal cannot be
+  reproduced, or because its evidence would be less redacted than the graded document, was released by
+  `--allow-doc-drift` in 4.3.0 (with `--rejudge` for the latter). Passing `--allow-doc-drift` now leaves such a row
+  listed; pass `--allow-scrub-change` (with `--rejudge` for a less-redacted row) after checking the scrub settings.
+  4.3.0's re-grade surfaces are new and experimental, so this change to the flag's meaning ships in a minor release.
+- **What the scrub-set proof does not cover.** Content accepted with `--allow-unchecked`, and the documents of
+  `unknown` / `live_refused` asserts (no live fingerprint to compare with), are still protected only by the
+  re-grading process's scrub set, as before; `regrade` warns about both before any judge call. So is an authored
+  file a drift accepted with `--allow-doc-drift` changed on a run whose set is not proven covered, when its scrub
+  markers did not drop: it is sent scrubbed with the current set only.
+
+### Fixed
+
+- **Corrections to the 4.3.0 notes.** 4.3.0 said a `hillclimb regrade` re-judge over a scrubbed literal "lists the row, with `--allow-doc-drift` the only
+  override", and the docs described the drift and less-redacted checks as what keeps a value the run scrubbed from
+  the judge. Those checks covered the judged documents only: the pairwise task line, an edited or added rubric line
+  and the frozen reference were not covered, and core `regrade` had no rubric check. The `ref freeze` docs said the
+  run under test "gets the same redaction" as the stored reference; that held for host paths, not for the secret
+  scrub. All of these are fixed above.
+
 ## [4.3.0] — 2026-10-04
 
 Full support for Claude Code's `/claude-api hillclimb` loop, with `cowork-harness hillclimb` as its runner,

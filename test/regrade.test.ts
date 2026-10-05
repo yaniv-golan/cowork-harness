@@ -457,6 +457,30 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(out.message).toContain("COWORK_HARNESS_SCRUB_VALUES");
     expect(out.message).not.toContain(SECRET);
     expect(judge.calls).toHaveLength(0);
+    // Accepting the drift does not accept the scrub loss in it: the file now carries fewer markers.
+    const drift = await regradeRuns(opts(k, { makeJudge: judge.make, allowDocDrift: true }));
+    expect(drift).toMatchObject({ ok: false, code: "evidence_unverifiable" });
+    expect(judge.calls).toHaveLength(0);
+  });
+
+  it("an accepted drift's lost-marker file is named by the RE-GRADED scenario's assert index, not the live one", async () => {
+    const SECRET = "sk-test-index-space-3b9e";
+    process.env.COWORK_HARNESS_SCRUB_VALUES = SECRET;
+    const k = await keptRun({ author: (w) => writeFileSync(join(w, "outputs", "report.md"), `token: ${SECRET}\nrisk: concentration\n`) });
+    delete process.env.COWORK_HARNESS_SCRUB_VALUES;
+    // The same judged assert, now second: live index 0, scenario index 1.
+    const reordered = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scn-order-")), `  - file_exists: outputs/report.md\n${SCOPED}`);
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({ runDirs: [k.runDir], scenarioFile: reordered, makeJudge: judge.make, allowDocDrift: true });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusals).toEqual([
+      expect.objectContaining({
+        code: "evidence_unverifiable",
+        evidenceSections: [{ assertionIndex: 1, kind: "authored", path: "outputs/report.md" }],
+      }),
+    ]);
+    expect(judge.calls).toHaveLength(0);
   });
 
   it("a changed scope does not hide a secret the live run scrubbed: the live document is rebuilt and checked too", async () => {
@@ -1124,6 +1148,8 @@ describe("regrade: spend, provenance and invalid grades", () => {
         `  - semantic_matches:\n      rubric: ["the report never mentions ${SECRET}"]\n      evidence_files: ["outputs/report.md"]\n`,
       ),
       makeJudge: judgeFactory(() => false).make, // a failing claim, so the message echoes it too
+      // A pre-4.4 run (no scrubSet) with rubric text it did not record: accepted, so the output sinks are what is tested.
+      allowScrubChange: true,
     });
     if (!out.ok) throw new Error(out.message);
     expect(out.runs[0].assertions[0].semanticClaims?.[0].claim).toContain(SECRET); // the in-memory report is raw
@@ -1183,6 +1209,8 @@ describe("regrade: spend, provenance and invalid grades", () => {
         `  - semantic_matches:\n      rubric: ["the report never mentions ${SECRET}"]\n      evidence_files: ["outputs/report.md"]\n`,
       ),
       makeJudge: judgeFactory(() => true).make,
+      // A pre-4.4 run (no scrubSet) with rubric text it did not record: accepted, so the file's scrub is what is tested.
+      allowScrubChange: true,
     });
     if (!out.ok) throw new Error(out.message);
     const text = readFileSync(out.runs[0].regradeFile, "utf8");
@@ -1378,13 +1406,38 @@ describe("regrade: content the live judge never read, and accepted drift", () =>
       assertYaml: SCOPED,
     });
     const judge = judgeFactory(() => true);
-    const out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50 }));
+    // A pre-4.4 run cannot prove the new note covered (see the next test): accepted here, so the unchecked rule is tested.
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50, allowScrubChange: true }));
     if (!out.ok) throw new Error(out.message);
     expect(judge.calls).toHaveLength(1);
     expect(judge.calls[0].answer).toContain("## Evidence health");
     expect(out.runs[0].assertions.map((a) => [a.docMatchesLive, a.semanticEvidence?.reason])).toEqual([["scope_changed", "graded"]]);
     expect(out.runs[0].uncheckedSections).toEqual([]);
     expect(out.runs[0].differingSections).toContainEqual({ assertionIndex: 0, kind: "health", change: "added" });
+  });
+
+  it("a health note no live document had cannot be proven scrubbed with the run's set: refused evidence_unverifiable, accepted only by allowScrubChange", async () => {
+    // keptRun records no scrubSet (a pre-4.4 run), so the note's paths cannot be proven covered by this process's set.
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "notes.md"), `${"n".repeat(600)}\n`);
+      },
+      assertYaml: SCOPED,
+    });
+    const judge = judgeFactory(() => true);
+    const refused = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50 }));
+    expect(judge.calls).toHaveLength(0);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.refusals?.map((r) => r.code)).toEqual(["evidence_unverifiable"]);
+    // Neither drift flag implies the scrub override.
+    const drift = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50, allowDocDrift: true, allowUnchecked: true }));
+    expect(drift.ok).toBe(false);
+    expect(judge.calls).toHaveLength(0);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50, allowScrubChange: true }));
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].scrubAcceptedBy).toBe("--allow-scrub-change");
   });
 
   it("extra content only in an assert that refuses its own evidence is not refused as unchecked", async () => {

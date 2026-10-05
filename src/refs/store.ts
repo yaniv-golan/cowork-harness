@@ -65,6 +65,9 @@ interface DocSidecar {
   chars: number;
   /** Frozen without a live fingerprint to check the recomposed document against. */
   unchecked?: true;
+  /** How many distinct strings the document was scrubbed with when it was composed. A count only — the store may be
+   *  committed, so no key name and no value. Absent on a document written before it existed. */
+  scrubCount?: number;
   /** sha256 of ref.json's bytes when this document was written. ref.json is never rewritten, so every sidecar of an
    *  entry records the same value, and a read whose current ref.json hashes differently is an integrity failure. */
   refJsonSha256: string;
@@ -79,6 +82,8 @@ export type ReadRefResult =
       composerId: string;
       source: RefSource;
       unchecked?: true;
+      /** How many distinct strings the stored document was scrubbed with (absent on an older document). */
+      scrubCount?: number;
       scenario: string;
       taskSha256: string;
     }
@@ -121,6 +126,7 @@ function writeDoc(
   composerId: string,
   unchecked: boolean,
   refJsonSha256: string,
+  scrubCount: number | undefined,
 ): void {
   const sidecar: DocSidecar = {
     format: 1,
@@ -129,6 +135,7 @@ function writeDoc(
     sha256: sha256(text),
     chars: text.length,
     ...(unchecked ? { unchecked: true as const } : {}),
+    ...(scrubCount !== undefined ? { scrubCount } : {}),
     refJsonSha256,
     addedAt: now(),
   };
@@ -147,7 +154,7 @@ export function freezeRef(
   /** By compose key: the document text, or `{text, unchecked}` for one frozen without a live fingerprint. */
   docs: Record<string, string | { text: string; unchecked?: boolean }>,
   /** `scenario` and `taskSha256` (sha256 of the RAW scenario prompt) are the task the reference answers: required. */
-  meta: { harnessVersion: string; composerId: string; unchecked?: boolean; scenario: string; taskSha256: string },
+  meta: { harnessVersion: string; composerId: string; unchecked?: boolean; scenario: string; taskSha256: string; scrubCount?: number },
 ): { status: "frozen" | "exists"; entryDir: string } {
   assertCaseId(caseId);
   if (Object.keys(docs).length === 0) throw new Error("freezeRef: no documents to freeze");
@@ -183,6 +190,7 @@ export function freezeRef(
         meta.composerId,
         meta.unchecked === true || (typeof d !== "string" && d.unchecked === true),
         sha256(manifestBytes),
+        meta.scrubCount,
       );
     // Re-probe every spelling right before the rename (the rename itself checks only `<case-id>`). What remains is the
     // directory-rename window renameNoFollow documents.
@@ -311,6 +319,7 @@ export function readRefDoc(storeDir: string, caseId: string, key: string): ReadR
     composerId: d.sidecar.composerId,
     source: result.manifest.source,
     ...(d.sidecar.unchecked ? { unchecked: true as const } : {}),
+    ...(typeof d.sidecar.scrubCount === "number" ? { scrubCount: d.sidecar.scrubCount } : {}),
     scenario: result.manifest.scenario,
     taskSha256: result.manifest.taskSha256,
   };
@@ -336,7 +345,7 @@ export function addRefDocs(
   storeDir: string,
   caseId: string,
   docs: ReadonlyArray<{ key: string; text: string; unchecked?: boolean }>,
-  from: { resultSha256: string; composerId: string; taskSha256?: string },
+  from: { resultSha256: string; composerId: string; taskSha256?: string; scrubCount?: number },
 ): { added: string[]; existing: string[] } {
   assertCaseId(caseId);
   const refuse = (why: string): FsRefusal => new FsRefusal(`refusing to add to the reference for case ${caseId}: ${why}`);
@@ -364,7 +373,7 @@ export function addRefDocs(
   const added: string[] = [];
   for (const d of fresh) {
     try {
-      writeDoc(root!, entryDir, d.key, d.text, from.composerId, d.unchecked === true, result.refJsonSha256);
+      writeDoc(root!, entryDir, d.key, d.text, from.composerId, d.unchecked === true, result.refJsonSha256, from.scrubCount);
       added.push(d.key);
     } catch (e) {
       // A concurrent add of the same key won the exclusive create: the key now exists, written by that add.
