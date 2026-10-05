@@ -14,7 +14,7 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
 import type { CompleteStructured } from "../src/decide/pairwise-judge.js";
-import { regradeRuns, type RegradeOptions } from "../src/run/regrade.js";
+import { regradeErrorEnvelope, regradeRuns, scrubRefusal, type RegradeOptions, type RegradeRefusal } from "../src/run/regrade.js";
 import type { SemanticJudge } from "../src/assert.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { freezeCaseRef } from "../src/hillclimb/freeze-ref.js";
@@ -525,6 +525,28 @@ describe.runIf(POSIX)("regrade scrub coverage: the pairwise prepass warn channel
   });
 });
 
+describe.runIf(POSIX)("regrade scrub coverage: a scrub refusal's own fields", () => {
+  it("section paths and reference names in a scrub refusal never carry a scrubbed value raw: refusals[] and the envelope", () => {
+    const secrets = [RUB];
+    const raw: RegradeRefusal = {
+      runDir: `/runs/${RUB}`,
+      code: "evidence_unverifiable",
+      scrubSet: "smaller",
+      evidenceSections: [{ assertionIndex: 0, kind: "authored", path: `outputs/${RUB}.md` }],
+      references: [`ref-${RUB}`],
+    };
+    const r = scrubRefusal(raw, secrets);
+    expect(r.evidenceSections![0]!.path).toBe("outputs/[REDACTED].md");
+    expect(r.references).toEqual(["ref-[REDACTED]"]);
+    expect(JSON.stringify(r)).not.toContain(RUB);
+    const env = regradeErrorEnvelope(
+      { ok: false, kind: "runtime", message: "refused", code: "evidence_unverifiable", refusals: [r] },
+      secrets,
+    );
+    expect(env).not.toContain(RUB);
+  });
+});
+
 // ---- hillclimb regrade over a flow the real CLI built ----
 
 const ENVELOPE = join(import.meta.dirname, "fixtures", "pairwise-judge", "claude-p-json-schema-envelope.json");
@@ -631,6 +653,60 @@ describe.runIf(POSIX)("regrade scrub coverage: hillclimb regrade", () => {
       expect(out.variants.flatMap((v) => v.listed).some((l) => /rubric/.test(l.why))).toBe(true);
       expect(JSON.stringify(out) + lines.join("\n")).not.toContain(RUB);
     }
+  });
+
+  it("a rubric edit unproven under another installation key lists that row with its part and reason, never a flow refusal", async () => {
+    const hc = buildHcFlow({ prompt: "say hello", rubric: ["answers"], scrubValues: RUB });
+    // Another machine's key: the run's fingerprint is intact but proves nothing here.
+    writeFileSync(join(dirname(f.runsDir), "scrubset.key"), randomBytes(32).toString("hex") + "\n", { mode: 0o600 });
+    hc.write(["answers", "is polite"]);
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", RUB);
+    const users: string[] = [];
+    const lines: string[] = [];
+    const out = await regradeFlow(HC_ARGS(), hcDeps(users, lines, collectSecrets()));
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(out.error).toBeUndefined();
+    expect(out.variants.find((v) => v.variant === "v1")!.listed).toEqual([
+      {
+        prompt_id: "alpha",
+        rep: 0,
+        why: expect.stringMatching(
+          /^rubric text the run did not record \(assert 1 line\(s\) 1\) cannot be proven scrubbed with the run's scrub set — the run's scrub-set fingerprint was made with another installation's scrubset\.key/,
+        ),
+      },
+    ]);
+    // The baseline row compares only with its own (neutral) reference: nothing reaches a judge, so nothing to prove.
+    expect(out.variants.find((v) => v.variant === "baseline")!.listed).toEqual([]);
+    expect(users).toHaveLength(0);
+    expect(lines.join("\n")).not.toMatch(/recorded before the scrub-set fingerprint|predates the scrub-set record/);
+  });
+
+  it("hillclimb scrubs its scrub listing: a refusal naming a scrubbed value is listed redacted", async () => {
+    buildHcFlow({ prompt: "say hello", rubric: ["answers"], scrubValues: RUB });
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", RUB);
+    const secrets = collectSecrets();
+    // A core preflight whose refusal carries the value raw: what hillclimb lists must still be scrubbed.
+    const seam = (async (opts: RegradeOptions & { checkOnly?: boolean }) => {
+      if (opts.checkOnly)
+        return {
+          ok: false,
+          kind: "runtime",
+          message: "refused",
+          code: "reference_unverifiable",
+          refusals: opts.runDirs.map((d) => ({
+            runDir: d,
+            code: "reference_unverifiable",
+            scrubSet: "smaller",
+            references: [`ref-${RUB}`],
+          })),
+        };
+      return regradeRuns(opts);
+    }) as unknown as typeof regradeRuns;
+    const out = await regradeFlow(HC_ARGS({ rejudge: true }), { ...hcDeps([], [], secrets), regrade: seam });
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    const whys = out.variants.flatMap((v) => v.listed).map((l) => l.why);
+    expect(whys.some((w) => w.includes("ref-[REDACTED]"))).toBe(true);
+    expect(JSON.stringify(out)).not.toContain(RUB);
   });
 
   it("legacy rows (no scrubSet): an edited line is listed with one summary line naming the remedy; --allow-scrub-change re-grades it", async () => {

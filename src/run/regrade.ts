@@ -643,7 +643,7 @@ const liveDriftLabel = (drift: LiveDocDrift[]): string =>
 
 /** Scrub a refusal's string fields (the run dir and section paths) one by one. Scrubbing the serialized JSON would
  *  break it on a secret that matches JSON syntax, and the parse back would throw. */
-function scrubRefusal(r: RegradeRefusal, secrets: string[]): RegradeRefusal {
+export function scrubRefusal(r: RegradeRefusal, secrets: string[]): RegradeRefusal {
   const sp = <T extends { path?: string }>(x: T): T => (x.path !== undefined ? { ...x, path: scrub(x.path, secrets) } : x);
   return {
     ...r,
@@ -771,8 +771,16 @@ function unprovenParts(o: {
   onlyRefs: string[] | undefined;
   acceptedDrift: Array<{ liveIndex: number; redaction: RedactionLoss[] }>;
 }): Array<{ refusal: RegradeRefusal; line: string }> {
+  // The comparisons that will call a judge: a non-neutral reference (in a fill, only those it judges). A pairwise
+  // assert whose every comparison is neutral (its own variant's reference) sends nothing to a judge.
+  const judgedRefs = (a: Assertion): string[] =>
+    o.setup
+      .refsFor(a)
+      .map((r) => r.name)
+      .filter((n) => !o.setup.neutralRefs.has(n) && (o.onlyRefs === undefined || o.onlyRefs.includes(n)));
+  const sent = o.sent.filter((a) => a.semantic_pairwise === undefined || judgedRefs(a).length > 0);
   // Nothing is sent to a judge: nothing to prove.
-  if (o.sent.length === 0) return [];
+  if (sent.length === 0) return [];
   const coverage = scrubCoverage(o.result.scrubSet, o.runDir, o.secrets, runsWriteRoot());
   if (coverage.covered) return [];
   const why = coverage.why;
@@ -783,13 +791,7 @@ function unprovenParts(o: {
     "Nothing was sent to the judge. Re-run the case (a new run records its scrub set), run with the scrub settings the run used, " +
     "or pass --allow-scrub-change after checking them. (can't verify ⇒ not green)";
   const recordedEntries = (o.result.assertions ?? []).filter((e) => e.assertion !== undefined);
-  // The comparisons that will call a judge: a non-neutral reference (in a fill, only those it judges).
-  const judgedRefs = (a: Assertion): string[] =>
-    o.setup
-      .refsFor(a)
-      .map((r) => r.name)
-      .filter((n) => !o.setup.neutralRefs.has(n) && (o.onlyRefs === undefined || o.onlyRefs.includes(n)));
-  const pairwiseSent = o.sent.filter((a) => a.semantic_pairwise !== undefined && judgedRefs(a).length > 0);
+  const pairwiseSent = sent.filter((a) => a.semantic_pairwise !== undefined);
   if (pairwiseSent.length && (typeof o.result.prompt !== "string" || o.result.prompt !== sc(o.sc.prompt)))
     out.push({
       refusal: { runDir: o.runDir, code: "task_unverifiable", scrubSet: why },
@@ -798,7 +800,7 @@ function unprovenParts(o: {
         `and ${reason}. ${remedy}`,
     });
   const recordedLines = new Set(recordedEntries.flatMap((e) => rubricOf(e.assertion)));
-  const rubricLines = o.sent.flatMap((a) => {
+  const rubricLines = sent.flatMap((a) => {
     const lines = rubricOf(a).flatMap((l, k) => (recordedLines.has(sc(l)) ? [] : [k]));
     return lines.length ? [{ assertionIndex: o.sc.assert.indexOf(a), lines }] : [];
   });
@@ -818,7 +820,7 @@ function unprovenParts(o: {
     const k = `${x.assertionIndex}\0${x.kind}\0${x.path ?? ""}`;
     if (!seen.has(k)) (seen.add(k), evidence.push(x));
   };
-  for (const a of o.sent) {
+  for (const a of sent) {
     const fp = o.docs.get(a);
     for (const s of fp?.sections ?? [])
       if ((s.kind === "health" || s.kind === "scratch_note") && !recordedSections.has(`${s.kind}\0${s.sha256}`))
