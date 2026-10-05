@@ -224,7 +224,9 @@ measured) whose run delivered an output, under the variant's lock: it refuses wh
 its `meta.run_dir`, else by its run id under the current runs root (`--run-dir` / `COWORK_HARNESS_RUNS_DIR`). An
 entry that is already complete is reported (`exists`), never rewritten. One that lacks a compose key (an assert
 added or re-scoped) gains it from the run it was frozen from, marked `unchecked`, and is refused when that run is
-gone: start a fresh flow dir then.
+gone: start a fresh flow dir then. The new document is composed with this process's scrub set, so it is added
+(by `freeze-ref` or a baseline pass) only when that set provably covers the one the run recorded (`scrubSet`);
+otherwise the case is refused with the remedy: re-run the variant, or add it under the run's scrub settings.
 
 Flags: `--variant ID` (required), `--flow DIR`, `--case ID` (repeatable), `--output-format text|json` (json
 carries `{frozen, added, exists, refused}`), `--dotenv FILE`, `--run-dir DIR`.
@@ -280,10 +282,12 @@ every climb there is finished.
   the judge's input is covered. Otherwise each part must equal the run's own scrubbed record: the pairwise `## Task`
   line (the prompt), each rubric line, each evidence note, and each reference, by its bytes whatever it is called
   (its send must hash to what a live comparison of the run under the same compose key was sent, `refSentSha256`; a
-  pre-4.4 grade's stored text must be one that comparison recorded). A reference re-frozen
-  since, or a `--fill-refs` reference the run never judged, proves nothing. A row with a part proven neither way is listed, with no judge call. A run from before 4.4 has no fingerprint, so
-  its new or edited rubric text is listed (one stderr line says so); so is a run from another machine, or one whose
-  token has rotated since. Re-run the case, or pass `--allow-scrub-change` after checking the scrub settings: the
+  grade recorded before the reference-send hash, the stored text must be one that comparison recorded). A reference
+  re-frozen since, or a `--fill-refs` reference the run never judged, proves nothing. A row with a part proven
+  neither way is listed, with no judge call. A run recorded before the scrub-set fingerprint (no `scrubSet`) proves
+  no coverage, so its new or edited rubric text is listed (one stderr line counts such rows); so is a run whose key
+  was unusable (`scrubSetUnavailable`), a run from another machine or under a replaced key, or one whose token has
+  rotated since. Re-run the case, or pass `--allow-scrub-change` after checking the scrub settings: the
   regrade file then records `scrubAcceptedBy`. Neither `--rejudge` nor `--allow-doc-drift` implies it.
 - **`--rejudge`:** every judged assert of every selected row is re-judged, with the flow's references as they are
   now. Use it after a judge change the triggers above do not see. Not with `--fill-refs`.
@@ -370,7 +374,11 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   assert does not line up with the scenario or whose deterministic outcome changed (run a default `regrade` first;
   an agent-failed row aside); one whose
   re-grade is judge-invalid; in a fill one whose kept outcome was judged against a reference that has changed
-  since; and an open `judge_invalid` slot.
+  since; one with a part of the judge's input not proven scrubbed with its run's scrub set, one whose evidence
+  would be less redacted than the graded document, or one whose re-judge needs an assert whose scrubbed literal
+  this process cannot reproduce (each released only by `--allow-scrub-change`, with `--rejudge` for a less-redacted
+  row, never by `--allow-doc-drift`); one whose assert has an edit inside a scrubbed literal (only a re-run applies
+  it); and an open `judge_invalid` slot.
 
 ## Exit codes
 
@@ -384,7 +392,8 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
 - `state-template`: `0`, or `2` on usage or a refusal.
 - `freeze-ref`: `0` no case refused (an entry already complete is reported, not refused); `1` a case refused (no
   good row whose run is under the runs root and delivered its output, a damaged entry, a reference frozen for a
-  different prompt, a missing compose key whose run is gone, a store write that failed, or a run whose judged
+  different prompt, a missing compose key whose run is gone or whose scrub set this process cannot prove it
+  covers, a store write that failed, or a run whose judged
   document cannot be composed, differs from the one its live judge read, or has no live fingerprint); `2` usage
   (a bad `--variant`, no flow dir, a variant with no `results.jsonl`, no selected case with `semantic_pairwise`, the variant's
   lock held by a live run).

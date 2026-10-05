@@ -21,9 +21,20 @@ never calls the semantic judge, so a `semantic_matches` or `semantic_pairwise` a
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` re-grades those against the kept run (the judge call
 is the only spend) and reports whether the judge read the same document the live judge did (widening the evidence
 scope needs `--allow-unchecked`: content the live judge never read is refused otherwise). A part of the judge's
-input that cannot be proven scrubbed with the run's scrub set is refused too: on a run from before 4.4 (no
-`scrubSet` in `result.json`), from another machine, or after a token rotated, unchanged rubric lines re-grade but a
-new or edited one is refused until the case is re-run or `--allow-scrub-change` is passed. A run dir moved or
+input that cannot be proven scrubbed with the run's scrub set is refused too (exit 2, `refusals[]`, naming the parts,
+never their text). A run records a keyed fingerprint of its scrub set (`result.json` `scrubSet`); when this
+process's set provably covers it, everything is sent. Otherwise only parts equal to the run's own scrubbed record
+are: the pairwise task line, each rubric line, each evidence-health and scratch note, and each reference still
+byte-identical to the one a live comparison of the run was sent. So a new or edited rubric line
+(`rubric_unverifiable`), a changed prompt (`task_unverifiable`), a changed evidence note (`evidence_unverifiable`),
+or a reference re-frozen since the run (`reference_unverifiable`) is refused on a run recorded before the
+scrub-set fingerprint (no `scrubSet`), on one whose key was unusable (`scrubSetUnavailable`, see
+`debugging.md`), from another machine, or after a token it scrubbed rotated. Re-run the case (a new run records a
+fresh fingerprint), regrade with the run's scrub settings, or pass `--allow-scrub-change` after checking them (the
+grade records `scrubAcceptedBy`); `--allow-doc-drift` and `--allow-unchecked` never imply it.
+`ref freeze` applies the same proof: a document with no live fingerprint (`--allow-unchecked`) is composed with this
+process's scrub set, so it is frozen only when that set provably covers the run's, or with `--allow-scrub-change`;
+`ref verify` refuses both flags. A run dir moved or
 downloaded from where it ran is read from where it is; a COPY beside its still-present original is refused (its
 `result.json` names the original's files), so grade the original, or re-run the scenario. Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with

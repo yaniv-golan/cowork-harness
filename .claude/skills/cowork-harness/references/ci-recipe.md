@@ -520,7 +520,11 @@ set `COWORK_HARNESS_RUNS_DIR` (or pass `--run-dir`) to a workspace-relative path
 artifact-upload step can collect them. Each run dir holds `events.jsonl`, `control-out.jsonl` and
 `egress.log` at the root, plus each turn's `run.jsonl` / `trace.json` / `result.json` under `turns/<N>/`
 (a single-turn run has just `turns/1/`; there is no root compat copy of any of these). Digest one with `cowork-harness trace <run-id | dir>`.
-Secrets are scrubbed from every persisted log by value.
+Secrets are scrubbed from every persisted log by value. The first live run under a runs root also creates its
+scrub-set key, `scrubset.key`, beside the runs root (in the working directory for `--run-dir runs`): add it to
+`.gitignore`, and never upload or commit it (an upload of `runs/` does not include it). A fresh runner creates a new
+key, so `regrade` of a CI run on another machine cannot prove its scrub set covered: new or edited rubric text is
+refused there; re-run the case instead.
 
 ## Don't assume a fixed assertion count across lanes
 
