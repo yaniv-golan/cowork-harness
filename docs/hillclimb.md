@@ -576,9 +576,18 @@ that the loop and the lite report builder read, with these differences:
   untouched, on every re-grade until the case is re-run. When this process cannot reproduce the recorded text,
   the graded outcome is kept and the assertion is never re-evaluated or re-judged over scrubbed evidence: a
   re-judge it would need lists the row, with the remedy (re-grade with the run's scrub settings, or pass
-  `--allow-doc-drift`, under which the judge sees the rubric as written against the scrubbed evidence, so its
+  `--allow-scrub-change`, under which the judge sees the rubric as written against the scrubbed evidence, so its
   grade may not match the live run's). Stderr names such an assertion, since whether it was edited cannot be
   known: an edited one takes a re-run of the case;
+- it never sends a judge a part of its input the run scrubbed unless it can prove it. A run records a keyed
+  fingerprint of its scrub set (`result.json` `scrubSet`, under `scrubset.key` in the runs root). When this
+  process's set provably covers it, everything is covered. Otherwise the pairwise task line, each rubric line,
+  each evidence note and each reference must equal the run's own scrubbed record, or the row is listed with the
+  parts it could not prove. A run from before 4.4 records no fingerprint: its unchanged lines re-grade, but a new
+  or edited rubric line is listed (one stderr line says how many such rows and the remedy). So is a row from a run
+  on another machine, or one whose token has rotated since. Re-run the case, or pass `--allow-scrub-change` after
+  checking the scrub settings; the regrade file then records `scrubAcceptedBy`. Neither `--rejudge` nor
+  `--allow-doc-drift` implies it;
 - it re-judges a judged assertion when something the judge sees changed (its rubric or claims, its judge model or
   prompt template, or a `semantic_pairwise` assertion's references), recording why in
   `meta.regrade_rejudged_because`; `--rejudge` re-judges every one;
@@ -592,7 +601,7 @@ A row is listed instead of re-graded when, among other cases (see the reference)
 when the evidence its judge read has changed since it was graded (an edited kept run, or a harness change to how
 the document is composed or scrubbed); `--rejudge` grades the latter, unless the current evidence would be less
 redacted than the graded one (that row stays listed until the run's scrub settings are set, or
-`--rejudge --allow-doc-drift`). Each row records `meta.assert_sig`, the assertions it was graded under: `hillclimb
+`--rejudge --allow-scrub-change`). Each row records `meta.assert_sig`, the assertions it was graded under: `hillclimb
 run` warns when a resumed pass would mix them, and `hillclimb check` flags a case whose rows carry more than one,
 and a case whose rows were graded under another assertion set than its scenario's now — compared with the scenario
 target when one is passed (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last
