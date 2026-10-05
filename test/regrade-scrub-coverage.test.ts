@@ -637,10 +637,12 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     ).toBe("frozen");
     setEnv("COWORK_HARNESS_SCRUB_VALUES", RUB);
     const name = `ref-${RUB}`;
-    const invalid: CompleteStructured = async () => ({ structured: "not an object", model: JUDGE, subtype: "success" });
+    // An invalid reply that quotes a scrubbed value: its reason is stored on the outcome and warned.
+    const invalid: CompleteStructured = async () => ({ structured: `not an object ${RUB}`, model: JUDGE, subtype: "success" });
     const err = captureStderr();
+    let run;
     try {
-      await executeScenario(sc, {
+      run = await executeScenario(sc, {
         // A metric-only reference (no gate) whose name holds a scrubbed value.
         pairwise: { caseId: "alpha", refs: [{ name, store: join(flow, "baseline", "ref") }], gateRefs: [] },
         pairwiseComplete: invalid,
@@ -652,6 +654,9 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     expect(err.text()).toContain("a metric-only reference");
     expect(err.text()).toContain("ref-[REDACTED]");
     expect(err.text()).not.toContain(RUB);
+    const outcome = run.assertions!.find((a) => a.pairwise !== undefined)!.pairwise!.find((o) => o.status === "invalid")!;
+    expect(outcome.why).toContain("[REDACTED]");
+    expect(outcome.why).not.toContain(RUB);
   });
 
   it("the committed reference sidecar records a count, never key names", async () => {
