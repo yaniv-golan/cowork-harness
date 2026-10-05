@@ -761,7 +761,7 @@ cat >/dev/null
 cat "${ENVELOPE}"
 `;
 
-function buildHcFlow(o: { prompt: string; rubric: string[]; scrubValues: string }) {
+function buildHcFlow(o: { prompt: string; rubric: string[]; scrubValues: string; evidenceFiles?: string[] }) {
   const plugin = join(dir, "plugin", "my-plugin");
   mkdirSync(join(plugin, "skills", "x"), { recursive: true });
   writeFileSync(join(plugin, "skills", "x", "SKILL.md"), `---\nname: x\ndescription: d\n---\nbody\n`);
@@ -772,7 +772,8 @@ function buildHcFlow(o: { prompt: string; rubric: string[]; scrubValues: string 
     writeFileSync(
       join(evals, "alpha.yaml"),
       `name: alpha\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: ${o.prompt}\nassert:\n  - result: success\n` +
-        `  - semantic_pairwise:\n      rubric: [${rubric.map((r) => `'${r}'`).join(", ")}]\n      judge_model: ${JUDGE}\n`,
+        `  - semantic_pairwise:\n      rubric: [${rubric.map((r) => `'${r}'`).join(", ")}]\n      judge_model: ${JUDGE}\n` +
+        (o.evidenceFiles ? `      evidence_files: [${o.evidenceFiles.map((x) => `'${x}'`).join(", ")}]\n` : ""),
     );
   write(o.rubric);
   const judge = join(dir, "judge.sh");
@@ -908,6 +909,90 @@ describe.runIf(POSIX)("regrade scrub coverage: hillclimb regrade", () => {
     const whys = out.variants.flatMap((v) => v.listed).map((l) => l.why);
     expect(whys.some((w) => w.includes("ref-[REDACTED]"))).toBe(true);
     expect(JSON.stringify(out)).not.toContain(RUB);
+  });
+
+  /** The v1 row's kept run dir and its result.json path. */
+  const v1Run = () => {
+    const row = JSON.parse(
+      readFileSync(join(f.cwd, "flow", "v1", "results.jsonl"), "utf8")
+        .trim()
+        .split("\n")[0]!,
+    ) as {
+      meta: { run_id: string };
+    };
+    const runDir = join(f.runsDir, "alpha", row.meta.run_id);
+    return { runDir, result: join(runDir, "turns", "1", "result.json") };
+  };
+  /** Swap in a stub agent that also writes `outputs/report.md` (holding RUB) into its work dir. */
+  const writingStub = () => {
+    f.cleanup();
+    f = makeStubFixture(`mkdir -p outputs && printf '%s' 'report: ${RUB} end' > outputs/report.md\n${STUB}`);
+    for (const [k, v] of Object.entries({
+      PATH: f.env.PATH!,
+      HOME: f.env.HOME!,
+      CLAUDE_CONFIG_DIR: f.env.CLAUDE_CONFIG_DIR!,
+      COWORK_HARNESS_RUNS_DIR: f.runsDir,
+    }))
+      setEnv(k, v);
+  };
+
+  it("--rejudge over a changed evidence-health note under an uncovered set lists the row", async () => {
+    writingStub();
+    buildHcFlow({ prompt: "say hello", rubric: ["answers"], scrubValues: RUB, evidenceFiles: ["outputs/report.md"] });
+    // Files outside the assert's scope added to the kept work dir since the run: they exhaust the capture budget, so
+    // the scoped document gains a health note (files omitted) no recorded document had.
+    const { runDir } = v1Run();
+    const work = (JSON.parse(readFileSync(join(runDir, "turns", "1", "result.json"), "utf8")) as { workDir: string }).workDir;
+    for (let i = 0; i < 6; i++) writeFileSync(join(work, "outputs", `zz-${i}.md`), "x".repeat(15_000));
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", RUB);
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_B); // a rotated token: only equality can prove a part
+    const users: string[] = [];
+    const out = await regradeFlow(HC_ARGS({ rejudge: true }), hcDeps(users, [], collectSecrets()));
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    const why = out.variants.find((v) => v.variant === "v1")!.listed.map((l) => l.why);
+    expect(why).toEqual([expect.stringMatching(/^evidence no run-scrubbed record vouches for \(assert 1: health/)]);
+    expect(users).toHaveLength(0);
+  });
+
+  it("hillclimb's own scrubbed-literal listing holds under a covered set: --allow-doc-drift does not release it", async () => {
+    const hc = buildHcFlow({ prompt: "say hello", rubric: ["answers", `never says ${RUB}`], scrubValues: RUB });
+    // The scrubbed literal edited to another value: the run's record cannot tell the two apart.
+    hc.write(["answers", "never says otter-meadow-slate"]);
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", RUB); // the run's own set: core's scrub proof passes
+    const users: string[] = [];
+    const out = await regradeFlow(HC_ARGS({ rejudge: true, allowDocDrift: true }), hcDeps(users, [], collectSecrets()));
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(out.variants.find((v) => v.variant === "v1")!.listed.map((l) => l.why)).toEqual([
+      expect.stringMatching(/is scrubbed in the run's result\.json and this process's secrets do not reproduce it/),
+    ]);
+    expect(users).toHaveLength(0);
+  });
+
+  it("hillclimb's own less-redacted listing holds under a covered set: --rejudge --allow-doc-drift does not release it", async () => {
+    writingStub();
+    buildHcFlow({ prompt: "say hello", rubric: ["answers"], scrubValues: RUB });
+    const { runDir, result } = v1Run();
+    // A fingerprint with no recorded marker count, and the authored file edited since: possibly less redacted.
+    const r = JSON.parse(readFileSync(result, "utf8")) as {
+      workDir: string;
+      assertions: Array<{
+        judgedDoc?: { sections: Array<Record<string, unknown>> };
+        composedDoc?: { sections: Array<Record<string, unknown>> };
+      }>;
+    };
+    for (const a of r.assertions)
+      for (const x of [...(a.judgedDoc?.sections ?? []), ...(a.composedDoc?.sections ?? [])]) delete x.redactions;
+    writeFileSync(result, JSON.stringify(r));
+    writeFileSync(join(r.workDir, "outputs", "report.md"), `report: ${RUB} end, edited`);
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", RUB); // the run's own set: core's scrub proof passes
+    const users: string[] = [];
+    const out = await regradeFlow(HC_ARGS({ rejudge: true, allowDocDrift: true }), hcDeps(users, [], collectSecrets()));
+    expect(out.exitCode, JSON.stringify(out)).toBe(1);
+    expect(out.variants.find((v) => v.variant === "v1")!.listed.map((l) => l.why)).toEqual([
+      expect.stringMatching(/^the current evidence may be less redacted than the graded document/),
+    ]);
+    expect(users).toHaveLength(0);
+    expect(runDir).toBeTruthy();
   });
 
   it("legacy rows (no scrubSet): an edited line is listed with one summary line naming the remedy; --allow-scrub-change re-grades it", async () => {
