@@ -89,9 +89,12 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   and `F/<variant>/regrade.md` lists the row. The usual causes: a run recorded before the scrub-set fingerprint (no
   `scrubSet` in its `result.json`; one stderr summary line counts them), a run whose key was unusable ("this run
   recorded no scrub set"), a run from another machine or under a replaced `scrubset.key`, or a token the run
-  scrubbed that has rotated since. What to do, in order: if this process lacks a scrub value the run had
-  (`COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS`, a rotated token), ask the user to set the run's
-  settings and regrade again; otherwise the listed cases need new runs, which record a fresh fingerprint. A pass
+  scrubbed that has rotated since. What to do, in order: if the run recorded no scrub set, first have the user fix
+  `scrubset.key` as its `::warning:: [scrub-set]` line names (see the debugging reference); the harness never
+  replaces an existing bad key, so a new run before that fix records no scrub set again and is listed again. If this
+  process lacks a scrub value the run had (`COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS`, a rotated
+  token), ask the user to set the run's settings and regrade again; otherwise the listed cases need new runs,
+  which record a fresh fingerprint once the key is usable. A pass
   runs nothing for a slot that already has a row, so tell the user and propose running the change as a new variant,
   or a fresh flow dir from the baseline when the baseline's rows are listed. Only if the user has checked the scrub
   settings and asks for it, re-run the same `regrade` with `--allow-scrub-change` (the regrade file then records
@@ -202,6 +205,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   listed instead: ask the user before re-running with `--rejudge`. A row whose new rubric text cannot be proven
   scrubbed with its run's scrub set is listed too, and so is one whose evidence would be less redacted than the
   graded document: handle both as in Step 0.5 (*Rows listed instead of re-graded*), never with `--allow-doc-drift`.
+  For the less-redacted row the override, if the user asks for it, is `--rejudge --allow-scrub-change` together:
+  `--allow-scrub-change` alone does not re-judge changed evidence.
 - **A new metric.** Add `metrics:` to the scenario, have the user approve the sha, re-run
   `cowork-harness hillclimb state-template T --flow F` and merge only the new `metrics` entries into
   `_state.json`. Rows written before it lack the key (`check` notes them); `hillclimb regrade T --flow F` fills it
@@ -213,7 +218,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   `win_vN` entries (it declares them only once no scored row lacks them). Only the baseline's reference
   decides `pass`. When an entry already frozen lacks a compose key (an assertion added or re-scoped since),
   `freeze-ref` and a baseline pass add it only when this process's scrub set provably covers the run it was frozen
-  from; otherwise the case is refused (exit 1) with the remedy, re-run the variant. A `--fill-refs` comparison against a
+  from; otherwise the case is refused (exit 1). The refusal says to re-run the variant, but a pass never re-runs a
+  filled slot and a baseline pass refuses again each time: restore the run's scrub settings and re-run `freeze-ref`,
+  or start a fresh flow dir. A `--fill-refs` comparison against a
   reference the row's run never judged is proven only when the run's scrub set is covered; otherwise the row is
   listed (exit 1) and keeps no `win_vN` column. Handle it as in Step 0.5: same scrub settings, or new runs; ask
   the user before any `--allow-scrub-change`.

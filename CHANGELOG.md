@@ -35,8 +35,9 @@ and `error.code` named in it. No CLI behaviour changes.
 - **The companion skill names every CLI long flag and every `error.code`.** A new test reads the flags from each
   command's `--help` and the codes from `schema/*.json`, and fails on one the skill never mentions, unless it is
   allowlisted with a reason. Its first run found 41 flags and 3 `regrade` codes (`doc_drift`,
-  `unchecked_content`, `no_semantic_asserts`) the skill never named; the skill now describes each where its
-  command is covered.
+  `unchecked_content`, `no_semantic_asserts`) the skill never named. The skill now describes 39 of the flags and
+  all 3 codes; the other 2 are allowlisted (`--diff`, used only by `sync --diff` for baseline maintenance, and
+  `--strict-independent`, which is help prose, not a flag).
 - [RELEASING.md](./RELEASING.md) gains a step that reconciles the companion skill against the new version's
   CHANGELOG, recipes first, before the live gate: a passage that is stale or missing blocks the release. The pull
   request template asks every PR to state whether the companion skill is affected.
