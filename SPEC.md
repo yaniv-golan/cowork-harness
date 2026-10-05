@@ -716,9 +716,9 @@ Two evidence refusals are decided before any judge call, for every run dir:
   run's (every recorded HMAC recomputed under the same key), every part of the judge's input is covered. Otherwise
   each part sent must equal the run's own scrubbed record: the `semantic_pairwise` task line (only when a pairwise
   comparison is judged), each rubric line, each evidence-health or scratch note, an accepted drift's authored file
-  that carries fewer scrub markers, and each reference: its send must hash to the `refSentSha256` a live grade of the
-  run recorded for it (a pre-4.4 grade, which sent the stored text raw: the stored text's sha256 must still equal its
-  `refDocSha256`). An
+  that carries fewer scrub markers, and each reference: its send must hash to the `refSentSha256` any live comparison of the
+  run recorded under the same compose key, whatever the reference is called (a pre-4.4 grade, which sent the stored
+  text raw: the stored text's sha256 must equal such a comparison's `refDocSha256`). An
   unproven part refuses unless `--allow-scrub-change` is passed, with `task_unverifiable`, `rubric_unverifiable`,
   `evidence_unverifiable` or `reference_unverifiable`; accepted, the run's entry and file record `scrubAcceptedBy`.
   Neither `--allow-doc-drift` nor `--allow-unchecked` implies it. A run with no `scrubSet` (harness < 4.4), another

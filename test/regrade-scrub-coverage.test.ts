@@ -84,7 +84,13 @@ afterEach(() => {
 const JUDGE = "claude-haiku-4-5-20251001";
 
 /** The scenario file, rewritten in place (a rubric edit between the run and the re-grade). */
-function writeScenario(o: { prompt?: string; pairwise?: string[] | null; matches?: string[]; morePairwise?: boolean }): string {
+function writeScenario(o: {
+  prompt?: string;
+  pairwise?: string[] | null;
+  matches?: string[];
+  morePairwise?: boolean;
+  refs?: string[];
+}): string {
   const file = join(dir, "evals", "alpha.yaml");
   mkdirSync(join(dir, "evals"), { recursive: true });
   const yamlList = (xs: string[]) => `[${xs.map((x) => `'${x}'`).join(", ")}]`;
@@ -100,7 +106,12 @@ function writeScenario(o: { prompt?: string; pairwise?: string[] | null; matches
       "  - result: success",
       ...(o.pairwise === null
         ? []
-        : ["  - semantic_pairwise:", `      rubric: ${yamlList(o.pairwise ?? ["gives the answer"])}`, `      judge_model: ${JUDGE}`]),
+        : [
+            "  - semantic_pairwise:",
+            `      rubric: ${yamlList(o.pairwise ?? ["gives the answer"])}`,
+            `      judge_model: ${JUDGE}`,
+            ...(o.refs ? [`      refs: ${yamlList(o.refs)}`] : []),
+          ]),
       ...(o.morePairwise
         ? ["  - semantic_pairwise:", "      rubric: ['is concise']", "      include_subagent_text: true", `      judge_model: ${JUDGE}`]
         : []),
@@ -589,22 +600,65 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     expect(refCodes(await regradeRuns(regradeOpts(file, flow, v1.outDir, [])))).toEqual(["reference_unverifiable"]);
   });
 
+  /** Re-grade the v1 run through the scenario's own `refs:` naming the baseline store: the reference is then called
+   *  `ref` (the store dir), where the live hillclimb grade called it `baseline`. */
+  const viaScenarioRefs = (flow: string, runDir: string, users: string[]) => {
+    const file = writeScenario({ refs: [join(flow, "baseline", "ref")] });
+    return regradeRuns({ ...regradeOpts(file, flow, runDir, users), pairwise: undefined });
+  };
+
+  it("a reference is proven by its bytes, not its name: a 4.4 run re-graded through refs: naming the same store", async () => {
+    const { flow, v1 } = await refFlow();
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_B); // an uncovered set: only equality can prove the reference
+    const users: string[] = [];
+    const out = await viaScenarioRefs(flow, v1.outDir, users);
+    expect(out.ok, JSON.stringify(out)).toBe(true);
+    expect(users.length).toBeGreaterThan(0);
+    expect(users.join("\n")).not.toContain(ANS);
+  });
+
+  it("a reference is proven by its bytes, not its name: a pre-4.4 run re-graded through refs: naming the same store", async () => {
+    const { flow, v1 } = await refFlow();
+    const r = readResult(v1.outDir) as { scrubSet?: unknown; assertions: Array<{ pairwise?: Array<Record<string, unknown>> }> };
+    delete r.scrubSet;
+    for (const a of r.assertions) for (const o of a.pairwise ?? []) (delete o.refSentSha256, delete o.refRedactions);
+    writeFileSync(resultPath(v1.outDir), JSON.stringify(r, null, 2));
+    const out = await viaScenarioRefs(flow, v1.outDir, []);
+    expect(out.ok, JSON.stringify(out)).toBe(true);
+  });
+
+  it("different bytes under another name are still refused", async () => {
+    const { flow, v1, refreeze } = await refFlow();
+    refreeze();
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_B);
+    const users: string[] = [];
+    const out = await viaScenarioRefs(flow, v1.outDir, users);
+    expect(refCodes(out)).toEqual(["reference_unverifiable"]);
+    if (!out.ok) expect(out.refusals?.[0]?.references).toEqual(["ref"]);
+    expect(users).toHaveLength(0);
+  });
+
   it("--fill-refs: a reference the run never judged is refused under an uncovered set, judged under the run's own", async () => {
     const { file, flow, v1 } = await refFlow();
     const sc = parseScenarioFile(file);
-    expect(
-      freezeCaseRef({
-        flowAbs: flow,
-        variant: "v1",
-        caseId: "alpha",
-        scenarioFile: file,
-        assertions: sc.assert,
-        prompt: sc.prompt,
-        results: JSON.stringify(rowFor(v1.outDir)) + "\n",
-        secrets: collectSecrets(),
-        command: "hillclimb freeze-ref",
-      }).status,
-    ).toBe("frozen");
+    // A v1 reference whose bytes no live comparison of this run was sent (the stub's outputs are otherwise identical,
+    // and a reference is proven by its bytes): written to the store as a freeze would.
+    const key = pairwiseComposeKey(sc.assert[1]!);
+    const doc = readRefDoc(join(flow, "baseline", "ref"), "alpha", key);
+    const entry = readRefEntry(join(flow, "baseline", "ref"), "alpha");
+    if (doc.status !== "ok" || entry.status !== "ok") throw new Error("no baseline reference");
+    freezeRef(
+      join(flow, "v1", "ref"),
+      "alpha",
+      entry.source,
+      { [key]: `${doc.text}\nv1's own answer` },
+      {
+        harnessVersion: "test",
+        composerId: doc.composerId,
+        scenario: entry.scenario,
+        taskSha256: entry.taskSha256,
+      },
+    );
     const fill = { ...flowPairwiseOptions("alpha", "v2", discoverFlowRefs(flow)), onlyRefs: ["v1"] };
     const covered = await regradeRuns(regradeOpts(file, flow, v1.outDir, [], { pairwise: fill }));
     expect(covered.ok, JSON.stringify(covered)).toBe(true);

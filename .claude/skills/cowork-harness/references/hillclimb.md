@@ -278,8 +278,9 @@ every climb there is finished.
 - **Never a part the run scrubbed, unproven.** A run records a keyed fingerprint of its scrub set (`result.json`
   `scrubSet`; the key is `scrubset.key` beside the runs root). When this process's set provably covers it, every part of
   the judge's input is covered. Otherwise each part must equal the run's own scrubbed record: the pairwise `## Task`
-  line (the prompt), each rubric line, each evidence note, and each reference (its send must hash to what the run's
-  live judge was sent, `refSentSha256`; a pre-4.4 grade's stored text must be unchanged). A reference re-frozen
+  line (the prompt), each rubric line, each evidence note, and each reference, by its bytes whatever it is called
+  (its send must hash to what a live comparison of the run under the same compose key was sent, `refSentSha256`; a
+  pre-4.4 grade's stored text must be one that comparison recorded). A reference re-frozen
   since, or a `--fill-refs` reference the run never judged, proves nothing. A row with a part proven neither way is listed, with no judge call. A run from before 4.4 has no fingerprint, so
   its new or edited rubric text is listed (one stderr line says so); so is a run from another machine, or one whose
   token has rotated since. Re-run the case, or pass `--allow-scrub-change` after checking the scrub settings: the

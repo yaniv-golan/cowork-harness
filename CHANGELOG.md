@@ -22,9 +22,10 @@ All notable changes to this project are documented here. The format is based on
   - Before any judge call, a re-grade proves each part it sends: covered when the run's set is a subset of this
     process's under the same key (a grown set included), else by equality with the run's own scrubbed record —
     the task line (checked only when a pairwise comparison will be judged), each rubric line, each evidence-health
-    and scratch note, and each reference: its send now must hash to what the run's live judge was sent
-    (`pairwise[].refSentSha256`, new), or, for a grade recorded before 4.4 (whose judge got the stored text raw),
-    the stored text must still be the one that grade recorded (`refDocSha256`). A reference re-frozen since, or one
+    and scratch note, and each reference, by its bytes whatever it is called: its send now must hash to what a live comparison of
+    the run under the same compose key was sent (`pairwise[].refSentSha256`, new), or, for a grade recorded before
+    4.4 (whose judge got the stored text raw), the stored text must be one such a comparison recorded
+    (`refDocSha256`). A reference re-frozen since, or one
     the run never judged (a `--fill-refs` column), proves nothing. A part proven neither way is
     refused by `regrade` (exit 2, `error.code` `task_unverifiable`, `rubric_unverifiable`, `evidence_unverifiable`
     or `reference_unverifiable`, in `refusals[]` beside `doc_drift`) and listed by `hillclimb regrade` (exit 1),

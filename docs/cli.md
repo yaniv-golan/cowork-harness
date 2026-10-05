@@ -307,9 +307,11 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
     recorded; and a drift accepted with `--allow-doc-drift` whose authored file carries fewer scrub markers than the graded one
     (or whose graded fingerprint recorded no count) is never proven this way;
   - each reference a comparison will send: this process's scrub of the stored reference must hash to the
-    `refSentSha256` a live grade of this run recorded for the same reference and compose key (what that judge was
-    sent). A grade recorded before 4.4 has no such hash, but its judge received the stored text unscrubbed, so a
-    stored text whose sha256 still equals its `refDocSha256` discloses nothing new. A reference re-frozen since, one
+    `refSentSha256` any live comparison of this run recorded under the same compose key (what that judge was sent),
+    whatever the reference is called now (a plain `regrade` names it after its store dir, a hillclimb flow after its
+    variant): what is disclosed depends only on the bytes. A grade recorded before 4.4 has no such hash, but its
+    judge received the stored text unscrubbed, so a stored text whose sha256 equals the `refDocSha256` of any live
+    comparison under that compose key discloses nothing new. A reference re-frozen since, one
     the run never judged (a `--fill-refs` column), or one with no recorded grade proves nothing.
 
   A part proven neither way is refused (exit `2`) with `error.code` `task_unverifiable`, `rubric_unverifiable`,

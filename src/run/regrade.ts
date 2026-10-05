@@ -759,8 +759,9 @@ const rubricOf = (a: Assertion | undefined): readonly string[] => a?.semantic_ma
  *  - each evidence-health and scratch note in a document to be sent: a section of the same kind and bytes is in a
  *    document the run recorded; and every drift accepted with `allowDocDrift` whose authored file now carries fewer
  *    scrub markers than the graded one (or whose graded fingerprint recorded no count) — a detected loss;
- *  - each judged reference: this process's send of it hashes to the `refSentSha256` a live grade of the run recorded
- *    for it (a pre-4.4 grade, sent the stored text raw: the stored text still hashes to its `refDocSha256`).
+ *  - each judged reference, by bytes whatever its name: this process's send of it hashes to the `refSentSha256` of any
+ *    live comparison of the run under the same compose key (a pre-4.4 grade, sent the stored text raw: the stored text
+ *    hashes to such a comparison's `refDocSha256`).
  * Bytes equal to the run's own scrubbed record are what the run already wrote; a part neither equal nor covered by a
  * proven set can carry a value only the run knew to scrub.
  */
@@ -842,11 +843,13 @@ function unprovenParts(o: {
       refusal: { runDir: o.runDir, code: "evidence_unverifiable", scrubSet: why, ...detail, evidenceSections: evidence },
       line: `evidence no run-scrubbed record vouches for (${uncheckedLabel(evidence)}) cannot be proven scrubbed with the run's set — ${reason}. ${remedy}`,
     });
-  // Each reference a comparison will send, by equality with what the run's live judge was sent for the same reference
-  // and compose key: a 4.4 outcome records the sent text's sha256 (`refSentSha256`), which this process's send must
-  // equal; an older outcome's judge received the stored text unscrubbed, so a stored text still equal to the one it
-  // recorded (`refDocSha256`) discloses nothing new. No such outcome (a reference re-frozen since, one the run never
-  // judged, an older run's invalid comparison) proves nothing.
+  // Each reference a comparison will send, proven by its BYTES, whatever it is called now (a plain `regrade` names a
+  // reference after its store dir, a hillclimb flow after its variant): what reaches a judge depends only on the text
+  // sent. Proven when any live comparison of this run under the same compose key was sent the same text — a 4.4
+  // outcome records the sent text's sha256 (`refSentSha256`), which this process's send must equal; an older
+  // outcome's judge received the stored text unscrubbed, so a stored text whose sha256 equals the one it recorded
+  // (`refDocSha256`) discloses nothing new. No such outcome (a reference re-frozen since, one the run never judged,
+  // an older run's invalid comparison) proves nothing.
   const unprovenRefs = new Set<string>();
   for (const a of pairwiseSent) {
     const key = pairwiseComposeKey(a);
@@ -858,9 +861,7 @@ function unprovenParts(o: {
       if (got.status !== "ok" || got.taskSha256 !== createHash("sha256").update(o.sc.prompt, "utf8").digest("hex")) continue;
       const sent = sha256Hex(sc(got.text));
       const proven = live.some((e) =>
-        (e.pairwise ?? []).some((x) =>
-          x.ref !== ref.name ? false : x.refSentSha256 !== undefined ? x.refSentSha256 === sent : x.refDocSha256 === got.sha256,
-        ),
+        (e.pairwise ?? []).some((x) => (x.refSentSha256 !== undefined ? x.refSentSha256 === sent : x.refDocSha256 === got.sha256)),
       );
       if (!proven) unprovenRefs.add(ref.name);
     }
