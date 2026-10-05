@@ -343,6 +343,8 @@ describe.runIf(POSIX)("regrade scrub coverage: core regrade", () => {
     if (refused.ok) return;
     expect(refused.refusals?.map((x) => x.code)).toEqual(["rubric_unverifiable"]);
     expect(refused.message).toMatch(/re-run the case/i);
+    // One summary line names the legacy cause and the remedy.
+    expect(refused.message.split("\n").filter((l) => /recorded before the scrub-set fingerprint/.test(l))).toHaveLength(1);
     expect(refused.message).toContain("--allow-scrub-change");
     // --allow-doc-drift does not imply it.
     const drift = await regradeRuns(regradeOpts(file, flow, v1.outDir, [], { allowDocDrift: true, allowUnchecked: true }));
