@@ -225,39 +225,143 @@ describe("hillclimb lite report builder contract (anthropics/skills@8a1541c4a3ff
   });
 });
 
-/** The locally bundled copy of the skill, if this machine has one, must still match the pins. */
+/** Dotted-number order for bundle version dirs ("2.1.289" > "2.1.88"). */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** The installed Claude Code's version (`claude --version` → "2.1.289 (Claude Code)"), if it is on PATH. */
+function installedClaudeVersion(): string | undefined {
+  const r = spawnSync("claude", ["--version"], { encoding: "utf8", timeout: 15_000 });
+  return r.status === 0 ? /^(\d+\.\d+\.\d+)/.exec(r.stdout.trim())?.[1] : undefined;
+}
+
+type BundleCheck = { version?: string; checked: number; drift: string[]; skipped: string[] };
+
+/**
+ * Checks ONE bundle version: the installed Claude Code's, else the newest version dir that has a `report/` dir.
+ * Old version dirs are not checked: macOS's periodic /tmp cleanup deletes their files and leaves the dirs.
+ * A `report/` dir with none of the pinned files is such a reaped or incomplete extraction: skipped, with a reason.
+ * A dir with some pinned files, where one is missing or differs, is drift.
+ */
+function checkLocalBundle(root: string, installed: string | undefined, pins: Record<string, string>): BundleCheck {
+  const reportDirsOf = (version: string): string[] =>
+    statSync(join(root, version)).isDirectory()
+      ? readdirSync(join(root, version))
+          .map((hash) => join(root, version, hash, "claude-api", "shared", "evals", "report"))
+          .filter((dir) => existsSync(dir))
+      : [];
+  const versions = existsSync(root) ? readdirSync(root).filter((v) => reportDirsOf(v).length > 0) : [];
+  const version = installed !== undefined && versions.includes(installed) ? installed : [...versions].sort(compareVersions).at(-1);
+  const out: BundleCheck = { version, checked: 0, drift: [], skipped: [] };
+  if (version === undefined) return out;
+  for (const dir of reportDirsOf(version)) {
+    const present = readdirSync(dir);
+    if (!Object.keys(pins).some((name) => present.includes(name))) {
+      out.skipped.push(`bundle ${version}: ${dir} holds none of the pinned files (a reaped or incomplete extraction)`);
+      continue;
+    }
+    out.checked++;
+    for (const [name, pin] of Object.entries(pins)) {
+      if (!present.includes(name)) {
+        out.drift.push(`bundle ${version}: ${name} is missing`);
+        continue;
+      }
+      const got = sha256(readFileSync(join(dir, name)));
+      if (got !== pin) out.drift.push(`bundle ${version}: ${name} sha256 ${got.slice(0, 12)}… differs from pin ${pin.slice(0, 12)}…`);
+    }
+    const unpinned = present.filter((n) => !(n in pins));
+    if (unpinned.length) console.warn(`bundle ${version} has unpinned report/ files: ${unpinned.join(", ")}`);
+  }
+  return out;
+}
+
+/** The installed (else newest) locally bundled copy of the skill, if this machine has one, must still match the pins. */
 describe("hillclimb report files in the local skill bundle match the pins", () => {
-  it("every bundled report/ file with a pin has the pinned sha256", (ctx) => {
+  it("the installed or newest bundle's report/ files have the pinned sha256", (ctx) => {
     const uid = process.getuid?.();
     if (uid === undefined) return ctx.skip("no POSIX uid on this platform");
     const root = `/private/tmp/claude-${uid}/bundled-skills`;
-    const reportDirs: { version: string; dir: string }[] = [];
-    if (existsSync(root))
-      for (const version of readdirSync(root))
-        for (const hash of existsSync(join(root, version)) && statSync(join(root, version)).isDirectory()
-          ? readdirSync(join(root, version))
-          : []) {
-          const dir = join(root, version, hash, "claude-api", "shared", "evals", "report");
-          if (existsSync(dir)) reportDirs.push({ version, dir });
-        }
-    if (!reportDirs.length) {
-      console.warn(`SKIPPING local-bundle drift check: no ${root}/*/*/claude-api/shared/evals/report/ on this machine`);
-      return ctx.skip("no local claude-api skill bundle");
+    const check = checkLocalBundle(root, installedClaudeVersion(), PINS);
+    for (const why of check.skipped) console.warn(`SKIPPING ${why}`);
+    if (check.checked === 0) {
+      console.warn(`SKIPPING local-bundle drift check: no complete ${root}/*/*/claude-api/shared/evals/report/ to check`);
+      return ctx.skip("no complete local claude-api skill bundle");
     }
-    const drift: string[] = [];
-    for (const { version, dir } of reportDirs) {
-      const present = readdirSync(dir);
-      for (const [name, pin] of Object.entries(PINS)) {
-        if (!present.includes(name)) {
-          drift.push(`bundle ${version}: ${name} is missing`);
-          continue;
-        }
-        const got = sha256(readFileSync(join(dir, name)));
-        if (got !== pin) drift.push(`bundle ${version}: ${name} sha256 ${got.slice(0, 12)}… differs from pin ${pin.slice(0, 12)}…`);
-      }
-      const unpinned = present.filter((n) => !(n in PINS));
-      if (unpinned.length) console.warn(`bundle ${version} has unpinned report/ files: ${unpinned.join(", ")}`);
+    expect(check.drift, "the local claude-api bundle moved away from the pinned hillclimb sources; re-read them and move the pins").toEqual(
+      [],
+    );
+  });
+});
+
+describe("the local-bundle check (synthetic bundles)", () => {
+  const files = { "a.mjs": "alpha", "b.md": "bravo", "c.mjs": "charlie" };
+  const pins = Object.fromEntries(Object.entries(files).map(([n, c]) => [n, sha256(c)]));
+  let root = "";
+  const bundle = (version: string, hash: string, contents: Record<string, string>): string => {
+    const dir = join(root, version, hash, "claude-api", "shared", "evals", "report");
+    mkdirSync(dir, { recursive: true });
+    for (const [n, c] of Object.entries(contents)) writeFileSync(join(dir, n), c);
+    return dir;
+  };
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "lite-bundles-"));
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("a report/ dir with none of the pinned files is skipped, not drift (a reaped extraction)", () => {
+    bundle("2.1.10", "reaped", {});
+    const check = checkLocalBundle(root, "2.1.10", pins);
+    expect(check.drift).toEqual([]);
+    expect(check.skipped).toHaveLength(1);
+    expect(check.checked).toBe(0);
+  });
+
+  it("a partial miss is drift", () => {
+    const { "c.mjs": _c, ...partial } = files;
+    bundle("2.1.11", "partial", partial);
+    expect(checkLocalBundle(root, "2.1.11", pins).drift).toEqual(["bundle 2.1.11: c.mjs is missing"]);
+  });
+
+  it("a sha mismatch is drift", () => {
+    bundle("2.1.12", "changed", { ...files, "b.md": "bravo, edited" });
+    const check = checkLocalBundle(root, "2.1.12", pins);
+    expect(check.drift).toHaveLength(1);
+    expect(check.drift[0]).toMatch(/^bundle 2\.1\.12: b\.md sha256 /);
+  });
+
+  it("checks the installed version's bundle when it is there, else the newest", () => {
+    bundle("2.1.9", "good", files);
+    expect(checkLocalBundle(root, "2.1.9", pins)).toMatchObject({ version: "2.1.9", drift: [] });
+    // 2.1.12 (a mismatch) is the newest: with no installed bundle, or an unknown installed version, it is the one checked.
+    expect(checkLocalBundle(root, "9.9.9", pins).version).toBe("2.1.12");
+    expect(checkLocalBundle(root, undefined, pins).drift).toHaveLength(1);
+  });
+
+  it("a real mismatch in a copy of the local bundle still fails (when this machine has one)", (ctx) => {
+    const uid = process.getuid?.();
+    if (uid === undefined) return ctx.skip("no POSIX uid on this platform");
+    const real = checkLocalBundle(`/private/tmp/claude-${uid}/bundled-skills`, installedClaudeVersion(), PINS);
+    if (real.version === undefined || real.drift.length > 0) return ctx.skip("no matching local bundle to copy");
+    const src = join(`/private/tmp/claude-${uid}/bundled-skills`, real.version);
+    const copyRoot = mkdtempSync(join(tmpdir(), "lite-bundle-copy-"));
+    try {
+      cpSync(src, join(copyRoot, real.version), { recursive: true });
+      const hash = readdirSync(join(copyRoot, real.version)).find((h) =>
+        existsSync(join(copyRoot, real.version!, h, "claude-api", "shared", "evals", "report", "SCHEMA.md")),
+      );
+      if (hash === undefined) return ctx.skip("the copied bundle has no SCHEMA.md");
+      const target = join(copyRoot, real.version, hash, "claude-api", "shared", "evals", "report", "SCHEMA.md");
+      writeFileSync(target, readFileSync(target, "utf8") + "\n");
+      expect(checkLocalBundle(copyRoot, real.version, PINS).drift.some((d) => d.includes("SCHEMA.md sha256"))).toBe(true);
+    } finally {
+      rmSync(copyRoot, { recursive: true, force: true });
     }
-    expect(drift, "the local claude-api bundle moved away from the pinned hillclimb sources; re-read them and move the pins").toEqual([]);
   });
 });
