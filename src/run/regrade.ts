@@ -110,7 +110,8 @@ export interface LiveDocDrift {
 /** A part of the judge's input a re-grade cannot prove is scrubbed with a set covering the run's: the pairwise task
  *  line (`task_unverifiable`), a rubric line (`rubric_unverifiable`), a section of the judged evidence — an evidence
  *  note, or an accepted drift's authored file carrying fewer scrub markers (`evidence_unverifiable`)
- *  — or a reference whose live grade's send-time scrub redacted something (`reference_unverifiable`). */
+ *  — or a reference this process would send other than the run's live judge was sent it: re-frozen or changed since,
+ *  never judged by the run (a `--fill-refs` column), or scrubbed differently now (`reference_unverifiable`). */
 export type ScrubRefusalCode = "task_unverifiable" | "rubric_unverifiable" | "evidence_unverifiable" | "reference_unverifiable";
 export const SCRUB_REFUSAL_CODES: readonly ScrubRefusalCode[] = [
   "task_unverifiable",
@@ -758,8 +759,8 @@ const rubricOf = (a: Assertion | undefined): readonly string[] => a?.semantic_ma
  *  - each evidence-health and scratch note in a document to be sent: a section of the same kind and bytes is in a
  *    document the run recorded; and every drift accepted with `allowDocDrift` whose authored file now carries fewer
  *    scrub markers than the graded one (or whose graded fingerprint recorded no count) — a detected loss;
- *  - each judged reference: no live grade against it recorded that the send-time scrub redacted something
- *    (`refRedactions`), so the run's set found nothing in it to scrub.
+ *  - each judged reference: this process's send of it hashes to the `refSentSha256` a live grade of the run recorded
+ *    for it (a pre-4.4 grade, sent the stored text raw: the stored text still hashes to its `refDocSha256`).
  * Bytes equal to the run's own scrubbed record are what the run already wrote; a part neither equal nor covered by a
  * proven set can carry a value only the run knew to scrub.
  */
@@ -798,7 +799,7 @@ function unprovenParts(o: {
   const pairwiseSent = sent.filter((a) => a.semantic_pairwise !== undefined);
   if (pairwiseSent.length && (typeof o.result.prompt !== "string" || o.result.prompt !== sc(o.sc.prompt)))
     out.push({
-      refusal: { runDir: o.runDir, code: "task_unverifiable", scrubSet: why, ...detail, ...detail },
+      refusal: { runDir: o.runDir, code: "task_unverifiable", scrubSet: why, ...detail },
       line:
         `the pairwise task line (the scenario prompt) ${typeof o.result.prompt === "string" ? "differs from the run's recorded prompt once scrubbed" : "has no recorded prompt to compare with"}, ` +
         `and ${reason}. ${remedy}`,

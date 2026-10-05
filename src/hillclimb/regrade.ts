@@ -444,7 +444,7 @@ function scrubListing(rs: readonly RegradeRefusal[]): string {
       case "evidence_unverifiable":
         return `evidence no run-scrubbed record vouches for (${(r.evidenceSections ?? []).map((x) => `assert ${x.assertionIndex}: ${x.kind}${x.path !== undefined ? ` ${x.path}` : ""}`).join(", ")})`;
       default:
-        return `the reference(s) ${(r.references ?? []).join(", ")} (its live grade scrubbed a value from it)`;
+        return `the reference(s) ${(r.references ?? []).join(", ")} (re-frozen or changed since the run, never judged by the run — a --fill-refs column — or scrubbed differently now)`;
     }
   };
   const why = rs[0]!.scrubSet;

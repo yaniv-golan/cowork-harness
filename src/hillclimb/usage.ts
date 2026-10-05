@@ -83,8 +83,9 @@ export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario
        Freezes each selected semantic_pairwise case's reference into <flow>/<variant>/ref from the variant's
        lowest-rep good row (status ok, not an agent failure, verdict and pairwise evidence measured), under the
        variant's lock. A baseline pass freezes the baseline's itself; freeze a later variant's to compare the next
-       ones with it (win_<vN>). An entry already complete is reported, never rewritten. Exit 0 nothing refused,
-       1 a case refused, 2 usage.`;
+       ones with it (win_<vN>). An entry already complete is reported, never rewritten. An entry lacking a compose
+       key gains it from its own run only when this process's scrub set provably covers that run's (else the case is
+       refused: re-run the variant). Exit 0 nothing refused, 1 a case refused, 2 usage.`;
 
 export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml | dir/> [--flow DIR] [--variant all|baseline|vN] [--case ID]...
        [--judge-model ID] [--fill-refs | --rejudge] [--approve-harness] [--allow-doc-drift] [--allow-unchecked]

@@ -324,14 +324,19 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   above; new or edited text, and a reference re-frozen since, is refused, with one summary line naming the remedy: re-run the case (a new run records its set), or pass `--allow-scrub-change`
   after checking the scrub settings. A literal made only of the letters the fingerprint uses (`ghjkmnpqrstvwxyz`)
   can change the stored fingerprint when the result is scrubbed; it then reads as unverifiable, never as covered.
-  When the installation key cannot be used (a symlink, a file readable by others, another owner, not a key), the run
+  When the installation key cannot be used (a symlink, a file readable by others, another owner, an empty file, not a
+  key), the run
   warns once, naming the key's path and the defect, and records why in `result.json` `scrubSetUnavailable`; a
-  re-grade then says "this run recorded no scrub set (its key …)" rather than calling the run older than 4.4. A
-  0-byte key left by an interrupted create is recreated, and a new key is written whole before it is linked into
-  place.
+  re-grade then says "this run recorded no scrub set (its key …)" rather than calling the run older than 4.4. An
+  existing file is never removed or replaced, so delete an unusable one to let the next run create a key. A new key
+  is written whole and then linked into place; on a filesystem with no hard links it is created exclusively in place
+  instead, which still never replaces an existing key (an interrupted create there leaves an empty file, reported as
+  unusable).
   **Not covered by the proof:** content accepted with `--allow-unchecked`, and the document of an `unknown` or
   `live_refused` assert (no live fingerprint to compare with), are protected only by this process's scrub set;
-  both are named in a `::warning::` before the judge call.
+  both are named in a `::warning::` before the judge call. So is an authored file a drift accepted with
+  `--allow-doc-drift` changed on a run whose set is not proven covered, when its scrub-marker count did not drop: it
+  is sent scrubbed with this process's set only.
 - **Whether it matches is measured, not assumed.** Each assert's document is fingerprinted and compared, section
   by section, with the `judgedDoc` the live run recorded. `docMatchesLive` is `true` (the same bytes), `false`
   (they differ; the differing sections are listed by kind and path), `scope_changed` (the rubric's
@@ -429,7 +434,7 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   envelope instead. On a drift, unchecked-content or scrub refusal that envelope carries `error.code` (`doc_drift` when
   any dir drifted, else `unchecked_content`, else the first of `task_unverifiable`, `rubric_unverifiable`,
   `evidence_unverifiable`, `reference_unverifiable`) and `refusals[]` — one `{runDir, code, uncheckedCount?,
-  uncheckedSections?, liveDocDrift?, scrubSet?, rubricLines?, evidenceSections?, references?}` per refused run dir
+  uncheckedSections?, liveDocDrift?, scrubSet?, scrubSetDetail?, rubricLines?, evidenceSections?, references?}` per refused run dir
   and code — so a batch caller can list what to fix. A
   scenario with neither a `semantic_matches` nor a `semantic_pairwise` assert is refused with `error.code: "no_semantic_asserts"` (category
   `usage`): nothing to re-grade, which a caller can treat as "nothing to do" rather than a failure. After a

@@ -463,6 +463,26 @@ describe("regrade: is the judged document the one the live judge read?", () => {
     expect(judge.calls).toHaveLength(0);
   });
 
+  it("an accepted drift's lost-marker file is named by the RE-GRADED scenario's assert index, not the live one", async () => {
+    const SECRET = "sk-test-index-space-3b9e";
+    process.env.COWORK_HARNESS_SCRUB_VALUES = SECRET;
+    const k = await keptRun({ author: (w) => writeFileSync(join(w, "outputs", "report.md"), `token: ${SECRET}\nrisk: concentration\n`) });
+    delete process.env.COWORK_HARNESS_SCRUB_VALUES;
+    // The same judged assert, now second: live index 0, scenario index 1.
+    const reordered = scenarioAt(mkdtempSync(join(tmpdir(), "cwh-rg-scn-order-")), `  - file_exists: outputs/report.md\n${SCOPED}`);
+    const judge = judgeFactory(() => true);
+    const out = await regradeRuns({ runDirs: [k.runDir], scenarioFile: reordered, makeJudge: judge.make, allowDocDrift: true });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusals).toEqual([
+      expect.objectContaining({
+        code: "evidence_unverifiable",
+        evidenceSections: [{ assertionIndex: 1, kind: "authored", path: "outputs/report.md" }],
+      }),
+    ]);
+    expect(judge.calls).toHaveLength(0);
+  });
+
   it("a changed scope does not hide a secret the live run scrubbed: the live document is rebuilt and checked too", async () => {
     // Live: unscoped, with the secret known and scrubbed. Re-grade: the secret unknown, and the scope narrowed
     // to the file — the graded document is scope_changed by design, but the LIVE one no longer rebuilds.

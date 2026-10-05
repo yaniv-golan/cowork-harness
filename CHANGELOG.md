@@ -28,7 +28,9 @@ All notable changes to this project are documented here. The format is based on
     the run never judged (a `--fill-refs` column), proves nothing. A part proven neither way is
     refused by `regrade` (exit 2, `error.code` `task_unverifiable`, `rubric_unverifiable`, `evidence_unverifiable`
     or `reference_unverifiable`, in `refusals[]` beside `doc_drift`) and listed by `hillclimb regrade` (exit 1),
-    naming the parts, never their text.
+    naming the parts, never their text: each `refusals[]` entry carries `scrubSet` (why the set is not proven),
+    `scrubSetDetail` (the run's own reason, when it recorded one), and `rubricLines`, `evidenceSections` or
+    `references`.
   - The new `--allow-scrub-change` flag (both commands) sends such a part anyway, recorded as `scrubAcceptedBy` on
     the regrade file and `runs[]`. `--allow-doc-drift`, `--allow-unchecked` and `--rejudge` never imply it; an
     accepted drift whose authored file lost scrub markers is part of what is proven.
@@ -38,11 +40,13 @@ All notable changes to this project are documented here. The format is based on
     (`ref_scrub_weaker`).
   - `hillclimb freeze-ref` and a baseline pass add a missing compose key to a reference only when this process's set
     provably covers the run's; otherwise the case is refused with "re-run the variant". `ref freeze` freezes an
-    unchecked document (`--allow-unchecked`) under the same proof, or with `--allow-scrub-change`.
-  - An unusable installation key (a symlink, a file readable by others, another owner, not a key) is warned about
+    unchecked document (`--allow-unchecked`) under the same proof, or with `--allow-scrub-change` (which
+    `ref verify` refuses, like the other freeze-only flags).
+  - An unusable installation key (a symlink, a file readable by others, another owner, an empty file, not a key) is warned about
     once, naming its path and the defect, and recorded on the result as `scrubSetUnavailable`, so a re-grade names
-    that cause instead of calling the run older than 4.4. A key is written whole before it is linked into place, and
-    a 0-byte key left by an interrupted create is recreated.
+    that cause instead of calling the run older than 4.4. An existing key file is never removed or replaced. A new
+    key is written whole before it is linked into place; on a filesystem with no hard links it is created
+    exclusively in place instead.
   - An invalid pairwise judge reply that quotes its input is scrubbed before it is warned on stderr or stored.
 
 ### Changed
@@ -59,9 +63,12 @@ All notable changes to this project are documented here. The format is based on
   reproduced, or because its evidence would be less redacted than the graded document, was released by
   `--allow-doc-drift` in 4.3.0 (with `--rejudge` for the latter). Passing `--allow-doc-drift` now leaves such a row
   listed; pass `--allow-scrub-change` (with `--rejudge` for a less-redacted row) after checking the scrub settings.
+  4.3.0's re-grade surfaces are new and experimental, so this change to the flag's meaning ships in a minor release.
 - **What the scrub-set proof does not cover.** Content accepted with `--allow-unchecked`, and the documents of
   `unknown` / `live_refused` asserts (no live fingerprint to compare with), are still protected only by the
-  re-grading process's scrub set, as before; `regrade` warns about both before any judge call.
+  re-grading process's scrub set, as before; `regrade` warns about both before any judge call. So is an authored
+  file a drift accepted with `--allow-doc-drift` changed on a run whose set is not proven covered, when its scrub
+  markers did not drop: it is sent scrubbed with the current set only.
 
 ### Fixed
 
