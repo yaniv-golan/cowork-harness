@@ -302,7 +302,7 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
     (checked only when a pairwise comparison will be judged, so a `semantic_matches`-only scenario never is);
   - each rubric line: scrubbed now, it must be a line the run recorded in one of its judged asserts;
   - each evidence-health and scratch note: a section of the same kind and bytes must be in a document the run
-    recorded; and a drift accepted with `--allow-doc-drift` whose authored file now carries fewer scrub markers
+    recorded; and a drift accepted with `--allow-doc-drift` whose authored file carries fewer scrub markers than the graded one
     (or whose graded fingerprint recorded no count) is never proven this way;
   - each reference judged: no live grade against it may have recorded `refRedactions` above 0.
 
