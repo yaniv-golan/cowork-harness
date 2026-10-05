@@ -41,9 +41,24 @@ describe("freezeFromRun", () => {
   });
 
   it("refuses an unchecked document unless --allow-unchecked, and then records it as unchecked", () => {
-    const c = composed({ docs: [{ key: K1, text: "U", live: "unknown" }] });
+    const c = composed({ docs: [{ key: K1, text: "U", live: "unknown" }], scrubCoverage: { covered: true } });
     expect(freezeFromRun(base(), deps(c)).exitCode).toBe(2);
     expect(freezeFromRun({ ...base(), allowUnchecked: true }, deps(c)).exitCode).toBe(0);
+    expect(readRefDoc(join(tmp, "refs"), "case_1", K1)).toMatchObject({ status: "ok", unchecked: true });
+  });
+
+  it("an unchecked document needs the run's scrub set proven covered: --allow-unchecked does not imply --allow-scrub-change", () => {
+    const c = composed({ docs: [{ key: K1, text: "U", live: "unknown" }], scrubCoverage: { covered: false, why: "smaller" } });
+    const refused = freezeFromRun({ ...base(), allowUnchecked: true }, deps(c));
+    expect(refused.exitCode).toBe(2);
+    expect(refused.message).toMatch(/lacks a value the run scrubbed/);
+    expect(refused.message).toContain("--allow-scrub-change");
+    expect(readRefDoc(join(tmp, "refs"), "case_1", K1).status).toBe("missing");
+    // A composition that says nothing about coverage proves nothing either.
+    expect(
+      freezeFromRun({ ...base(), allowUnchecked: true }, deps(composed({ docs: [{ key: K1, text: "U", live: "unknown" }] }))).exitCode,
+    ).toBe(2);
+    expect(freezeFromRun({ ...base(), allowUnchecked: true, allowScrubChange: true }, deps(c)).exitCode).toBe(0);
     expect(readRefDoc(join(tmp, "refs"), "case_1", K1)).toMatchObject({ status: "ok", unchecked: true });
   });
 
@@ -118,6 +133,7 @@ describe("freezeFromRun — task identity and atomicity", () => {
             { key: K1, text: "A", live: "match" },
             { key: K2, text: "B", live: "unknown" },
           ],
+          scrubCoverage: { covered: true },
         }),
       ),
     );

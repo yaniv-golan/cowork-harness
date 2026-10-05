@@ -15,7 +15,8 @@
  * made only of those letters) fails validation and proves nothing: fail closed.
  */
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, writeSync, constants } from "node:fs";
+import { closeSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, rmSync, writeSync, constants } from "node:fs";
+import { warn } from "./io.js";
 import { dirname, join, resolve } from "node:path";
 
 export const SCRUB_KEY_FILE = "scrubset.key";
@@ -45,40 +46,66 @@ const keyIdOf = (key: Buffer): string => encode(createHash("sha256").update("cow
 const hmacOf = (key: Buffer, s: string): string => encode(createHmac("sha256", key).update(s, "utf8").digest(), VALUE_CHARS);
 
 /** Read a key file: a regular file (not a link), owned by this user, readable by no one else, 64 hex. Anything
- *  else is not a key — it proves nothing and is never overwritten. */
-function readKeyFile(path: string): Buffer | undefined {
+ *  else is not a key — it proves nothing and is never used. `why` names the defect (never the key). */
+function readKeyFile(path: string): { key: Buffer } | { why: string; empty?: true; absent?: true } {
+  let st;
   try {
-    const st = lstatSync(path);
-    if (!st.isFile() || (st.mode & 0o077) !== 0) return undefined;
-    if (typeof process.getuid === "function" && st.uid !== process.getuid()) return undefined;
-    const hex = readFileSync(path, "utf8").trim();
-    return /^[0-9a-f]{64}$/.test(hex) ? Buffer.from(hex, "hex") : undefined;
+    st = lstatSync(path);
   } catch {
-    return undefined;
+    return { why: `${path} does not exist`, absent: true };
   }
+  if (!st.isFile()) return { why: `${path} is not a regular file (a symlink or a directory)` };
+  if ((st.mode & 0o077) !== 0)
+    return { why: `${path} is readable or writable by others (mode ${(st.mode & 0o777).toString(8)}; it must be 600)` };
+  if (typeof process.getuid === "function" && st.uid !== process.getuid()) return { why: `${path} is owned by another user` };
+  if (st.size === 0) return { why: `${path} is empty (an interrupted create)`, empty: true };
+  let hex: string;
+  try {
+    hex = readFileSync(path, "utf8").trim();
+  } catch (e) {
+    return { why: `${path} cannot be read (${(e as Error).message})` };
+  }
+  return /^[0-9a-f]{64}$/.test(hex) ? { key: Buffer.from(hex, "hex") } : { why: `${path} does not hold a 64-hex-digit key` };
 }
 
 /** Where the installation key of a runs root lives: beside it, in its parent directory. */
 export const scrubKeyPath = (runsRoot: string): string => join(dirname(resolve(runsRoot)), SCRUB_KEY_FILE);
 
-/** The installation key for `runsRoot`, created (0600, exclusive) when absent. Undefined when it cannot be made or read. */
-export function scrubKey(runsRoot: string): Buffer | undefined {
+/** Write a fresh key next to `path` and link it into place: a reader sees either no key or a complete one, never a
+ *  partial file, and a concurrent creator's key is never replaced (`link` does not overwrite). */
+function createKey(path: string): void {
+  const tmp = `${path}.tmp-${randomBytes(6).toString("hex")}`;
+  const fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+  try {
+    writeSync(fd, randomBytes(32).toString("hex") + "\n");
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    linkSync(tmp, path);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+/** The installation key for `runsRoot`, created (0600) when absent. A 0-byte key file (a create interrupted by an
+ *  older harness) is removed and recreated. Otherwise an unusable file is never touched: `why` says what is wrong. */
+export function scrubKey(runsRoot: string): { key: Buffer } | { why: string } {
   const path = scrubKeyPath(runsRoot);
-  const existing = readKeyFile(path);
-  if (existing) return existing;
+  let got = readKeyFile(path);
+  if ("key" in got) return got;
+  if (!got.absent && !got.empty) return got;
   try {
     mkdirSync(dirname(path), { recursive: true });
-    const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
-    try {
-      if ((fstatSync(fd).mode & 0o077) !== 0) return undefined;
-      writeSync(fd, randomBytes(32).toString("hex") + "\n");
-    } finally {
-      closeSync(fd);
-    }
-  } catch {
-    // Created by a concurrent run between the read and the create, or not creatable at all: read whatever is there.
+    if (got.empty) rmSync(path);
+    createKey(path);
+  } catch (e) {
+    return { why: `${path} could not be created (${(e as Error).message})` };
   }
-  return readKeyFile(path);
+  got = readKeyFile(path);
+  return "key" in got ? got : { why: got.why };
 }
 
 /** The fingerprint of a scrub set (`collectSecrets()` output) under `key`. */
@@ -87,10 +114,25 @@ export function scrubSetRecord(secrets: readonly string[], key: Buffer): ScrubSe
   return { v: 1, keyId: keyIdOf(key), values };
 }
 
-/** The fingerprint a run records, or undefined when no key can be made (the run then proves nothing later). */
-export function runScrubSet(secrets: readonly string[], runsRoot: string): ScrubSetRecord | undefined {
-  const key = scrubKey(runsRoot);
-  return key ? scrubSetRecord(secrets, key) : undefined;
+const warnedKeys = new Set<string>();
+
+/** The fingerprint a run records, or why none can be (`unavailable`, recorded on the result as
+ *  `scrubSetUnavailable`). An unusable key is warned about once per process, naming its path and the defect. */
+export function runScrubSet(
+  secrets: readonly string[],
+  runsRoot: string,
+  say: (line: string) => void = warn,
+): { record: ScrubSetRecord } | { unavailable: string } {
+  const got = scrubKey(runsRoot);
+  if ("key" in got) return { record: scrubSetRecord(secrets, got.key) };
+  if (!warnedKeys.has(got.why)) {
+    warnedKeys.add(got.why);
+    say(
+      `::warning:: [scrub-set] no scrub-set fingerprint is recorded: the installation key ${got.why}. A later re-grade of this run ` +
+        `cannot prove its scrub set covered. Fix or remove the file (a missing key is created on the next run).\n`,
+    );
+  }
+  return { unavailable: got.why };
 }
 
 /** A recorded value, validated: anything not exactly the shape written (absent, older, or changed by a scrub) is
@@ -103,22 +145,36 @@ export function parseScrubSet(v: unknown): ScrubSetRecord | undefined {
   return { v: 1, keyId: o.keyId, values: o.values as string[] };
 }
 
-/** Why a run's scrub set is not proven covered: it records none (`legacy`), the record was changed (`mangled`), no
- *  key here has its id (`key`), or a string it scrubbed is not in this set (`smaller`). */
-export type ScrubCoverage = { covered: true } | { covered: false; why: "legacy" | "mangled" | "key" | "smaller" };
+/** Why a run's scrub set is not proven covered: it predates the record (`legacy`), it recorded why it has none
+ *  (`unrecorded`: its key was unusable, `detail` says how), the record was changed (`mangled`), no key here has its id
+ *  (`key`), or a string it scrubbed is not in this set (`smaller`). */
+export type ScrubCoverage =
+  | { covered: true }
+  | { covered: false; why: "legacy" | "mangled" | "key" | "smaller" }
+  | { covered: false; why: "unrecorded"; detail: string };
 
 /**
- * Whether `secrets` provably covers the scrub set the run in `runDir` recorded (`recorded`: its result.json
- * `scrubSet`). The key is looked up beside the runs root that holds the run (`<root>/<scenario>/<run>`), then beside
+ * Whether `secrets` provably covers the scrub set the run in `runDir` recorded (its result.json `scrubSet`, or
+ * `scrubSetUnavailable` when it could record none). The key is looked up beside the runs root that holds the run (`<root>/<scenario>/<run>`), then beside
  * the current runs root. Read only: never creates a key.
  */
-export function scrubCoverage(recorded: unknown, runDir: string, secrets: readonly string[], currentRunsRoot: string): ScrubCoverage {
-  if (recorded === undefined) return { covered: false, why: "legacy" };
+export function scrubCoverage(
+  result: { scrubSet?: unknown; scrubSetUnavailable?: unknown } | undefined,
+  runDir: string,
+  secrets: readonly string[],
+  currentRunsRoot: string,
+): ScrubCoverage {
+  const recorded = result?.scrubSet;
+  if (recorded === undefined)
+    return typeof result?.scrubSetUnavailable === "string"
+      ? { covered: false, why: "unrecorded", detail: result.scrubSetUnavailable }
+      : { covered: false, why: "legacy" };
   const run = parseScrubSet(recorded);
   if (!run) return { covered: false, why: "mangled" };
   const key = [dirname(dirname(runDir)), currentRunsRoot]
     .map((root) => readKeyFile(scrubKeyPath(root)))
-    .find((k) => k !== undefined && keyIdOf(k) === run.keyId);
+    .flatMap((k) => ("key" in k ? [k.key] : []))
+    .find((k) => keyIdOf(k) === run.keyId);
   if (!key) return { covered: false, why: "key" };
   const now = new Set(scrubSetRecord(secrets, key).values);
   return run.values.every((v) => now.has(v)) ? { covered: true } : { covered: false, why: "smaller" };
@@ -129,6 +185,8 @@ export function coverageWhy(c: Extract<ScrubCoverage, { covered: false }>): stri
   switch (c.why) {
     case "legacy":
       return "the run predates the scrub-set record (harness < 4.4), so its scrub set cannot be proven covered";
+    case "unrecorded":
+      return `this run recorded no scrub set (its key ${c.detail}), so its scrub set cannot be proven covered`;
     case "mangled":
       return "the run's recorded scrub-set fingerprint is unreadable, so its scrub set cannot be proven covered";
     case "key":

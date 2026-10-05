@@ -10,6 +10,7 @@ import { freezeCaseRef } from "../src/hillclimb/freeze-ref.js";
 import { discoverFlowRefs, flowPairwiseOptions } from "../src/hillclimb/pairwise.js";
 import { latestTurn, turnArtifactPath } from "../src/run/turn-layout.js";
 import { POSIX, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
+import { collectSecrets } from "../src/secrets.js";
 
 // `regrade` over semantic_pairwise, on REAL kept run dirs (the real executeScenario with the agent and the judge
 // transport stubbed): the same seeded order as the live pass, the neutral run drift-checked against composedDoc,
@@ -198,7 +199,8 @@ describe.runIf(POSIX)("regrade: semantic_pairwise", () => {
     const r = await regradeRuns({
       runDirs: [v1.outDir],
       scenarioFile: file,
-      secrets: [],
+      // The run's own set: the reference a fill adds was never judged by the run, so only a covered set sends it.
+      secrets: collectSecrets(),
       pairwise: { ...flowPairwiseOptions("alpha", "v2", discoverFlowRefs(flow)), onlyRefs: ["v1"] },
       pairwiseComplete: judge(calls),
     });
@@ -318,7 +320,8 @@ describe.runIf(POSIX)("regrade: semantic_pairwise with order: both", () => {
     const r = await regradeRuns({
       runDirs: [v1.outDir],
       scenarioFile: file,
-      secrets: [],
+      // The run's own set: the reference a fill adds was never judged by the run, so only a covered set sends it.
+      secrets: collectSecrets(),
       pairwise: { ...flowPairwiseOptions("alpha", "v2", discoverFlowRefs(flow)), onlyRefs: ["v1"] },
       pairwiseComplete: always("A"),
     });
@@ -381,7 +384,8 @@ describe.runIf(POSIX)("regrade: a fill over semantic_matches + semantic_pairwise
     const r = await regradeRuns({
       runDirs: [v1.outDir],
       scenarioFile: file,
-      secrets: [],
+      // The run's own set: the reference a fill adds was never judged by the run, so only a covered set sends it.
+      secrets: collectSecrets(),
       pairwise: { ...flowPairwiseOptions("alpha", "v2", discoverFlowRefs(flow)), onlyRefs: ["v1"] },
       pairwiseComplete: judge([]),
       makeJudge: () => {

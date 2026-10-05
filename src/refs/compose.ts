@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { runsWriteRoot } from "../run/trace-view.js";
+import { scrubCoverage } from "../scrub-set.js";
 import { COMPOSER_ID, judgedOpts, semanticRefusal, type AssertContext } from "../assert.js";
 import { pathSafeId } from "../hillclimb/ids.js";
 import { tildeify } from "../io.js";
@@ -147,5 +148,6 @@ export function composeFromRunDir(
     taskSha256: createHash("sha256").update(scenarioRef.prompt, "utf8").digest("hex"),
     docs,
     scrubCount: distinct(secrets),
+    scrubCoverage: scrubCoverage(result, runDir, secrets, runsWriteRoot()),
   };
 }

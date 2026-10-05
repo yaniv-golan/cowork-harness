@@ -23,7 +23,8 @@ import { basename, join, resolve } from "node:path";
 import { claudeCliCompleteStructured, transportIdentity } from "../decide/llm-transport.js";
 import { makePairwiseJudge, type CompleteStructured } from "../decide/pairwise-judge.js";
 import { pairwiseRefsRefusal, scenarioPairwiseSetup, type PairwiseSetup } from "../refs/preflight.js";
-import { runPairwiseJudges, type PairwiseRef } from "./pairwise-prepass.js";
+import { pairwiseComposeKey, runPairwiseJudges, type PairwiseRef } from "./pairwise-prepass.js";
+import { readRefDoc } from "../refs/store.js";
 import { composeJudgedDocument, evaluate, judgedOpts, runSemanticJudges, semanticRefusal, type AssertContext } from "../assert.js";
 import { parseArgs } from "../cli-args.js";
 import { isolationRefusal } from "../decide/llm-transport.js";
@@ -127,7 +128,9 @@ export interface RegradeRefusal {
   uncheckedSections?: UncheckedSection[];
   liveDocDrift?: LiveDocDrift[];
   /** A scrub refusal: why the run's scrub set is not proven covered by this process's (`ScrubCoverage`). */
-  scrubSet?: "legacy" | "mangled" | "key" | "smaller";
+  scrubSet?: "legacy" | "unrecorded" | "mangled" | "key" | "smaller";
+  /** `scrubSet: "unrecorded"`: why the run could record none (its key's path and defect). */
+  scrubSetDetail?: string;
   /** `rubric_unverifiable`: per assert (its index in the new scenario), the rubric line indexes not proven. */
   rubricLines?: Array<{ assertionIndex: number; lines: number[] }>;
   /** `evidence_unverifiable`: the sections not proven. */
@@ -769,7 +772,7 @@ function unprovenParts(o: {
   secrets: string[];
   setup: PairwiseSetup;
   onlyRefs: string[] | undefined;
-  acceptedDrift: Array<{ liveIndex: number; redaction: RedactionLoss[] }>;
+  acceptedDrift: Array<{ redaction: RedactionLoss[] }>;
 }): Array<{ refusal: RegradeRefusal; line: string }> {
   // The comparisons that will call a judge: a non-neutral reference (in a fill, only those it judges). A pairwise
   // assert whose every comparison is neutral (its own variant's reference) sends nothing to a judge.
@@ -781,9 +784,10 @@ function unprovenParts(o: {
   const sent = o.sent.filter((a) => a.semantic_pairwise === undefined || judgedRefs(a).length > 0);
   // Nothing is sent to a judge: nothing to prove.
   if (sent.length === 0) return [];
-  const coverage = scrubCoverage(o.result.scrubSet, o.runDir, o.secrets, runsWriteRoot());
+  const coverage = scrubCoverage(o.result, o.runDir, o.secrets, runsWriteRoot());
   if (coverage.covered) return [];
   const why = coverage.why;
+  const detail = coverage.why === "unrecorded" ? { scrubSetDetail: coverage.detail } : {};
   const reason = coverageWhy(coverage);
   const sc = o.secrets.length ? (t: string) => scrub(t, o.secrets) : (t: string) => t;
   const out: Array<{ refusal: RegradeRefusal; line: string }> = [];
@@ -794,7 +798,7 @@ function unprovenParts(o: {
   const pairwiseSent = sent.filter((a) => a.semantic_pairwise !== undefined);
   if (pairwiseSent.length && (typeof o.result.prompt !== "string" || o.result.prompt !== sc(o.sc.prompt)))
     out.push({
-      refusal: { runDir: o.runDir, code: "task_unverifiable", scrubSet: why },
+      refusal: { runDir: o.runDir, code: "task_unverifiable", scrubSet: why, ...detail, ...detail },
       line:
         `the pairwise task line (the scenario prompt) ${typeof o.result.prompt === "string" ? "differs from the run's recorded prompt once scrubbed" : "has no recorded prompt to compare with"}, ` +
         `and ${reason}. ${remedy}`,
@@ -806,7 +810,7 @@ function unprovenParts(o: {
   });
   if (rubricLines.length)
     out.push({
-      refusal: { runDir: o.runDir, code: "rubric_unverifiable", scrubSet: why, rubricLines },
+      refusal: { runDir: o.runDir, code: "rubric_unverifiable", scrubSet: why, ...detail, rubricLines },
       line:
         `rubric text the run did not record (${rubricLines.map((r) => `assert ${r.assertionIndex} line(s) ${r.lines.join(",")}`).join("; ")}: ` +
         `new or edited since the run, or scrubbed differently) cannot be proven scrubbed with the run's set — ${reason}. ${remedy}`,
@@ -826,20 +830,47 @@ function unprovenParts(o: {
       if ((s.kind === "health" || s.kind === "scratch_note") && !recordedSections.has(`${s.kind}\0${s.sha256}`))
         add({ assertionIndex: o.sc.assert.indexOf(a), kind: s.kind });
   }
-  for (const d of o.acceptedDrift) for (const r of d.redaction) add({ assertionIndex: d.liveIndex, kind: "authored", path: r.path });
+  // An accepted drift's authored file that lost scrub markers, named by the asserts (new scenario index) whose
+  // document to be sent carries it: a file no sent document carries reaches no judge.
+  const lossy = new Set(o.acceptedDrift.flatMap((d) => d.redaction.map((r) => r.path)));
+  for (const a of sent)
+    for (const s of o.docs.get(a)?.sections ?? [])
+      if (s.kind === "authored" && lossy.has(s.path ?? "")) add({ assertionIndex: o.sc.assert.indexOf(a), kind: "authored", path: s.path });
   if (evidence.length)
     out.push({
-      refusal: { runDir: o.runDir, code: "evidence_unverifiable", scrubSet: why, evidenceSections: evidence },
+      refusal: { runDir: o.runDir, code: "evidence_unverifiable", scrubSet: why, ...detail, evidenceSections: evidence },
       line: `evidence no run-scrubbed record vouches for (${uncheckedLabel(evidence)}) cannot be proven scrubbed with the run's set — ${reason}. ${remedy}`,
     });
-  const redactedLive = new Set(
-    recordedEntries.flatMap((e) => (e.pairwise ?? []).filter((x) => (x.refRedactions ?? 0) > 0).map((x) => x.ref)),
-  );
-  const references = [...new Set(pairwiseSent.flatMap((a) => judgedRefs(a).filter((n) => redactedLive.has(n))))].sort();
+  // Each reference a comparison will send, by equality with what the run's live judge was sent for the same reference
+  // and compose key: a 4.4 outcome records the sent text's sha256 (`refSentSha256`), which this process's send must
+  // equal; an older outcome's judge received the stored text unscrubbed, so a stored text still equal to the one it
+  // recorded (`refDocSha256`) discloses nothing new. No such outcome (a reference re-frozen since, one the run never
+  // judged, an older run's invalid comparison) proves nothing.
+  const unprovenRefs = new Set<string>();
+  for (const a of pairwiseSent) {
+    const key = pairwiseComposeKey(a);
+    const live = recordedEntries.filter((e) => e.assertion.semantic_pairwise !== undefined && pairwiseComposeKey(e.assertion) === key);
+    for (const ref of o.setup.refsFor(a)) {
+      if (!judgedRefs(a).includes(ref.name)) continue;
+      const got = readRefDoc(ref.store, o.setup.caseId, key);
+      // A reference that cannot be read, or was frozen for another task, is not sent (the comparison is `missing`).
+      if (got.status !== "ok" || got.taskSha256 !== createHash("sha256").update(o.sc.prompt, "utf8").digest("hex")) continue;
+      const sent = sha256Hex(sc(got.text));
+      const proven = live.some((e) =>
+        (e.pairwise ?? []).some((x) =>
+          x.ref !== ref.name ? false : x.refSentSha256 !== undefined ? x.refSentSha256 === sent : x.refDocSha256 === got.sha256,
+        ),
+      );
+      if (!proven) unprovenRefs.add(ref.name);
+    }
+  }
+  const references = [...unprovenRefs].sort();
   if (references.length)
     out.push({
-      refusal: { runDir: o.runDir, code: "reference_unverifiable", scrubSet: why, references },
-      line: `the reference(s) ${references.join(", ")} held a value the run's live grade scrubbed at send time, and ${reason}. ${remedy}`,
+      refusal: { runDir: o.runDir, code: "reference_unverifiable", scrubSet: why, ...detail, references },
+      line:
+        `the reference(s) ${references.join(", ")} would be sent as no live grade of this run was sent them (re-frozen since, ` +
+        `never judged by the run, or scrubbed differently now), and ${reason}. ${remedy}`,
     });
   return out;
 }

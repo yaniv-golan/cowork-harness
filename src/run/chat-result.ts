@@ -94,6 +94,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     scenario: opts.scenario,
     prompt: opts.prompt,
     scrubSet: undefined, // a chat is never re-graded (regrade refuses a chat run dir): no fingerprint to prove against
+    scrubSetUnavailable: undefined,
     fidelity: opts.fidelity,
     baseline: opts.baseline,
     result: record.result,

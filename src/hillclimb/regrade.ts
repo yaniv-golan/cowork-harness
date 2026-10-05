@@ -450,7 +450,9 @@ function scrubListing(rs: readonly RegradeRefusal[]): string {
   const why = rs[0]!.scrubSet;
   return (
     `${rs.map(part).join("; ")} cannot be proven scrubbed with the run's scrub set` +
-    (why ? ` — ${coverageWhy({ covered: false, why })}` : "") +
+    (why
+      ? ` — ${coverageWhy(why === "unrecorded" ? { covered: false, why, detail: rs[0]!.scrubSetDetail ?? "was unusable" } : { covered: false, why })}`
+      : "") +
     `: nothing was sent to the judge. Re-run the case, run with the scrub settings the run used, or pass --allow-scrub-change after checking them`
   );
 }

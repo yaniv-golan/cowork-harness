@@ -22,6 +22,8 @@ import { discoverFlowRefs, flowPairwiseOptions } from "../src/hillclimb/pairwise
 import { regradeFlow, type HillclimbRegradeArgs, type RegradeFlowDeps } from "../src/hillclimb/regrade.js";
 import { latestTurn, turnArtifactPath } from "../src/run/turn-layout.js";
 import { collectSecrets } from "../src/secrets.js";
+import { freezeRef, readRefDoc, readRefEntry } from "../src/refs/store.js";
+import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
 import { CLI, POSIX, makeStubFixture, stubSessionTranscript, type StubFixture } from "./helpers/stub-agent.js";
 
 const TASK = "zebra-kettle-quiet-orbit";
@@ -231,7 +233,7 @@ describe.runIf(POSIX)("regrade scrub coverage: the run records its scrub set", (
 });
 
 describe.runIf(POSIX)("regrade scrub coverage: core regrade", () => {
-  it("R58 repro: the pairwise task line never goes raw — a smaller set refuses task_unverifiable; the run's set re-grades", async () => {
+  it("the pairwise task line never goes raw — a smaller set refuses task_unverifiable; the run's set re-grades", async () => {
     setEnv("COWORK_HARNESS_SCRUB_VALUES", TASK);
     const file = writeScenario({ prompt: `what is the answer ${TASK}?` });
     const { flow, v1 } = await flowRun({ file });
@@ -359,6 +361,54 @@ describe.runIf(POSIX)("regrade scrub coverage: core regrade", () => {
     expect(users.join("\n")).not.toContain(TASK);
   });
 
+  it("a missing recorded prompt cannot prove the task line: task_unverifiable", async () => {
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_A);
+    const file = writeScenario({});
+    const { flow, v1 } = await flowRun({ file });
+    const r = readResult(v1.outDir);
+    delete r.prompt;
+    writeFileSync(resultPath(v1.outDir), JSON.stringify(r, null, 2));
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_B); // an uncovered set: only equality can prove a part
+    const out = await regradeRuns(regradeOpts(file, flow, v1.outDir, []));
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusals?.map((x) => x.code)).toEqual(["task_unverifiable"]);
+    expect(out.message).toMatch(/has no recorded prompt to compare with/);
+  });
+
+  it("a run whose key was unusable records why, warns once naming the key, and a re-grade says so instead of 'predates'", async () => {
+    const keyPath = join(dirname(f.runsDir), "scrubset.key");
+    writeFileSync(keyPath, "not a key\n", { mode: 0o600 });
+    const file = writeScenario({});
+    const err = captureStderr();
+    let run;
+    try {
+      run = await flowRun({ file });
+    } finally {
+      err.restore();
+    }
+    const warned = err
+      .text()
+      .split("\n")
+      .filter((l) => l.includes("no scrub-set fingerprint is recorded"));
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain(keyPath);
+    const r = readResult(run.v1.outDir);
+    expect(r.scrubSet).toBeUndefined();
+    expect(r.scrubSetUnavailable).toBe(`${keyPath} does not hold a 64-hex-digit key`);
+    writeScenario({ pairwise: ["gives the answer", "is polite"] });
+    const out = await regradeRuns(regradeOpts(file, run.flow, run.v1.outDir, []));
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.refusals?.[0]).toMatchObject({
+      code: "rubric_unverifiable",
+      scrubSet: "unrecorded",
+      scrubSetDetail: `${keyPath} does not hold a 64-hex-digit key`,
+    });
+    expect(out.message).toContain("this run recorded no scrub set (its key");
+    expect(out.message).not.toMatch(/predates|recorded before the scrub-set fingerprint/);
+  });
+
   it("echoes: a run-scrubbed value in a judge's rationale never lands raw in the regrade file", async () => {
     setEnv("COWORK_HARNESS_SCRUB_VALUES", ANS);
     const file = writeScenario({ matches: ["gives the answer"] });
@@ -416,7 +466,7 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     expect(graded.refRedactions).toBe(2);
   });
 
-  it("a reference whose live grade scrubbed a value is refused reference_unverifiable under a smaller set; ref_scrub_weaker is noticed", async () => {
+  it("a reference the run sent scrubbed is refused reference_unverifiable when this set sends it otherwise; ref_scrub_weaker is noticed", async () => {
     const file = writeScenario({});
     const sc = parseScenarioFile(file);
     const flow = join(dir, "flow");
@@ -451,6 +501,157 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     expect(users.join("\n")).not.toContain(ANS);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.refusals?.map((r) => r.code)).toEqual(["reference_unverifiable"]);
+  });
+
+  /** The baseline frozen with no scrub set (its document holds ANS raw), then v1 run and judged against it with ANS and
+   *  TOKEN_A in the set. */
+  async function refFlow() {
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_A);
+    const file = writeScenario({});
+    const sc = parseScenarioFile(file);
+    const flow = join(dir, "flow");
+    mkdirSync(join(flow, "baseline"), { recursive: true });
+    const base = await executeScenario(sc, { pairwise: flowPairwiseOptions("alpha", "baseline", discoverFlowRefs(flow)) });
+    const freeze = (secrets: string[]) =>
+      freezeCaseRef({
+        flowAbs: flow,
+        variant: "baseline",
+        caseId: "alpha",
+        scenarioFile: file,
+        assertions: sc.assert,
+        prompt: sc.prompt,
+        results: JSON.stringify(rowFor(base.outDir)) + "\n",
+        secrets,
+        command: "hillclimb run",
+      });
+    expect(freeze([]).status).toBe("frozen");
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", ANS);
+    const v1 = await executeScenario(sc, {
+      pairwise: flowPairwiseOptions("alpha", "v1", discoverFlowRefs(flow)),
+      pairwiseComplete: capture([]),
+    });
+    // Re-freeze the baseline reference by hand with different bytes, as an edited store would be.
+    const refreeze = () => {
+      const store = join(flow, "baseline", "ref");
+      const key = pairwiseComposeKey(sc.assert[1]!);
+      const doc = readRefDoc(store, "alpha", key);
+      const entry = readRefEntry(store, "alpha");
+      if (doc.status !== "ok" || entry.status !== "ok") throw new Error("no reference to re-freeze");
+      rmSync(join(store, "alpha"), { recursive: true, force: true });
+      freezeRef(
+        store,
+        "alpha",
+        entry.source,
+        { [key]: `${doc.text}\nedited by hand` },
+        {
+          harnessVersion: "test",
+          composerId: doc.composerId,
+          scenario: entry.scenario,
+          taskSha256: entry.taskSha256,
+        },
+      );
+    };
+    return { file, flow, v1, refreeze };
+  }
+  const refCodes = (out: Awaited<ReturnType<typeof regradeRuns>>) => (out.ok ? [] : (out.refusals ?? []).map((r) => r.code));
+
+  it("a reference the run sent scrubbed re-grades after a token rotation with nothing edited", async () => {
+    const { file, flow, v1 } = await refFlow();
+    const pw = v1.assertions!.find((a) => a.pairwise !== undefined)!.pairwise!;
+    expect(pw[0]).toMatchObject({ status: "graded", refRedactions: 2 });
+    expect(pw[0]!.refSentSha256).toMatch(/^[0-9a-f]{64}$/);
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_B);
+    const users: string[] = [];
+    const out = await regradeRuns(regradeOpts(file, flow, v1.outDir, users));
+    expect(out.ok, JSON.stringify(out)).toBe(true);
+    expect(users.join("\n")).not.toContain(ANS);
+  });
+
+  it("a reference re-frozen since the live grade is refused reference_unverifiable (4.4 run)", async () => {
+    const { file, flow, v1, refreeze } = await refFlow();
+    refreeze();
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_B);
+    const users: string[] = [];
+    const out = await regradeRuns(regradeOpts(file, flow, v1.outDir, users));
+    expect(refCodes(out)).toEqual(["reference_unverifiable"]);
+    expect(users).toHaveLength(0);
+  });
+
+  it("a pre-4.4 run's reference: unchanged since its live grade re-grades; re-frozen is refused", async () => {
+    const { file, flow, v1, refreeze } = await refFlow();
+    // A pre-4.4 run: no fingerprint, and its outcomes record only the stored document's sha (its judge got it raw).
+    const r = readResult(v1.outDir) as { scrubSet?: unknown; assertions: Array<{ pairwise?: Array<Record<string, unknown>> }> };
+    delete r.scrubSet;
+    for (const a of r.assertions) for (const o of a.pairwise ?? []) (delete o.refSentSha256, delete o.refRedactions);
+    writeFileSync(resultPath(v1.outDir), JSON.stringify(r, null, 2));
+    expect(refCodes(await regradeRuns(regradeOpts(file, flow, v1.outDir, [])))).toEqual([]);
+    refreeze();
+    expect(refCodes(await regradeRuns(regradeOpts(file, flow, v1.outDir, [])))).toEqual(["reference_unverifiable"]);
+  });
+
+  it("--fill-refs: a reference the run never judged is refused under an uncovered set, judged under the run's own", async () => {
+    const { file, flow, v1 } = await refFlow();
+    const sc = parseScenarioFile(file);
+    expect(
+      freezeCaseRef({
+        flowAbs: flow,
+        variant: "v1",
+        caseId: "alpha",
+        scenarioFile: file,
+        assertions: sc.assert,
+        prompt: sc.prompt,
+        results: JSON.stringify(rowFor(v1.outDir)) + "\n",
+        secrets: collectSecrets(),
+        command: "hillclimb freeze-ref",
+      }).status,
+    ).toBe("frozen");
+    const fill = { ...flowPairwiseOptions("alpha", "v2", discoverFlowRefs(flow)), onlyRefs: ["v1"] };
+    const covered = await regradeRuns(regradeOpts(file, flow, v1.outDir, [], { pairwise: fill }));
+    expect(covered.ok, JSON.stringify(covered)).toBe(true);
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", TOKEN_B);
+    const users: string[] = [];
+    const out = await regradeRuns(regradeOpts(file, flow, v1.outDir, users, { pairwise: fill }));
+    expect(refCodes(out)).toEqual(["reference_unverifiable"]);
+    if (!out.ok) expect(out.refusals?.[0]?.references).toEqual(["v1"]);
+    expect(users).toHaveLength(0);
+  });
+
+  it("every prepass line naming a reference is scrubbed: ref_scrub_weaker and a metric-only invalid grade", async () => {
+    const file = writeScenario({});
+    const sc = parseScenarioFile(file);
+    const flow = join(dir, "flow");
+    mkdirSync(join(flow, "baseline"), { recursive: true });
+    const base = await executeScenario(sc, { pairwise: flowPairwiseOptions("alpha", "baseline", discoverFlowRefs(flow)) });
+    expect(
+      freezeCaseRef({
+        flowAbs: flow,
+        variant: "baseline",
+        caseId: "alpha",
+        scenarioFile: file,
+        assertions: sc.assert,
+        prompt: sc.prompt,
+        results: JSON.stringify(rowFor(base.outDir)) + "\n",
+        secrets: [],
+        command: "hillclimb run",
+      }).status,
+    ).toBe("frozen");
+    setEnv("COWORK_HARNESS_SCRUB_VALUES", RUB);
+    const name = `ref-${RUB}`;
+    const invalid: CompleteStructured = async () => ({ structured: "not an object", model: JUDGE, subtype: "success" });
+    const err = captureStderr();
+    try {
+      await executeScenario(sc, {
+        // A metric-only reference (no gate) whose name holds a scrubbed value.
+        pairwise: { caseId: "alpha", refs: [{ name, store: join(flow, "baseline", "ref") }], gateRefs: [] },
+        pairwiseComplete: invalid,
+      });
+    } finally {
+      err.restore();
+    }
+    expect(err.text()).toContain("ref_scrub_weaker");
+    expect(err.text()).toContain("a metric-only reference");
+    expect(err.text()).toContain("ref-[REDACTED]");
+    expect(err.text()).not.toContain(RUB);
   });
 
   it("the committed reference sidecar records a count, never key names", async () => {
@@ -629,7 +830,7 @@ const hcDeps = (users: string[], lines: string[], secrets: readonly string[]): R
 });
 
 describe.runIf(POSIX)("regrade scrub coverage: hillclimb regrade", () => {
-  it("R58 repro: under --rejudge with a smaller set the task line never goes raw — the row is listed (exit 1)", async () => {
+  it("under --rejudge with a smaller set the task line never goes raw — the row is listed (exit 1)", async () => {
     buildHcFlow({ prompt: `say ${TASK}`, rubric: ["answers"], scrubValues: TASK });
     const users: string[] = [];
     const lines: string[] = [];

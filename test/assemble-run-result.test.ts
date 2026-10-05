@@ -27,6 +27,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     scenario: "test-scenario",
     prompt: undefined,
     scrubSet: undefined,
+    scrubSetUnavailable: undefined,
     fidelity: "container",
     baseline: "latest",
     result: "success",

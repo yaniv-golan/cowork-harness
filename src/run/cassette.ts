@@ -6154,6 +6154,7 @@ function replayErrorResult(file: string): RunResult {
     execution: undefined, // cassette unreadable/invalid — no environment provenance recoverable
     prompt: undefined,
     scrubSet: undefined, // a cassette scrubs nothing live: no set to fingerprint
+    scrubSetUnavailable: undefined,
     resultErrorKind: undefined,
     errorSource: undefined, // no rec to read from on this early-bail lane
     resultSubtype: undefined, // (same — no result event to read a subtype from)
@@ -9187,6 +9188,7 @@ export async function replayCassette(
       turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
       command: "replay", // #48
       scrubSet: undefined, // a replay scrubs nothing live: its records are the recording's
+      scrubSetUnavailable: undefined,
       mutation: mutationReport, // --mutate only; undefined otherwise
       metrics,
       // A replay is held to the lane the RECORDED scenario declared — the frozen contract, not the

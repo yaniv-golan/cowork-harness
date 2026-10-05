@@ -134,7 +134,12 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
       };
     // The new document is composed now, with this process's scrub set, and written to a store that may be committed:
     // it is added only when that set provably covers the one the run scrubbed its records with.
-    const coverage = scrubCoverage(runResultField(runDir, "scrubSet"), runDir, i.secrets, runsWriteRoot());
+    const coverage = scrubCoverage(
+      { scrubSet: runResultField(runDir, "scrubSet"), scrubSetUnavailable: runResultField(runDir, "scrubSetUnavailable") },
+      runDir,
+      i.secrets,
+      runsWriteRoot(),
+    );
     if (!coverage.covered)
       return {
         status: "refused",

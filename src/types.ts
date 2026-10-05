@@ -1842,6 +1842,10 @@ export interface RunResult {
    *  with it that its own scrub set covers the run's. Absent on a run recorded before it existed, on a non-live lane,
    *  and when no key could be made — such a run's set cannot be proven covered. */
   scrubSet?: { v: 1; keyId: string; values: string[] };
+  /** Why this run recorded no `scrubSet`: its installation key was unusable (the key's path and the defect, never the
+   *  key). Distinguishes such a run from one recorded before the fingerprint existed. Absent when `scrubSet` is set,
+   *  on a non-live lane, and on an older run. */
+  scrubSetUnavailable?: string;
   fidelity: string;
   baseline: string;
   result: "success" | "error";
@@ -2162,6 +2166,10 @@ export interface RunResult {
        *  never reaches the judge. 0 when the stored text already had none of the set's values. Absent on an outcome
        *  graded before this field existed (such a grade sent the stored text as it was). */
       refRedactions?: number;
+      /** sha256 of the reference text as SENT to the judge (the stored document scrubbed with the grading process's
+       *  set). A re-grade that cannot prove its scrub set covers the run's sends a reference only when its own send
+       *  hashes to this. Absent on an outcome graded before this field existed. */
+      refSentSha256?: string;
       /** The reference was frozen without a live fingerprint to check it against (`ref freeze --allow-unchecked`). */
       unchecked?: boolean;
       why?: string;

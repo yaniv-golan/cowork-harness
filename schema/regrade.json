@@ -56,9 +56,10 @@
               "liveDocDrift": { "type": "array", "items": { "$ref": "#/definitions/LiveDocDrift" } },
               "scrubSet": {
                 "type": "string",
-                "enum": ["legacy", "mangled", "key", "smaller"],
-                "description": "A scrub refusal: why the run's scrub set is not proven covered — the run records no fingerprint (`legacy`, harness < 4.4), its fingerprint is unreadable (`mangled`), it was made under another installation key (`key`), or this process's set lacks a string the run scrubbed (`smaller`)."
+                "enum": ["legacy", "unrecorded", "mangled", "key", "smaller"],
+                "description": "A scrub refusal: why the run's scrub set is not proven covered — the run records no fingerprint (`legacy`, harness < 4.4), it recorded why it has none (`unrecorded`: its key was unusable; see `scrubSetDetail`), its fingerprint is unreadable (`mangled`), it was made under another installation key (`key`), or this process's set lacks a string the run scrubbed (`smaller`)."
               },
+              "scrubSetDetail": { "type": "string", "description": "`scrubSet: unrecorded`: the run's own reason (its key's path and defect)." },
               "rubricLines": {
                 "type": "array",
                 "description": "`rubric_unverifiable`: per assert, the rubric line indexes not proven.",
@@ -73,7 +74,7 @@
               },
               "evidenceSections": {
                 "type": "array",
-                "description": "`evidence_unverifiable`: the sections not proven.",
+                "description": "`evidence_unverifiable`: the sections not proven, each by the index of the assert (in the scenario re-graded) whose document to be sent carries it.",
                 "items": { "$ref": "#/definitions/UncheckedSection" }
               },
               "references": { "type": "array", "description": "`reference_unverifiable`: the reference names.", "items": { "type": "string" } }

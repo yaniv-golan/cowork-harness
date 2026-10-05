@@ -1037,7 +1037,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const secrets = collectSecrets();
   // The fingerprint of that set, recorded on the result so a later re-grade can prove its own set covers it. Made
   // under the installation key in the runs root (created here on the first run); undefined when no key can be made.
-  const scrubSet = runScrubSet(secrets, runsWriteRoot());
+  const scrubState = runScrubSet(secrets, runsWriteRoot());
+  const scrubSet = "record" in scrubState ? scrubState.record : undefined;
+  const scrubSetUnavailable = "unavailable" in scrubState ? scrubState.unavailable : undefined;
   // Dialog auto-cancel: faithful 6s by default; relaxed (∞) under the external decider since the
   // caller is authoritative; `COWORK_HARNESS_DIALOG_TIMEOUT_MS` overrides either way.
   // parse the dialog timeout env var. The special values "inf", "infinite", and "-1" mean Infinity
@@ -1667,6 +1669,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         lane: scenario.lane, // a salvaged partial keeps the contract it was run under
         prompt: scenario.prompt,
         scrubSet,
+        scrubSetUnavailable,
         fidelity: scenario.fidelity,
         baseline: baseline.appVersion,
         record,
@@ -2147,6 +2150,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       scenario: scenario.name,
       prompt: scenario.prompt, // persisted for `scaffold <run-dir>`
       scrubSet,
+      scrubSetUnavailable,
       fidelity: scenario.fidelity,
       baseline: baseline.appVersion,
       result: record.result,
@@ -3022,6 +3026,8 @@ export function buildPartialResult(args: {
   prompt: string;
   /** The run's scrub-set fingerprint (`RunResult.scrubSet`); absent when none could be made. */
   scrubSet?: RunResult["scrubSet"];
+  /** Why no fingerprint could be made (`RunResult.scrubSetUnavailable`). */
+  scrubSetUnavailable?: string;
   fidelity: string;
   baseline: string;
   record: RunRecord;
@@ -3145,6 +3151,7 @@ export function buildPartialResult(args: {
     scenario: args.scenarioName,
     prompt: args.prompt,
     scrubSet: args.scrubSet,
+    scrubSetUnavailable: args.scrubSetUnavailable,
     fidelity: args.fidelity,
     baseline: args.baseline,
     result: "error",

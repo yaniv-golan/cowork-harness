@@ -2520,7 +2520,10 @@
       },
       "<oneOf:1>.refusals[].scrubSet": {
         "type": "string",
-        "enum": ["legacy", "mangled", "key", "smaller"]
+        "enum": ["legacy", "unrecorded", "mangled", "key", "smaller"]
+      },
+      "<oneOf:1>.refusals[].scrubSetDetail": {
+        "type": "string"
       },
       "<oneOf:1>.refusals[].uncheckedCount": {
         "type": "integer"
@@ -3654,6 +3657,9 @@
         "required": true
       },
       ".scrubSet.values[]": {
+        "type": "string"
+      },
+      ".scrubSetUnavailable": {
         "type": "string"
       },
       ".skillActivity": {

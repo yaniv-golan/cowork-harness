@@ -191,6 +191,10 @@
         "values": { "type": "array", "items": { "type": "string", "pattern": "^[ghjkmnpqrstvwxyz]{32}$" } }
       }
     },
+    "scrubSetUnavailable": {
+      "type": "string",
+      "description": "Why this run recorded no `scrubSet`: its installation key was unusable (the key's path and the defect, never the key). Distinguishes such a run from one recorded before the fingerprint existed."
+    },
     "fidelity": {
       "type": "string"
     },

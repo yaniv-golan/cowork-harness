@@ -105,6 +105,9 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
   ctx.semanticDocInfo ??= new Map();
   ctx.semanticRefused ??= new Map();
   const secrets = ctx.secrets ?? [];
+  // Every line this pass prints goes through the scrub: a reference's name, a model id and a judge's reply can each
+  // carry a value the run scrubs.
+  const say = (m: string): void => warn(secrets.length ? scrub(m, secrets) : m);
   const task = secrets.length ? scrub(opts.task, secrets) : opts.task;
   const taskSha256 = createHash("sha256").update(opts.task, "utf8").digest("hex");
   const warnedWeakerRef = new Set<string>();
@@ -128,7 +131,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
     // variant) still has to prove, when frozen later, that the recomposed document is the one it produced.
     (ctx.composedDocs ??= new Map()).set(a, built.fingerprint);
     if (!p.rubric?.length)
-      warn(
+      say(
         `::warning:: [semantic_pairwise] assert ${i} has no rubric — the judge weighs overall quality for the task; concrete criteria grade more reliably\n`,
       );
     // The rubric leaves for the judge exactly as the documents do, so it is scrubbed with the same set — and a claim
@@ -136,7 +139,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
     const rubric = p.rubric && secrets.length ? p.rubric.map((c) => scrub(c, secrets)) : p.rubric;
     const redacted = (p.rubric ?? []).flatMap((c, k) => (rubric && c !== rubric[k] ? [k] : []));
     if (redacted.length)
-      warn(
+      say(
         `::warning:: [semantic_pairwise] rubric criterion ${redacted.length === 1 ? "index" : "indexes"} ${redacted.join(",")} contained a ` +
           `scrubbed secret value and ${redacted.length === 1 ? "was" : "were"} sent to the judge redacted.\n`,
       );
@@ -188,7 +191,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
       const resolved = opts.modelFor(a);
       if (!warnedSelfJudge && opts.mainModels?.some((m) => sameModelKey(m) === sameModelKey(resolved))) {
         warnedSelfJudge = true;
-        warn(
+        say(
           `::warning:: [semantic_pairwise] assert ${i}: the judge model ${resolved} is also the model under test — a model judging its own ` +
             `kind of output is a known bias; pin a different judge_model.\n`,
         );
@@ -200,7 +203,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
       const refRedactions = markers(reference) - markers(got.text);
       if (got.scrubCount !== undefined && distinct(secrets) > got.scrubCount && !warnedWeakerRef.has(ref.name)) {
         warnedWeakerRef.add(ref.name);
-        warn(
+        say(
           `::notice:: [semantic_pairwise] reference ${ref.name} was frozen with a smaller scrub set than this process's; it is scrubbed ` +
             `with this process's set before the judge reads it (ref_scrub_weaker).\n`,
         );
@@ -234,6 +237,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
           ...(rationale !== undefined ? { rationale } : {}),
           refDocSha256: got.sha256,
           refRedactions,
+          refSentSha256: createHash("sha256").update(reference, "utf8").digest("hex"),
           ...(got.unchecked ? { unchecked: true } : {}),
         });
       } catch (e) {
@@ -247,14 +251,21 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         const why = scrub(e.message.split("\n")[0]!, secrets);
         if (!gate) {
           // A metric-only reference: this comparison is lost, the verdict is not.
-          outcomes.push({ ref: ref.name, ...tag, status: "invalid", why });
-          warn(
+          outcomes.push({
+            ref: ref.name,
+            ...tag,
+            status: "invalid",
+            why,
+            refDocSha256: got.sha256,
+            refSentSha256: createHash("sha256").update(reference, "utf8").digest("hex"),
+          });
+          say(
             `::warning:: semantic_pairwise grade vs ${ref.name} invalid after retry (a metric-only reference; the verdict stands): ${why}\n`,
           );
           continue;
         }
         ctx.judgeInvalid.add(a);
-        warn(`::warning:: semantic_pairwise grade invalid after retry (rep counts as invalid, not passed): ${why}\n`);
+        say(`::warning:: semantic_pairwise grade invalid after retry (rep counts as invalid, not passed): ${why}\n`);
         break;
       }
     }
