@@ -21,12 +21,15 @@ import { afterAll } from "vitest";
 //
 // Subprocesses inherit this too — the CLI-spawning tests get it for free.
 if (!process.env.COWORK_HARNESS_RUNS_DIR) {
-  const dir = mkdtempSync(join(tmpdir(), "cowork-test-runs-"));
+  // Nested one level: the runs root's installation key (`scrubset.key`) lives BESIDE it, so it lands in this
+  // process's own temp dir, never as a shared `$TMPDIR/scrubset.key`.
+  const parent = mkdtempSync(join(tmpdir(), "cowork-test-runs-"));
+  const dir = join(parent, "runs");
   process.env.COWORK_HARNESS_RUNS_DIR = dir;
   // Only remove what we created. A test file that sets its own root owns its own cleanup.
   afterAll(() => {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync(parent, { recursive: true, force: true });
     } catch {
       /* best-effort: a leaked temp dir is noise, a failed teardown that fails the suite is not */
     }

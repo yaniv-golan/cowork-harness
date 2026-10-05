@@ -43,7 +43,7 @@ const can = existsSync(CLI);
 function cli(args: string[]) {
   const r = spawnSync("node", [CLI, ...args], {
     encoding: "utf8",
-    env: { ...process.env, COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "cse-runs-")) },
+    env: { ...process.env, COWORK_HARNESS_RUNS_DIR: join(mkdtempSync(join(tmpdir(), "cse-runs-")), "runs") },
   });
   return { code: r.status, stderr: r.stderr ?? "", stdout: r.stdout ?? "" };
 }

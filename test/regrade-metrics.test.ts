@@ -26,7 +26,7 @@ const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 let savedRuns: string | undefined;
 beforeEach(() => {
   savedRuns = process.env.COWORK_HARNESS_RUNS_DIR;
-  process.env.COWORK_HARNESS_RUNS_DIR = mkdtempSync(join(tmpdir(), "rgm-runs-"));
+  process.env.COWORK_HARNESS_RUNS_DIR = join(mkdtempSync(join(tmpdir(), "rgm-runs-")), "runs");
 });
 afterEach(() => {
   if (savedRuns === undefined) delete process.env.COWORK_HARNESS_RUNS_DIR;

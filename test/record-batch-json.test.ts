@@ -23,7 +23,7 @@ function record(args: string[], cwd: string) {
     cwd,
     env: {
       ...inheritedEnv,
-      COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "rec-batch-runs-")),
+      COWORK_HARNESS_RUNS_DIR: join(mkdtempSync(join(tmpdir(), "rec-batch-runs-")), "runs"),
       COWORK_HARNESS_FORBID_SPAWN: "1",
       COWORK_HARNESS_MODEL: "",
       CLAUDE_CODE_OAUTH_TOKEN: "",
