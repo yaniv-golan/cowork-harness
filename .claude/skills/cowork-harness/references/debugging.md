@@ -40,7 +40,9 @@ rubric changed (or you want another judge model) on a run you already paid for, 
 kept run without re-running the agent — unlike the tools above it is not token-free (the judge call is its
 spend) — writes the grade beside the run, and says whether the judge read the same document the live judge did.
 Content the live judge never read (a widened `evidence_files` / `include_subagent_text` / `include_fork_results` scope, or a larger
-`--authored-total-bytes`) is refused unless you pass `--allow-unchecked`. A `task_unverifiable` /
+`--authored-total-bytes`) is refused unless you pass `--allow-unchecked` (`error.code` `unchecked_content`); a
+judged document that differs from the one the live judge read is refused as `doc_drift` unless you pass
+`--allow-doc-drift`, and a scenario with no judged assert is `no_semantic_asserts`. A `task_unverifiable` /
 `rubric_unverifiable` / `evidence_unverifiable` / `reference_unverifiable` refusal means a part of the judge's input
 cannot be proven scrubbed with the run's scrub set (typically an edited rubric on a run recorded before the scrub-set
 fingerprint); `refusals[].scrubSet` says why (`legacy`, `unrecorded`, `mangled`, `key`, `smaller`). Re-run the
@@ -57,6 +59,11 @@ interrupted create), unreadable, not a 64-hex-digit key, or could not be created
 `scrubSet: "unrecorded"` ("this run recorded no scrub set (its key …)"). The harness never removes or replaces an
 existing key file: fix it as the warning says (`chmod 600` a key you own, or delete a bad file so the next run
 creates a key), then re-run the case to record a fingerprint. Keep `scrubset.key` out of version control.
+
+Two more read-only views: `trace <run> --translate-paths` rewrites VM paths to host paths in the text
+`tools`/default views (an effective `hostloop` run with its `mounts.json`), and `diff <a> <b>` masks per-run noise
+(ids, timestamps, host paths) unless you pass `--no-normalize`; on two baselines, `--changelog` renders the
+known fields as prose.
 
 **microvm: "control-protocol write failed" with `env: 'claude': No such file or directory` in the agent
 stderr** usually means the VM never finished provisioning (the agent never reached PATH). Check

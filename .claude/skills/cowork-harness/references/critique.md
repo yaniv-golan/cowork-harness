@@ -35,7 +35,9 @@ Two things a harvester needs: roll-ups are excluded from `stats` aggregation (th
 counting them adds a phantom run and drags `passRate` toward 1), so **filter them out of any pass-rate
 computed over raw rows** — that exclusion also governs `stats --group-by skill-hash`, so a per-generation
 **total spend** still needs the raw rows (only the roll-up carries the evaluator passes); and a roll-up with `result:"error"` had an unpriced workload, so its totals
-UNDERCOUNT. The index is the only cost record that survives run-dir pruning.
+UNDERCOUNT. The index is the only cost record that survives run-dir pruning. `--evaluator-model <id>` changes
+only the evaluator passes' model (and the armor's injection-resistance check covers the default evaluator only);
+when the task turn dominates cost, the levers are `--model`, `--timeout` and the probe's scope.
 
 ## An exit-2 report — which turn failed, and whether it was really infrastructure
 

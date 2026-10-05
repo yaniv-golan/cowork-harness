@@ -131,6 +131,16 @@ exits 0, so dropping the
 `verify-cassettes` step means a skill edit silently stops being tested. (One command instead of two:
 `replay --fail-on-skill-drift`.)
 
+`lint --json` and `lint-skill --json` print their findings as JSON for a script to read. `analyze-skill --strict
+<plugin-dir>/` is the static pre-flight for host-loop path fidelity and lost artifact write-backs (exit 3 when it
+could not parse a candidate); `--runtime` adds a headless-DOM confirmation (needs `jsdom`) that never changes
+the exit code.
+
+Other `verify-cassettes` flags: `--skip-privacy` or `--skip-staleness` runs only one half of the gate;
+`--skip-scenario-drift` drops the scenario-prompt drift check; `--allow-empty` lets an existing directory with no
+cassettes exit 0 (a missing path still fails); `--margins` prints each count-bound assert's recorded value against
+its budget (diagnostic, never the verdict).
+
 The rest of this doc explains the lane split, recording, privacy, and the full pipeline + live job.
 
 ## The core split: token-free PR gate + live nightly (self-hosted)

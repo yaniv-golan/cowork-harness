@@ -213,6 +213,10 @@ cowork-harness scaffold --name report-check --skill ./skills/report-gen \
   --egress-allowed api.weather.example.com --out scenarios/report-check.yaml
 ```
 
+Each repeatable flag adds one item: `--content` a `transcript_matches`, `--tool` a `tool_called`, `--subagent` a
+`subagent_dispatched`, `--file` a `file_exists`, `--artifact` a `user_visible_artifact`, `--egress-allowed` /
+`--egress-denied` an `egress_allowed` / `egress_denied`, `--gate REGEX=CHOICE` a scripted answer and `--web-fetch`
+an approval rule; `--no-delete` adds `no_delete_in_outputs: true`, and `--no-validate` skips the self-lint.
 The flag-built form runs the bundled `scripts/scenario.py scaffold`, which also runs directly with the
 same flags (installed as a plugin, `${CLAUDE_PLUGIN_ROOT}/scripts/scenario.py`).
 

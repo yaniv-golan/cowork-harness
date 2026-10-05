@@ -363,7 +363,8 @@ modes exist to withhold; `status.json` is still written either way, so `status` 
 passed to `--run-dir` (a directory without its own `status.json`): it scans up to two levels down for the
 newest session's `status.json` and reads that. `--follow` fails loud on a timeout/staleness
 rather than hanging forever. (Fuller recipe in [`docs/run-status.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/run-status.md) — repo-only, not in the installed
-payload; `cowork-harness status --help` has the flags.)
+payload; `cowork-harness status --help` has the flags.) To find a scenario's newest run dir, use
+`cowork-harness status --latest-for <scenario>`, which orders by run time rather than directory mtime.
 
 **Poll with `--follow`, not with a shell loop over `status`'s stdout.** The one-shot text form prints to
 **stderr** and writes nothing to stdout; `--output-format json` (one envelope) and `--follow` (one JSON
@@ -383,6 +384,25 @@ subagent that returns before it finishes — the returning agent tears down its 
 in-flight run mid-artifact-write. Run it foreground, or detached from any process that will exit first.
 (The `status.json` liveness above is exactly what surfaces such a teardown as `"error"`/`stale` rather
 than a stuck `"running"`.)
+
+### Other flags worth knowing
+
+- `skill` / `critique`: `--prompt-file <path>` reads the prompt verbatim (no shell parsing); `--marketplace <dir>
+  --enable name@mkt` loads skills through a marketplace; `--timeout <ms>` is the wall-clock budget;
+  `--allow-host-writes` consents to a writable `hostloop` connected folder; `--verbose` adds thinking, tool inputs
+  and the sub-agent tree to the output.
+- `run --matrix`: `--max-cells <n>` caps the cross-product (default 16), and a truncated matrix fails unless
+  `--allow-truncated-matrix` judges only the cells that ran.
+- `record`: `--max-artifact-bytes <n>` caps an inlined artifact body (default 65536); `--rerecord-stale
+  --from-embedded` re-records from the cassette's embedded scenario when no source file resolves.
+- `replay --mutate`: `--mutate-include` / `--mutate-exclude <glob>` scope which artifact paths are perturbed, and
+  `--mutate-max-per-file` / `--mutate-max-total` raise the sample caps (default 10 / 50).
+- `probe-dispatch --expect-write <suffix>` counts only a sub-agent write whose path ends with the suffix as delivered.
+- `ref freeze --case-id <id>` overrides the store entry's name (default: the scenario's name).
+- `fixture export <run-dir> --out <dir>` refuses a file holding a secret, and a text file or file name holding a host
+  path unless `--allow-host-paths` (a path into a run dir or a guest session is refused regardless).
+- `prune [--keep-last <n>] [--pinned-older-than <N>d]` removes old run dirs (default `--keep-last 5`);
+  `--dry-run` previews it.
 
 ### Place assertions in the right CI lane
 
