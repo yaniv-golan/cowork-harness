@@ -1387,6 +1387,30 @@ describe("regrade: content the live judge never read, and accepted drift", () =>
     expect(out.runs[0].differingSections).toContainEqual({ assertionIndex: 0, kind: "health", change: "added" });
   });
 
+  it("a health note no live document had cannot be proven scrubbed with the run's set: refused evidence_unverifiable, accepted only by allowScrubChange", async () => {
+    // keptRun records no scrubSet (a pre-4.4 run), so the note's paths cannot be proven covered by this process's set.
+    const k = await keptRun({
+      author: (w) => {
+        writeReport(w);
+        writeFileSync(join(w, "outputs", "notes.md"), `${"n".repeat(600)}\n`);
+      },
+      assertYaml: SCOPED,
+    });
+    const judge = judgeFactory(() => true);
+    const refused = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50 }));
+    expect(judge.calls).toHaveLength(0);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.refusals?.map((r) => r.code)).toEqual(["evidence_unverifiable"]);
+    // Neither drift flag implies the scrub override.
+    const drift = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50, allowDocDrift: true, allowUnchecked: true }));
+    expect(drift.ok).toBe(false);
+    expect(judge.calls).toHaveLength(0);
+    const out = await regradeRuns(opts(k, { makeJudge: judge.make, authoredTotalBytes: 50, allowScrubChange: true }));
+    if (!out.ok) throw new Error(out.message);
+    expect(out.runs[0].scrubAcceptedBy).toBe("--allow-scrub-change");
+  });
+
   it("extra content only in an assert that refuses its own evidence is not refused as unchecked", async () => {
     // The new unscoped assert would read big.md and notes.md, which no live document had, but big.md is over the
     // per-file cap, so the assert refuses its evidence: no judge receives that document.
