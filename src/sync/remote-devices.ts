@@ -105,6 +105,27 @@ export function cloudBlockFromReading(r: CloudBlockReading): { cloud: CloudBlock
   };
 }
 
+/** `cloudBlockFromReading(extract(files))`, with a THROW from the extractor contained here: it becomes a `cloud:`
+ *  WARNING and no block. Without this, a throw would land in sync's asar-wide catch, be reported as an asar
+ *  extraction failure, null every other asar-derived field and block the write. Never names the error's text. */
+export function safeCloudBlock(
+  files: Map<string, string>,
+  extract: (f: Map<string, string>) => CloudBlockReading = extractCloudBlock,
+): { cloud: CloudBlock | null; notes: string[] } {
+  let reading: CloudBlockReading;
+  try {
+    reading = extract(files);
+  } catch (e) {
+    const kind = e instanceof Error ? e.name : typeof e;
+    reading = {
+      tools: null,
+      descriptions: [],
+      deltas: [`cloud: the remote-devices extractor threw (${kind}) — fix extractCloudBlock (maintainer)`],
+    };
+  }
+  return cloudBlockFromReading(reading);
+}
+
 /** Why `sync` must refuse to write this block, or null. Names only the failing PATHS: a zod issue message can echo
  *  the offending value, and in this block that value could be description text. */
 export function cloudSchemaRefusal(cloud: unknown): string | null {

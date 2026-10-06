@@ -8,7 +8,7 @@ import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 import type { CloudBlock, DesktopInitSurface } from "../types.js";
-import { cloudBlockFromReading, extractCloudBlock } from "./remote-devices.js";
+import { safeCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
 
 /**
@@ -1575,7 +1575,7 @@ function extractFromAsar(
     // The cloud block reads the RAW chunks: it parses them, and normalization is a text rewrite for anchors.
     // NOT write-blocking: the block is data no harness path reads. A failed extraction writes the baseline
     // without it (never the previous release's) and says so; check:versions then warns.
-    const { cloud, notes: cloudNotes } = cloudBlockFromReading(extractCloudBlock(rawFiles));
+    const { cloud, notes: cloudNotes } = safeCloudBlock(rawFiles);
     const promptFingerprint = extractPromptFingerprint(bundle);
     const fingerprintsFile = readPromptFingerprintsFile();
     const promptDrift = checkPromptDrift(

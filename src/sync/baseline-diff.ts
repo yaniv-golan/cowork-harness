@@ -183,7 +183,7 @@ export function renderCloudEntries(entries: BaselineDiffEntry[]): { lines: strin
   const rest = entries.filter((e) => !mine.includes(e));
   const lines: string[] = [];
   const unhandled: BaselineDiffEntry[] = [];
-  type Fp = { name?: string };
+  type Fp = { name?: string; sha256?: string };
   for (const e of mine) {
     if (e.path === "cloud" && e.kind === "added") {
       const b = e.to as { remoteDevicesTools?: unknown[]; remoteDevicesDescriptions?: unknown[]; unreachable?: unknown[] };
@@ -195,19 +195,27 @@ export function renderCloudEntries(entries: BaselineDiffEntry[]): { lines: strin
       if (e.added.length) lines.push(`- remote-devices tool(s) APPEARED: ${code(e.added as string[])}`);
       if (e.removed.length) lines.push(`- remote-devices tool(s) DISAPPEARED: ${code(e.removed as string[])}`);
     } else if (e.path === "cloud.remoteDevicesDescriptions" && e.kind === "array") {
-      const per = new Map<string, { added: number; removed: number }>();
-      for (const [list, k] of [
-        [e.added, "added"],
-        [e.removed, "removed"],
-      ] as const)
-        for (const f of list as Fp[]) {
-          const n = String(f.name);
-          const c = per.get(n) ?? { added: 0, removed: 0 };
-          c[k]++;
-          per.set(n, c);
-        }
-      for (const [n, c] of [...per].sort(([a], [b]) => (a < b ? -1 : 1)))
-        lines.push(`- remote-devices \`${n}\`: description fingerprint(s) changed (+${c.added} −${c.removed} branch records)`);
+      // A record whose name and text hash are on both sides moved only its `branch` (the selector assignment that
+      // picks the same text was re-keyed): a relabel, rendered apart from a text change.
+      const textKey = (f: Fp) => `${String(f.name)}\u0000${String(f.sha256)}`;
+      const removedText = new Set((e.removed as Fp[]).map(textKey));
+      const addedText = new Set((e.added as Fp[]).map(textKey));
+      const per = new Map<string, { added: number; removed: number; relabeled: number }>();
+      const bump = (n: string, k: "added" | "removed" | "relabeled") => {
+        const c = per.get(n) ?? { added: 0, removed: 0, relabeled: 0 };
+        c[k]++;
+        per.set(n, c);
+      };
+      for (const f of e.added as Fp[]) bump(String(f.name), removedText.has(textKey(f)) ? "relabeled" : "added");
+      for (const f of e.removed as Fp[]) if (!addedText.has(textKey(f))) bump(String(f.name), "removed");
+      for (const [n, c] of [...per].sort(([a], [b]) => (a < b ? -1 : 1))) {
+        if (c.added || c.removed)
+          lines.push(`- remote-devices \`${n}\`: description fingerprint(s) changed (+${c.added} −${c.removed} branch records)`);
+        if (c.relabeled)
+          lines.push(
+            `- remote-devices \`${n}\`: ${c.relabeled} branch record(s) relabeled, same text (the conditions selecting it changed)`,
+          );
+      }
     } else if (e.path === "cloud.unreachable" && e.kind === "array") {
       if (e.added.length) lines.push(`- cloud.unreachable: added ${code(e.added as string[])}`);
       if (e.removed.length) lines.push(`- cloud.unreachable: removed ${code(e.removed as string[])}`);

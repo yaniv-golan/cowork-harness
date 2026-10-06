@@ -12,6 +12,7 @@ import {
   CLOUD_UNREACHABLE,
   cloudBlockFromReading,
   cloudSchemaRefusal,
+  safeCloudBlock,
   extractCloudBlock,
   findRemoteDevicesToolList,
 } from "../src/sync/remote-devices.js";
@@ -263,5 +264,36 @@ describe("findRemoteDevicesToolList accepts digits in a name", () => {
       "device_bash",
       "tool_v2",
     ]);
+  });
+});
+
+describe("an extractor that THROWS does not take the rest of sync down", () => {
+  it("the throw becomes a cloud WARNING and no block; the rest of the baseline is still written", () => {
+    const secretish = "FIXTURE error text that must not be echoed";
+    const r = safeCloudBlock(new Map(), () => {
+      throw new TypeError(secretish);
+    });
+    expect(r.cloud).toBeNull();
+    expect(r.notes).toHaveLength(1);
+    expect(r.notes[0]).toMatch(/^WARNING: cloud: the remote-devices extractor threw \(TypeError\).*written WITHOUT a cloud block/);
+    expect(r.notes[0]).not.toContain(secretish);
+  });
+  it("a normal extraction passes straight through", () => {
+    expect(safeCloudBlock(bundle()).cloud?.remoteDevicesTools).toContain("device_bash");
+  });
+});
+
+describe("a branch relabel (same text) renders apart from a text change", () => {
+  const b = (descs: object[]) => ({ cloud: { remoteDevicesTools: ["device_bash"], remoteDevicesDescriptions: descs, unreachable: [] } });
+  const rec = (branch: string, h: string) => ({ name: "device_bash", branch, sha256: h.repeat(64), codePoints: 5 });
+  it("same sha, new branch → a relabel line and no 'changed' line", () => {
+    const out = renderChangelog(diffBaselines(b([rec("aaaaaaaaaaaa", "1")]), b([rec("bbbbbbbbbbbb", "1")])));
+    expect(out).toContain("- remote-devices `device_bash`: 1 branch record(s) relabeled, same text");
+    expect(out).not.toContain("fingerprint(s) changed");
+  });
+  it("a new sha is still a change", () => {
+    const out = renderChangelog(diffBaselines(b([rec("aaaaaaaaaaaa", "1")]), b([rec("aaaaaaaaaaaa", "2")])));
+    expect(out).toContain("description fingerprint(s) changed (+1 −1 branch records)");
+    expect(out).not.toContain("relabeled");
   });
 });
