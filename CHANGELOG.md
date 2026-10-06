@@ -44,12 +44,6 @@ All notable changes to this project are documented here. The format is based on
     server-side. The harness does not model either.
   - The Desktop init surface was read from 2 local frames, on an account whose tasks still run locally: the same
     Desktop servers and tools as `desktop-2.19675.0`.
-- **The release preflight accepts an unobserved Desktop init surface once the local lane is unavailable.** From
-  2026-10-06 new Pro and Max Cowork tasks run in the cloud, and a cloud session writes no local init frame. For a
-  Desktop at or after 2.19675.0 with no local session since install, `sync` records `observed: false` with
-  `unobservedReason: "local-lane-unavailable"` and prints a note instead of a warning, and `sync --diff` names the
-  reason. Preflight check 7 accepts that state after re-checking the version from the baseline's own `appVersion`.
-  The reason is never recorded when the install time is unknown.
 
 ## [4.4.1] — 2026-10-05
 

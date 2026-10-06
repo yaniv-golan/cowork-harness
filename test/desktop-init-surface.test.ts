@@ -18,7 +18,6 @@ import {
   readDesktopInitSurface,
   desktopInstalledAtMs,
   DESKTOP_SESSIONS_DISPLAY,
-  LOCAL_LANE_UNAVAILABLE_FROM,
   type InitSurfaceInput,
 } from "../src/sync/desktop-init-surface.js";
 import { DESKTOP_OWN_SERVERS, DesktopInitSurface } from "../src/types.js";
@@ -29,8 +28,6 @@ import { DESKTOP_OWN_SERVERS, DesktopInitSurface } from "../src/types.js";
 // fails CI instead of being published.
 
 const AGENT = "9.9.100";
-/** Below LOCAL_LANE_UNAVAILABLE_FROM: the pre-sunset path, where an unobserved surface carries no reason. */
-const APP = "2.100.0";
 const INSTALLED = Date.parse("2026-09-20T00:00:00.000Z");
 const AFTER = "2026-09-21T10:00:00.000Z";
 const BEFORE = "2026-09-19T10:00:00.000Z";
@@ -188,7 +185,7 @@ afterAll(() => {
 const input = (over: Partial<InitSurfaceInput> = {}): InitSurfaceInput => ({
   dir: corpus,
   agentVersion: AGENT,
-  appVersion: APP,
+  appVersion: "9.100.0",
   installedAtMs: INSTALLED,
   bundleHasLiteral,
   ...over,
@@ -204,7 +201,7 @@ describe("readDesktopInitSurface — selection and the recorded block", () => {
     expect(r.framesSelected).toBe(4); // local_a, local_b, local_d, local_e
     expect(r.surface).toEqual({
       agentVersion: AGENT,
-      appVersion: APP,
+      appVersion: "9.100.0",
       observed: true,
       servers: {
         cowork: { presence: "some", toolsAll: ["present_files", "save_skill"], toolsSome: ["create_artifact"] },
@@ -307,7 +304,7 @@ describe("readDesktopInitSurface — mutation: a widened filter is caught (P4)",
 
 describe("readDesktopInitSurface — missing or stale frames", () => {
   const unobservedChecks = (r: ReturnType<typeof readDesktopInitSurface>, agentVersion = AGENT) => {
-    expect(r.surface).toEqual({ agentVersion, appVersion: APP, observed: false, servers: {} });
+    expect(r.surface).toEqual({ agentVersion, appVersion: "9.100.0", observed: false, servers: {} });
     expect(r.framesSelected).toBe(0);
     // A WARNING, never a delta: a delta would need --allow-empty, which waives every other sync guard.
     expect(r.deltas).toEqual([]);
@@ -336,52 +333,6 @@ describe("readDesktopInitSurface — missing or stale frames", () => {
   });
 });
 
-describe("readDesktopInitSurface — the local lane is unavailable from the sunset build on", () => {
-  // Nothing is selected in these cases (stale agent version), so the surface is unobserved; only the Desktop
-  // version decides whether the reason is recorded.
-  const stale = (appVersion: string, over: Partial<InitSurfaceInput> = {}) =>
-    readDesktopInitSurface(input({ agentVersion: "9.9.101", appVersion, ...over }));
-
-  it("at the sunset build: observed:false with reason local-lane-unavailable, and a note that says why (not a WARNING)", () => {
-    const r = stale(LOCAL_LANE_UNAVAILABLE_FROM);
-    expect(r.surface).toEqual({
-      agentVersion: "9.9.101",
-      appVersion: LOCAL_LANE_UNAVAILABLE_FROM,
-      observed: false,
-      unobservedReason: "local-lane-unavailable",
-      servers: {},
-    });
-    expect(r.deltas).toEqual([]);
-    const notes = r.notes.join("\n");
-    expect(notes).not.toMatch(/^WARNING: desktopInitSurface UNOBSERVED/m);
-    expect(notes).toContain("local-lane-unavailable");
-    expect(DesktopInitSurface.safeParse(r.surface).success).toBe(true);
-  });
-
-  it("after the sunset build: the same reason", () => {
-    expect(stale("2.19676.0").surface.unobservedReason).toBe("local-lane-unavailable");
-    expect(stale("3.0.0").surface.unobservedReason).toBe("local-lane-unavailable");
-  });
-
-  it("before the sunset build: no reason, the WARNING stays", () => {
-    const r = stale("2.19674.9");
-    expect(r.surface.unobservedReason).toBeUndefined();
-    expect(r.notes.join("\n")).toMatch(/^WARNING: desktopInitSurface UNOBSERVED/m);
-  });
-
-  it("an unknown install time is a sync defect, not the lane: no reason even after the sunset build", () => {
-    const r = stale("3.0.0", { installedAtMs: null });
-    expect(r.surface.unobservedReason).toBeUndefined();
-    expect(r.notes.join("\n")).toMatch(/^WARNING: desktopInitSurface UNOBSERVED/m);
-  });
-
-  it("an OBSERVED surface after the sunset build carries no reason (a local session did run)", () => {
-    const r = readDesktopInitSurface(input({ appVersion: "3.0.0" }));
-    expect(r.surface.observed).toBe(true);
-    expect(r.surface.unobservedReason).toBeUndefined();
-  });
-});
-
 describe("DesktopInitSurface schema", () => {
   const ok = {
     agentVersion: "1",
@@ -405,20 +356,12 @@ describe("DesktopInitSurface schema", () => {
     ["an unsorted list", { ...ok, servers: { cowork: { ...ok.servers.cowork, toolsAll: ["b", "a"] } } }],
     ["overlapping lists", { ...ok, servers: { cowork: { ...ok.servers.cowork, toolsSome: ["a"] } } }],
     ["observed:false with servers", { ...ok, observed: false }],
-    ["a reason on an observed block", { ...ok, unobservedReason: "local-lane-unavailable" }],
-    ["an unknown reason", { ...ok, observed: false, servers: {}, unobservedReason: "no-session" }],
   ])("rejects %s", (_label, value) => {
     expect(DesktopInitSurface.safeParse(value).success).toBe(false);
   });
 
   it("accepts the well-formed block", () => {
     expect(DesktopInitSurface.safeParse(ok).success).toBe(true);
-  });
-
-  it("accepts an unobserved block with the local-lane-unavailable reason", () => {
-    expect(DesktopInitSurface.safeParse({ ...ok, observed: false, servers: {}, unobservedReason: "local-lane-unavailable" }).success).toBe(
-      true,
-    );
   });
 });
 

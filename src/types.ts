@@ -225,11 +225,6 @@ export const DesktopInitSurface = z
     agentVersion: z.string().min(1),
     appVersion: z.string().min(1),
     observed: z.boolean(),
-    /** Why the surface is unobserved, when `sync` can say so from the synced Desktop version alone.
-     *  `local-lane-unavailable`: the Desktop is at or after the local-lane sunset build
-     *  (`LOCAL_LANE_UNAVAILABLE_FROM` in src/sync/desktop-init-surface.ts), where new Pro/Max tasks run in
-     *  the cloud and write no local init frame. Only on `observed:false`. */
-    unobservedReason: z.literal("local-lane-unavailable").optional(),
     servers: z.strictObject({
       cowork: DesktopInitServer.optional(),
       plugins: DesktopInitServer.optional(),
@@ -239,8 +234,6 @@ export const DesktopInitSurface = z
   .superRefine((v, ctx) => {
     const names = Object.keys(v.servers);
     if (!v.observed && names.length > 0) ctx.addIssue({ code: "custom", message: "observed:false must carry no servers" });
-    if (v.observed && v.unobservedReason !== undefined)
-      ctx.addIssue({ code: "custom", message: "unobservedReason is only valid on observed:false" });
     for (const [name, s] of Object.entries(v.servers)) {
       if (!s) continue;
       if (!isSortedUnique(s.toolsAll) || !isSortedUnique(s.toolsSome))

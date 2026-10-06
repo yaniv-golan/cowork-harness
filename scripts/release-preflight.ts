@@ -20,10 +20,7 @@
 //   7. The NEWEST baseline's provenance.desktopInitSurface is observed (HARD fail). `sync` records
 //      `observed:false` when no Cowork session ran on the synced Desktop — a routine local state, so it
 //      is allowed in a commit but must not ship. Emergency override: --allow-unobserved-init-surface
-//      (dedicated on purpose: never --allow-empty, which would waive sync's other guards). Accepted
-//      without the override: `unobservedReason: "local-lane-unavailable"`, which `sync` records for a
-//      Desktop at or after the local-lane sunset build; this check re-derives it from the baseline's
-//      appVersion.
+//      (dedicated on purpose: never --allow-empty, which would waive sync's other guards).
 //   8. The covered surface since the last release tag (scripts/check-surface.ts --since-tag): a removed or
 //      changed leaf FAILS unless the package.json version is a MAJOR bump over that tag. The per-PR snapshot
 //      cannot catch this — every PR regenerates it, so it reads +0 at release time. Before the bump
@@ -37,7 +34,6 @@ import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
 import { checkSurfaceSinceLastTag } from "./check-surface.js";
 import { compareBaselineVersions } from "../src/baseline.js";
-import { LOCAL_LANE_UNAVAILABLE_FROM, localLaneUnavailable } from "../src/sync/desktop-init-surface.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const r = (p: string) => readFileSync(join(REPO_ROOT, p), "utf8");
@@ -176,27 +172,12 @@ export const ALLOW_UNOBSERVED_INIT_SURFACE_FLAG = "--allow-unobserved-init-surfa
 /** Check 7 — pure over the newest baseline's parsed JSON, so it is unit-testable without a checkout. */
 export function checkInitSurfaceObserved(newest: { name: string; json: unknown }, allowUnobserved: boolean): CheckResult {
   const name = "newest baseline's Desktop init surface is observed";
-  const block = (
-    newest.json as {
-      provenance?: { desktopInitSurface?: { observed?: unknown; appVersion?: unknown; unobservedReason?: unknown } };
-    } | null
-  )?.provenance?.desktopInitSurface;
+  const block = (newest.json as { provenance?: { desktopInitSurface?: { observed?: unknown } } } | null)?.provenance?.desktopInitSurface;
   if (block?.observed === true) return { name, status: "PASS", detail: `${newest.name}: observed` };
-  // The recorded reason is accepted only when the baseline's own appVersion bears it out: re-derived here, so a
-  // reason copied onto a pre-sunset baseline is refused rather than trusted.
-  const app = typeof block?.appVersion === "string" ? block.appVersion : "";
-  if (block?.unobservedReason === "local-lane-unavailable" && localLaneUnavailable(app))
-    return {
-      name,
-      status: "PASS",
-      detail: `${newest.name}: unobserved, accepted — local-lane-unavailable (Desktop ${app} is at or after the local-lane sunset build ${LOCAL_LANE_UNAVAILABLE_FROM})`,
-    };
   const why =
     block === undefined
       ? `${newest.name} carries no provenance.desktopInitSurface — re-sync it with a current cowork-harness`
-      : block.unobservedReason !== undefined
-        ? `${newest.name} records desktopInitSurface.unobservedReason ${JSON.stringify(block.unobservedReason)}, which does not hold for Desktop ${app || "(no appVersion)"}: only local-lane-unavailable, at or after ${LOCAL_LANE_UNAVAILABLE_FROM}, is accepted`
-        : `${newest.name} records desktopInitSurface.observed:false — start one Cowork session on that Desktop, then re-run \`cowork-harness sync\``;
+      : `${newest.name} records desktopInitSurface.observed:false — start one Cowork session on that Desktop, then re-run \`cowork-harness sync\``;
   if (allowUnobserved)
     return {
       name,

@@ -302,35 +302,6 @@ describe("renderChangelog / formatDiffLines — Desktop init surface", () => {
     expect(text).not.toContain("provenance.desktopInitSurface.servers");
   });
 
-  it("observed → UNOBSERVED with reason local-lane-unavailable: the one line names the reason and that preflight accepts it", () => {
-    const next = block({}, false, "2.19675.1", "2.1.288");
-    (next.provenance.desktopInitSurface as Record<string, unknown>).unobservedReason = "local-lane-unavailable";
-    for (const out of [md(observed, next), plain(observed, next)]) {
-      expect(out).toContain("Desktop init surface UNOBSERVED at `2.19675.1` / agent `2.1.288`");
-      expect(out).toContain("reason `local-lane-unavailable`");
-      expect(out).toContain("the release preflight accepts this state");
-      expect(out).not.toContain("refuses this state");
-      expect(out).not.toContain("DISAPPEARED");
-      expect(out).not.toContain("provenance.desktopInitSurface.");
-    }
-  });
-
-  it("first introduction of an unobserved block with the reason names the reason", () => {
-    const next = block({}, false, "2.19675.1", "2.1.288");
-    (next.provenance.desktopInitSurface as Record<string, unknown>).unobservedReason = "local-lane-unavailable";
-    const out = md({ provenance: {} }, next);
-    expect(out).toContain("reason `local-lane-unavailable`");
-    expect(out).not.toContain(GENERIC);
-  });
-
-  it("unobserved (with reason) → observed drops the reason without a generic line", () => {
-    const prev = block({}, false, "2.19675.1", "2.1.288");
-    (prev.provenance.desktopInitSurface as Record<string, unknown>).unobservedReason = "local-lane-unavailable";
-    const out = md(prev, observed);
-    expect(out).toContain("- Desktop init surface now OBSERVED (was unobserved)");
-    expect(out).not.toContain(GENERIC);
-  });
-
   it("unobserved → observed says so and lists what appeared", () => {
     const prev = block({}, false);
     const out = md(prev, observed);

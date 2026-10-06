@@ -19,21 +19,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { cmpVersionStrings } from "../baseline.js";
 import { DESKTOP_OWN_SERVERS, type DesktopInitSurface } from "../types.js";
-
-/** The first Desktop build of the local-lane sunset. From 2026-10-06 new Pro/Max Cowork tasks run in the
- *  cloud, and a cloud session writes no local `system/init` frame, so from this build on an unobserved
- *  surface is the expected state rather than a missing step. Keyed on the Desktop VERSION alone: the
- *  sunset also moved scheduled tasks to the cloud, so there is no local frame source to fall back on.
- *  Shared by `sync` (which records the reason) and release-preflight check 7 (which re-derives it from the
- *  baseline's own appVersion rather than trusting the recorded string). */
-export const LOCAL_LANE_UNAVAILABLE_FROM = "2.19675.0";
-
-/** Whether the local lane is unavailable on Desktop `appVersion` (at or after the sunset build). */
-export function localLaneUnavailable(appVersion: string): boolean {
-  return cmpVersionStrings(appVersion, LOCAL_LANE_UNAVAILABLE_FROM) >= 0;
-}
 
 /** Fixed display form of the sessions dir — messages use this, never the resolved (username-bearing) path. */
 export const DESKTOP_SESSIONS_DISPLAY = "~/Library/Application Support/Claude/local-agent-mode-sessions";
@@ -187,17 +173,6 @@ export function readDesktopInitSurface(input: InitSurfaceInput): InitSurfaceRead
   }
 
   if (framesSelected === 0) {
-    // An unknown install time is a sync defect (the asar was unreadable), never explained away by the lane.
-    if (input.installedAtMs !== null && localLaneUnavailable(input.appVersion)) {
-      const r = reading({ ...unobserved, unobservedReason: "local-lane-unavailable" }, 0, excludedServers);
-      r.notes.push(
-        `desktopInitSurface: unobserved, recorded with reason local-lane-unavailable — Desktop ${input.appVersion} is at or after ` +
-          `the local-lane sunset build ${LOCAL_LANE_UNAVAILABLE_FROM}, where new Pro/Max tasks run in the cloud and write no local init frame. ` +
-          "The release preflight accepts this state.",
-      );
-      if (counts.unreadable > 0) r.notes.push(`desktopInitSurface: ${counts.unreadable} session-log file(s)/dir(s) unreadable (skipped)`);
-      return r;
-    }
     const r = reading(unobserved, 0, excludedServers);
     const why = !dirPresent
       ? `no Cowork session logs found under ${DESKTOP_SESSIONS_DISPLAY}`
