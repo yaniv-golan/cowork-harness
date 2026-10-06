@@ -483,9 +483,9 @@
         "note": "— startup syncPlugins(); plugins load via --plugin-dir (registry inert in-VM)."
       },
       "cuCanUseToolEnabled:2486083521": {
-        "on": false,
-        "source": "defaultValue",
-        "value": false
+        "on": true,
+        "source": "force",
+        "value": true
       },
       "skeletonHome:2614807392": {
         "on": false,
@@ -618,8 +618,8 @@
     ],
     "spawnEnvSpreadCount": 35,
     "fcache": {
-      "content16": "4f706f0a98c7214c",
-      "embeddedTimestamp": 1791283394992,
+      "content16": "e2c4efe94a5b08bf",
+      "embeddedTimestamp": 1791286375904,
       "featureCount": 396
     },
     "asarGateIds": [
@@ -1171,5 +1171,288 @@
       }
     }
   },
-  "requireFullVmSandbox": null
+  "requireFullVmSandbox": null,
+  "cloud": {
+    "remoteDevicesTools": [
+      "list_devices",
+      "get_device_info",
+      "device_list_dir",
+      "device_stage_files",
+      "device_commit_files",
+      "device_bash",
+      "device_request_folder_access",
+      "device_request_delete_permission",
+      "create_artifact",
+      "update_artifact",
+      "list_artifacts",
+      "list_legacy_live_artifacts",
+      "project_memory_read",
+      "project_memory_write"
+    ],
+    "remoteDevicesDescriptions": [
+      {
+        "name": "create_artifact",
+        "branch": "7799435b915c",
+        "sha256": "3ed415bc4a56dedc60cf0c54d277affac6acf5f112d3addb0b34cb46a8dd88ce",
+        "codePoints": 701
+      },
+      {
+        "name": "create_artifact",
+        "branch": "7f4749ce96db",
+        "sha256": "dc89bd3d2aec541aedffea6b703c955ebcf4a866395ca6132a4c32cc4bad13e6",
+        "codePoints": 705
+      },
+      {
+        "name": "device_bash",
+        "branch": "3cc333ce1f06",
+        "sha256": "f78a8587f2521d369f2d3998ad0f4033f00ef1f33b9b5ccc086a6e659c050d40",
+        "codePoints": 1978
+      },
+      {
+        "name": "device_bash",
+        "branch": "ac92050f107c",
+        "sha256": "4ce506e8993817289c1e9f0bf4d1818dd253551b959119c105d73194b763af85",
+        "codePoints": 1983
+      },
+      {
+        "name": "device_bash",
+        "branch": "e1908f059bd9",
+        "sha256": "15aa550be2153a6b278db4aff3772053a22f10a923aad54358a2b535883f2c60",
+        "codePoints": 2036
+      },
+      {
+        "name": "device_bash",
+        "branch": "eeb00304cc27",
+        "sha256": "ba9701727605c94fbeeb1d61b1307001d6f531851365d251b9d65363526f3213",
+        "codePoints": 1925
+      },
+      {
+        "name": "device_commit_files",
+        "branch": "32d8b3adb178",
+        "sha256": "b017e6f3437df72ea2278c3028773188126eff75b39179eb1b0e7e9e5f6cbded",
+        "codePoints": 863
+      },
+      {
+        "name": "device_commit_files",
+        "branch": "538c4c861af1",
+        "sha256": "2dcadf616b3648e1d6b361f7a6b3b2a90ed96458b5984290c43ecd1383f52578",
+        "codePoints": 782
+      },
+      {
+        "name": "device_commit_files",
+        "branch": "58e4936d6962",
+        "sha256": "713a5fbe5076ba1fbdc0beb4eac8b125d39bbb091f9442b2171ad124c662bc61",
+        "codePoints": 927
+      },
+      {
+        "name": "device_commit_files",
+        "branch": "a3ceb2274da1",
+        "sha256": "32d8c75d5c2b24e641cf78ac0ebb6d6c8a2977b503c61c7294e97602291a5ff5",
+        "codePoints": 1008
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "04469f2ed5ac",
+        "sha256": "4b49385df00722d288a54e09f3947279b38ac4ae19defa90c28cad38c3db9257",
+        "codePoints": 1039
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "13f1f921d373",
+        "sha256": "b99d8f1415c843c0ec73c3967ba94bab6175d74ac23779269ceb99201cd9be69",
+        "codePoints": 1370
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "1f63bc49a740",
+        "sha256": "1f67aa2312b3739496e2a68388d7aad3af66bd4ea5bcc2ea4f6c5a5af8c1111f",
+        "codePoints": 1281
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "2d2601f7b793",
+        "sha256": "34d996c4d7643ef14c976d19bc88392a96eeb758d59a587c1511f95bfa2645e0",
+        "codePoints": 929
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "58aa49f64859",
+        "sha256": "c36f00673202b1a2af7e873a138fb5305a537ef5ebd6ee1c7f4c7c271e131872",
+        "codePoints": 1112
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "5f90ddcc616d",
+        "sha256": "7a10470404dc7dc0be1c0de3e7aca412356c5f150d40d64f3161c69e3dab7d17",
+        "codePoints": 1222
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "72a8f1a27377",
+        "sha256": "3463422afe7f47dc8fafcbaba0bdd254d289290358bdfc3624885a359da0e0e8",
+        "codePoints": 1429
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "8851add8c45d",
+        "sha256": "1dc3f325f087a72c0d6d40b04eb59f6f0a3e421f0309165cb4be18a9172a6145",
+        "codePoints": 1187
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "c0ddae379e6c",
+        "sha256": "22b210f85e678dee886c07d452a55677a660369c6711c2d137c2f20508ec599e",
+        "codePoints": 1297
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "f4de0ae4957e",
+        "sha256": "8b353d4c0b42cdd3704aca1317d893781a34502e245aeb428525685389f386ee",
+        "codePoints": 1480
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "faa0d6aa2633",
+        "sha256": "edd7cb5d4ce415605bf971d6356cff92506ec01d882bf62b237f2d82cf612716",
+        "codePoints": 1171
+      },
+      {
+        "name": "device_list_dir",
+        "branch": "fd1d06feb2f4",
+        "sha256": "b1ec2b6638efed0e9c0cc49700e2d29d9e703879c945b15407ac85341ac3b49e",
+        "codePoints": 1539
+      },
+      {
+        "name": "device_request_delete_permission",
+        "branch": "ff99c025b80f",
+        "sha256": "43055fafc61694281ad7edcbb4337a79c8a16b51633e821cb26d118bccdf951b",
+        "codePoints": 1236
+      },
+      {
+        "name": "device_request_folder_access",
+        "branch": "28666333234b",
+        "sha256": "d0cf321fb2b7b1329c3eb63a03772f48961c9e2eba65bb98910e9beaf1abc660",
+        "codePoints": 1073
+      },
+      {
+        "name": "device_request_folder_access",
+        "branch": "2d2c38a02146",
+        "sha256": "72b93ace6c7ac73c49457c38a8d3c2029c71a2ef5e1fc06880c16001caa04e71",
+        "codePoints": 950
+      },
+      {
+        "name": "device_request_folder_access",
+        "branch": "4b820a69797d",
+        "sha256": "00b96a154b8a37169c5e4f73e7f871f6515cf1a92df1576e822f2a2ec2db7889",
+        "codePoints": 1117
+      },
+      {
+        "name": "device_stage_files",
+        "branch": "5c7416ea3b90",
+        "sha256": "274970de81013c9ef200b4cdc194accad1e820bebf32e2b9611c5a279c6a6589",
+        "codePoints": 1034
+      },
+      {
+        "name": "device_stage_files",
+        "branch": "7874ed95e0b4",
+        "sha256": "02f9355c2c221c863f0398033b327460540b0f4e87c0068e4e053561742dd03a",
+        "codePoints": 1382
+      },
+      {
+        "name": "device_stage_files",
+        "branch": "9b706885e306",
+        "sha256": "726276cb3b1b16ebfcdae57b76deb40054862dd50983383d3ddee17f8ca195b1",
+        "codePoints": 1251
+      },
+      {
+        "name": "device_stage_files",
+        "branch": "ddf52c78f520",
+        "sha256": "23185a19af758c9eef983c11475fc4ae2e0083ead0ca65f213cec9bf4ed1780c",
+        "codePoints": 1165
+      },
+      {
+        "name": "get_device_info",
+        "branch": "7ad76aa6596f",
+        "sha256": "7dff455d14b2180bdd241d8d7fb45e2b102947a4156c633a5f9d87c1a4e04320",
+        "codePoints": 2015
+      },
+      {
+        "name": "get_device_info",
+        "branch": "823b84a39f52",
+        "sha256": "0dcd7517937f93d40885a05b8069af5a8bbfea501f19f80b0737643c0e3f4a60",
+        "codePoints": 1853
+      },
+      {
+        "name": "get_device_info",
+        "branch": "eaaebafe46f2",
+        "sha256": "a0c591f4772f339887cc626af73b07f9feb541fcc1f0aa3f6a329b19a8c675c9",
+        "codePoints": 1654
+      },
+      {
+        "name": "list_artifacts",
+        "branch": "b58405bac6e9",
+        "sha256": "2faba2631679b7620b1727601d4bbd3ff6ac8c9bde175f61816bbd079d8dffe4",
+        "codePoints": 363
+      },
+      {
+        "name": "list_artifacts",
+        "branch": "fab4dcac6244",
+        "sha256": "bb2612da6059142dc739ccdb658d2526c1b319e1c1965acdedc710adc2299ec2",
+        "codePoints": 501
+      },
+      {
+        "name": "list_legacy_live_artifacts",
+        "branch": "ff99c025b80f",
+        "sha256": "314b280cd09ebe31fd42c27f4bc9bb67031804509082fd4f4ed2835bb8fa5f49",
+        "codePoints": 1577
+      },
+      {
+        "name": "project_memory_read",
+        "branch": "ff99c025b80f",
+        "sha256": "e20b744cff16f466179f1caedb6d09dd5a0f9f37ed34dbe202552098f91c6f78",
+        "codePoints": 441
+      },
+      {
+        "name": "project_memory_write",
+        "branch": "ff99c025b80f",
+        "sha256": "da4ce666c46a9fc81480ff72cda2f1fa9a98efbff2d4383a0f30f9c1cdcfcb91",
+        "codePoints": 397
+      },
+      {
+        "name": "update_artifact",
+        "branch": "13a7931f55bf",
+        "sha256": "46ee7915dd1e931b7bd9abcdd18c7bff1b9fe34ef5d43fad19ed3709059aecc5",
+        "codePoints": 584
+      },
+      {
+        "name": "update_artifact",
+        "branch": "31b3500c4deb",
+        "sha256": "01995cbc251a18d814ff446ff462a1196dc41024ce458929bbaaf15b1bbee355",
+        "codePoints": 746
+      },
+      {
+        "name": "update_artifact",
+        "branch": "93e4060a6d2b",
+        "sha256": "2977caa0db4878c468b9ba9c9c81c155810d0f00352b3b1a4172107a83ada346",
+        "codePoints": 580
+      },
+      {
+        "name": "update_artifact",
+        "branch": "97763713980e",
+        "sha256": "c07ac59afcf748cbf80593201253cdf70df208e6858eca62f0a699c14a902ffa",
+        "codePoints": 750
+      }
+    ],
+    "unreachable": [
+      "ccr_session_riders",
+      "ccr_web_fetch_proxy",
+      "ccr_web_search_proxy",
+      "memory_context",
+      "plugin_skill_sync",
+      "repl_bridge",
+      "session_id_unavailable",
+      "workspace_failed",
+      "workspace_starting"
+    ]
+  }
 }

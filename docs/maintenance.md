@@ -398,6 +398,22 @@ committed baseline and say why in that baseline's `$comment`.
      set still reflects what **this account** is served — `save_skill` needs org skill-creation access — the
      same class of fact `provenance.gates` already records.
 
+   **`cloud` → what Desktop serves to a cloud Cowork session.** A cloud session reaches this computer
+   through Desktop's `remote-devices` MCP server. From Desktop 2.19675.1, `sync` records, as a top-level
+   `cloud` block, that server's tool list (`remoteDevicesTools`) and one fingerprint per conditional
+   branch of each tool's description (`remoteDevicesDescriptions`: `name`, `branch`, `sha256`,
+   `codePoints`), read from the bundle. It also records `unreachable`: the cloud-session features no local
+   reproduction can reach (the CCR session host and its web fetch/search proxies, memory context,
+   plugin/skill sync, the REPL bridge, and the `device_bash` refusals that need Desktop's VM lifecycle or a
+   server-asserted session id). Nothing in the harness reads the block; it exists so `sync --diff` names a
+   tool that appears or disappears and a description whose fingerprint moved.
+   - **Names, hashes and counts only.** A description is Anthropic's text, so only its `sha256` and
+     code-point count are recorded, and a branch is identified by a hash of which conditions select it. A
+     strict schema refuses any other field before `sync` writes, and a test holds every string in every
+     committed block to a name or hash shape.
+   - **Not carried forward.** When the extraction fails, `sync` flags it and writes no `cloud` block rather
+     than the previous release's. `check:versions` fails when the newest baseline lacks one.
+
    `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
    and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
    key silently falls back to a code default that need not match production.

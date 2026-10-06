@@ -8,6 +8,7 @@ import {
   AnswerRule,
   Assertion,
   FIDELITY_TIERS,
+  CloudBlock,
   DesktopInitSurface,
   type RunResult,
   type RunStatus,
@@ -3391,9 +3392,25 @@ async function cmdSync(args: string[]) {
       1,
     );
   }
+  // Same rule for the cloud block: names, hashes and counts only. A null block (extraction failed) already
+  // carries an unknown delta, and is omitted rather than carried forward from the previous release.
+  if (res.cloud) {
+    const cloudCheck = CloudBlock.safeParse(res.cloud);
+    if (!cloudCheck.success) {
+      fail(
+        "sync",
+        "runtime",
+        `ERROR: the cloud block failed its schema — refusing to write baseline (issue paths: ${cloudCheck.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")})`,
+        "This is an extractor bug in src/sync/remote-devices.ts, not a Desktop change.",
+        isJsonOutput(normalizedArgs),
+        1,
+      );
+    }
+  }
   const capturedAt = new Date().toISOString().slice(0, 10);
+  const { cloud: _baseCloud, ...baseWithoutCloud } = base as Record<string, unknown>;
   const next = {
-    ...base,
+    ...baseWithoutCloud,
     $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
     baselineVersion: 1,
     appVersion: res.appVersion,
@@ -3444,6 +3461,9 @@ async function cmdSync(args: string[]) {
       // `observed:false`, which the release preflight refuses to ship.
       desktopInitSurface: res.desktopInitSurface,
     },
+    // Never carried forward (see CloudBlock): a carried block would stamp the previous release's surface
+    // with this release's identity.
+    ...(res.cloud ? { cloud: res.cloud } : {}),
   };
   const diffFlag = !!syncParsed.flags["--diff"];
   if (diffFlag) {

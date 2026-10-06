@@ -7,7 +7,8 @@ import { gunzipSync } from "node:zlib";
 import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
-import type { DesktopInitSurface } from "../types.js";
+import type { CloudBlock, DesktopInitSurface } from "../types.js";
+import { CLOUD_UNREACHABLE, extractCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
 
 /**
@@ -65,6 +66,9 @@ export interface SyncResult {
    *  release was installed (see desktop-init-surface.ts). `observed:false` when no such session exists.
    *  NEVER carried forward from the base baseline: that would stamp one release's surface with the next's. */
   desktopInitSurface: DesktopInitSurface;
+  /** The `cloud` block (remote-devices tool list + description fingerprints + unreachable features); null when
+   *  the asar could not be read or the extraction failed (a delta says which). Never carried forward. */
+  cloud: CloudBlock | null;
   unknownDeltas: string[];
   notes: string[]; // non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs) — surfaced by the CLI, never a delta
 }
@@ -881,6 +885,7 @@ export function sync(): SyncResult {
     promptFingerprint,
     agentReleaseChannel,
     bundleHasLiteral,
+    cloud,
     notes,
   } = extractFromAsar(unknown, gates);
 
@@ -943,6 +948,7 @@ export function sync(): SyncResult {
     agentReleaseBaseUrl: agentReleaseChannel?.baseUrl ?? null,
     agentReleaseChannel,
     desktopInitSurface: initSurface.surface,
+    cloud,
     unknownDeltas: unknown,
     notes,
   };
@@ -1494,6 +1500,7 @@ function extractFromAsar(
   agentReleaseChannel: AgentReleaseChannel | null;
   /** Quoted-literal membership over the normalized bundle; null when the bundle could not be read. */
   bundleHasLiteral: ((name: string) => boolean) | null;
+  cloud: CloudBlock | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
@@ -1508,6 +1515,7 @@ function extractFromAsar(
       promptFingerprint: null,
       agentReleaseChannel: null,
       bundleHasLiteral: null,
+      cloud: null,
       notes: [],
     };
   }
@@ -1564,6 +1572,17 @@ function extractFromAsar(
         unknown,
         "provenance.asarGateIds: the gate-id literal scan matched nothing — the asar's literal shape moved, so a membership diff would be blind. Fix extractAsarGateIds (maintainer), or the written baseline will inherit the PREVIOUS release's ids under this appVersion",
       );
+    // The cloud block reads the RAW chunks: it parses them, and normalization is a text rewrite for anchors.
+    const cloudReading = extractCloudBlock(rawFiles);
+    for (const d of cloudReading.deltas) flag(unknown, d);
+    const cloud: CloudBlock | null =
+      cloudReading.tools && cloudReading.deltas.length === 0
+        ? {
+            remoteDevicesTools: cloudReading.tools,
+            remoteDevicesDescriptions: cloudReading.descriptions,
+            unreachable: [...CLOUD_UNREACHABLE],
+          }
+        : null;
     const promptFingerprint = extractPromptFingerprint(bundle);
     const fingerprintsFile = readPromptFingerprintsFile();
     const promptDrift = checkPromptDrift(
@@ -1584,6 +1603,7 @@ function extractFromAsar(
       agentReleaseChannel: extractAgentReleaseChannel(bundle),
       // Quoted, after normalizeBundleQuotes: a bare substring would match any identifier fragment.
       bundleHasLiteral: (name: string) => bundle.includes(`"${name}"`),
+      cloud,
       notes: [...notes, ...promptDrift.notes, ...tripwireNotes],
     };
   } catch (e) {
@@ -1598,6 +1618,7 @@ function extractFromAsar(
       promptFingerprint: null,
       agentReleaseChannel: null,
       bundleHasLiteral: null,
+      cloud: null,
       notes: [],
     };
   } finally {

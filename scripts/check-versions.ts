@@ -122,6 +122,20 @@ function cmp(a: string, b: string): number {
   return 0;
 }
 
+/** The first Desktop whose baseline carries the `cloud` block. Older baselines predate it and stay as written. */
+export const CLOUD_BLOCK_FROM = "2.19675.1";
+
+/** Invariant: the NEWEST baseline carries the `cloud` block once the block exists. Presence only — the per-release
+ *  diff of its contents is `sync --diff`, and its shape is test/remote-devices.test.ts. A newest baseline without
+ *  it means the extraction failed and `sync` wrote the baseline without the block. */
+export function checkCloudBlockPresent(maxBaseline: string | undefined, newest: unknown): string[] {
+  if (!maxBaseline || cmp(maxBaseline, CLOUD_BLOCK_FROM) < 0) return [];
+  if ((newest as { cloud?: unknown } | null)?.cloud !== undefined) return [];
+  return [
+    `baselines/desktop-${maxBaseline}.json carries no top-level \`cloud\` block (the remote-devices tool list and fingerprints) — re-run \`cowork-harness sync\` and fix the extraction it flags`,
+  ];
+}
+
 /** Invariant 11 — DESIGN.md's "Scope of that claim" note, verified against the baselines.
  *
  *  That note is the repo's honest disclosure of how much of the CURRENT baseline is actually
@@ -803,6 +817,7 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   //     pass itself, and encoding that rule here would just move the drift. Instead the list must be
   //     CONTIGUOUS from wherever it starts through the newest baseline, which is what actually catches a
   //     release being left out.
+  if (maxBaseline) errors.push(...checkCloudBlockPresent(maxBaseline, json(`baselines/desktop-${maxBaseline}.json`)));
   errors.push(
     ...checkDesignScopeNote({
       design,
