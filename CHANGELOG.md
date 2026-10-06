@@ -33,7 +33,9 @@ All notable changes to this project are documented here. The format is based on
   It records names, hashes and counts only, never description text; a strict schema enforces that before the write
   and over every committed baseline. `sync --diff` names a tool that appears or disappears and a description whose
   fingerprint moved. A failed extraction does not block the write: `sync` prints a warning and writes the baseline
-  without the block (never the previous release's), and `check:versions` warns when the newest baseline lacks it.
+  without the block (never the previous release's), and `check:versions` warns when the newest baseline lacks it. A
+  block that fails the schema (a field or string that is not a name, hash or count) still refuses the write, since that
+  is the case where description text could be published.
   Nothing in the harness reads it. See [docs/maintenance.md](./docs/maintenance.md).
 
 ### Changed

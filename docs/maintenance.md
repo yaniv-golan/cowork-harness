@@ -397,7 +397,8 @@ committed baseline and say why in that baseline's `$comment`.
 
    **`cloud` → what Desktop serves to a cloud Cowork session.** A cloud session reaches this computer
    through Desktop's `remote-devices` MCP server. From Desktop 2.19675.1, `sync` records, as a top-level
-   `cloud` block, that server's tool list (`remoteDevicesTools`) and one fingerprint per conditional
+   `cloud` block, that server's tool-name array (`remoteDevicesTools`; not every name has a description in the
+   bundle — `list_devices` has none) and one fingerprint per conditional
    branch of each tool's description (`remoteDevicesDescriptions`: `name`, `branch`, `sha256`,
    `codePoints`), read from the bundle. It also records `unreachable`: the cloud-session features no local
    reproduction can reach (the CCR session host and its web fetch/search proxies, memory context,
@@ -408,9 +409,14 @@ committed baseline and say why in that baseline's `$comment`.
      code-point count are recorded, and a branch is identified by a hash of which conditions select it. A
      strict schema refuses any other field before `sync` writes, and a test holds every string in every
      committed block to a name or hash shape.
-   - **Not carried forward, and not write-blocking.** When the extraction fails, `sync` prints a `WARNING`
-     note naming the failure and writes the baseline without a `cloud` block, never the previous release's.
-     `check:versions` then warns (it does not fail) that the newest baseline lacks one.
+   - **Not carried forward, and not write-blocking.** When the extraction fails (or the extractor throws),
+     `sync` prints a `WARNING` note naming the failure and writes the baseline without a `cloud` block, never
+     the previous release's. `check:versions` then warns (it does not fail) that the newest baseline lacks one.
+     The one exception is the schema: an extracted block that fails it still refuses the write, because that is
+     the case where description text could be published.
+   - **`unreachable` is a curated harness list, not extracted** (`CLOUD_UNREACHABLE` in
+     `src/sync/remote-devices.ts`). Its diff line fires only when the harness changes the list, never on a
+     Desktop release.
 
    `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
    and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
