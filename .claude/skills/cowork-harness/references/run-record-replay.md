@@ -1,6 +1,6 @@
 # Run, record and lock
 
-Tracks `cowork-harness 4.4.0` (baseline `desktop-2.19675.0`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
+Tracks `cowork-harness 4.4.1` (baseline `desktop-2.19675.0`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
 
 ## Part II — RUN, RECORD & LOCK
 
@@ -21,9 +21,20 @@ never calls the semantic judge, so a `semantic_matches` or `semantic_pairwise` a
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` re-grades those against the kept run (the judge call
 is the only spend) and reports whether the judge read the same document the live judge did (widening the evidence
 scope needs `--allow-unchecked`: content the live judge never read is refused otherwise). A part of the judge's
-input that cannot be proven scrubbed with the run's scrub set is refused too: on a run from before 4.4 (no
-`scrubSet` in `result.json`), from another machine, or after a token rotated, unchanged rubric lines re-grade but a
-new or edited one is refused until the case is re-run or `--allow-scrub-change` is passed. A run dir moved or
+input that cannot be proven scrubbed with the run's scrub set is refused too (exit 2, `refusals[]`, naming the parts,
+never their text). A run records a keyed fingerprint of its scrub set (`result.json` `scrubSet`); when this
+process's set provably covers it, everything is sent. Otherwise only parts equal to the run's own scrubbed record
+are: the pairwise task line, each rubric line, each evidence-health and scratch note, and each reference still
+byte-identical to the one a live comparison of the run was sent. So a new or edited rubric line
+(`rubric_unverifiable`), a changed prompt (`task_unverifiable`), a changed evidence note (`evidence_unverifiable`),
+or a reference re-frozen since the run (`reference_unverifiable`) is refused on a run recorded before the
+scrub-set fingerprint (no `scrubSet`), on one whose key was unusable (`scrubSetUnavailable`, see
+`debugging.md`), from another machine, or after a token it scrubbed rotated. Re-run the case (a new run records a
+fresh fingerprint), regrade with the run's scrub settings, or pass `--allow-scrub-change` after checking them (the
+grade records `scrubAcceptedBy`); `--allow-doc-drift` and `--allow-unchecked` never imply it.
+`ref freeze` applies the same proof: a document with no live fingerprint (`--allow-unchecked`) is composed with this
+process's scrub set, so it is frozen only when that set provably covers the run's, or with `--allow-scrub-change`;
+`ref verify` refuses both flags. A run dir moved or
 downloaded from where it ran is read from where it is; a COPY beside its still-present original is refused (its
 `result.json` names the original's files), so grade the original, or re-run the scenario. Or skip
 the discovery/encode/record dance entirely and answer gates **live during the recording** with
@@ -352,7 +363,8 @@ modes exist to withhold; `status.json` is still written either way, so `status` 
 passed to `--run-dir` (a directory without its own `status.json`): it scans up to two levels down for the
 newest session's `status.json` and reads that. `--follow` fails loud on a timeout/staleness
 rather than hanging forever. (Fuller recipe in [`docs/run-status.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/run-status.md) — repo-only, not in the installed
-payload; `cowork-harness status --help` has the flags.)
+payload; `cowork-harness status --help` has the flags.) To find a scenario's newest run dir, use
+`cowork-harness status --latest-for <scenario>`, which orders by run time rather than directory mtime.
 
 **Poll with `--follow`, not with a shell loop over `status`'s stdout.** The one-shot text form prints to
 **stderr** and writes nothing to stdout; `--output-format json` (one envelope) and `--follow` (one JSON
@@ -372,6 +384,25 @@ subagent that returns before it finishes — the returning agent tears down its 
 in-flight run mid-artifact-write. Run it foreground, or detached from any process that will exit first.
 (The `status.json` liveness above is exactly what surfaces such a teardown as `"error"`/`stale` rather
 than a stuck `"running"`.)
+
+### Other flags worth knowing
+
+- `skill` / `critique`: `--prompt-file <path>` reads the prompt verbatim (no shell parsing); `--marketplace <dir>
+  --enable name@mkt` loads skills through a marketplace; `--timeout <ms>` is the wall-clock budget;
+  `--allow-host-writes` consents to a writable `hostloop` connected folder; `--verbose` adds thinking, tool inputs
+  and the sub-agent tree to the output.
+- `run --matrix`: `--max-cells <n>` caps the cross-product (default 16), and a truncated matrix fails unless
+  `--allow-truncated-matrix` judges only the cells that ran.
+- `record`: `--max-artifact-bytes <n>` caps an inlined artifact body (default 65536); `--rerecord-stale
+  --from-embedded` re-records from the cassette's embedded scenario when no source file resolves.
+- `replay --mutate`: `--mutate-include` / `--mutate-exclude <glob>` scope which artifact paths are perturbed, and
+  `--mutate-max-per-file` / `--mutate-max-total` raise the sample caps (default 10 / 50).
+- `probe-dispatch --expect-write <suffix>` counts only a sub-agent write whose path ends with the suffix as delivered.
+- `ref freeze --case-id <id>` overrides the store entry's name (default: the scenario's name).
+- `fixture export <run-dir> --out <dir>` refuses a file holding a secret, and a text file or file name holding a host
+  path unless `--allow-host-paths` (a path into a run dir or a guest session is refused regardless).
+- `prune [--keep-last <n>] [--pinned-older-than <N>d]` removes old run dirs (default `--keep-last 5`);
+  `--dry-run` previews it.
 
 ### Place assertions in the right CI lane
 

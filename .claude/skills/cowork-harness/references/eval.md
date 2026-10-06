@@ -1,6 +1,6 @@
 # `eval` — paired before/after comparison of a skill edit (EXPERIMENTAL)
 
-Tracks `cowork-harness 4.4.0` (baseline `desktop-2.19675.0`). The full guide is
+Tracks `cowork-harness 4.4.1` (baseline `desktop-2.19675.0`). The full guide is
 [docs/eval.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/eval.md); this is the part you
 need while running it.
 
@@ -31,6 +31,9 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
   worst observed runs × 2 × `--reps` exceed x — pre-flight only, agent cost only, never a mid-run stop.
 - In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
 - Run an A/A first (`--allow-identical-arms`, the same source twice) to see your scenarios' noise.
+- A directory arm's snapshot leaves out untracked files unless you pass `--include-untracked` (not with a
+  `git:` arm). `--correction bh|holm` picks the multiple-comparison correction behind `confirmed` (default
+  `bh` at q = 0.10; `holm` is stricter).
 
 ## Reading the labels
 

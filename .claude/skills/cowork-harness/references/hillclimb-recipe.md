@@ -1,6 +1,6 @@
 # Recipe 7 — Climb a skill with `/claude-api hillclimb` and the harness as its runner
 
-Tracks `cowork-harness 4.4.0` (baseline `desktop-2.19675.0`). It needs a `cowork-harness` whose
+Tracks `cowork-harness 4.4.1` (baseline `desktop-2.19675.0`). It needs a `cowork-harness` whose
 `hillclimb --help` lists `--skill` (help goes to stderr). This page is the loop's procedure, step by step, in the order of the
 `/claude-api hillclimb` guide. Every mechanic (flags, refusals, the gate, `regrade`, `freeze-ref`, exit codes,
 row keys) is in [`hillclimb.md`](hillclimb.md); the setup and the full list of differences from the guide's own
@@ -59,6 +59,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Never pass `--approve-harness`.** It records the harness sha and is the user's to run. A refusal before
   spending prints `refusing to run: …` and exits 2: stop and show the user what it names. `freeze-ref` needs
   no approval.
+- **Never pass `--allow-scrub-change` unattended,** and never put it in an allowed prefix. It sends the judge a
+  part of its input that cannot be proven scrubbed with the run's scrub set, so it can disclose a secret the run
+  scrubbed. Pass it only after the user has checked the scrub settings and said yes for that listing.
 - **`--skill` takes the bare skill name** (a `skills/<dir>` name or the registered name), never `plugin:name`
   or a path.
 
@@ -76,10 +79,27 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Recompute the headline** from `F/<variant>/results.jsonl`, never from `summary.json`.
 - **Spot-check grading.** Read the lowest-scoring baseline rows' `explanation` and traces. If a rubric is wrong,
   tell the user; after they edit it and approve the new sha, `cowork-harness hillclimb regrade T --flow F`
-  re-evaluates every row in place from its kept run without running the agent: changed deterministic
+  re-evaluates the rows in place from their kept runs without running the agent: changed deterministic
   assertions and every metric without a judge call, a judged assertion re-judged because its rubric changed. An
   unchanged assertion whose evaluation a harness upgrade changed keeps its recorded outcome (noted); editing the
   assertion, or re-running the case, re-grades it.
+- **Rows listed instead of re-graded (exit 1).** A new or edited rubric line (or another part of the judge's input)
+  is sent only when it can be proven scrubbed with the run's scrub set. When it cannot, the row is listed, untouched
+  and still carrying its old grade, with no judge call; stderr names the parts and why the run's set is not proven,
+  and `F/<variant>/regrade.md` lists the row. The usual causes: a run recorded before the scrub-set fingerprint (no
+  `scrubSet` in its `result.json`; one stderr summary line counts them), a run whose key was unusable ("this run
+  recorded no scrub set"), a run from another machine or under a replaced `scrubset.key`, or a token the run
+  scrubbed that has rotated since. What to do, in order: if the run recorded no scrub set, first have the user fix
+  `scrubset.key` as its `::warning:: [scrub-set]` line names (see the debugging reference); the harness never
+  replaces an existing bad key, so a new run before that fix records no scrub set again and is listed again. If this
+  process lacks a scrub value the run had (`COWORK_HARNESS_SCRUB_VALUES` / `COWORK_HARNESS_SCRUB_KEYS`, a rotated
+  token), ask the user to set the run's settings and regrade again; otherwise the listed cases need new runs,
+  which record a fresh fingerprint once the key is usable. A pass
+  runs nothing for a slot that already has a row, so tell the user and propose running the change as a new variant,
+  or a fresh flow dir from the baseline when the baseline's rows are listed. Only if the user has checked the scrub
+  settings and asks for it, re-run the same `regrade` with `--allow-scrub-change` (the regrade file then records
+  `scrubAcceptedBy`). Never pass it unattended; `--allow-doc-drift`, `--allow-unchecked` and `--rejudge` never
+  imply it. Don't compare variants while rows are listed: their grades are from the old rubric.
 - **Triage every zero.** An agent's own failure is a scored row (`meta.failure_class: "errored_agent"`, with
   `meta.termination_rule`). Infrastructure, timeouts, a wrong served model and invalid judge grades are
   `errors.jsonl` rows, never in the scored denominator. A variant that rewords or batches its questions can miss
@@ -182,7 +202,11 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **Grader drift.** If a rubric is wrong, the user edits it and approves the sha; then
   `cowork-harness hillclimb regrade T --flow F` re-grades every variant's rows (default `--variant all`) and writes
   `F/<variant>/regrade.md` when a row moved or was listed. A row whose judge evidence itself changed since it was graded is
-  listed instead: ask the user before re-running with `--rejudge`.
+  listed instead: ask the user before re-running with `--rejudge`. A row whose new rubric text cannot be proven
+  scrubbed with its run's scrub set is listed too, and so is one whose evidence would be less redacted than the
+  graded document: handle both as in Step 0.5 (*Rows listed instead of re-graded*), never with `--allow-doc-drift`.
+  For the less-redacted row the override, if the user asks for it, is `--rejudge --allow-scrub-change` together:
+  `--allow-scrub-change` alone does not re-judge changed evidence.
 - **A new metric.** Add `metrics:` to the scenario, have the user approve the sha, re-run
   `cowork-harness hillclimb state-template T --flow F` and merge only the new `metrics` entries into
   `_state.json`. Rows written before it lack the key (`check` notes them); `hillclimb regrade T --flow F` fills it
@@ -192,9 +216,16 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   `cowork-harness hillclimb regrade T --flow F --fill-refs` (no `--case`: rows of cases with no pairwise
   assertion need the column too, at no judge cost), then `state-template T --flow F` and merge the new
   `win_vN` entries (it declares them only once no scored row lacks them). Only the baseline's reference
-  decides `pass`.
-- **After a rubric re-grade, compare the ranking.** If the order of the variants flipped, tell the user and
-  propose restarting the climb from the baseline.
+  decides `pass`. When an entry already frozen lacks a compose key (an assertion added or re-scoped since),
+  `freeze-ref` and a baseline pass add it only when this process's scrub set provably covers the run it was frozen
+  from; otherwise the case is refused (exit 1). The refusal says to re-run the variant, but a pass never re-runs a
+  filled slot and a baseline pass refuses again each time: restore the run's scrub settings and re-run `freeze-ref`,
+  or start a fresh flow dir. A `--fill-refs` comparison against a
+  reference the row's run never judged is proven only when the run's scrub set is covered; otherwise the row is
+  listed (exit 1) and keeps no `win_vN` column. Handle it as in Step 0.5: same scrub settings, or new runs; ask
+  the user before any `--allow-scrub-change`.
+- **After a rubric re-grade, compare the ranking** once no row is listed. If the order of the variants flipped,
+  tell the user and propose restarting the climb from the baseline.
 
 ## Step 5 — report and hand back
 

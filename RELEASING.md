@@ -177,8 +177,11 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - [ ] **Does this release add or change a user-facing CLI flag, assertion key, cassette field, message,
       top-level scenario key, or version coupling?** If so update **CHANGELOG.md + README.md +
       `.claude/skills/cowork-harness/SKILL.md` + `references/`** — a version bump is NOT documentation.
-      Only *some* of this is guarded (the assertion-key catalog and cassette schema fields, by
-      `test/skill-docs-sync.test.ts`); a new **flag** or **message** is guarded by nothing and is on you.
+      `test/skill-docs-sync.test.ts` and `test/skill-flag-coverage.test.ts` guard names only: every assertion
+      key, cassette schema field, CLI long flag and `error.code` value must appear somewhere in the skill. A
+      message is guarded by nothing. A name can appear in a passage that no longer describes what it does, so
+      those tests pass while the instructions go stale; a changed refusal, exit code, default or flag meaning is
+      caught only by the companion-skill reconcile step below.
       Two consecutive consumer adoption reports spent ~40% of their findings on exactly this.
 - [ ] **New top-level scenario key?** Then the docs above MUST also state **the version floor and what an
       older CLI does with the key** — the loader is `z.strictObject`, so an unknown key is a hard error
@@ -211,6 +214,18 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       a release that reports nothing reads as "unchanged" whether or not anyone checked — the same
       silence-is-not-a-verdict failure the 3.8.0 corpus preview exists to close. A consumer diffed two
       tags' `src/` by hand and still had to ask (2026-09-21) because the 3.7.0 notes said nothing either way.
+- [ ] **Reconcile the companion skill against the CHANGELOG.** Do it once the new version's CHANGELOG section is
+      final, and before any live gate. For every bullet in that section (every heading: Security, Upgrade notes,
+      Added, Changed, Fixed, Documentation), find each passage of `.claude/skills/cowork-harness/SKILL.md` and
+      `references/*.md` that describes the behaviour, and mark it **ok**, **stale** or **missing**. Search widely:
+      the command, its flags, its refusal and `error.code` names, and the nouns the bullet uses. Do the
+      step-by-step recipes first (`references/hillclimb-recipe.md`, `references/task-recipes.md`,
+      `references/authoring.md`): an agent follows a recipe literally, so a stale step there does the most harm. A
+      behaviour change is more than a new name: a changed refusal, exit code or default, or a change to what a flag
+      unlocks, makes every passage describing the old behaviour stale. Keep the table (bullet | skill file:line |
+      status | fix) with the release work; it is the evidence for this step. **Any stale or missing passage
+      blocks the release** until it is fixed, in present tense, with no per-release history in the skill. The
+      name guard above passes while a passage is stale, which is why this step is manual.
 - [ ] Bump every version location (items 1–10) with **`npm run bump -- X.Y.Z --write`** — it rewrites all
       of them via targeted patterns and updates the lockfile + self-checks `check:versions` (run without
       `--write` first to preview the diff; dry-run is the default). It deliberately does **not** touch the

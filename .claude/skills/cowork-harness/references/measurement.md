@@ -1,6 +1,6 @@
 # Measurement
 
-Tracks `cowork-harness 4.4.0` (baseline `desktop-2.19675.0`). Read it before comparing runs: `--repeat`, `--ablate-skill`, and the hygiene that keeps a batch valid.
+Tracks `cowork-harness 4.4.1` (baseline `desktop-2.19675.0`). Read it before comparing runs: `--repeat`, `--ablate-skill`, and the hygiene that keeps a batch valid.
 
 ### Measure — before/after, with/without (`--repeat`, `--ablate-skill`)
 
@@ -56,7 +56,7 @@ Compare timings between runs of the same tier and model only.
    `fingerprint.skillHash` is content-exact but one-way, so an edit mid-batch silently splits your
    dataset into two generations — and a hash whose source was never frozen identifies a generation that
    is unrecoverable. `stats --group-by skill-hash` separates them after the fact; nothing recovers the
-   source.
+   source. (`stats --reindex` rebuilds the runs index from the run dirs when it is lost or predates it.)
 3. **Check which arm you actually ran** before analysing anything: `ablated` and
    `context.availableSkills` in each `result.json`.
 4. **Classify each rep three ways**: invocation (`skillsInvoked`), observed source access (did it read

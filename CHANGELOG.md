@@ -6,6 +6,42 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.4.1] — 2026-10-05
+
+A companion-skill release: the skill now teaches 4.4.0's re-grade scrub-set proof, and a test keeps every CLI flag
+and `error.code` named in it. No CLI behaviour changes.
+
+### Upgrade notes
+
+- **Cassettes: no re-record needed.** Nothing under `src/`, `baselines/` or `docker/` changed, `latest` still
+  resolves to `desktop-2.19675.0`, and `CASSETTE_VERSION` is still 14.
+
+### Documentation
+
+- **The companion skill covers the re-grade scrub-set proof.**
+  - The hillclimb recipe says what to do with rows `hillclimb regrade` lists (exit 1) because a part of the
+    judge's input cannot be proven scrubbed with the run's scrub set (a run recorded before the scrub-set
+    fingerprint, an unusable key, another machine, a rotated token): regrade with the run's scrub settings, or
+    re-run the cases, which records a fresh fingerprint. It never passes `--allow-scrub-change` unattended; that
+    flag is the user's call after checking the scrub settings. Its `freeze-ref` and `--fill-refs` steps say when
+    they refuse or list for the same reason.
+  - The `regrade` reference names every part refused when unproven: the pairwise task line, rubric lines,
+    evidence-health and scratch notes, and a reference re-frozen since the run. It covers `ref freeze`'s proof for
+    an unchecked document (`--allow-scrub-change`), which `ref verify` refuses, and what the proof does not cover.
+  - The debugging reference explains the unusable-key warning (`scrubset.key` a symlink, readable by others,
+    owned by another user, empty, unreadable or not a key): such a run records `scrubSetUnavailable`, so its
+    later re-grades refuse with `scrubSet: "unrecorded"`; fix or delete the key file, then re-run the case. The
+    CI recipe says to keep `scrubset.key` out of version control and artifact uploads.
+- **The companion skill names every CLI long flag and every `error.code`.** A new test reads the flags from each
+  command's `--help` and the codes from `schema/*.json`, and fails on one the skill never mentions, unless it is
+  allowlisted with a reason. Its first run found 41 flags and 3 `regrade` codes (`doc_drift`,
+  `unchecked_content`, `no_semantic_asserts`) the skill never named. The skill now describes 39 of the flags and
+  all 3 codes; the other 2 are allowlisted (`--diff`, used only by `sync --diff` for baseline maintenance, and
+  `--strict-independent`, which is help prose, not a flag).
+- [RELEASING.md](./RELEASING.md) gains a step that reconciles the companion skill against the new version's
+  CHANGELOG, recipes first, before the live gate: a passage that is stale or missing blocks the release. The pull
+  request template asks every PR to state whether the companion skill is affected.
+
 ## [4.4.0] — 2026-10-05
 
 A security fix: `regrade` and `hillclimb regrade` no longer send a judge a value the run scrubbed. A run now records
