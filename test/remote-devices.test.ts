@@ -190,3 +190,17 @@ describe("check:versions — the newest baseline carries the cloud block", () =>
     expect(checkCloudBlockPresent(CLOUD_BLOCK_FROM, { cloud: {} })).toEqual([]);
   });
 });
+
+describe("sync's write: the cloud block is never carried forward", () => {
+  it("this release's block replaces the previous one; no block extracted → none written, not the previous release's", async () => {
+    const { withSyncedCloudBlock } = await import("../src/sync/remote-devices.js");
+    const prev = { appVersion: "1", cloud: { remoteDevicesTools: ["old_tool"] } };
+    expect(withSyncedCloudBlock(prev, { remoteDevicesTools: ["new_tool"] })).toEqual({
+      appVersion: "1",
+      cloud: { remoteDevicesTools: ["new_tool"] },
+    });
+    const none = withSyncedCloudBlock(prev, null);
+    expect(none).toEqual({ appVersion: "1" });
+    expect("cloud" in none).toBe(false);
+  });
+});

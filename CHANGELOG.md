@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+
+- **Bumped the transitive `source-map-js` 1.2.1 → 1.2.2**, clearing a Dependabot high-severity advisory. It is a
+  dev-only dependency (reached through `jsdom` and `vitest`), so nothing in the published package changes. Lockfile
+  only.
+
 ### Upgrade notes
 
 - **Cassettes: re-record — the agent moved.** `latest` now resolves to `desktop-2.19675.1`, which pins agent **2.1.288**
@@ -44,12 +50,6 @@ All notable changes to this project are documented here. The format is based on
   `unobservedReason: "local-lane-unavailable"` and prints a note instead of a warning, and `sync --diff` names the
   reason. Preflight check 7 accepts that state after re-checking the version from the baseline's own `appVersion`.
   The reason is never recorded when the install time is unknown.
-
-### Security
-
-- **Bumped the transitive `source-map-js` 1.2.1 → 1.2.2**, clearing a Dependabot high-severity advisory. It is a
-  dev-only dependency (reached through `jsdom` and `vitest`), so nothing in the published package changes. Lockfile
-  only.
 
 ## [4.4.1] — 2026-10-05
 

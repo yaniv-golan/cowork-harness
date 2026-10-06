@@ -91,6 +91,16 @@ export function findRemoteDevicesToolList(files: Map<string, string>): string[] 
   return null;
 }
 
+/** The baseline `sync` writes, as far as the `cloud` block goes: this release's block when it was extracted, and
+ *  otherwise none — never the previous release's, which would stamp its surface with this release's identity. */
+export function withSyncedCloudBlock<T extends Record<string, unknown>>(
+  next: T,
+  cloud: object | null,
+): Omit<T, "cloud"> & { cloud?: object } {
+  const { cloud: _previous, ...rest } = next;
+  return cloud ? { ...rest, cloud } : rest;
+}
+
 export function extractCloudBlock(files: Map<string, string>): CloudBlockReading {
   const deltas: string[] = [];
   const tools = findRemoteDevicesToolList(files);

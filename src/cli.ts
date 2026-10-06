@@ -59,6 +59,7 @@ import type { DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName, vmProvisioned, type VmProvisioning } from "./runtime/lima.js";
 import { resolveVmBaselineArg } from "./runtime/vm-baseline-arg.js";
 import { sync, canonicalizeEnv, syncedNetworkBlock } from "./sync/cowork-sync.js";
+import { withSyncedCloudBlock } from "./sync/remote-devices.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
@@ -3408,63 +3409,62 @@ async function cmdSync(args: string[]) {
     }
   }
   const capturedAt = new Date().toISOString().slice(0, 10);
-  const { cloud: _baseCloud, ...baseWithoutCloud } = base as Record<string, unknown>;
-  const next = {
-    ...baseWithoutCloud,
-    $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
-    baselineVersion: 1,
-    appVersion: res.appVersion,
-    capturedAt,
-    agentVersion: res.agentVersion,
-    agentBinary: nextAgentBinary,
-    network: syncedNetworkBlock(base.network as Record<string, unknown> | undefined, res.networkMode, res.allowDomains),
-    requireFullVmSandbox: res.requireFullVmSandbox,
-    // spawn.env AND spawn.effortByModel/effortRegexDefault are the GENERATED tier: re-derived from the asar
-    // each sync, canonically ordered so a benign source-reorder is a zero-line diff. All the hand-curated
-    // spawn fields (tools, allowedTools, scalars, prompt pointers, $comment*) carry forward from base
-    // untouched. On a hard-fail deriveSpawnEnv / extractModelEffortConfig returns null and the base values
-    // are preserved (the all-or-nothing contract).
-    spawn: {
-      ...(base.spawn as object),
-      env: canonicalizeEnv(
-        res.spawnEnv ?? (base.spawn as { env?: Record<string, string> })?.env,
-        (base.spawn as { env?: Record<string, string> })?.env,
-      ),
-      ...(res.modelEffortConfig
-        ? {
-            effortByModel: res.modelEffortConfig.effortByModel,
-            effortRegexDefault: res.modelEffortConfig.effortRegexDefault,
-          }
-        : {}),
+  const next = withSyncedCloudBlock(
+    {
+      ...(base as Record<string, unknown>),
+      $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
+      baselineVersion: 1,
+      appVersion: res.appVersion,
+      capturedAt,
+      agentVersion: res.agentVersion,
+      agentBinary: nextAgentBinary,
+      network: syncedNetworkBlock(base.network as Record<string, unknown> | undefined, res.networkMode, res.allowDomains),
+      requireFullVmSandbox: res.requireFullVmSandbox,
+      // spawn.env AND spawn.effortByModel/effortRegexDefault are the GENERATED tier: re-derived from the asar
+      // each sync, canonically ordered so a benign source-reorder is a zero-line diff. All the hand-curated
+      // spawn fields (tools, allowedTools, scalars, prompt pointers, $comment*) carry forward from base
+      // untouched. On a hard-fail deriveSpawnEnv / extractModelEffortConfig returns null and the base values
+      // are preserved (the all-or-nothing contract).
+      spawn: {
+        ...(base.spawn as object),
+        env: canonicalizeEnv(
+          res.spawnEnv ?? (base.spawn as { env?: Record<string, string> })?.env,
+          (base.spawn as { env?: Record<string, string> })?.env,
+        ),
+        ...(res.modelEffortConfig
+          ? {
+              effortByModel: res.modelEffortConfig.effortByModel,
+              effortRegexDefault: res.modelEffortConfig.effortRegexDefault,
+            }
+          : {}),
+      },
+      provenance: {
+        ...baseProvenance,
+        gates: nextGates,
+        asarFingerprint: res.asarFingerprint,
+        spawnEnvKeys: res.spawnEnvKeys,
+        spawnEnvSpreadCount: res.spawnEnvSpreadCount,
+        // Snapshot IDENTITY for the gate block above. `capturedAt` is a date, which is far too coarse: the
+        // payload refetches irregularly (3.7–20.8 min observed) and its membership churns count-neutrally,
+        // so "captured on 2026-08-05" cannot distinguish two materially different reads. Carried forward
+        // from `baseProvenance` when the fcache is unreadable, so an offline sync never blanks it.
+        ...(res.fcache ? { fcache: res.fcache } : {}),
+        // Gate ids this release's BUNDLE references — a pure function of the shipped asar, so unlike the
+        // fcache block above it is reproducible by anyone, stable across the fcache's own refetch schedule,
+        // and attributable to the Desktop release rather than to days of server rollout. This is what makes
+        // a membership change nameable: diff two baselines' lists and the new ids fall out directly.
+        // Carried forward when extraction yields nothing (asar missing / extract failed), so an offline
+        // sync never blanks it into a false "every gate reference disappeared".
+        asarGateIds: res.asarGateIds.length > 0 ? res.asarGateIds : (baseProvenance.asarGateIds ?? []),
+        // Desktop's own server tool surface, from real Desktop init frames of THIS release. Deliberately
+        // NEVER carried forward from `baseProvenance` (unlike the two fields above): a carried value would
+        // stamp the previous release's surface with this release's identity. Unobserved is written as
+        // `observed:false`, which the release preflight refuses to ship.
+        desktopInitSurface: res.desktopInitSurface,
+      },
     },
-    provenance: {
-      ...baseProvenance,
-      gates: nextGates,
-      asarFingerprint: res.asarFingerprint,
-      spawnEnvKeys: res.spawnEnvKeys,
-      spawnEnvSpreadCount: res.spawnEnvSpreadCount,
-      // Snapshot IDENTITY for the gate block above. `capturedAt` is a date, which is far too coarse: the
-      // payload refetches irregularly (3.7–20.8 min observed) and its membership churns count-neutrally,
-      // so "captured on 2026-08-05" cannot distinguish two materially different reads. Carried forward
-      // from `baseProvenance` when the fcache is unreadable, so an offline sync never blanks it.
-      ...(res.fcache ? { fcache: res.fcache } : {}),
-      // Gate ids this release's BUNDLE references — a pure function of the shipped asar, so unlike the
-      // fcache block above it is reproducible by anyone, stable across the fcache's own refetch schedule,
-      // and attributable to the Desktop release rather than to days of server rollout. This is what makes
-      // a membership change nameable: diff two baselines' lists and the new ids fall out directly.
-      // Carried forward when extraction yields nothing (asar missing / extract failed), so an offline
-      // sync never blanks it into a false "every gate reference disappeared".
-      asarGateIds: res.asarGateIds.length > 0 ? res.asarGateIds : (baseProvenance.asarGateIds ?? []),
-      // Desktop's own server tool surface, from real Desktop init frames of THIS release. Deliberately
-      // NEVER carried forward from `baseProvenance` (unlike the two fields above): a carried value would
-      // stamp the previous release's surface with this release's identity. Unobserved is written as
-      // `observed:false`, which the release preflight refuses to ship.
-      desktopInitSurface: res.desktopInitSurface,
-    },
-    // Never carried forward (see CloudBlock): a carried block would stamp the previous release's surface
-    // with this release's identity.
-    ...(res.cloud ? { cloud: res.cloud } : {}),
-  };
+    res.cloud,
+  );
   const diffFlag = !!syncParsed.flags["--diff"];
   if (diffFlag) {
     // Diff against `base` (the latest committed baseline `next` was merged onto), NOT a separate read of
