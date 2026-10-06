@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Security
+
+- **Bumped the transitive `source-map-js` 1.2.1 → 1.2.2**, clearing a Dependabot high-severity advisory. It is a
+  dev-only dependency (reached through `jsdom` and `vitest`), so nothing in the published package changes. Lockfile
+  only.
+
 ## [4.4.1] — 2026-10-05
 
 A companion-skill release: the skill now teaches 4.4.0's re-grade scrub-set proof, and a test keeps every CLI flag
