@@ -122,7 +122,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.286   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.288   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 # The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
 # from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
 # `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
@@ -383,7 +383,7 @@ committed baseline and say why in that baseline's `$comment`.
      an unobserved newest baseline; `--allow-unobserved-init-surface` downgrades that to a warning for an
      emergency release.
    - **After the local-lane sunset.** From 2026-10-06 new Pro/Max Cowork tasks run in the cloud, and a cloud
-     session writes no local init frame, so the remedy above no longer applies on such an account. For a
+     session writes no local init frame, so on such an account the remedy above has nothing to read. For a
      Desktop at or after build 2.19675.0, `sync` records `observed: false` with
      `unobservedReason: "local-lane-unavailable"` and prints a note instead of the `WARNING`; the preflight
      accepts that state, re-checking the version from the baseline's own `appVersion`. The reason is not set

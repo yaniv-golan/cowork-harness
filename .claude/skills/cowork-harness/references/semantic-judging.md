@@ -1,6 +1,6 @@
 # `semantic_matches` — the full semantics
 
-Tracks `cowork-harness 4.4.1` (baseline `desktop-2.19675.0`). The one-line summary is in
+Tracks `cowork-harness 4.4.1` (baseline `desktop-2.19675.1`). The one-line summary is in
 [assertion-catalog.md](assertion-catalog.md); this is the whole contract, split out so the catalog stays within the
 agent's single-read size.
 
