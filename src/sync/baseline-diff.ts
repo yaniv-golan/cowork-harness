@@ -64,7 +64,19 @@ export function diffBaselines(a: unknown, b: unknown, path = "", pathAnnotation 
 const INIT = "provenance.desktopInitSurface";
 
 type InitServer = { presence?: string; toolsAll?: string[]; toolsSome?: string[] };
-type InitBlock = { agentVersion?: string; appVersion?: string; observed?: boolean; servers?: Record<string, InitServer> };
+type InitBlock = {
+  agentVersion?: string;
+  appVersion?: string;
+  observed?: boolean;
+  unobservedReason?: string;
+  servers?: Record<string, InitServer>;
+};
+
+/** The tail of an UNOBSERVED line: an accepted reason, or the remedy and the preflight refusal. */
+const unobservedTail = (reason: string | undefined) =>
+  reason === "local-lane-unavailable"
+    ? "reason `local-lane-unavailable` (Desktop at or after the local-lane sunset build: new Pro/Max tasks run in the cloud and write no local init frame); the release preflight accepts this state"
+    : "Start a Cowork session and re-sync; the release preflight refuses this state";
 
 const code = (xs: readonly string[]) => xs.map((x) => `\`${x}\``).join(", ");
 
@@ -75,7 +87,8 @@ function describeInitServer(s: InitServer | undefined): string {
 }
 
 function describeInitBlock(b: InitBlock): string {
-  if (!b.observed) return `UNOBSERVED at \`${b.appVersion}\` / agent \`${b.agentVersion}\` (no Cowork session since install)`;
+  if (!b.observed)
+    return `UNOBSERVED at \`${b.appVersion}\` / agent \`${b.agentVersion}\` (no Cowork session since install)${b.unobservedReason ? ` — ${unobservedTail(b.unobservedReason)}` : ""}`;
   const servers = Object.entries(b.servers ?? {});
   if (servers.length === 0) return `observed at \`${b.appVersion}\`, but no Desktop server was connected`;
   return servers.map(([name, s]) => `\`${name}\` (${s.presence}): ${describeInitServer(s)}`).join(" · ");
@@ -110,9 +123,12 @@ export function renderInitSurfaceEntries(entries: BaselineDiffEntry[]): { lines:
   };
   const app = scalarTo("appVersion");
   const agent = scalarTo("agentVersion");
+  const reasonEntry = mine.find((e) => e.path === `${INIT}.unobservedReason`);
+  const reasonTo =
+    reasonEntry?.kind === "added" ? String(reasonEntry.to) : reasonEntry?.kind === "scalar" ? String(reasonEntry.to) : undefined;
   if (becameUnobserved) {
     lines.push(
-      `- Desktop init surface UNOBSERVED${app ? ` at \`${app}\`` : ""}${agent ? ` / agent \`${agent}\`` : ""} — no Cowork session since install, so the server/tool removals below it are NOT evidence (not shown). Start a Cowork session and re-sync; the release preflight refuses this state`,
+      `- Desktop init surface UNOBSERVED${app ? ` at \`${app}\`` : ""}${agent ? ` / agent \`${agent}\`` : ""} — no Cowork session since install, so the server/tool removals below it are NOT evidence (not shown). ${unobservedTail(reasonTo)}`,
     );
   } else {
     if (observed?.kind === "scalar") lines.push("- Desktop init surface now OBSERVED (was unobserved)");
@@ -125,6 +141,8 @@ export function renderInitSurfaceEntries(entries: BaselineDiffEntry[]): { lines:
   const toolMoves = new Map<string, { addAll: string[]; addSome: string[]; rmAll: string[]; rmSome: string[] }>();
   for (const e of mine) {
     if (e === whole || e === observed) continue;
+    // Rendered on the UNOBSERVED line above; on unobserved → observed its removal is implied by "now OBSERVED".
+    if (e === reasonEntry && (becameUnobserved || (observed?.kind === "scalar" && observed.to === true))) continue;
     if (e.path === `${INIT}.appVersion` || e.path === `${INIT}.agentVersion`) {
       if (e.kind !== "scalar") unhandled.push(e);
       continue;

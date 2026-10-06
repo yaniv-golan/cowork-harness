@@ -1541,7 +1541,9 @@ Desktop's own `cowork`, `plugins` and `skills` servers declared in real Cowork s
 so `save_skill` appearing or disappearing in production shows up as a `sync --diff` line (see
 [maintenance.md](./maintenance.md)). That is a record of production, not a model of it. No harness
 assertion can stand in for it: the harness never declares `save_skill`, so a `tool_absent` check over a
-harness run passes whatever production does.
+harness run passes whatever production does. From Desktop 2.19675.0 on, a Pro/Max account runs no local
+sessions, so `sync` usually records the surface as unobserved (reason `local-lane-unavailable`) and this
+watch sees nothing for that release.
 
 ### Why it isn't modeled
 

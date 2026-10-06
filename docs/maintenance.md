@@ -382,6 +382,13 @@ committed baseline and say why in that baseline's `$comment`.
      start one Cowork session in Claude Desktop, then re-run `sync`. `npm run preflight` refuses to release
      an unobserved newest baseline; `--allow-unobserved-init-surface` downgrades that to a warning for an
      emergency release.
+   - **After the local-lane sunset.** From 2026-10-06 new Pro/Max Cowork tasks run in the cloud, and a cloud
+     session writes no local init frame, so the remedy above no longer applies on such an account. For a
+     Desktop at or after build 2.19675.0, `sync` records `observed: false` with
+     `unobservedReason: "local-lane-unavailable"` and prints a note instead of the `WARNING`; the preflight
+     accepts that state, re-checking the version from the baseline's own `appVersion`. The reason is not set
+     when the install time is unknown (an unreadable `app.asar` is a sync defect, not the lane). An account
+     whose sessions still run locally keeps recording an observed surface as before.
    - **Reading the diff.** A tool or server appearing or disappearing is the signal. A tool moving between
      `toolsAll` and `toolsSome` depends on which kinds of session happened to be read (at 2.7032.0 some
      sessions lack the four artifact tools), so treat that as a prompt to look, not as evidence.

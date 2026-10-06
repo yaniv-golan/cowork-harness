@@ -12,6 +12,7 @@ import {
   checkInitSurfaceObserved,
   ALLOW_UNOBSERVED_INIT_SURFACE_FLAG,
 } from "../scripts/release-preflight.js";
+import { LOCAL_LANE_UNAVAILABLE_FROM } from "../src/sync/desktop-init-surface.js";
 
 describe("isValidSemver", () => {
   it("accepts a plain X.Y.Z version", () => {
@@ -184,6 +185,31 @@ describe("checkInitSurfaceObserved (check 7)", () => {
 
   it("the override downgrades to WARN, never PASS", () => {
     expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: block(false) }, true).status).toBe("WARN");
+  });
+
+  // The local lane is unavailable from the sunset build on: an unobserved surface with that recorded reason is
+  // accepted, but only when the baseline's own appVersion bears the reason out (a hand-copied reason is refused).
+  const reasoned = (appVersion: string, unobservedReason?: string) => ({
+    provenance: { desktopInitSurface: { appVersion, observed: false, ...(unobservedReason ? { unobservedReason } : {}) } },
+  });
+
+  it("PASSES observed:false with reason local-lane-unavailable at or after the sunset build, naming the reason", () => {
+    for (const v of [LOCAL_LANE_UNAVAILABLE_FROM, "2.19675.1", "3.0.0"]) {
+      const r = checkInitSurfaceObserved({ name: `desktop-${v}.json`, json: reasoned(v, "local-lane-unavailable") }, false);
+      expect(r.status).toBe("PASS");
+      expect(r.detail).toContain("local-lane-unavailable");
+    }
+  });
+
+  it("FAILS the reason on a baseline BEFORE the sunset build (the reason does not hold there)", () => {
+    const r = checkInitSurfaceObserved({ name: "desktop-2.19674.0.json", json: reasoned("2.19674.0", "local-lane-unavailable") }, false);
+    expect(r.status).toBe("FAIL");
+    expect(r.detail).toContain(LOCAL_LANE_UNAVAILABLE_FROM);
+  });
+
+  it("FAILS an unknown reason, and observed:false with no reason after the sunset build", () => {
+    expect(checkInitSurfaceObserved({ name: "d.json", json: reasoned("3.0.0", "no-session") }, false).status).toBe("FAIL");
+    expect(checkInitSurfaceObserved({ name: "d.json", json: reasoned("3.0.0") }, false).status).toBe("FAIL");
   });
 });
 
