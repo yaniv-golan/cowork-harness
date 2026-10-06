@@ -32,8 +32,9 @@ All notable changes to this project are documented here. The format is based on
   branch of each tool's description, and `unreachable`: the cloud-session features no local reproduction can reach.
   It records names, hashes and counts only, never description text; a strict schema enforces that before the write
   and over every committed baseline. `sync --diff` names a tool that appears or disappears and a description whose
-  fingerprint moved, and `check:versions` requires the block on the newest baseline. Nothing in the harness reads it.
-  See [docs/maintenance.md](./docs/maintenance.md).
+  fingerprint moved. A failed extraction does not block the write: `sync` prints a warning and writes the baseline
+  without the block (never the previous release's), and `check:versions` warns when the newest baseline lacks it.
+  Nothing in the harness reads it. See [docs/maintenance.md](./docs/maintenance.md).
 
 ### Changed
 
@@ -43,7 +44,10 @@ All notable changes to this project are documented here. The format is based on
     sessions-bridge poll intervals, and the computer-use permission gate (`cuCanUseToolEnabled`) reads on again,
     server-side. The harness does not model either.
   - The Desktop init surface was read from 2 local frames, on an account whose tasks still run locally: the same
-    Desktop servers and tools as `desktop-2.19675.0`.
+    Desktop servers and tools as `desktop-2.19675.0`. One move was observed and is unexplained: the `cowork` server's
+    `send_user_message` went from `toolsSome` (declared in some sessions) to `toolsAll` (declared in every session
+    read). With two frames from one account, this may reflect the account or the sessions read rather than the
+    release.
 
 ## [4.4.1] — 2026-10-05
 

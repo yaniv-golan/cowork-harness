@@ -129,6 +129,7 @@ VOLATILE (changes per release; lives in baselines/*.json, sync-regenerated)
   - network.allowDomains + network.mode + requireFullVmSandbox
   - gates
   - asarFingerprint (provenance + "unknown delta" tripwire)
+  - cloud (the remote-devices tool list + description fingerprints; data only, never carried forward)
 
 HAND-AUTHORED (in baselines/*.json, drift-guarded — sync does NOT extract these)
   - mountLayout (mount modes)

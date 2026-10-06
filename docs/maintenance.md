@@ -408,8 +408,9 @@ committed baseline and say why in that baseline's `$comment`.
      code-point count are recorded, and a branch is identified by a hash of which conditions select it. A
      strict schema refuses any other field before `sync` writes, and a test holds every string in every
      committed block to a name or hash shape.
-   - **Not carried forward.** When the extraction fails, `sync` flags it and writes no `cloud` block rather
-     than the previous release's. `check:versions` fails when the newest baseline lacks one.
+   - **Not carried forward, and not write-blocking.** When the extraction fails, `sync` prints a `WARNING`
+     note naming the failure and writes the baseline without a `cloud` block, never the previous release's.
+     `check:versions` then warns (it does not fail) that the newest baseline lacks one.
 
    `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
    and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
