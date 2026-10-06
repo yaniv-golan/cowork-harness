@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Cassettes: re-record — the agent moved.** `latest` now resolves to `desktop-2.19675.1`, which pins agent **2.1.288**
+  (was 2.1.286). A cassette recorded through `baseline: latest` reports
+  `[stale] baseline moved 2.19675.0 → 2.19675.1 since record — re-record`: `verify-cassettes` and `replay --strict` exit
+  `1` on it, and a plain `replay` warns and keeps its exit code.
+  - At `container`, `microvm` and `hostloop`, re-record. A re-stamp clears the finding but leaves an `agent-version:` note,
+    because the recording ran 2.1.286.
+  - At `protocol` the baseline move alone does not need a re-record: the agent there is the `claude` on your `PATH`, and
+    the first-party spawn env, the Cowork system prompt, the sub-agent append and the egress contract are unchanged.
+  - The bundled cassettes are re-stamped to `2.19675.1`, not re-recorded; the three recorded by the staged agent carry
+    the `agent-version:` note until they are.
+
+### Added
+
+- **`sync` records what Desktop serves to a cloud Cowork session, in a new top-level `cloud` block.** It holds the
+  tool list of Desktop's `remote-devices` server, one fingerprint (SHA-256 and code-point count) per conditional
+  branch of each tool's description, and `unreachable`: the cloud-session features no local reproduction can reach.
+  It records names, hashes and counts only, never description text; a strict schema enforces that before the write
+  and over every committed baseline. `sync --diff` names a tool that appears or disappears and a description whose
+  fingerprint moved, and `check:versions` requires the block on the newest baseline. Nothing in the harness reads it.
+  See [docs/maintenance.md](./docs/maintenance.md).
+
+### Changed
+
+- **New baseline `desktop-2.19675.1`** (agent **2.1.288**), which `latest` resolves to.
+  - Unchanged from `desktop-2.19675.0`: the Cowork system prompt, the sub-agent append, the egress contract, the
+    model/effort config and the first-party `spawn.env`. Gate provenance moved: Desktop's runtime config gains two
+    sessions-bridge poll intervals, and the computer-use permission gate (`cuCanUseToolEnabled`) reads on again,
+    server-side. The harness does not model either.
+  - The Desktop init surface was read from 2 local frames, on an account whose tasks still run locally: the same
+    Desktop servers and tools as `desktop-2.19675.0`.
+- **The release preflight accepts an unobserved Desktop init surface once the local lane is unavailable.** From
+  2026-10-06 new Pro and Max Cowork tasks run in the cloud, and a cloud session writes no local init frame. For a
+  Desktop at or after 2.19675.0 with no local session since install, `sync` records `observed: false` with
+  `unobservedReason: "local-lane-unavailable"` and prints a note instead of a warning, and `sync --diff` names the
+  reason. Preflight check 7 accepts that state after re-checking the version from the baseline's own `appVersion`.
+  The reason is never recorded when the install time is unknown.
+
 ### Security
 
 - **Bumped the transitive `source-map-js` 1.2.1 → 1.2.2**, clearing a Dependabot high-severity advisory. It is a
