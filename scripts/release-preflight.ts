@@ -195,11 +195,13 @@ function newestBaseline(): { name: string; json: unknown } {
 }
 
 function checkCheckVersions(): CheckResult {
-  const { ok, errors, values } = checkVersions();
+  const { ok, errors, warnings, values } = checkVersions();
   return {
     name: "check:versions",
-    status: ok ? "PASS" : "FAIL",
-    detail: ok ? `version lockstep OK (package.json=${values.pkg})` : errors.join("; "),
+    status: !ok ? "FAIL" : warnings.length ? "WARN" : "PASS",
+    detail: !ok
+      ? errors.join("; ")
+      : `version lockstep OK (package.json=${values.pkg})${warnings.length ? `; ${warnings.join("; ")}` : ""}`,
   };
 }
 

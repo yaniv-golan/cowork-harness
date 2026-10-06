@@ -125,9 +125,10 @@ function cmp(a: string, b: string): number {
 /** The first Desktop whose baseline carries the `cloud` block. Older baselines predate it and stay as written. */
 export const CLOUD_BLOCK_FROM = "2.19675.1";
 
-/** Invariant: the NEWEST baseline carries the `cloud` block once the block exists. Presence only — the per-release
- *  diff of its contents is `sync --diff`, and its shape is test/remote-devices.test.ts. A newest baseline without
- *  it means the extraction failed and `sync` wrote the baseline without the block. */
+/** WARNING, never an error: the NEWEST baseline carries the `cloud` block once the block exists. Presence only —
+ *  the per-release diff of its contents is `sync --diff`, and its shape is test/remote-devices.test.ts. A newest
+ *  baseline without it means the extraction failed and `sync` wrote the baseline without the block (it says so in a
+ *  note). The block is data no harness path reads, so its absence must not block a release. */
 export function checkCloudBlockPresent(maxBaseline: string | undefined, newest: unknown): string[] {
   if (!maxBaseline || cmp(maxBaseline, CLOUD_BLOCK_FROM) < 0) return [];
   if ((newest as { cloud?: unknown } | null)?.cloud !== undefined) return [];
@@ -546,8 +547,15 @@ export function checkBaselinePinClaims(files: { path: string; text: string }[]):
   return errors;
 }
 
-export function checkVersions(): { ok: boolean; errors: string[]; values: Record<string, string | undefined> } {
+export function checkVersions(): {
+  ok: boolean;
+  errors: string[];
+  /** Non-blocking findings: printed as `::warning::`, never part of `ok`. */
+  warnings: string[];
+  values: Record<string, string | undefined>;
+} {
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   const pkg = json("package.json").version as string;
   const lock = json("package-lock.json");
@@ -817,7 +825,7 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   //     pass itself, and encoding that rule here would just move the drift. Instead the list must be
   //     CONTIGUOUS from wherever it starts through the newest baseline, which is what actually catches a
   //     release being left out.
-  if (maxBaseline) errors.push(...checkCloudBlockPresent(maxBaseline, json(`baselines/desktop-${maxBaseline}.json`)));
+  if (maxBaseline) warnings.push(...checkCloudBlockPresent(maxBaseline, json(`baselines/desktop-${maxBaseline}.json`)));
   errors.push(
     ...checkDesignScopeNote({
       design,
@@ -953,6 +961,7 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
   return {
     ok: errors.length === 0,
     errors,
+    warnings,
     values: {
       ...values,
       readmeFloors: readmeFloors.join(","),
@@ -964,8 +973,9 @@ export function checkVersions(): { ok: boolean; errors: string[]; values: Record
 }
 
 function main(): void {
-  const { ok, errors, values } = checkVersions();
+  const { ok, errors, warnings, values } = checkVersions();
   process.stdout.write(`version lockstep: ${JSON.stringify(values)}\n`);
+  for (const w of warnings) process.stderr.write(`::warning::${w}\n`);
   if (ok) {
     process.stdout.write("✓ all version strings are aligned\n");
     return;

@@ -24,6 +24,7 @@
 import { createHash } from "node:crypto";
 import * as acorn from "acorn";
 import * as walk from "acorn-walk";
+import { CloudBlock } from "../types.js";
 
 /** Features of a cloud session that a local reproduction cannot reach by construction. Identifiers only. */
 export const CLOUD_UNREACHABLE = [
@@ -50,7 +51,7 @@ export interface CloudBlockReading {
   /** The `remote-devices` tool list in bundle order; null when its array was not found. */
   tools: string[] | null;
   descriptions: RemoteDevicesFingerprint[];
-  /** Write-blocking: the extraction could not be trusted. Never carries description text. */
+  /** The extraction could not be trusted, so no block is written (see cloudBlockFromReading). Never carries description text. */
   deltas: string[];
 }
 
@@ -83,12 +84,33 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export function findRemoteDevicesToolList(files: Map<string, string>): string[] | null {
   for (const src of files.values()) {
     if (!src.includes("list_devices") || !src.includes("device_bash")) continue;
-    for (const m of src.matchAll(/\[((?:\s*["'`][a-z_]+["'`]\s*,)+\s*["'`][a-z_]+["'`]\s*)\]/g)) {
-      const names = [...m[1].matchAll(/["'`]([a-z_]+)["'`]/g)].map((x) => x[1]);
+    for (const m of src.matchAll(/\[((?:\s*["'`][a-z][a-z0-9_]*["'`]\s*,)+\s*["'`][a-z][a-z0-9_]*["'`]\s*)\]/g)) {
+      const names = [...m[1].matchAll(/["'`]([a-z][a-z0-9_]*)["'`]/g)].map((x) => x[1]);
       if (names.includes("list_devices") && names.includes("device_bash")) return names;
     }
   }
   return null;
+}
+
+/** The block `sync` writes from one reading, and the notes it prints. A reading with any delta, or no tool list,
+ *  yields NO block (never a partial one) and a WARNING note per delta; the write is not blocked. */
+export function cloudBlockFromReading(r: CloudBlockReading): { cloud: CloudBlock | null; notes: string[] } {
+  const notes = r.deltas.map(
+    (d) => `WARNING: ${d}. The baseline is written WITHOUT a cloud block (not carried forward); check:versions will warn.`,
+  );
+  if (!r.tools || r.deltas.length > 0) return { cloud: null, notes };
+  return {
+    cloud: { remoteDevicesTools: r.tools, remoteDevicesDescriptions: r.descriptions, unreachable: [...CLOUD_UNREACHABLE] },
+    notes,
+  };
+}
+
+/** Why `sync` must refuse to write this block, or null. Names only the failing PATHS: a zod issue message can echo
+ *  the offending value, and in this block that value could be description text. */
+export function cloudSchemaRefusal(cloud: unknown): string | null {
+  const r = CloudBlock.safeParse(cloud);
+  if (r.success) return null;
+  return `ERROR: the cloud block failed its schema — refusing to write baseline (issue paths: ${r.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")})`;
 }
 
 /** The baseline `sync` writes, as far as the `cloud` block goes: this release's block when it was extracted, and

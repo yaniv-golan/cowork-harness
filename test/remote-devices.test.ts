@@ -1,12 +1,20 @@
 // The baseline `cloud` block: the extractor over a SYNTHETIC bundle, the strict schema, and the publishing
 // rule over every committed baseline — names, hashes and counts only, never prose.
 //
-// Every bundle here is synthetic: placeholder description text, minified-looking names invented for the test.
+// The bundles here are synthetic: placeholder description text and invented minified names. The one real value
+// is a public gate id (1265511872), used as a selector so the "no selector expression in the output" check has a
+// recognizable literal to look for.
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { CLOUD_UNREACHABLE, extractCloudBlock, findRemoteDevicesToolList } from "../src/sync/remote-devices.js";
+import {
+  CLOUD_UNREACHABLE,
+  cloudBlockFromReading,
+  cloudSchemaRefusal,
+  extractCloudBlock,
+  findRemoteDevicesToolList,
+} from "../src/sync/remote-devices.js";
 import { CloudBlock } from "../src/types.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "../src/sync/baseline-diff.js";
 
@@ -181,12 +189,14 @@ describe("sync --diff / changelog rendering of the cloud block", () => {
   });
 });
 
-describe("check:versions — the newest baseline carries the cloud block", () => {
+describe("check:versions — warns when the newest baseline lacks the cloud block", () => {
   it("required from CLOUD_BLOCK_FROM on; older newest baselines are exempt; present passes", async () => {
     const { checkCloudBlockPresent, CLOUD_BLOCK_FROM } = await import("../scripts/check-versions.js");
     expect(checkCloudBlockPresent(CLOUD_BLOCK_FROM, {})).toHaveLength(1);
     expect(checkCloudBlockPresent("9.0.0", { provenance: {} })).toHaveLength(1);
     expect(checkCloudBlockPresent("2.19675.0", {})).toEqual([]);
+    expect(checkCloudBlockPresent("2.9939.4", {})).toEqual([]); // numeric, not lexical: 9939 < 19675
+    expect(checkCloudBlockPresent("10.0.0", {})).toHaveLength(1); // numeric, not lexical: 10 > 2
     expect(checkCloudBlockPresent(CLOUD_BLOCK_FROM, { cloud: {} })).toEqual([]);
   });
 });
@@ -202,5 +212,56 @@ describe("sync's write: the cloud block is never carried forward", () => {
     const none = withSyncedCloudBlock(prev, null);
     expect(none).toEqual({ appVersion: "1" });
     expect("cloud" in none).toBe(false);
+  });
+});
+
+describe("sync's wiring of an extraction result", () => {
+  it("a clean reading becomes the block, with the unreachable list, and no notes", () => {
+    const r = cloudBlockFromReading({ tools: ["device_bash"], descriptions: [], deltas: [] });
+    expect(r.notes).toEqual([]);
+    expect(r.cloud).toEqual({ remoteDevicesTools: ["device_bash"], remoteDevicesDescriptions: [], unreachable: [...CLOUD_UNREACHABLE] });
+  });
+  it("any delta → NO block (never a partial one) and a WARNING note per delta saying the baseline is written without it", () => {
+    const r = cloudBlockFromReading({ tools: ["device_bash"], descriptions: [], deltas: ["cloud: x.js did not parse"] });
+    expect(r.cloud).toBeNull();
+    expect(r.notes).toHaveLength(1);
+    expect(r.notes[0]).toMatch(/^WARNING: cloud: x\.js did not parse\. The baseline is written WITHOUT a cloud block/);
+  });
+  it("no tool list → no block", () => {
+    expect(cloudBlockFromReading({ tools: null, descriptions: [], deltas: ["cloud: no list"] }).cloud).toBeNull();
+  });
+});
+
+describe("sync's schema refusal before the write", () => {
+  it("a well-formed block is not refused", () => {
+    expect(cloudSchemaRefusal({ remoteDevicesTools: ["device_bash"], remoteDevicesDescriptions: [], unreachable: [] })).toBeNull();
+  });
+  it("a block carrying text is refused, and the message names the path but never the value", () => {
+    const leak = "FIXTURE leaked description sentence";
+    const msg = cloudSchemaRefusal({ remoteDevicesTools: [leak], remoteDevicesDescriptions: [], unreachable: [] });
+    expect(msg).toMatch(/refusing to write baseline \(issue paths: remoteDevicesTools\.0\)/);
+    expect(msg).not.toContain(leak);
+  });
+});
+
+describe("CLOUD_UNREACHABLE", () => {
+  it("keeps the three device_bash refusal codes that need Desktop's VM lifecycle or a server-asserted session id", () => {
+    for (const c of ["workspace_starting", "workspace_failed", "session_id_unavailable"]) expect(CLOUD_UNREACHABLE).toContain(c);
+  });
+  it("a change to the list is rendered as an added/removed line", () => {
+    const b = (u: string[]) => ({ cloud: { remoteDevicesTools: ["device_bash"], remoteDevicesDescriptions: [], unreachable: u } });
+    const out = renderChangelog(diffBaselines(b(["repl_bridge"]), b(["memory_context"])));
+    expect(out).toContain("- cloud.unreachable: added `memory_context`");
+    expect(out).toContain("- cloud.unreachable: removed `repl_bridge`");
+  });
+});
+
+describe("findRemoteDevicesToolList accepts digits in a name", () => {
+  it("reads a list whose names contain digits", () => {
+    expect(findRemoteDevicesToolList(new Map([["a.js", `var x=["list_devices","device_bash","tool_v2"];`]]))).toEqual([
+      "list_devices",
+      "device_bash",
+      "tool_v2",
+    ]);
   });
 });

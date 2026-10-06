@@ -8,7 +8,6 @@ import {
   AnswerRule,
   Assertion,
   FIDELITY_TIERS,
-  CloudBlock,
   DesktopInitSurface,
   type RunResult,
   type RunStatus,
@@ -59,7 +58,7 @@ import type { DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName, vmProvisioned, type VmProvisioning } from "./runtime/lima.js";
 import { resolveVmBaselineArg } from "./runtime/vm-baseline-arg.js";
 import { sync, canonicalizeEnv, syncedNetworkBlock } from "./sync/cowork-sync.js";
-import { withSyncedCloudBlock } from "./sync/remote-devices.js";
+import { cloudSchemaRefusal, withSyncedCloudBlock } from "./sync/remote-devices.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
 import { cmdChat } from "./run/chat.js";
@@ -3394,19 +3393,18 @@ async function cmdSync(args: string[]) {
     );
   }
   // Same rule for the cloud block: names, hashes and counts only. A null block (extraction failed) already
-  // carries an unknown delta, and is omitted rather than carried forward from the previous release.
+  // printed a WARNING note, and is omitted rather than carried forward from the previous release.
   if (res.cloud) {
-    const cloudCheck = CloudBlock.safeParse(res.cloud);
-    if (!cloudCheck.success) {
+    const refusal = cloudSchemaRefusal(res.cloud);
+    if (refusal)
       fail(
         "sync",
         "runtime",
-        `ERROR: the cloud block failed its schema — refusing to write baseline (issue paths: ${cloudCheck.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")})`,
+        refusal,
         "This is an extractor bug in src/sync/remote-devices.ts, not a Desktop change.",
         isJsonOutput(normalizedArgs),
         1,
       );
-    }
   }
   const capturedAt = new Date().toISOString().slice(0, 10);
   const next = withSyncedCloudBlock(

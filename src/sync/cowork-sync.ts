@@ -8,7 +8,7 @@ import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 import type { CloudBlock, DesktopInitSurface } from "../types.js";
-import { CLOUD_UNREACHABLE, extractCloudBlock } from "./remote-devices.js";
+import { cloudBlockFromReading, extractCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
 
 /**
@@ -1573,16 +1573,9 @@ function extractFromAsar(
         "provenance.asarGateIds: the gate-id literal scan matched nothing — the asar's literal shape moved, so a membership diff would be blind. Fix extractAsarGateIds (maintainer), or the written baseline will inherit the PREVIOUS release's ids under this appVersion",
       );
     // The cloud block reads the RAW chunks: it parses them, and normalization is a text rewrite for anchors.
-    const cloudReading = extractCloudBlock(rawFiles);
-    for (const d of cloudReading.deltas) flag(unknown, d);
-    const cloud: CloudBlock | null =
-      cloudReading.tools && cloudReading.deltas.length === 0
-        ? {
-            remoteDevicesTools: cloudReading.tools,
-            remoteDevicesDescriptions: cloudReading.descriptions,
-            unreachable: [...CLOUD_UNREACHABLE],
-          }
-        : null;
+    // NOT write-blocking: the block is data no harness path reads. A failed extraction writes the baseline
+    // without it (never the previous release's) and says so; check:versions then warns.
+    const { cloud, notes: cloudNotes } = cloudBlockFromReading(extractCloudBlock(rawFiles));
     const promptFingerprint = extractPromptFingerprint(bundle);
     const fingerprintsFile = readPromptFingerprintsFile();
     const promptDrift = checkPromptDrift(
@@ -1604,7 +1597,7 @@ function extractFromAsar(
       // Quoted, after normalizeBundleQuotes: a bare substring would match any identifier fragment.
       bundleHasLiteral: (name: string) => bundle.includes(`"${name}"`),
       cloud,
-      notes: [...notes, ...promptDrift.notes, ...tripwireNotes],
+      notes: [...notes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],
     };
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);
