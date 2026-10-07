@@ -3,7 +3,7 @@
 // passes with exit 0). Where a case needs a frame the recording lacks (no exit code, a hook that never answered, a
 // different event), it edits the recorded frames and says so in its name.
 import { describe, it, expect } from "vitest";
-import { evaluate, type AssertContext } from "../src/assert.js";
+import { OBJECT_HOOK_EVENT_BLOCKED_VIA, evaluate, type AssertContext } from "../src/assert.js";
 import { parseMessage } from "../src/agent/session.js";
 import { Assertion } from "../src/types.js";
 import { loadHookDecisionFrames, loadHookFrames } from "./helpers/hook-frames.js";
@@ -196,14 +196,34 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
     expect(r.message).toMatch(/1 frame\(s\) denied by JSON on stdout/);
     expect(r.message).toMatch(/via: any/);
   });
-  it("the object form counts either channel by default", () => {
-    expect(run({ hook_event_blocked: { event: "PreToolUse", min: 2, max: 2 } }, ctx(decisions())).pass).toBe(true);
-    expect(run({ hook_event_blocked: { event: "Stop", min: 1, max: 1 } }, ctx(decisions())).pass).toBe(true);
+  it("via: any counts either channel", () => {
+    expect(run({ hook_event_blocked: { event: "PreToolUse", via: "any", min: 2, max: 2 } }, ctx(decisions())).pass).toBe(true);
+    expect(run({ hook_event_blocked: { event: "Stop", via: "any", min: 1, max: 1 } }, ctx(decisions())).pass).toBe(true);
   });
-  it("{max: 0} without via fails over a hook that denied by JSON alone (no false green on a real deny)", () => {
+  // The object form's default channel is one constant; these hold whichever value it has.
+  it("omitting via grades exactly as via: <the object default>", () => {
+    for (const spec of [
+      { event: "Stop", max: 0 },
+      { event: "Stop", min: 1, max: 1 },
+      { event: "PreToolUse", min: 2, max: 2 },
+      { event: "PreToolUse", tool: "Bash", max: 0 },
+      { event: "PreToolUse", min: 1, max: 1 },
+    ]) {
+      const bare = run({ hook_event_blocked: spec }, ctx(decisions()));
+      const explicit = run({ hook_event_blocked: { ...spec, via: OBJECT_HOOK_EVENT_BLOCKED_VIA } }, ctx(decisions()));
+      expect([bare.pass, bare.message], JSON.stringify(spec)).toEqual([explicit.pass, explicit.message]);
+    }
+  });
+  it("{max: 0} over a hook that denied by JSON alone: via: any fails it, via: exit2 passes it", () => {
+    const any = run({ hook_event_blocked: { event: "Stop", via: "any", max: 0 } }, ctx(decisions()));
+    expect(any.pass).toBe(false);
+    expect(any.message).toMatch(/1 blocking .*expected at most 0/);
+    const exit2 = run({ hook_event_blocked: { event: "Stop", via: "exit2", max: 0 } }, ctx(decisions()));
+    expect(exit2.pass).toBe(true);
+  });
+  it("the object default: `any` fails {event: Stop, max: 0} on the JSON-only deny; `exit2` would pass it", () => {
     const r = run({ hook_event_blocked: { event: "Stop", max: 0 } }, ctx(decisions()));
-    expect(r.pass).toBe(false);
-    expect(r.message).toMatch(/1 blocking .*expected at most 0/);
+    expect(r.pass).toBe(OBJECT_HOOK_EVENT_BLOCKED_VIA === "exit2");
   });
   it("via: exit2 | json | any picks the channel", () => {
     const n =

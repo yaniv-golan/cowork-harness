@@ -1700,9 +1700,11 @@ function blocksVia(f: HookFrame, via: HookChannel): boolean | undefined {
 }
 
 /** Which channel the BARE `hook_event_blocked: <event>` counts. It has always meant exit code 2, and counting a JSON
- *  deny as well would change what an existing scenario asserts, so it stays `exit2`. The object form defaults to
- *  `any`, as `no_hook_event_blocked` and `hook_decision` read the agent's deny. */
+ *  deny as well would change what an existing scenario asserts, so it stays `exit2`. */
 const BARE_HOOK_EVENT_BLOCKED_VIA: HookChannel = "exit2";
+/** Which channel the OBJECT form counts when `via` is omitted: `any`, as `no_hook_event_blocked` and `hook_decision`
+ *  read the agent's deny, so `{event, max: 0}` fails on a hook that denied by JSON alone. */
+export const OBJECT_HOOK_EVENT_BLOCKED_VIA: HookChannel = "any";
 
 /** The `hook_response` frames for `event` (and, with `tool`, only those whose `hook_name` is `<event>:<tool>` — the
  *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered.
@@ -1828,7 +1830,7 @@ function checkHookEventBlocked(
   events: NonNullable<AssertContext["contextEvents"]>,
 ): KeyResult {
   const o = typeof spec === "string" ? { event: spec } : spec;
-  const via: HookChannel = typeof spec === "string" ? BARE_HOOK_EVENT_BLOCKED_VIA : (spec.via ?? "any");
+  const via: HookChannel = typeof spec === "string" ? BARE_HOOK_EVENT_BLOCKED_VIA : (spec.via ?? OBJECT_HOOK_EVENT_BLOCKED_VIA);
   // A JSON deny the exit-2 channel did not count is named, so the author finds `via`.
   const uncountedJson = (frames: HookFrame[]) => {
     if (via !== "exit2") return undefined;

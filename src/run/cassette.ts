@@ -119,7 +119,15 @@ import { isVmSessionsPath } from "../vm-paths.js";
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
-import { evaluate, budgetFields, toolResultEvidence, readJsonDecision, HOSTLOOP_ONLY_KEYS, type AssertContext } from "../assert.js";
+import {
+  evaluate,
+  budgetFields,
+  toolResultEvidence,
+  readJsonDecision,
+  HOSTLOOP_ONLY_KEYS,
+  OBJECT_HOOK_EVENT_BLOCKED_VIA,
+  type AssertContext,
+} from "../assert.js";
 import {
   planMutationsWithStats,
   summarizeMutationPlan,
@@ -3300,7 +3308,12 @@ export function redactionRewroteHookOutput(base: Cassette, redacted: Cassette): 
     // stdout, so the bare `hook_event_blocked` and `via: exit2` are not named.
     for (const key of ["hook_decision", "hook_event_blocked", "no_hook_event_blocked"] as const) {
       const v = a?.[key];
-      if (v === undefined || typeof v === "string" || (key === "hook_event_blocked" && (v as { via?: unknown })?.via === "exit2")) continue;
+      if (
+        v === undefined ||
+        typeof v === "string" ||
+        (key === "hook_event_blocked" && ((v as { via?: unknown })?.via ?? OBJECT_HOOK_EVENT_BLOCKED_VIA) === "exit2")
+      )
+        continue;
       const event = v === true ? undefined : (v as { event?: unknown })?.event;
       before ??= frozenHookResponses(base.events);
       after ??= frozenHookResponses(redacted.events);
