@@ -2791,6 +2791,25 @@ function globArtifactJson(ctx: AssertContext, aj: NonNullable<Assertion["artifac
     if (!startsWith(literal, r)) continue;
     for (let k = r.length + 1; k <= literal.length; k++) {
       const p = literal.slice(0, k).join("/");
+      // Exact native names: the segment must be one of its parent's readdir names as spelled. Opening the authored
+      // spelling instead would let a case-insensitive filesystem (macOS) fold `ARTIFACTS` onto `artifacts`, or NFD
+      // onto NFC — a pass there that is a miss on Linux. Folding may only ever err toward refusing.
+      let names: string[] | undefined;
+      try {
+        names = readdirSync(join(ctx.workRoot, ...literal.slice(0, k - 1)));
+      } catch {
+        names = undefined; // the parent is not there either: nothing below it on either lane
+      }
+      if (!names?.includes(literal[k - 1]!)) {
+        const parent = literal.slice(0, k - 1).join("/");
+        const shown = (names ?? []).sort().slice(0, 10).join(", ");
+        return {
+          pass: false,
+          message:
+            `${label}: no file matches — "${p}" is not there as spelled (names match exactly, with no case or Unicode folding)` +
+            (names ? `; ${parent}/ holds: ${shown || "(nothing)"}` : ""),
+        };
+      }
       let link = ctx.linkPaths?.has(p) === true;
       if (!link) {
         try {

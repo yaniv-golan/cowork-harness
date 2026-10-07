@@ -157,3 +157,39 @@ describe("artifact_json glob — record refuses an incomplete walk", () => {
     expect(artifactJsonGlobWalkGap(glob, clean, ["outputs"])).toBeUndefined();
   });
 });
+
+describe("artifact_json glob — the literal prefix matches native names exactly", () => {
+  // On a case-insensitive filesystem (macOS) a walk started at the AUTHORED prefix string would reach the real
+  // directory and pass; on Linux it would find nothing. The check is against the parent's readdir names, so the
+  // message below appears on every platform — the test asserts the check itself, not a platform's accident.
+  for (const [what, glob] of [
+    ["case", "outputs/ARTIFACTS/runs/*/run_status.json"],
+    ["Unicode form", "outputs/artífacts/runs/*/run_status.json"],
+  ] as const) {
+    it(`a ${what} mismatch in a prefix segment is "not there as spelled" on both lanes`, () => {
+      const root = tree({
+        "outputs/artifacts/runs/r1/run_status.json": status("ok"),
+        "outputs/artífacts/runs/r1/run_status.json": status("ok"),
+      });
+      const a = [{ artifact_json: { artifact: glob, match: "each" as const, path: "status", equals: "ok" } }];
+      const replay = materializeManifest(buildManifest(root), ["outputs", ".projects"]);
+      try {
+        const [live] = evaluate(a, ctx(root));
+        const [rep] = evaluate(
+          a,
+          ctx(replay.workRoot, {
+            userVisiblePrefixes: replay.prefixes,
+            truncatedPaths: replay.truncatedPaths,
+            linkPaths: replay.linkPaths,
+          }),
+        );
+        for (const r of [live, rep]) {
+          expect(r.pass).toBe(false);
+          expect(r.message).toContain("not there as spelled");
+        }
+      } finally {
+        rmSync(replay.workRoot, { recursive: true, force: true });
+      }
+    });
+  }
+});
