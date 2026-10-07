@@ -270,6 +270,7 @@ cowork-harness lint scenarios/*.yaml
 | `unknown-assert-key` | WARN | an assertion key not in the catalog (the loader rejects it) |
 | `unknown-top-key` | WARN | a scenario key not in the schema |
 | `vacuous-gate-assert` | WARN | `gate_answers_delivered` with no presence companion (zero gates passes it), or inert beside `questions_count_max: 0` |
+| `unpaired-gates-all-scripted` | WARN | `gates_all_scripted` with neither `gate_answer_count_min` (≥ 1) nor `questions_count_max` — zero gates passes it, so nothing says whether gates were expected |
 | `scenario-invalid` | ERROR | the harness's scenario loader refuses the file (via `cowork-harness lint` only — see below) |
 | `baseline-unknown` | ERROR | `baseline:` names no baseline this CLI ships (via `cowork-harness lint` only) |
 | `workspace-fixture-invalid` | ERROR | the run refuses the scenario's `workspace_fixture` directory — missing, a symlink, a hard link, agent-config paths, untracked files in git mode, empty, or over a size cap (via `cowork-harness lint` only) |

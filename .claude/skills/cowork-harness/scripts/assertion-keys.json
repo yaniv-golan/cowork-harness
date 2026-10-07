@@ -22,6 +22,7 @@
     "file_exists",
     "gate_answer_count_min",
     "gate_answers_delivered",
+    "gates_all_scripted",
     "hook_blocked",
     "hook_decision",
     "hook_event_blocked",

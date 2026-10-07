@@ -1379,6 +1379,25 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "gates_all_scripted": {
+            "description": "every AskUserQuestion gate that fired was answered by a scripted rule (`answers:` / `--answer`) — not the LLM decider, `first`, an external or human decider. A gate asked but never answered fails. Zero gates passes (nothing needed a person); pair it with gate_answer_count_min or questions_count_max to state whether gates were expected (`lint` warns when it is unpaired). On replay each gate is re-classified against the cassette's frozen `answers:`; a replayed web_fetch permission cannot be attributed and fails evidence-unavailable, and so does a result with no decisions record or an unattributed answer. The object form `{include_permissions: true}` extends the check to tool permissions",
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": true
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "include_permissions": {
+                    "description": "also require every tool-permission decision to come from a scripted `when_tool` rule or a fixed rule (a registry allow of Read/Glob/Grep, a strict-parity deny, the harness's own path-gate deny, or the fail-closed deny when nothing answered); cowork parity's permissive off-registry auto-allow never counts",
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
           "result": {
             "description": "the run's final result was success | error",
             "type": "string",

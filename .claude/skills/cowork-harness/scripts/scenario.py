@@ -171,6 +171,7 @@ GATE_KEYS = {
     "questions_count_max",
     "gate_answers_delivered",
     "gate_answer_count_min",
+    "gates_all_scripted",
     "hook_blocked",
     "no_hook_blocked",
     "vm_path_denied",
@@ -1944,6 +1945,28 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                     )
                 )
 
+    # W: gates_all_scripted with nothing stating whether gates were expected.
+    #
+    # `gates_all_scripted` passes when no gate fired — nothing needed a person, which is what "unattended" means,
+    # and a skill may legitimately ask on some inputs only. So a skill that stops asking keeps the key green. The
+    # author states the expectation with a delivered-gate floor (`gate_answer_count_min` >= 1: gates were
+    # expected; a floor of 0 always holds and states nothing) or a question bound (`questions_count_max`).
+    if _assert_values(items, "gates_all_scripted") and not (
+        "questions_count_max" in assert_keys
+        or any((n := _numeric(v)) is not None and n >= 1 for v in _assert_values(items, "gate_answer_count_min"))
+    ):
+        findings.append(
+            Finding(
+                "WARN",
+                "unpaired-gates-all-scripted",
+                "`gates_all_scripted` passes when no gate fired, so on its own it stays green if the skill stops "
+                "asking — nothing says whether this scenario expects gates.",
+                "Pair it with `gate_answer_count_min: 1` if gates are expected, or with `questions_count_max` "
+                "(e.g. `questions_count_max: 0` if none are).",
+                path,
+            )
+        )
+
     # E: a statically unsatisfiable assert pairing — the scenario can never pass, on any lane.
     #
     # Each group pairs ONE assertion demanding a record NOT exist with the assertions demanding the SAME
@@ -2422,6 +2445,7 @@ LINT_RULES = {
     "unknown-assert-key": "WARN",
     "unknown-top-key": "WARN",
     "vacuous-gate-assert": "WARN",
+    "unpaired-gates-all-scripted": "WARN",
 }
 
 

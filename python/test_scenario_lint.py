@@ -2456,3 +2456,28 @@ def test_hook_event_not_served_names_the_tiers_each_event_was_verified_at(tmp_pa
     assert "hostloop" not in msgs["Stop"]
     assert "live-verified at `container` and `hostloop`)" in msgs["PostToolUse"]
     assert "has not been verified here" in msgs["TaskCreated"]
+
+
+# --- unpaired-gates-all-scripted: say whether gates were expected -----------------------------------
+# `gates_all_scripted` passes when no gate fired (nothing needed a person). A skill that stops asking
+# then keeps the key green, so the author pairs it with a key that states the expectation: a delivered-
+# gate floor (gate_answer_count_min >= 1, "gates were expected") or a question bound (questions_count_max).
+
+UNPAIRED = "unpaired-gates-all-scripted"
+
+
+@pytest.mark.parametrize("form", ["gates_all_scripted: true", "gates_all_scripted: {include_permissions: true}"])
+def test_gates_all_scripted_alone_warns(form, tmp_path):
+    f = _one(UNPAIRED, f"assert:\n  - {form}\n", tmp_path)
+    assert f is not None and f.severity == "WARN"
+    assert "gate_answer_count_min" in f.fix and "questions_count_max" in f.fix
+
+
+@pytest.mark.parametrize("pair", ["gate_answer_count_min: 1", "questions_count_max: 0", "questions_count_max: 2"])
+def test_gates_all_scripted_paired_is_silent(pair, tmp_path):
+    assert UNPAIRED not in _rules(f"assert:\n  - gates_all_scripted: true\n  - {pair}\n", tmp_path)
+
+
+def test_gates_all_scripted_with_a_zero_floor_still_warns(tmp_path):
+    # `gate_answer_count_min: 0` always holds, so it states nothing about whether gates were expected.
+    assert UNPAIRED in _rules("assert:\n  - gates_all_scripted: true\n  - gate_answer_count_min: 0\n", tmp_path)
