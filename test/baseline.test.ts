@@ -1844,6 +1844,11 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     it.each(MUT)("S6g import-form mutation %s fails loud (%#)", (_label, mutate) => {
       expect(facts(mutate())).toContain("S6g scheduled-run env key");
     });
+    // The count mismatch (constructions > guarded) also catches I10; this pins the dedicated reason, so dropping that
+    // guard is not masked by the other.
+    it("I10 names the reason: the object has no importer", () => {
+      expect(facts(filesOf({ spawn: spawn().replace(IMPORT_SPREAD, ""), codetab: "var s=1;" }))).toContain("no importer references it");
+    });
   });
 
   // Back-compat: an asar with NO Artifact spread and NO env key stays clean — every committed baseline's
