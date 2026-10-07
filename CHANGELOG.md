@@ -6,20 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
 - **Cassette format v15.** This build reads and writes cassettes up to `cassetteVersion` 15 (`schema/cassette.v15.json`; `schema/cassette.v14.json` is retained). The stamp stays per-scenario: a cassette whose scenario uses no v15 feature is stamped exactly as before, so no existing cassette or `verify-cassettes` result changes. An older build refuses a v15 cassette as too new (upgrade) rather than as an unrecognized assertion.
 - **The companion skill's assertion catalog is split by family.** `references/assertion-catalog.md` keeps the
   conventions every key shares and the verdict-signal table, and links three new files that hold the per-key rows:
   `assertion-catalog-outcome-files-tools.md`, `assertion-catalog-agents-skills-budgets.md` and
   `assertion-catalog-gates-hooks-modifiers.md`. The catalog was close to the size one Read returns whole, and each
   new assertion key grows it. The rows are moved unchanged. No harness behaviour changes.
-- **`latest` moves to `desktop-2.26454.2`** (agent **2.1.293**, was 2.1.289). Its `sync` reported no unknown deltas:
-  the Cowork system prompt, the sub-agent append, the egress contract, the first-party spawn env and the cloud tool
-  surface are unchanged from `desktop-2.26454.0`. The agent was staged from a release-candidate channel, so the CI
-  recipe's download base (`B=`) now names it; the stable path serves the same bytes for this version.
-  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.26454.0 → 2.26454.2 since
-    record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it; a
-    re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on
-    2.1.293.
+- **`hook_decision: {event, decision, tool?, min?, max?}`** counts a plugin's command hook frames by what the hook
+  decided: `allow`, `deny`, `ask` or `defer` (`block` and `approve` are aliases of `deny` and `allow`). It reads both
+  ways a hook decides: the JSON it prints on stdout with exit 0, and exit code 2, which is a deny. Only stdout that
+  parses whole as a JSON object counts as a decision, so a hook that prints the word `deny` decides nothing.
+- **`hook_event_blocked` takes a count form, `{event, tool?, via?, min?, max?}`.** It counts the blocking frames for an
+  event. `{event, max: 0}` asserts the hook never blocked. `via` picks the channel: `exit2`, `json`, or `any` (the
+  default). The bare `hook_event_blocked: <event>` still counts exit code 2 alone. When it fails, it names any JSON
+  deny it saw and points to `via`.
+- **`no_hook_event_blocked: true | {event, tool?}`** asserts that no command hook blocked, by either channel. It is
+  never vacuous: with no frame in scope it reports evidence-unavailable.
+- `tool` scopes each of these keys to the tool that fired (`hook_name` is `<event>:<tool>`): `Bash` at `container`,
+  `mcp__workspace__bash` at `hostloop`. An event whose frames carry no tool name, such as `Stop`, reports
+  evidence-unavailable for any `tool`.
+- A frame whose decision cannot be read counts as unknown. That covers a missing exit code, a hook that never
+  answered, stdout that a redaction policy rewrote or the agent truncated, and a `hookEventName` naming another
+  event. An unknown frame makes a check evidence-unavailable only when it could change the verdict. `record` warns
+  when its redaction policy makes a hook decision that one of these keys reads unreadable.
 
 ## [4.5.0] — 2026-10-07
 
