@@ -38,3 +38,18 @@ export function anyGlobMatches(globs: string[], path: string): boolean {
   const p = path.replace(/\\/g, "/");
   return globs.some((g) => globToRegExp(g).test(p));
 }
+
+/** true iff an `artifact_json.artifact` is a glob: it holds `*` or `?`. `[` is NOT a glob character here, as in
+ *  `globToRegExp` (it escapes `[` to a literal), so detection and matching cannot disagree on a path like `a[1].json`. */
+export function isArtifactGlob(p: string): boolean {
+  return /[*?]/.test(p);
+}
+
+/** The path segments of an `artifact_json` glob, with `\` read as `/` and empty and `.` segments dropped — the form
+ *  both the evaluator and the record-time guard match against walk paths (which carry no `./`). */
+export function artifactGlobSegments(p: string): string[] {
+  return p
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((seg) => seg !== "" && seg !== ".");
+}

@@ -21,6 +21,7 @@ import { OS_JUNK_PATTERN } from "../run/skill-hash.js";
 import { preRunHashCap } from "../run/pre-run-manifest.js";
 import { listTurns, turnArtifactPath } from "../run/turn-layout.js";
 import type { Assertion, Fingerprint, Scenario } from "../types.js";
+import { artifactGlobSegments, globToRegExp, isArtifactGlob } from "../glob.js";
 
 /** The env var overriding the fixture size cap (bytes, a whole number >= 1). */
 export const WORKSPACE_FIXTURE_MAX_BYTES_ENV = "COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES";
@@ -334,6 +335,13 @@ function vacuousTargets(files: ReadonlyArray<{ path: string }>): Set<string> {
   return out;
 }
 
+/** Does a glob `artifact_json` match a staged fixture file? Compared in both fold forms, as {@link hitsTargets} does —
+ *  a folding filesystem resolves the glob's match to the fixture's file, and over-folding errs toward refusing. */
+function globHitsFixture(files: ReadonlyArray<{ path: string }>, glob: string): boolean {
+  const res = foldForms(artifactGlobSegments(glob).join("/")).map((g) => globToRegExp(g));
+  return files.some((f) => foldForms(`outputs/${f.path}`).some((form) => res.some((re) => re.test(form))));
+}
+
 /** Is this (normalized) assertion path one of the vacuous targets, under either fold form? */
 function hitsTargets(targets: Set<string>, p: string): boolean {
   const base = posix.normalize(p.split("\\").join("/")).replace(/^\.\//, "").replace(/\/+$/, "");
@@ -359,7 +367,7 @@ export function workspaceFixtureAssertRefusal(
       if (v === undefined) continue;
       const p = assertedArtifactPath(key, v);
       if (p === undefined || assertedAuthored(v) !== undefined) continue;
-      if (hitsTargets(targets, p)) hits.push({ key, path: p });
+      if (key === "artifact_json" && isArtifactGlob(p) ? globHitsFixture(files, p) : hitsTargets(targets, p)) hits.push({ key, path: p });
     }
   }
   if (!hits.length) return undefined;

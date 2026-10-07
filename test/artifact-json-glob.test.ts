@@ -1,14 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import { Assertion as AssertionSchema } from "../src/types.js";
 import { buildManifest, materializeManifest, artifactJsonTargetsTruncated } from "../src/run/cassette.js";
 import type { Scenario } from "../src/types.js";
+import { workspaceFixtureAssertRefusal } from "../src/fixture/workspace.js";
 
 // `artifact_json` with a glob in `artifact` and an explicit `match: each | any`. One walk serves both lanes: it is
-// rooted at the user-visible roots (+ uploads), which is exactly what replay materializes, so a match can never
+// rooted at the user-visible roots, which replay materializes in full, so a match can never
 // exist on one lane and vanish on the other.
 
 function ctx(workRoot: string, over: Partial<AssertContext> = {}): AssertContext {
@@ -110,15 +112,24 @@ describe("artifact_json glob — each / any", () => {
     const [r] = evaluate([{ artifact_json: { artifact: GLOB, match: "any", path: "status", equals: "ok" } }], ctx(root));
     expect(r.pass).toBe(false);
   });
-  it("authored: true applies to each match", () => {
-    const root = tree({ "outputs/artifacts/runs/r1/run_status.json": status("ok") });
-    const pre = { "outputs/artifacts/runs/r1/run_status.json": "x" };
-    // A pre-run hash that differs from the current file ⇒ "rewritten" ⇒ authored.
-    const [ok] = evaluate(
-      [{ artifact_json: { artifact: GLOB, match: "each", path: "status", equals: "ok", authored: true } }],
-      ctx(root, { preRunHashes: pre, preRunPaths: Object.keys(pre), preRunOrigin: "local" } as Partial<AssertContext>),
-    );
-    expect(ok.message ?? "").not.toMatch(/untouched pre-run file/);
+  it("authored: true applies to each match — an untouched pre-run match fails each, a new one carries any", () => {
+    const root = tree({
+      "outputs/artifacts/runs/old/run_status.json": status("ok"),
+      "outputs/artifacts/runs/new/run_status.json": status("ok"),
+    });
+    const sha = createHash("sha256").update(status("ok")).digest("hex");
+    // `old` was there before the run with the same bytes (untouched); `new` was not (created by the run).
+    const pre: Partial<AssertContext> = {
+      preRunHashes: { "outputs/artifacts/runs/old/run_status.json": sha },
+      preRunPaths: ["outputs/artifacts/runs/old/run_status.json"],
+      preRunOrigin: "local-walk",
+    };
+    const a = (match: "each" | "any") => [{ artifact_json: { artifact: GLOB, match, path: "status", equals: "ok", authored: true } }];
+    const [each] = evaluate(a("each"), ctx(root, pre));
+    expect(each.pass).toBe(false);
+    expect(each.message).toMatch(/runs\/old\/run_status\.json[^\n]*untouched pre-run file/);
+    const [any] = evaluate(a("any"), ctx(root, pre));
+    expect(any.pass).toBe(true);
   });
 });
 
@@ -138,7 +149,19 @@ describe("artifact_json glob — zero, over-cap, and unavailable matches", () =>
       ctx(root),
     );
     expect(r.pass).toBe(false);
-    expect(r.message).toContain("no file matches");
+    expect(r.message).toContain("reaches no user-visible root");
+  });
+  it("a glob over uploads/ fails loud, naming why: uploaded inputs are not matched (never a quiet zero-match)", () => {
+    const root = tree({ "uploads/runs/r1/run_status.json": status("ok") });
+    for (const match of ["each", "any"] as const) {
+      const [r] = evaluate(
+        [{ artifact_json: { artifact: "uploads/runs/*/run_status.json", match, path: "status", equals: "ok" } }],
+        ctx(root),
+      );
+      expect(r.pass).toBe(false);
+      expect(r.message).toContain("reaches no user-visible root");
+      expect(r.message).toContain("uploaded inputs are not matched");
+    }
   });
   it("more than 200 matches is evidence-unavailable, not a partial verdict", () => {
     const files: Record<string, string> = {};
@@ -267,5 +290,29 @@ describe("artifact_json glob — the record-time guard sees glob matches", () =>
       assert: [{ artifact_json: { artifact: GLOB, match: "each", path: "status", equals: "ok" } }],
     } as unknown as Scenario;
     expect(artifactJsonTargetsTruncated(scenario, root, manifest)).toEqual(["outputs/artifacts/runs/r2/run_status.json"]);
+  });
+});
+
+describe("artifact_json glob — the workspace_fixture refusal sees a glob match", () => {
+  const sc = (assert: unknown[]) => ({ name: "s", assert }) as unknown as Pick<Scenario, "name" | "assert">;
+  const files = [{ path: "artifacts/runs/seed/run_status.json" }];
+  it("an unannotated glob matching a fixture file is refused (it could pass on the fixture alone)", () => {
+    expect(workspaceFixtureAssertRefusal(sc([{ artifact_json: { artifact: GLOB, match: "any", path: "status" } }]), files)).toMatch(
+      /pass on the fixture alone/,
+    );
+  });
+  it("in either case fold, as for a literal path", () => {
+    const g = "outputs/Artifacts/runs/*/run_status.json";
+    expect(workspaceFixtureAssertRefusal(sc([{ artifact_json: { artifact: g, match: "any", path: "status" } }]), files)).toMatch(
+      /pass on the fixture alone/,
+    );
+  });
+  it("a glob matching no fixture file, or one stating `authored:`, is not refused", () => {
+    expect(
+      workspaceFixtureAssertRefusal(sc([{ artifact_json: { artifact: "outputs/other/*.json", match: "any", path: "status" } }]), files),
+    ).toBeUndefined();
+    expect(
+      workspaceFixtureAssertRefusal(sc([{ artifact_json: { artifact: GLOB, match: "any", path: "status", authored: true } }]), files),
+    ).toBeUndefined();
   });
 });

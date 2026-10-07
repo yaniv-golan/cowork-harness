@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { KNOWN_HOOK_EVENTS } from "./agent/session.js";
+import { isArtifactGlob } from "./glob.js";
 
 /** Cowork's `DEFAULT_MAX_THINKING_TOKENS` (the ELF's `hre`), binary-verified = 31999 — the ONE budget
  *  extended thinking ever runs at when it's ON (there is no arbitrary N; off is 0/disabled, never a
@@ -1209,7 +1210,18 @@ export const Assertion = z.strictObject({
   // manifest (`record` snapshots one); a manifest-less cassette skips it (with a loud warning).
   artifact_json: z
     .strictObject({
-      artifact: z.string().min(1).describe("relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"),
+      artifact: z
+        .string()
+        .min(1)
+        .describe(
+          "relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json), or a glob (`*`, `?`, whole-segment `**`; `[` is literal) over the user-visible roots (outputs/ and connected folders), which then needs `match`",
+        ),
+      match: z
+        .enum(["each", "any"])
+        .optional()
+        .describe(
+          "required with a glob `artifact`, refused on a literal one: `each` = every matched file satisfies the predicate, `any` = at least one does. Zero matches fail; more than 200 matches, or a match that is a link or has no readable body, is evidence-unavailable",
+        ),
       path: z
         .string()
         .min(1)
@@ -1225,6 +1237,10 @@ export const Assertion = z.strictObject({
       absent: z.boolean().optional().describe("the final key is absent from its (resolved) parent — the anti-hallucination negative"),
       is_null: z.boolean().optional().describe("the resolved value is JSON null (distinct from absent)"),
       authored: AuthoredFlag,
+    })
+    .refine((v) => isArtifactGlob(v.artifact) === (v.match !== undefined), {
+      message: "a glob `artifact` (one with `*` or `?`) needs `match: each | any`; a literal `artifact` takes no `match`",
+      path: ["match"],
     })
     .optional()
     .describe("assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"),

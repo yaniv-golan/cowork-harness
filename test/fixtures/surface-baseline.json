@@ -4608,6 +4608,10 @@
       ".assert[].artifact_json.is_null": {
         "type": "boolean"
       },
+      ".assert[].artifact_json.match": {
+        "type": "string",
+        "enum": ["each", "any"]
+      },
       ".assert[].artifact_json.path": {
         "type": "string"
       },

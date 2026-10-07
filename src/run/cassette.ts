@@ -136,7 +136,7 @@ import {
   explainNoMutations,
   type MutationCoverage,
 } from "./mutate.js";
-import { anyGlobMatches } from "../glob.js";
+import { anyGlobMatches, artifactGlobSegments, globToRegExp, isArtifactGlob } from "../glob.js";
 import { compileUserRegex } from "../regex.js";
 import { toolNameSpellings } from "./tool-name-canonicalization.js";
 import { toolCallObjectRegexes } from "../tool-call-assert.js";
@@ -4354,7 +4354,12 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
   // assert.ts). (A pre-v8 entry with no reason is not flagged — this guard only runs at record time, where
   // buildManifest always sets the reason.)
   const truncatedAbs = new Set<string>();
-  for (const a of artifacts) if (a.truncated && a.truncationReason === "size") truncatedAbs.add(resolve(workRoot, a.path));
+  const truncatedRel: string[] = [];
+  for (const a of artifacts)
+    if (a.truncated && a.truncationReason === "size") {
+      truncatedAbs.add(resolve(workRoot, a.path));
+      truncatedRel.push(a.path);
+    }
   if (truncatedAbs.size === 0) return [];
   const hits: string[] = [];
   for (const a of scenario.assert ?? []) {
@@ -4363,6 +4368,13 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
     // a deliverable big enough to be worth scanning for a leak is exactly the one that clears the cap.
     for (const target of [a.artifact_json?.artifact, a.artifact_text?.artifact]) {
       if (!target) continue;
+      // A glob `artifact_json` names every size-truncated entry it matches. Its walk covers only the user-visible
+      // roots, which the manifest holds in full, so matching the manifest's paths is matching what it would read.
+      if (a.artifact_json?.artifact === target && isArtifactGlob(target)) {
+        const re = globToRegExp(artifactGlobSegments(target).join("/"));
+        for (const p of truncatedRel) if (re.test(p) && !hits.includes(p)) hits.push(p);
+        continue;
+      }
       if (truncatedAbs.has(resolve(workRoot, target)) && !hits.includes(target)) hits.push(target);
     }
   }
