@@ -282,6 +282,26 @@ _FALLBACK_KNOWN_HOOK_EVENTS = set(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED)
 # hostloop). Kept apart from the known set because the message wording depends on which claim we can
 # make: accepted-by-the-validator is not reached-by-a-run.
 _FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreToolUse"}
+# The tiers each was observed at (mirrors LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS in src/agent/session.ts).
+_FALLBACK_LIVE_VERIFIED_HOOK_EVENT_TIERS = {
+    "SessionStart": ["container", "hostloop"],
+    "UserPromptSubmit": ["container", "hostloop"],
+    "PostToolUse": ["container", "hostloop"],
+    "Stop": ["container"],
+    "PreToolUse": ["container"],
+}
+
+
+def _load_live_verified_tiers():
+    """{event: [tier, ...]} from the generated sidecar, else the embedded fallback."""
+    try:
+        d = json.loads((Path(__file__).resolve().parent / "assertion-keys.json").read_text(encoding="utf-8"))
+        tiers = d.get("liveVerifiedHookEventTiers")
+        if isinstance(tiers, dict):
+            return {k: list(v) for k, v in tiers.items() if isinstance(v, list)}
+    except Exception:
+        pass
+    return {k: list(v) for k, v in _FALLBACK_LIVE_VERIFIED_HOOK_EVENT_TIERS.items()}
 
 
 def _load_hook_events():
@@ -308,6 +328,7 @@ def _load_hook_events():
 
 
 SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_HOOK_EVENTS = _load_hook_events()
+LIVE_VERIFIED_HOOK_EVENT_TIERS = _load_live_verified_tiers()
 
 # Self-check: every valid assertion key must be classified, else the replay-class lint logic mishandles it.
 # Surfaced loudly at load AND as a lint ERROR in cmd_lint (so --strict / exit codes flow). Never sys.exit here.
@@ -2860,7 +2881,9 @@ def _lint_hook_events(path):
         if name in KNOWN_HOOK_EVENTS:
             fires = (
                 "fires here — a plugin's own `hooks/hooks.json` is loaded and executed by the agent "
-                "binary (live-verified at both `container` and `hostloop`)"
+                "binary (live-verified at "
+                + " and ".join(f"`{t}`" for t in LIVE_VERIFIED_HOOK_EVENT_TIERS.get(name, ["container"]))
+                + ")"
                 if name in LIVE_VERIFIED_HOOK_EVENTS
                 else "is a hook event the agent accepts, and it loads a plugin's own `hooks/hooks.json` "
                      "itself — though whether a harness run ever reaches this event's trigger has not "

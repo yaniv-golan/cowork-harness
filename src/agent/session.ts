@@ -394,14 +394,16 @@ export type HookEvent = (typeof KNOWN_HOOK_EVENTS)[number];
  *  run will actually reach this trigger" are different claims, and conflating them is how a receipt for
  *  three events would silently become a promise about 33: nothing has shown that a harness run ever
  *  raises `WorktreeCreate`, `TeammateIdle`, `TaskCreated`, `ConfigChange` or `DirectoryAdded` at all.
- *  Widen only by running the case. */
-export const LIVE_VERIFIED_PLUGIN_HOOK_EVENTS: readonly HookEvent[] = [
-  "SessionStart",
-  "UserPromptSubmit",
-  "PostToolUse",
-  "Stop",
-  "PreToolUse",
-];
+ *  Widen only by running the case, and record the tier it ran at. */
+export const LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS: Readonly<Partial<Record<HookEvent, readonly ("container" | "hostloop")[]>>> = {
+  SessionStart: ["container", "hostloop"],
+  UserPromptSubmit: ["container", "hostloop"],
+  PostToolUse: ["container", "hostloop"],
+  Stop: ["container"],
+  PreToolUse: ["container"],
+};
+/** The events in LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS, which records the tiers each was observed at. */
+export const LIVE_VERIFIED_PLUGIN_HOOK_EVENTS: readonly HookEvent[] = Object.keys(LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS) as HookEvent[];
 
 /** The hook events this harness actually SERVES on `initialize`.
  *

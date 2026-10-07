@@ -17,7 +17,12 @@ import {
   METRIC_ARTIFACT_REFUSED_PATTERNS,
 } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
-import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_PLUGIN_HOOK_EVENTS } from "../src/agent/session.js";
+import {
+  SERVED_HOOK_EVENTS,
+  KNOWN_HOOK_EVENTS,
+  LIVE_VERIFIED_PLUGIN_HOOK_EVENTS,
+  LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS,
+} from "../src/agent/session.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 export const SCHEMA_DIR = join(REPO_ROOT, "schema");
@@ -115,6 +120,8 @@ export function buildAssertionKeys(): string {
         // reaches this trigger" are different claims, and the linter's wording depends on which one it
         // can make. See LIVE_VERIFIED_PLUGIN_HOOK_EVENTS in src/agent/session.ts.
         liveVerifiedHookEvents: [...LIVE_VERIFIED_PLUGIN_HOOK_EVENTS].sort(),
+        // The tiers each of those was observed at, so the linter claims no more than was run.
+        liveVerifiedHookEventTiers: LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS,
         // Every enum-valued scenario field, top-level AND nested (answers[]/assert[] item keys), keyed
         // by a stable dotted field id. See collectEnums/buildEnumMap above. scenario.py's
         // `enum-value-invalid` rule keeps an embedded fallback parity-tested against this.

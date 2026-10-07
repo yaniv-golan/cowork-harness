@@ -164,6 +164,26 @@
     "Stop",
     "UserPromptSubmit"
   ],
+  "liveVerifiedHookEventTiers": {
+    "SessionStart": [
+      "container",
+      "hostloop"
+    ],
+    "UserPromptSubmit": [
+      "container",
+      "hostloop"
+    ],
+    "PostToolUse": [
+      "container",
+      "hostloop"
+    ],
+    "Stop": [
+      "container"
+    ],
+    "PreToolUse": [
+      "container"
+    ]
+  },
   "enums": {
     "answers.decide": [
       "allow",

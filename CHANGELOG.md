@@ -45,8 +45,11 @@ All notable changes to this project are documented here. The format is based on
   hook never reaches that list, so `no_hook_blocked` passes over a plugin's block. The docs and the companion skill
   now send a plugin hook to `hook_event_blocked`, `no_hook_event_blocked` and `hook_decision`.
 - **`liveVerifiedHookEvents` in `assertion-keys.json` lists `PreToolUse`.** A plugin's PreToolUse hook has now been
-  recorded firing at `container`, deciding by JSON and by exit 2. No notice or lint message changes: PreToolUse is
-  an event the harness serves, and those messages cover unserved events only.
+  recorded firing at `container`, deciding by JSON and by exit 2. PreToolUse is an event the harness serves, and the
+  notices cover unserved events only, so no notice changes for it.
+- **`assertion-keys.json` gains `liveVerifiedHookEventTiers`**, the tiers each live-verified hook event was observed
+  at. `lint`'s `hook-event-not-served` message now names those tiers: `Stop` says `container`, where it used to claim
+  `container` and `hostloop`.
 
 ## [4.5.0] — 2026-10-07
 
