@@ -90,6 +90,7 @@ import {
   type AssertContext,
   type SemanticJudge,
   expandExpectDenied,
+  OBJECT_HOOK_EVENT_BLOCKED_VIA,
 } from "../assert.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
 import { makePairwiseJudge, type CompleteStructured } from "../decide/pairwise-judge.js";
@@ -536,6 +537,50 @@ export function hookOutputContradictions(asserts: Assertion[]): string[] {
   return out;
 }
 
+/** A negative hook key (no block in its scope) alongside a positive one (at least one block in a scope inside it, on a
+ *  channel the negative counts). Value-level, like hookOutputContradictions. The bare `hook_event_blocked` counts exit
+ *  code 2; the object form counts `via` (default OBJECT_HOOK_EVENT_BLOCKED_VIA); `hook_decision` deny and
+ *  `no_hook_event_blocked` count both channels. Mirrored in scenario.py. */
+export function hookBlockContradictions(asserts: Assertion[]): string[] {
+  type Side = { label: string; event?: string; tool?: string; ch: string[] };
+  const channels = (via: string | undefined) => {
+    const v = via ?? OBJECT_HOOK_EVENT_BLOCKED_VIA;
+    return v === "any" ? ["exit2", "json"] : [v];
+  };
+  const isDeny = (d: string) => d === "deny" || d === "block";
+  const atLeastOne = (o: { min?: number; max?: number }) => (o.min ?? (o.max === undefined ? 1 : 0)) >= 1;
+  const neg: Side[] = [];
+  const pos: Side[] = [];
+  for (const a of asserts) {
+    const nb = a.no_hook_event_blocked;
+    if (nb === true) neg.push({ label: "no_hook_event_blocked", ch: ["exit2", "json"] });
+    else if (nb) neg.push({ label: "no_hook_event_blocked", event: nb.event, tool: nb.tool, ch: ["exit2", "json"] });
+    const hb = a.hook_event_blocked;
+    if (typeof hb === "string") pos.push({ label: "hook_event_blocked", event: hb, ch: ["exit2"] });
+    else if (hb) {
+      if (hb.max === 0) neg.push({ label: "hook_event_blocked {max: 0}", event: hb.event, tool: hb.tool, ch: channels(hb.via) });
+      if (atLeastOne(hb)) pos.push({ label: "hook_event_blocked", event: hb.event, tool: hb.tool, ch: channels(hb.via) });
+    }
+    const hd = a.hook_decision;
+    if (hd && isDeny(hd.decision)) {
+      if (hd.max === 0) neg.push({ label: "hook_decision deny {max: 0}", event: hd.event, tool: hd.tool, ch: ["exit2", "json"] });
+      if (atLeastOne(hd)) pos.push({ label: "hook_decision deny", event: hd.event, tool: hd.tool, ch: ["exit2", "json"] });
+    }
+  }
+  const out: string[] = [];
+  for (const n of neg)
+    for (const p of pos) {
+      if (n.event !== undefined && n.event !== p.event) continue;
+      if (n.tool !== undefined && n.tool !== p.tool) continue;
+      if (!p.ch.every((c) => n.ch.includes(c))) continue;
+      const clause =
+        `\`${n.label}\` alongside \`${p.label}\` on ${p.event}${p.tool === undefined ? "" : ` (tool ${p.tool})`} ` +
+        `(both read the same hook_response frames — the block the positive key requires is one the negative key requires not to exist)`;
+      if (!out.includes(clause)) out.push(clause);
+    }
+  return out;
+}
+
 /** Every statically unsatisfiable assertion pairing in the scenario, or `undefined` when it is runnable.
  *
  *  The two halves of a pair can sit in SEPARATE `assert:` entries, so the check is over the whole array —
@@ -582,6 +627,7 @@ export function assertContradiction(scenario: Scenario): string | undefined {
     if (hits.length) clauses.push(`${g.absence.label} alongside ${hits.join(" and ")} (${g.why})`);
   }
   clauses.push(...hookOutputContradictions(asserts));
+  clauses.push(...hookBlockContradictions(asserts));
   if (!clauses.length) return undefined;
   // "both" is wrong once a scenario carries more than one contradictory group — and a scenario that
   // carries two is exactly the one whose message gets read carefully.

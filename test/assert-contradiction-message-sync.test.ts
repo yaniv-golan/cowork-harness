@@ -240,6 +240,24 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
   });
 });
 
+describe.skipIf(!havePython)("hook-key contradictions: the same clause in both languages", () => {
+  it("names the keys, the event and the tool alike", () => {
+    const ts = assertContradiction(
+      scenario([
+        { no_hook_event_blocked: { event: "PreToolUse" } },
+        { hook_decision: { event: "PreToolUse", decision: "deny", tool: "Bash" } },
+      ]),
+    )!;
+    const lint = lintContradiction(
+      "assert:\n  - no_hook_event_blocked: { event: PreToolUse }\n  - hook_decision: { event: PreToolUse, decision: deny, tool: Bash }\n",
+    )!;
+    const clause =
+      "`no_hook_event_blocked` alongside `hook_decision deny` on PreToolUse (tool Bash) (both read the same hook_response frames — the block the positive key requires is one the negative key requires not to exist)";
+    expect(ts).toContain(clause);
+    expect(lint.message).toContain(clause);
+  });
+});
+
 describe("the object hook_event_blocked's default channel is the same in both languages", () => {
   it("OBJECT_HOOK_EVENT_BLOCKED_VIA (TS) equals _OBJECT_HOOK_EVENT_BLOCKED_VIA (scenario.py)", async () => {
     const { OBJECT_HOOK_EVENT_BLOCKED_VIA } = await import("../src/assert.js");

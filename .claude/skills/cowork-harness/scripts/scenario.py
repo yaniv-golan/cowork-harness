@@ -1352,6 +1352,66 @@ def _lint_tool_call_object_form(items, fidelity, path):
     return out
 
 
+
+# The channel the object form of `hook_event_blocked` counts when `via` is omitted. Mirrors
+# OBJECT_HOOK_EVENT_BLOCKED_VIA in src/assert.ts (test/assert-contradiction-message-sync.test.ts pins the two).
+_OBJECT_HOOK_EVENT_BLOCKED_VIA = "any"
+
+
+def _hook_block_contradictions(items):
+    """A negative hook key (no block in its scope) alongside a positive one (at least one block in a scope inside it,
+    on a channel the negative counts). Mirrors hookBlockContradictions in src/run/execute.ts."""
+
+    def channels(via):
+        v = via if isinstance(via, str) else _OBJECT_HOOK_EVENT_BLOCKED_VIA
+        return ["exit2", "json"] if v == "any" else [v]
+
+    def at_least_one(o):
+        mn = o.get("min")
+        if not isinstance(mn, int) or isinstance(mn, bool):
+            mn = 1 if o.get("max") is None else 0
+        return mn >= 1
+
+    neg, pos = [], []
+    for nb in _assert_values(items, "no_hook_event_blocked"):
+        if nb is True:
+            neg.append(("no_hook_event_blocked", None, None, ["exit2", "json"]))
+        elif isinstance(nb, dict):
+            neg.append(("no_hook_event_blocked", nb.get("event"), nb.get("tool"), ["exit2", "json"]))
+    for hb in _assert_values(items, "hook_event_blocked"):
+        if isinstance(hb, str):
+            pos.append(("hook_event_blocked", hb, None, ["exit2"]))
+        elif isinstance(hb, dict):
+            if hb.get("max") == 0 and not isinstance(hb.get("max"), bool):
+                neg.append(("hook_event_blocked {max: 0}", hb.get("event"), hb.get("tool"), channels(hb.get("via"))))
+            if at_least_one(hb):
+                pos.append(("hook_event_blocked", hb.get("event"), hb.get("tool"), channels(hb.get("via"))))
+    for hd in _assert_values(items, "hook_decision"):
+        if isinstance(hd, dict) and hd.get("decision") in ("deny", "block"):
+            if hd.get("max") == 0 and not isinstance(hd.get("max"), bool):
+                neg.append(("hook_decision deny {max: 0}", hd.get("event"), hd.get("tool"), ["exit2", "json"]))
+            if at_least_one(hd):
+                pos.append(("hook_decision deny", hd.get("event"), hd.get("tool"), ["exit2", "json"]))
+    out = []
+    for n_label, n_event, n_tool, n_ch in neg:
+        for p_label, p_event, p_tool, p_ch in pos:
+            if n_event is not None and n_event != p_event:
+                continue
+            if n_tool is not None and n_tool != p_tool:
+                continue
+            if not all(c in n_ch for c in p_ch):
+                continue
+            tool = "" if p_tool is None else f" (tool {p_tool})"
+            clause = (
+                f"`{n_label}` alongside `{p_label}` on {p_event}{tool} "
+                f"(both read the same hook_response frames — the block the positive key requires is one the negative "
+                f"key requires not to exist)"
+            )
+            if clause not in out:
+                out.append(clause)
+    return out
+
+
 def lint_doc(doc, path, raw_lines, cassette_records=None):
     findings = []
     if not isinstance(doc, dict):
@@ -1948,6 +2008,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 f"(stream {n_stream} / {p_stream}) (both read the same hook_response frames — the output "
                 f"`hook_output_contains` requires is the output `hook_output_not_contains` requires not to exist)"
             )
+    clauses.extend(_hook_block_contradictions(items))
     if clauses:
         findings.append(
             Finding(
