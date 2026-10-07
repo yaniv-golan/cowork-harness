@@ -684,7 +684,7 @@ describe("hook decisions on replay, and the redaction finding for them", () => {
   it("replay grades the same verdicts the live run does", async () => {
     const c = decisionCassette([
       DENY,
-      { hook_event_blocked: { event: "Stop", min: 1, max: 1 } },
+      { hook_event_blocked: { event: "Stop", via: "any", min: 1, max: 1 } },
       { hook_event_blocked: "PreToolUse" },
       { no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } },
     ]);
@@ -711,7 +711,7 @@ describe("hook decisions on replay, and the redaction finding for them", () => {
   it("record-time: names hook_decision, the object hook_event_blocked and no_hook_event_blocked over stdout it made unreadable", () => {
     const base = decisionCassette([
       DENY,
-      { hook_event_blocked: { event: "PreToolUse" } },
+      { hook_event_blocked: { event: "PreToolUse", via: "any" } },
       { no_hook_event_blocked: true },
       { hook_event_blocked: "PreToolUse" },
       { hook_event_blocked: { event: "PreToolUse", via: "exit2" } },

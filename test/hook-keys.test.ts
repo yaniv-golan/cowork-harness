@@ -241,7 +241,9 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
     expect(Assertion.safeParse({ hook_event_blocked: { event: "Stop", via: "stdout" } }).success).toBe(false);
   });
   it("tool: scopes to the tool that fired", () => {
-    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", min: 1, max: 1 } }, ctx(decisions())).pass).toBe(true);
+    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "any", min: 1, max: 1 } }, ctx(decisions())).pass).toBe(
+      true,
+    );
     expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "exit2", max: 0 } }, ctx(decisions())).pass).toBe(true);
   });
   it("no_hook_event_blocked fails on a JSON deny, naming it", () => {
