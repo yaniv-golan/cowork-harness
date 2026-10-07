@@ -33,6 +33,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **A `[lane]` notice on stderr says which lane a run models.** Every tier reproduces Cowork's local lane, which new
+  Pro and Max tasks do not use from 2026-10-06. A live `lane: local` run with at least one environment-shaped
+  assertion (a path, mount, delivery or egress key: `file_exists`, `file_absent`, `user_visible_artifact`,
+  `artifact_text`/`artifact_json`, `present_files_called`, `computer_links_resolve*`, `no_scratchpad_leak`,
+  `transcript_no_host_path`, `no_delete_in_*`, `input_unmodified`, `no_unexpected_files`, `egress_*`) prints one line
+  saying so, at most once per process; `chat` prints it once at session start. `--compact`, `--demo`, `CI` and the
+  new `COWORK_HARNESS_NO_LANE_NOTICE=1` silence it. Stderr only: no result field, cassette or exit code changes.
 - **`sync` records what Desktop serves to a cloud Cowork session, in a new top-level `cloud` block.** It holds the
   tool list of Desktop's `remote-devices` server, one fingerprint (SHA-256 and code-point count) per conditional
   branch of each tool's description, and `unreachable`: the cloud-session features no local reproduction can reach.
@@ -75,6 +82,14 @@ All notable changes to this project are documented here. The format is based on
   for a model listed in the org's managed config (`thinkingAlwaysOnModels`), even with extended thinking off. The
   harness reads no managed config. See
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels).
+- **`doctor`'s staged-agent check says what Desktop has staged against what the baseline pins.** Its detail ends
+  with one of: the agent is staged and pinned; Desktop staged a newer agent, so run `cowork-harness sync`; the pinned
+  agent is not staged (staging may be withheld, or no task has booted the VM since an update); or no staged VM agent
+  was found. Each ends with the local-lane note above. It names versions only, never a path, and never changes the
+  check's status. It is left out under a `COWORK_AGENT_BINARY` override and off macOS.
+- **The docs and the companion skill state the lane by date.** Every tier models Cowork's local lane; from 2026-10-06
+  new Pro and Max tasks run in the cloud, and before then no setting reliably decided the lane. The selector
+  observations in [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) move under a dated History heading.
 - **New baseline `desktop-2.19675.1`** (agent **2.1.288**).
   - Unchanged from `desktop-2.19675.0`: the Cowork system prompt, the sub-agent append, the egress contract, the
     model/effort config and the first-party `spawn.env`. Gate provenance moved: Desktop's runtime config gains two
