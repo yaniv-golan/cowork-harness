@@ -7,8 +7,8 @@ import { CASSETTE_VERSION, V15_ASSERT_FEATURES, V14_ASSERT_FEATURES, requiredVer
 // v15 is the next shared interpretation bump, landed on its own before any key uses it. The stamp is
 // requirement-based (requiredVersionFor), so raising CASSETTE_VERSION alone moves no cassette's stamp.
 
-/** One sample assertion per V15_ASSERT_FEATURES predicate, in the same order. A key of this release that appends a
- *  predicate appends its sample here; the coverage test below fails until it does. */
+/** One sample assertion per V15_ASSERT_FEATURES predicate, in the same order. A key that appends a predicate there
+ *  appends its sample here; the coverage test below fails until it does. */
 const V15_SAMPLES: unknown[] = [];
 
 describe("cassette v15", () => {
