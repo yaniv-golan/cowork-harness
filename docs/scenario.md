@@ -908,8 +908,8 @@ without one:
   usual cause is a misspelled name.
 - **Evidence-unavailable** (a fail) when:
   - more than 200 files match;
-  - the walk can't see the whole tree (deeper than 32 levels, over 20,000 entries, or an unreadable or escaping
-    subtree);
+  - the walk can't see the whole tree (more than 32 levels below the glob's fixed leading part, over 20,000 entries,
+    or an unreadable or escaping subtree, including an unreadable directory on that fixed part);
   - a match is a **symlink or hardlink**, a directory on the glob's literal path is a symlink, or a symlinked
     directory sits where a match could be (a linked run directory under `runs/*`). A literal `artifact` follows an
     in-root symlink on a live run, but a glob refuses links on both lanes, because a cassette records the link,

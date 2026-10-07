@@ -93,6 +93,9 @@ All notable changes to this project are documented here. The format is based on
 - **A cassette whose scenario uses the `artifact_json` glob (or `match`) is stamped `cassetteVersion` 15 and
   needs this release to replay.** An older harness refuses it as too new, so pin the harness version in CI before
   you record one.
+- **An `artifact_json` `artifact` containing `*` or `?` is now a glob.** Such a path used to name a file literally;
+  it now needs `match:` and matches by pattern (`?` and `*` also match themselves, so such a file is still reached,
+  along with any other name the pattern fits).
 
 ### Added
 
