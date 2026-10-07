@@ -63,13 +63,14 @@ All notable changes to this project are documented here. The format is based on
   `CLAUDE_CODE_PROCESS_WRAPPER`); see Upgrade notes and [docs/session.md](./docs/session.md). Every call the harness
   makes to the host `claude` (the judge, the decider, critique) drops `CLAUDE_CODE_SIMPLE` and
   `CLAUDE_CODE_PROCESS_WRAPPER` from the inherited environment too: `CLAUDE_CODE_SIMPLE=1` is the CLI's bare mode,
-  which reads auth only from an API key or an `apiKeyHelper`, so an export would change the grader's credential.
+  which reads auth only from an API key or an `apiKeyHelper`, so an export would change the grader's credential. The
+  `--settings` those calls carry also blanks `CLAUDE_CODE_SIMPLE`, so a user-settings `env` block cannot set it either.
 - **`sync` follows two reshapes in Desktop 2.26454.0.** The max-thinking helper gains one condition, and the check
   admits exactly that shape while still asserting the 31999 budget. The scheduled-run env key now lives in a one-key
-  object a module exports: `sync` reads the keys of an imported object spread into the spawn env, under any condition
-  (refusing to write when a guarded one cannot be resolved), and the scheduled-run check counts every use of that object
-  and requires each to be the scheduled-only spawn spread or Desktop's own scheduled-task assign, with no other function
-  in its module returning it.
+  object a module exports: `sync` reads the keys of an object spread into the spawn env, from a module or the same
+  chunk, under any condition, and refuses to write when a guarded spread, or a bare spread from a module, cannot be
+  read. The scheduled-run check counts every use of that object and requires each to be the scheduled-only spawn spread
+  or Desktop's own scheduled-task assign, with no other function in its module returning it.
 - **Fidelity gaps: thinking forced on for managed-config models.** Desktop 2.26454.0 sends the full thinking budget
   for a model listed in the org's managed config (`thinkingAlwaysOnModels`), even with extended thinking off. The
   harness reads no managed config. See

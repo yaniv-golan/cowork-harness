@@ -7,6 +7,7 @@ import {
   withGraderSettings,
   defaultManagedMcpPath,
   graderSpawnEnv,
+  assertIsolationSupported,
   helpDeclaresFlag,
   isolationRefusal,
   resetIsolationPreflight as resetPreflight,
@@ -116,10 +117,10 @@ function resetIsolationPreflight(managedMcpPath = join(dir, "no-managed-mcp.json
   resetPreflight(managedMcpPath);
 }
 
-// The --settings value every grader call carries: the three effort/thinking keys blanked, so a user-settings `env`
-// block cannot set them (flag settings apply after user settings).
+// The --settings value every grader call carries: the three effort/thinking keys and the bare-mode key blanked, so a
+// user-settings `env` block cannot set them (flag settings apply after user settings).
 const GRADER_SETTINGS_JSON = JSON.stringify({
-  env: { CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "" },
+  env: { CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "", CLAUDE_CODE_SIMPLE: "" },
 });
 
 let prevForbid: string | undefined;
@@ -624,7 +625,13 @@ describe("per-role effort and the settings counter-override", () => {
     expect(out.filter((a) => a === "--settings")).toHaveLength(1);
     expect(out.slice(0, 2)).toEqual(["--json-schema", "{}"]);
     expect(JSON.parse(out[out.indexOf("--settings") + 1]!)).toEqual({
-      env: { KEEP: "1", CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "" },
+      env: {
+        KEEP: "1",
+        CLAUDE_CODE_EFFORT_LEVEL: "",
+        CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "",
+        CLAUDE_CODE_DISABLE_THINKING: "",
+        CLAUDE_CODE_SIMPLE: "",
+      },
       other: true,
     });
   });
@@ -725,6 +732,27 @@ describe("helpDeclaresFlag / defaultManagedMcpPath", () => {
 });
 
 describe("graderSpawnEnv", () => {
+  it("the --help preflight probe runs with the same dropped environment as the grader call", () => {
+    const d = mkdtempSync(join(tmpdir(), "grader-probe-"));
+    const dump = join(d, "env.txt");
+    const bin = join(d, "claude");
+    writeFileSync(bin, `#!/bin/sh\nenv > "${dump}"\necho "Usage: claude"\nexit 0\n`, { mode: 0o755 });
+    vi.stubEnv("CLAUDE_CODE_SIMPLE", "1");
+    try {
+      try {
+        assertIsolationSupported(bin);
+      } catch {
+        // a stub without the isolation flags is refused; only the probe's environment matters here
+      }
+      const env = readFileSync(dump, "utf8");
+      expect(env).toContain("PATH=");
+      expect(env).not.toMatch(/^CLAUDE_CODE_SIMPLE=/m);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it("drops the operator's bare-mode and process-wrapper keys, and keeps auth and PATH", () => {
     const env = graderSpawnEnv({
       CLAUDE_CODE_SIMPLE: "1",

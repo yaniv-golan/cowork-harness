@@ -90,7 +90,14 @@ describe("claudeCliCompleteStructured (real envelope shape)", () => {
       "--output-format",
       "json",
       "--settings",
-      JSON.stringify({ env: { CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "" } }),
+      JSON.stringify({
+        env: {
+          CLAUDE_CODE_EFFORT_LEVEL: "",
+          CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "",
+          CLAUDE_CODE_DISABLE_THINKING: "",
+          CLAUDE_CODE_SIMPLE: "",
+        },
+      }),
       "--json-schema",
       JSON.stringify(PAIRWISE_JSON_SCHEMA),
       "--system-prompt",
