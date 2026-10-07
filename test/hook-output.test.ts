@@ -25,7 +25,7 @@ import { assertContradiction, hookOutputContradictions, warnAmbiguousHookOutputF
 import { warnAmbiguousHookOutput } from "../src/run/hook-events.js";
 import type { RunResult, Scenario } from "../src/types.js";
 import type { LaunchPlan } from "../src/session.js";
-import { loadHookFrames } from "./helpers/hook-frames.js";
+import { loadHookDecisionFrames, loadHookFrames } from "./helpers/hook-frames.js";
 
 /** contextEvents as Run records them, optionally with each frame's fields edited (still the recorded frames). */
 function recorded(edit?: (f: Record<string, unknown>) => Record<string, unknown>) {
@@ -234,6 +234,9 @@ function hookCassette(assert: Record<string, unknown>[], stderr?: (s: string) =>
   const frames = loadHookFrames().map((f) =>
     stderr && f.subtype === "hook_response" && typeof f.stderr === "string" && f.stderr ? { ...f, stderr: stderr(f.stderr) } : f,
   );
+  return framesCassette(assert, frames);
+}
+function framesCassette(assert: Record<string, unknown>[], frames: Record<string, unknown>[]): Cassette {
   return {
     scenario: {
       name: "hook-output-replay",
@@ -661,5 +664,69 @@ describe("warnAmbiguousHookOutputForPlan", () => {
     // a bad COWORK_MANAGED_CONFIG is left for the spawn to refuse
     vi.stubEnv("COWORK_MANAGED_CONFIG", "yes");
     expect(() => msgs(plan, "protocol")).not.toThrow();
+  });
+});
+
+// The JSON decision on replay: the hook-decision recording frozen into a cassette, re-driven; and a redaction policy
+// that rewrites the hook's stdout so its JSON no longer parses.
+describe("hook decisions on replay, and the redaction finding for them", () => {
+  const decisionCassette = (assert: Record<string, unknown>[]) => framesCassette(assert, loadHookDecisionFrames());
+  // A policy that redacts every `stdout` value wholesale: the decision JSON becomes a bare token.
+  const STDOUT_POLICY = { patterns: [], keyNames: ["stdout"] };
+  const DENY = { hook_decision: { event: "PreToolUse", decision: "deny", min: 2, max: 2 } };
+
+  it("replay grades the same verdicts the live run does", async () => {
+    const c = decisionCassette([
+      DENY,
+      { hook_event_blocked: { event: "Stop", min: 1, max: 1 } },
+      { hook_event_blocked: "PreToolUse" },
+      { no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } },
+    ]);
+    const all = (await replayCassette(c, [])).assertions;
+    expect(all.map((a) => a.pass)).toEqual([true, true, true, false]);
+  });
+
+  it("stdout redacted so it no longer parses: the JSON channel is evidence-unavailable on replay, exit 2 is not", async () => {
+    const base = decisionCassette([DENY, { hook_event_blocked: { event: "PreToolUse", via: "exit2", min: 1, max: 1 } }]);
+    const red = redactCassette(base, STDOUT_POLICY);
+    const all = (await replayCassette(red, [])).assertions;
+    expect(all[0]!.pass).toBe(false);
+    expect(all[0]!.message).toMatch(/^evidence unavailable: hook_decision: /);
+    expect(all[1]!.pass).toBe(true);
+  });
+
+  it("a redaction token in place of the decision value is unreadable, not 'no decision'", async () => {
+    const base = decisionCassette([{ hook_decision: { event: "Stop", decision: "deny", max: 0 } }]);
+    const red = redactCassette(base, { patterns: [{ re: /block/g, label: "word" }], keyNames: [] });
+    const r = (await replayCassette(red, [])).assertions[0]!;
+    expect(r.message).toMatch(/^evidence unavailable: hook_decision: /);
+  });
+
+  it("record-time: names hook_decision, the object hook_event_blocked and no_hook_event_blocked over stdout it made unreadable", () => {
+    const base = decisionCassette([
+      DENY,
+      { hook_event_blocked: { event: "PreToolUse" } },
+      { no_hook_event_blocked: true },
+      { hook_event_blocked: "PreToolUse" },
+      { hook_event_blocked: { event: "PreToolUse", via: "exit2" } },
+      { hook_decision: { event: "PostToolUse", decision: "deny", max: 0 } },
+    ]);
+    const f = redactionRewroteHookOutput(base, redactCassette(base, STDOUT_POLICY));
+    expect(f.map((m) => m.slice(0, m.indexOf(":")))).toEqual([
+      "assert[0] hook_decision on PreToolUse",
+      "assert[1] hook_event_blocked on PreToolUse",
+      "assert[2] no_hook_event_blocked on any event",
+    ]);
+    expect(f[0]).toMatch(/1 `PreToolUse` hook_response frame whose JSON decision on stdout the redaction policy made unreadable/);
+    expect(redactionRewroteHookOutput(base, redactCassette(base, POLICY))).toEqual([]);
+  });
+
+  it("record's self-check: a failing hook_decision that redaction makes unavailable does not refuse; a pass it breaks does", async () => {
+    const failing = decisionCassette([{ hook_decision: { event: "PreToolUse", decision: "deny", tool: "Bash", max: 0 } }]);
+    await expect(assertRedactionVerdictPreserved(failing, redactCassette(failing, STDOUT_POLICY))).resolves.toBeUndefined();
+    const passing = decisionCassette([DENY]);
+    await expect(assertRedactionVerdictPreserved(passing, redactCassette(passing, STDOUT_POLICY))).rejects.toThrow(
+      /redaction changed assertion failures/,
+    );
   });
 });
