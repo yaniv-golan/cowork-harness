@@ -185,18 +185,25 @@ describe("gates_all_scripted on replay: re-classified against the cassette's fro
     expect(checkGatesAllScripted({ include_permissions: true }, live(ds)).message).toMatch(/^evidence unavailable/);
   });
 
-  // The hostloop web_fetch gate records the parity default's `by` without its rationale (run.ts resolveWebFetchGate).
-  it("include_permissions live: a web_fetch allowed by cowork parity is the permissive auto-allow", () => {
-    const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision: "allow", by: "cowork" }];
+  // The hostloop web_fetch gate records whatever answered its `webfetch:<domain>` request, with no rationale
+  // (run.ts resolveWebFetchGate). The parity default abstains on that request (decider.ts PermissionDefaultDecider),
+  // so the answer comes from a scripted rule or the terminal decider.
+  it("include_permissions live: an LLM-decided web_fetch deny with no rationale is not scripted", () => {
+    const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision: "deny", by: "llm" }];
     const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
     expect(r.pass).toBe(false);
-    expect(r.message).toContain("permissive");
+    expect(r.message).toContain("answered by llm");
   });
 
-  it("include_permissions live: a web_fetch denied by strict parity is a fixed rule", () => {
-    const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision: "deny", by: "strict" }];
-    const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
-    expect(r.pass, r.message).toBe(true);
+  it("include_permissions live: a parity-attributed web_fetch row with no rationale is evidence-unavailable, never a pass", () => {
+    // No producer writes this row; if one ever does, nothing on it says which rule answered.
+    for (const [by, decision] of [
+      ["strict", "deny"],
+      ["cowork", "allow"],
+    ] as const) {
+      const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision, by }];
+      expect(checkGatesAllScripted({ include_permissions: true }, live(ds)).message).toMatch(/^evidence unavailable/);
+    }
   });
 
   it("include_permissions on replay: an off-registry deny no frozen rule covers is a fixed rule (strict parity, the path gate)", () => {

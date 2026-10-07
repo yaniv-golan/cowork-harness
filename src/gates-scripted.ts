@@ -91,13 +91,6 @@ function classifyPermission(d: DecisionRow, rules: ScriptedDecider | null | unde
     case "strict":
       if (d.rationale === PERMISSIVE_AUTOALLOW_RATIONALE) return { kind: "not", why: "permissive off-registry auto-allow (cowork parity)" };
       if (d.rationale === DEFAULT_ALLOW_RATIONALE || d.rationale === STRICT_DENY_RATIONALE) return { kind: "scripted" };
-      // The hostloop web_fetch gate records the parity default's `by` without its rationale. Its request
-      // (`webfetch:<domain>`) is never on the default-allow registry, so an allow is the permissive auto-allow and
-      // a deny is strict parity's fixed rule.
-      if (d.rationale === undefined && isWebFetch(d.name)) {
-        if (d.decision === "allow") return { kind: "not", why: "permissive off-registry auto-allow (cowork parity)" };
-        if (d.decision === "deny") return { kind: "scripted" };
-      }
       return { kind: "unavailable", why: `parity default with an unrecognised rationale (${d.rationale ?? "absent"})` };
     case "replay": {
       if (rules === undefined)
