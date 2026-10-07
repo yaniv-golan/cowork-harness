@@ -9,7 +9,7 @@ const sc = (asserts: Assertion[]): Scenario => ({ name: "s", prompt: "p", sessio
 
 describe("semantic_pairwise wiring", () => {
   it("a scenario using it stamps cassette v14; one without it does not", () => {
-    expect(CASSETTE_VERSION).toBe(14);
+    expect(CASSETTE_VERSION).toBeGreaterThanOrEqual(14);
     expect(requiredVersionFor(sc([pw]))).toBe(14);
     expect(requiredVersionFor(sc([{ result: "success" } as Assertion]))).toBeLessThan(14);
   });

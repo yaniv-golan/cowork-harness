@@ -476,15 +476,18 @@ export interface Cassette {
 //  as an unrecognized assertion to re-record. (A v12 `replay` still evaluated before refusing, and crashes on
 //  the object form — the reason replay now refuses a future cassette before evaluating anything.) Every other
 //  scenario still stamps v12. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
-// v14: ONE interpretation bump shared by the keys of this release that an older reader cannot read. Today:
+// v14: ONE interpretation bump shared by the keys that need a v14 reader:
 //  `semantic_matches.include_fork_results`, `semantic_pairwise`, the `authored` forms, `question_option_count` and the `hook_output_*` keys
-//  (V14_ASSERT_FEATURES below), and `workspace_fixture`. Later keys of this release stamp the
-//  same version with no further bump: a top-level key adds its own KEY_REQUIRED_VERSION entry returning 14,
-//  an assert-level one appends a predicate to V14_ASSERT_FEATURES. A cassette using any of them stamps v14, so
+//  (V14_ASSERT_FEATURES below), and `workspace_fixture`. That set is closed: a new key stamps v15 (see below),
+//  not v14. A cassette using any of them stamps v14, so
 //  a v13 reader refuses it as "too new; upgrade" instead of rejecting the frozen assertion as unrecognized
 //  ("re-record" — the wrong remedy). Every other scenario stamps exactly what it did. No hashing or shape
 //  change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 14;
+// v15: the same mechanism for the keys added after v14 (an assert-level key appends a predicate to
+//  V15_ASSERT_FEATURES below; a top-level key adds a KEY_REQUIRED_VERSION entry returning 15). The stamp stays requirement-based: a cassette that uses no v15
+//  feature stamps exactly what it did, so the bump alone changes no existing cassette or verify-cassettes result.
+//  No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
+export const CASSETTE_VERSION = 15;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -551,7 +554,15 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // "unrecognized assertion … re-record" unless the stamp routes it to "too new; upgrade" — hence
   // `include_fork_results` (live-only) stamps v14 (V14_ASSERT_FEATURES).
   assert: (v) =>
-    !Array.isArray(v) ? 0 : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a))) ? 14 : v.some(usesToolCallObjectForm) ? 13 : 0,
+    !Array.isArray(v)
+      ? 0
+      : v.some((a) => V15_ASSERT_FEATURES.some((f) => f(a)))
+        ? 15
+        : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a)))
+          ? 14
+          : v.some(usesToolCallObjectForm)
+            ? 13
+            : 0,
   skills: () => 0,
   requires_capabilities: () => 0,
   allow_host_writes: () => 0,
@@ -565,8 +576,8 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   metrics: () => 0,
 };
 
-/** The assertion-level features that need a v14 reader — ONE list, so a later key of this release appends a predicate
- *  here instead of bumping the version again. Each takes a possibly loose, on-disk assertion. */
+/** The assertion-level features that need a v14 reader. Closed: a new key appends to V15_ASSERT_FEATURES instead.
+ *  Each takes a possibly loose, on-disk assertion. */
 export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
   // `semantic_matches.include_fork_results` — any VALUE: a v13 reader rejects the key itself, true or false.
   (a) => {
@@ -590,6 +601,10 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
   // `hook_output_contains` / `hook_output_not_contains` — the keys themselves, as for `semantic_pairwise`.
   (a) => !!a && typeof a === "object" && ("hook_output_contains" in (a as object) || "hook_output_not_contains" in (a as object)),
 ];
+
+/** The assertion-level features that need a v15 reader, as V14_ASSERT_FEATURES is for v14: a new assertion key an
+ *  older reader cannot read appends a predicate here, and a sample to test/cassette-v15.test.ts. Empty until one lands. */
+export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
 function usesToolCallObjectForm(a: unknown): boolean {
@@ -3917,7 +3932,7 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   if (cassette.fingerprint !== undefined) {
     const fmt = cassette.fingerprint.hashFormat;
     const shown = fmt === undefined ? "(absent)" : `'${fmt}'`;
-    // KNOWN versions only, both directions. A future v15/`jcs2` is NOT judged here — that belongs to the
+    // KNOWN versions only, both directions. A future v16/`jcs2` is NOT judged here — that belongs to the
     // future-cassette policy below, which is the surface that knows how to talk about versions this build
     // does not understand. The check applies to a baseline-only fingerprint too: `hashFormat` is stamped on
     // every buildFingerprint return path, so its absence at the current version is a genuine inconsistency

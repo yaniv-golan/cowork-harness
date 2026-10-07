@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { CASSETTE_VERSION, V14_ASSERT_FEATURES, requiredVersionFor, readCassette, cassetteSchemaUrl } from "../src/run/cassette.js";
 import { ScenarioObject } from "../src/types.js";
 
-// v14 is ONE interpretation bump shared by the keys of this release that an older reader cannot read. Its first user is
+// v14 is ONE interpretation bump shared by the keys that need a v14 reader. Its first user is
 // `semantic_matches.include_fork_results`: live-only, but `readCassette` strict-parses every frozen assert
 // BEFORE the live-only strip, so without the lift a v13 reader rejects it as "unrecognized assertion … re-record"
 // — the wrong remedy. With it, a v13 reader takes the future-cassette path: "too new; upgrade".
@@ -14,8 +14,8 @@ const parse = (assert: unknown[]) => ScenarioObject.parse({ prompt: "x", fidelit
 const SM = (extra: Record<string, unknown> = {}) => ({ semantic_matches: { rubric: ["r"], ...extra } });
 
 describe("v14: include_fork_results lifts the stamp", () => {
-  it("this build writes and reads v14", () => {
-    expect(CASSETTE_VERSION).toBe(14);
+  it("this build writes and reads at least v14 (v15 since the keys added after it)", () => {
+    expect(CASSETTE_VERSION).toBeGreaterThanOrEqual(14);
     expect(cassetteSchemaUrl(14)).toMatch(/schema\/cassette\.v14\.json$/);
     expect(existsSync(join(process.cwd(), "schema", "cassette.v14.json"))).toBe(true);
   });
@@ -36,7 +36,7 @@ describe("v14: include_fork_results lifts the stamp", () => {
     expect(requiredVersionFor({ prompt: "x", assert: [SM({ include_fork_results: true })] })).toBe(14);
     expect(requiredVersionFor({ prompt: "x", assert: [{ semantic_matches: null }, 5, null] })).toBe(12);
   });
-  it("V14_ASSERT_FEATURES is the one list a later assert-level key of this release appends to", () => {
+  it("V14_ASSERT_FEATURES is the one list of the v14 assert-level keys (closed; new keys go to V15)", () => {
     expect(V14_ASSERT_FEATURES.length).toBeGreaterThanOrEqual(1);
   });
 });

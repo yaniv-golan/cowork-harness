@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+- **Cassette format v15.** This build reads and writes cassettes up to `cassetteVersion` 15 (`schema/cassette.v15.json`; `schema/cassette.v14.json` is retained). The stamp stays per-scenario: a cassette whose scenario uses no v15 feature is stamped exactly as before, so no existing cassette or `verify-cassettes` result changes. An older build refuses a v15 cassette as too new (upgrade) rather than as an unrecognized assertion.
+
 ## [4.5.0] — 2026-10-07
 
 From 2026-10-06 new Pro and Max tasks run in the cloud, and every tier of this harness models Cowork's local lane.
