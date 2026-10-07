@@ -374,6 +374,12 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
       const c = ctx(decisions(as("PreModelSwitch", out("PreModelSwitch", { hookSpecificOutput: { permissionDecision: "deny" } }))));
       expect(run({ hook_decision: { event: "PreModelSwitch", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);
     });
+    it("Stop: a decision.behavior allow is PermissionRequest's shape, so the top-level block decides", () => {
+      const s = out("Stop", { decision: "block", hookSpecificOutput: { decision: { behavior: "allow" } } });
+      const c = ctx(decisions(withStdout("Stop", s)));
+      expect(run({ no_hook_event_blocked: { event: "Stop" } }, c).pass).toBe(false);
+      expect(run({ hook_decision: { event: "Stop", decision: "allow", max: 0 } }, c).pass).toBe(true);
+    });
   });
   describe("output the agent's own check rejects is unreadable", () => {
     for (const [label, stdout] of [
@@ -387,6 +393,7 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
         '{"decision":"block","hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"x"}}',
       ],
       ["a hookSpecificOutput with no hookEventName, beside a block", '{"decision":"block","hookSpecificOutput":{"additionalContext":"x"}}'],
+      ["a hookSpecificOutput that is not an object, beside a block", '{"decision":"block","hookSpecificOutput":"x"}'],
     ] as const)
       it(label, () => {
         const c = ctx(decisions(withStdout("PreToolUse:Bash", stdout)));
