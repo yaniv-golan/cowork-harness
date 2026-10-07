@@ -157,7 +157,7 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/measurement.md`](references/measurement.md) | `--repeat`, `--ablate-skill`, measurement hygiene |
 | [`references/debugging.md`](references/debugging.md) | triage, `result.json` fields and `trace` views, `chat` |
 | [`references/gotchas.md`](references/gotchas.md) | the full "✓ passed ≠ correct" landmine catalog |
-| [`references/task-recipes.md`](references/task-recipes.md) | start here for "how do I X": evolve `assert:`, audit tier drift, redaction, budgets, answer quality |
+| [`references/task-recipes.md`](references/task-recipes.md) | start here for "how do I X": evolve `assert:`, audit tier drift, redaction, budgets, answer quality, and goals with no flag (force a compaction, ablate a section, a form reply, resume in a new conversation, hook JSON decisions, schema checks, unattended runs) |
 | [`references/assertion-catalog.md`](references/assertion-catalog.md) | every `assert:` key's semantics, the verdict-signal table |
 | [`references/semantic-judging.md`](references/semantic-judging.md) | `semantic_matches` in full: what the judge reads, fork results, refusal reasons, provenance |
 | [`references/scenario-schema.md`](references/scenario-schema.md) | every YAML field, which keys survive `replay`, the `web_fetch` model |
