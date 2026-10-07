@@ -32,6 +32,18 @@ describe("cassette v15", () => {
     });
   });
 
+  it("the stamp consults the V15 list: a predicate appended to it lifts a matching assertion to 15", () => {
+    const list = V15_ASSERT_FEATURES as Array<(a: unknown) => boolean>;
+    const probe = (a: unknown) => !!a && typeof a === "object" && "__v15_probe" in (a as object);
+    list.push(probe);
+    try {
+      expect(requiredVersionFor({ prompt: "x", assert: [{ __v15_probe: true }] })).toBe(15);
+      expect(requiredVersionFor({ prompt: "x", assert: [{ result: "success" }] })).toBe(12);
+    } finally {
+      list.splice(list.indexOf(probe), 1);
+    }
+  });
+
   it("the bump alone stamps nothing at 15: a plain scenario still stamps the epoch floor", () => {
     expect(requiredVersionFor({ prompt: "x" })).toBe(12);
     expect(requiredVersionFor({ prompt: "x", assert: [{ result: "success" }] })).toBe(12);
