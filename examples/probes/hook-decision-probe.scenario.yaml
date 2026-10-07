@@ -14,7 +14,8 @@ session: ../sessions/hook-decision-probe.yaml
 fidelity: container
 prompt: |
   Check the shell works by running `echo ready` with the Bash tool, then save a note saying "ready" to a file
-  named note.txt in the outputs folder with the Write tool. Tell me briefly what happened with each step.
+  named note.txt in the outputs folder with the Write tool. If a step is blocked, don't ask me what to do: go on
+  to the next step. Tell me briefly what happened with each step.
 assert:
   - hook_event_fired: PreToolUse
   - hook_event_fired: Stop
