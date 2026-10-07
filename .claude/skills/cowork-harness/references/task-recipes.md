@@ -54,11 +54,11 @@ what production would do. Two layers of defense:
 
 ### Cassette anatomy (what you're looking at when you open one)
 
-Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v14.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v14.json)):
+Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v15.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v15.json)):
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 14 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 whatever its `lane:`, 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, and 14 when a `semantic_matches` entry carries `include_fork_results`) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 15 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 whatever its `lane:`, 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, and 14 when a `semantic_matches` entry carries `include_fork_results`) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |

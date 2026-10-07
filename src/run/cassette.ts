@@ -484,7 +484,11 @@ export interface Cassette {
 //  a v13 reader refuses it as "too new; upgrade" instead of rejecting the frozen assertion as unrecognized
 //  ("re-record" — the wrong remedy). Every other scenario stamps exactly what it did. No hashing or shape
 //  change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 14;
+// v15: the same mechanism, for the next release's keys (V15_ASSERT_FEATURES below; a top-level key adds a
+//  KEY_REQUIRED_VERSION entry returning 15). The stamp stays requirement-based: a cassette that uses no v15
+//  feature stamps exactly what it did, so the bump alone changes no existing cassette or verify-cassettes result.
+//  No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
+export const CASSETTE_VERSION = 15;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -551,7 +555,15 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // "unrecognized assertion … re-record" unless the stamp routes it to "too new; upgrade" — hence
   // `include_fork_results` (live-only) stamps v14 (V14_ASSERT_FEATURES).
   assert: (v) =>
-    !Array.isArray(v) ? 0 : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a))) ? 14 : v.some(usesToolCallObjectForm) ? 13 : 0,
+    !Array.isArray(v)
+      ? 0
+      : v.some((a) => V15_ASSERT_FEATURES.some((f) => f(a)))
+        ? 15
+        : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a)))
+          ? 14
+          : v.some(usesToolCallObjectForm)
+            ? 13
+            : 0,
   skills: () => 0,
   requires_capabilities: () => 0,
   allow_host_writes: () => 0,
@@ -590,6 +602,10 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
   // `hook_output_contains` / `hook_output_not_contains` — the keys themselves, as for `semantic_pairwise`.
   (a) => !!a && typeof a === "object" && ("hook_output_contains" in (a as object) || "hook_output_not_contains" in (a as object)),
 ];
+
+/** The assertion-level features that need a v15 reader, as V14_ASSERT_FEATURES is for v14: a key of this release
+ *  appends a predicate here. Empty until the first such key lands. */
+export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
 function usesToolCallObjectForm(a: unknown): boolean {

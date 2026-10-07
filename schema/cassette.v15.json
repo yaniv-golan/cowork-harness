@@ -1,0 +1,346 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v15.json",
+  "title": "cowork-harness cassette v15",
+  "description": "Recorded control-protocol cassette produced by cowork-harness (https://github.com/yaniv-golan/cowork-harness). Contains a frozen scenario, recorded agent event stream, control-protocol responses, artifact manifest, and a staleness fingerprint. v3 adds `contentSig`. v4 persists `userVisibleRoots`. v6 (staleness redesign, breaking): contentSig unified onto the skillHash walk (same file set incl. OS-junk exclusion, in-tree-symlink-by-target); git-tracked file set is the DEFAULT boundary (opt out with COWORK_HARNESS_GITSET=0). v7: NUL-byte entry separator in hashDir and computeContentSig to prevent hash collisions for file paths containing newline characters. v8: skillHash folds fixed-length content shas (not raw bytes) and contentSig/link entries are type-prefixed & NUL-framed (closes unframed-concatenation collisions → a v8 staleness hash is non-comparable with pre-v8, so `rehash` routes pre-v8 cassettes to re-record); `ManifestEntry.truncationReason` names why a body is absent (the cassette-level `readonlyFolderRoots` list is removed). v9 adds two optional fields, neither changing the skillHash/contentSig algorithm: `sessionFingerprint` (a session-SHAPE hash — connected folders, plugins, skills, mcp discovery config, egress allowlist and web_fetch approved domains, plus projects and agent_env overrides when set — checked only by `verify-cassettes`, never the default replay verdict) and `folderPrefixMap` (the record-time connected-folder host-path → mount-name correspondence, so `computer_links_resolve` on replay no longer re-derives that map from the current session file at replay time). v12 (HASH-FORMAT EPOCH, breaking): `skillHash`/`contentSig` switch the plugin-manifest transform from insertion-order `JSON.stringify` to JCS-style canonical serialization (key order no longer re-stales), `contentSig` folds directory markers, and `fingerprint.hashFormat` records which transform produced the digests — ABSENT means the legacy pre-v12 transform, never raw bytes. Pre-v12 digests are NOT comparable: `replay` reports `unverifiable-skill` and `rehash` migrates. v10 adds ManifestEntry.linkKind (symlink/hardlink entries, body-less path+kind only) so an agent-created link stray is visible to no_unexpected_files on replay. v11 changes what `cassetteVersion` MEANS, not the cassette's shape: it is now the minimum format version a reader needs to INTERPRET the frozen `scenario` correctly, not \"which recorder wrote this\" — stamped per-scenario (`requiredVersionFor`, src/run/cassette.ts), not unconditionally at the build's max. A scenario whose `lane` is `\"remote\"` stamps v11 (a pre-lane reader would misread it — location delivers nothing, present_files is not served); every other scenario, including `lane: \"local\"`/omitted (nearly all of them), still stamps v10, unchanged. No hashing or manifest-shape change versus v10 — a v10 cassette's staleness fingerprint stays directly comparable. v13 changes interpretation, not shape or hashing: a cassette whose frozen `scenario.assert` uses the OBJECT form of `tool_called` / `tool_not_called` (input, scope and paired-result predicates) stamps v13. A v12 `verify-cassettes` refuses it as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes evaluating it, so upgrade before replaying. From v13 on, `replay` refuses a newer-format cassette before evaluating any assertion. Every other scenario still stamps v12; the hash-format epoch stays at v12. v14 changes interpretation, not shape or hashing: ONE bump shared by the keys of this release that an older reader cannot read — today a frozen `scenario.assert` entry whose `semantic_matches` carries `include_fork_results`, or any `semantic_pairwise` entry, stamps v14, so a v13 reader refuses it as too new (upgrade) instead of rejecting the assertion as unrecognized (re-record). Every other scenario stamps what it did. The `sessionFingerprint` SHAPE additionally covers the session's pinned `model`: the agent selects part of its system prompt by model capability, so editing `model:` after recording changes what the agent was told, not merely how well it answered. Also v14: a scenario that declares `workspace_fixture` (stored relative to the cassette; its signature is `fingerprint.workspaceFixtureSig`), and an assertion using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json`, and any `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry. v15 changes interpretation, not shape or hashing, by the same mechanism as v14: one bump shared by the keys of the next release that a v14 reader cannot read, so a v14 reader refuses such a cassette as too new (upgrade) instead of rejecting it as unrecognized (re-record). No key stamps v15 yet; a cassette using no v15 feature stamps exactly what it did.",
+  "type": "object",
+  "required": ["scenario", "events"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "generator": {
+      "type": "string",
+      "const": "cowork-harness"
+    },
+    "cassetteVersion": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "v11+: the MINIMUM format version a reader needs to interpret this cassette's `scenario` correctly (not the recorder's own version) — see the top-level description. Most cassettes still carry 10."
+    },
+    "scenario": {
+      "type": "object",
+      "description": "Embedded scenario snapshot at record time."
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Recorded agent event stream (newline-delimited JSON lines)."
+    },
+    "controlOut": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Driver→agent control_response stream (newline-delimited JSON lines)."
+    },
+    "effectiveFidelity": {
+      "type": "string",
+      "description": "The fidelity tier the live record resolved to."
+    },
+    "artifacts": {
+      "type": "array",
+      "description": "Snapshot of user-visible output files produced by the run (the manifest). Each entry carries path + bytes + sha256; small text/JSON bodies are inlined, larger ones are hash-only.",
+      "items": {
+        "type": "object",
+        "required": ["path", "bytes", "sha256"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "workRoot-relative path, e.g. outputs/report.json"
+          },
+          "bytes": {
+            "type": "number",
+            "description": "file size in bytes at record time"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "sha256 of the raw bytes (empty string only on an unreadable/containment-failed entry)"
+          },
+          "body": {
+            "type": "string",
+            "description": "inlined body (≤ the artifact-body cap); materialized on replay so artifact_json can parse it. Absent on a truncated entry."
+          },
+          "encoding": {
+            "type": "string",
+            "enum": ["utf8", "base64"],
+            "description": "how `body` is encoded (base64 for non-UTF-8/binary)."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "body omitted (hash-only). file_exists/user_visible_artifact still PASS (existence proven by path+sha); artifact_json is evidence-unavailable."
+          },
+          "truncationReason": {
+            "type": "string",
+            "enum": ["size", "readonly", "unreadable", "input", "fixture"],
+            "description": "v8+: WHY the body is absent, so replay gives the precise artifact_json remedy. `size` = over the body cap (raise --max-artifact-bytes); `readonly` = a mode:r connected-folder input (assert on a deliverable); `unreadable` = a record-time read/containment failure (sha256 is \"\"); `input` = an UPLOADED file, captured hash-only so a replay can verify it was unmodified (these sit under an input root, not under userVisibleRoots); `fixture` (v14) = an UNTOUCHED binary `workspace_fixture` file (its sha256 equals its pre-run hash), recorded hash-only — text fixture files stay inline. ABSENT on pre-v8 entries."
+          },
+          "linkKind": {
+            "type": "string",
+            "enum": ["symlink", "hardlink"],
+            "description": "v10: this entry is a symlink or hardlink (not a regular file). Recorded path+kind only, body-less, sha256 \"\"; materializes as an empty placeholder on replay. Absent = regular file."
+          }
+        }
+      }
+    },
+    "userVisibleRoots": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "v4+: the user-visible mount roots captured at record time (`outputs` + each connected folder's resolved mount name). Replay reads THIS instead of a hardcoded prefix. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix."
+    },
+    "preRunOrigin": {
+      "type": "string",
+      "enum": ["local-walk", "remote-unavailable", "local-unreadable"],
+      "description": "Provenance of the pre-run baseline the `no_unexpected_files` diff rests on. Only `local-walk` is a real baseline; a cassette recorded from a `remote-unavailable` or `local-unreadable` baseline fails that assertion as evidence-unavailable on replay rather than passing vacuously. Optional (no cassetteVersion bump); ABSENT on recordings made before it was captured."
+    },
+    "preRunPaths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "workRoot-relative paths under userVisibleRoots that existed BEFORE the agent ran — the baseline `no_unexpected_files` diffs against on replay. Optional metadata (no cassetteVersion bump); ABSENT on pre-0.24 and microvm recordings → replay EXCLUDES `no_unexpected_files` with a loud warning. Always co-present with `userVisibleRoots` when present."
+    },
+    "preRunHashes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": ["string", "null"]
+      },
+      "description": "Per-path sha256 of the user-visible tree BEFORE the agent ran (workRoot-relative keys). Powers `input_unmodified` on replay. A `null` value marks a path whose recorded artifact body was secret-scrubbed at record time — the scrubbed body's committed sha256 no longer matches the raw pre-run hash, so the path reports evidence-unavailable on replay instead of a false \"modified in place\". Added 0.27.0, no cassetteVersion bump."
+    },
+    "scenarioSource": {
+      "type": "string",
+      "description": "The authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir (relocatable, no absolute host path). `record --rerecord-stale` prefers this over a slug guess. ABSENT when recorded from an in-memory/inline scenario."
+    },
+    "fingerprint": {
+      "type": "object",
+      "description": "Staleness tripwire over the skill/baseline inputs that determined the recording.",
+      "properties": {
+        "baseline": {
+          "type": "string"
+        },
+        "hashFormat": {
+          "type": "string",
+          "enum": ["jcs1"],
+          "description": "v12+: which manifest-transform algorithm produced the digests in this fingerprint. ABSENT means the LEGACY (pre-v12) transform — NOT raw bytes: every cassette recorded before v12 already carries version-stripped manifest digests, so reading absence as raw would mislabel all of them. A v12 fingerprint MUST carry this."
+        },
+        "skillHash": {
+          "type": "string",
+          "description": "Algorithm-specific hash of skill dir contents (staleness detection)."
+        },
+        "contentSig": {
+          "type": "string",
+          "description": "content fingerprint over the same file set as skillHash. NOT algorithm-independent and NOT the rehash proof: it follows the SAME manifest transform skillHash does and (v12+) also folds `D:` directory markers, so it is not comparable across a hash-format epoch. The migration proof recomputes the LEGACY skillHash instead."
+        },
+        "skillSources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skillScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sharedHash": {
+          "type": "string"
+        },
+        "fileSigs": {
+          "type": "array",
+          "description": "v5+: per-file manifest [relpath, contentSha] of files feeding skillHash, for exact-diff staleness reporting. Root-relative paths; scanned+redacted like skillSources. Each sha is over the bytes that FOLD INTO skillHash, which is not always the file's bytes: a `.claude-plugin/plugin.json` (or root `plugin.json`) folds as the manifest re-serialized with `version` deleted, so its entry will NOT equal sha256(file). Hand-checking one with `shasum` mismatches and reads as corruption. The hand-check depends on `hashFormat`: absent/legacy reproduces with JSON.parse -> delete `version` -> JSON.stringify -> sha256, while `jcs1` uses canonical (JCS-style) serialization instead. Applying the legacy recipe to a jcs1 cassette will not match for any manifest whose keys are unsorted, and reads as corruption. COWORK_HARNESS_DEBUG_SKILLHASH=1 dumps the folded set with these shas, but fires ONLY on a hash mismatch — a cassette that verifies clean has no on-demand dump.",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "fileSigsOmitted": {
+          "type": "boolean",
+          "description": "v5+: true when the per-file manifest was omitted because the tree exceeded the size cap (degrades to bucket-level staleness messages)."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["git", "raw"],
+          "description": "Phase C: the file-set boundary used for skillHash — 'git' (git-tracked set — the DEFAULT unless COWORK_HARNESS_GITSET=0, and every dir is a git work tree) or 'raw' (filesystem walk; used when GITSET=0 OR any dir is not a repo). A record-vs-verify mode flip means hashes aren't comparable → re-record."
+        },
+        "agentScope": {
+          "type": "string",
+          "enum": ["skill"],
+          "description": "Opt-in per-skill agent scoping (COWORK_HARNESS_AGENT_SCOPE=skill) was active for this scoped hash: a skill-named agents/<n> was treated as skill <n>'s private input, not a fleet-wide shared root. ABSENT = the default (agents/ is shared). A record-vs-verify flip → re-record under the same setting."
+        },
+        "workspaceFixtureSig": {
+          "type": "string",
+          "description": "v14: the `workspace_fixture` content signature — sha256 over the fixture's sorted (path, sha256, owner-exec bit) triples, taken from the files actually staged. Replay recomputes it from the scenario's fixture dir (resolved against the cassette): a mismatch is a `fixture` staleness finding, a dir that cannot be resolved or scanned `unverifiable-fixture`. Other permission bits are not part of it. ABSENT when the scenario declares no fixture."
+        },
+        "workspaceFixtureFileSigs": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "description": "v14: per-file `[path, sig]` behind `workspaceFixtureSig` (fixture-relative paths, redacted like `fileSigs`; the sig is the content sha256, suffixed `+x` for an executable file), so a `fixture` finding names the changed files."
+        },
+        "promptAssetsHash": {
+          "type": "string",
+          "description": "sha16 over the baseline's committed prompt-asset FILE bytes (spawn.promptTemplate / subagentAppend / subagentAppendHostLoop, key-ordered, comment-stripped). Prompt identity was previously keyed on `baseline` (appVersion) alone, so a prompt-asset edit under the SAME appVersion silently replayed old-prompt behavior. Since Desktop 1.46388.3 it ALSO covers the sub-agent prompt text the harness GENERATES rather than reads from an asset (the host-loop folder manifest and the trailing skills sentence, src/prompt/subagent-manifest.ts): that text reaches the model exactly as an asset's does, so it must stale a recording the same way. ABSENT on a cassette recorded before this field existed → informational note, never a finding."
+        }
+      }
+    },
+    "authoring": {
+      "type": "object",
+      "description": "Provenance of how the gate answers were authored. PRESENT with nonDeterministic:true only when a live decider answered at least one gate during recording (a driving agent via --decider-dir, a model via --decider-llm, or an --on-unanswered first auto-pick), so RE-recording may drift. The cassette itself still replays deterministically (the answers are frozen). ABSENT means fully scripted/deterministic authoring.",
+      "properties": {
+        "nonDeterministic": {
+          "type": "boolean"
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["decider-dir", "decider-llm"]
+        }
+      },
+      "required": ["nonDeterministic"]
+    },
+    "timeline": {
+      "type": "array",
+      "description": "The recorded timeline (see src/agent/timeline.ts) — harness-observation timestamps for every meaningful in-run event (tool_use, tool_result, subagent_dispatch, thinking, decision, result, …), in total order. Each entry carries `seq` (monotonic order), `ts` (ms elapsed since `timelineHeader.startedAtMono`), `line` (translated-stdout ordinal), `type`, plus type-specific fields. `ts` values are wall-clock-observation-time and are NOT reproducible on replay — frozen, not recomputed. ABSENT on a cassette recorded before this field existed, or when timeline.jsonl was empty/unreadable at record time; timing folds that read this are informational only (no verdict impact).",
+      "items": {
+        "type": "object",
+        "required": ["seq", "ts", "line", "type"],
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "description": "per-timeline-entry monotonic counter (0, 1, 2, …) — the total order over timeline entries."
+          },
+          "ts": {
+            "type": "number",
+            "description": "milliseconds elapsed since `timelineHeader.startedAtMono` (monotonic clock)."
+          },
+          "line": {
+            "type": "integer",
+            "description": "0-based ordinal of the Nth real stdout message translated from the child process (not a raw index into `events`)."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "tool_use",
+              "tool_result",
+              "subagent_dispatch",
+              "skill_invoked",
+              "task_updated",
+              "file_changed",
+              "scratchpad_promoted",
+              "thinking",
+              "decision",
+              "result"
+            ]
+          }
+        }
+      }
+    },
+    "timelineHeader": {
+      "type": "object",
+      "description": "Written once as the first line of timeline.jsonl. `startedAtMono` is the raw start-time `process.hrtime.bigint()` value (as a string — JSON cannot serialize BigInt); every `timeline[].ts` is ms elapsed since this instant, not wall-clock time. `startedAtWall` is the wall-clock anchor (ISO string) so absolute times are recoverable from a purely-relative `ts` stream.",
+      "required": ["v", "startedAtWall", "startedAtMono"],
+      "properties": {
+        "v": {
+          "type": "integer",
+          "const": 1
+        },
+        "startedAtWall": {
+          "type": "string",
+          "description": "ISO wall-clock timestamp anchor."
+        },
+        "startedAtMono": {
+          "type": "string",
+          "description": "raw `process.hrtime.bigint()` start value, stringified."
+        }
+      }
+    },
+    "sessionFingerprint": {
+      "type": "string",
+      "description": "v9+: a hash of the resolved session's content-relevant SHAPE (the pinned model, connected folders + mode, plugins, skills and mcp discovery config, egress allowlist, web_fetch approved domains, plus projects and agent_env when set) at record time — distinct from `fingerprint.skillHash` (skill/plugin FILE content). Checked ONLY by `verify-cassettes` (never the default replay verdict). ABSENT on a pre-v9 cassette → not checked."
+    },
+    "folderPrefixMap": {
+      "type": "array",
+      "description": "v9+: the record-time connected-folder host-path → resolved-mount-name correspondence, so `computer_links_resolve` on replay normalizes a host-shaped link against a record-time-accurate map instead of re-deriving it from the CURRENT session file. ABSENT on a pre-v9 cassette → replay keeps the legacy current-session reconstruction. ABSENT on a v9+ cassette (unexpected) → replay treats a host-shaped folder link as evidence-unavailable rather than reconstructing from the current session.",
+      "items": {
+        "type": "object",
+        "required": ["from", "mount"],
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "the recorded connected-folder host path"
+          },
+          "mount": {
+            "type": "string",
+            "description": "its resolved mount name (a `userVisibleRoots` entry)"
+          }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "description": "Recording ENVIRONMENT provenance — the location + tier this cassette was recorded under. Stamped `location:\"local\"` on every recording produced by this harness (only local runs are recorded), so a hypothetical future cloud-recorded cassette is positively distinguishable. `tier` is the resolved effective fidelity; `agentBinaryFormat` mirrors the baseline's agent-binary format. Additive — no cassetteVersion bump; readers that don't know it ignore it.",
+      "required": ["location"],
+      "properties": {
+        "location": {
+          "type": "string",
+          "enum": ["local", "cloud"]
+        },
+        "tier": {
+          "type": "string"
+        },
+        "agentBinaryFormat": {
+          "type": "string"
+        },
+        "harnessVersion": {
+          "type": "string",
+          "description": "Version of the cowork-harness CLI that RECORDED this cassette. Additive (no cassetteVersion bump); absent on cassettes recorded before 1.11.0, and that absence is meaningful — never backfilled."
+        },
+        "agentImage": {
+          "type": "object",
+          "description": "Identity of the rootfs image resolving under the run's image ref AT CASSETTE-WRITE TIME. Stamped only for tiers whose capabilities come from the agent image (container, hostloop); microvm probes the Lima guest instead, so the field is absent there. `ref` is the resolved image ref (a verbatim COWORK_AGENT_IMAGE value, so it is scanned and redactable); `configId` is the content-addressed local config id (present for built AND pulled images, NOT comparable across machines); `registryDigest` is the registry manifest digest (pulled images only, and the only cross-machine-comparable identity). Because this is a re-inspection at write time rather than the identity captured during the run, a rebuild or a changed COWORK_AGENT_IMAGE between run and record would record a different image than the one that ran. Additive — no cassetteVersion bump; absent on cassettes recorded before this field existed, and that absence is meaningful — never backfilled.",
+          "required": ["ref"],
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "configId": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "registryDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          }
+        },
+        "model": {
+          "type": "object",
+          "description": "the model this recording actually ran (`id`, taken from what the agent reported, so it survives a mid-run fallback) and where that model came from (`source`: `user_setting` when something pinned it, `unresolved` when nothing did and the recording machine's default was used). Additive — absent on cassettes recorded before this field, which is meaningful and distinct from a recording that resolved nothing.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

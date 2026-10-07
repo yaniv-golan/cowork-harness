@@ -348,6 +348,7 @@ const FP_FROZEN: Record<string, string> = {
   "schema/cassette.v11.json": "retained historical schema — describes the v11 shape as shipped",
   "schema/cassette.v12.json": "retained historical schema — describes the v12 shape as shipped",
   "schema/cassette.v13.json": "retained historical schema — describes the v13 shape as shipped",
+  "schema/cassette.v14.json": "retained historical schema — describes the v14 shape as shipped",
 };
 
 /** Extract the fingerprint shape's top-level keys from source text. Reads the text rather than importing
@@ -906,7 +907,7 @@ export function checkVersions(): {
             .filter((f) => /^cassette\.v\d+\.json$/.test(f))
             .map((f) => ({ path: `schema/${f}`, text: r(`schema/${f}`) })),
         ],
-        // 6 prose sites + 2 in schema/cassette.v14.json; v9-v13 are frozen history (see FP_FROZEN).
+        // 6 prose sites + 2 in schema/cassette.v15.json; v9-v14 are frozen history (see FP_FROZEN).
         minSites: 8,
       }),
     );

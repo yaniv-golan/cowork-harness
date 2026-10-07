@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 
 const read = (p: string) => readFileSync(resolve(p), "utf8");
 const runResult = JSON.parse(read("schema/run-result.json"));
-const cassette = JSON.parse(read("schema/cassette.v14.json"));
+const cassette = JSON.parse(read("schema/cassette.v15.json"));
 const CLASSES: string[] = runResult.properties.staleness.items.properties.class.enum;
 const REASONS: string[] = cassette.properties.artifacts.items.properties.truncationReason.enum;
 

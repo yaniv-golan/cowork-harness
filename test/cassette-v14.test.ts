@@ -14,8 +14,8 @@ const parse = (assert: unknown[]) => ScenarioObject.parse({ prompt: "x", fidelit
 const SM = (extra: Record<string, unknown> = {}) => ({ semantic_matches: { rubric: ["r"], ...extra } });
 
 describe("v14: include_fork_results lifts the stamp", () => {
-  it("this build writes and reads v14", () => {
-    expect(CASSETTE_VERSION).toBe(14);
+  it("this build writes and reads at least v14 (v15 since the next release's keys)", () => {
+    expect(CASSETTE_VERSION).toBeGreaterThanOrEqual(14);
     expect(cassetteSchemaUrl(14)).toMatch(/schema\/cassette\.v14\.json$/);
     expect(existsSync(join(process.cwd(), "schema", "cassette.v14.json"))).toBe(true);
   });
