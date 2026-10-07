@@ -15,7 +15,7 @@ import type {
 import { addTokenUsage } from "./decide/usage.js";
 import { checkToolCallObject, routedToolGlobs } from "./tool-call-assert.js";
 import { outputsDeleteTier, outputsDeleteEntries } from "./run/outputs-delete-tier.js";
-import { SKILL_RESULT_ASSERT_CAP, VERDICT_MODIFIER_KEYS, questionOptionCountBoundError } from "./types.js";
+import { SKILL_RESULT_ASSERT_CAP, VERDICT_MODIFIER_KEYS, hookCountBoundError, questionOptionCountBoundError } from "./types.js";
 import { REDACTION_TOKEN_RE, hasRedactionToken } from "./redactable-literal.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
@@ -1611,6 +1611,164 @@ const SCRATCHPAD_PREFIX = "scratchpad/";
  *  discarded…". */
 const SPILL_MARKER_RE = /\n?Output truncated \(\d+KB total\)/;
 
+/** Hooks that STARTED and never answered: a `hook_started` with no `hook_response` of the same `hook_id` (an async or
+ *  backgrounded hook, or one still running when the run ended). Whatever it printed or decided never reached the
+ *  stream. A recording without `hook_started` frames (an older one) contributes nothing here. */
+function pendingHooks(
+  events: NonNullable<AssertContext["contextEvents"]>,
+  inScope: (e: NonNullable<AssertContext["contextEvents"]>[number]) => boolean,
+): number {
+  const ids = (subtype: string) =>
+    events
+      .filter((e) => e.subtype === subtype && inScope(e))
+      .map((e) => e.data?.hook_id)
+      .filter((id): id is string => typeof id === "string");
+  const responded = new Set(ids("hook_response"));
+  return new Set(ids("hook_started").filter((id) => !responded.has(id))).size;
+}
+
+/** One `hook_response` frame, as the hook keys read it. `blocking` is the agent's deny: exit code 2, or (exit 0) a
+ *  JSON deny on stdout. `undefined` means the frame's outcome cannot be read (no exit code). */
+type HookFrame = { name: string; exitCode?: number; outcome: string; blocking: boolean | undefined };
+
+/** The `hook_response` frames for `event` (and, with `tool`, only those whose `hook_name` is `<event>:<tool>` — the
+ *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered. */
+function hookFrames(
+  events: NonNullable<AssertContext["contextEvents"]>,
+  event: string | undefined,
+  tool?: string,
+): { frames: HookFrame[]; pending: number; events: Set<string> } {
+  const inScope = (e: (typeof events)[number]) =>
+    (event === undefined || e.data?.hook_event === event) && (tool === undefined || e.data?.hook_name === `${event}:${tool}`);
+  const raw = events.filter((e) => e.subtype === "hook_response" && inScope(e));
+  const frames = raw.map((e): HookFrame => {
+    const exitCode = typeof e.data?.exit_code === "number" ? e.data.exit_code : undefined;
+    return {
+      name: typeof e.data?.hook_name === "string" ? e.data.hook_name : String(e.data?.hook_event ?? event),
+      exitCode,
+      outcome: typeof e.data?.outcome === "string" ? e.data.outcome : "unknown",
+      blocking: exitCode === undefined ? undefined : exitCode === 2,
+    };
+  });
+  const seen = new Set(raw.map((e) => e.data?.hook_event).filter((v): v is string => typeof v === "string"));
+  return { frames, pending: pendingHooks(events, inScope), events: seen };
+}
+
+const describeHookFrame = (f: { exitCode?: number; outcome: string }) =>
+  f.exitCode === undefined ? `${f.outcome} (no exit code)` : String(f.exitCode);
+
+/** A count with `unknown` frames of unreadable outcome lies in [known, known + unknown]. The verdict stands when that
+ *  range lies wholly inside [min, max] (pass) or wholly outside it (fail); otherwise it is unknowable. */
+function judgeHookCount(known: number, unknown: number, min: number, max: number): "pass" | "fail" | "unavailable" {
+  const lo = known;
+  const hi = known + unknown;
+  if (lo >= min && hi <= max) return "pass";
+  if (hi < min || lo > max) return "fail";
+  return "unavailable";
+}
+
+const hookScope = (event: string, tool?: string) => `\`${event}\`${tool === undefined ? "" : ` (tool \`${tool}\`)`}`;
+const neverFired = (key: string, event: string, tool?: string) =>
+  `${key}: no hook_response frame for ${hookScope(event, tool)} was recorded — the staged plugin declares no such hook, the hook never ran${tool === undefined ? "" : ", the tool that fired has another name (the shell is `Bash` at container, `mcp__workspace__bash` at hostloop)"}, its hooks.json is not at <plugin>/hooks/hooks.json (the root is silently ignored), or the recording predates --include-hook-events`;
+
+/** `hook_event_blocked`, bare (at least one block) or `{event, tool?, min?, max?}`. */
+function checkHookEventBlocked(
+  spec: string | { event: string; tool?: string; min?: number; max?: number },
+  events: NonNullable<AssertContext["contextEvents"]>,
+): KeyResult {
+  const fail = (message: string): KeyResult => ({ pass: false, message });
+  const o = typeof spec === "string" ? { event: spec } : spec;
+  const bound = hookCountBoundError("hook_event_blocked", o);
+  if (bound !== undefined) return fail(bound);
+  const min = o.min ?? (o.max === undefined ? 1 : 0);
+  const max = o.max ?? Infinity;
+  const { frames, pending } = hookFrames(events, o.event, o.tool);
+  const scope = hookScope(o.event, o.tool);
+  if (frames.length === 0)
+    return fail(
+      pending
+        ? `evidence unavailable: hook_event_blocked: ${pending} ${scope} hook(s) started without a response — whether they blocked never reached the stream`
+        : neverFired("hook_event_blocked", o.event, o.tool),
+    );
+  const blocked = frames.filter((f) => f.blocking === true);
+  const unreadable = frames.filter((f) => f.blocking === undefined);
+  const unknown = unreadable.length + pending;
+  const expected = max === Infinity ? `at least ${min}` : min === 0 ? `at most ${max}` : min === max ? `exactly ${min}` : `${min}–${max}`;
+  const listed = (fs: HookFrame[]) =>
+    fs
+      .slice(0, 5)
+      .map((f) => `${f.name} exit ${describeHookFrame(f)}`)
+      .join(", ") + (fs.length > 5 ? `, +${fs.length - 5} more` : "");
+  const verdict = judgeHookCount(blocked.length, unknown, min, max);
+  if (verdict === "pass")
+    return { pass: true, evidence: `${blocked.length} blocking ${scope} hook frame(s) of ${frames.length} (expected ${expected})` };
+  if (verdict === "unavailable")
+    return fail(
+      `evidence unavailable: hook_event_blocked: ${blocked.length} blocking ${scope} hook frame(s), plus ${unknown} whose outcome cannot be read (${[
+        unreadable.length ? listed(unreadable) : "",
+        pending ? `${pending} started without a response` : "",
+      ]
+        .filter(Boolean)
+        .join("; ")}) — expected ${expected}, which they decide`,
+    );
+  if (typeof spec === "string" && blocked.length === 0)
+    return fail(
+      `hook_event_blocked: ${scope} fired ${frames.length}× but never blocked (exit codes seen: ${frames.map(describeHookFrame).join(", ")})`,
+    );
+  return fail(
+    `hook_event_blocked: ${blocked.length} blocking ${scope} hook frame(s), expected ${expected}${blocked.length ? `: ${listed(blocked)}` : ` (exit codes seen: ${frames.map(describeHookFrame).join(", ")})`}`,
+  );
+}
+
+/** The events whose frames stream even when hook events were not requested (no `--include-hook-events`). A frame of
+ *  any OTHER event proves the request. */
+const HOOK_EVENTS_STREAMED_UNREQUESTED = new Set(["SessionStart", "Setup"]);
+
+/** `no_hook_event_blocked`: `true` (every frame) or `{event, tool?}`. Never vacuous. */
+function checkNoHookEventBlocked(
+  spec: true | { event: string; tool?: string },
+  events: NonNullable<AssertContext["contextEvents"]>,
+): KeyResult {
+  const fail = (message: string): KeyResult => ({ pass: false, message });
+  const o = spec === true ? { event: undefined, tool: undefined } : spec;
+  const { frames, pending, events: seen } = hookFrames(events, o.event, o.tool);
+  const scope = o.event === undefined ? "hook" : `${hookScope(o.event, o.tool)} hook`;
+  const blocked = frames.filter((f) => f.blocking === true);
+  if (blocked.length > 0)
+    return fail(
+      `no_hook_event_blocked: ${blocked
+        .slice(0, 5)
+        .map((f) => `${f.name} (exit ${describeHookFrame(f)})`)
+        .join(
+          ", ",
+        )}${blocked.length > 5 ? `, +${blocked.length - 5} more` : ""} blocked — ${blocked.length} of ${frames.length} ${scope} frame(s)`,
+    );
+  const unreadable = frames.filter((f) => f.blocking === undefined);
+  if (unreadable.length > 0 || pending > 0)
+    return fail(
+      `evidence unavailable: no_hook_event_blocked: ${[
+        unreadable.length
+          ? `${unreadable.length} ${scope} frame(s) carry no readable outcome (${unreadable
+              .slice(0, 5)
+              .map((f) => `${f.name} ${describeHookFrame(f)}`)
+              .join(", ")})`
+          : "",
+        pending ? `${pending} ${scope}(s) started without a response` : "",
+      ]
+        .filter(Boolean)
+        .join("; ")} — any of them may have blocked`,
+    );
+  if (frames.length === 0)
+    return fail(
+      `evidence unavailable: no_hook_event_blocked: no ${scope} frame was recorded, so nothing shows a hook ran — ${o.event === undefined ? "no staged plugin declares hooks, or" : "the hook never fired, the tool that fired has another name, or"} the recording predates --include-hook-events`,
+    );
+  if (o.event === undefined && ![...seen].some((e) => !HOOK_EVENTS_STREAMED_UNREQUESTED.has(e)))
+    return fail(
+      `evidence unavailable: no_hook_event_blocked: only ${[...seen].join("/")} frames were recorded, and those stream even without --include-hook-events — nothing shows the run's other hooks were reported. Scope it with \`{event: …}\` to check those events alone`,
+    );
+  return { pass: true, evidence: `${frames.length} ${scope} frame(s), none blocked` };
+}
+
 /** `hook_output_contains` / `hook_output_not_contains`: a command hook's `stdout` / `stderr` on its `hook_response`
  *  frames (RunResult.contextEvents; replay re-derives them from the frozen stream). A hook that fails OPEN and says
  *  why on stderr passes hook_event_fired, so this reads the text it printed. Never vacuous: no frame for the event
@@ -1675,15 +1833,7 @@ function checkHookOutput(
   const events = ctx.contextEvents;
   const ofEvent = (subtype: string) => events.filter((e) => e.subtype === subtype && e.data?.hook_event === spec.event);
   const frames = ofEvent("hook_response");
-  // A `hook_started` with no `hook_response` of the same `hook_id`: an async or backgrounded hook, or one still
-  // running when the run ended. Whatever it printed never reached the stream, so its absence cannot be shown. A
-  // recording without `hook_started` frames (an older one) contributes nothing here and grades as before.
-  const responded = new Set(frames.map((e) => e.data?.hook_id).filter((id): id is string => typeof id === "string"));
-  const pending = new Set(
-    ofEvent("hook_started")
-      .map((e) => e.data?.hook_id)
-      .filter((id): id is string => typeof id === "string" && !responded.has(id)),
-  ).size;
+  const pending = pendingHooks(events, (e) => e.data?.hook_event === spec.event);
   const pendingNote = `${pending} \`${spec.event}\` hook(s) started without a response`;
   const shownNeedle = spec.text !== undefined ? JSON.stringify(spec.text) : `/${spec.matches}/i`;
   const where = stream === "any" ? "stdout or stderr" : stream;
@@ -2992,46 +3142,27 @@ function check(
   // contextEvents, and replay re-derives them from the frozen stream. exit_code 2 is the agent's blocking
   // exit; exit_code is OPTIONAL on the wire, so its absence is reported, never read as a block or a pass.
   // `hook_blocked` above is a different channel: the harness's own PreToolUse callbacks in controlOut.
-  const hookResponses = (event: string) =>
-    (ctx.contextEvents ?? [])
-      .filter((e) => e.subtype === "hook_response" && e.data?.hook_event === event)
-      .map((e) => ({
-        name: typeof e.data?.hook_name === "string" ? e.data.hook_name : event,
-        exitCode: typeof e.data?.exit_code === "number" ? e.data.exit_code : undefined,
-        outcome: typeof e.data?.outcome === "string" ? e.data.outcome : "unknown",
-      }));
-  const describeFrame = (f: { exitCode?: number; outcome: string }) =>
-    f.exitCode === undefined ? `${f.outcome} (no exit code)` : String(f.exitCode);
   if (a.hook_event_fired !== undefined) {
     if (ctx.contextEvents === undefined)
       results.push(fail(`hook_event_fired: no context events captured (older run / lane without context events) — cannot verify`));
     else {
-      const fired = hookResponses(a.hook_event_fired);
+      const { frames: fired } = hookFrames(ctx.contextEvents, a.hook_event_fired);
       results.push(
         fired.length > 0
-          ? ok(`${fired.length} hook_response frame(s): ${fired.map((f) => `${f.name} exit ${describeFrame(f)}`).join(", ")}`)
-          : fail(
-              `hook_event_fired: no hook_response frame for \`${a.hook_event_fired}\` was recorded — the staged plugin declares no such hook, the hook never ran, its hooks.json is not at <plugin>/hooks/hooks.json (the root is silently ignored), or the recording predates --include-hook-events`,
-            ),
+          ? ok(`${fired.length} hook_response frame(s): ${fired.map((f) => `${f.name} exit ${describeHookFrame(f)}`).join(", ")}`)
+          : fail(neverFired("hook_event_fired", a.hook_event_fired)),
       );
     }
   }
   if (a.hook_event_blocked !== undefined) {
     if (ctx.contextEvents === undefined)
       results.push(fail(`hook_event_blocked: no context events captured (older run / lane without context events) — cannot verify`));
-    else {
-      const fired = hookResponses(a.hook_event_blocked);
-      const blocked = fired.filter((f) => f.exitCode === 2);
-      results.push(
-        blocked.length > 0
-          ? ok(`${blocked.length} blocking hook_response frame(s): ${blocked.map((f) => f.name).join(", ")}`)
-          : fired.length > 0
-            ? fail(
-                `hook_event_blocked: \`${a.hook_event_blocked}\` fired ${fired.length}× but never blocked (exit codes seen: ${fired.map(describeFrame).join(", ")})`,
-              )
-            : fail(`hook_event_blocked: no hook_response frame for \`${a.hook_event_blocked}\` was recorded — the hook never fired`),
-      );
-    }
+    else results.push(checkHookEventBlocked(a.hook_event_blocked, ctx.contextEvents));
+  }
+  if (a.no_hook_event_blocked !== undefined) {
+    if (ctx.contextEvents === undefined)
+      results.push(fail(`no_hook_event_blocked: no context events captured (older run / lane without context events) — cannot verify`));
+    else results.push(checkNoHookEventBlocked(a.no_hook_event_blocked, ctx.contextEvents));
   }
   for (const [key, spec, negative] of [
     ["hook_output_contains", a.hook_output_contains, false],

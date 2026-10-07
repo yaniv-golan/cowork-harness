@@ -19,8 +19,12 @@ const ctx = (contextEvents: AssertContext["contextEvents"]) =>
   ({ transcript: "", toolsCalled: new Set(), questions: [], subagents: [], contextEvents }) as unknown as AssertContext;
 const run = (a: unknown, c: AssertContext) => evaluate([a as Assertion], c)[0]!;
 const isResponse = (f: Frame) => f.subtype === "hook_response";
-/** The recording's exit-0 frame alone (its hook_started kept): a Stop hook that fired and did not block. */
-const passOnly = () => recorded((fs) => fs.filter((f) => !isResponse(f) || f.exit_code === 0));
+/** The recording's exit-0 frame and its hook_started alone: a Stop hook that fired and did not block. */
+const passFrames = (fs: Frame[]) => {
+  const id = fs.find((f) => isResponse(f) && f.exit_code === 0)?.hook_id;
+  return fs.filter((f) => f.hook_id === id);
+};
+const passOnly = () => recorded(passFrames);
 /** The exit-0 frame with its exit code removed. */
 const noExitCode = (fs: Frame[]) => fs.map((f) => (isResponse(f) && f.exit_code === 0 ? { ...f, exit_code: undefined } : f));
 /** The exit-0 frame dropped, its hook_started kept: a hook that started and never answered. */
@@ -111,7 +115,7 @@ describe("no_hook_event_blocked", () => {
     for (const v of [true, { event: "Stop" }]) {
       const r = run({ no_hook_event_blocked: v }, ctx(recorded()));
       expect(r.pass).toBe(false);
-      expect(r.message).toMatch(/Stop.*blocked.*exit 2/);
+      expect(r.message).toMatch(/: Stop \(exit 2\) blocked — 1 of 2 /);
     }
   });
   it("passes when hooks fired and none blocked", () => {
@@ -126,9 +130,7 @@ describe("no_hook_event_blocked", () => {
   });
   it("unscoped over SessionStart-only frames (edited) is evidence-unavailable: those stream without --include-hook-events", () => {
     const sessionStartOnly = recorded((fs) =>
-      fs
-        .filter((f) => !isResponse(f) || f.exit_code === 0)
-        .map((f) => ({ ...f, hook_event: "SessionStart", hook_name: "SessionStart:startup" })),
+      passFrames(fs).map((f) => ({ ...f, hook_event: "SessionStart", hook_name: "SessionStart:startup" })),
     );
     const r = run({ no_hook_event_blocked: true }, ctx(sessionStartOnly));
     expect(r.pass).toBe(false);
@@ -137,11 +139,11 @@ describe("no_hook_event_blocked", () => {
     expect(run({ no_hook_event_blocked: { event: "SessionStart" } }, ctx(sessionStartOnly)).pass).toBe(true);
   });
   it("an in-scope frame without an exit code (edited) is evidence-unavailable", () => {
-    const c = ctx(recorded((fs) => noExitCode(fs.filter((f) => !isResponse(f) || f.exit_code === 0))));
+    const c = ctx(recorded((fs) => noExitCode(passFrames(fs))));
     expect(run({ no_hook_event_blocked: true }, c).message).toMatch(UNAVAILABLE);
   });
   it("a hook that started and never answered (edited) is evidence-unavailable", () => {
-    const c = ctx(recorded((fs) => [...fs.filter((f) => !isResponse(f) || f.exit_code === 0), { ...fs[0]!, hook_id: "never-answered" }]));
+    const c = ctx(recorded((fs) => [...passFrames(fs), { ...fs[0]!, hook_id: "never-answered" }]));
     expect(run({ no_hook_event_blocked: true }, c).message).toMatch(UNAVAILABLE);
   });
   it("no context events: cannot verify", () => {

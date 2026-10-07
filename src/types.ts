@@ -427,6 +427,43 @@ export function questionOptionCountBoundError(v: { exactly?: number; min?: numbe
   return undefined;
 }
 
+/** `tool:` on the hook keys: the frame's `hook_name` is `<event>:<query>`, where the query is what the hook was
+ *  matched against on THIS call (the tool that fired; the source for SessionStart), not the matcher configured in
+ *  hooks.json. */
+const hookToolField = z
+  .string()
+  .min(1)
+  .optional()
+  .describe(
+    "only frames whose `hook_name` is `<event>:<tool>`: the exact name of the tool that fired (or the SessionStart source: `startup`, `resume`, `compact`), NOT the matcher configured in hooks.json. Tool names differ by tier: the shell is `Bash` at `container` and `mcp__workspace__bash` at `hostloop`, so the wrong name reports 'never fired'",
+  );
+const hookCountFields = {
+  min: z.number().int().nonnegative().optional().describe("at least N matching frames (default 1, or 0 when only `max` is set)"),
+  max: z.number().int().nonnegative().optional().describe("at most N matching frames"),
+};
+/** Load-time, so a range no count satisfies is refused before the spawn; `evaluate()` repeats it for hand-built
+ *  contexts. */
+export function hookCountBoundError(key: string, v: { min?: number; max?: number }): string | undefined {
+  if (v.min !== undefined && v.max !== undefined && v.min > v.max)
+    return `${key}: \`min\` (${v.min}) is greater than \`max\` (${v.max}), so no count satisfies it`;
+  return undefined;
+}
+const hookCountObject = <T extends z.core.$ZodLooseShape>(key: string, shape: T) =>
+  z
+    .strictObject({
+      event: z.enum(KNOWN_HOOK_EVENTS).describe("the hook event whose `hook_response` frames are counted"),
+      tool: hookToolField,
+      ...shape,
+      ...hookCountFields,
+    })
+    .superRefine((v, c) => {
+      const message = hookCountBoundError(key, v as { min?: number; max?: number });
+      if (message !== undefined) c.addIssue({ code: "custom", message });
+    });
+/** The decisions `hook_decision` matches, as the agent normalises them: `block` is the agent's `deny` (a top-level
+ *  `decision: "block"` and a PreToolUse `permissionDecision: "deny"` both deny), `approve` its `allow`. */
+export const HOOK_DECISIONS = ["allow", "deny", "ask", "defer", "block", "approve"] as const;
+
 /** The shared object form of `hook_output_contains` / `hook_output_not_contains`. */
 const hookOutputObject = z
   .strictObject({
@@ -836,10 +873,33 @@ export const Assertion = z.strictObject({
       "a COMMAND hook for this event (a plugin's hooks/hooks.json or manifest hook — `Stop`, `SessionStart`, `PostToolUse`, …) ran: the agent emitted a `hook_response` system frame with this `hook_event` (RunResult.contextEvents). Any outcome counts as fired. The harness passes `--include-hook-events` whenever a staged plugin declares hooks, which is what makes events other than SessionStart/Setup appear on the stream at all — a recording made without it (older cassettes, or a plugin that declared no hooks) reports 'never fired'. Content-class, so it grades on replay. Recorded end-to-end for `Stop`; other names match the same frame but have not each been recorded. Distinct from `hook_blocked`, which reads the harness's OWN PreToolUse decisions from controlOut",
     ),
   hook_event_blocked: z
-    .enum(KNOWN_HOOK_EVENTS)
+    .union([z.enum(KNOWN_HOOK_EVENTS), hookCountObject("hook_event_blocked", {})])
     .optional()
     .describe(
-      "that command hook BLOCKED at least once: a `hook_response` frame for the event carried `exit_code: 2` (the agent's blocking exit; the frame also carries outcome 'error'). Fails naming the exit codes/outcomes seen when the hook fired without blocking (`exit_code` is optional on the wire — a frame without it is reported as such, never counted as blocked); fails 'no hook_response' when it never fired; cannot-verify when the run has no context events. Content-class. Recorded end-to-end for `Stop`",
+      'that command hook BLOCKED: a `hook_response` frame for the event denied, by exit code 2 or by a JSON decision on stdout with exit 0 (a PreToolUse `permissionDecision: "deny"`, or a top-level `decision: "block"`, which the agent treats alike). The bare event means at least one block. The OBJECT form `{event, tool?, min?, max?}` counts blocking frames (one per hook run: PreToolUse runs once per matching tool call, subagent calls included); `{event, max: 0}` is the per-event negative. Fails naming the exit codes/outcomes seen when the hook fired without blocking; fails \'no hook_response\' when it never fired, for `max: 0` too, so a disabled hook never passes. A frame whose outcome cannot be read (no exit code, a hook that started and never answered, stdout a redaction policy rewrote or the agent truncated) is evidence-unavailable when it could change the verdict. A script the hook cannot find also exits 2, so it reads as a block. Cannot-verify when the run has no context events. Content-class. Recorded end-to-end for `Stop`',
+    ),
+  no_hook_event_blocked: z
+    .union([
+      z.literal(true),
+      z.strictObject({
+        event: z.enum(KNOWN_HOOK_EVENTS).describe("only this event's frames"),
+        tool: hookToolField,
+      }),
+    ])
+    .optional()
+    .describe(
+      "no command hook blocked: every `hook_response` frame (or, in the object form `{event, tool?}`, every frame for that event) neither exited 2 nor denied by JSON — the same blocking rule as hook_event_blocked. Never vacuous: no frame in scope fails evidence-unavailable, and the unscoped `true` also needs a frame of an event other than SessionStart/Setup, which stream even when hook events were not requested (they stream only when a staged plugin declares hooks). A frame without an exit code, or a hook that started and never answered, is evidence-unavailable. Frames carry no plugin id: a second staged plugin's hook, or a host plugin's on `protocol`, counts as a frame here (the run warns). Distinct from `no_hook_blocked`, which reads the harness's OWN PreToolUse callbacks from controlOut. Content-class",
+    ),
+  hook_decision: hookCountObject("hook_decision", {
+    decision: z
+      .enum(HOOK_DECISIONS)
+      .describe(
+        'the decision, as the agent applies it: `deny` (alias `block`) matches exit code 2, a PreToolUse `permissionDecision: "deny"` and a top-level `decision: "block"`; `allow` (alias `approve`) matches `permissionDecision: "allow"` and `decision: "approve"`; `ask` and `defer` match their permissionDecision',
+      ),
+  })
+    .optional()
+    .describe(
+      "count the `hook_response` frames for the event whose decision is `decision`, read from the hook's stdout JSON on exit 0 (`hookSpecificOutput.permissionDecision`, else top-level `decision`) or from exit code 2 (a deny). Range `min`/`max` as for hook_event_blocked (default at least 1); `tool` scopes to the tool that fired. Non-JSON stdout is no decision, not an error. Fails 'never fired' when no frame is in scope. A frame whose decision cannot be read (stdout a redaction policy rewrote so it no longer parses, truncated output, no exit code, a hook that started and never answered, a `hookEventName` that names another event) is evidence-unavailable when it could change the verdict. Content-class, so it grades on replay",
     ),
   hook_output_contains: hookOutputObject
     .optional()

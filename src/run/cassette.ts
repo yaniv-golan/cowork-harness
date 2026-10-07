@@ -8277,7 +8277,9 @@ export const ALWAYS_CONTENT_KEYS: (keyof Assertion)[] = [
   "compaction_occurred",
   "hook_event_fired", // hook_response system frames are stream content — the re-drive reproduces them via parseMessage
   "hook_event_blocked",
-  // the same frames' stdout / stderr fields
+  "no_hook_event_blocked",
+  // the same frames' stdout / stderr fields (hook_decision reads the decision a hook printed on stdout)
+  "hook_decision",
   "hook_output_contains",
   "hook_output_not_contains",
   "all_tasks_completed",
