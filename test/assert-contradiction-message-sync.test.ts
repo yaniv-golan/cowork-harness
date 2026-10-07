@@ -94,6 +94,26 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
       ],
       'assert:\n  - hook_output_not_contains: { event: Stop, text: "x" }\n  - hook_output_contains: { event: Stop, stream: stderr, text: "x" }\n',
     ],
+    [
+      "no_hook_event_blocked: true + hook_event_blocked: Stop",
+      [{ no_hook_event_blocked: true }, { hook_event_blocked: "Stop" }],
+      "assert:\n  - no_hook_event_blocked: true\n  - hook_event_blocked: Stop\n",
+    ],
+    [
+      "no_hook_event_blocked {event} + hook_decision deny on a tool of that event",
+      [{ no_hook_event_blocked: { event: "PreToolUse" } }, { hook_decision: { event: "PreToolUse", decision: "deny", tool: "Bash" } }],
+      "assert:\n  - no_hook_event_blocked: { event: PreToolUse }\n  - hook_decision: { event: PreToolUse, decision: deny, tool: Bash }\n",
+    ],
+    [
+      "hook_event_blocked {max: 0} + the bare hook_event_blocked (exit 2 is counted by either default)",
+      [{ hook_event_blocked: { event: "Stop", max: 0 } }, { hook_event_blocked: "Stop" }],
+      "assert:\n  - hook_event_blocked: { event: Stop, max: 0 }\n  - hook_event_blocked: Stop\n",
+    ],
+    [
+      "hook_decision deny {max: 0} + hook_event_blocked via: json",
+      [{ hook_decision: { event: "PreToolUse", decision: "block", max: 0 } }, { hook_event_blocked: { event: "PreToolUse", via: "json" } }],
+      "assert:\n  - hook_decision: { event: PreToolUse, decision: block, max: 0 }\n  - hook_event_blocked: { event: PreToolUse, via: json }\n",
+    ],
   ];
 
   it.each(PAIRS)("both sides flag %s", (label, ts, yaml) => {
@@ -137,6 +157,36 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
       "hook_output_* on different events",
       [{ hook_output_not_contains: { event: "Stop", text: "x" } }, { hook_output_contains: { event: "SessionStart", text: "x" } }],
       'assert:\n  - hook_output_not_contains: { event: Stop, text: "x" }\n  - hook_output_contains: { event: SessionStart, text: "x" }\n',
+    ],
+    [
+      "no_hook_event_blocked on one tool + hook_event_blocked on the whole event (another tool may block)",
+      [{ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, { hook_event_blocked: { event: "PreToolUse", via: "any" } }],
+      "assert:\n  - no_hook_event_blocked: { event: PreToolUse, tool: Bash }\n  - hook_event_blocked: { event: PreToolUse, via: any }\n",
+    ],
+    [
+      "hook_event_blocked via: exit2 {max: 0} + via: json (disjoint channels)",
+      [{ hook_event_blocked: { event: "Stop", via: "exit2", max: 0 } }, { hook_event_blocked: { event: "Stop", via: "json" } }],
+      "assert:\n  - hook_event_blocked: { event: Stop, via: exit2, max: 0 }\n  - hook_event_blocked: { event: Stop, via: json }\n",
+    ],
+    [
+      "hook_event_blocked via: json {max: 0} + the bare form (exit 2 only)",
+      [{ hook_event_blocked: { event: "Stop", via: "json", max: 0 } }, { hook_event_blocked: "Stop" }],
+      "assert:\n  - hook_event_blocked: { event: Stop, via: json, max: 0 }\n  - hook_event_blocked: Stop\n",
+    ],
+    [
+      "no_hook_event_blocked on one event + hook_decision deny on another",
+      [{ no_hook_event_blocked: { event: "Stop" } }, { hook_decision: { event: "PreToolUse", decision: "deny" } }],
+      "assert:\n  - no_hook_event_blocked: { event: Stop }\n  - hook_decision: { event: PreToolUse, decision: deny }\n",
+    ],
+    [
+      "no_hook_event_blocked + hook_decision allow (an allow is not a block)",
+      [{ no_hook_event_blocked: true }, { hook_decision: { event: "PreToolUse", decision: "allow" } }],
+      "assert:\n  - no_hook_event_blocked: true\n  - hook_decision: { event: PreToolUse, decision: allow }\n",
+    ],
+    [
+      "hook_event_blocked {max: 0} + {min: 0, max: 3} (zero blocks satisfies both)",
+      [{ hook_event_blocked: { event: "Stop", max: 0 } }, { hook_event_blocked: { event: "Stop", min: 0, max: 3 } }],
+      "assert:\n  - hook_event_blocked: { event: Stop, max: 0 }\n  - hook_event_blocked: { event: Stop, min: 0, max: 3 }\n",
     ],
     [
       "two negatives on different channels",
@@ -187,5 +237,14 @@ describe.skipIf(!havePython)("assert-contradiction: TS refusal ↔ Python lint r
 
   it("the lint side is ERROR, matching a refusal rather than an advisory", () => {
     expect(lintContradiction("assert:\n  - questions_count_max: 0\n  - gate_answer_count_min: 1\n")!.severity).toBe("ERROR");
+  });
+});
+
+describe("the object hook_event_blocked's default channel is the same in both languages", () => {
+  it("OBJECT_HOOK_EVENT_BLOCKED_VIA (TS) equals _OBJECT_HOOK_EVENT_BLOCKED_VIA (scenario.py)", async () => {
+    const { OBJECT_HOOK_EVENT_BLOCKED_VIA } = await import("../src/assert.js");
+    const { readFileSync } = await import("node:fs");
+    const m = /^_OBJECT_HOOK_EVENT_BLOCKED_VIA = "(\w+)"$/m.exec(readFileSync(SCRIPT, "utf8"));
+    expect(m?.[1]).toBe(OBJECT_HOOK_EVENT_BLOCKED_VIA);
   });
 });
