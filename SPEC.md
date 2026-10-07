@@ -1220,8 +1220,9 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   reader would replay it without the fixture staleness check), and an `assert` entry using the object form of
   `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a
   `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry. A `gates_all_scripted`, `no_hook_event_blocked` or
-  `hook_decision` entry, or a `hook_event_blocked` entry in its object form, stamps **v15**, so a v14 reader refuses it
-  as too new. The minimum supported read version is **v9**
+  `hook_decision` entry, a `hook_event_blocked` entry in its object form, or an `artifact_json` entry whose `artifact`
+  is a glob or that carries `match` stamps **v15**, so a v14 reader refuses it as too new instead of misreading it (it
+  would grade the glob as a literal path). The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`

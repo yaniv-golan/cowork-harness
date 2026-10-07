@@ -625,6 +625,14 @@ export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
   (a) => !!a && typeof a === "object" && "hook_decision" in (a as object),
   // `gates_all_scripted` — the key itself, either form: a v14 reader's strict assertion schema rejects it.
   (a) => !!a && typeof a === "object" && "gates_all_scripted" in (a as object),
+  // The `artifact_json` glob: the `match` key (any value: a v14 reader rejects the key), and a glob `artifact` even
+  // without one — a v14 reader would grade the glob as a literal path that never exists, a wrong verdict.
+  (a) => {
+    const aj = a && typeof a === "object" ? (a as Record<string, unknown>).artifact_json : undefined;
+    if (!aj || typeof aj !== "object") return false;
+    const o = aj as Record<string, unknown>;
+    return "match" in o || (typeof o.artifact === "string" && isArtifactGlob(o.artifact));
+  },
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
