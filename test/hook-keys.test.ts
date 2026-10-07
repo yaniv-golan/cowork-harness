@@ -427,6 +427,8 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
     it("exit 2 with the refusal text is still a deny", () => {
       const c = ctx(decisions(frame({ exit_code: 2, outcome: "error", stderr: "hook stdio closed before end-of-stream" })));
       expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);
+      // The JSON channel reads no decision from an exit-2 frame, refusal text or not.
+      expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "json", max: 0 } }, c).pass).toBe(true);
     });
   });
   it("stdout the agent truncated is unreadable", () => {
