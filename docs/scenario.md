@@ -1554,9 +1554,8 @@ The run dir is the one each turn's `[status]` line prints. A resumed session's d
 turn, and `verify-run` refuses a dir with more than one turn, so the `compaction_occurred` assert cannot be checked
 on it: read the `/compact` turn's own `result.json` instead (`jq` exits `0` when it recorded a compaction, `1` when it
 did not). *Does not prove:* that the skill behaves as it would after an automatic compaction. A manual
-`/compact` may not re-attach skills exactly as autocompact does (not verified). Observed in agent 2.1.289: re-attached
-skill text is capped at about 20,000 characters in total, truncation marker included, within a 25,000-token budget
-across all re-attached skills, so a long `SKILL.md` can come back cut.
+`/compact` may not re-attach skills exactly as autocompact does (not verified), and re-attached skill text can come
+back truncated, so a long `SKILL.md` may not return whole.
 
 #### Ablate one `SKILL.md` section
 
@@ -1605,7 +1604,7 @@ assert:
   - file_exists: {path: outputs/brief.md, authored: false}          # carried over, not rewritten
 ```
 
-Record step 2 with `--out` next to the scenario: `record` refuses a fixture outside the cassette's directory.
+Record step 2 with `--out` inside the same tree as the fixture: `record` refuses a fixture outside the cassette's git repository (outside git, outside the cassette's directory).
 *Does not prove:* how Cowork treats a new task over the same folder on either lane (not verified); the second
 conversation starts with no memory of the first.
 
