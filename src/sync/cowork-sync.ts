@@ -3504,6 +3504,8 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_TAGS",
   "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  // Desktop still sends it, but agent 2.1.289 does not read it (the name is absent from its binary); pinned anyway, so
+  // the baseline keeps matching what Desktop constructs.
   "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL",
   // Gate 1595132361-conditional (Desktop >=1.46388.3). PINNED, not allowlisted: it has a 1p W1 site
   // and no host/settings/3p conditionality there. While the gate reads off, WI-4 classifies the key and
@@ -4065,14 +4067,17 @@ export function deriveSpawnEnv(
         if (distinct.length > 1) return "ambiguous";
         return { keys: distinct[0], chunk: r.chunk };
       };
-      // Any condition counts, not only the scheduled-run `<ns>.<P>(<s>)` shape: a gate call (`...t.WJ("id")&&q.K`) or a
-      // predicate from another namespace (`...o.Y(a)&&q.K`) guards an imported object just the same, and skipping it would
-      // hide the object's keys. The condition may hold no `,`, `{` or `}`, so the match never crosses into a neighbour.
-      for (const sm of text.matchAll(/\.\.\.([^,{}]*?)&&([\w$]+)\.([\w$]+)(?=[,}])/g)) {
-        const obj = objectOf(`${sm[2]}.${sm[3]}`);
+      // Not only the scheduled-run `<ns>.<P>(<s>)` shape: a gate call (`...t.WJ("id")&&q.K`) or a predicate from another
+      // namespace (`...o.Y(a)&&q.K`) guards an imported object just the same, and a hoisted same-chunk object
+      // (`...At("id")&&Ab`, `var Ab={…}`) is the same move without the import. Skipping any of them would hide the
+      // object's keys. Every W1 spread ending in `&&<ident>` or `&&<ns>.<ident>` is read; what this does not see is a
+      // condition holding `,`, `{` or `}` (excluded, so the match never crosses into a neighbour), and the
+      // single-text mode, where there is no files map to resolve through.
+      for (const sm of text.matchAll(/\.\.\.([^,{}]*?)&&([\w$]+)(?:\.([\w$]+))?(?=[,}])/g)) {
+        const obj = objectOf(sm[3] ? `${sm[2]}.${sm[3]}` : sm[2]);
         if (obj === null || obj === "ambiguous") {
           flags.push(
-            `spawn.env: the guarded spread \`${sm[0]}\` in W1 reads an imported object whose literal could not be resolved` +
+            `spawn.env: the guarded spread \`${sm[0]}\` in W1 reads an object whose literal could not be resolved` +
               `${obj === "ambiguous" ? " unambiguously" : ""} — its keys are invisible to this check; re-derive; ${SPAWN_NO_BYPASS}`,
           );
           hardFail = true;
@@ -4092,7 +4097,17 @@ export function deriveSpawnEnv(
       for (const sm of text.matchAll(/(?<!&&)\.\.\.([\w$]+)\.([\w$]+)(?=[,}])/g)) {
         if (!new RegExp(`(?<![\\w$])${reEsc(sm[1])}=require\\("\\./`).test(scope ?? bundle)) continue;
         const obj = objectOf(`${sm[1]}.${sm[2]}`);
-        if (obj === null || obj === "ambiguous") continue;
+        // The namespace IS a module import, so this spread brings that module's object into the env unconditionally;
+        // one whose literal is not all string pairs (`{KEY:someVar}`) or not unique cannot be read, and skipping it
+        // would apply its keys unseen.
+        if (obj === null || obj === "ambiguous") {
+          flags.push(
+            `spawn.env: the spread \`${sm[0]}\` in W1 reads an imported object whose literal could not be resolved` +
+              `${obj === "ambiguous" ? " unambiguously" : ""} — its keys are invisible to this check; re-derive; ${SPAWN_NO_BYPASS}`,
+          );
+          hardFail = true;
+          continue;
+        }
         for (const k of enumSpawnKeys(obj.keys)) {
           enumerated.add(k.key);
           resolveInto(k.key, sliceSpawnValue(obj.keys, k.valueStart), target, true, obj.chunk);
@@ -4252,7 +4267,9 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     // where `i` is true for a model on the managed-config `thinkingAlwaysOnModels` list (a documented gap; the
     // harness does not model that list). Admitted EXACTLY as `||<ident>`: an `&&`, a negation or any other shape
     // changes WHEN the budget applies and must fail closed, as S6d/S6f/S6g do on a reshape. The groups stay
-    // non-capturing so m[1] is still the arm.
+    // non-capturing so m[1] is still the arm. Not checked: what the extra disjunct is. It is a helper parameter, so S4
+    // admits any single identifier there and does not trace the call sites to confirm the argument is the managed-list
+    // lookup (in 2.26454.0 both callers pass it, the spawn and the mid-session override).
     const m = bundle.match(/(?:maxThinkingTokens:[^,}]{0,60}|return[ (][\w$]+\?\?[\w$]+\?\?![\w$]+(?:\)\|\|[\w$]+)?)\?([\w$.]+):0\}/);
     if (!m) miss("S4 maxThinkingTokens", "the maxThinkingTokens capture is gone");
     else {

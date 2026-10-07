@@ -1834,6 +1834,32 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       expect(guarded.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
       expect(guarded.env).toEqual(EXPECTED_GREEN);
     });
+    it("deriveSpawnEnv: a bare spread of an imported object whose literal is not all string pairs → hard fail", () => {
+      const { env, flags } = derive(withQ("...q.K,", "{API_TIMEOUT_MS:zVar}"));
+      expect(env).toBeNull();
+      expect(flags.some((f) => /spread .* reads an imported object whose literal could not be resolved/.test(f))).toBe(true);
+    });
+    // A hoisted same-chunk object under a gate is the same move without the import.
+    const hoisted = (obj: string, gate = "434204418") =>
+      filesOf({ spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + `...At("${gate}")&&zAb,`) + `;var zAb=${obj};` });
+    it("deriveSpawnEnv: a new key in a gate-guarded HOISTED same-chunk object → unknown-key hard fail", () => {
+      const { env, flags } = derive(hoisted('{ZNEW_KEY:"1"}'));
+      expect(env).toBeNull();
+      expect(flags.some((f) => f.includes("ZNEW_KEY"))).toBe(true);
+    });
+    it("deriveSpawnEnv: a gate-guarded hoisted object that is not a string-pair literal → hard fail", () => {
+      const { env, flags } = derive(hoisted("{API_TIMEOUT_MS:zVar}"));
+      expect(env).toBeNull();
+      expect(flags.some((f) => /guarded spread .* could not be resolved/.test(f))).toBe(true);
+    });
+    it("deriveSpawnEnv: a hoisted object follows its gate — OFF classifies, ON auto-pins", () => {
+      const off = derive(hoisted('{API_TIMEOUT_MS:"5"}'));
+      expect(off.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(off.env).toEqual(EXPECTED_GREEN);
+      const on = derive(hoisted('{API_TIMEOUT_MS:"5"}', "714014285"));
+      expect(on.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(on.env).toEqual({ ...EXPECTED_GREEN, API_TIMEOUT_MS: "5" });
+    });
     it("deriveSpawnEnv: an imported object under an ON gate follows the gate and auto-pins, as an inline gate spread does", () => {
       const on = derive(withQ('...At("714014285")&&q.K,', '{API_TIMEOUT_MS:"5"}'));
       expect(on.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
