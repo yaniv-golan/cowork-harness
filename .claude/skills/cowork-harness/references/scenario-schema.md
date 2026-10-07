@@ -180,12 +180,12 @@ permission_mode: default         # default | acceptEdits | plan | bypassPermissi
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
 # answer_channel: none           # NOT Cowork: nobody answers the agent (--permission-prompts none; the agent then
                                   # offers no AskUserQuestion/EnterPlanMode/ExitPlanMode). Needs bypassPermissions +
-                                  # a file assertion the skill's output satisfies (file_absent doesn't count) + a
+                                  # a positive file assertion (file_absent doesn't count) + a
                                   # baseline that records cliCapabilities (protocol: a host claude whose --help lists
                                   # it). Refuses answers/deciders, permission_parity: strict, approved_domains, the
                                   # gate keys, questions_count_max, tool_called: AskUserQuestion, hostloop/cowork and
                                   # lane: remote. A closing `?` is parked_at_question (warn), not stalled. Full list:
-                                  # docs/headless-no-answer.md
+                                  # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/headless-no-answer.md
 
 # sub-agent / tool-search env knob (tier-uniform; maps to agent env vars)
 agent_env:

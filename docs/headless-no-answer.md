@@ -20,9 +20,12 @@ the mounts, the egress allowlist — is unchanged, so the delivery, egress, file
 grade real behaviour.
 
 - **A run ends `success` whether or not the skill finished.** Completion is judged from the files the
-  skill wrote, so a scenario must carry at least one file assertion the skill's output satisfies
-  (`artifact_json`, `artifact_text`, `file_exists` or `user_visible_artifact`) or it fails to load.
-  `file_absent` does not count: a skill that did nothing passes it.
+  skill wrote, so a scenario must carry at least one positive file assertion (`artifact_json`,
+  `artifact_text`, `file_exists` or `user_visible_artifact`) or it fails to load. `file_absent` does not
+  count: a skill that did nothing passes it. The harness checks that the key is there, not that only the
+  skill could satisfy it: point it at a value the skill writes (the status file's `status`), not at a file an
+  upload or connected folder already provides. A `workspace_fixture` file is refused unless the assertion
+  states `authored:`.
 - **Stopping at a question is the contract, not a stall.** A successful run whose last message ends in `?`
   gets the `parked_at_question` warning, never the `stalled` failure. The warning does not change the verdict
   or the exit code: the file assertions decide those. Unlike `stalled`, it fires even when tools ran before

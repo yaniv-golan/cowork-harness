@@ -87,7 +87,8 @@ describe("hostCliSupportsPermissionPrompts — the protocol-tier probe", () => {
     mkdirSync(d, { recursive: true });
     const p = join(d, "claude");
     // `echo` is a shell builtin: the probe runs with PATH set to this dir alone, so no external `cat`.
-    writeFileSync(p, `#!/bin/sh\n[ "$1" = "--help" ] && echo '${help}'\nexit 0\n`);
+    // `printf '%b'` expands the `\n` in a wrapped sample the same way under dash and bash (`echo` does not).
+    writeFileSync(p, `#!/bin/sh\n[ "$1" = "--help" ] && printf '%b\\n' '${help}'\nexit 0\n`);
     chmodSync(p, 0o755);
     return d;
   };

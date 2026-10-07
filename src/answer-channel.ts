@@ -71,7 +71,7 @@ export function answerChannelAssertRefusal(assert: readonly Assertion[]): string
   }
   if (!assert.some((a) => FILE_EVIDENCE_KEYS.some((k) => (a as Record<string, unknown>)[k] !== undefined)))
     return why(
-      `needs at least one file assertion that the skill's own output satisfies (${FILE_EVIDENCE_KEYS.join(", ")}): the run ends \`success\` whether or not the skill finished, and a run that stops at a question is recorded as parked rather than failed, so completion must be judged from what the skill wrote.`,
+      `needs at least one positive file assertion (${FILE_EVIDENCE_KEYS.join(", ")}), on a value the skill writes: the run ends \`success\` whether or not the skill finished, and a run that stops at a question is recorded as parked rather than failed, so completion must be judged from what the skill wrote.`,
     );
   return undefined;
 }

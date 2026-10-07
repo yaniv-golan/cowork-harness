@@ -4,6 +4,7 @@ import { ScriptedDecider } from "../src/decide/decider.js";
 import { computeVerdict } from "../src/run/verdict.js";
 import { classifyTermination } from "../src/eval/classify.js";
 import { buildRunsLine } from "../src/eval/runs.js";
+import { erroredHint } from "../src/eval/report.js";
 import type { AgentEvent, AgentSession, DecisionResponse } from "../src/agent/session.js";
 import type { RunResult } from "../src/types.js";
 
@@ -136,5 +137,20 @@ describe("the parked warning never changes the verdict", () => {
       ),
     );
     expect(classifyTermination({ result: line.result })).toMatchObject({ bucket: "valid", rule: "parked_at_question" });
+  });
+});
+
+describe("advice under answer_channel: none never names a remedy the key refuses", () => {
+  it("ended_with_question points at the status file, not at scripting an answer", () => {
+    const base = { scenario: "t", fidelity: "container", baseline: "x", decisions: [], egress: [], outDir: "/tmp/x", assertions: [] };
+    const r = { ...base, result: "success", finalMessage: "Done? Mostly. See the notes.", workspaceFiles: [] } as unknown as RunResult;
+    const msg = (x: RunResult) => computeVerdict(x, "live").signals.find((s) => s.code === "ended_with_question")?.message ?? "";
+    expect(msg(r)).toMatch(/Script the answer/);
+    const none = msg({ ...r, answerChannel: "none" });
+    expect(none).toMatch(/status file/);
+    expect(none).not.toMatch(/answer:|decider/);
+  });
+  it("eval names the agent version when every rep was a violation", () => {
+    expect(erroredHint({ bucket: "errored_infra", rule: "source_answer_channel_violation" })).toMatch(/--permission-prompts none/);
   });
 });

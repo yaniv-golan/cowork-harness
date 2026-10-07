@@ -414,7 +414,9 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         severity: "warn",
         message:
           "the final answer contains a question or a closing request for input and the run wrote no deliverable to outputs/ — the agent may have ended on a request for input instead of a deliverable. " +
-          `Script the answer (answer:/--answer/a decider) or steer --decider-llm --intent; ${stallOptOut} if ending on a question is intended.`,
+          (result.answerChannel === "none"
+            ? "Under answer_channel: none nothing can answer it; check the status file the skill wrote."
+            : `Script the answer (answer:/--answer/a decider) or steer --decider-llm --intent; ${stallOptOut} if ending on a question is intended.`),
       });
 
     // A skill can produce a deliverable, never deliver it, and still green: no assertion covers the

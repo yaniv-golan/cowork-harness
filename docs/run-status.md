@@ -27,9 +27,10 @@ namespace.
 3. When the run finishes (success, error, or an unanswered-gate partial), `status.json` is written once
    more with a terminal `state` (`"done"` or `"error"`). On a terminal **error**, it also carries the
    terminal-error diagnostics — `errorSource` (`spawn`/`protocol`/`exit`/`agent`/`result`/`no_result`/`timeout`/
-   `decider_timeout` — `no_result` = the stream ended with no result event, i.e. turn/time exhaustion;
-   `decider_timeout` = a `--decider-cmd`/`--decider-dir` channel did not answer a gate within its backstop, and
-   the run ended as an unanswered-gate partial), the SDK `resultSubtype`
+   `decider_timeout`/`answer_channel_violation` — `no_result` = the stream ended with no result event, i.e.
+   turn/time exhaustion; `decider_timeout` = a `--decider-cmd`/`--decider-dir` channel did not answer a gate within
+   its backstop, and the run ended as an unanswered-gate partial; `answer_channel_violation` = a run under
+   `answer_channel: none` received a question or permission request anyway, which was refused), the SDK `resultSubtype`
    (e.g. `error_max_turns`), `stderrLogPath`, and `resultErrorKind` (`transport`/`agent`/`usage_limit`) — so a
    failure-output reader gets more than a bare `"error"` (these mirror the same fields in `result.json`).
    `resultErrorKind: "usage_limit"` is worth checking for specifically: a batch/status watcher can halt fast
