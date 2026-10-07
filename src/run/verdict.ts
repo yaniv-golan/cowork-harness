@@ -343,7 +343,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       code: "parked_at_question",
       severity: "warn",
       message:
-        "parked at a question (answer_channel: none): the run ended on a question nobody can answer, which is what this session models. Completion is judged from the file assertions.",
+        "parked at a question (answer_channel: none): the run ended on a question and nothing will answer it, which is what this session models. If the skill was meant to park here, its status file shows it; completion is judged from the file assertions.",
     });
   } else if (result.stalledOnQuestion && !result.assertions.some((a) => a.assertion.allow_stall === true)) {
     signals.push({

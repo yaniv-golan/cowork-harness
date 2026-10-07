@@ -21,10 +21,12 @@ egress, file and transcript assertions still grade real behaviour.
 - **A run ends `success` whether or not the skill finished.** Completion is judged from the files the
   skill wrote, so a scenario must carry at least one file assertion (`artifact_json`, `artifact_text`,
   `file_exists`, `file_absent` or `user_visible_artifact`) or it fails to load.
-- **Stopping at a question is the contract, not a stall.** Where an ordinary run would get the `stalled`
-  failure (its last message ends on a question and no tool ran after its last gate, which here means no tool
-  ran at all), this run gets the `parked_at_question` warning instead. A gated skill normally runs its own
-  script before it asks, so the usual run passes with neither signal; see below.
+- **Stopping at a question is the contract, not a stall.** A successful run whose last message ends in `?`
+  gets the `parked_at_question` warning, never the `stalled` failure. The warning does not change the verdict
+  or the exit code: the file assertions decide those. Unlike `stalled`, it fires even when tools ran before
+  the question, since a gated skill always runs its own script first. It reads only the closing `?`, so it has
+  two known misses: a finished answer that ends on an offer ("Want me to deliver it?") warns too, and a request
+  for input phrased without one ("Please share the raise amount.") does not fire.
 - **A request that reaches the harness anyway** (an agent that ignored the flag) is refused, never
   answered, and the run ends `error` with `errorSource: "answer_channel_violation"`. Answering it would
   invent the channel the run declares absent.
@@ -33,9 +35,9 @@ egress, file and transcript assertions still grade real behaviour.
 
 With no question tool on offer, the model asks in prose and ends its turn. In three runs of the example below
 (agent 2.1.293, `claude-sonnet-5`), the model invoked the skill, ran its script, which wrote `waiting`, then
-ended with a plain-text question asking which option to continue with. Each run ended `success` with no
-verdict signal, and both assertions passed. Whether the skill parked correctly shows only in the status
-file, which is why a file assertion is required.
+ended with a plain-text question asking which option to continue with. Each run ended `success`, both
+assertions passed, and each is reported with the `parked_at_question` warning. Whether the skill parked at the
+right gate shows only in the status file, which is why a file assertion is required.
 
 ## Requirements and refusals
 

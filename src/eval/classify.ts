@@ -60,6 +60,7 @@ export type ClassifiableResult = Partial<
     | "resultErrorKind"
     | "resultSubtype"
     | "stalledOnQuestion"
+    | "answerChannel"
     | "partial"
     | "unansweredGate"
     | "models"
@@ -159,6 +160,7 @@ function thrownKind(e: unknown): ThrownKind {
  *  | thrown BoundaryError                                                  | errored_infra                     |
  *  | thrown UnansweredError                                                | errored_agent                     |
  *  | thrown anything else / no result at all                               | unclassified                      |
+ *  | success, errorSource absent or `agent`, no kind, stalled, no channel   | valid (parked_at_question)        |
  *  | success, errorSource absent or `agent`, no kind, stalled, allow_stall | valid (stall_allowed)             |
  *  | success, errorSource absent or `agent`, no kind, stalled              | errored_agent                     |
  *  | success, errorSource absent or `agent`, no kind                       | valid                             |
@@ -211,6 +213,9 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
   if (r.result === "success") {
     if ((source === undefined || source === "agent") && kind === undefined) {
       if (r.stalledOnQuestion !== true) return out("valid", "success");
+      // Under `answer_channel: none` a stop at a question is the contract, reported as the `parked_at_question` warn
+      // (verdict.ts); completion is judged from the file assertion such a scenario must carry.
+      if (r.answerChannel === "none") return out("valid", "parked_at_question");
       // A stall is the agent's own failure unless the scenario opted out. The flag is run.ts's detector: a closing
       // `?`, or (after a gate) a cued closing request for input such as "Please share X so I can…" — see
       // input-request.ts. The opt-out is the same predicate the `stalled` verdict signal uses (verdict.ts), over the

@@ -1373,7 +1373,11 @@ export class Run {
     const lastGateIdx = this.toolLog.map((t) => t.name).lastIndexOf("AskUserQuestion");
     const productiveAfterGate = this.toolLog.slice(lastGateIdx + 1).filter((t) => t.name !== "AskUserQuestion").length;
     const asksForInput = lastText.endsWith("?") || (lastGateIdx >= 0 && endsOnRequestForInput(lastText));
-    if (this.rec.result === "success" && asksForInput && productiveAfterGate === 0) {
+    // Under `answer_channel: none` the agent is offered no question tool, so a gated skill runs its script, then asks
+    // in prose and ends its turn: (3) can never hold. There a closing `?` alone marks the stop, which computeVerdict
+    // reports as `parked_at_question` (warn), never `stalled`. Only the `?`: no gate fires to arm the wider wording.
+    const parkedWithoutChannel = this.noAnswerChannel && lastText.endsWith("?");
+    if (this.rec.result === "success" && ((asksForInput && productiveAfterGate === 0) || parkedWithoutChannel)) {
       this.rec.stalledOnQuestion = true;
     }
     // pair each answered gate with its tool_result (by toolUseId). delivered=true iff a non-error
