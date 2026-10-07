@@ -87,7 +87,9 @@ describe("gates_all_scripted over kept-run decision streams (live)", () => {
   it("include_permissions: an agent error row is not a permission gate", () => {
     const ds = decisionsOf("scripted-question-and-permission");
     ds.push({ kind: "tool", name: "exit", decision: "error", by: "agent", detail: "exited 1" });
-    expect(checkGatesAllScripted({ include_permissions: true }, live(ds)).pass).toBe(true);
+    const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
+    expect(r.pass).toBe(true);
+    expect(r.message).toMatch(/, 1 permission decision\(s\)/); // the Write allow only, not the error row
   });
 
   it("an LLM-answered permission fails under include_permissions but not in the question-only form", () => {
@@ -167,6 +169,11 @@ describe("gates_all_scripted on replay: re-classified against the cassette's fro
     const r = checkGatesAllScripted({ include_permissions: true }, live(ds, { frozenAnswers: [] }));
     expect(r.pass).toBe(false);
     expect(r.message).toContain("Bash");
+  });
+
+  it("include_permissions on replay: an off-registry deny no frozen rule covers is a fixed rule (strict parity, the path gate)", () => {
+    const ds: Decisions = [{ kind: "tool", name: "Bash", decision: "deny", by: "replay" }];
+    expect(checkGatesAllScripted({ include_permissions: true }, live(ds, { frozenAnswers: [] })).pass).toBe(true);
   });
 
   it("include_permissions on replay: a registry allow (Read/Glob/Grep) counts", () => {
