@@ -1410,7 +1410,7 @@ export const ScenarioObject = z.strictObject({
   fidelity: z
     .enum(FIDELITY_TIERS)
     .describe(
-      "isolation tier (REQUIRED): protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic). `container` models the VM loop, while production runs the host loop by default (gate 1143815894) — a bare relative path lands elsewhere, the shell starts elsewhere, and the offered tool set differs. Name hostloop to match production, cowork to auto-pick the way Cowork does, or container to model the VM loop deliberately.",
+      "isolation tier (REQUIRED): protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic). `container` models the VM loop, while Cowork's local lane runs the host loop by default (gate 1143815894) — a bare relative path lands elsewhere, the shell starts elsewhere, and the offered tool set differs. Name hostloop to match that lane, cowork to auto-pick the way Cowork does, or container to model the VM loop deliberately.",
     ),
   // execution LOCATION, orthogonal to `fidelity` (a local privilege tier) — do NOT collapse the two.
   // `cloud-describe` is RESERVED: no runner exists yet, so authoring it is a load-time error (see

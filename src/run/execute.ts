@@ -2396,14 +2396,14 @@ export function fidelityOmitted(raw: unknown): boolean {
 /** The one-line remedy for a scenario without `fidelity:`. `container` was the default before 4.0.0, so it
  *  keeps a scenario's behaviour identical; `hostloop` is what Desktop runs on the local lane. */
 export const FIDELITY_REQUIRED_REMEDY =
-  "add `fidelity: container` to keep the pre-4.0 behaviour (it was the default), or `fidelity: hostloop` to match production";
+  "add `fidelity: container` to keep the pre-4.0 behaviour (it was the default), or `fidelity: hostloop` to match Cowork's local lane";
 
 /** The long form of the remedy: which lane each tier models, what switching can cost, and the one case where
  *  the answer is fixed (a scenario that already has a cassette). Carried on the fidelity issue in `hint`, where
  *  `lint` reads it as the finding's `fix`. */
 export const FIDELITY_REQUIRED_FIX =
   "Add `fidelity:` naming a tier. `fidelity: container` keeps the pre-4.0 behaviour (it was the default) and models " +
-  "the VM loop; production runs the host loop by default (gate 1143815894), so `fidelity: hostloop` matches it and " +
+  "the VM loop; Cowork's local lane runs the host loop by default (gate 1143815894), so `fidelity: hostloop` matches it and " +
   "`fidelity: cowork` auto-picks the way Cowork does. Switching tiers can cost you assertions: `no_scratchpad_leak` " +
   "is container-only and `transcript_no_host_path` fails by design at hostloop/protocol. If this scenario already " +
   "has a cassette, add the tier it recorded — a different tier is a recording-shaping change and needs a re-record.";
