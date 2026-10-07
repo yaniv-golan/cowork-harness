@@ -31,6 +31,19 @@ All notable changes to this project are documented here. The format is based on
   answered, stdout that a redaction policy rewrote or the agent truncated, and a `hookEventName` naming another
   event. An unknown frame makes a check evidence-unavailable only when it could change the verdict. `record` warns
   when its redaction policy makes a hook decision that one of these keys reads unreadable.
+- `run`, `record` and `lint` refuse a negative hook key alongside a positive one that can never both pass, such as
+  `no_hook_event_blocked: true` with `hook_event_blocked: Stop`, as they refuse `no_hook_blocked` with `hook_blocked`.
+
+### Changed
+
+- **The bare `hook_event_blocked: <event>` keeps its verdicts; some failure messages change.** When no frame blocked
+  and one frame cannot be read (no exit code, or a hook that started and never answered), the failure now reads
+  "evidence unavailable" instead of "never blocked" or "never fired". When the hook printed a JSON deny, the "never
+  blocked" message names it and points to `via: any`. The "never fired" message lists the same causes as
+  `hook_event_fired`'s.
+- **`hook_blocked` and `no_hook_blocked` say what they read:** the harness's own hook callbacks. A plugin's command
+  hook never reaches that list, so `no_hook_blocked` passes over a plugin's block. The docs and the companion skill
+  now send a plugin hook to `hook_event_blocked`, `no_hook_event_blocked` and `hook_decision`.
 
 ## [4.5.0] — 2026-10-07
 

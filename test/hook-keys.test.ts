@@ -108,6 +108,8 @@ describe("hook_event_blocked, count form", () => {
     const r = run({ hook_event_blocked: { event: "PreToolUse", tool: "Edit" } }, ctx(decisions()));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/no hook_response frame for `PreToolUse` \(tool `Edit`\)/);
+    // the tier trap: the shell's name differs by tier
+    expect(r.message).toMatch(/the shell is `Bash` at container, `mcp__workspace__bash` at hostloop/);
   });
   describe("unknown frames (edited: exit code removed / response dropped) decide by range intersection", () => {
     // One known block (B=1) and one unknown frame (U=1): the true count is 1 or 2.
