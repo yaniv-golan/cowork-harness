@@ -1656,8 +1656,8 @@ type HookFrame = {
 /** The JSON decision on an exit-0 frame's stdout. Only stdout that parses WHOLE as a JSON object decides: stdout is the
  *  hook's ordinary output too, so a word like `deny`, prose, or JSON after other text decides nothing. Read
  *  `hookSpecificOutput.permissionDecision` (its `hookEventName` must name the frame's event, as the agent requires), else
- *  a top-level `decision` (`block` denies, `approve` allows, as the agent normalises them). `continue: false` stops the
- *  agent but is not a decision. */
+ *  a top-level `decision` (`block` denies, `approve` allows, as the agent normalises them). A PermissionRequest hook
+ *  answers with `hookSpecificOutput.decision.behavior`. `continue: false` stops the agent but is not a decision. */
 export function readJsonDecision(stdout: string, event: unknown): { json: HookDecision | undefined; token?: string } {
   const text = stdout.trim();
   if (text === "") return { json: "none" };
@@ -1670,6 +1670,14 @@ export function readJsonDecision(stdout: string, event: unknown): { json: HookDe
   if (v === null || typeof v !== "object" || Array.isArray(v)) return { json: "none" };
   const o = v as Record<string, unknown>;
   const hso = o.hookSpecificOutput;
+  // PermissionRequest answers with `decision: {behavior: "allow" | "deny"}` (the agent's own validation message).
+  if (hso !== null && typeof hso === "object" && !Array.isArray(hso) && "decision" in hso) {
+    const h = hso as Record<string, unknown>;
+    if (h.hookEventName !== event) return { json: undefined };
+    const d = h.decision as { behavior?: unknown } | null;
+    const behavior = d !== null && typeof d === "object" ? d.behavior : undefined;
+    return behavior === "allow" || behavior === "deny" ? { json: behavior, token: `behavior ${behavior}` } : { json: undefined };
+  }
   if (hso !== null && typeof hso === "object" && !Array.isArray(hso) && "permissionDecision" in hso) {
     const h = hso as Record<string, unknown>;
     if (h.hookEventName !== event) return { json: undefined };
@@ -1715,7 +1723,8 @@ function hookFrames(
   const raw = events.filter((e) => e.subtype === "hook_response" && inScope(e));
   const frames = raw.map((e): HookFrame => {
     const exitCode = typeof e.data?.exit_code === "number" ? e.data.exit_code : undefined;
-    const stdout = typeof e.data?.stdout === "string" ? e.data.stdout : typeof e.data?.output === "string" ? e.data.output : undefined;
+    // stdout alone: `output` joins stdout and stderr, so a frame without `stdout` has no readable decision.
+    const stdout = typeof e.data?.stdout === "string" ? e.data.stdout : undefined;
     const { json, token } =
       exitCode === undefined
         ? { json: undefined }
