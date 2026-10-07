@@ -1627,9 +1627,15 @@ function pendingHooks(
   return new Set(ids("hook_started").filter((id) => !responded.has(id))).size;
 }
 
-/** One `hook_response` frame, as the hook keys read it. `blocking` is the agent's deny: exit code 2, or (exit 0) a
- *  JSON deny on stdout. `undefined` means the frame's outcome cannot be read (no exit code). */
-type HookFrame = { name: string; exitCode?: number; outcome: string; blocking: boolean | undefined };
+/** One `hook_response` frame, as the hook keys read it. `blocking` is the agent's deny by either channel: exit code
+ *  2, or (exit 0) a JSON deny on stdout. `exit2` is exit code 2 alone. `undefined` means the frame's outcome cannot be
+ *  read (no exit code). */
+type HookFrame = { name: string; exitCode?: number; outcome: string; blocking: boolean | undefined; exit2: boolean | undefined };
+
+/** Which channel the BARE `hook_event_blocked: <event>` counts. It has always meant exit code 2, and counting a JSON
+ *  deny as well would change what an existing scenario asserts, so it stays `exit2`; the object form,
+ *  `no_hook_event_blocked` and `hook_decision` read the agent's deny by either channel. */
+const BARE_HOOK_EVENT_BLOCKED_VIA: "exit2" | "any" = "exit2";
 
 /** The `hook_response` frames for `event` (and, with `tool`, only those whose `hook_name` is `<event>:<tool>` — the
  *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered. */
@@ -1648,6 +1654,7 @@ function hookFrames(
       exitCode,
       outcome: typeof e.data?.outcome === "string" ? e.data.outcome : "unknown",
       blocking: exitCode === undefined ? undefined : exitCode === 2,
+      exit2: exitCode === undefined ? undefined : exitCode === 2,
     };
   });
   const seen = new Set(raw.map((e) => e.data?.hook_event).filter((v): v is string => typeof v === "string"));
@@ -1690,8 +1697,10 @@ function checkHookEventBlocked(
         ? `evidence unavailable: hook_event_blocked: ${pending} ${scope} hook(s) started without a response — whether they blocked never reached the stream`
         : neverFired("hook_event_blocked", o.event, o.tool),
     );
-  const blocked = frames.filter((f) => f.blocking === true);
-  const unreadable = frames.filter((f) => f.blocking === undefined);
+  const via = typeof spec === "string" ? BARE_HOOK_EVENT_BLOCKED_VIA : "any";
+  const blocks = (f: HookFrame) => (via === "exit2" ? f.exit2 : f.blocking);
+  const blocked = frames.filter((f) => blocks(f) === true);
+  const unreadable = frames.filter((f) => blocks(f) === undefined);
   const unknown = unreadable.length + pending;
   const expected = max === Infinity ? `at least ${min}` : min === 0 ? `at most ${max}` : min === max ? `exactly ${min}` : `${min}–${max}`;
   const listed = (fs: HookFrame[]) =>
