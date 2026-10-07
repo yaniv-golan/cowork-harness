@@ -298,7 +298,7 @@ up often enough to spell out:
   behavior). See [`docs/cassette.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md) § "Still skipped on replay" and [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) § "Which
   assertions survive replay."
 - **`present_files` assertions can't verify off the tiers that serve the tool.** `no_scratchpad_leak` and
-  `present_files_called` check the `present_files` delivery path — the desktop-local lane's tool; remote
+  `present_files_called` check the `present_files` delivery path — the local lane's tool (not used by new Pro and Max tasks from 2026-10-06); remote
   Cowork delivers via the agent-native `SendUserFile` instead, so never hardcode a delivery tool name in
   a SKILL.md (Gotcha 24 in `gotchas.md`). **The harness** serves `present_files` on `container` **and `hostloop`**
   — not `microvm`/`protocol`. `present_files_called` works at both; `no_scratchpad_leak` stays

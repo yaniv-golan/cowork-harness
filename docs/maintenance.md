@@ -276,13 +276,10 @@ committed baseline and say why in that baseline's `$comment`.
    entry is itself a hard-fail), then re-run `cowork-harness sync`.
 
    > **PRECONDITION for any live probe of real Cowork: the probe session must run on the local lane.**
-   > Cowork's "Only on this computer" setting (Settings → Cowork, or Settings → General → Tasks in the
-   > merged interface) does not reliably select it: sessions have run in the cloud with it **on**
-   > (observed 2026-10-02), and for Pro and Max plans Anthropic
-   > [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new
-   > tasks run in the cloud from 2026-10-06 and the setting is removed. After that date new Pro and Max
-   > sessions are expected to run in the cloud, and the probe needs an account that still gets local
-   > sessions. A cloud-lane session runs under a server-authored prompt with
+   > [From 2026-10-06 new Pro and Max tasks run in the cloud](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile),
+   > so a local-lane probe cannot be taken from a Pro or Max account; it needs an account whose plan still
+   > runs tasks locally. Before that date no setting reliably selected the lane (sessions ran in the cloud
+   > with Cowork's local-only setting **on**, observed 2026-10-02). A cloud-lane session runs under a server-authored prompt with
    > no `## Cowork environment` section at all, and you will be diffing a lane this harness does not
    > model. Start a FRESH session and confirm its lane before probing — see
    > [fidelity-gaps.md → Which lane a session actually ran on](./fidelity-gaps.md#which-lane-a-session-actually-ran-on).

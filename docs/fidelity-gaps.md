@@ -34,25 +34,15 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 37 o
 
 ## Which Cowork LANE this harness models — read first, it scopes everything below
 
-Every fidelity tier reproduces Cowork's **desktop-local** lane. Cowork also runs sessions on a
-**remote** lane, server-side in a cloud container that reaches the user's machine over a device
-bridge. **No setting reliably decides which lane a real session gets.** As of Desktop 2.19675.0
-(2026-10-02), the composer shows no per-session lane picker, on desktop or on the web, in the two
-organizations checked. Cowork has an "Only on this computer" option, at Settings → Cowork in the older
-composer and at Settings → General → Tasks in the merged interface, and sessions still ran in the cloud
-with it **on** (13+ runs on Desktop 2.19675.0, merged interface, 2026-10-02). In a Personal/Max organization on
-Desktop 2.19675.0 (2026-10-03), sessions started from the older Cowork composer ran locally (2 of 2) and sessions
-started from the merged composer ran in the cloud (2 of 2): in those runs the composer used, not the setting alone,
-went with the lane. Separately, on Desktop 2.16120.0 some new
-sessions ran locally; the setting's state for those runs is not recorded. Anthropic's
-[architecture overview](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) describes
-the cloud as Cowork's default and says existing desktop deployments can still run sessions on the user's
-machine. Anthropic's [web, desktop and mobile article](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) adds,
-for Pro and Max plans, Anthropic's announcement that from 2026-10-06 new tasks run in the cloud and the
-option is removed (the article calls it "Only on your computer"), and that tasks already running on the
-user's computer stay there until they are done. So
-establish the lane from the session itself: see
-[Which lane a session actually ran on](#which-lane-a-session-actually-ran-on).
+Every fidelity tier reproduces Cowork's **local** lane. Cowork also runs sessions on a **remote** lane,
+server-side in a cloud container that reaches the user's machine over a device bridge. From 2026-10-06 new Pro and
+Max tasks (scheduled tasks included) run in the cloud, per Anthropic's
+[web, desktop and mobile article](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile).
+Anthropic's [architecture overview](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview)
+describes the cloud as Cowork's default and says organisation deployments can still run sessions on the user's
+machine. To know which lane a given session ran on, check the session itself: see
+[Which lane a session actually ran on](#which-lane-a-session-actually-ran-on); how the lane was chosen before
+2026-10-06 is under [History (to 2026-10-03)](#history-to-2026-10-03-what-chose-the-lane).
 
 That matters for how you read the rest of this file. Gaps documented here are gaps against the
 *local* lane. On the remote lane the environment is different in kind, not degree: the cloud
@@ -92,9 +82,23 @@ remote-only difference: `tesseract`, `pdftoppm`, `soffice` and `pdfplumber` were
 lane, and the local manifest carries them too (`tesseract-ocr`, `poppler-utils` and `libreoffice-core` in
 its apt doc stack, `pdfplumber` in pip).
 
+### History (to 2026-10-03): what chose the lane
+
+No setting reliably decided which lane a real session got. As of Desktop 2.19675.0 (2026-10-02), the composer showed
+no per-session lane picker, on desktop or on the web, in the two organizations checked. Cowork had an "Only on this
+computer" option, at Settings → Cowork in the older composer and at Settings → General → Tasks in the merged
+interface, and sessions still ran in the cloud with it **on** (13+ runs on Desktop 2.19675.0, merged interface,
+2026-10-02). In a Personal/Max organization on Desktop 2.19675.0 (2026-10-03), sessions started from the older Cowork
+composer ran locally (2 of 2) and sessions started from the merged composer ran in the cloud (2 of 2): in those runs
+the composer used, not the setting alone, went with the lane. Separately, on Desktop 2.16120.0 some new sessions ran
+locally; the setting's state for those runs was not recorded. Anthropic's article announced, for Pro and Max plans,
+that from 2026-10-06 new tasks run in the cloud and the option is removed (the article calls it "Only on your
+computer"), and that tasks already running on the user's computer stay there until they are done.
+
 ### Which lane a session actually ran on
 
-No setting reliably decides the lane (see above), so check the session itself before comparing it to a
+No setting reliably decided the lane before 2026-10-06, and for Pro and Max new tasks run in the cloud after that
+date, so check the session itself before comparing it to a
 run here. This is the one place these checks are listed. Each of these places a session when it is
 present. `CLAUDE_CODE_ENTRYPOINT` read from a hook, and report paths, point both ways; the environment
 heading and the Desktop log lines are positive signals for the local lane only, and their absence proves
@@ -136,7 +140,7 @@ the agent binary and zero times in the entire `app.asar`** (measured against 1.4
 The agent's host resolver throws without it — `case "ccr-session": …` reaches a `status: "absent"` branch
 that raises *"ccr-session host requires --sdk-url"*, with a second branch for a URL the allowlist
 rejects. So **no Desktop-spawned session can resolve the `ccr-session` host at all**, and every feature
-routed through it is *structurally unreachable* in the desktop-local lane rather than merely disabled.
+routed through it is *structurally unreachable* in the local lane rather than merely disabled.
 
 Two riders observed on that host, both with the same 26-in-the-agent / 0-in-the-asar shape:
 `cowork_memory_context` (fetched as `GET /memory_context` with `If-None-Match` and injected as an
@@ -1650,7 +1654,7 @@ report can't-verify rather than passing vacuously.
 ### Path resolution: the shell and the file tools use DIFFERENT roots (measured 2026-08-27)
 
 **The two roots are modeled; what remains divergent is whether the write SURVIVES.** On the
-desktop-local lane, production resolves a relative path differently depending on which tool writes it:
+local lane, production resolves a relative path differently depending on which tool writes it:
 
 | | production (host-loop) | `container`/`microvm` (VM-loop) | `hostloop` |
 |---|---|---|---|
@@ -1718,7 +1722,7 @@ or an assertion against these tools:
    one is reading something production does not emit. Cowork's own chat-surface prompt asserts the
    opposite ("Write's result shows the file's full path"), so the product's documentation of its own tool
    is wrong here — do not take it as a spec.
-3. **Before Desktop 2.7032.0, the literal prefix `outputs/` DOUBLED on the desktop-local lane**
+3. **Before Desktop 2.7032.0, the literal prefix `outputs/` DOUBLED on the local lane**
    (`outputs/x` → `outputs/outputs/x`, invisible), and **`<folder>/x` built a same-named decoy inside
    `outputs`** rather than reaching the connected folder — silently, with a success result. From 2.7032.0
    both are refused outright (the agent runs at `/var/empty`). In both eras no relative path from the file

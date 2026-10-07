@@ -270,8 +270,8 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     `--output-format json`). *Fix:* re-record against the pinned agent.
 
 24. **Never name the file-delivery tool in a `SKILL.md`.** *Why:* Cowork has **two**, one per product
-    lane, and an agent only sees the one for the surface it is on. The desktop-local sandbox this harness
-    emulates is served `mcp__cowork__present_files` (`{files:[{file_path}]}`); **remote** cloud-container
+    lane, and an agent only sees the one for the surface it is on. The local-lane sandbox this harness
+    emulates (not used by new Pro and Max tasks from 2026-10-06) is served `mcp__cowork__present_files` (`{files:[{file_path}]}`); **remote** cloud-container
     Cowork instead gives the agent the native `SendUserFile` (`files: string[]`, required `status`,
     optional `caption`/`display`). A skill that hardcodes either name works on one lane and fails on the
     other — and probing a remote session makes this harness look like it emulates the wrong tool under the
