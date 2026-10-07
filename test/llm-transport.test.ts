@@ -732,11 +732,12 @@ describe("helpDeclaresFlag / defaultManagedMcpPath", () => {
 });
 
 describe("graderSpawnEnv", () => {
-  it("the --help preflight probe runs with the same dropped environment as the grader call", () => {
+  it("the --help/--version preflight probes run with the same dropped environment as the grader call", () => {
     const d = mkdtempSync(join(tmpdir(), "grader-probe-"));
     const dump = join(d, "env.txt");
     const bin = join(d, "claude");
-    writeFileSync(bin, `#!/bin/sh\nenv > "${dump}"\necho "Usage: claude"\nexit 0\n`, { mode: 0o755 });
+    // One dump per probe (`--help`, `--version`), so a later probe cannot overwrite an earlier one's environment.
+    writeFileSync(bin, `#!/bin/sh\nenv > "${dump}$1"\necho "Usage: claude"\nexit 0\n`, { mode: 0o755 });
     vi.stubEnv("CLAUDE_CODE_SIMPLE", "1");
     try {
       try {
@@ -744,9 +745,13 @@ describe("graderSpawnEnv", () => {
       } catch {
         // a stub without the isolation flags is refused; only the probe's environment matters here
       }
-      const env = readFileSync(dump, "utf8");
-      expect(env).toContain("PATH=");
-      expect(env).not.toMatch(/^CLAUDE_CODE_SIMPLE=/m);
+      const probes = ["--help", "--version"].filter((a) => existsSync(dump + a));
+      expect(probes).toContain("--help");
+      for (const a of probes) {
+        const env = readFileSync(dump + a, "utf8");
+        expect(env, a).toContain("PATH=");
+        expect(env, a).not.toMatch(/^CLAUDE_CODE_SIMPLE=/m);
+      }
     } finally {
       vi.unstubAllEnvs();
       rmSync(d, { recursive: true, force: true });
