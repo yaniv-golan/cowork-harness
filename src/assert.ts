@@ -1767,7 +1767,9 @@ const AGENT_REJECTED_RE =
   /^(?:hook (?:stdio closed before end-of-stream|output parsed as a document that grants|output opens a JSON payload that never completed)|Hook JSON output validation failed|HTTP hook must return|Failed to run: )/;
 
 /** The JSON decision a `hook_response` frame's data carries, by the rules in `HOOK_DECISION_RULES`: `undefined` when it
- *  cannot be read. Shared by the hook keys and record's redaction warning, so both read a frame the same way. */
+ *  cannot be read. Shared by the hook keys and record's redaction warning, so both read a frame the same way. Not
+ *  modelled: in 2.1.293, a plugin hook the host runs through its own hook runner (`ranElsewhere`) has its JSON rewritten
+ *  before the agent applies it, while the frame keeps the raw stdout; no current tier runs hooks that way. */
 export function frameJsonDecision(d: Record<string, unknown> | undefined): { json: HookDecision | undefined; token?: string } {
   const exitCode = typeof d?.exit_code === "number" ? d.exit_code : undefined;
   if (exitCode === undefined) return { json: undefined };
