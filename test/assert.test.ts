@@ -523,7 +523,10 @@ describe("hook_event_fired / hook_event_blocked over recorded hook_response fram
     expect(r.pass).toBe(true);
   });
   it("hook_event_blocked fails naming the exit codes seen when the hook fired without blocking (the recording's exit-0 frame alone)", () => {
-    const passOnly = recordedContextEvents((f) => f.subtype !== "hook_response" || f.exit_code === 0);
+    // The exit-0 frame and its hook_started: dropping only the blocking RESPONSE would leave a hook that started and
+    // never answered, which is evidence-unavailable.
+    const passId = loadHookFrames().find((f) => f.subtype === "hook_response" && f.exit_code === 0)?.hook_id;
+    const passOnly = recordedContextEvents((f) => f.hook_id === passId);
     expect(passOnly.some((e) => e.subtype === "hook_response")).toBe(true);
     const [r] = evaluate([{ hook_event_blocked: "Stop" }], ctx({ contextEvents: passOnly }));
     expect(r.pass).toBe(false);

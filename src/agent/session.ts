@@ -384,14 +384,26 @@ export type HookEvent = (typeof KNOWN_HOOK_EVENTS)[number];
 /** The subset of `KNOWN_HOOK_EVENTS` a plugin's own hook has been OBSERVED to fire for in a harness run —
  *  live-verified 2026-08-01 at both `container` and `hostloop` with a fixture plugin (SessionStart /
  *  UserPromptSubmit / PostToolUse), and 2026-09-22 at `container` for Stop — a block-and-resend recorded
- *  as hook_response frames by examples/probes/stop-hook-probe.scenario.yaml.
+ *  as hook_response frames by examples/probes/stop-hook-probe.scenario.yaml — and 2026-10-07 at `container` for
+ *  PreToolUse: a JSON deny on Bash and an exit 2 on Write, recorded by
+ *  examples/probes/hook-decision-probe.scenario.yaml (frames in
+ *  test/fixtures/hook-frames/hook-decision.events.jsonl). PreToolUse is also an event this harness SERVES, so the
+ *  "will fire" notice never names it; the entry records the observation.
  *
  *  Kept separate from `KNOWN_HOOK_EVENTS` deliberately. "The agent's validator accepts this name" and "a
  *  run will actually reach this trigger" are different claims, and conflating them is how a receipt for
  *  three events would silently become a promise about 33: nothing has shown that a harness run ever
  *  raises `WorktreeCreate`, `TeammateIdle`, `TaskCreated`, `ConfigChange` or `DirectoryAdded` at all.
- *  Widen only by running the case. */
-export const LIVE_VERIFIED_PLUGIN_HOOK_EVENTS: readonly HookEvent[] = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"];
+ *  Widen only by running the case, and record the tier it ran at. */
+export const LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS: Readonly<Partial<Record<HookEvent, readonly ("container" | "hostloop")[]>>> = {
+  SessionStart: ["container", "hostloop"],
+  UserPromptSubmit: ["container", "hostloop"],
+  PostToolUse: ["container", "hostloop"],
+  Stop: ["container"],
+  PreToolUse: ["container"],
+};
+/** The events in LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS, which records the tiers each was observed at. */
+export const LIVE_VERIFIED_PLUGIN_HOOK_EVENTS: readonly HookEvent[] = Object.keys(LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS) as HookEvent[];
 
 /** The hook events this harness actually SERVES on `initialize`.
  *

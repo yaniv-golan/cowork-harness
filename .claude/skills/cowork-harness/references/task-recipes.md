@@ -399,19 +399,20 @@ conversation starts with no memory of the first.
 
 ### Assert a hook's JSON decision
 
-A hook that decides by printing JSON and exiting 0 is not a block to
-`hook_event_blocked`, which counts exit code 2 only. Read the hook's output, and what the agent got back:
+A hook that decides by printing JSON and exiting 0 counts the same as one that exits 2: both deny. The one
+exception is the bare `hook_event_blocked: <event>`, which counts exit code 2 alone; its object form counts both.
+Assert the decision, and what the agent got back:
 
 ```yaml
 assert:
-  - hook_output_contains: {event: PreToolUse, stream: stdout, matches: '"permissionDecision"\s*:\s*"deny"'}
+  - hook_decision: {event: PreToolUse, decision: deny, tool: Bash}   # the tool that fired: Bash at container
   - tool_result_contains: "blocked by policy"
   # updatedInput: the recorded call input is what the model sent; the rewrite shows in the paired result
   - tool_called: {tool: Bash, result: {matches: 'outputs/archive/'}}
-  - hook_event_blocked: Stop        # a Stop hook that blocks with exit 2
+  - hook_event_blocked: {event: Stop, max: 0}   # the Stop hook ran and never blocked
 ```
 
-*Does not prove:* which tool a hook frame was about (frames do not name it), or that the model read the reason.
+*Does not prove:* that the model read the reason, or which plugin's hook decided (frames carry no plugin id).
 
 ### Schema-check a written file
 

@@ -152,6 +152,8 @@ CONTENT_KEYS = {
     "compaction_occurred",
     "hook_event_fired",
     "hook_event_blocked",
+    "no_hook_event_blocked",
+    "hook_decision",
     "hook_output_contains",
     "hook_output_not_contains",
     "all_tasks_completed",
@@ -279,7 +281,27 @@ _FALLBACK_KNOWN_HOOK_EVENTS = set(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED)
 # The subset a plugin hook has been OBSERVED to fire for here (live-verified 2026-08-01, container +
 # hostloop). Kept apart from the known set because the message wording depends on which claim we can
 # make: accepted-by-the-validator is not reached-by-a-run.
-_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"}
+_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreToolUse"}
+# The tiers each was observed at (mirrors LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS in src/agent/session.ts).
+_FALLBACK_LIVE_VERIFIED_HOOK_EVENT_TIERS = {
+    "SessionStart": ["container", "hostloop"],
+    "UserPromptSubmit": ["container", "hostloop"],
+    "PostToolUse": ["container", "hostloop"],
+    "Stop": ["container"],
+    "PreToolUse": ["container"],
+}
+
+
+def _load_live_verified_tiers():
+    """{event: [tier, ...]} from the generated sidecar, else the embedded fallback."""
+    try:
+        d = json.loads((Path(__file__).resolve().parent / "assertion-keys.json").read_text(encoding="utf-8"))
+        tiers = d.get("liveVerifiedHookEventTiers")
+        if isinstance(tiers, dict):
+            return {k: list(v) for k, v in tiers.items() if isinstance(v, list)}
+    except Exception:
+        pass
+    return {k: list(v) for k, v in _FALLBACK_LIVE_VERIFIED_HOOK_EVENT_TIERS.items()}
 
 
 def _load_hook_events():
@@ -306,6 +328,7 @@ def _load_hook_events():
 
 
 SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_HOOK_EVENTS = _load_hook_events()
+LIVE_VERIFIED_HOOK_EVENT_TIERS = _load_live_verified_tiers()
 
 # Self-check: every valid assertion key must be classified, else the replay-class lint logic mishandles it.
 # Surfaced loudly at load AND as a lint ERROR in cmd_lint (so --strict / exit codes flow). Never sys.exit here.
@@ -407,6 +430,11 @@ _EMBEDDED_ENUMS = {
     "assert.semantic_pairwise.order": ["random", "both"],
     "assert.hook_event_fired": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_event_blocked": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_event_blocked.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_event_blocked.via": ["exit2", "json", "any"],
+    "assert.no_hook_event_blocked.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_decision.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_decision.decision": ["allow", "deny", "ask", "defer", "block", "approve"],
     "assert.hook_output_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_output_contains.stream": ["stdout", "stderr", "any"],
     "assert.hook_output_not_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
@@ -1345,6 +1373,66 @@ def _lint_tool_call_object_form(items, fidelity, path):
     return out
 
 
+
+# The channel the object form of `hook_event_blocked` counts when `via` is omitted. Mirrors
+# OBJECT_HOOK_EVENT_BLOCKED_VIA in src/assert.ts (test/assert-contradiction-message-sync.test.ts pins the two).
+_OBJECT_HOOK_EVENT_BLOCKED_VIA = "any"
+
+
+def _hook_block_contradictions(items):
+    """A negative hook key (no block in its scope) alongside a positive one (at least one block in a scope inside it,
+    on a channel the negative counts). Mirrors hookBlockContradictions in src/run/execute.ts."""
+
+    def channels(via):
+        v = via if isinstance(via, str) else _OBJECT_HOOK_EVENT_BLOCKED_VIA
+        return ["exit2", "json"] if v == "any" else [v]
+
+    def at_least_one(o):
+        mn = o.get("min")
+        if not isinstance(mn, int) or isinstance(mn, bool):
+            mn = 1 if o.get("max") is None else 0
+        return mn >= 1
+
+    neg, pos = [], []
+    for nb in _assert_values(items, "no_hook_event_blocked"):
+        if nb is True:
+            neg.append(("no_hook_event_blocked", None, None, ["exit2", "json"]))
+        elif isinstance(nb, dict):
+            neg.append(("no_hook_event_blocked", nb.get("event"), nb.get("tool"), ["exit2", "json"]))
+    for hb in _assert_values(items, "hook_event_blocked"):
+        if isinstance(hb, str):
+            pos.append(("hook_event_blocked", hb, None, ["exit2"]))
+        elif isinstance(hb, dict):
+            if hb.get("max") == 0 and not isinstance(hb.get("max"), bool):
+                neg.append(("hook_event_blocked {max: 0}", hb.get("event"), hb.get("tool"), channels(hb.get("via"))))
+            if at_least_one(hb):
+                pos.append(("hook_event_blocked", hb.get("event"), hb.get("tool"), channels(hb.get("via"))))
+    for hd in _assert_values(items, "hook_decision"):
+        if isinstance(hd, dict) and hd.get("decision") in ("deny", "block"):
+            if hd.get("max") == 0 and not isinstance(hd.get("max"), bool):
+                neg.append(("hook_decision deny {max: 0}", hd.get("event"), hd.get("tool"), ["exit2", "json"]))
+            if at_least_one(hd):
+                pos.append(("hook_decision deny", hd.get("event"), hd.get("tool"), ["exit2", "json"]))
+    out = []
+    for n_label, n_event, n_tool, n_ch in neg:
+        for p_label, p_event, p_tool, p_ch in pos:
+            if n_event is not None and n_event != p_event:
+                continue
+            if n_tool is not None and n_tool != p_tool:
+                continue
+            if not all(c in n_ch for c in p_ch):
+                continue
+            tool = "" if p_tool is None else f" (tool {p_tool})"
+            clause = (
+                f"`{n_label}` alongside `{p_label}` on {p_event}{tool} "
+                f"(both read the same hook_response frames — the block the positive key requires is one the negative "
+                f"key requires not to exist)"
+            )
+            if clause not in out:
+                out.append(clause)
+    return out
+
+
 def lint_doc(doc, path, raw_lines, cassette_records=None):
     findings = []
     if not isinstance(doc, dict):
@@ -1694,6 +1782,26 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 _f = _enum_finding(f"assert.{_tk}.scope", _tv["scope"], path)
                 if _f is not None:
                     findings.append(_f)
+        # The hook keys: a bare event name (`hook_event_blocked: Stop`) is checked against the event list; the
+        # object form (`{event, ...}`) checks its own enum fields. A string must never be read as an object or
+        # an object as an invalid bare event.
+        for _hk in ("hook_event_fired", "hook_event_blocked"):
+            if _hk in _item and not isinstance(_item[_hk], dict):
+                _f = _enum_finding(f"assert.{_hk}", _item[_hk], path)
+                if _f is not None:
+                    findings.append(_f)
+        for _hk, _fields in (
+            ("hook_event_blocked", ("event", "via")),
+            ("no_hook_event_blocked", ("event",)),
+            ("hook_decision", ("event", "decision")),
+        ):
+            _hv = _item.get(_hk)
+            if isinstance(_hv, dict):
+                for _key in _fields:
+                    if _key in _hv:
+                        _f = _enum_finding(f"assert.{_hk}.{_key}", _hv[_key], path)
+                        if _f is not None:
+                            findings.append(_f)
         _question_options = _item.get("question_options")
         if isinstance(_question_options, dict):
             if "order" in _question_options:
@@ -1921,6 +2029,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 f"(stream {n_stream} / {p_stream}) (both read the same hook_response frames — the output "
                 f"`hook_output_contains` requires is the output `hook_output_not_contains` requires not to exist)"
             )
+    clauses.extend(_hook_block_contradictions(items))
     if clauses:
         findings.append(
             Finding(
@@ -2772,7 +2881,9 @@ def _lint_hook_events(path):
         if name in KNOWN_HOOK_EVENTS:
             fires = (
                 "fires here — a plugin's own `hooks/hooks.json` is loaded and executed by the agent "
-                "binary (live-verified at both `container` and `hostloop`)"
+                "binary (live-verified at "
+                + " and ".join(f"`{t}`" for t in LIVE_VERIFIED_HOOK_EVENT_TIERS.get(name, ["container"]))
+                + ")"
                 if name in LIVE_VERIFIED_HOOK_EVENTS
                 else "is a hook event the agent accepts, and it loads a plugin's own `hooks/hooks.json` "
                      "itself — though whether a harness run ever reaches this event's trigger has not "
@@ -2782,8 +2893,8 @@ def _lint_hook_events(path):
                 "INFO", "hook-event-not-served",
                 f"`{name}` {fires} — but cowork-harness "
                 f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. "
-                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` (and `hook_output_*` for what it "
-                f"printed) grade it from the agent's own "
+                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` (and `hook_decision` for what it "
+                f"decided, `hook_output_*` for what it printed) grade it from the agent's own "
                 f"hook_response frames (the harness passes --include-hook-events because this plugin declares "
                 f"hooks); but if real Cowork installs a `{name}` hook of its own, the harness does not reproduce "
                 f"it, so anything driven by that is absent here. (Cowork installs hooks of its own for "

@@ -6,12 +6,52 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
 - **Cassette format v15.** This build reads and writes cassettes up to `cassetteVersion` 15 (`schema/cassette.v15.json`; `schema/cassette.v14.json` is retained). The stamp stays per-scenario: a cassette whose scenario uses no v15 feature is stamped exactly as before, so no existing cassette or `verify-cassettes` result changes. An older build refuses a v15 cassette as too new (upgrade) rather than as an unrecognized assertion.
 - **The companion skill's assertion catalog is split by family.** `references/assertion-catalog.md` keeps the
   conventions every key shares and the verdict-signal table, and links three new files that hold the per-key rows:
   `assertion-catalog-outcome-files-tools.md`, `assertion-catalog-agents-skills-budgets.md` and
   `assertion-catalog-gates-hooks-modifiers.md`. The catalog was close to the size one Read returns whole, and each
   new assertion key grows it. The rows are moved unchanged. No harness behaviour changes.
+- **`hook_decision: {event, decision, tool?, min?, max?}`** counts a plugin's command hook frames by what the hook
+  decided: `allow`, `deny`, `ask` or `defer` (`block` and `approve` are aliases of `deny` and `allow`). It reads both
+  ways a hook decides: the JSON it prints on stdout, read on a frame the agent marks `outcome: success` (exit 0, or an
+  HTTP hook's 2xx status), and exit code 2, which is a deny. A hook the agent cancelled (timed out or aborted) decided
+  nothing. Only stdout that parses whole as a JSON object counts as a decision, so a hook that prints the word `deny`
+  decides nothing. It reads the JSON by the agent's rules: `hookSpecificOutput.permissionDecision` decides on
+  `PreToolUse` and `PreModelSwitch` only, where it overrides a top-level `decision`; a `PermissionRequest` hook
+  decides by `hookSpecificOutput.decision.behavior`; an `Elicitation` or `ElicitationResult` hook that answers
+  `action: decline` denies; any other event decides by the top-level `decision` alone.
+- **`hook_event_blocked` takes a count form, `{event, tool?, via?, min?, max?}`.** It counts the blocking frames for an
+  event. `{event, max: 0}` asserts the hook never blocked. `via` picks the channel: `exit2`, `json`, or `any` (the
+  default). The bare `hook_event_blocked: <event>` still counts exit code 2 alone. When it fails, it names any JSON
+  deny it saw and points to `via`.
+- **`no_hook_event_blocked: true | {event, tool?}`** asserts that no command hook blocked, by either channel. It is
+  never vacuous: with no frame in scope it reports evidence-unavailable.
+- `tool` scopes each of these keys to the tool that fired (`hook_name` is `<event>:<tool>`): `Bash` at `container`,
+  `mcp__workspace__bash` at `hostloop`. An event whose frames carry no tool name, such as `Stop`, reports
+  evidence-unavailable for any `tool`.
+- A frame whose decision cannot be read counts as unknown, and makes a check evidence-unavailable only when it could
+  change the verdict. That covers:
+  - a JSON decision on a frame other than `outcome: success`, such as exit 1, where the frame does not show whether
+    the agent applied it;
+  - a missing exit code, or a hook that never answered;
+  - stdout that a redaction policy rewrote or the agent truncated;
+  - output the agent did not apply, which it marks on the frame: `outcome: "error"` with exit 0, or, at the start of
+    stderr, its rejection of the JSON, its refusal to read an incomplete capture, or its failure to run the hook;
+  - a top-level `decision` other than `approve` or `block`, and a `hookSpecificOutput` whose `hookEventName` is
+    missing or names another event.
+
+  `record` warns when its redaction policy makes a hook decision that one of these keys reads unreadable.
+- A cassette whose scenario uses `hook_decision`, `no_hook_event_blocked` or the object form of `hook_event_blocked`
+  is stamped v15, so an older build refuses it as too new instead of rejecting the assertion. The bare
+  `hook_event_blocked: <event>` stamps what it did.
+- `run`, `record` and `lint` refuse a negative hook key alongside a positive one that can never both pass, such as
+  `no_hook_event_blocked: true` with `hook_event_blocked: Stop`, as they refuse `no_hook_blocked` with `hook_blocked`.
+
+### Changed
+
 - **`latest` moves to `desktop-2.26454.2`** (agent **2.1.293**, was 2.1.289). Its `sync` reported no unknown deltas:
   the Cowork system prompt, the sub-agent append, the egress contract, the first-party spawn env and the cloud tool
   surface are unchanged from `desktop-2.26454.0`. The agent was staged from a release-candidate channel, so the CI
@@ -20,6 +60,23 @@ All notable changes to this project are documented here. The format is based on
     record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it; a
     re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on
     2.1.293.
+- **The bare `hook_event_blocked: <event>` keeps its verdicts; some failure messages change.** When no frame blocked
+  and one frame cannot be read (no exit code, or a hook that started and never answered), the failure now reads
+  "evidence unavailable" instead of "never blocked" or "never fired". When the hook printed a JSON deny, the "never
+  blocked" message names it and points to `via: any`. The "never fired" message lists the same causes as
+  `hook_event_fired`'s.
+- **The bare `hook_event_blocked: <event>` now gets the hook-attribution warning** that `hook_output_contains` gets:
+  a run warns when a second staged plugin declares a hook for the same event, or when a `protocol` run can see hooks
+  installed on the host, since a frame carries no plugin id. The verdict does not change.
+- **`hook_blocked` and `no_hook_blocked` say what they read:** the harness's own hook callbacks. A plugin's command
+  hook never reaches that list, so `no_hook_blocked` passes over a plugin's block. The docs and the companion skill
+  now send a plugin hook to `hook_event_blocked`, `no_hook_event_blocked` and `hook_decision`.
+- **`liveVerifiedHookEvents` in `assertion-keys.json` lists `PreToolUse`.** A plugin's PreToolUse hook has now been
+  recorded firing at `container`, deciding by JSON and by exit 2. PreToolUse is an event the harness serves, and the
+  notices cover unserved events only, so no notice changes for it.
+- **`assertion-keys.json` gains `liveVerifiedHookEventTiers`**, the tiers each live-verified hook event was observed
+  at. `lint`'s `hook-event-not-served` message now names those tiers: `Stop` says `container`, where it used to claim
+  `container` and `hostloop`.
 
 ## [4.5.0] — 2026-10-07
 

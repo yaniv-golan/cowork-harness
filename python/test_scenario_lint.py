@@ -1442,6 +1442,37 @@ def test_enum_value_invalid_on_nested_assert_result(tmp_path):
     assert code == 1
 
 
+def test_enum_value_invalid_on_hook_keys_string_and_object_forms(tmp_path):
+    # `hook_event_blocked` takes a bare event OR `{event, ...}`: each form is checked against its own field id,
+    # and a valid object is never reported as an invalid bare event.
+    body = (
+        "assert:\n"
+        "  - hook_event_blocked: Stopp\n"
+        "  - hook_event_blocked: {event: Stopp, max: 0}\n"
+        "  - hook_event_blocked: {event: Stop, max: 0}\n"
+        "  - hook_event_blocked: {event: Stop, via: stdout}\n"
+        "  - hook_event_blocked: {event: Stop, via: json}\n"
+        "  - no_hook_event_blocked: {event: Nope}\n"
+        "  - no_hook_event_blocked: true\n"
+        "  - hook_decision: {event: PreToolUse, decision: denied}\n"
+        "  - hook_decision: {event: PreToolUse, decision: block}\n"
+        "  - hook_event_fired: Stop\n"
+    )
+    f = _write_at(tmp_path, "container", body)
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = sorted(x["message"] for x in findings if x["rule"] == "enum-value-invalid")
+    assert hits == sorted(
+        [
+            "`assert.hook_event_blocked: Stopp` is not a valid value.",
+            "`assert.hook_event_blocked.event: Stopp` is not a valid value.",
+            "`assert.hook_event_blocked.via: stdout` is not a valid value.",
+            "`assert.no_hook_event_blocked.event: Nope` is not a valid value.",
+            "`assert.hook_decision.decision: denied` is not a valid value.",
+        ]
+    )
+    assert code == 1
+
+
 def test_enum_value_invalid_on_answers_decide(tmp_path):
     body = "answers:\n  - when_tool: Bash\n    decide: bogus\nassert:\n  - result: success\n"
     f = _write_at(tmp_path, "container", body)
@@ -2407,3 +2438,21 @@ def test_slash_skill_quiet_when_session_unreadable(tmp_path, session):
         encoding="utf-8",
     )
     assert [x for x in scenario.lint_file(str(f)) if x.rule == _SLASH_RULE] == []
+
+
+def test_hook_event_not_served_names_the_tiers_each_event_was_verified_at(tmp_path):
+    # Each live-verified event says where it was observed firing, not a blanket "container and hostloop":
+    # Stop and PreToolUse were recorded at container only.
+    hooks = tmp_path / "plug" / "hooks"
+    hooks.mkdir(parents=True)
+    f = hooks / "hooks.json"
+    f.write_text(json.dumps({"hooks": {"Stop": [], "PostToolUse": [], "TaskCreated": []}}), encoding="utf-8")
+    msgs = {
+        x.message.split("`")[1]: x.message
+        for x in scenario._lint_hook_events(str(f))
+        if x.rule == "hook-event-not-served"
+    }
+    assert "live-verified at `container`)" in msgs["Stop"]
+    assert "hostloop" not in msgs["Stop"]
+    assert "live-verified at `container` and `hostloop`)" in msgs["PostToolUse"]
+    assert "has not been verified here" in msgs["TaskCreated"]

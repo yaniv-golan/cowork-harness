@@ -1,0 +1,8 @@
+# Session for the hook-decision probe: a plugin whose only content is three command hooks, each deciding a
+# different way (a PreToolUse JSON deny, a PreToolUse exit 2, a Stop JSON block that fires once).
+model: claude-sonnet-5
+# A hard turn budget: the recorded run took 4 turns. Bounds the live gate's spend (test/live-hook-decision.test.ts).
+agent_max_turns: 8
+plugins:
+  local_plugins:
+    - ../probes/hook-decision-probe

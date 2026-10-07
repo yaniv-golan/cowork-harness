@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Live acceptance probe: the three ways a command hook decides reach the stream as `hook_response` frames.
+#   - PreToolUse on Bash prints a `permissionDecision: deny` JSON on stdout and exits 0;
+#   - PreToolUse on Write writes a reason to stderr and exits 2;
+#   - Stop prints a top-level `decision: block` JSON once, then lets the agent stop.
+# The frames it records show which field carries the JSON and what an exit-2 PreToolUse frame looks like; the
+# copies in test/fixtures/hook-frames/ are what `hook_decision` is tested against.
+#
+# Recorded at `container`: hooks run inside the sandbox (no host-hook consent), on the baseline's pinned agent,
+# and the frames copied from this run must never carry the recording machine's environment.
+name: hook-decision-probe
+baseline: latest
+session: ../sessions/hook-decision-probe.yaml
+fidelity: container
+# A hard wall-clock budget (the recorded run took 13 s) and, below, a cost ceiling the run is graded against.
+timeout_ms: 180000
+prompt: |
+  Check the shell works by running `echo ready` with the Bash tool, then save a note saying "ready" to a file
+  named note.txt in the outputs folder with the Write tool. If a step is blocked, don't ask me what to do: go on
+  to the next step. Tell me briefly what happened with each step.
+assert:
+  - hook_event_fired: PreToolUse
+  - hook_event_fired: Stop
+  - hook_output_contains: { event: PreToolUse, stream: stdout, text: "HOOKPROBE-DENY" }
+  - hook_output_contains: { event: PreToolUse, stream: stderr, text: "HOOKPROBE-EXIT2" }
+  - hook_output_contains: { event: Stop, stream: stdout, text: "HOOKPROBE-STOP" }
+  # What each hook decided, through both channels.
+  - hook_decision: { event: PreToolUse, decision: deny, tool: Bash, min: 1, max: 1 }   # JSON on stdout, exit 0
+  - hook_decision: { event: PreToolUse, decision: deny, tool: Write, min: 1, max: 1 }  # exit code 2
+  - hook_decision: { event: Stop, decision: block, min: 1, max: 1 }                    # JSON block once, then a pass
+  - hook_event_blocked: PreToolUse                                                     # the bare form: exit 2 alone
+  - hook_event_blocked: { event: PreToolUse, via: json, tool: Bash, min: 1, max: 1 }
+  - hook_event_blocked: { event: Stop, via: exit2, max: 0 }                            # Stop never exited 2
+  - max_cost_usd: 0.25                                                                 # the recorded run cost $0.066

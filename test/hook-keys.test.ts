@@ -1,0 +1,553 @@
+// The count form of `hook_event_blocked`, `no_hook_event_blocked` and the `hook_decision` schema, over the committed
+// Stop recording (test/fixtures/hook-frames/stop-hook-block.events.jsonl: the hook blocks once with exit 2, then
+// passes with exit 0). Where a case needs a frame the recording lacks (no exit code, a hook that never answered, a
+// different event), it edits the recorded frames and says so in its name.
+import { describe, it, expect } from "vitest";
+import { OBJECT_HOOK_EVENT_BLOCKED_VIA, evaluate, type AssertContext } from "../src/assert.js";
+import { parseMessage } from "../src/agent/session.js";
+import { Assertion } from "../src/types.js";
+import { loadHookDecisionFrames, loadHookFrames } from "./helpers/hook-frames.js";
+
+type Frame = Record<string, unknown>;
+const toEvents = (frames: Frame[]) =>
+  frames.flatMap((f) => parseMessage(f)).flatMap((e) => (e.type === "system_event" ? [{ subtype: e.subtype, data: e.data }] : []));
+function recorded(edit?: (frames: Frame[]) => Frame[]) {
+  const frames = loadHookFrames();
+  return toEvents(edit ? edit(frames.map((f) => ({ ...f }))) : frames);
+}
+/** The hook-decision recording: Bash denied by JSON (exit 0), Write blocked by exit 2, Stop blocked once by JSON
+ *  (exit 0) and then passed with empty stdout. */
+function decisions(edit?: (frames: Frame[]) => Frame[]) {
+  const frames = loadHookDecisionFrames();
+  return toEvents(edit ? edit(frames.map((f) => ({ ...f }))) : frames);
+}
+/** Rewrite the stdout of the response frames whose hook_name is `name`. */
+const withStdout = (name: string, stdout: string) => (fs: Frame[]) =>
+  fs.map((f) => (isResponse(f) && f.hook_name === name ? { ...f, stdout, output: stdout } : f));
+const ctx = (contextEvents: AssertContext["contextEvents"]) =>
+  ({ transcript: "", toolsCalled: new Set(), questions: [], subagents: [], contextEvents }) as unknown as AssertContext;
+const run = (a: unknown, c: AssertContext) => evaluate([a as Assertion], c)[0]!;
+const isResponse = (f: Frame) => f.subtype === "hook_response";
+/** The recording's exit-0 frame and its hook_started alone: a Stop hook that fired and did not block. */
+const passFrames = (fs: Frame[]) => {
+  const id = fs.find((f) => isResponse(f) && f.exit_code === 0)?.hook_id;
+  return fs.filter((f) => f.hook_id === id);
+};
+const passOnly = () => recorded(passFrames);
+/** The exit-0 frame with its exit code removed. */
+const noExitCode = (fs: Frame[]) => fs.map((f) => (isResponse(f) && f.exit_code === 0 ? { ...f, exit_code: undefined } : f));
+/** The exit-0 frame dropped, its hook_started kept: a hook that started and never answered. */
+const pending = (fs: Frame[]) => fs.filter((f) => !isResponse(f) || f.exit_code !== 0);
+const UNAVAILABLE = /^evidence unavailable: /;
+
+describe("schema", () => {
+  const parse = (a: unknown) => Assertion.safeParse(a).success;
+  it("hook_event_blocked takes the bare event or {event, tool?, min?, max?}", () => {
+    expect(parse({ hook_event_blocked: "Stop" })).toBe(true);
+    expect(parse({ hook_event_blocked: { event: "Stop", max: 0 } })).toBe(true);
+    expect(parse({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", min: 1, max: 3 } })).toBe(true);
+    expect(parse({ hook_event_blocked: { event: "Stop", min: 3, max: 1 } })).toBe(false);
+    expect(parse({ hook_event_blocked: { event: "Stop", min: -1 } })).toBe(false);
+    expect(parse({ hook_event_blocked: { event: "Stop", matcher: "Bash" } })).toBe(false);
+    expect(parse({ hook_event_blocked: { event: "NoSuchEvent" } })).toBe(false);
+  });
+  it("no_hook_event_blocked takes true or {event, tool?}; tool needs event", () => {
+    expect(parse({ no_hook_event_blocked: true })).toBe(true);
+    expect(parse({ no_hook_event_blocked: false })).toBe(false);
+    expect(parse({ no_hook_event_blocked: { event: "Stop" } })).toBe(true);
+    expect(parse({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } })).toBe(true);
+    expect(parse({ no_hook_event_blocked: { tool: "Bash" } })).toBe(false);
+  });
+  it("hook_decision takes {event, decision, tool?, min?, max?} with a fixed decision vocabulary", () => {
+    for (const decision of ["allow", "deny", "ask", "defer", "block", "approve"])
+      expect(parse({ hook_decision: { event: "PreToolUse", decision } }), decision).toBe(true);
+    expect(parse({ hook_decision: { event: "PreToolUse", decision: "denied" } })).toBe(false);
+    expect(parse({ hook_decision: { event: "PreToolUse" } })).toBe(false);
+    expect(parse({ hook_decision: { event: "PreToolUse", decision: "deny", min: 2, max: 1 } })).toBe(false);
+  });
+});
+
+describe("hook_event_blocked, count form", () => {
+  it("the bare form keeps its meaning: at least one block", () => {
+    expect(run({ hook_event_blocked: "Stop" }, ctx(recorded())).pass).toBe(true);
+  });
+  it("{event} alone means min 1", () => {
+    expect(run({ hook_event_blocked: { event: "Stop" } }, ctx(recorded())).pass).toBe(true);
+    expect(run({ hook_event_blocked: { event: "Stop" } }, ctx(passOnly())).pass).toBe(false);
+  });
+  it("{max: 0} is the per-event negative: one block fails it, naming the count", () => {
+    const r = run({ hook_event_blocked: { event: "Stop", max: 0 } }, ctx(recorded()));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/1 blocking .*expected at most 0/);
+    expect(run({ hook_event_blocked: { event: "Stop", max: 0 } }, ctx(passOnly())).pass).toBe(true);
+  });
+  it("a count under min fails; an exact range passes", () => {
+    expect(run({ hook_event_blocked: { event: "Stop", min: 2 } }, ctx(recorded())).message).toMatch(/1 blocking .*expected at least 2/);
+    expect(run({ hook_event_blocked: { event: "Stop", min: 1, max: 1 } }, ctx(recorded())).pass).toBe(true);
+  });
+  it("{max: 0} over an event that never fired fails 'never fired', never a vacuous pass", () => {
+    const r = run({ hook_event_blocked: { event: "PostToolUse", max: 0 } }, ctx(recorded()));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no hook_response frame for `PostToolUse`/);
+  });
+  it("tool: on an event whose frames carry no tool name (Stop) is evidence-unavailable, never a pass or a 'never fired' fail", () => {
+    for (const a of [
+      { hook_event_blocked: { event: "Stop", tool: "Bash" } },
+      { hook_event_blocked: { event: "Stop", tool: "Bash", max: 0 } },
+      { no_hook_event_blocked: { event: "Stop", tool: "Bash" } },
+      { hook_decision: { event: "Stop", decision: "deny", tool: "Bash" } },
+      { hook_decision: { event: "Stop", decision: "deny", tool: "Bash", max: 0 } },
+    ]) {
+      const r = run(a, ctx(recorded()));
+      expect(r.pass, JSON.stringify(a)).toBe(false);
+      expect(r.message, JSON.stringify(a)).toMatch(UNAVAILABLE);
+      expect(r.message, JSON.stringify(a)).toMatch(/carry no tool name/);
+    }
+  });
+  it("tool: naming a tool that never fired, where the event's frames do carry tool names, fails 'never fired'", () => {
+    const r = run({ hook_event_blocked: { event: "PreToolUse", tool: "Edit" } }, ctx(decisions()));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/no hook_response frame for `PreToolUse` \(tool `Edit`\)/);
+    // the tier trap: the shell's name differs by tier
+    expect(r.message).toMatch(/the shell is `Bash` at container, `mcp__workspace__bash` at hostloop/);
+  });
+  describe("unknown frames (edited: exit code removed / response dropped) decide by range intersection", () => {
+    // One known block (B=1) and one unknown frame (U=1): the true count is 1 or 2.
+    it("[1,2] inside [0,5] passes", () => {
+      expect(run({ hook_event_blocked: { event: "Stop", max: 5 } }, ctx(recorded(noExitCode))).pass).toBe(true);
+    });
+    it("[1,2] disjoint from [3,∞) fails", () => {
+      const r = run({ hook_event_blocked: { event: "Stop", min: 3 } }, ctx(recorded(noExitCode)));
+      expect(r.pass).toBe(false);
+      expect(r.message).not.toMatch(UNAVAILABLE);
+    });
+    it("[1,2] straddling [2,2] is evidence-unavailable, though both ends alone would fail or pass", () => {
+      expect(run({ hook_event_blocked: { event: "Stop", min: 2, max: 2 } }, ctx(recorded(noExitCode))).message).toMatch(UNAVAILABLE);
+      expect(run({ hook_event_blocked: { event: "Stop", max: 1 } }, ctx(recorded(noExitCode))).message).toMatch(UNAVAILABLE);
+    });
+    it("[1,3] around [2,2] is evidence-unavailable though both ends fall outside it (one block, two unknowns)", () => {
+      const twoUnknown = (fs: Frame[]) => [...noExitCode(fs), { ...fs[0]!, hook_id: "never-answered" }];
+      const r = run({ hook_event_blocked: { event: "Stop", min: 2, max: 2 } }, ctx(recorded(twoUnknown)));
+      expect(r.message).toMatch(UNAVAILABLE);
+      expect(r.message).toMatch(/plus 2 whose outcome cannot be read/);
+    });
+    it("a hook that started and never answered counts as unknown too", () => {
+      expect(run({ hook_event_blocked: { event: "Stop", max: 1 } }, ctx(recorded(pending))).message).toMatch(UNAVAILABLE);
+      expect(run({ hook_event_blocked: { event: "Stop", max: 5 } }, ctx(recorded(pending))).pass).toBe(true);
+    });
+  });
+  it("no context events: cannot verify", () => {
+    expect(run({ hook_event_blocked: { event: "Stop", max: 0 } }, ctx(undefined)).message).toMatch(/cannot verify/);
+  });
+});
+
+describe("no_hook_event_blocked", () => {
+  it("a blocking frame fails it, naming the frame", () => {
+    for (const v of [true, { event: "Stop" }]) {
+      const r = run({ no_hook_event_blocked: v }, ctx(recorded()));
+      expect(r.pass).toBe(false);
+      expect(r.message).toMatch(/: Stop \(exit 2\) blocked — 1 of 2 /);
+    }
+  });
+  it("passes when hooks fired and none blocked", () => {
+    expect(run({ no_hook_event_blocked: true }, ctx(passOnly())).pass).toBe(true);
+    expect(run({ no_hook_event_blocked: { event: "Stop" } }, ctx(passOnly())).pass).toBe(true);
+  });
+  it("zero frames in scope: never a vacuous pass", () => {
+    expect(run({ no_hook_event_blocked: { event: "PostToolUse" } }, ctx(passOnly())).pass).toBe(false);
+    const r = run({ no_hook_event_blocked: true }, ctx([]));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(UNAVAILABLE);
+  });
+  it("unscoped over SessionStart-only frames (edited) is evidence-unavailable: those stream without --include-hook-events", () => {
+    const sessionStartOnly = recorded((fs) =>
+      passFrames(fs).map((f) => ({ ...f, hook_event: "SessionStart", hook_name: "SessionStart:startup" })),
+    );
+    const r = run({ no_hook_event_blocked: true }, ctx(sessionStartOnly));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(UNAVAILABLE);
+    expect(r.message).toMatch(/--include-hook-events/);
+    expect(run({ no_hook_event_blocked: { event: "SessionStart" } }, ctx(sessionStartOnly)).pass).toBe(true);
+  });
+  it("an in-scope frame without an exit code (edited) is evidence-unavailable", () => {
+    const c = ctx(recorded((fs) => noExitCode(passFrames(fs))));
+    expect(run({ no_hook_event_blocked: true }, c).message).toMatch(UNAVAILABLE);
+  });
+  it("a hook that started and never answered (edited) is evidence-unavailable", () => {
+    const c = ctx(recorded((fs) => [...passFrames(fs), { ...fs[0]!, hook_id: "never-answered" }]));
+    expect(run({ no_hook_event_blocked: true }, c).message).toMatch(UNAVAILABLE);
+  });
+  it("no context events: cannot verify", () => {
+    expect(run({ no_hook_event_blocked: true }, ctx(undefined)).message).toMatch(/cannot verify/);
+  });
+});
+
+describe("the JSON decision channel (the hook-decision recording)", () => {
+  it("the bare form counts exit 2 alone: Bash's JSON deny is not counted, Write's exit 2 is", () => {
+    expect(run({ hook_event_blocked: "PreToolUse" }, ctx(decisions())).pass).toBe(true);
+    const r = run(
+      { hook_event_blocked: "PreToolUse" },
+      ctx(decisions(withStdout("PreToolUse:Write", "")).filter((e) => e.data?.hook_name !== "PreToolUse:Write")),
+    );
+    expect(r.pass).toBe(false);
+  });
+  it("the bare form's 'never blocked' failure names a JSON deny it did not count and points to `via`", () => {
+    const r = run({ hook_event_blocked: "Stop" }, ctx(decisions()));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/never blocked/);
+    expect(r.message).toMatch(/1 frame\(s\) denied by JSON on stdout/);
+    expect(r.message).toMatch(/via: any/);
+  });
+  it("via: any counts either channel", () => {
+    expect(run({ hook_event_blocked: { event: "PreToolUse", via: "any", min: 2, max: 2 } }, ctx(decisions())).pass).toBe(true);
+    expect(run({ hook_event_blocked: { event: "Stop", via: "any", min: 1, max: 1 } }, ctx(decisions())).pass).toBe(true);
+  });
+  // The object form's default channel is one constant; these hold whichever value it has.
+  it("omitting via grades exactly as via: <the object default>", () => {
+    for (const spec of [
+      { event: "Stop", max: 0 },
+      { event: "Stop", min: 1, max: 1 },
+      { event: "PreToolUse", min: 2, max: 2 },
+      { event: "PreToolUse", tool: "Bash", max: 0 },
+      { event: "PreToolUse", min: 1, max: 1 },
+    ]) {
+      const bare = run({ hook_event_blocked: spec }, ctx(decisions()));
+      const explicit = run({ hook_event_blocked: { ...spec, via: OBJECT_HOOK_EVENT_BLOCKED_VIA } }, ctx(decisions()));
+      expect([bare.pass, bare.message], JSON.stringify(spec)).toEqual([explicit.pass, explicit.message]);
+    }
+  });
+  it("{max: 0} over a hook that denied by JSON alone: via: any fails it, via: exit2 passes it", () => {
+    const any = run({ hook_event_blocked: { event: "Stop", via: "any", max: 0 } }, ctx(decisions()));
+    expect(any.pass).toBe(false);
+    expect(any.message).toMatch(/1 blocking .*expected at most 0/);
+    const exit2 = run({ hook_event_blocked: { event: "Stop", via: "exit2", max: 0 } }, ctx(decisions()));
+    expect(exit2.pass).toBe(true);
+  });
+  it("the object default: `any` fails {event: Stop, max: 0} on the JSON-only deny; `exit2` would pass it", () => {
+    const r = run({ hook_event_blocked: { event: "Stop", max: 0 } }, ctx(decisions()));
+    expect(r.pass).toBe(OBJECT_HOOK_EVENT_BLOCKED_VIA === "exit2");
+  });
+  it("via: exit2 | json | any picks the channel", () => {
+    const n =
+      (via: string, event = "PreToolUse") =>
+      (min: number) =>
+        run({ hook_event_blocked: { event, via, min, max: min } }, ctx(decisions())).pass;
+    expect(n("exit2")(1)).toBe(true);
+    expect(n("json")(1)).toBe(true);
+    expect(n("any")(2)).toBe(true);
+    expect(n("exit2", "Stop")(0)).toBe(true);
+    expect(n("json", "Stop")(1)).toBe(true);
+  });
+  it("via is refused on the bare form's schema and must be one of exit2|json|any", () => {
+    expect(Assertion.safeParse({ hook_event_blocked: { event: "Stop", via: "exit2" } }).success).toBe(true);
+    expect(Assertion.safeParse({ hook_event_blocked: { event: "Stop", via: "stdout" } }).success).toBe(false);
+  });
+  it("tool: scopes to the tool that fired", () => {
+    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "any", min: 1, max: 1 } }, ctx(decisions())).pass).toBe(
+      true,
+    );
+    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "exit2", max: 0 } }, ctx(decisions())).pass).toBe(true);
+  });
+  it("no_hook_event_blocked fails on a JSON deny, naming it", () => {
+    const r = run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, ctx(decisions()));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/PreToolUse:Bash \(exit 0, JSON deny\) blocked/);
+  });
+  describe("stdout that is not a whole JSON decision is no decision", () => {
+    for (const [label, stdout] of [
+      ["the bare word deny", "deny\n"],
+      ["prose naming deny", "the hook said deny; permissionDecision deny\n"],
+      ["JSON with a deny after other text", 'note: {"decision":"block"}\n'],
+      ["a JSON array", '[{"decision":"block"}]\n'],
+      ["a JSON string", '"deny"\n'],
+      ["continue: false (stops, does not deny)", '{"continue":false,"stopReason":"x"}\n'],
+    ] as const)
+      it(`${label}: not a block, not unknown`, () => {
+        const c = ctx(decisions(withStdout("PreToolUse:Bash", stdout)));
+        const r = run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, c);
+        expect(r.pass, r.message).toBe(true);
+        expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, c).pass).toBe(true);
+      });
+  });
+  it("a hookEventName naming another event makes the decision unreadable", () => {
+    const wrong = '{"hookSpecificOutput":{"hookEventName":"PostToolUse","permissionDecision":"deny"}}\n';
+    const r = run(
+      { hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } },
+      ctx(decisions(withStdout("PreToolUse:Bash", wrong))),
+    );
+    expect(r.message).toMatch(UNAVAILABLE);
+  });
+  it("stdout a redaction rewrote so it no longer parses is unreadable; a [REDACTED] inside a reason still parses", () => {
+    const broken = '{"hookSpecificOutput": [REDACTED]\n';
+    const r = run(
+      { hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } },
+      ctx(decisions(withStdout("PreToolUse:Bash", broken))),
+    );
+    expect(r.message).toMatch(UNAVAILABLE);
+    const inReason =
+      '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"[REDACTED]"}}\n';
+    expect(
+      run(
+        { hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny" } },
+        ctx(decisions(withStdout("PreToolUse:Bash", inReason))),
+      ).pass,
+    ).toBe(true);
+    // The exit-2 channel ignores stdout, so a rewritten stdout leaves via: exit2 readable.
+    expect(
+      run(
+        { hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "exit2", max: 0 } },
+        ctx(decisions(withStdout("PreToolUse:Bash", broken))),
+      ).pass,
+    ).toBe(true);
+  });
+  it("via: json over stdout it cannot read is evidence-unavailable, not a miss", () => {
+    const broken = withStdout("PreToolUse:Bash", '{"hookSpecificOutput": [REDACTED]\n');
+    const r = run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "json", max: 0 } }, ctx(decisions(broken)));
+    expect(r.message).toMatch(UNAVAILABLE);
+  });
+  describe("which frames' JSON decides (edited: Bash's response frame)", () => {
+    const edit = (patch: Frame) => (fs: Frame[]) =>
+      fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Bash" ? { ...f, ...patch } : f));
+    const c = (patch: Frame) => ctx(decisions(edit(patch)));
+    it("exit 1 with a JSON deny is unreadable: a command hook's is applied, an MCP tool hook's error is not", () => {
+      for (const patch of [
+        { exit_code: 1, outcome: "error" },
+        // An MCP tool hook whose tool reported an error: the body is both stdout and stderr.
+        { exit_code: 1, outcome: "error", stderr: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}' },
+      ]) {
+        expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c(patch)).message).toMatch(UNAVAILABLE);
+        expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1 } }, c(patch)).message).toMatch(
+          UNAVAILABLE,
+        );
+        expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "exit2", max: 0 } }, c(patch)).pass).toBe(true);
+      }
+    });
+    it("exit 1 with plain text on stdout decides nothing", () => {
+      const text = c({ exit_code: 1, outcome: "error", stdout: "Traceback: boom\n", output: "Traceback: boom\n" });
+      expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, text).pass).toBe(true);
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, text).pass).toBe(true);
+    });
+    it("a hook the agent cancelled decided nothing, whatever it printed first", () => {
+      const cancelled = c({ exit_code: 1, outcome: "cancelled" });
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, cancelled).pass).toBe(true);
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, cancelled).pass).toBe(true);
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c({ exit_code: 0, outcome: "cancelled" })).pass).toBe(
+        true,
+      );
+    });
+    it("an HTTP hook's frame carries the HTTP status as its exit code: on success its JSON decides", () => {
+      const http = c({ exit_code: 200, outcome: "success" });
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, http).pass).toBe(true);
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, http).pass).toBe(false);
+    });
+  });
+  it("a frame with no stdout field is unreadable: `output` joins stdout and stderr, so it is never read as the decision", () => {
+    const outputOnly = (fs: Frame[]) =>
+      fs.map((f) => {
+        if (!isResponse(f) || f.hook_name !== "PreToolUse:Bash") return f;
+        const { stdout: _drop, ...rest } = f;
+        return { ...rest, output: '{"decision":"block"}\nwarning: x' };
+      });
+    const c = ctx(decisions(outputOnly));
+    expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).message).toMatch(UNAVAILABLE);
+    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, c).message).toMatch(UNAVAILABLE);
+  });
+  it("a PermissionRequest hook decides by hookSpecificOutput.decision.behavior (edited: Bash's frames renamed)", () => {
+    const asPermissionRequest = (stdout: string) => (fs: Frame[]) =>
+      fs.map((f) =>
+        f.hook_name !== "PreToolUse:Bash"
+          ? f
+          : {
+              ...f,
+              hook_event: "PermissionRequest",
+              hook_name: "PermissionRequest:Bash",
+              ...(isResponse(f) ? { stdout, output: stdout } : {}),
+            },
+      );
+    const say = (behavior: string) =>
+      ctx(
+        decisions(
+          asPermissionRequest(JSON.stringify({ hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior } } })),
+        ),
+      );
+    expect(run({ hook_decision: { event: "PermissionRequest", decision: "deny", min: 1, max: 1 } }, say("deny")).pass).toBe(true);
+    expect(run({ no_hook_event_blocked: { event: "PermissionRequest" } }, say("deny")).pass).toBe(false);
+    expect(run({ hook_decision: { event: "PermissionRequest", decision: "allow", min: 1, max: 1 } }, say("allow")).pass).toBe(true);
+    // A decision shape the reader does not model is unreadable, never "no decision".
+    expect(run({ no_hook_event_blocked: { event: "PermissionRequest" } }, say("maybe")).message).toMatch(UNAVAILABLE);
+  });
+  describe("permissionDecision decides only where the agent reads it: PreToolUse and PreModelSwitch", () => {
+    /** Bash's frames renamed to `event`, with `stdout` on the response. */
+    const as = (event: string, stdout: string) => (fs: Frame[]) =>
+      fs.map((f) =>
+        f.hook_name !== "PreToolUse:Bash"
+          ? f
+          : { ...f, hook_event: event, hook_name: `${event}:Bash`, ...(isResponse(f) ? { stdout, output: stdout, exit_code: 0 } : {}) },
+      );
+    const out = (event: string, extra: Record<string, unknown>) =>
+      JSON.stringify({ ...extra, hookSpecificOutput: { hookEventName: event, ...(extra.hookSpecificOutput as object) } });
+    it("Stop: a top-level block still blocks beside a stray permissionDecision allow", () => {
+      const s = out("Stop", { decision: "block", hookSpecificOutput: { permissionDecision: "allow" } });
+      const c = ctx(decisions(withStdout("Stop", s)));
+      expect(run({ no_hook_event_blocked: { event: "Stop" } }, c).pass).toBe(false);
+      expect(run({ hook_event_blocked: { event: "Stop", max: 0 } }, c).pass).toBe(false);
+      expect(run({ hook_decision: { event: "Stop", decision: "allow", max: 0 } }, c).pass).toBe(true);
+    });
+    it("PostToolUse: a permissionDecision deny decides nothing (edited: Bash's frames renamed)", () => {
+      const c = ctx(decisions(as("PostToolUse", out("PostToolUse", { hookSpecificOutput: { permissionDecision: "deny" } }))));
+      expect(run({ hook_decision: { event: "PostToolUse", decision: "deny", max: 0 } }, c).pass).toBe(true);
+      expect(run({ no_hook_event_blocked: { event: "PostToolUse" } }, c).pass).toBe(true);
+      expect(run({ hook_event_blocked: { event: "PostToolUse", max: 0 } }, c).pass).toBe(true);
+    });
+    it("Elicitation and ElicitationResult: a decline blocks, an accept decides nothing (edited: Bash's frames renamed)", () => {
+      for (const ev of ["Elicitation", "ElicitationResult"]) {
+        const decline = ctx(decisions(as(ev, out(ev, { hookSpecificOutput: { action: "decline" } }))));
+        expect(run({ no_hook_event_blocked: { event: ev } }, decline).pass).toBe(false);
+        expect(run({ hook_decision: { event: ev, decision: "deny", min: 1, max: 1 } }, decline).pass).toBe(true);
+        const accept = ctx(decisions(as(ev, out(ev, { hookSpecificOutput: { action: "accept", content: {} } }))));
+        expect(run({ no_hook_event_blocked: { event: ev } }, accept).pass).toBe(true);
+        expect(run({ hook_decision: { event: ev, decision: "allow", max: 0 } }, accept).pass).toBe(true);
+      }
+    });
+    it("PreModelSwitch: a permissionDecision deny denies (edited: Bash's frames renamed)", () => {
+      const c = ctx(decisions(as("PreModelSwitch", out("PreModelSwitch", { hookSpecificOutput: { permissionDecision: "deny" } }))));
+      expect(run({ hook_decision: { event: "PreModelSwitch", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);
+    });
+    it("Stop: a decision.behavior allow is PermissionRequest's shape, so the top-level block decides", () => {
+      const s = out("Stop", { decision: "block", hookSpecificOutput: { decision: { behavior: "allow" } } });
+      const c = ctx(decisions(withStdout("Stop", s)));
+      expect(run({ no_hook_event_blocked: { event: "Stop" } }, c).pass).toBe(false);
+      expect(run({ hook_decision: { event: "Stop", decision: "allow", max: 0 } }, c).pass).toBe(true);
+    });
+  });
+  describe("output the agent's own check rejects is unreadable", () => {
+    for (const [label, stdout] of [
+      [
+        "a top-level decision deny beside a permissionDecision deny",
+        '{"decision":"deny","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}',
+      ],
+      ["a top-level decision ask", '{"decision":"ask"}'],
+      [
+        "a hookSpecificOutput naming another event, beside a block",
+        '{"decision":"block","hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"x"}}',
+      ],
+      ["a hookSpecificOutput with no hookEventName, beside a block", '{"decision":"block","hookSpecificOutput":{"additionalContext":"x"}}'],
+      ["a hookSpecificOutput that is not an object, beside a block", '{"decision":"block","hookSpecificOutput":"x"}'],
+    ] as const)
+      it(label, () => {
+        const c = ctx(decisions(withStdout("PreToolUse:Bash", stdout)));
+        expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1 } }, c).message).toMatch(UNAVAILABLE);
+        expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).message).toMatch(UNAVAILABLE);
+      });
+  });
+  describe("the agent's own verdict on the frame (edited: Bash's response frame)", () => {
+    const frame = (patch: Frame) => (fs: Frame[]) =>
+      fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Bash" ? { ...f, ...patch } : f));
+    const unreadable = (patch: Frame) => {
+      const c = ctx(decisions(frame(patch)));
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).message).toMatch(UNAVAILABLE);
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1 } }, c).message).toMatch(UNAVAILABLE);
+    };
+    it("exit 0 with outcome error: the agent rejected the output, so a deny on stdout is not read", () =>
+      unreadable({ exit_code: 0, outcome: "error", stderr: "Hook JSON output validation failed" }));
+    it("exit 0 with outcome error and an empty stdout is unreadable too", () =>
+      unreadable({ exit_code: 0, outcome: "error", stdout: "", output: "" }));
+    it("exit 1 with the agent's refusal to read an incomplete capture: it may have blocked", () =>
+      unreadable({
+        exit_code: 1,
+        outcome: "error",
+        stdout: "",
+        stderr: "hook stdio closed before end-of-stream, so part of its output may have been discarded\nHook exited 1 with stderr:\nx",
+      }));
+    it("exit 1 with ordinary stderr and plain stdout decides nothing; the refusal text mid-stderr is not the agent's", () => {
+      const c = ctx(decisions(frame({ exit_code: 1, outcome: "error", stdout: "", output: "", stderr: "Traceback: boom" })));
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).pass).toBe(true);
+      const mid = ctx(
+        decisions(
+          frame({
+            exit_code: 1,
+            outcome: "error",
+            stdout: "",
+            output: "",
+            stderr: "note: Failed to run: x; hook stdio closed before end-of-stream",
+          }),
+        ),
+      );
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, mid).pass).toBe(true);
+    });
+    for (const [label, stderr] of [
+      ["the agent rejected the JSON", "Hook JSON output validation failed \u2014 decision: Invalid option\nHook exited 1 with stderr:\n"],
+      ["an HTTP hook's body was not JSON", "HTTP hook must return JSON, but got non-JSON response body: x"],
+      ["the agent failed to run the hook", "Failed to run: spawn ENOENT"],
+      ["a partial JSON capture", "hook output opens a JSON payload that never completed before its stdio went quiet"],
+      [
+        "a capture that grants after its stdio went quiet",
+        "hook output parsed as a document that grants, rewrites or injects, but its stdio went quiet",
+      ],
+    ] as const)
+      it(`exit 1 where ${label}: unreadable, even with empty stdout`, () =>
+        unreadable({ exit_code: 1, outcome: "error", stdout: "", output: "", stderr }));
+    it("exit 2 with the refusal text is still a deny", () => {
+      const c = ctx(decisions(frame({ exit_code: 2, outcome: "error", stderr: "hook stdio closed before end-of-stream" })));
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);
+      // The JSON channel reads no decision from an exit-2 frame, refusal text or not.
+      expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "json", max: 0 } }, c).pass).toBe(true);
+    });
+  });
+  it("stdout the agent truncated is unreadable", () => {
+    const cut = '{"hookSpecificOutput": {"hookEventName"\nOutput truncated (40KB total)';
+    const r = run(
+      { hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } },
+      ctx(decisions(withStdout("PreToolUse:Bash", cut))),
+    );
+    expect(r.message).toMatch(UNAVAILABLE);
+  });
+});
+
+describe("hook_decision", () => {
+  const d = (spec: Record<string, unknown>) => run({ hook_decision: spec }, ctx(decisions()));
+  it("deny counts the JSON deny and the exit 2", () => {
+    expect(d({ event: "PreToolUse", decision: "deny", min: 2, max: 2 }).pass).toBe(true);
+    expect(d({ event: "PreToolUse", decision: "deny", tool: "Bash", min: 1, max: 1 }).pass).toBe(true);
+    expect(d({ event: "PreToolUse", decision: "deny", tool: "Write", min: 1, max: 1 }).pass).toBe(true);
+  });
+  it("block is an alias of deny; a top-level decision: block reads as deny", () => {
+    expect(d({ event: "Stop", decision: "block", min: 1, max: 1 }).pass).toBe(true);
+    expect(d({ event: "Stop", decision: "deny", min: 1, max: 1 }).pass).toBe(true);
+  });
+  it("a frame with empty stdout decides nothing: it is not an allow", () => {
+    const r = d({ event: "Stop", decision: "allow" });
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/0 `Stop` hook frame\(s\) decided allow/);
+  });
+  it("allow / approve, ask and defer read permissionDecision (edited stdout)", () => {
+    const say = (v: string) =>
+      ctx(
+        decisions(
+          withStdout("PreToolUse:Bash", JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v } })),
+        ),
+      );
+    for (const v of ["allow", "ask", "defer"])
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: v } }, say(v)).pass, v).toBe(true);
+    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "approve" } }, say("allow")).pass).toBe(true);
+    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, say("allow")).pass).toBe(true);
+    const approve = ctx(decisions(withStdout("Stop", '{"decision":"approve"}')));
+    expect(run({ hook_decision: { event: "Stop", decision: "allow", min: 2 } }, approve).pass).toBe(true);
+  });
+  it("max: 0 over a frame that denied fails, naming the raw token and exit code", () => {
+    const r = d({ event: "PreToolUse", decision: "deny", tool: "Bash", max: 0 });
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/PreToolUse:Bash \(exit 0, JSON deny\)/);
+  });
+  it("never fired fails; no context events cannot verify", () => {
+    expect(d({ event: "PostToolUse", decision: "deny", max: 0 }).message).toMatch(/no hook_response frame for `PostToolUse`/);
+    expect(run({ hook_decision: { event: "Stop", decision: "deny" } }, ctx(undefined)).message).toMatch(/cannot verify/);
+  });
+  it("a frame with no exit code is unknown and decides by the range rule", () => {
+    const c = ctx(
+      decisions((fs) => fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Write" ? { ...f, exit_code: undefined } : f))),
+    );
+    expect(run({ hook_decision: { event: "PreToolUse", decision: "deny", min: 2, max: 2 } }, c).message).toMatch(UNAVAILABLE);
+    expect(run({ hook_decision: { event: "PreToolUse", decision: "deny", min: 1, max: 5 } }, c).pass).toBe(true);
+  });
+});

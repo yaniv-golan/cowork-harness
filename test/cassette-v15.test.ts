@@ -9,7 +9,11 @@ import { CASSETTE_VERSION, V15_ASSERT_FEATURES, V14_ASSERT_FEATURES, requiredVer
 
 /** One sample assertion per V15_ASSERT_FEATURES predicate, in the same order. A key that appends a predicate there
  *  appends its sample here; the coverage test below fails until it does. */
-const V15_SAMPLES: unknown[] = [];
+const V15_SAMPLES: unknown[] = [
+  { no_hook_event_blocked: true },
+  { hook_event_blocked: { event: "Stop", max: 0 } },
+  { hook_decision: { event: "PreToolUse", decision: "deny" } },
+];
 
 describe("cassette v15", () => {
   it("this build writes and reads v15, and ships its schema", () => {
@@ -42,6 +46,16 @@ describe("cassette v15", () => {
     } finally {
       list.splice(list.indexOf(probe), 1);
     }
+  });
+
+  it("the hook keys: every new form stamps 15; the bare hook_event_blocked, which a v14 reader reads, does not", () => {
+    for (const a of [
+      { no_hook_event_blocked: { event: "Stop" } },
+      { hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "json", min: 1 } },
+      { hook_decision: { event: "Stop", decision: "block", max: 0 } },
+    ])
+      expect(requiredVersionFor({ prompt: "x", assert: [a] }), JSON.stringify(a)).toBe(15);
+    expect(requiredVersionFor({ prompt: "x", assert: [{ hook_event_blocked: "Stop" }] })).toBe(12);
   });
 
   it("the bump alone stamps nothing at 15: a plain scenario still stamps the epoch floor", () => {
