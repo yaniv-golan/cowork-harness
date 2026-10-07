@@ -80,7 +80,7 @@ describe.runIf(POSIX)("gates_all_scripted on the live lane and verify-run (proto
     const live = r.assertions.find((a) => a.assertion.gates_all_scripted !== undefined)!;
     expect(live.pass, live.message).toBe(true);
     const v = assertContextFromRunDir(r.outDir, parseScenarioFile(p));
-    if (!v.ok) throw new Error(v.message);
+    if (!v.ok) throw new Error(JSON.stringify(v));
     const [vr] = evaluate(parseScenarioFile(p).assert, v.ctx);
     expect(vr!.pass, vr!.message).toBe(true);
   }, 120_000);
@@ -93,7 +93,7 @@ describe.runIf(POSIX)("gates_all_scripted on the live lane and verify-run (proto
     expect(live.message).toContain("Which output format should the note.md file use?");
     expect(live.message).toMatch(/answered by first/);
     const v = assertContextFromRunDir(r.outDir, parseScenarioFile(p));
-    if (!v.ok) throw new Error(v.message);
+    if (!v.ok) throw new Error(JSON.stringify(v));
     const [vr] = evaluate(parseScenarioFile(p).assert, v.ctx);
     expect(vr!.pass).toBe(false);
     expect(vr!.message).toContain("Which output format should the note.md file use?");
@@ -106,7 +106,7 @@ describe.runIf(POSIX)("gates_all_scripted on the live lane and verify-run (proto
     const { decisions: _d, ...rest } = JSON.parse(readFileSync(rj, "utf8"));
     writeFileSync(rj, JSON.stringify(rest));
     const v = assertContextFromRunDir(r.outDir, parseScenarioFile(p));
-    if (!v.ok) throw new Error(v.message);
+    if (!v.ok) throw new Error(JSON.stringify(v));
     const [vr] = evaluate(parseScenarioFile(p).assert, v.ctx);
     expect(vr!.pass).toBe(false);
     expect(vr!.message).toMatch(/^evidence unavailable/);
