@@ -386,7 +386,7 @@ export type HookEvent = (typeof KNOWN_HOOK_EVENTS)[number];
  *  UserPromptSubmit / PostToolUse), and 2026-09-22 at `container` for Stop — a block-and-resend recorded
  *  as hook_response frames by examples/probes/stop-hook-probe.scenario.yaml — and 2026-10-07 at `container` for
  *  PreToolUse: a JSON deny on Bash and an exit 2 on Write, recorded by
- *  examples/probes/hook-decision-probe.scenario.yaml (run local_f4nqju6jc9; frames in
+ *  examples/probes/hook-decision-probe.scenario.yaml (frames in
  *  test/fixtures/hook-frames/hook-decision.events.jsonl). PreToolUse is also an event this harness SERVES, so the
  *  "will fire" notice never names it; the entry records the observation.
  *
