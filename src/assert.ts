@@ -1653,6 +1653,38 @@ type HookFrame = {
   decision: HookDecision | undefined;
 };
 
+/** The agent's rules the hook keys reproduce, each with a string that marks it in the agent binary, so a new agent
+ *  build can be re-checked rule by rule: find the anchor, read the code around it. Minified names change every build,
+ *  so every anchor is a literal. Read from agents 2.1.289 and 2.1.293. `test/hook-decision-elf-anchors.test.ts` fails
+ *  when an anchor is missing from the staged agent, and skips when none is staged. Two rules have no literal of their
+ *  own, so re-check them by reading the code: the agent parses stdout and applies its JSON before it looks at the exit
+ *  code (after the "does not start with {" anchor), and exit 2 blocks whatever stdout says. */
+export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }> = [
+  {
+    rule: "stdout that does not open with `{` is plain text, not a decision",
+    anchor: "Hook output does not start with {, treating as plain text",
+  },
+  { rule: "a top-level `decision` is `approve` or `block`; anything else is rejected", anchor: "Valid types are: approve, block" },
+  { rule: "on PreToolUse, `permissionDecision` overrides the top-level `decision`", anchor: '?.hookEventName==="PreToolUse"&&' },
+  { rule: "`permissionDecision` takes allow, deny, ask or defer", anchor: "Valid types are: allow, deny, ask, defer" },
+  { rule: "PreModelSwitch also decides by `permissionDecision`", anchor: 'case"PreModelSwitch":if(' },
+  {
+    rule: "PermissionRequest decides by `hookSpecificOutput.decision.behavior`",
+    anchor: 'PermissionRequest decision must be {"behavior": "allow"}',
+  },
+  { rule: "a `hookEventName` naming another event is rejected", anchor: "Hook returned incorrect event name" },
+  {
+    rule: "a `hookSpecificOutput` with no `hookEventName` is rejected",
+    anchor: 'hookSpecificOutput is missing required field "hookEventName"',
+  },
+  { rule: "JSON that fails the agent's schema is rejected, with this stderr prefix", anchor: "Hook JSON output validation failed" },
+  { rule: "an HTTP hook's body that is not JSON is rejected, with this stderr prefix", anchor: "HTTP hook must return JSON" },
+  { rule: "a hook the agent failed to run reports this stderr prefix (and can block)", anchor: "Failed to run: " },
+  { rule: "a capture whose stdio closed early is refused (and can block)", anchor: "hook stdio closed before end-of-stream" },
+  { rule: "a granting capture whose stdio went quiet is refused (and can block)", anchor: "hook output parsed as a document that grants" },
+  { rule: "a partial JSON capture is refused (and can block)", anchor: "hook output opens a JSON payload that never completed" },
+];
+
 /** The events whose hook can decide by `hookSpecificOutput.permissionDecision`. The agent ignores the field on every other
  *  event, where only the top-level `decision` counts. Read from the agent's hook-output handler in 2.1.289 and 2.1.293,
  *  which apply the same rule. */
