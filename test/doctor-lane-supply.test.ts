@@ -49,6 +49,10 @@ describe("laneSupplyClause", () => {
       `Desktop staged agent 2.1.300, newer than the pinned 2.1.288: run \`cowork-harness sync\`; ${LANE}`,
     );
   });
+  it("the compare is numeric, not lexical: 2.1.1000 is newer than 2.1.288, 2.1.99 is older", () => {
+    expect(laneSupplyClause({ version: "2.1.1000", elfExists: true }, "2.1.288")).toMatch(/^Desktop staged agent 2\.1\.1000, newer than/);
+    expect(laneSupplyClause({ version: "2.1.99", elfExists: true }, "2.1.288")).toMatch(/^agent 2\.1\.288 not staged/);
+  });
   it("staged < pin, or = pin with the ELF missing → not staged, may be withheld", () => {
     const notStaged = `agent 2.1.288 not staged by this Desktop (staging may be withheld by server policy, or no task has booted the VM since an update); ${LANE}`;
     expect(laneSupplyClause({ version: "2.1.286", elfExists: true }, "2.1.288")).toBe(notStaged);
