@@ -100,6 +100,12 @@ describe("hook_event_blocked, count form", () => {
       expect(run({ hook_event_blocked: { event: "Stop", min: 2, max: 2 } }, ctx(recorded(noExitCode))).message).toMatch(UNAVAILABLE);
       expect(run({ hook_event_blocked: { event: "Stop", max: 1 } }, ctx(recorded(noExitCode))).message).toMatch(UNAVAILABLE);
     });
+    it("[1,3] around [2,2] is evidence-unavailable though both ends fall outside it (one block, two unknowns)", () => {
+      const twoUnknown = (fs: Frame[]) => [...noExitCode(fs), { ...fs[0]!, hook_id: "never-answered" }];
+      const r = run({ hook_event_blocked: { event: "Stop", min: 2, max: 2 } }, ctx(recorded(twoUnknown)));
+      expect(r.message).toMatch(UNAVAILABLE);
+      expect(r.message).toMatch(/plus 2 whose outcome cannot be read/);
+    });
     it("a hook that started and never answered counts as unknown too", () => {
       expect(run({ hook_event_blocked: { event: "Stop", max: 1 } }, ctx(recorded(pending))).message).toMatch(UNAVAILABLE);
       expect(run({ hook_event_blocked: { event: "Stop", max: 5 } }, ctx(recorded(pending))).pass).toBe(true);
