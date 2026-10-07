@@ -149,6 +149,18 @@ spoofing would change that — the harness would have to pass a flag Desktop its
 
 `sdk-url` has **0 occurrences in this repo**, which is correct: there is nothing to model.
 
+### A skill attached before the cloud session exists — tokens arrive unexpanded (not emulated)
+
+On the cloud lane, a conversation in the merged composer starts as chat, and the cloud session is created by the first
+turn that needs a shell or file tool. A skill attached before that turn, whether by a slash command or by naming it in
+a first message, and whether or not it is `user-invocable`, is expanded outside the agent: `${CLAUDE_PLUGIN_ROOT}`,
+`$ARGUMENTS`, `${CLAUDE_SKILL_DIR}` and `${CLAUDE_PLUGIN_DATA}` reach the model unexpanded, `!cmd` lines do not run,
+and the base directory it names (`/mnt/skills/plugins/<plugin>:<skill>`) was not found. A skill attached after the
+session exists expands normally. Observed on Desktop 2.19675.0 with cloud agent 2.1.287, 1 to 7 sessions per case,
+two accounts on one machine. **The harness does not emulate this**: every tier expands these tokens. A skill that must
+work when invoked on a first message should not depend on them, or should detect a token left literal and fall back
+(see [plugin-root.md](./plugin-root.md)).
+
 ### The remote lane, measured from inside (2026-09-21/22, one session — every line is n = 1)
 
 A throwaway plugin run through the Cowork app on a remote-lane session (`CLAUDE_CODE_ENTRYPOINT=remote_cowork`)
@@ -1451,8 +1463,11 @@ is merely open.
 model to collect any missing arguments through the `visualize` server's elicitation module —
 `mcp__visualize__read_me` to load the form patterns, then `mcp__visualize__show_widget` to render a form
 with pills, free text, dates and a file dropzone — and to reserve `AskUserQuestion` for one-off
-clarifications mid-task. The user's answers then arrive as **bullet points in the next user message**,
-not as a tool result. The guidance is live for standard accounts (`286376943`, on/force).
+clarifications mid-task. The user's answers then arrive as **one line in the next user message**, not as a
+tool result: `<Title> details — Label: value · Label: value`, with multi-select values comma-joined, a value of
+81–200 characters quoted, and a longer one shown as `(N chars — see below)` and repeated in full after a
+`--- Full content ---` line; a skipped form arrives as one fixed sentence. To test a skill's parsing of it, send such
+a line as a resumed turn (see [Recipes for goals the harness has no flag for](./scenario.md#recipes-for-goals-the-harness-has-no-flag-for)). The guidance is live for standard accounts (`286376943`, on/force).
 
 **It is guidance, not enforcement, and production splits roughly evenly.** Measured across a corpus of
 real Cowork session transcripts that all received this guidance: about half of the turns that collected

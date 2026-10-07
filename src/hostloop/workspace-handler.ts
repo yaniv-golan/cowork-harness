@@ -501,7 +501,9 @@ async function execInContainer(
 ) {
   if (!command) return textResult("error: missing 'command'", true);
   // Async (execFile, not spawnSync) so the awaited MCP handler yields the event loop while the subprocess
-  // runs — a slow `docker exec` no longer blocks all protocol I/O. Each call independent (a fresh `bash -c`, as Cowork runs it).
+  // runs — a slow `docker exec` no longer blocks all protocol I/O. Each call independent (a fresh `bash -c`, as Cowork runs it:
+  // Desktop's host-loop workspace bash tool spawns `bash` with `-c` and the command in the session's VM process — app.asar
+  // 2.26454.0, `index.chunk-ClFP2abq.js`, the workspace tool's handler; chunk names change every build).
   try {
     const { stdout, stderr } = await pexec(runner, ["exec", "-w", cwd, container, "bash", "-c", command], {
       encoding: "utf8",
