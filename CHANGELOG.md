@@ -113,12 +113,14 @@ records the tool surface Desktop serves to a cloud session. No result field or c
 ### Documentation
 
 - **Recipes for goals the harness has no flag for**, in [docs/scenario.md](./docs/scenario.md#recipes-for-goals-the-harness-has-no-flag-for)
-  and the companion skill's task recipes: force a context compaction (a `/compact` turn, then `compaction_occurred`),
+  and the companion skill's task recipes: force a context compaction (a resumed `/compact` turn, checked in that turn's `result.json`),
   ablate one `SKILL.md` section (a second `eval` arm, sized with `--dry-run --target-effect`), test a skill's parsing of
   a Desktop form reply (a resumed turn in the reply's format), resume the work in a new conversation (`fixture export`
   then `workspace_fixture:` with `authored` checks), assert a hook's JSON decision (`hook_output_contains`, since
   `hook_event_blocked` counts exit code 2 only), schema-check a written file (the Python lane with `jsonschema`), and
   hold a skill to an unattended host. Each says what it does not prove.
+- **The companion skill's authoring reference says a scenario's `session:` is a path to a session file**, never a
+  nested block, which fails to load; a scenario that tests a plugin needs a session file.
 - **[docs/fidelity-gaps.md](./docs/fidelity-gaps.md) corrects how a Desktop form reply arrives**: one line,
   `<Title> details — Label: value · …`, with long values after a `--- Full content ---` line, not bullet points.
 - **A cloud-lane entry: a skill attached before the cloud session exists gets its tokens unexpanded.**

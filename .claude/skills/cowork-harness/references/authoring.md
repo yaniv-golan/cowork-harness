@@ -11,8 +11,10 @@ provenance, and the scaffold/lint tools that keep the YAML honest.
 ### Two files: session vs scenario
 
 - **`sessions/*.yaml`** — pre-prompt setup: `model`, mounts (`folders`), and discovery
-  (marketplaces / plugins / skills / mcp). One session is reused by many scenarios. A scenario that
-  omits `session:` gets an all-defaults **inline** session (not a file on disk).
+  (marketplaces / plugins / skills / mcp). One session is reused by many scenarios. A scenario's
+  `session:` is a **path** to such a file, never a nested block: `session: { plugins: … }` fails to load. A
+  scenario that omits `session:` gets an all-defaults session with no plugin declared, so a scenario that tests a
+  plugin needs a session file.
 - **`scenarios/*.yaml`** — the test: `prompt`, scripted `answers:`, and `assert:`.
 
 This split matters: release ground truth (`baseline:` / `baselines/`, produced by `sync`) is
