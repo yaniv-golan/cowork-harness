@@ -401,6 +401,34 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
         expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).message).toMatch(UNAVAILABLE);
       });
   });
+  describe("the agent's own verdict on the frame (edited: Bash's response frame)", () => {
+    const frame = (patch: Frame) => (fs: Frame[]) =>
+      fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Bash" ? { ...f, ...patch } : f));
+    const unreadable = (patch: Frame) => {
+      const c = ctx(decisions(frame(patch)));
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).message).toMatch(UNAVAILABLE);
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1 } }, c).message).toMatch(UNAVAILABLE);
+    };
+    it("exit 0 with outcome error: the agent rejected the output, so a deny on stdout is not read", () =>
+      unreadable({ exit_code: 0, outcome: "error", stderr: "Hook JSON output validation failed" }));
+    it("exit 0 with outcome error and an empty stdout is unreadable too", () =>
+      unreadable({ exit_code: 0, outcome: "error", stdout: "", output: "" }));
+    it("exit 1 with the agent's refusal to read an incomplete capture: it may have blocked", () =>
+      unreadable({
+        exit_code: 1,
+        outcome: "error",
+        stdout: "",
+        stderr: "hook stdio closed before end-of-stream, so part of its output may have been discarded\nHook exited 1 with stderr:\nx",
+      }));
+    it("exit 1 with ordinary stderr decides nothing", () => {
+      const c = ctx(decisions(frame({ exit_code: 1, outcome: "error", stderr: "Traceback: boom" })));
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).pass).toBe(true);
+    });
+    it("exit 2 with the refusal text is still a deny", () => {
+      const c = ctx(decisions(frame({ exit_code: 2, outcome: "error", stderr: "hook stdio closed before end-of-stream" })));
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);
+    });
+  });
   it("stdout the agent truncated is unreadable", () => {
     const cut = '{"hookSpecificOutput": {"hookEventName"\nOutput truncated (40KB total)';
     const r = run(

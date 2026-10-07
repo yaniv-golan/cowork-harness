@@ -1715,10 +1715,18 @@ const BARE_HOOK_EVENT_BLOCKED_VIA: HookChannel = "exit2";
  *  read the agent's deny, so `{event, max: 0}` fails on a hook that denied by JSON alone. */
 export const OBJECT_HOOK_EVENT_BLOCKED_VIA: HookChannel = "any";
 
+/** The agent's refusal to read a hook's capture as a verdict (its stdio went quiet before end-of-stream), which it puts at
+ *  the start of the frame's stderr. On some events, PreToolUse among them, the agent turns that refusal into a block
+ *  whatever the exit code, so the frame's decision cannot be read. Wording from agents 2.1.289 and 2.1.293. */
+const CAPTURE_REFUSED_RE =
+  /^hook (?:stdio closed before end-of-stream|output parsed as a document that grants|output opens a JSON payload that never completed)/;
+
 /** The `hook_response` frames for `event` (and, with `tool`, only those whose `hook_name` is `<event>:<tool>` — the
  *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered.
  *  `untooled` is set when `tool` was asked for and the event's frames carry no tool name at all (`Stop` is named
- *  `Stop`), so no frame could ever match it. */
+ *  `Stop`), so no frame could ever match it. An exit-0 frame the agent marked `outcome: "error"` is unreadable: the
+ *  agent rejected its output, which decides nothing when the JSON fails the agent's schema but blocks on some events
+ *  when the capture was incomplete. */
 function hookFrames(
   events: NonNullable<AssertContext["contextEvents"]>,
   event: string | undefined,
@@ -1736,12 +1744,13 @@ function hookFrames(
     const exitCode = typeof e.data?.exit_code === "number" ? e.data.exit_code : undefined;
     // stdout alone: `output` joins stdout and stderr, so a frame without `stdout` has no readable decision.
     const stdout = typeof e.data?.stdout === "string" ? e.data.stdout : undefined;
+    const stderr = typeof e.data?.stderr === "string" ? e.data.stderr : "";
     const { json, token } =
-      exitCode === undefined
+      exitCode === undefined || (exitCode !== 2 && CAPTURE_REFUSED_RE.test(stderr))
         ? { json: undefined }
         : exitCode !== 0
           ? { json: "none" as const }
-          : stdout === undefined
+          : e.data?.outcome === "error" || stdout === undefined
             ? { json: undefined }
             : readJsonDecision(stdout, e.data?.hook_event);
     const exit2 = exitCode === undefined ? undefined : exitCode === 2;
