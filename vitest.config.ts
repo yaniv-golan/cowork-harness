@@ -17,7 +17,7 @@ export default defineConfig({
   test: {
     // Give every test process its own runs root so nothing writes into the developer's real
     // ~/.cowork-harness/runs. See test/setup/runs-root.ts for why this is structural rather than per-file.
-    setupFiles: ["test/setup/runs-root.ts", "test/setup/forbid-spawn.ts"],
+    setupFiles: ["test/setup/runs-root.ts", "test/setup/forbid-spawn.ts", "test/setup/no-lane-notice.ts"],
     // Fails the run when a test leaves a shared $TMPDIR/scrubset.key (see the file).
     globalSetup: ["test/setup/no-shared-scrub-key.ts"],
     // 93 test files spawn a subprocess (the built CLI, `claude`, git); only a handful declare a timeout,
