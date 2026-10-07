@@ -174,6 +174,8 @@ describe("gates_all_scripted on replay: re-classified against the cassette's fro
   it("include_permissions live: the harness's own fixed denies count (a malformed web_fetch request, the fail-closed deny)", () => {
     const ds: Decisions = [
       { kind: "tool", name: "mcp__workspace__web_fetch", decision: "deny", by: "agent" },
+      // No producer in the default chain writes this row live (the parity default never abstains on an ordinary
+      // permission); it pins how a deny that nothing answered is read if a chain without that default ever does.
       { kind: "tool", name: "Bash", decision: "abstain→deny", by: "none", requestId: "r1" },
     ];
     const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
@@ -193,6 +195,18 @@ describe("gates_all_scripted on replay: re-classified against the cassette's fro
     const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
     expect(r.pass).toBe(false);
     expect(r.message).toContain("answered by llm");
+  });
+
+  it("include_permissions live: a web_fetch deny no answer source decided fails, as the key's doc rows say", () => {
+    // run.ts decideWebFetchDomain records `abstain-fallback` when the whole chain abstained; real Cowork asks the user.
+    const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision: "deny", by: "abstain-fallback" }];
+    const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
+    expect(r.pass).toBe(false);
+    expect(r.message).toContain("answered by abstain-fallback");
+    for (const doc of ["docs/scenario.md", ".claude/skills/cowork-harness/references/assertion-catalog-gates-hooks-modifiers.md"])
+      expect(readFileSync(doc, "utf8"), doc).toContain(
+        "a web_fetch deny that no answer source decided fails (`answered by abstain-fallback`)",
+      );
   });
 
   it("include_permissions live: a parity-attributed web_fetch row with no rationale is evidence-unavailable, never a pass", () => {
