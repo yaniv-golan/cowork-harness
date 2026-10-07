@@ -1699,8 +1699,10 @@ assert:
 ```
 
 Leave `allow_stall` out, so ending on a question fails. `trace <run> --view questions` shows who answered each gate
-(`answeredBy`). *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` entirely and
-tell the model no user is present; the harness models neither.
+(`answeredBy`). *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` and tell
+the model no user is present; the harness does not model them. To check instead that a skill parks correctly when
+nobody can answer at all, use the session key `answer_channel: none`: the agent gets no question tool, and the run is
+graded by the status file the skill writes ([headless-no-answer.md](./headless-no-answer.md)).
 
 ### Debugging with `chat`
 

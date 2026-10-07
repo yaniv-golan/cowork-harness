@@ -31,7 +31,8 @@ grade real behaviour.
   for input phrased without one ("Please share the raise amount.") does not fire.
 - **A request that reaches the harness anyway** (an agent that ignored the flag) is refused, never
   answered, and the run ends `error` with `errorSource: "answer_channel_violation"`. Answering it would
-  invent the channel the run declares absent.
+  invent the channel the run declares absent. `result.json` does not say which request arrived; the run's
+  `events.jsonl` and `control-out.jsonl` do.
 
 ## What the model does at the gate
 
@@ -51,13 +52,13 @@ Each of these is a load error, raised before anything is staged or spent, and re
 | `permission_mode` other than `bypassPermissions` | under any other mode the agent's ordinary permission asks are denied too, including Cowork's own `present_files`, and plan mode can never exit |
 | `fidelity: hostloop`, or `cowork` | the host loop's folder-grant and web_fetch guards are answered over the channel this removes |
 | `lane: remote` | the cloud lane's permission surface is unmeasured |
-| `answers:`, `on_unanswered`, `--on-unanswered`, `--decider-cmd`, `--decider-dir`, `--decider-model` | no question reaches the harness, so nothing can be scripted or decided |
+| `answers:`, `on_unanswered`, `--on-unanswered`, `--decider-llm`, `--decider-cmd`, `--decider-dir`, `--decider-model` | no question reaches the harness, so nothing can be scripted or decided |
 | `permission_parity: strict` | it configures how permission asks are answered, and none are asked |
 | `web_fetch.approved_domains` | approving a domain answers a prompt this run cannot show |
 | `question_asked`, `question_options`, `question_context`, `question_option_count`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted` | each grades a gate the harness answered |
 | `questions_count_max` | it counts the questions that reach the harness, and none do, so it would always pass |
 | `tool_called` naming `AskUserQuestion` (or a glob such as `AskUser*`) | the flag removes the tool, so it can never be called; assert the status file instead |
-| an agent that does not accept `--permission-prompts none` | the pinned agent's support is recorded by `sync` in the baseline (`agentBinary.cliCapabilities`); a baseline synced before that field existed is refused with a re-sync hint. At `protocol`, the `claude` on your `PATH` is checked with `--help` instead |
+| an agent that does not accept `--permission-prompts none` | the pinned agent's support is recorded by `sync` in the baseline (`agentBinary.cliCapabilities`); a baseline synced before that field existed is refused with a re-sync hint. At `protocol`, the `claude` on your `PATH` is checked with `--help` instead. Every agent measured so far has the option, so the refusal for one that lacks it is tested on synthetic samples only |
 
 `tool_not_called: AskUserQuestion` is accepted, though with the tool removed it always passes. `chat` and
 `skill` build their own session from flags, so they cannot declare the key.

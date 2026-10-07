@@ -30,7 +30,8 @@ Docker, no re-record.
 | **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `replay --mutate` — perturbs a CAPPED SAMPLE of recorded JSON values (10/file, 50 total) and reports which perturbations NOTHING caught; the report names the sample size, so read it as a sample not a total (reporting only; never moves the verdict/exit code) · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
 
 A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
-agent stderr) — read those before re-running; a re-record rarely tells you more than the captured stderr
+agent stderr) — read those before re-running (`answer_channel_violation` means a run under `answer_channel: none`
+received a question or permission request anyway; `events.jsonl` and `control-out.jsonl` show which); a re-record rarely tells you more than the captured stderr
 already does.
 <!-- END triage-canonical -->
 

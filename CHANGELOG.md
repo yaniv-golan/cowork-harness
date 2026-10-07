@@ -67,8 +67,8 @@ All notable changes to this project are documented here. The format is based on
   that assumes a channel (`answers:`, `on_unanswered` and the decider flags, `permission_parity: strict`,
   `web_fetch.approved_domains`, the gate assertion keys including `gates_all_scripted`, `questions_count_max`,
   `tool_called` naming `AskUserQuestion`), the host loop and `lane: remote`; `file_absent` alone does not count as the
-  file assertion. `record --dry-run`, batch pre-flights, `verify-run` and `replay --assert-from` apply the same
-  rules. The flag also removes `AskUserQuestion`, `EnterPlanMode` and
+  file assertion. `record --dry-run`, batch pre-flights, `verify-run`, `replay --assert-from` / `--reassert` and `hillclimb regrade`
+  apply the same rules. A `protocol` run needs a host `claude` whose `--help` lists `--permission-prompts none`. The flag also removes `AskUserQuestion`, `EnterPlanMode` and
   `ExitPlanMode` from the agent's toolset, so the model asks in prose. A successful run whose last message ends in
   `?` gets the new `parked_at_question` warning, never the `stalled` fail, and `eval` counts it as a completed rep
   (rule `parked_at_question`); a request that reaches the harness anyway is refused and ends the run with the new
@@ -77,8 +77,8 @@ All notable changes to this project are documented here. The format is based on
   cassette v15, so an older build refuses it as too new rather than replaying it with the channel present. See
   `docs/headless-no-answer.md`.
 - **`agent_env.artifacts_root` (session key)** sets `COWORK_ARTIFACTS_ROOT` to a path under outputs as the agent sees
-  it on each tier, for a skill that takes its run-status directory from that variable. Refused at `hostloop`, whose
-  shell never sees the agent's environment. The operator's own export of the variable is now scrubbed at `protocol`
+  it on each tier, for a skill that takes its run-status directory from that variable. Refused at `hostloop` and
+  `fidelity: cowork`, since the host loop's shell never sees the agent's environment. The operator's own export of the variable is now scrubbed at `protocol`
   and `hostloop`.
 - **Baseline field `agentBinary.cliCapabilities.permissionPrompts`**, recorded by `sync` from the staged agent
   (recorded in `desktop-2.26454.0` and `desktop-2.26454.2`). A baseline without it is refused for
