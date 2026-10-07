@@ -53,18 +53,23 @@ All notable changes to this project are documented here. The format is based on
     The agent reads either as on only for `1`, `true`, `yes` or `on`, so `"0"` behaves as unset. The harness pins both.
   - Gate provenance moved: the computer-use permission gate (`cuCanUseToolEnabled`) reads off again, at its default.
     The harness does not model it.
-  - The `cloud` block records two `remote-devices` descriptions whose fingerprints moved, and the bundle shows what
-    changed (observed, data only; nothing in the harness reads it): `device_commit_files` also accepts a file staged
-    under a project folder; `device_request_folder_access` lets a task request the home folder or a whole drive, with
-    protected locations still off-limits inside a granted folder. Desktop's remote `device_bash` also gains git
-    handling for connected folders.
+  - The `cloud` block records new description fingerprints for two `remote-devices` tools (five branch records), and
+    the bundle shows what changed (observed, data only; nothing in the harness reads it): `device_commit_files` also
+    accepts a file staged under a project folder; `device_request_folder_access` lets a task request the home folder or
+    a whole drive, with protected locations still off-limits inside a granted folder.
+  - Seen in the bundle only, with no fingerprint behind it: Desktop's remote `device_bash` runs git in connected folders
+    with optional locks off, and adds a hint to a git lock-file failure.
 - **The operator-env scrub covers three more keys** (`CLAUDE_CODE_SIMPLE`, `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`,
-  `CLAUDE_CODE_PROCESS_WRAPPER`); see Upgrade notes and [docs/session.md](./docs/session.md).
+  `CLAUDE_CODE_PROCESS_WRAPPER`); see Upgrade notes and [docs/session.md](./docs/session.md). Every call the harness
+  makes to the host `claude` (the judge, the decider, critique) drops `CLAUDE_CODE_SIMPLE` and `CLAUDE_CODE_PROCESS_WRAPPER` from the inherited
+  environment too: `CLAUDE_CODE_SIMPLE=1` is the CLI's bare mode, which reads auth only from an API key or an
+  `apiKeyHelper`, so an export would change the grader's credential.
 - **`sync` follows two reshapes in Desktop 2.26454.0.** The max-thinking helper gains one condition, and the check
   admits exactly that shape while still asserting the 31999 budget. The scheduled-run env key now lives in a one-key
-  object a module exports: `sync` reads an imported object's keys in the spawn env, and the scheduled-run check counts
-  every use of that object and requires each to be the scheduled-only spawn spread or Desktop's own scheduled-task
-  assign.
+  object a module exports: `sync` reads the keys of an imported object spread into the spawn env, under any condition
+  (refusing to write when a guarded one cannot be resolved), and the scheduled-run check counts every use of that object
+  and requires each to be the scheduled-only spawn spread or Desktop's own scheduled-task assign, with no other function
+  in its module returning it.
 - **Fidelity gaps: thinking forced on for managed-config models.** Desktop 2.26454.0 sends the full thinking budget
   for a model listed in the org's managed config (`thinkingAlwaysOnModels`), even with extended thinking off. The
   harness reads no managed config. See

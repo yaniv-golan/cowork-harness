@@ -6,6 +6,7 @@ import {
   claudeCliCompleteStructured,
   withGraderSettings,
   defaultManagedMcpPath,
+  graderSpawnEnv,
   helpDeclaresFlag,
   isolationRefusal,
   resetIsolationPreflight as resetPreflight,
@@ -720,5 +721,18 @@ describe("helpDeclaresFlag / defaultManagedMcpPath", () => {
     expect(defaultManagedMcpPath("darwin")).toBe("/Library/Application Support/ClaudeCode/managed-mcp.json");
     expect(defaultManagedMcpPath("linux")).toBe("/etc/claude-code/managed-mcp.json");
     expect(defaultManagedMcpPath("win32")).toBe("C:\\Program Files\\ClaudeCode\\managed-mcp.json");
+  });
+});
+
+describe("graderSpawnEnv", () => {
+  it("drops the operator's bare-mode and process-wrapper keys, and keeps auth and PATH", () => {
+    const env = graderSpawnEnv({
+      CLAUDE_CODE_SIMPLE: "1",
+      CLAUDE_CODE_PROCESS_WRAPPER: "/usr/bin/wrap",
+      CLAUDE_CODE_EFFORT_LEVEL: "low",
+      CLAUDE_CODE_OAUTH_TOKEN: "tok",
+      PATH: "/bin",
+    });
+    expect(env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "tok", PATH: "/bin" });
   });
 });

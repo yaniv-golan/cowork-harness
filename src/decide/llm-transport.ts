@@ -18,10 +18,11 @@ import { EFFORT_THINKING_ENV_KEYS } from "../effort-env.js";
  *  later; `assertIsolationSupported` refuses an older CLI before any model call.
  *
  *  What is NOT isolated, by design: USER settings stay, so `apiKeyHelper` auth keeps working, and the call inherits
- *  the harness's own environment (auth, PATH, proxy). Three things narrow what that lets through for grading:
+ *  the harness's own environment (auth, PATH, proxy). Four things narrow what that lets through for grading:
  *  - the effort is pinned per role with `--effort` (`GRADER_EFFORT`), which outranks a user-settings `effortLevel`;
  *  - the effort/thinking env keys (`EFFORT_THINKING_ENV_KEYS`) are dropped from the inherited environment, since the
  *    CLI reads `CLAUDE_CODE_EFFORT_LEVEL` ahead of `--effort`;
+ *  - the bare-mode and process-wrapper keys (`GRADER_SHELL_DROP_KEYS`) are dropped too;
  *  - `--settings` blanks the same keys (`GRADER_SETTINGS`): the CLI applies a user-settings or global-config `env`
  *    block inside itself, after this spawn, and flag settings are applied after both, so a blank wins. Every reader
  *    takes `""` as unset or false. That is read from the 2.1.288 binary, not observed live, so `userSettingsEffort`
@@ -145,11 +146,17 @@ function warnSettingsEffort(role: GraderRole): void {
   }
 }
 
+/** Operator-shell keys that change what the host CLI is, not only how hard it thinks: `CLAUDE_CODE_SIMPLE=1` is its
+ *  `--bare` mode, which also reads Anthropic auth only from `ANTHROPIC_API_KEY` or an `apiKeyHelper` (never OAuth or
+ *  the keychain), so an export would silently change the grader's credential; `CLAUDE_CODE_PROCESS_WRAPPER` wraps the
+ *  processes it launches. The agent's tiers scrub the same keys (`SCRUBBED_AGENT_ENV_KEYS` in src/session.ts). */
+export const GRADER_SHELL_DROP_KEYS = ["CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_PROCESS_WRAPPER"] as const;
+
 /** The host-`claude` call's environment: the harness's own, minus the keys that would change its effort or thinking
- *  (see `ISOLATION_ARGS`). Everything else — auth, PATH, proxy — is kept. */
+ *  (see `ISOLATION_ARGS`) and `GRADER_SHELL_DROP_KEYS`. Everything else — auth, PATH, proxy — is kept. */
 export function graderSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
-  for (const k of EFFORT_THINKING_ENV_KEYS) delete env[k];
+  for (const k of [...EFFORT_THINKING_ENV_KEYS, ...GRADER_SHELL_DROP_KEYS]) delete env[k];
   return env;
 }
 
