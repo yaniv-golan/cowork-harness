@@ -405,6 +405,12 @@ describe("warnAmbiguousHookOutput: output that cannot be attributed to one plugi
     expect(out).toHaveLength(1);
     expect(out[0]).toMatch(/no_hook_event_blocked on `any event`: this protocol run reads your real config dir/);
   });
+
+  it("...and still warns for it when another hook key names an event", () => {
+    const out = msgs([], [{ no_hook_event_blocked: true }, { hook_event_blocked: "Stop" }], true);
+    expect(out.some((m) => /no_hook_event_blocked on `any event`/.test(m))).toBe(true);
+    expect(out.some((m) => /hook_event_blocked on `Stop`/.test(m))).toBe(true);
+  });
 });
 
 // A hook_started whose hook_response never arrived (paired by hook_id): an async or backgrounded hook, or one still
