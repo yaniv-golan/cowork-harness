@@ -3332,7 +3332,7 @@ export function redactionRewroteHookOutput(base: Cassette, redacted: Cassette): 
       for (let k = 0; k < before.length && k < after.length; k++) {
         const b = before[k];
         const r = after[k];
-        if (!b || !r || b.exit_code !== 0 || (event !== undefined && b.hook_event !== event)) continue;
+        if (!b || !r || typeof b.exit_code !== "number" || b.exit_code === 2 || (event !== undefined && b.hook_event !== event)) continue;
         const read = (m: Record<string, unknown>) =>
           typeof m.stdout === "string" ? readJsonDecision(m.stdout, m.hook_event).json : undefined;
         if (read(b) !== read(r)) n++;

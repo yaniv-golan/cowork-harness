@@ -305,12 +305,28 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
     const r = run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "json", max: 0 } }, ctx(decisions(broken)));
     expect(r.message).toMatch(UNAVAILABLE);
   });
-  it("an exit code other than 0 or 2 decides nothing, whatever stdout holds (edited: Bash's frame exits 1)", () => {
-    const exit1 = (fs: Frame[]) =>
-      fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Bash" ? { ...f, exit_code: 1, outcome: "error" } : f));
-    const c = ctx(decisions(exit1));
-    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, c).pass).toBe(true);
-    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, c).pass).toBe(true);
+  it("the JSON decides on any exit code but 2, as the agent reads it (edited: Bash's frame exits 1)", () => {
+    const exit1 = (stdout?: string) => (fs: Frame[]) =>
+      fs.map((f) =>
+        isResponse(f) && f.hook_name === "PreToolUse:Bash"
+          ? { ...f, exit_code: 1, outcome: "error", ...(stdout === undefined ? {} : { stdout, output: stdout }) }
+          : f,
+      );
+    // Exit 1 with the recorded JSON deny on stdout: the agent applies it, so it is a block.
+    const deny = ctx(decisions(exit1()));
+    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, deny).pass).toBe(false);
+    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, deny).pass).toBe(true);
+    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "exit2", max: 0 } }, deny).pass).toBe(true);
+    // Exit 1 with plain text on stdout decides nothing.
+    const text = ctx(decisions(exit1("Traceback: boom\n")));
+    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, text).pass).toBe(true);
+    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, text).pass).toBe(true);
+  });
+  it("an HTTP hook's frame carries the HTTP status as its exit code, and its JSON decides (edited: Bash's frame exits 200)", () => {
+    const http = (fs: Frame[]) =>
+      fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Bash" ? { ...f, exit_code: 200, outcome: "success" } : f));
+    const c = ctx(decisions(http));
+    expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).pass).toBe(false);
   });
   it("a frame with no stdout field is unreadable: `output` joins stdout and stderr, so it is never read as the decision", () => {
     const outputOnly = (fs: Frame[]) =>
@@ -420,10 +436,33 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
         stdout: "",
         stderr: "hook stdio closed before end-of-stream, so part of its output may have been discarded\nHook exited 1 with stderr:\nx",
       }));
-    it("exit 1 with ordinary stderr decides nothing", () => {
-      const c = ctx(decisions(frame({ exit_code: 1, outcome: "error", stderr: "Traceback: boom" })));
+    it("exit 1 with ordinary stderr and plain stdout decides nothing; the refusal text mid-stderr is not the agent's", () => {
+      const c = ctx(decisions(frame({ exit_code: 1, outcome: "error", stdout: "", output: "", stderr: "Traceback: boom" })));
       expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).pass).toBe(true);
+      const mid = ctx(
+        decisions(
+          frame({
+            exit_code: 1,
+            outcome: "error",
+            stdout: "",
+            output: "",
+            stderr: "note: Failed to run: x; hook stdio closed before end-of-stream",
+          }),
+        ),
+      );
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, mid).pass).toBe(true);
     });
+    for (const [label, stderr] of [
+      ["the agent rejected the JSON", "Hook JSON output validation failed \u2014 decision: Invalid option\nHook exited 1 with stderr:\n"],
+      ["an HTTP hook's body was not JSON", "HTTP hook must return JSON, but got non-JSON response body: x"],
+      ["the agent failed to run the hook", "Failed to run: spawn ENOENT"],
+      ["a partial JSON capture", "hook output opens a JSON payload that never completed before its stdio went quiet"],
+      [
+        "a capture that grants after its stdio went quiet",
+        "hook output parsed as a document that grants, rewrites or injects, but its stdio went quiet",
+      ],
+    ] as const)
+      it(`exit 1 where ${label}: unreadable, whatever stdout holds`, () => unreadable({ exit_code: 1, outcome: "error", stderr }));
     it("exit 2 with the refusal text is still a deny", () => {
       const c = ctx(decisions(frame({ exit_code: 2, outcome: "error", stderr: "hook stdio closed before end-of-stream" })));
       expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);

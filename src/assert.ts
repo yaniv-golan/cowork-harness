@@ -1634,12 +1634,12 @@ function pendingHooks(
 }
 
 /** A hook's decision as the agent applies it: `none` is a frame that decided nothing (empty or non-JSON stdout, a JSON
- *  object without a decision, an exit code other than 0 or 2). */
+ *  object without a decision). */
 export type HookDecision = "allow" | "deny" | "ask" | "defer" | "none";
 const PERMISSION_DECISIONS = new Set(["allow", "deny", "ask", "defer"]);
 
 /** One `hook_response` frame, as the hook keys read it. `exit2` is exit code 2, the agent's blocking exit. `json` is the
- *  decision the hook printed on stdout with exit 0, and `token` the raw value it printed (`deny`, `block`, …).
+ *  decision the hook printed on stdout (on any exit code but 2), and `token` the raw value it printed (`deny`, `block`, …).
  *  `decision` combines them: exit 2 is a deny whatever stdout holds. `undefined` means unreadable: no exit code, or
  *  (for `json`) stdout a redaction policy rewrote or the agent truncated so it no longer parses, or a `hookEventName`
  *  naming another event. */
@@ -1658,7 +1658,7 @@ type HookFrame = {
  *  which apply the same rule. */
 const PERMISSION_DECISION_EVENTS: ReadonlySet<unknown> = new Set(["PreToolUse", "PreModelSwitch"]);
 
-/** The JSON decision on an exit-0 frame's stdout. Only stdout that parses WHOLE as a JSON object decides: stdout is the
+/** The JSON decision on a frame's stdout. Only stdout that parses WHOLE as a JSON object decides: stdout is the
  *  hook's ordinary output too, so a word like `deny`, prose, or JSON after other text decides nothing. On PreToolUse and
  *  PreModelSwitch, `hookSpecificOutput.permissionDecision` decides, and overrides a top-level `decision`, as the agent
  *  applies them; on other events the agent ignores it. A PermissionRequest hook answers with
@@ -1715,18 +1715,19 @@ const BARE_HOOK_EVENT_BLOCKED_VIA: HookChannel = "exit2";
  *  read the agent's deny, so `{event, max: 0}` fails on a hook that denied by JSON alone. */
 export const OBJECT_HOOK_EVENT_BLOCKED_VIA: HookChannel = "any";
 
-/** The agent's refusal to read a hook's capture as a verdict (its stdio went quiet before end-of-stream), which it puts at
- *  the start of the frame's stderr. On some events, PreToolUse among them, the agent turns that refusal into a block
- *  whatever the exit code, so the frame's decision cannot be read. Wording from agents 2.1.289 and 2.1.293. */
-const CAPTURE_REFUSED_RE =
-  /^hook (?:stdio closed before end-of-stream|output parsed as a document that grants|output opens a JSON payload that never completed)/;
+/** What the agent puts at the start of a frame's stderr when it did not read the hook's output as a clean verdict: its
+ *  refusal of a capture whose stdio went quiet early, its rejection of the JSON (a command hook's or an HTTP hook's), or
+ *  a hook it failed to run. The first and last can block on PreToolUse and PermissionRequest whatever the exit code, so
+ *  such a frame's decision cannot be read. Wording from agents 2.1.289 and 2.1.293. */
+const AGENT_REJECTED_RE =
+  /^(?:hook (?:stdio closed before end-of-stream|output parsed as a document that grants|output opens a JSON payload that never completed)|Hook JSON output validation failed|HTTP hook must return|Failed to run: )/;
 
 /** The `hook_response` frames for `event` (and, with `tool`, only those whose `hook_name` is `<event>:<tool>` — the
  *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered.
  *  `untooled` is set when `tool` was asked for and the event's frames carry no tool name at all (`Stop` is named
- *  `Stop`), so no frame could ever match it. An exit-0 frame the agent marked `outcome: "error"` is unreadable: the
- *  agent rejected its output, which decides nothing when the JSON fails the agent's schema but blocks on some events
- *  when the capture was incomplete. */
+ *  `Stop`), so no frame could ever match it. The JSON on stdout decides on any exit code but 2, as the agent reads it (an
+ *  HTTP hook's frame carries the HTTP status as its exit code). An exit-0 frame the agent marked `outcome: "error"` is
+ *  unreadable: the agent did not apply its output, and on some events that blocks. */
 function hookFrames(
   events: NonNullable<AssertContext["contextEvents"]>,
   event: string | undefined,
@@ -1745,12 +1746,13 @@ function hookFrames(
     // stdout alone: `output` joins stdout and stderr, so a frame without `stdout` has no readable decision.
     const stdout = typeof e.data?.stdout === "string" ? e.data.stdout : undefined;
     const stderr = typeof e.data?.stderr === "string" ? e.data.stderr : "";
+    // The agent reads the JSON on stdout whatever the exit code; exit 2 is a deny on its own.
     const { json, token } =
-      exitCode === undefined || (exitCode !== 2 && CAPTURE_REFUSED_RE.test(stderr))
+      exitCode === undefined || (exitCode !== 2 && AGENT_REJECTED_RE.test(stderr))
         ? { json: undefined }
-        : exitCode !== 0
+        : exitCode === 2
           ? { json: "none" as const }
-          : e.data?.outcome === "error" || stdout === undefined
+          : (exitCode === 0 && e.data?.outcome === "error") || stdout === undefined
             ? { json: undefined }
             : readJsonDecision(stdout, e.data?.hook_event);
     const exit2 = exitCode === undefined ? undefined : exitCode === 2;
@@ -1773,7 +1775,7 @@ const hookExitCode = (f: { exitCode?: number; outcome: string }) =>
   f.exitCode === undefined ? `${f.outcome} (no exit code)` : String(f.exitCode);
 /** The exit code, plus the JSON decision the hook printed with it: `0, JSON deny`. */
 const describeHookFrame = (f: { exitCode?: number; outcome: string; token?: string; json?: HookDecision }) =>
-  `${hookExitCode(f)}${f.token !== undefined ? `, JSON ${f.token}` : f.exitCode === 0 && f.json === undefined ? ", stdout unreadable" : ""}`;
+  `${hookExitCode(f)}${f.token !== undefined ? `, JSON ${f.token}` : f.exitCode !== undefined && f.json === undefined ? ", decision unreadable" : ""}`;
 
 /** A count with `unknown` frames of unreadable outcome lies in [known, known + unknown]. The verdict stands when that
  *  range lies wholly inside [min, max] (pass) or wholly outside it (fail); otherwise it is unknowable. */

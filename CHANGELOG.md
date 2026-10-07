@@ -16,7 +16,8 @@ All notable changes to this project are documented here. The format is based on
   new assertion key grows it. The rows are moved unchanged. No harness behaviour changes.
 - **`hook_decision: {event, decision, tool?, min?, max?}`** counts a plugin's command hook frames by what the hook
   decided: `allow`, `deny`, `ask` or `defer` (`block` and `approve` are aliases of `deny` and `allow`). It reads both
-  ways a hook decides: the JSON it prints on stdout with exit 0, and exit code 2, which is a deny. Only stdout that
+  ways a hook decides: the JSON it prints on stdout, read on any exit code but 2 as the agent reads it, and exit code
+  2, which is a deny. Only stdout that
   parses whole as a JSON object counts as a decision, so a hook that prints the word `deny` decides nothing. It
   reads the JSON by the agent's rules: `hookSpecificOutput.permissionDecision` decides on `PreToolUse` and
   `PreModelSwitch` only, where it overrides a top-level `decision`; a `PermissionRequest` hook decides by
@@ -32,8 +33,8 @@ All notable changes to this project are documented here. The format is based on
   evidence-unavailable for any `tool`.
 - A frame whose decision cannot be read counts as unknown. That covers a missing exit code, a hook that never
   answered, stdout that a redaction policy rewrote or the agent truncated, and output the agent rejects. The agent
-  marks a rejection on the frame (`outcome: "error"` with exit 0, or its refusal to read an incomplete capture in
-  stderr), and the reader also treats as rejected a top-level `decision` other than `approve` or `block`, and a
+  marks a rejection on the frame (`outcome: "error"` with exit 0, or, at the start of stderr, its rejection of the
+  JSON, its refusal to read an incomplete capture, or its failure to run the hook), and the reader also treats as rejected a top-level `decision` other than `approve` or `block`, and a
   `hookSpecificOutput` whose `hookEventName` is missing or names another event. An unknown frame makes a check evidence-unavailable only when it could change the verdict. `record` warns
   when its redaction policy makes a hook decision that one of these keys reads unreadable.
 - A cassette whose scenario uses `hook_decision`, `no_hook_event_blocked` or the object form of `hook_event_blocked`
