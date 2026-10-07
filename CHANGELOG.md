@@ -109,6 +109,22 @@ records the tool surface Desktop serves to a cloud session. No result field or c
     read). With two frames from one account, this may reflect the account or the sessions read rather than the
     release.
 
+### Documentation
+
+- **Recipes for goals the harness has no flag for**, in [docs/scenario.md](./docs/scenario.md#recipes-for-goals-the-harness-has-no-flag-for)
+  and the companion skill's task recipes: force a context compaction (a `/compact` turn, then `compaction_occurred`),
+  ablate one `SKILL.md` section (a second `eval` arm, sized with `--dry-run --target-effect`), test a skill's parsing of
+  a Desktop form reply (a resumed turn in the reply's format), resume the work in a new conversation (`fixture export`
+  then `workspace_fixture:` with `authored` checks), assert a hook's JSON decision (`hook_output_contains`, since
+  `hook_event_blocked` counts exit code 2 only), schema-check a written file (the Python lane with `jsonschema`), and
+  hold a skill to an unattended host. Each says what it does not prove.
+- **[docs/fidelity-gaps.md](./docs/fidelity-gaps.md) corrects how a Desktop form reply arrives**: one line,
+  `<Title> details — Label: value · …`, with long values after a `--- Full content ---` line, not bullet points.
+- **A cloud-lane entry: a skill attached before the cloud session exists gets its tokens unexpanded.**
+  `${CLAUDE_PLUGIN_ROOT}`, `$ARGUMENTS`, `${CLAUDE_SKILL_DIR}` and `${CLAUDE_PLUGIN_DATA}` reach the model literally and
+  `!cmd` lines do not run (observed on Desktop 2.19675.0). The harness does not emulate this;
+  [docs/plugin-root.md](./docs/plugin-root.md) points to it.
+
 ## [4.4.1] — 2026-10-05
 
 A companion-skill release: the skill now teaches 4.4.0's re-grade scrub-set proof, and a test keeps every CLI flag
