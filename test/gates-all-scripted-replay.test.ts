@@ -2,7 +2,7 @@
 // can_use_tool requests and the answers the harness sent, test/fixtures/gates-all-scripted/<case>/) into a cassette
 // with the run's own `answers:`, replays it, and compares against the verdict over that run's live decisions.
 import { describe, it, expect, vi } from "vitest";
-import { cpSync, mkdtempSync, readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { freezeRecordedRun, readCassette, replayCassette } from "../src/run/cassette.js";
@@ -32,9 +32,16 @@ const CASES = [
   { name: "llm", kept: "llm-question", answers: [], nonDeterministic: true }, // create-skill: one LLM-answered 3-question gate
 ];
 
-async function replayed(c: (typeof CASES)[number]): Promise<RunResult["assertions"]> {
+async function replayed(c: (typeof CASES)[number], dropAnswerTo?: string): Promise<RunResult["assertions"]> {
   const outDir = mkdtempSync(join(tmpdir(), "gates-all-scripted-"));
   cpSync(join(FIX, c.name), outDir, { recursive: true });
+  if (dropAnswerTo) {
+    const co = join(outDir, "control-out.jsonl");
+    const kept = readFileSync(co, "utf8")
+      .split("\n")
+      .filter((l) => l && !l.includes(dropAnswerTo));
+    writeFileSync(co, kept.join("\n") + "\n");
+  }
   const scenario = ScenarioObject.parse({
     name: `gates-all-scripted-${c.name}`,
     fidelity: "container",
@@ -90,5 +97,11 @@ describe("gates_all_scripted: replay agrees with live on real gate frames", () =
     expect(q!.pass).toBe(false);
     expect(q!.message).toContain("How should the skill handle big CSVs and messy data?");
     expect(q!.message).not.toMatch(/evidence unavailable/);
+  });
+
+  it("a truncated recording (a gate with no recorded answer) is evidence-unavailable, never a zero-gate pass", async () => {
+    const [q] = await replayed(CASES[0]!, "034e563d-8c67-4309-84df-2944d9a3ddb7"); // the question's request id
+    expect(q!.pass).toBe(false);
+    expect(q!.message).toMatch(/^evidence unavailable/);
   });
 });
