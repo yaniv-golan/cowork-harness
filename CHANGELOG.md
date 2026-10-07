@@ -17,11 +17,12 @@ All notable changes to this project are documented here. The format is based on
 - **`hook_decision: {event, decision, tool?, min?, max?}`** counts a plugin's command hook frames by what the hook
   decided: `allow`, `deny`, `ask` or `defer` (`block` and `approve` are aliases of `deny` and `allow`). It reads both
   ways a hook decides: the JSON it prints on stdout, read on a frame the agent marks `outcome: success` (exit 0, or an
-  HTTP hook's 2xx status), and exit code 2, which is a deny. A hook the agent cancelled (timed out) decided nothing. Only stdout that
-  parses whole as a JSON object counts as a decision, so a hook that prints the word `deny` decides nothing. It
-  reads the JSON by the agent's rules: `hookSpecificOutput.permissionDecision` decides on `PreToolUse` and
-  `PreModelSwitch` only, where it overrides a top-level `decision`; a `PermissionRequest` hook decides by
-  `hookSpecificOutput.decision.behavior`; any other event decides by the top-level `decision` alone.
+  HTTP hook's 2xx status), and exit code 2, which is a deny. A hook the agent cancelled (timed out or aborted) decided
+  nothing. Only stdout that parses whole as a JSON object counts as a decision, so a hook that prints the word `deny`
+  decides nothing. It reads the JSON by the agent's rules: `hookSpecificOutput.permissionDecision` decides on
+  `PreToolUse` and `PreModelSwitch` only, where it overrides a top-level `decision`; a `PermissionRequest` hook
+  decides by `hookSpecificOutput.decision.behavior`; an `Elicitation` or `ElicitationResult` hook that answers
+  `action: decline` denies; any other event decides by the top-level `decision` alone.
 - **`hook_event_blocked` takes a count form, `{event, tool?, via?, min?, max?}`.** It counts the blocking frames for an
   event. `{event, max: 0}` asserts the hook never blocked. `via` picks the channel: `exit2`, `json`, or `any` (the
   default). The bare `hook_event_blocked: <event>` still counts exit code 2 alone. When it fails, it names any JSON

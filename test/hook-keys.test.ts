@@ -399,6 +399,16 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
       expect(run({ no_hook_event_blocked: { event: "PostToolUse" } }, c).pass).toBe(true);
       expect(run({ hook_event_blocked: { event: "PostToolUse", max: 0 } }, c).pass).toBe(true);
     });
+    it("Elicitation and ElicitationResult: a decline blocks, an accept decides nothing (edited: Bash's frames renamed)", () => {
+      for (const ev of ["Elicitation", "ElicitationResult"]) {
+        const decline = ctx(decisions(as(ev, out(ev, { hookSpecificOutput: { action: "decline" } }))));
+        expect(run({ no_hook_event_blocked: { event: ev } }, decline).pass).toBe(false);
+        expect(run({ hook_decision: { event: ev, decision: "deny", min: 1, max: 1 } }, decline).pass).toBe(true);
+        const accept = ctx(decisions(as(ev, out(ev, { hookSpecificOutput: { action: "accept", content: {} } }))));
+        expect(run({ no_hook_event_blocked: { event: ev } }, accept).pass).toBe(true);
+        expect(run({ hook_decision: { event: ev, decision: "allow", max: 0 } }, accept).pass).toBe(true);
+      }
+    });
     it("PreModelSwitch: a permissionDecision deny denies (edited: Bash's frames renamed)", () => {
       const c = ctx(decisions(as("PreModelSwitch", out("PreModelSwitch", { hookSpecificOutput: { permissionDecision: "deny" } }))));
       expect(run({ hook_decision: { event: "PreModelSwitch", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);
@@ -475,7 +485,8 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
         "hook output parsed as a document that grants, rewrites or injects, but its stdio went quiet",
       ],
     ] as const)
-      it(`exit 1 where ${label}: unreadable, whatever stdout holds`, () => unreadable({ exit_code: 1, outcome: "error", stderr }));
+      it(`exit 1 where ${label}: unreadable, even with empty stdout`, () =>
+        unreadable({ exit_code: 1, outcome: "error", stdout: "", output: "", stderr }));
     it("exit 2 with the refusal text is still a deny", () => {
       const c = ctx(decisions(frame({ exit_code: 2, outcome: "error", stderr: "hook stdio closed before end-of-stream" })));
       expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);

@@ -1658,7 +1658,8 @@ type HookFrame = {
  *  so every anchor is a literal. Read from agents 2.1.289 and 2.1.293. `test/hook-decision-elf-anchors.test.ts` fails
  *  when an anchor is missing from the staged agent, and skips when none is staged. Two rules have no literal of their
  *  own, so re-check them by reading the code: the agent parses a command hook's stdout and applies its JSON before it
- *  looks at the exit code (after the "does not start with {" anchor), and exit 2 blocks whatever stdout says. */
+ *  looks at the exit code (after the "does not start with {" anchor), so a frame it marks `outcome: "success"` carries
+ *  JSON it applied; and exit 2 blocks whatever stdout says. */
 export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }> = [
   {
     rule: "stdout that does not open with `{` is plain text, not a decision",
@@ -1683,8 +1684,9 @@ export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }
   { rule: "a capture whose stdio closed early is refused (and can block)", anchor: "hook stdio closed before end-of-stream" },
   { rule: "a granting capture whose stdio went quiet is refused (and can block)", anchor: "hook output parsed as a document that grants" },
   { rule: "a partial JSON capture is refused (and can block)", anchor: "hook output opens a JSON payload that never completed" },
+  { rule: "an Elicitation or ElicitationResult hook that declines blocks", anchor: '.action==="decline")' },
   {
-    rule: "a hook the agent cancelled (timed out) decides nothing; the agent stops before it reads stdout",
+    rule: "a hook the agent cancelled (timed out or aborted) decides nothing; the agent stops before it reads stdout",
     anchor: 'type:"hook_cancelled"',
   },
   { rule: "an MCP tool hook whose tool reports an error decides nothing (the frame exits 1)", anchor: "MCP tool returned an error" },
@@ -1726,6 +1728,11 @@ export function readJsonDecision(stdout: string, event: unknown): { json: HookDe
       const d = h.decision as { behavior?: unknown } | null;
       const behavior = d !== null && typeof d === "object" ? d.behavior : undefined;
       return behavior === "allow" || behavior === "deny" ? { json: behavior, token: `behavior ${behavior}` } : { json: undefined };
+    }
+    // An Elicitation or ElicitationResult hook that declines blocks; accepting or cancelling sets no decision.
+    if ((event === "Elicitation" || event === "ElicitationResult") && "action" in h) {
+      if (h.action === "decline") return { json: "deny", token: "action decline" };
+      if (typeof h.action !== "string") return { json: undefined };
     }
     if (PERMISSION_DECISION_EVENTS.has(event) && "permissionDecision" in h) {
       const pd = h.permissionDecision;
@@ -1770,7 +1777,7 @@ export function frameJsonDecision(d: Record<string, unknown> | undefined): { jso
   // Exit 2 is a deny on its own, read by the exit-2 channel.
   if (exitCode === 2) return { json: "none" };
   if (AGENT_REJECTED_RE.test(stderr)) return { json: undefined };
-  // A hook the agent cancelled (it timed out) decided nothing: the agent stops before it reads stdout.
+  // A hook the agent cancelled (it timed out, or was aborted) decided nothing: the agent stops before it reads stdout.
   if (d?.outcome === "cancelled") return { json: "none" };
   const read = stdout === undefined ? { json: undefined } : readJsonDecision(stdout, d?.hook_event);
   // On `outcome: "success"` (exit 0, or an HTTP hook's 2xx) the JSON decides.
