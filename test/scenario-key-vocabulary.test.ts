@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { CATALOG_FILES } from "./helpers/assertion-catalog.js";
 
 // Anti-drift guard, REVERSE DIRECTION. `test/scenario-docs-sync.test.ts` asserts
 // `real assertion key ⇒ has a doc table row`. Nothing asserted the converse, so a key-shaped token in
@@ -48,7 +49,7 @@ const SCANNED = [
   "CHANGELOG.md",
   "llms.txt",
   ".claude/skills/cowork-harness/references/scenario-schema.md",
-  ".claude/skills/cowork-harness/references/assertion-catalog.md",
+  ...CATALOG_FILES,
   ".claude/skills/cowork-harness/references/task-recipes.md",
   ".claude/skills/cowork-harness/references/fidelity-and-answers.md",
 ];
