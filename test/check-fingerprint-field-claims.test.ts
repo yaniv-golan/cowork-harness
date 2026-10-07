@@ -17,16 +17,18 @@ import { checkFingerprintFieldClaims, fingerprintShapeKeys } from "../scripts/ch
  * rather than left to look covered.
  */
 
+// The synthetic cases below check the guard's logic against a fixed key set; REAL_KEYS is what the source has today.
 const KEYS = ["agent_env", "egress", "folders", "mcp", "model", "plugins", "projects", "skills", "web_fetch"];
+const REAL_KEYS = [...KEYS, "answer_channel", "artifacts_root"].sort();
 const site = (text: string, path = "docs/x.md") => [{ path, text }];
 
 describe("fingerprintShapeKeys — parse-or-error, never parse-and-pass", () => {
   const src = readFileSync(join(process.cwd(), "src/run/cassette.ts"), "utf8");
 
-  it("extracts all 9 keys, literal and spread, from the real source", () => {
+  it("extracts all 11 keys, literal and spread, from the real source", () => {
     const { keys, error } = fingerprintShapeKeys(src);
     expect(error).toBeUndefined();
-    expect(keys).toEqual(KEYS);
+    expect(keys).toEqual(REAL_KEYS);
   });
 
   // M3 — the extractor must fail LOUDLY when the shape is renamed. A regex that stops matching and

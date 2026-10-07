@@ -384,6 +384,7 @@ a global install has them locally too, not just on GitHub.
 | [docs/README.md](./docs/README.md) | The docs index — a one-line map of every guide below. |
 | [docs/boundary.md](./docs/boundary.md) | The limitations model — sealed FS, default-deny egress, MCP-only crossing; how each tier enforces it; how to verify. |
 | [docs/session.md](./docs/session.md) | Every `sessions/*.yaml` field and its Cowork mapping. |
+| [docs/headless-no-answer.md](./docs/headless-no-answer.md) | `answer_channel: none` — a run with nobody to answer the agent (not Cowork). |
 | [docs/scenario.md](./docs/scenario.md) | `scenarios/*.yaml` — prompt, scripted answers, assertions. |
 | [docs/subagents.md](./docs/subagents.md) | The sub-agent capability/path model — tier-qualified outputs contract, tool-composition rules, the type-less dispatch trap. |
 | [docs/chat.md](./docs/chat.md) | The interactive `chat` REPL — multi-turn debugging, flags, attaching files/folders. |

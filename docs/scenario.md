@@ -724,10 +724,10 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 #### Verdict signals
 
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
-are twenty-three codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
+are twenty-four codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
 `result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
 `result.verdict.signals[].severity` or the run's exit code instead.
-Only twelve codes are **warn**-severity (informational, never flip pass/fail):
+Only thirteen codes are **warn**-severity (informational, never flip pass/fail):
 
 - `outputs_delete_unconfirmed` (**warn**, live lane) — a delete-shaped command near `mnt/outputs` that
   nothing confirms: no output present at turn start was deleted, and no flagged delete has an outputs path as
@@ -798,6 +798,10 @@ Only twelve codes are **warn**-severity (informational, never flip pass/fail):
   `verify-run` from the scenario you pass: `verify-run` clears once every sub-question is scripted, a replay
   once the run is re-recorded with them scripted. On a replay the message names the recorded answer, not who
   gave it live.
+- `parked_at_question` (**warn**) — a run whose session declares `answer_channel: none` ended on a question
+  nobody can answer. With no answer channel, stopping at the question is the contract the run models, so it
+  takes the place of the `stalled` fail; completion is judged from the file assertions such a scenario must
+  carry (see [headless-no-answer.md](./headless-no-answer.md)).
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see
   [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion

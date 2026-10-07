@@ -3077,6 +3077,10 @@
       ".ablated": {
         "type": "boolean"
       },
+      ".answerChannel": {
+        "type": "string",
+        "enum": ["none"]
+      },
       ".apiRetries": {
         "type": "object"
       },
@@ -3286,7 +3290,7 @@
       },
       ".errorSource": {
         "type": "string",
-        "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout"]
+        "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout", "answer_channel_violation"]
       },
       ".evidenceErrors": {
         "type": "object"
@@ -4415,7 +4419,8 @@
           "delivery_unobservable",
           "outputs_delete_unconfirmed",
           "outputs_diff_unavailable",
-          "partly_scripted_gate"
+          "partly_scripted_gate",
+          "parked_at_question"
         ],
         "required": true
       },
@@ -5701,6 +5706,9 @@
         "type": "object",
         "closed": true
       },
+      ".agent_env.artifacts_root": {
+        "type": "string"
+      },
       ".agent_env.disable_experimental_betas": {
         "type": "boolean"
       },
@@ -5713,6 +5721,10 @@
       },
       ".agent_max_turns": {
         "type": "integer"
+      },
+      ".answer_channel": {
+        "type": "string",
+        "enum": ["none"]
       },
       ".auto_mount_folders": {
         "type": "boolean"
@@ -6054,6 +6066,7 @@
     "coworkVars": [
       "COWORK_AGENT_BINARY",
       "COWORK_AGENT_IMAGE",
+      "COWORK_ARTIFACTS_ROOT",
       "COWORK_CONTAINER_RUNTIME",
       "COWORK_HARNESS_AGENT_SCOPE",
       "COWORK_HARNESS_ALLOW_AGENT_FALLBACK",

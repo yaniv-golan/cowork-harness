@@ -164,11 +164,13 @@ describe("verdict-signals docs ↔ code", () => {
   // 12 as of `partly_scripted_gate`. It fires only where the decider's existing stderr warning already
   // fires (scripted rules matched some, not all, sub-questions of one batch), so no clean run gains it; on
   // the `first`/`llm` fallbacks it co-occurs with `non_deterministic`, and on `fail` the run is already red.
-  it('the docs\' "only twelve warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 13 as of `parked_at_question`. It fires only under `answer_channel: none`, and only where `stalled` (a fail) would
+  // otherwise have fired, so no run gains a signal it did not have.
+  it('the docs\' "only thirteen warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(12);
-    expect(scenarioMdText).toMatch(/Only twelve codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(13);
+    expect(scenarioMdText).toMatch(/Only thirteen codes are \*\*warn\*\*-severity/);
   });
 });
 

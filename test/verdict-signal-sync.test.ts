@@ -154,7 +154,7 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
   // reference's TABLE was guarded (above) and stayed correct, while the two prose sentences wrapping it
   // and the skill's pointer to it drifted to "four", "five" and "17" against an actual 11/9/20. A count
   // stated in prose beside a guarded table is not covered by the table's guard — pin it explicitly.
-  const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+  const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen"];
 
   it("the schema reference's prose fail/warn counts match the table it introduces", () => {
     const warnCount = [...SEVERITY].filter(([, s]) => s === "warn").length;
@@ -185,7 +185,7 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
       expect(scenarioMd, `docs/scenario.md should document the warn signal ${code}`).toContain(`\`${code}\``);
     }
     // the prose states the count in words; keep it honest as the set grows
-    const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+    const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen"];
     expect(scenarioMd).toContain(`Only ${WORDS[warnCodes.length]} codes are **warn**-severity`);
   });
 });

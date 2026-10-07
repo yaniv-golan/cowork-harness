@@ -60,6 +60,25 @@ All notable changes to this project are documented here. The format is based on
 - `run`, `record` and `lint` refuse a negative hook key alongside a positive one that can never both pass, such as
   `no_hook_event_blocked: true` with `hook_event_blocked: Stop`, as they refuse `no_hook_blocked` with `hook_blocked`.
 
+- **`answer_channel: none` (session key): a run with nobody to answer the agent.** It models a headless host's
+  contract and is not a Cowork setting: the agent is spawned with `--permission-prompts none` in place of the stdio
+  permission tool, so questions and permission prompts are denied inside the agent and never reach the harness. It
+  requires `permission_mode: bypassPermissions` and at least one file assertion, and it refuses at load every input
+  that assumes a channel (`answers:`, `on_unanswered` and the decider flags, `permission_parity: strict`,
+  `web_fetch.approved_domains`, the gate assertion keys, `tool_called` naming `AskUserQuestion`), the host loop and
+  `lane: remote`. A run that ends on a question gets the new `parked_at_question` warning instead of the `stalled`
+  failure; a request that reaches the harness anyway is refused and ends the run with the new `errorSource`
+  `answer_channel_violation`. Such runs are labelled `[headless, no answer channel — not Cowork]`, carry
+  `RunResult.answerChannel: "none"`, and form their own `stats` group. See `docs/headless-no-answer.md`.
+- **`agent_env.artifacts_root` (session key)** sets `COWORK_ARTIFACTS_ROOT` to a path under outputs as the agent sees
+  it on each tier, for a skill that takes its run-status directory from that variable. Refused at `hostloop`, whose
+  shell never sees the agent's environment. The operator's own export of the variable is now scrubbed at `protocol`
+  and `hostloop`.
+- **Baseline field `agentBinary.cliCapabilities.permissionPrompts`**, recorded by `sync` from the staged agent
+  (present in `desktop-2.26454.0`). A baseline without it is refused for `answer_channel: none` with a re-sync hint.
+- The session fingerprint now covers `answer_channel` and `agent_env.artifacts_root` when set; a session without
+  them hashes exactly as before.
+
 ### Changed
 
 - **`latest` moves to `desktop-2.26454.2`** (agent **2.1.293**, was 2.1.289). Its `sync` reported no unknown deltas:

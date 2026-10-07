@@ -56,6 +56,7 @@ Grouped by the same **author → run → debug** spine as the reading order abov
 |---|---|
 | [boundary.md](./boundary.md) | **The limitations model** — how the harness reproduces Cowork's sealed filesystem, default-deny egress, and MCP-only crossing, per fidelity tier; how to verify it. Read this if you care about *constraint* fidelity. |
 | [session.md](./session.md) | **Author** — reference for `sessions/*.yaml`: every pre-prompt setting (model, folders/projects, uploads, discovery, egress) and its Cowork mapping. |
+| [headless-no-answer.md](./headless-no-answer.md) | **Author** — `answer_channel: none`: run a skill with nobody to answer it (a headless host's contract, not Cowork), and `agent_env.artifacts_root`. |
 | [scenario.md](./scenario.md) | **Author** — reference for `scenarios/*.yaml`: prompt, scripted answers, assertions. |
 | [subagents.md](./subagents.md) | **Author/debug** — the sub-agent capability/path model: the tier-qualified outputs-addressing contract (host-loop vs. VM-loop), the tool-composition rules, the type-less dispatch trap, and model-resolution precedence. |
 | [cassette.md](./cassette.md) | **Run, record & lock** — cassette `record`/`replay`: file shape, the assertion table (content vs. skipped), full-fidelity replay (`controlOut` — the recorded driver→child control responses — plus the O7 guard, which re-exercises the decision-serialization logic on replay), backward compat, and the committed CI fixture. |

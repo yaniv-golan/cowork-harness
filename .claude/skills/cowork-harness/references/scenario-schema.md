@@ -178,12 +178,16 @@ agent_max_turns: 500              # optional turn ceiling -> agent --max-turns; 
                                   # (distinct from the max_turns ASSERTION)
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
+# answer_channel: none           # NOT Cowork: nobody answers the agent (--permission-prompts none). Needs
+                                  # bypassPermissions + a file assertion; refuses answers/deciders/gate keys and
+                                  # hostloop/cowork; a stop at a question is parked_at_question (warn), not stalled
 
 # sub-agent / tool-search env knob (tier-uniform; maps to agent env vars)
 agent_env:
   subagent_model: claude-opus-4-8   # -> CLAUDE_CODE_SUBAGENT_MODEL
   tool_search: auto                 # auto | off -> ENABLE_TOOL_SEARCH; omit = binary default (ToolSearch ON)
   disable_experimental_betas: false # true -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 (also disables ToolSearch)
+  artifacts_root: artifacts         # -> COWORK_ARTIFACTS_ROOT=<outputs as the agent sees it>/artifacts; refused at hostloop
 
 # fenced debug escape hatch (NOT reachable via Cowork's UI)
 debug:

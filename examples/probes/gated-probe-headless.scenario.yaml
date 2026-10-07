@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=../../schema/scenario.schema.json
+# Headless gated probe: a skill that records `waiting` in its own status file before asking, run with
+# nobody to answer (`answer_channel: none` in the session). The run ends `success` either way; completion
+# is judged from the status file. A stop at the question is reported as `parked_at_question`, not a fail.
+name: gated-probe-headless
+baseline: latest
+session: ../sessions/gated-probe-headless.yaml
+fidelity: container
+prompt: |
+  Run the gated probe.
+assert:
+  # the status file the skill's own script wrote, before the gate
+  - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: waiting }
+  # the script that writes it actually ran (not the model writing the file itself)
+  - tool_called: { tool: Bash, input: { command: "step1\\.py" } }
