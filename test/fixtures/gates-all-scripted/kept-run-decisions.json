@@ -1,0 +1,248 @@
+{
+  "_source": "decisions[] copied verbatim from kept run dirs result.json (detail.input dropped); one entry per run",
+  "scripted-question": {
+    "decisions": [
+      {
+        "kind": "question",
+        "name": "AskUserQuestion",
+        "decision": "answered",
+        "by": "scripted",
+        "requestId": "fdba610d-9cea-40ed-95ac-a9177ba7f3c4",
+        "detail": {
+          "Reading this as a question about what a 40-bed house two hours from a city could be doing on Monday-to-Thursday nights that is not selling single leisure nights to the same audience that already fills the weekend - either by finding someone for whom the two-hour distance is the reason to come rather than the obstacle, or by making the midweek building earn without anyone travelling at all. The person who has to act is whoever decides where a multi-day, non-weekend activity physically happens - an organiser, an institution's administrator, a trainer, a household member - and who today has no standing reason to leave the city between Monday and Thursday, deciding at the moment of choosing, whether a block of consecutive weekday days-and-nights happens where they already are, or somewhere two hours out that has to earn the journey; and separately, what the building is for on the nights nobody buys.\n\nPressures I added on my own, which you did not state: that acquiring a single unknown traveller through intermediaries and paid search now costs more than one night's margin; that the scarce input in rural hospitality is people willing to work far from a city, and the shift pattern rather than the wage is what they leave over; that heating, insuring and staffing a mostly-empty house on a weekday must beat closing the doors rather than beat zero; that proximity to a city has become abundant while genuine distance from one has become scarce.\n\nTwo things only you can tell me, each in a phrase, or say skip: What have you already tried or ruled out? What would count as solved? — Say \"go\" to start, or correct anything above. I will fix it once and start, and I will not ask again.": "skip"
+        },
+        "questions": [
+          {
+            "question": "Reading this as a question about what a 40-bed house two hours from a city could be doing on Monday-to-Thursday nights that is not selling single leisure nights to the same audience that already fills the weekend - either by finding someone for whom the two-hour distance is the reason to come rather than the obstacle, or by making the midweek building earn without anyone travelling at all. The person who has to act is whoever decides where a multi-day, non-weekend activity physically happens - an organiser, an institution's administrator, a trainer, a household member - and who today has no standing reason to leave the city between Monday and Thursday, deciding at the moment of choosing, whether a block of consecutive weekday days-and-nights happens where they already are, or somewhere two hours out that has to earn the journey; and separately, what the building is for on the nights nobody buys.\n\nPressures I added on my own, which you did not state: that acquiring a single unknown traveller through intermediaries and paid search now costs more than one night's margin; that the scarce input in rural hospitality is people willing to work far from a city, and the shift pattern rather than the wage is what they leave over; that heating, insuring and staffing a mostly-empty house on a weekday must beat closing the doors rather than beat zero; that proximity to a city has become abundant while genuine distance from one has become scarce.\n\nTwo things only you can tell me, each in a phrase, or say skip: What have you already tried or ruled out? What would count as solved? — Say \"go\" to start, or correct anything above. I will fix it once and start, and I will not ask again.",
+            "header": "Start the run",
+            "options": [
+              {
+                "label": "Go",
+                "description": "Start the run on the reading above. Beyond the discounting and the corporate rate card you already mentioned, nothing further to add on what you have tried or what would count as solved."
+              },
+              {
+                "label": "Go — but answer the two",
+                "description": "Start, and I will take your typed answer to \"what have you tried or ruled out\" and \"what would count as solved\" alongside it. Pick Other to type both."
+              },
+              {
+                "label": "Correct the reading",
+                "description": "Something above is wrong — the reading, the actor, the decision, or one of the pressures I added. Pick Other to say what."
+              }
+            ],
+            "multiSelect": false
+          }
+        ]
+      }
+    ]
+  },
+  "llm-question": {
+    "decisions": [
+      {
+        "kind": "question",
+        "name": "AskUserQuestion",
+        "decision": "answered",
+        "by": "llm",
+        "requestId": "a7a9ee5b-6298-4cae-ad5c-b7ef0e195f04",
+        "model": "claude-sonnet-5",
+        "detail": {
+          "How should the skill handle big CSVs and messy data?": "Minimal instructions only",
+          "Any output preferences for the markdown tables?": "Padded + alignment row (Recommended)",
+          "Want me to run the eval loop (test cases + benchmark review) before packaging?": "Skip evals, just build and package"
+        },
+        "rationale": "LLM judgment",
+        "questions": [
+          {
+            "question": "How should the skill handle big CSVs and messy data?",
+            "header": "Scope",
+            "options": [
+              {
+                "label": "Full-featured converter",
+                "description": "Bundled Python script: auto-detects delimiter and encoding, aligns columns, escapes pipes/newlines, handles ragged rows, and can truncate or chunk very large tables."
+              },
+              {
+                "label": "Minimal instructions only",
+                "description": "SKILL.md guidance with no bundled script — Claude writes the conversion inline each time. Smaller, but less deterministic."
+              }
+            ],
+            "multiSelect": false
+          },
+          {
+            "question": "Any output preferences for the markdown tables?",
+            "header": "Output",
+            "options": [
+              {
+                "label": "Padded + alignment row (Recommended)",
+                "description": "Columns padded to equal width for readable raw markdown, with a separator row honoring numeric right-alignment."
+              },
+              {
+                "label": "Compact, unpadded",
+                "description": "Minimal pipes, no padding — smaller files, renders identically but harder to read as plain text."
+              },
+              {
+                "label": "Both, user picks per run",
+                "description": "Script takes a flag; the skill asks or infers which style to use."
+              }
+            ],
+            "multiSelect": false
+          },
+          {
+            "question": "Want me to run the eval loop (test cases + benchmark review) before packaging?",
+            "header": "Evals",
+            "options": [
+              {
+                "label": "Skip evals, just build and package",
+                "description": "Draft the skill, smoke-test the script directly on edge cases, validate, package, and hand you the .skill file."
+              },
+              {
+                "label": "Run the full eval loop",
+                "description": "Also run test prompts with and without the skill, grade them, and open a review viewer for your feedback. Slower."
+              }
+            ],
+            "multiSelect": false
+          }
+        ]
+      }
+    ]
+  },
+  "first-then-scripted": {
+    "decisions": [
+      {
+        "kind": "question",
+        "name": "AskUserQuestion",
+        "decision": "answered",
+        "by": "first",
+        "requestId": "28b9a983-ec73-42f2-b5c8-ec6424a7beda",
+        "detail": {
+          "Is this a flip-focused engagement (Israeli → Delaware), or a standard cap-table modeling engagement?": "Standard cap-table modeling",
+          "What is Acmecorp Inc.'s jurisdiction structure?": "Delaware (already flipped)"
+        },
+        "rationale": "first option (on_unanswered=first)",
+        "questions": [
+          {
+            "question": "Is this a flip-focused engagement (Israeli → Delaware), or a standard cap-table modeling engagement?",
+            "header": "Engagement",
+            "options": [
+              {
+                "label": "Standard cap-table modeling",
+                "description": "Model dilution, conversion, and priced-round scenarios for a Delaware company."
+              },
+              {
+                "label": "Flip-focused (Israeli → Delaware)",
+                "description": "Focus on the mechanics of restructuring from an Israeli company to a Delaware holding company."
+              }
+            ],
+            "multiSelect": false
+          },
+          {
+            "question": "What is Acmecorp Inc.'s jurisdiction structure?",
+            "header": "Jurisdiction",
+            "options": [
+              {
+                "label": "Delaware (already flipped)",
+                "description": "Incorporated in Delaware; no Israeli parent or subsidiary involved."
+              },
+              {
+                "label": "Israeli company",
+                "description": "Incorporated in Israel under Israeli Companies Law."
+              },
+              {
+                "label": "Mid-flip",
+                "description": "Flip is in progress — Israeli company with a Delaware entity being set up."
+              },
+              {
+                "label": "Delaware with Israeli subsidiary",
+                "description": "Delaware holding company with an Israeli operational subsidiary."
+              }
+            ],
+            "multiSelect": false
+          }
+        ]
+      },
+      {
+        "kind": "question",
+        "name": "AskUserQuestion",
+        "decision": "answered",
+        "by": "scripted",
+        "requestId": "7c495072-f377-4950-92f1-a192b51a7bd1",
+        "detail": {
+          "Here's what I found in your Series A term sheet:\n\n**Extracted terms (high confidence):**\n- Investment: $5,000,000\n- Pre-Money Valuation: $20,000,000 → Post-Money: $25,000,000\n- Lead Investor: Foobar Ventures LP\n- Liquidation Preference: 1× non-participating\n- Binding provisions: Exclusivity / No-Shop and Confidentiality\n- Standard provisions referenced (not detailed): anti-dilution, drag-along, ROFR, co-sale, information rights, registration rights, board composition\n\n⚠️ **BINDING FIELD IS BLANK — requires immediate attention:**\nThe Exclusivity / No-Shop clause reads: *\"During a period of ___ days following the date hereof...\"* — the number of days is missing. This clause IS binding if you sign. You would be barred from talking to other investors for an unknown duration.\n\n⚠️ **Terms referenced but not detailed in this document:**\n- Anti-dilution mechanism (broad-based weighted average vs. full ratchet — this matters a lot)\n- Board composition (number of seats, investor control)\n\nThis term sheet contains no cap table (no founder share counts, option pool, or prior investors). How should I proceed?": "Instrument terms only"
+        },
+        "questions": [
+          {
+            "question": "Here's what I found in your Series A term sheet:\n\n**Extracted terms (high confidence):**\n- Investment: $5,000,000\n- Pre-Money Valuation: $20,000,000 → Post-Money: $25,000,000\n- Lead Investor: Foobar Ventures LP\n- Liquidation Preference: 1× non-participating\n- Binding provisions: Exclusivity / No-Shop and Confidentiality\n- Standard provisions referenced (not detailed): anti-dilution, drag-along, ROFR, co-sale, information rights, registration rights, board composition\n\n⚠️ **BINDING FIELD IS BLANK — requires immediate attention:**\nThe Exclusivity / No-Shop clause reads: *\"During a period of ___ days following the date hereof...\"* — the number of days is missing. This clause IS binding if you sign. You would be barred from talking to other investors for an unknown duration.\n\n⚠️ **Terms referenced but not detailed in this document:**\n- Anti-dilution mechanism (broad-based weighted average vs. full ratchet — this matters a lot)\n- Board composition (number of seats, investor control)\n\nThis term sheet contains no cap table (no founder share counts, option pool, or prior investors). How should I proceed?",
+            "header": "Next step",
+            "options": [
+              {
+                "label": "Provide the cap base — full review",
+                "description": "Share your current cap table (founder names and shares, option pool size, any SAFEs or notes outstanding). I'll model the full dilution impact of this round."
+              },
+              {
+                "label": "Instrument terms only",
+                "description": "Generate the term sheet review and watchlist now, without dilution modeling. You can always come back with your cap table for the full picture."
+              }
+            ],
+            "multiSelect": false
+          }
+        ]
+      }
+    ]
+  },
+  "cowork-permissive-allow": {
+    "decisions": [
+      {
+        "kind": "tool",
+        "name": "Bash",
+        "decision": "allow",
+        "by": "cowork",
+        "requestId": "f966ac42-470e-462d-9a69-fecb9429d6a7",
+        "rationale": "allow-unscripted (cowork parity)"
+      }
+    ]
+  },
+  "scripted-question-and-permission": {
+    "decisions": [
+      {
+        "kind": "question",
+        "name": "AskUserQuestion",
+        "decision": "answered",
+        "by": "scripted",
+        "requestId": "034e563d-8c67-4309-84df-2944d9a3ddb7",
+        "detail": {
+          "Which output format should the note.md file use?": "Plain text"
+        },
+        "questions": [
+          {
+            "question": "Which output format should the note.md file use?",
+            "header": "Format",
+            "options": [
+              {
+                "label": "Plain text",
+                "description": "A single line of plain text containing \"protocol smoke\"."
+              },
+              {
+                "label": "Markdown heading",
+                "description": "The line as a Markdown heading, e.g. # protocol smoke."
+              },
+              {
+                "label": "Markdown blockquote",
+                "description": "The line as a Markdown blockquote, e.g. > protocol smoke."
+              },
+              {
+                "label": "Bullet item",
+                "description": "The line as a Markdown bullet, e.g. - protocol smoke."
+              }
+            ],
+            "multiSelect": false
+          }
+        ]
+      },
+      {
+        "kind": "tool",
+        "name": "Write",
+        "decision": "allow",
+        "by": "scripted",
+        "requestId": "aedb4a34-a9fc-4af3-8299-c5bd93ca1617"
+      }
+    ]
+  }
+}

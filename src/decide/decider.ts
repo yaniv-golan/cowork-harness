@@ -148,6 +148,17 @@ export class ScriptedDecider implements Decider {
     return matched.length > 0 && unmatched.length > 0 ? { matched, unmatched } : null;
   }
 
+  /** The sub-questions of a batch no rule answers, by the text the rules match against: empty means `decide` would
+   *  answer the whole batch itself (or throw — it never falls through). Same lookup as `decide`, without answering. */
+  unansweredOf(questions: ReadonlyArray<{ question?: string; header?: string }>): string[] {
+    return questions.map((q) => q.question ?? q.header ?? "").filter((text) => !this.ruleFor(text));
+  }
+
+  /** Whether a `when_tool` rule answers a permission request for this tool (the lookup `decide` uses). */
+  answersTool(tool: string): boolean {
+    return this.rules.some((r) => r.when_tool === tool);
+  }
+
   async decide(req: DecisionRequest, ctx: RunContext): Promise<Decision | Abstain> {
     if (req.kind === "question") {
       const answers: Record<string, string> = {};
@@ -262,9 +273,17 @@ export class ScriptedDecider implements Decider {
 // Task), which would make strict parity allow Bash.
 const DEFAULT_ALLOW = new Set(["Read", "Glob", "Grep"]);
 
+/** Whether the parity default allows this tool under either parity (the read-only registry above). */
+export function isDefaultAllowedTool(tool: string): boolean {
+  return DEFAULT_ALLOW.has(tool);
+}
+
 /** The rationale a cowork-parity off-registry auto-allow carries. Shared so run.ts can detect a
  *  permissive auto-allow (real Cowork would BLOCK for the user) without string-matching drift. */
 export const PERMISSIVE_AUTOALLOW_RATIONALE = "allow-unscripted (cowork parity)";
+/** The parity default's two FIXED answers: a registry allow (either parity) and the strict off-registry deny. */
+export const DEFAULT_ALLOW_RATIONALE = "default-allow built-in";
+export const STRICT_DENY_RATIONALE = "deny (strict parity)";
 
 /** Cowork/strict permission default: allow-unscripted (cowork) or deny (strict). Permission only. */
 export class PermissionDefaultDecider implements Decider {
@@ -280,7 +299,7 @@ export class PermissionDefaultDecider implements Decider {
       return {
         response: { kind: "permission", behavior: "allow", updatedInput: req.input },
         by: this.parity,
-        rationale: "default-allow built-in",
+        rationale: DEFAULT_ALLOW_RATIONALE,
       };
     const allow = this.parity === "cowork";
     return {
@@ -288,7 +307,7 @@ export class PermissionDefaultDecider implements Decider {
         ? { kind: "permission", behavior: "allow", updatedInput: req.input }
         : { kind: "permission", behavior: "deny", message: "denied (strict, off-registry)" },
       by: this.parity,
-      rationale: allow ? PERMISSIVE_AUTOALLOW_RATIONALE : "deny (strict parity)",
+      rationale: allow ? PERMISSIVE_AUTOALLOW_RATIONALE : STRICT_DENY_RATIONALE,
     };
   }
 }
