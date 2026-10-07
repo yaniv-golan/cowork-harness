@@ -302,6 +302,8 @@ export async function cmdChat(args: string[]) {
   // mirroring execute.ts's hardening so a re-run can't collide on the sidecar container name.
   const runToken = `r${process.hrtime.bigint().toString(36)}`;
   // no process.env mutation — pass proxy/network explicitly so concurrent calls don't stomp.
+  // Which lane this session models: once, at session start (lane-notice.ts).
+  maybePrintChatLaneNotice();
   // Unit-lane spawn guard: everything below starts containers or a real agent.
   assertSpawnAllowed(`\`chat\` at ${fidelity}`);
   // protocol tier runs the host claude binary with no Docker sandbox, so no sidecar is needed.
@@ -345,7 +347,6 @@ export async function cmdChat(args: string[]) {
     if (m.kind === "upload") log(`  upload: ${m.hostPath} → mnt/${m.mountPath}\n`);
     else if (m.kind === "folder") log(`  folder: ${m.hostPath} → mnt/${m.mountPath}\n`);
   }
-  maybePrintChatLaneNotice();
   log(`type your message (/help for commands)\n`);
 
   const runner = resolveContainerRuntime();
