@@ -44,6 +44,9 @@ All notable changes to this project are documented here. The format is based on
 - **`hook_blocked` and `no_hook_blocked` say what they read:** the harness's own hook callbacks. A plugin's command
   hook never reaches that list, so `no_hook_blocked` passes over a plugin's block. The docs and the companion skill
   now send a plugin hook to `hook_event_blocked`, `no_hook_event_blocked` and `hook_decision`.
+- **`liveVerifiedHookEvents` in `assertion-keys.json` lists `PreToolUse`.** A plugin's PreToolUse hook has now been
+  recorded firing at `container`, deciding by JSON and by exit 2. No notice or lint message changes: PreToolUse is
+  an event the harness serves, and those messages cover unserved events only.
 
 ## [4.5.0] — 2026-10-07
 

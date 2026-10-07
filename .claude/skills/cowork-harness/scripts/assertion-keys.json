@@ -159,6 +159,7 @@
   ],
   "liveVerifiedHookEvents": [
     "PostToolUse",
+    "PreToolUse",
     "SessionStart",
     "Stop",
     "UserPromptSubmit"

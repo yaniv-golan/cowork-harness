@@ -281,7 +281,7 @@ _FALLBACK_KNOWN_HOOK_EVENTS = set(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED)
 # The subset a plugin hook has been OBSERVED to fire for here (live-verified 2026-08-01, container +
 # hostloop). Kept apart from the known set because the message wording depends on which claim we can
 # make: accepted-by-the-validator is not reached-by-a-run.
-_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"}
+_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreToolUse"}
 
 
 def _load_hook_events():
