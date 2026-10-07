@@ -1677,8 +1677,9 @@ def valid(doc):
 result.assert_artifact_json("outputs/cap.json", valid)
 ```
 
-In a scenario, name the exact paths (`artifact_json` per file) and add `no_unexpected_files` so no other file slips
-in. *Does not prove:* anything about a file whose name you did not list (no globbing).
+In a scenario, name the exact paths (`artifact_json` per file), or cover a set with a glob `artifact` and
+`match: each`, and add `no_unexpected_files` so no other file slips in. `artifact_json` checks fields one dotted path
+at a time, not a whole schema. *Does not prove:* anything about a file no path or glob you listed reaches.
 
 #### Hold a skill to an unattended host
 
