@@ -130,6 +130,12 @@ describe("answerChannelRefusal", () => {
     const a = Assertion.parse({ [k]: gateValue[k] });
     expect(refuse({ scenario: { assert: [parkedAssert, a] } })).toMatch(new RegExp(k));
   });
+  // Named on its own: it passes vacuously when no gate fires, which is every run without a channel.
+  it("refuses gates_all_scripted, both forms", () => {
+    expect(GATE_ASSERT_KEYS).toContain("gates_all_scripted");
+    for (const v of [true, { include_permissions: true }])
+      expect(refuse({ scenario: { assert: [parkedAssert, Assertion.parse({ gates_all_scripted: v })] } })).toMatch(/gates_all_scripted/);
+  });
   it("GATE_ASSERT_KEYS names every question/gate assertion key in the schema", () => {
     const schemaKeys = Object.keys(Assertion.shape).filter((k) => /^(question_|gate_|gates_)/.test(k) && k !== "questions_count_max");
     expect([...GATE_ASSERT_KEYS].sort()).toEqual(schemaKeys.sort());

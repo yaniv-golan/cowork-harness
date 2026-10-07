@@ -652,13 +652,16 @@ function usesToolCallObjectForm(a: unknown): boolean {
  *  callers hold values of different strictness — `record` has a parsed `Scenario`, `rehash` has an
  *  on-disk cassette's frozen scenario read through CassetteShape's loose passthrough, not the strict
  *  schema. */
-export function requiredVersionFor(scenario: unknown): number {
+export function requiredVersionFor(scenario: unknown, frozen?: { answerChannel?: unknown }): number {
   const s = (scenario ?? {}) as Record<string, unknown>;
   // Derived, never hard-coded: this is what actually gets STAMPED at both write sites, so a hash-format
   // bump that moved only CASSETTE_VERSION/HASH_FORMAT_EPOCH would write new-algorithm digests into
   // cassettes stamped with an old version — permanently mislabelled, and unprovable at the next epoch.
   const BASE = HASH_FORMAT_EPOCH;
-  return Math.max(BASE, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
+  // `answerChannel` is frozen beside the scenario, not in it, and a v14 reader ignores an unknown top-level key: it
+  // would replay a run that parked at a question as the `stalled` fail. Every write site passes the cassette's value.
+  const channel = frozen?.answerChannel === "none" ? 15 : 0;
+  return Math.max(BASE, channel, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
 }
 
 const DEFAULT_MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
@@ -6024,7 +6027,7 @@ export async function freezeRecordedRun(
   }
   // The STAMPED version — the minimum a reader needs to interpret THIS scenario, not the build's max
   // (CASSETTE_VERSION). Nearly every scenario (lane: local/omitted) stamps v10, unchanged (P8).
-  const stampedVersion = requiredVersionFor(relocatable);
+  const stampedVersion = requiredVersionFor(relocatable, { answerChannel: result.answerChannel });
   // Read once — the decision stream feeds both the cassette body and the label-provenance stamp below.
   const recordedControlOut = safeLines(join(result.outDir, "control-out.jsonl"));
   const base: Cassette = {
@@ -6802,7 +6805,7 @@ async function writeReassertedAssertBlock(
   // record does, or an older CLI meets a v12-stamped cassette carrying v13 semantics and says "re-record"
   // instead of "too new". Never LOWER the stamp: the rest of the cassette was written for the old one.
   const raw = rawCassette as { cassetteVersion?: number; $schema?: string };
-  const stamp = Math.max(raw.cassetteVersion ?? 0, requiredVersionFor(rawCassette.scenario));
+  const stamp = Math.max(raw.cassetteVersion ?? 0, requiredVersionFor(rawCassette.scenario, rawCassette));
   if (stamp !== raw.cassetteVersion) {
     raw.cassetteVersion = stamp;
     raw.$schema = cassetteSchemaUrl(stamp);
@@ -8015,7 +8018,7 @@ export async function cmdRehash(args: string[]): Promise<void> {
     // The version THIS scenario requires — not CASSETTE_VERSION (the build's max). Without this,
     // `rehash` would bump a lane-free v10 cassette to v11 for no interpretive reason, reintroducing the
     // blanket cost P8 exists to avoid via the very command this plan names as the recovery path.
-    const requiredVersion = requiredVersionFor(cassette.scenario);
+    const requiredVersion = requiredVersionFor(cassette.scenario, cassette);
 
     // INVARIANT BEFORE SKIP. `cassetteVersion` says which reader is required; `fingerprint.hashFormat`
     // says which transform produced the digests. Nothing ties them together, and the skip below returns

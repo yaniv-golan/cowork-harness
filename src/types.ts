@@ -1373,6 +1373,7 @@ export const GATE_ASSERT_KEYS = [
   "question_option_count",
   "gate_answers_delivered",
   "gate_answer_count_min",
+  "gates_all_scripted",
 ] as const satisfies readonly (keyof Assertion)[];
 
 /** Verdict modifiers: assertions that verify nothing themselves — each opts into (suppresses) one

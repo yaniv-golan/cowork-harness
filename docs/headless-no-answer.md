@@ -38,7 +38,7 @@ Each of these is a load error, raised before anything is staged or spent:
 | `answers:`, `on_unanswered`, `--on-unanswered`, `--decider-cmd`, `--decider-dir`, `--decider-model` | no question reaches the harness, so nothing can be scripted or decided |
 | `permission_parity: strict` | it configures how permission asks are answered, and none are asked |
 | `web_fetch.approved_domains` | approving a domain answers a prompt this run cannot show |
-| `question_asked`, `question_options`, `question_context`, `question_option_count`, `gate_answers_delivered`, `gate_answer_count_min` | each grades a gate the harness answered |
+| `question_asked`, `question_options`, `question_context`, `question_option_count`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted` | each grades a gate the harness answered |
 | `tool_called` naming `AskUserQuestion` (or a glob such as `AskUser*`) | whether the agent is offered the tool at all depends on the agent version under this flag; assert the status file instead |
 | an agent that does not accept `--permission-prompts none` | the pinned agent's support is recorded by `sync` in the baseline (`agentBinary.cliCapabilities`); a baseline synced before that field existed is refused with a re-sync hint. At `protocol`, the `claude` on your `PATH` is checked with `--help` instead |
 
