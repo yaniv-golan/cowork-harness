@@ -1215,7 +1215,7 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   refuses that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and
   then crashes evaluating it, so upgrade before replaying one. From v13 on, `replay` refuses a newer-format
   cassette before evaluating any assertion. A `semantic_matches` entry carrying `include_fork_results`, or any
-  `semantic_pairwise` entry, stamps **v14** (one bump shared with the other keys of this release that an older reader cannot read), so a v13 reader refuses it as
+  `semantic_pairwise` entry, stamps **v14** (one bump shared by the keys that need a v14 reader), so a v13 reader refuses it as
   too new rather than as an unrecognized assertion. Also **v14**: a scenario declaring `workspace_fixture` (a v13
   reader would replay it without the fixture staleness check), and an `assert` entry using the object form of
   `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a

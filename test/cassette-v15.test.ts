@@ -49,12 +49,13 @@ describe("cassette v15", () => {
     expect(requiredVersionFor({ prompt: "x", assert: [{ result: "success" }] })).toBe(12);
   });
 
-  it("no committed cassette's required version moves (all stay below 15)", () => {
+  it("no committed cassette's required version moves: each still requires its stamp (or the epoch floor 12)", () => {
     const files = execFileSync("git", ["ls-files", "*.cassette.json"], { encoding: "utf8" }).split("\n").filter(Boolean);
     expect(files.length).toBeGreaterThanOrEqual(4);
     for (const f of files) {
-      const c = JSON.parse(readFileSync(f, "utf8")) as { scenario: unknown };
-      expect({ f, v: requiredVersionFor(c.scenario) < 15 }).toEqual({ f, v: true });
+      const c = JSON.parse(readFileSync(f, "utf8")) as { scenario: unknown; cassetteVersion: number };
+      // A pre-epoch stamp (10) is still read; this build would stamp it at the epoch floor.
+      expect({ f, v: requiredVersionFor(c.scenario) }).toEqual({ f, v: Math.max(c.cassetteVersion, 12) });
     }
   });
 });
