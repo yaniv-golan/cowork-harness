@@ -11,6 +11,7 @@ import {
   HILLCLIMB_USAGE,
 } from "../hillclimb/usage.js";
 import { recordedFixtureRefusal, scanWorkspaceFixture } from "../fixture/workspace.js";
+import { answerChannelAssertRefusal } from "../answer-channel.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS } from "../eval/usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
@@ -7152,6 +7153,9 @@ export async function cmdReplay(args: string[]) {
         // A missing list, or a fixture name the redaction policy rewrote, refuses an unannotated one as unverifiable.
         const vacuous = recordedFixtureRefusal(onDisk, rc.cassette.fingerprint?.workspaceFixtureFileSigs);
         if (vacuous) throw new Error(`--assert-from: ${vacuous}`);
+        // A recording with no answer channel is re-graded only by a block its own load check would accept.
+        const noChannel = rc.cassette.answerChannel === "none" ? answerChannelAssertRefusal(onDisk.assert ?? []) : undefined;
+        if (noChannel) throw new Error(`--assert-from: ${noChannel}`);
         warnUncheckableOnDiskKeys(rc.cassette, rc.cassette.scenario, onDisk);
         // Shallow clone — never mutate the parsed cassette in place.
         cassette = {

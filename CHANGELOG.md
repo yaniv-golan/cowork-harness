@@ -65,8 +65,10 @@ All notable changes to this project are documented here. The format is based on
   permission tool, so questions and permission prompts are denied inside the agent and never reach the harness. It
   requires `permission_mode: bypassPermissions` and at least one file assertion, and it refuses at load every input
   that assumes a channel (`answers:`, `on_unanswered` and the decider flags, `permission_parity: strict`,
-  `web_fetch.approved_domains`, the gate assertion keys including `gates_all_scripted`, `tool_called` naming
-  `AskUserQuestion`), the host loop and `lane: remote`. The flag also removes `AskUserQuestion`, `EnterPlanMode` and
+  `web_fetch.approved_domains`, the gate assertion keys including `gates_all_scripted`, `questions_count_max`,
+  `tool_called` naming `AskUserQuestion`), the host loop and `lane: remote`; `file_absent` alone does not count as the
+  file assertion. `record --dry-run`, batch pre-flights, `verify-run` and `replay --assert-from` apply the same
+  rules. The flag also removes `AskUserQuestion`, `EnterPlanMode` and
   `ExitPlanMode` from the agent's toolset, so the model asks in prose. A successful run whose last message ends in
   `?` gets the new `parked_at_question` warning, never the `stalled` fail, and `eval` counts it as a completed rep
   (rule `parked_at_question`); a request that reaches the harness anyway is refused and ends the run with the new

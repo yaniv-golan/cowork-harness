@@ -43,9 +43,37 @@ export function artifactsRootRefusal(
   return undefined;
 }
 
-/** The assertion keys that can carry completion evidence from files. A `none` scenario must assert at least one:
- *  the run ends `success` whether or not the skill finished, so completion is judged from what it wrote. */
-const FILE_EVIDENCE_KEYS = ["artifact_json", "artifact_text", "file_exists", "file_absent", "user_visible_artifact"] as const;
+/** The assertion keys that can carry POSITIVE completion evidence from files. A `none` scenario must assert at least
+ *  one: the run ends `success` whether or not the skill finished, so completion is judged from what it wrote.
+ *  `file_absent` is not one: a skill that did nothing passes it. */
+const FILE_EVIDENCE_KEYS = ["artifact_json", "artifact_text", "file_exists", "user_visible_artifact"] as const;
+
+/** The assertion half of the refusal: what an `assert:` block may not say under `answer_channel: none`, and what it
+ *  must. Shared by the live load check and every path that grades a no-channel run against a NEW block (`verify-run`,
+ *  `replay --assert-from` / `--reassert`, `hillclimb regrade`), so a re-grade cannot pass a block the run refuses. */
+export function answerChannelAssertRefusal(assert: readonly Assertion[]): string | undefined {
+  const why = (s: string) => `\`answer_channel: none\` ${s}`;
+  for (const a of assert) {
+    const gate = GATE_ASSERT_KEYS.find((k) => (a as Record<string, unknown>)[k] !== undefined);
+    if (gate)
+      return why(
+        `refuses \`${gate}\`: it grades a gate the harness answered, and under this key the harness answers none. To check the skill parked at its gate, assert its status file (artifact_json).`,
+      );
+    if ((a as Record<string, unknown>).questions_count_max !== undefined)
+      return why(
+        "refuses `questions_count_max`: it counts the questions that reach the harness, and under this key none do, so it would always pass. Assert the status file the skill writes instead.",
+      );
+    if (namesAskUserQuestion(a))
+      return why(
+        "refuses `tool_called: AskUserQuestion`: the flag removes the tool from the agent's toolset (measured on agent 2.1.293), so the assertion could only fail. Assert the status file the skill writes instead.",
+      );
+  }
+  if (!assert.some((a) => FILE_EVIDENCE_KEYS.some((k) => (a as Record<string, unknown>)[k] !== undefined)))
+    return why(
+      `needs at least one file assertion that the skill's own output satisfies (${FILE_EVIDENCE_KEYS.join(", ")}): the run ends \`success\` whether or not the skill finished, and a run that stops at a question is recorded as parked rather than failed, so completion must be judged from what the skill wrote.`,
+    );
+  return undefined;
+}
 
 /** What the refusal check needs about the invocation, beyond the scenario and session. Only what the USER chose:
  *  a caller that fills a resolved default (`onUnanswered: "fail"`) is not refused for it. */
@@ -101,21 +129,8 @@ export function answerChannelRefusal(args: {
     );
   if (session.web_fetch.approved_domains.length > 0)
     return why("refuses `web_fetch.approved_domains`: approving a domain is an answer to a prompt this run cannot show.");
-  for (const a of scenario.assert) {
-    const gate = GATE_ASSERT_KEYS.find((k) => (a as Record<string, unknown>)[k] !== undefined);
-    if (gate)
-      return why(
-        `refuses \`${gate}\`: it grades a gate the harness answered, and under this key the harness answers none. To check the skill parked at its gate, assert its status file (artifact_json).`,
-      );
-    if (namesAskUserQuestion(a))
-      return why(
-        "refuses `tool_called: AskUserQuestion`: whether the agent is offered the tool at all depends on the agent version under this flag. Assert the status file the skill writes instead.",
-      );
-  }
-  if (!scenario.assert.some((a) => FILE_EVIDENCE_KEYS.some((k) => (a as Record<string, unknown>)[k] !== undefined)))
-    return why(
-      `needs at least one file assertion (${FILE_EVIDENCE_KEYS.join(", ")}): the run ends \`success\` whether or not the skill finished, and a run that stops at a question is recorded as parked rather than failed, so completion must be judged from what the skill wrote.`,
-    );
+  const assertRefusal = answerChannelAssertRefusal(scenario.assert);
+  if (assertRefusal) return assertRefusal;
 
   if (tier === "protocol") {
     const probe = args.probeHostCli?.() ?? { supported: false, path: undefined };

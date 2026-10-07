@@ -140,8 +140,9 @@ describe("answerChannelRefusal", () => {
     const schemaKeys = Object.keys(Assertion.shape).filter((k) => /^(question_|gate_|gates_)/.test(k) && k !== "questions_count_max");
     expect([...GATE_ASSERT_KEYS].sort()).toEqual(schemaKeys.sort());
   });
-  it("keeps questions_count_max (it counts attempts, not answered gates)", () => {
-    expect(refuse({ scenario: { assert: [parkedAssert, { questions_count_max: 0 }] } })).toBeUndefined();
+  // It counts the questions that reach the harness, and under this key none do: `questions_count_max: 0` always passes.
+  it("refuses questions_count_max (no question reaches the harness to count)", () => {
+    expect(refuse({ scenario: { assert: [parkedAssert, { questions_count_max: 0 }] } })).toMatch(/questions_count_max/);
   });
 
   it.each(["AskUserQuestion", "AskUser*", { tool: "AskUserQuestion" }, { tool: ["Read", "AskUserQuestion"] }])(
@@ -159,6 +160,11 @@ describe("answerChannelRefusal", () => {
 
   it("requires a file assertion", () => {
     expect(refuse({ scenario: { assert: [{ result: "success" }] } })).toMatch(/file assertion/);
+  });
+  // A skill that did nothing satisfies `file_absent`, so it cannot be the completion evidence.
+  it("does not count file_absent as completion evidence", () => {
+    expect(refuse({ scenario: { assert: [{ file_absent: "outputs/x" }] } })).toMatch(/file assertion/);
+    expect(refuse({ scenario: { assert: [{ file_absent: "outputs/x" }, { file_exists: "outputs/y" }] } })).toBeUndefined();
     expect(refuse({ scenario: { assert: [{ file_exists: "outputs/x" }] } })).toBeUndefined();
   });
 

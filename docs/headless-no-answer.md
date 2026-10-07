@@ -11,16 +11,18 @@ surface says so: the run banner, the footer and `stats` label the run
 
 ## What it changes
 
-The agent is spawned with `--permission-prompts none` in place of `--permission-prompt-tool stdio`. With
-it, the agent itself denies anything that would prompt (questions, permission asks, MCP elicitations), and
-nothing reaches the harness. The flag also removes `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` from
-the tools the agent offers the model (agent 2.1.293, the same in every permission mode), so the model has no
-question tool to call. Everything else about the spawn — the rest of the toolset, the system prompt, the mounts, the egress allowlist — is unchanged, so the delivery,
-egress, file and transcript assertions still grade real behaviour.
+The agent is spawned with `--permission-prompts none` in place of `--permission-prompt-tool stdio`, so it
+answers its own permission prompts with a deny instead of sending them to the harness. The flag also removes
+`AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` from the tools the agent offers the model (agent 2.1.293,
+the same in every permission mode), so the model has no question tool to call. Anything that still reaches the
+harness is refused (see below). Everything else about the spawn — the rest of the toolset, the system prompt,
+the mounts, the egress allowlist — is unchanged, so the delivery, egress, file and transcript assertions still
+grade real behaviour.
 
 - **A run ends `success` whether or not the skill finished.** Completion is judged from the files the
-  skill wrote, so a scenario must carry at least one file assertion (`artifact_json`, `artifact_text`,
-  `file_exists`, `file_absent` or `user_visible_artifact`) or it fails to load.
+  skill wrote, so a scenario must carry at least one file assertion the skill's output satisfies
+  (`artifact_json`, `artifact_text`, `file_exists` or `user_visible_artifact`) or it fails to load.
+  `file_absent` does not count: a skill that did nothing passes it.
 - **Stopping at a question is the contract, not a stall.** A successful run whose last message ends in `?`
   gets the `parked_at_question` warning, never the `stalled` failure. The warning does not change the verdict
   or the exit code: the file assertions decide those. Unlike `stalled`, it fires even when tools ran before
@@ -41,7 +43,8 @@ right gate shows only in the status file, which is why a file assertion is requi
 
 ## Requirements and refusals
 
-Each of these is a load error, raised before anything is staged or spent:
+Each of these is a load error, raised before anything is staged or spent, and reported the same way by
+`record --dry-run` and the pre-flight of a `run`, `record`, `eval` or `hillclimb` batch:
 
 | Refused | Why |
 |---|---|
@@ -52,11 +55,16 @@ Each of these is a load error, raised before anything is staged or spent:
 | `permission_parity: strict` | it configures how permission asks are answered, and none are asked |
 | `web_fetch.approved_domains` | approving a domain answers a prompt this run cannot show |
 | `question_asked`, `question_options`, `question_context`, `question_option_count`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted` | each grades a gate the harness answered |
-| `tool_called` naming `AskUserQuestion` (or a glob such as `AskUser*`) | whether the agent is offered the tool at all depends on the agent version under this flag; assert the status file instead |
+| `questions_count_max` | it counts the questions that reach the harness, and none do, so it would always pass |
+| `tool_called` naming `AskUserQuestion` (or a glob such as `AskUser*`) | the flag removes the tool, so it can never be called; assert the status file instead |
 | an agent that does not accept `--permission-prompts none` | the pinned agent's support is recorded by `sync` in the baseline (`agentBinary.cliCapabilities`); a baseline synced before that field existed is refused with a re-sync hint. At `protocol`, the `claude` on your `PATH` is checked with `--help` instead |
 
-`questions_count_max` and `tool_not_called: AskUserQuestion` stay valid. `chat` and `skill` build their
-own session from flags, so they cannot declare the key.
+`tool_not_called: AskUserQuestion` is accepted, though with the tool removed it always passes. `chat` and
+`skill` build their own session from flags, so they cannot declare the key.
+
+The assertion rules above also apply when a run with no answer channel is graded against a new `assert:`
+block: `verify-run`, `replay --assert-from` / `--reassert` and `hillclimb regrade` refuse a block the run
+itself would refuse at load.
 
 ## Telling a skill where to write: `agent_env.artifacts_root`
 

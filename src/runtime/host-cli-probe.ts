@@ -24,8 +24,10 @@ export function hostCliSupportsPermissionPrompts(env: NodeJS.ProcessEnv): { supp
   if (hit !== undefined) return { supported: hit, path };
   const r = spawnSync(path, ["--help"], { env, encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] });
   const help = `${r.stdout ?? ""}${r.stderr ?? ""}`;
-  // The option line, and `"none"` among its values. Commander wraps long help, so the value can sit on a later line.
-  const supported = /--permission-prompts <\w+>/.test(help) && /"none"/.test(help);
+  // The option's own entry, and `"none"` among its values. Commander wraps long help onto indented continuation lines,
+  // so the entry runs until the next option line (exactly two spaces, then `-`); a `"none"` elsewhere in the help says nothing about it.
+  const entry = /--permission-prompts <\w+>([\s\S]*?)(?=\n {2}-|$)/.exec(help);
+  const supported = entry !== null && /"none"/.test(entry[1]);
   cache.set(key, supported);
   return { supported, path };
 }

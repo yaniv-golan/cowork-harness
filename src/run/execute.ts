@@ -2789,7 +2789,20 @@ export function launchSourcesPreflight(
   const withModel = model !== undefined && model !== loaded.model ? applySessionOverrides(loaded, { model }) : loaded;
   const session = opts.ablateSkill ? ablateSession(withModel) : withModel;
   const baseline = opts.baseline ?? loadBaseline(scenario.baseline);
-  const sources = resolveLaunchSources(session, baseline, effectiveTier(scenario.fidelity, baseline), false, {
+  // The run's `answer_channel` / `artifacts_root` refusals, so a dry run, a batch pre-flight and `lint` refuse what the
+  // run would, before anything is spent. The invocation's own decider flags are checked by the run itself.
+  const tier = effectiveTier(scenario.fidelity, baseline);
+  const channelRefusal =
+    artifactsRootRefusal(session, tier, scenario.fidelity) ??
+    answerChannelRefusal({
+      scenario,
+      session,
+      tier,
+      baseline,
+      probeHostCli: () => hostCliSupportsPermissionPrompts(strippedEnv(baseline)),
+    });
+  if (channelRefusal) throw new UsageError(channelRefusal);
+  const sources = resolveLaunchSources(session, baseline, tier, false, {
     stageFilters: false,
     quiet: opts.quiet,
     ...(scenario.workspace_fixture !== undefined ? { workspaceFixture: scenario.workspace_fixture } : {}),

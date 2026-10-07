@@ -104,6 +104,22 @@ describe("hostCliSupportsPermissionPrompts — the protocol-tier probe", () => {
     expect(hostCliSupportsPermissionPrompts({ PATH: d })).toEqual({ supported: false, path: join(d, "claude") });
   });
 
+  // Real help wraps the entry onto continuation lines, one of which itself starts with `--permission-prompt-tool)`.
+  it.skipIf(process.platform === "win32")("reads `none` from the option's wrapped entry, not from elsewhere in --help", () => {
+    resetHostCliProbeCache();
+    const wrapped = fake(
+      "wrapped",
+      '  --permission-prompts <target>         Who answers permission prompts with\n                                        --print: "host" (the SDK host or\n                                        --permission-prompt-tool) or "none"\n  --print                               Print',
+    );
+    expect(hostCliSupportsPermissionPrompts({ PATH: wrapped }).supported).toBe(true);
+    resetHostCliProbeCache();
+    const elsewhere = fake(
+      "elsewhere",
+      '  --permission-prompts <target>         Who answers permission prompts: "host"\n  --effort <level>                      Effort: "low" or "none"',
+    );
+    expect(hostCliSupportsPermissionPrompts({ PATH: elsewhere }).supported).toBe(false);
+  });
+
   it("is false with no path when `claude` is not on the run env's PATH", () => {
     resetHostCliProbeCache();
     expect(hostCliSupportsPermissionPrompts({ PATH: join(dir, "empty") })).toEqual({ supported: false, path: undefined });
