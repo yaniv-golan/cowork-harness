@@ -22,3 +22,10 @@ assert:
   - hook_output_contains: { event: PreToolUse, stream: stdout, text: "HOOKPROBE-DENY" }
   - hook_output_contains: { event: PreToolUse, stream: stderr, text: "HOOKPROBE-EXIT2" }
   - hook_output_contains: { event: Stop, stream: stdout, text: "HOOKPROBE-STOP" }
+  # What each hook decided, through both channels.
+  - hook_decision: { event: PreToolUse, decision: deny, tool: Bash, min: 1, max: 1 }   # JSON on stdout, exit 0
+  - hook_decision: { event: PreToolUse, decision: deny, tool: Write, min: 1, max: 1 }  # exit code 2
+  - hook_decision: { event: Stop, decision: block, min: 1, max: 1 }                    # JSON block once, then a pass
+  - hook_event_blocked: PreToolUse                                                     # the bare form: exit 2 alone
+  - hook_event_blocked: { event: PreToolUse, via: json, tool: Bash, min: 1, max: 1 }
+  - hook_event_blocked: { event: Stop, via: exit2, max: 0 }                            # Stop never exited 2
