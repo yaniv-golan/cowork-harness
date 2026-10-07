@@ -37,6 +37,7 @@ import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { deriveOutcome } from "./outcome.js";
 import { loadBaseline, stampedOutputsMountMode } from "../baseline.js";
+import { maybePrintLaneNotice, type EnvironmentShapedAssertKey } from "./lane-notice.js";
 import { outputsCheckArmed } from "./outputs-delete-tier.js";
 import {
   loadSession,
@@ -887,6 +888,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // statusLine's contract note. (`--keep`/footer paths elsewhere are human-facing and DO tildeify.)
   const sLine = statusLine(outDir, !!opts.compact);
   if (sLine) process.stderr.write(sLine);
+  // Which lane this run models, once per process, only for environment-shaped assertions (lane-notice.ts).
+  maybePrintLaneNotice(scenario, { compact: opts.compact });
 
   // Crash-safety net: WITHOUT this, a throw that unwinds past executeScenario without ever reaching
   // either RunResult assembler (buildPartialResult's call site, or the success-path result below) —
@@ -2604,7 +2607,11 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
   // does not exist. Until a remote delivery tool is served, the honest remedies are the weaker
   // path-plus-statement proxy or switching lanes — say exactly that.
   if (scenario.lane === "remote") {
-    const LANE_INCOMPATIBLE = ["present_files_called", "no_scratchpad_leak", "user_visible_artifact"] as const;
+    const LANE_INCOMPATIBLE = [
+      "present_files_called",
+      "no_scratchpad_leak",
+      "user_visible_artifact",
+    ] as const satisfies readonly EnvironmentShapedAssertKey[];
     for (const a of scenario.assert)
       for (const key of LANE_INCOMPATIBLE)
         if (a[key] !== undefined)

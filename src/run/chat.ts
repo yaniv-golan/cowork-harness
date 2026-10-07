@@ -38,6 +38,7 @@ import { checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
+import { maybePrintChatLaneNotice } from "./lane-notice.js";
 import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
 const log = (s: string) => process.stderr.write(s);
@@ -344,6 +345,7 @@ export async function cmdChat(args: string[]) {
     if (m.kind === "upload") log(`  upload: ${m.hostPath} → mnt/${m.mountPath}\n`);
     else if (m.kind === "folder") log(`  folder: ${m.hostPath} → mnt/${m.mountPath}\n`);
   }
+  maybePrintChatLaneNotice();
   log(`type your message (/help for commands)\n`);
 
   const runner = resolveContainerRuntime();
