@@ -14,16 +14,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
-- **Cassettes: re-record — the agent moved.** `latest` now resolves to `desktop-2.19675.1`, which pins agent **2.1.288**
+- **Cassettes: re-record — the agent moved.** `latest` now resolves to `desktop-2.26454.0`, which pins agent **2.1.289**
   (was 2.1.286). A cassette recorded through `baseline: latest` reports
-  `[stale] baseline moved 2.19675.0 → 2.19675.1 since record — re-record`: `verify-cassettes` and `replay --strict` exit
+  `[stale] baseline moved 2.19675.0 → 2.26454.0 since record — re-record`: `verify-cassettes` and `replay --strict` exit
   `1` on it, and a plain `replay` warns and keeps its exit code.
   - At `container`, `microvm` and `hostloop`, re-record. A re-stamp clears the finding but leaves an `agent-version:` note,
-    because the recording ran 2.1.286.
-  - At `protocol` the baseline move alone does not need a re-record: the agent there is the `claude` on your `PATH`, and
-    the first-party spawn env, the Cowork system prompt, the sub-agent append and the egress contract are unchanged.
-  - The bundled cassettes are re-stamped to `2.19675.1`, not re-recorded; the three recorded by the staged agent carry
+    because the recording ran 2.1.286. The first-party spawn env these tiers take from the baseline also gained two keys
+    (see Changed).
+  - At `protocol` the baseline move alone does not need a re-record: the agent there is the `claude` on your `PATH`, the
+    tier takes no spawn env from the baseline, and the Cowork system prompt, the sub-agent append and the egress contract
+    are unchanged.
+  - The bundled cassettes are re-stamped to `2.26454.0`, not re-recorded; the three recorded by the staged agent carry
     the `agent-version:` note until they are.
+- **`CLAUDE_CODE_SIMPLE`, `CLAUDE_AGENT_SDK_MCP_NO_PREFIX` and `CLAUDE_CODE_PROCESS_WRAPPER` exported in your shell no
+  longer reach the agent** at `hostloop` and `protocol`, the tiers that inherit it. Desktop lets no user-supplied value
+  of these keys reach an agent it spawns. At `hostloop` the agent receives the baseline's pinned `"0"` for the first two;
+  at `protocol` it receives none of them. A scenario that relied on an exported value no longer gets it.
 
 ### Added
 
@@ -40,7 +46,30 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
-- **New baseline `desktop-2.19675.1`** (agent **2.1.288**), which `latest` resolves to.
+- **New baseline `desktop-2.26454.0`** (agent **2.1.289**), which `latest` resolves to.
+  - Unchanged from `desktop-2.19675.1`: the Cowork system prompt, the sub-agent append, the egress contract, the
+    model/effort config and the Desktop init surface (read from 2 local frames: the same servers and tools).
+  - The first-party `spawn.env` gains two keys, both `"0"`: `CLAUDE_CODE_SIMPLE` and `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`.
+    The agent reads either as on only for `1`, `true`, `yes` or `on`, so `"0"` behaves as unset. The harness pins both.
+  - Gate provenance moved: the computer-use permission gate (`cuCanUseToolEnabled`) reads off again, at its default.
+    The harness does not model it.
+  - The `cloud` block records two `remote-devices` descriptions whose fingerprints moved, and the bundle shows what
+    changed (observed, data only; nothing in the harness reads it): `device_commit_files` also accepts a file staged
+    under a project folder; `device_request_folder_access` lets a task request the home folder or a whole drive, with
+    protected locations still off-limits inside a granted folder. Desktop's remote `device_bash` also gains git
+    handling for connected folders.
+- **The operator-env scrub covers three more keys** (`CLAUDE_CODE_SIMPLE`, `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`,
+  `CLAUDE_CODE_PROCESS_WRAPPER`); see Upgrade notes and [docs/session.md](./docs/session.md).
+- **`sync` follows two reshapes in Desktop 2.26454.0.** The max-thinking helper gains one condition, and the check
+  admits exactly that shape while still asserting the 31999 budget. The scheduled-run env key now lives in a one-key
+  object a module exports: `sync` reads an imported object's keys in the spawn env, and the scheduled-run check counts
+  every use of that object and requires each to be the scheduled-only spawn spread or Desktop's own scheduled-task
+  assign.
+- **Fidelity gaps: thinking forced on for managed-config models.** Desktop 2.26454.0 sends the full thinking budget
+  for a model listed in the org's managed config (`thinkingAlwaysOnModels`), even with extended thinking off. The
+  harness reads no managed config. See
+  [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels).
+- **New baseline `desktop-2.19675.1`** (agent **2.1.288**).
   - Unchanged from `desktop-2.19675.0`: the Cowork system prompt, the sub-agent append, the egress contract, the
     model/effort config and the first-party `spawn.env`. Gate provenance moved: Desktop's runtime config gains two
     sessions-bridge poll intervals, and the computer-use permission gate (`cuCanUseToolEnabled`) reads on again,
