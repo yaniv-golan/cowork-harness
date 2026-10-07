@@ -276,6 +276,18 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
       ).pass,
     ).toBe(true);
   });
+  it("via: json over stdout it cannot read is evidence-unavailable, not a miss", () => {
+    const broken = withStdout("PreToolUse:Bash", '{"hookSpecificOutput": [REDACTED]\n');
+    const r = run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "json", max: 0 } }, ctx(decisions(broken)));
+    expect(r.message).toMatch(UNAVAILABLE);
+  });
+  it("an exit code other than 0 or 2 decides nothing, whatever stdout holds (edited: Bash's frame exits 1)", () => {
+    const exit1 = (fs: Frame[]) =>
+      fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Bash" ? { ...f, exit_code: 1, outcome: "error" } : f));
+    const c = ctx(decisions(exit1));
+    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, c).pass).toBe(true);
+    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, c).pass).toBe(true);
+  });
   it("stdout the agent truncated is unreadable", () => {
     const cut = '{"hookSpecificOutput": {"hookEventName"\nOutput truncated (40KB total)';
     const r = run(
