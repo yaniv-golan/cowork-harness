@@ -29,7 +29,8 @@ export interface VerdictSignal {
     | "ended_with_question"
     | "undelivered_deliverables"
     | "delivery_unobservable"
-    | "partly_scripted_gate";
+    | "partly_scripted_gate"
+    | "parked_at_question";
   severity: "fail" | "warn";
   message: string;
 }
@@ -334,7 +335,17 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
   // while `skill`/`probe-dispatch` (both recorded as command "skill") have no block and take `--allow-stall`.
   // Naming the scenario spelling to a `skill` user named a remedy that lane cannot perform.
   const stallOptOut = result.command === "skill" ? "pass --allow-stall" : "assert allow_stall: true";
-  if (result.stalledOnQuestion && !result.assertions.some((a) => a.assertion.allow_stall === true)) {
+  // Under `answer_channel: none` nobody can answer, so stopping at a question IS the contract the run models. It is
+  // reported, never failed; completion is judged from the file assertion such a scenario must carry (refused at load
+  // without one), so this note can never be the only evidence of a pass.
+  if (result.stalledOnQuestion && result.answerChannel === "none") {
+    signals.push({
+      code: "parked_at_question",
+      severity: "warn",
+      message:
+        "parked at a question (answer_channel: none): the run ended on a question nobody can answer, which is what this session models. Completion is judged from the file assertions.",
+    });
+  } else if (result.stalledOnQuestion && !result.assertions.some((a) => a.assertion.allow_stall === true)) {
     signals.push({
       code: "stalled",
       severity: "fail",

@@ -1,5 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
-import { answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
+import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
 import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
 import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
@@ -1098,10 +1098,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const onUnanswered: OnUnanswered = scenario.on_unanswered ?? opts.onUnanswered ?? "fail";
   // This is a POLICY line (what happens IF an unscripted question arrives), not an outcome — the old
   // `unanswered questions → fail` wording read as a failure on clean runs. State it as policy + source.
+  // Under `answer_channel: none` no question can reach a decider, so there is no policy to report — say so rather
+  // than print a default that will never apply.
   process.stderr.write(
-    opts.externalChannel
-      ? `[input] unscripted-question policy: live decider channel\n`
-      : `[input] unscripted-question policy: ${onUnanswered} (${scenario.on_unanswered ? "scenario" : opts.onUnanswered ? "flag" : "default"})\n`,
+    session.answer_channel === "none"
+      ? `[input] unscripted-question policy: n/a (answer_channel: none)\n[${ANSWER_CHANNEL_NONE_LABEL}]\n`
+      : opts.externalChannel
+        ? `[input] unscripted-question policy: live decider channel\n`
+        : `[input] unscripted-question policy: ${onUnanswered} (${scenario.on_unanswered ? "scenario" : opts.onUnanswered ? "flag" : "default"})\n`,
   );
 
   // Secrets are needed BEFORE the decider is built — the external channel emits live, ahead of the
@@ -1472,6 +1476,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const decider = effectiveFidelity === "hostloop" ? Chain(makeHostLoopCanUseToolGate(), policyDecider) : policyDecider;
       const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
       run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
+      // `answer_channel: none`: no request may be decided — one that arrives anyway is a violation (see Run).
+      if (plan.answerChannel === "none") run.disableAnswerChannel();
       // The session root — the dir whose `mnt/` IS the user-visible workspace, and what present_files'
       // promoted/leaked classification is measured from. Taken from the SPAWN, never re-derived here: the
       // root and the agent's reported paths must be in the SAME path space, and they are not the same space
@@ -1740,6 +1746,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         skillCommit: skillCommit(scenario.session, loadedSession),
         scenarioName: scenario.name,
         lane: scenario.lane, // a salvaged partial keeps the contract it was run under
+        answerChannel: plan.answerChannel,
         prompt: scenario.prompt,
         scrubSet,
         scrubSetUnavailable,
@@ -2210,6 +2217,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       generator: "cowork-harness",
       mode: "run",
       lane: scenario.lane,
+      answerChannel: plan.answerChannel,
       metrics,
       scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
       command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
@@ -3101,6 +3109,8 @@ export function buildPartialResult(args: {
   scenarioName: string;
   /** The scenario's declared Cowork lane — see `Scenario.lane`. Absent ⇒ local. */
   lane?: "local" | "remote";
+  /** The session's `answer_channel` — see `RunResult.answerChannel`. */
+  answerChannel?: "none";
   prompt: string;
   /** The run's scrub-set fingerprint (`RunResult.scrubSet`); absent when none could be made. */
   scrubSet?: RunResult["scrubSet"];
@@ -3216,6 +3226,7 @@ export function buildPartialResult(args: {
     mode: "run",
     command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
     lane: args.lane, // the scenario's declared Cowork lane, threaded so a salvaged partial keeps its contract
+    answerChannel: args.answerChannel,
     metrics: undefined, // a partial run is not graded, so nothing is measured either
     scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
     runLabel: args.runLabel, // run-identity: threaded through so a salvaged partial keeps its generation label

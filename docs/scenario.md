@@ -1074,7 +1074,7 @@ corresponds to the scenario, this path is safe by construction:
   does not move the **replay** verdict — plain, `--strict` or `--assert-from`. The notice says so; re-record
   if the session changed. It *is* fingerprinted, and `verify-cassettes` checks that hash and reports a
   change as staleness (exit 1): `sessionFingerprint` covers the session's pinned `model:` and connected
-  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects` and `agent_env` when set. A model
+  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects`, `agent_env`, `answer_channel` and `agent_env.artifacts_root` when set. A model
   supplied by `--model` or `COWORK_HARNESS_MODEL` is not in it (`environment.model` records what ran), and a
   cassette recorded before `model` joined the hash gets a note, not a failure — re-record to gain that
   coverage. (Skill *content* under the session IS guarded — next bullet.)

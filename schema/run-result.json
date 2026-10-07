@@ -214,6 +214,11 @@
       "enum": ["local", "remote"],
       "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because the lane leaves no trace (and before 2026-10-06 no setting reliably decided Cowork's lane) in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
     },
+    "answerChannel": {
+      "type": "string",
+      "enum": ["none"],
+      "description": "\"none\" when the session declared `answer_channel: none`: a headless run in which nobody answers the agent's questions or permission prompts (the agent was spawned with `--permission-prompts none`). Not Cowork, which always has an answer channel. Absent otherwise."
+    },
     "execution": {
       "type": "object",
       "properties": {
@@ -239,8 +244,8 @@
     },
     "errorSource": {
       "type": "string",
-      "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout"],
-      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), 'timeout' when the harness wall-clock limit killed the run, or 'decider_timeout' when an external decider channel (--decider-cmd helper, --decider-dir rendezvous) did not answer a gate within its backstop (the run is an unanswered-gate partial). Additive diagnostic alongside resultErrorKind; not read by the verdict."
+      "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout", "answer_channel_violation"],
+      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), 'timeout' when the harness wall-clock limit killed the run, or 'decider_timeout' when an external decider channel (--decider-cmd helper, --decider-dir rendezvous) did not answer a gate within its backstop (the run is an unanswered-gate partial), or 'answer_channel_violation' when a session with `answer_channel: none` received a question or permission prompt anyway (the agent ignored `--permission-prompts none`; the request was refused, never answered). Additive diagnostic alongside resultErrorKind; not read by the verdict."
     },
     "resultSubtype": {
       "type": "string",
@@ -666,7 +671,8 @@
                   "delivery_unobservable",
                   "outputs_delete_unconfirmed",
                   "outputs_diff_unavailable",
-                  "partly_scripted_gate"
+                  "partly_scripted_gate",
+                  "parked_at_question"
                 ]
               },
               "severity": {

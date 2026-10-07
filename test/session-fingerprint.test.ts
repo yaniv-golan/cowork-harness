@@ -105,6 +105,23 @@ describe("buildSessionFingerprint (function-level)", () => {
   });
 });
 
+describe("buildSessionFingerprint — answer_channel and agent_env.artifacts_root", () => {
+  const fp = (yaml: string) => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-ac-"));
+    writeFileSync(join(d, "s.yaml"), yaml);
+    return buildSessionFingerprint("s.yaml", d);
+  };
+  const base = "permission_mode: bypassPermissions\n";
+
+  it("answer_channel: none moves the hash", () => {
+    expect(fp(base + "answer_channel: none\n")).not.toEqual(fp(base));
+  });
+  it("artifacts_root moves the hash, and its value is hashed AS AUTHORED", () => {
+    expect(fp(base + "agent_env: { artifacts_root: a }\n")).not.toEqual(fp(base));
+    expect(fp(base + "agent_env: { artifacts_root: a }\n")).not.toEqual(fp(base + "agent_env: { artifacts_root: b }\n"));
+  });
+});
+
 const baseScenario = (session: string) => ({
   name: "t",
   baseline: "latest",

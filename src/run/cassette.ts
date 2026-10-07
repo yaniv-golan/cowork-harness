@@ -419,6 +419,10 @@ export interface Cassette {
   // so it never changes the default `replay` verdict (not even under `--strict`). ABSENT on a pre-v9
   // cassette → not checked (backward-compat: an existing committed cassette never goes stale from this).
   sessionFingerprint?: string;
+  // v15: the recorded session's `answer_channel` (`"none"`; absent = the stdio channel). FROZEN because the session
+  // file is not readable at rehash or replay time, and both read it: `requiredVersionFor` stamps v15 from it, and
+  // replay re-drives with the channel disabled so a recorded request replays as a violation, not an answer.
+  answerChannel?: "none";
   // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
   // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS
   // (guaranteed record-time-accurate) map instead of re-deriving it from the session file on disk AT
@@ -1612,6 +1616,12 @@ export function buildSessionFingerprint(
     ...(!opts?.omitProjects && cfg.projects.length
       ? { projects: [...cfg.projects].map((pr) => ({ uuid: pr.uuid, from: pr.from })).sort((a, b) => a.uuid.localeCompare(b.uuid)) }
       : {}),
+    // Who answers the agent, and where a skill is told to write its run status: both change the run's inputs. Hashed
+    // only when set, so a session without them hashes byte-identically to before. `artifacts_root` is the AUTHORED
+    // relative value — `agentEnvOverrides` does not map it, because its resolution differs per tier, and the hash
+    // must not.
+    ...(cfg.answer_channel !== undefined ? { answer_channel: cfg.answer_channel } : {}),
+    ...(cfg.agent_env.artifacts_root !== undefined ? { artifacts_root: cfg.agent_env.artifacts_root } : {}),
   };
   return createHash("sha256")
     .update(Buffer.from(JSON.stringify(shape), "utf8"))
@@ -3763,6 +3773,7 @@ const CassetteShape = z.looseObject({
   // v9 (Finding 23/24) — both optional; absent on any pre-v9 cassette (backward-compat).
   sessionFingerprint: z.string().optional(),
   folderPrefixMap: z.array(z.object({ from: z.string(), mount: z.string() })).optional(),
+  answerChannel: z.literal("none").optional(),
 });
 
 /** the ONE place the default cassette path is computed from a scenario name. Both `record --dry-run`
@@ -6056,6 +6067,7 @@ export async function freezeRecordedRun(
     // like `fingerprint`'s own skillHash-less case; `sessionFingerprintDrift` treats undefined as
     // "not checked" (never a false mismatch).
     sessionFingerprint: buildSessionFingerprint(scenario.session, undefined),
+    ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
     // v9: record-time connected-folder host-path -> mount-name map (Finding 24) — undefined when the
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
@@ -6242,6 +6254,7 @@ function replayErrorResult(file: string): RunResult {
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
     command: "replay", // #48
     lane: undefined, // unreadable cassette — no scenario to read a lane from
+    answerChannel: undefined,
     metrics: undefined, // nothing was driven, so nothing is measured
     scratchpadEvidenceComplete: false, // no run happened; nothing was observed
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
@@ -8663,6 +8676,8 @@ export async function replayCassette(
   // pass Infinity as dialogTimeoutMs — the synchronous decider resolves before any timer,
   // and there is no child, so the synchronous respond() is safe here.
   const run = new Run(session, replayDecider, hooks, "replay", Infinity);
+  // A recording made with no answer channel replays with none: a request in its stream is a violation, as it was live.
+  if (cassette.answerChannel === "none") run.disableAnswerChannel();
   let rec: RunRecord;
   let truncatedMsg: string | undefined;
   try {
@@ -9314,6 +9329,7 @@ export async function replayCassette(
       // A replay is held to the lane the RECORDED scenario declared — the frozen contract, not the
       // replaying machine's. Absent on a cassette recorded before the axis existed ⇒ local.
       lane: cassette.scenario.lane,
+      answerChannel: cassette.answerChannel,
       // A replay materializes a recorded tree; it runs no scratchpad walk of its own, so it cannot answer
       // the undelivered question — cannot-tell, never a clean read.
       scratchpadEvidenceComplete: false,

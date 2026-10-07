@@ -1849,7 +1849,8 @@ export interface RunStatus {
   durationMs?: number;
   // terminal-error diagnostics, surfaced so a failure-output debugger gets more than a bare "error"
   // (these live in result.json but not status.json before this). Present only on a terminal error write.
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
+  errorSource?:
+    "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout" | "answer_channel_violation";
   // classifies the error KIND — surfaced here so a batch/status watcher can halt-fast on `usage_limit`
   // (quota exhausted; retrying into a spent quota just burns the batch) rather than treating it as generic.
   resultErrorKind?: "transport" | "agent" | "usage_limit";
@@ -1983,6 +1984,9 @@ export interface RunResult {
    *  is DECLARED intent, because the lane leaves no trace (and before 2026-10-06 no setting reliably decided it)
    *  in a run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
   lane?: "local" | "remote";
+  /** `"none"` when the session declared `answer_channel: none` (a headless run with nobody to answer the agent — not
+   *  Cowork). Absent otherwise, so every existing result keeps its meaning. Stats never pool the two. */
+  answerChannel?: "none";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   /** A keyed fingerprint of the scrub set this run's records were scrubbed with (`src/scrub-set.ts`): one HMAC per
@@ -2009,7 +2013,8 @@ export interface RunResult {
    *  partial). Additive diagnostic detail alongside
    *  the coarse verdict-relevant `resultErrorKind`; consumed by nobody in the verdict. Absent on a clean run;
    *  a run that recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
+  errorSource?:
+    "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout" | "answer_channel_violation";
   /** The SDK result message's `subtype` verbatim (e.g. `error_max_turns`, `error_during_execution`,
    *  `success`) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution
    *  error without the harness inventing a taxonomy. Present when a result event carried a subtype. */
@@ -2416,7 +2421,8 @@ export interface RunResult {
         | "ended_with_question"
         | "undelivered_deliverables"
         | "delivery_unobservable"
-        | "partly_scripted_gate";
+        | "partly_scripted_gate"
+        | "parked_at_question";
       severity: "fail" | "warn";
       message: string;
     }>;

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ANSWER_CHANNEL_NONE_LABEL } from "./answer-channel.js";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -3656,7 +3657,8 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
   ]
     .filter(Boolean)
     .join(" ");
-  const base = `${s.scenario}${identity ? ` (${identity})` : ""}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
+  const channel = s.answerChannel === "none" ? ` [${ANSWER_CHANNEL_NONE_LABEL}]` : "";
+  const base = `${s.scenario}${identity ? ` (${identity})` : ""}${channel}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
   const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
   const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
   if (metric === "pass-rate") return base;

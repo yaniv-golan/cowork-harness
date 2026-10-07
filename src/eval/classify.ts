@@ -20,7 +20,17 @@ type ResultErrorKind = NonNullable<RunResult["resultErrorKind"]>;
 
 /** Every `RunResult.errorSource` member. The `satisfies` below fails the typecheck if a member is added to
  *  the type and not here, and the Record in `ERROR_SOURCE_RULE` fails it until the member has a rule. */
-export const ERROR_SOURCES = ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout"] as const;
+export const ERROR_SOURCES = [
+  "spawn",
+  "protocol",
+  "exit",
+  "agent",
+  "result",
+  "no_result",
+  "timeout",
+  "decider_timeout",
+  "answer_channel_violation",
+] as const;
 export const RESULT_ERROR_KINDS = ["transport", "agent", "usage_limit"] as const;
 type Missing<Union, Listed> = Exclude<Union, Listed> extends never ? true : false;
 const errorSourcesComplete: Missing<ErrorSource, (typeof ERROR_SOURCES)[number]> = true;
@@ -99,6 +109,7 @@ const ERROR_SOURCE_RULE: Record<ErrorSource, "infra" | "agent" | "by_kind" | "ag
   spawn: "infra", // the harness could not start the agent (Docker, a missing staged binary)
   protocol: "infra", // the stream-json channel broke
   decider_timeout: "infra", // a --decider-cmd / --decider-dir channel did not answer within its backstop
+  answer_channel_violation: "infra", // under answer_channel: none, the agent sent a request anyway (it ignored the flag)
   timeout: "agent", // the run never finished its task within the wall-clock limit
   no_result: "agent", // the stream ended with no terminal event (turn/time exhaustion)
   result: "by_kind", // the SDK's own is_error result
