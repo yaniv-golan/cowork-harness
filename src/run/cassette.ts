@@ -623,6 +623,8 @@ export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
   },
   // `hook_decision` — the key itself.
   (a) => !!a && typeof a === "object" && "hook_decision" in (a as object),
+  // `gates_all_scripted` — the key itself, either form: a v14 reader's strict assertion schema rejects it.
+  (a) => !!a && typeof a === "object" && "gates_all_scripted" in (a as object),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */

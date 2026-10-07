@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **New assertion `gates_all_scripted`.** It passes only when every question gate was answered by a scripted
+  `answers:` rule, and fails naming the gate when the LLM decider, `on_unanswered: first`, or an external or human
+  decider answered one. `{include_permissions: true}` also requires every permission decision to come from a scripted
+  or fixed rule; a permissive auto-allow fails it. On `replay` each gate is re-classified against the cassette's frozen
+  answers, so replay gives the live verdict. A run whose decision record is missing (a `result.json` from an older
+  build, a truncated recording) is evidence-unavailable, never a pass. A run where no gate fired passes; `lint` warns
+  unless the key is paired with `gate_answer_count_min` or `questions_count_max`. A scenario using it stamps cassette
+  v15.
 - **Cassette format v15.** This build reads and writes cassettes up to `cassetteVersion` 15 (`schema/cassette.v15.json`; `schema/cassette.v14.json` is retained). The stamp stays per-scenario: a cassette whose scenario uses no v15 feature is stamped exactly as before, so no existing cassette or `verify-cassettes` result changes. An older build refuses a v15 cassette as too new (upgrade) rather than as an unrecognized assertion.
 - **The companion skill's assertion catalog is split by family.** `references/assertion-catalog.md` keeps the
   conventions every key shares and the verdict-signal table, and links three new files that hold the per-key rows:
