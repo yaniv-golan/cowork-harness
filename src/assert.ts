@@ -2797,8 +2797,18 @@ function globArtifactJson(ctx: AssertContext, aj: NonNullable<Assertion["artifac
       let names: string[] | undefined;
       try {
         names = readdirSync(join(ctx.workRoot, ...literal.slice(0, k - 1)));
-      } catch {
-        names = undefined; // the parent is not there either: nothing below it on either lane
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        // Absent: nothing below it on either lane. Any other error (EACCES, EIO) is a parent that exists but
+        // can't be listed — what it holds is unknown, so this is no evidence of a miss.
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          const parent = literal.slice(0, k - 1).join("/");
+          return {
+            pass: false,
+            message: `evidence unavailable: ${label} — "${parent}" on the glob's path could not be listed (${code ?? String(e)})`,
+          };
+        }
+        names = undefined;
       }
       if (!names?.includes(literal[k - 1]!)) {
         const parent = literal.slice(0, k - 1).join("/");
