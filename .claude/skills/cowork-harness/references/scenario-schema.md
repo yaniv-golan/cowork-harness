@@ -14,7 +14,7 @@ assert:
 ```
 
 Everything below is the full field catalog. The assertion catalog — every `assert:` key, plus the
-verdict-signal table — is in [`assertion-catalog.md`](./assertion-catalog.md).
+verdict-signal table — starts at [`assertion-catalog.md`](./assertion-catalog.md), which indexes the per-family files.
 
 ## Table of contents
 - [Scenario YAML](#scenario-yaml)
@@ -368,9 +368,9 @@ modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`,
 `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
 `path_denied`, `no_path_denied` (the latter three are also `fidelity: hostloop`-only — see
-[`assertion-catalog.md`](./assertion-catalog.md)). With `controlOut` present they evaluate; on an old
+[`assertion-catalog-gates-hooks-modifiers.md`](./assertion-catalog-gates-hooks-modifiers.md)). With `controlOut` present they evaluate; on an old
 cassette without it, a **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
-`questions_count_max` counts sub-questions, not gates/tool-calls — see its row in [`assertion-catalog.md`](./assertion-catalog.md) and
+`questions_count_max` counts sub-questions, not gates/tool-calls — see its row in [`assertion-catalog-gates-hooks-modifiers.md`](./assertion-catalog-gates-hooks-modifiers.md) and
 `trace --view questions`. `hook_blocked`/`no_hook_blocked` need `controlOut` for a different reason than
 the question keys: a custom hook's block/allow decision is an opaque async reply recorded only in
 `control-out.jsonl`, not the `events` stream — reconstructing from the stream alone would show only the

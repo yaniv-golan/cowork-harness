@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
+import { CATALOG_FILES } from "./helpers/assertion-catalog.js";
 import { parse as parseYaml } from "yaml";
 import { scrapeCoworkEnvVars } from "../scripts/lib/env-scrape.js";
 import { AGENT_IMAGE_DEFAULT, PROXY_IMAGE_DEFAULT } from "../src/runtime/agent-image.js";
@@ -132,11 +133,9 @@ describe("gotchas.md index blurbs don't claim non-existent content", () => {
 });
 
 describe("verdict-signals docs ↔ code", () => {
-  // The signal table moved to assertion-catalog.md; scan both skill references so the check keeps its reach.
-  const scenarioSchemaText = [
-    ".claude/skills/cowork-harness/references/scenario-schema.md",
-    ".claude/skills/cowork-harness/references/assertion-catalog.md",
-  ]
+  // The signal table moved to assertion-catalog.md (its per-key rows since split across assertion-catalog-*.md);
+  // scan every catalog file and scenario-schema.md so the check keeps its reach.
+  const scenarioSchemaText = [".claude/skills/cowork-harness/references/scenario-schema.md", ...CATALOG_FILES]
     .map((f) => readFileSync(resolve(f), "utf8"))
     .join("\n");
   const scenarioMdText = readFileSync(resolve("docs/scenario.md"), "utf8");

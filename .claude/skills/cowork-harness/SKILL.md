@@ -158,7 +158,10 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/debugging.md`](references/debugging.md) | triage, `result.json` fields and `trace` views, `chat` |
 | [`references/gotchas.md`](references/gotchas.md) | the full "✓ passed ≠ correct" landmine catalog |
 | [`references/task-recipes.md`](references/task-recipes.md) | start here for "how do I X": evolve `assert:`, audit tier drift, redaction, budgets, answer quality, and goals with no flag (force a compaction, ablate a section, a form reply, resume in a new conversation, hook JSON decisions, schema checks, unattended runs) |
-| [`references/assertion-catalog.md`](references/assertion-catalog.md) | every `assert:` key's semantics, the verdict-signal table |
+| [`references/assertion-catalog.md`](references/assertion-catalog.md) | the assertion catalog's index: conventions shared by every key, the verdict-signal table, and links to the per-family files below |
+| [`references/assertion-catalog-outcome-files-tools.md`](references/assertion-catalog-outcome-files-tools.md) | per-key rows: outcome, transcript, files and artifacts, tools |
+| [`references/assertion-catalog-agents-skills-budgets.md`](references/assertion-catalog-agents-skills-budgets.md) | per-key rows: sub-agents, skills and connectors, budgets, tasks, delivery |
+| [`references/assertion-catalog-gates-hooks-modifiers.md`](references/assertion-catalog-gates-hooks-modifiers.md) | per-key rows: gates, hooks, path denial, verdict modifiers, egress, judged keys |
 | [`references/semantic-judging.md`](references/semantic-judging.md) | `semantic_matches` in full: what the judge reads, fork results, refusal reasons, provenance |
 | [`references/scenario-schema.md`](references/scenario-schema.md) | every YAML field, which keys survive `replay`, the `web_fetch` model |
 | [`references/fidelity-and-answers.md`](references/fidelity-and-answers.md) | tier semantics, answer paths, the determinism contract |

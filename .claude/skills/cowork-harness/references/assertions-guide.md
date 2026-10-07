@@ -1,6 +1,6 @@
 # Assertions guide
 
-Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.0`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog is `assertion-catalog.md`.
+Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.0`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog starts at `assertion-catalog.md`, which indexes the per-family files that hold every key's row.
 
 ### Assertions: two orthogonal axes
 
@@ -21,7 +21,7 @@ Getting Axis B wrong means a check that **does nothing in CI** — the harness w
 (an `::warning::` annotation, not a silent no-op — see the Axis B bullet above), and the bundled linter
 catches it before you push — run it (see *Scaffold a valid scenario, then lint before you push* in `authoring.md`).
 
-See `references/assertion-catalog.md` for the full assertion catalog, and `references/scenario-schema.md`'s
+See `references/assertion-catalog.md` for the full assertion catalog (an index into its per-family files), and `references/scenario-schema.md`'s
 *Replay class* for which keys survive `replay`.
 
 #### Which assertion for which question (goal → key)

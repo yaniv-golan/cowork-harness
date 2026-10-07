@@ -2,13 +2,14 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { CASSETTE_VERSION } from "../src/run/cassette";
+import { catalogText } from "./helpers/assertion-catalog.js";
 
 // Anti-drift tripwire for the SKILL's bundled docs.
 // Scoped to the surfaces that actually rotted and the KINDS that rot — machine-readable
 // field lists the docs claim to cover — NOT a naive "new CLI flag must appear in a doc" gate (which
 // would have caught neither motivating example: `--allow-file` WAS documented outside the skill, and
 // `effectiveFidelity` isn't a flag). Extends the test/cassette-docs-sync.test.ts pattern:
-//   1. schema/scenario.schema.json's assertion-key catalog ↔ references/assertion-catalog.md
+//   1. schema/scenario.schema.json's assertion-key catalog ↔ references/assertion-catalog*.md (hub + per-family files)
 //   2. the CURRENT cassette schema's top-level fields ↔ SKILL.md ∪ references/*.md
 //   3. the CURRENT cassette schema's NESTED fields ↔ SKILL.md ∪ references/*.md (see below)
 // Source of truth is always the schema; the docs must mention every key as a backtick-quoted token.
@@ -34,7 +35,7 @@ describe("skill docs ↔ schema assertion-key catalog", () => {
     properties: { assert: { items: { properties: Record<string, unknown> } } };
   };
   const keys = Object.keys(schema.properties.assert.items.properties);
-  const doc = readFileSync(join(SKILL_DIR, "references/assertion-catalog.md"), "utf8");
+  const doc = catalogText();
 
   it("parsed a sane key set (guards against a schema-shape change silently emptying this test)", () => {
     expect(keys.length).toBeGreaterThan(30);
@@ -42,11 +43,11 @@ describe("skill docs ↔ schema assertion-key catalog", () => {
     expect(keys).toContain("questions_count_max");
   });
 
-  it("every assertion key in the scenario schema appears backtick-quoted in references/assertion-catalog.md", () => {
+  it("every assertion key in the scenario schema appears backtick-quoted in the assertion catalog (references/assertion-catalog*.md)", () => {
     const missing = keys.filter((k) => !documents(doc, k));
     expect(
       missing,
-      `references/assertion-catalog.md is missing: ${missing.join(", ")} — its assertion catalog claims to be complete`,
+      `references/assertion-catalog*.md is missing: ${missing.join(", ")} — its assertion catalog claims to be complete`,
     ).toEqual([]);
   });
 });
