@@ -2441,6 +2441,7 @@ LINT_RULES = {
     "container-only-key-off-container": "ERROR",
     "egress-on-protocol": "ERROR",
     "enum-value-invalid": "ERROR",
+    "artifact-json-match": "ERROR",
     "fidelity-missing": "ERROR",
     "file-absent-contradiction": "ERROR",
     "gate-needs-controlout": "INFO",
