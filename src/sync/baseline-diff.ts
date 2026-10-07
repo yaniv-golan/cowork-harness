@@ -175,8 +175,59 @@ export function renderInitSurfaceEntries(entries: BaselineDiffEntry[]): { lines:
 /** Maps KNOWN baseline fields to prose; an unrecognized path still renders (never silently dropped),
  *  just as a generic line. Annotation-class entries are grouped into their own de-emphasized section
  *  instead of interleaved with real drift. */
+/** Block-level rendering for the top-level `cloud` block (names, hashes and counts only, so no line can carry
+ *  description text). Its first introduction is ONE count line rather than a dump of every fingerprint, and a
+ *  fingerprint change is named per tool. Unrecognized entries under the block fall through to `rest`. */
+export function renderCloudEntries(entries: BaselineDiffEntry[]): { lines: string[]; rest: BaselineDiffEntry[] } {
+  const mine = entries.filter((e) => e.path === "cloud" || e.path.startsWith("cloud."));
+  const rest = entries.filter((e) => !mine.includes(e));
+  const lines: string[] = [];
+  const unhandled: BaselineDiffEntry[] = [];
+  type Fp = { name?: string; sha256?: string };
+  for (const e of mine) {
+    if (e.path === "cloud" && e.kind === "added") {
+      const b = e.to as { remoteDevicesTools?: unknown[]; remoteDevicesDescriptions?: unknown[]; unreachable?: unknown[] };
+      lines.push(
+        `- cloud block now recorded: ${b.remoteDevicesTools?.length ?? 0} remote-devices tool(s), ${b.remoteDevicesDescriptions?.length ?? 0} description fingerprint(s), ${b.unreachable?.length ?? 0} unreachable feature(s)`,
+      );
+    } else if (e.path === "cloud" && e.kind === "removed") lines.push("- cloud block no longer recorded");
+    else if (e.path === "cloud.remoteDevicesTools" && e.kind === "array") {
+      if (e.added.length) lines.push(`- remote-devices tool(s) APPEARED: ${code(e.added as string[])}`);
+      if (e.removed.length) lines.push(`- remote-devices tool(s) DISAPPEARED: ${code(e.removed as string[])}`);
+    } else if (e.path === "cloud.remoteDevicesDescriptions" && e.kind === "array") {
+      // A record whose name and text hash are on both sides moved only its `branch` (the selector assignment that
+      // picks the same text was re-keyed): a relabel, rendered apart from a text change.
+      const textKey = (f: Fp) => `${String(f.name)}\u0000${String(f.sha256)}`;
+      const removedText = new Set((e.removed as Fp[]).map(textKey));
+      const addedText = new Set((e.added as Fp[]).map(textKey));
+      const per = new Map<string, { added: number; removed: number; relabeled: number }>();
+      const bump = (n: string, k: "added" | "removed" | "relabeled") => {
+        const c = per.get(n) ?? { added: 0, removed: 0, relabeled: 0 };
+        c[k]++;
+        per.set(n, c);
+      };
+      for (const f of e.added as Fp[]) bump(String(f.name), removedText.has(textKey(f)) ? "relabeled" : "added");
+      for (const f of e.removed as Fp[]) if (!addedText.has(textKey(f))) bump(String(f.name), "removed");
+      for (const [n, c] of [...per].sort(([a], [b]) => (a < b ? -1 : 1))) {
+        if (c.added || c.removed)
+          lines.push(`- remote-devices \`${n}\`: description fingerprint(s) changed (+${c.added} −${c.removed} branch records)`);
+        if (c.relabeled)
+          lines.push(
+            `- remote-devices \`${n}\`: ${c.relabeled} branch record(s) relabeled, same text (the conditions selecting it changed)`,
+          );
+      }
+    } else if (e.path === "cloud.unreachable" && e.kind === "array") {
+      if (e.added.length) lines.push(`- cloud.unreachable: added ${code(e.added as string[])}`);
+      if (e.removed.length) lines.push(`- cloud.unreachable: removed ${code(e.removed as string[])}`);
+    } else unhandled.push(e);
+  }
+  return { lines, rest: [...rest, ...unhandled] };
+}
+
 export function renderChangelog(allEntries: BaselineDiffEntry[]): string {
-  const { lines: initLines, rest: entries } = renderInitSurfaceEntries(allEntries);
+  const { lines: initOnly, rest: afterInit } = renderInitSurfaceEntries(allEntries);
+  const { lines: cloudLines, rest: entries } = renderCloudEntries(afterInit);
+  const initLines = [...initOnly, ...cloudLines];
   const notable = entries.filter((e) => !e.annotation);
   const annotations = entries.filter((e) => e.annotation);
   const lines: string[] = [...initLines];
@@ -284,7 +335,9 @@ export function renderChangelog(allEntries: BaselineDiffEntry[]): string {
 export function formatDiffLines(allEntries: BaselineDiffEntry[]): string[] {
   // The init-surface block needs block-level context (see renderInitSurfaceEntries) — without it an
   // unobserved re-sync prints as three bare server removals here too.
-  const { lines: initLines, rest: entries } = renderInitSurfaceEntries(allEntries);
+  const { lines: initOnly, rest: afterInit } = renderInitSurfaceEntries(allEntries);
+  const { lines: cloudLines, rest: entries } = renderCloudEntries(afterInit);
+  const initLines = [...initOnly, ...cloudLines];
   return [
     ...initLines.map((l) => l.replace(/^- /, "")),
     ...entries.map((e) => {

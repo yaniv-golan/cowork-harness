@@ -122,7 +122,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.286   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.288   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 # The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
 # from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
 # `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
@@ -382,6 +382,10 @@ committed baseline and say why in that baseline's `$comment`.
      start one Cowork session in Claude Desktop, then re-run `sync`. `npm run preflight` refuses to release
      an unobserved newest baseline; `--allow-unobserved-init-surface` downgrades that to a warning for an
      emergency release.
+   - **After the local-lane sunset.** From 2026-10-06 new Pro and Max Cowork tasks run in the cloud, and a
+     cloud session writes no local init frame. So before syncing, run one local task on an account whose
+     plan still has the local lane; otherwise the surface is recorded unobserved and the preflight refuses
+     it.
    - **Reading the diff.** A tool or server appearing or disappearing is the signal. A tool moving between
      `toolsAll` and `toolsSome` depends on which kinds of session happened to be read (at 2.7032.0 some
      sessions lack the four artifact tools), so treat that as a prompt to look, not as evidence.
@@ -390,6 +394,29 @@ committed baseline and say why in that baseline's `$comment`.
      committed baseline enforces it), and sync's messages carry counts, never names or paths. The recorded
      set still reflects what **this account** is served — `save_skill` needs org skill-creation access — the
      same class of fact `provenance.gates` already records.
+
+   **`cloud` → what Desktop serves to a cloud Cowork session.** A cloud session reaches this computer
+   through Desktop's `remote-devices` MCP server. From Desktop 2.19675.1, `sync` records, as a top-level
+   `cloud` block, that server's tool-name array (`remoteDevicesTools`; not every name has a description in the
+   bundle — `list_devices` has none) and one fingerprint per conditional
+   branch of each tool's description (`remoteDevicesDescriptions`: `name`, `branch`, `sha256`,
+   `codePoints`), read from the bundle. It also records `unreachable`: the cloud-session features no local
+   reproduction can reach (the CCR session host and its web fetch/search proxies, memory context,
+   plugin/skill sync, the REPL bridge, and the `device_bash` refusals that need Desktop's VM lifecycle or a
+   server-asserted session id). Nothing in the harness reads the block; it exists so `sync --diff` names a
+   tool that appears or disappears and a description whose fingerprint moved.
+   - **Names, hashes and counts only.** A description is Anthropic's text, so only its `sha256` and
+     code-point count are recorded, and a branch is identified by a hash of which conditions select it. A
+     strict schema refuses any other field before `sync` writes, and a test holds every string in every
+     committed block to a name or hash shape.
+   - **Not carried forward, and not write-blocking.** When the extraction fails (or the extractor throws),
+     `sync` prints a `WARNING` note naming the failure and writes the baseline without a `cloud` block, never
+     the previous release's. `check:versions` then warns (it does not fail) that the newest baseline lacks one.
+     The one exception is the schema: an extracted block that fails it still refuses the write, because that is
+     the case where description text could be published.
+   - **`unreachable` is a curated harness list, not extracted** (`CLOUD_UNREACHABLE` in
+     `src/sync/remote-devices.ts`). Its diff line fires only when the harness changes the list, never on a
+     Desktop release.
 
    `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
    and separately reports a gate that starts or stops **serving** a key, which matters because an unserved

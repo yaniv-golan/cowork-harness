@@ -12,6 +12,45 @@ All notable changes to this project are documented here. The format is based on
   dev-only dependency (reached through `jsdom` and `vitest`), so nothing in the published package changes. Lockfile
   only.
 
+### Upgrade notes
+
+- **Cassettes: re-record — the agent moved.** `latest` now resolves to `desktop-2.19675.1`, which pins agent **2.1.288**
+  (was 2.1.286). A cassette recorded through `baseline: latest` reports
+  `[stale] baseline moved 2.19675.0 → 2.19675.1 since record — re-record`: `verify-cassettes` and `replay --strict` exit
+  `1` on it, and a plain `replay` warns and keeps its exit code.
+  - At `container`, `microvm` and `hostloop`, re-record. A re-stamp clears the finding but leaves an `agent-version:` note,
+    because the recording ran 2.1.286.
+  - At `protocol` the baseline move alone does not need a re-record: the agent there is the `claude` on your `PATH`, and
+    the first-party spawn env, the Cowork system prompt, the sub-agent append and the egress contract are unchanged.
+  - The bundled cassettes are re-stamped to `2.19675.1`, not re-recorded; the three recorded by the staged agent carry
+    the `agent-version:` note until they are.
+
+### Added
+
+- **`sync` records what Desktop serves to a cloud Cowork session, in a new top-level `cloud` block.** It holds the
+  tool list of Desktop's `remote-devices` server, one fingerprint (SHA-256 and code-point count) per conditional
+  branch of each tool's description, and `unreachable`: the cloud-session features no local reproduction can reach.
+  It records names, hashes and counts only, never description text; a strict schema enforces that before the write
+  and over every committed baseline. `sync --diff` names a tool that appears or disappears and a description whose
+  fingerprint moved. A failed extraction does not block the write: `sync` prints a warning and writes the baseline
+  without the block (never the previous release's), and `check:versions` warns when the newest baseline lacks it. A
+  block that fails the schema (a field or string that is not a name, hash or count) still refuses the write, since that
+  is the case where description text could be published.
+  Nothing in the harness reads it. See [docs/maintenance.md](./docs/maintenance.md).
+
+### Changed
+
+- **New baseline `desktop-2.19675.1`** (agent **2.1.288**), which `latest` resolves to.
+  - Unchanged from `desktop-2.19675.0`: the Cowork system prompt, the sub-agent append, the egress contract, the
+    model/effort config and the first-party `spawn.env`. Gate provenance moved: Desktop's runtime config gains two
+    sessions-bridge poll intervals, and the computer-use permission gate (`cuCanUseToolEnabled`) reads on again,
+    server-side. The harness does not model either.
+  - The Desktop init surface was read from 2 local frames, on an account whose tasks still run locally: the same
+    Desktop servers and tools as `desktop-2.19675.0`. One move was observed and is unexplained: the `cowork` server's
+    `send_user_message` went from `toolsSome` (declared in some sessions) to `toolsAll` (declared in every session
+    read). With two frames from one account, this may reflect the account or the sessions read rather than the
+    release.
+
 ## [4.4.1] — 2026-10-05
 
 A companion-skill release: the skill now teaches 4.4.0's re-grade scrub-set proof, and a test keeps every CLI flag

@@ -1762,10 +1762,13 @@ names a destination path on the device (`devicePath`) and a source, which is one
 container's outputs root, `/mnt/user-data/outputs/` (`stagedPath`), for an output that was never shared.
 Both source fields are optional in its schema (Desktop 2.19675.0), and a session-host variant of its
 description asks for the staged path only. Desktop 1.37937.0
-added `device_fs` and `device_request_delete_permission` to that set, plus a folder-access announce mode
+added `device_request_delete_permission` to that set, plus a folder-access announce mode
 (`card` / `dialog` / `off`) — the Desktop half of the six `cowork_*` risk categories that had appeared in
 agent 2.1.237's auto-mode permission rubric. **This list is illustrative, not an inventory** (see the
-feature-gating note below), so it is not kept exhaustive; it is updated when a release moves the shape. Desktop advertises
+feature-gating note below). The inventory is the newest baseline's `cloud` block: `remoteDevicesTools` lists the server's
+tool-name array (14 names on 2.19675.1, 13 of them with a description in the bundle; `list_devices` has none), and
+`remoteDevicesDescriptions` fingerprints each description, so
+`sync --diff` names a tool that appears or disappears (see [maintenance.md](./maintenance.md)). Desktop advertises
 these *outward* to a cloud session over a device-OAuth bridge, and Desktop's own telemetry tags these
 calls `session_type: "cowork-remote"`. None of these tools is in the local spawn's tool list.
 

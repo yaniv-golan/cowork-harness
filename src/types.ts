@@ -244,6 +244,29 @@ export const DesktopInitSurface = z
   });
 export type DesktopInitSurface = z.infer<typeof DesktopInitSurface>;
 
+/** A name in the `cloud` block: a lowercase identifier. Never prose, a path or a `__`-split wire name. */
+const CloudName = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
+
+/** The baseline's top-level `cloud` block (src/sync/remote-devices.ts): the `remote-devices` tool list Desktop
+ *  serves to a cloud Cowork session, one fingerprint per conditional branch of each tool's description, and
+ *  the cloud features no local reproduction can reach. Names, hashes and counts ONLY — a description's text
+ *  never appears, and `branch` is a hash of the selector assignment, not the selector expression. STRICT at
+ *  every level; enforced before `sync` writes it and over every committed baseline. Data only: nothing in the
+ *  harness reads it. Absent from baselines synced before Desktop 2.19675.1. */
+export const CloudBlock = z.strictObject({
+  remoteDevicesTools: z.array(CloudName).min(1),
+  remoteDevicesDescriptions: z.array(
+    z.strictObject({
+      name: CloudName,
+      branch: z.string().regex(/^[0-9a-f]{12}$/),
+      sha256: z.string().regex(/^[0-9a-f]{64}$/),
+      codePoints: z.number().int().positive(),
+    }),
+  ),
+  unreachable: z.array(CloudName),
+});
+export type CloudBlock = z.infer<typeof CloudBlock>;
+
 /** Scenario — what the user authors. */
 export const AnswerRule = z
   .strictObject({
