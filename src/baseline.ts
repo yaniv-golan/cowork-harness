@@ -34,6 +34,29 @@ export function countStringInFile(path: string, needle: string): number {
   return n;
 }
 
+/** The agent's CLI capabilities that a harness feature depends on, as recorded in `agentBinary.cliCapabilities`. */
+export interface CliCapabilities {
+  /** The agent accepts `--permission-prompts none` (anything that would prompt is denied locally). */
+  permissionPrompts: boolean;
+}
+
+/** The two strings that, together, mean the agent accepts `--permission-prompts none`: the Commander option
+ *  DECLARATION and the text of its `none` branch. A bare `--permission-prompts` is NOT the oracle: it also sits in
+ *  the agent's argv pass-through tables, and `fewer-permission-prompts` (a bundled skill's name) shares the binary.
+ *  Measured in every backed-up agent (2.1.260 through 2.1.289): both present. */
+const PERMISSION_PROMPTS_MARKERS = ["--permission-prompts <target>", "--permission-prompts none"] as const;
+
+/** Extract the agent's CLI capabilities from its bytes. Pure, so the false path is testable on a synthetic buffer:
+ *  no real agent measured so far lacks the flag, so a real negative sample does not exist yet. */
+export function cliCapabilitiesOfBuffer(buf: Buffer): CliCapabilities {
+  return { permissionPrompts: PERMISSION_PROMPTS_MARKERS.every((m) => buf.includes(Buffer.from(m))) };
+}
+
+/** `cliCapabilitiesOfBuffer` over a file (the staged agent ELF, at sync time — one whole-file read). */
+export function cliCapabilitiesOfFile(path: string): CliCapabilities {
+  return cliCapabilitiesOfBuffer(readFileSync(path));
+}
+
 /**
  * Point-of-use integrity check for the agent ELF against the baseline's recorded `sha256`. **On by
  * default** (opt out with `COWORK_HARNESS_VERIFY_AGENT_SHA=0`) — a recorded hash that is never enforced at
@@ -722,6 +745,7 @@ export function buildNextAgentBinary(
     shaProvenance?: string;
     manifestChecksumMatch?: boolean | "unknown";
     stringSentinels?: Record<string, number>;
+    cliCapabilities?: CliCapabilities;
   },
 ): Record<string, unknown> {
   return {
@@ -734,6 +758,7 @@ export function buildNextAgentBinary(
     shaProvenance: d.shaProvenance,
     manifestChecksumMatch: d.manifestChecksumMatch,
     stringSentinels: d.stringSentinels,
+    cliCapabilities: d.cliCapabilities,
   };
 }
 

@@ -88,6 +88,10 @@ export const PlatformBaseline = z.looseObject({
     // `sync --diff` tripwire: a changed count is the trigger to re-verify the feature wiring; nothing
     // consumes it at runtime.
     stringSentinels: z.record(z.string(), z.number()).optional(),
+    // CLI capabilities of the staged agent that a harness feature depends on, extracted by `sync` from the ELF's
+    // strings (`cliCapabilitiesOfBuffer`). Same lifecycle as `stringSentinels`. ABSENT means unknown (a baseline
+    // synced before the field existed), and a feature that needs a capability refuses on unknown — never assumes it.
+    cliCapabilities: z.strictObject({ permissionPrompts: z.boolean() }).optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z
