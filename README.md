@@ -438,6 +438,6 @@ inputs/outputs. Human-readable terminal text is explicitly **not** part of the c
 ## Status
 
 The latest shipped baseline — what `baseline: latest` resolves to, the highest version under `baselines/` — is
-**`desktop-2.26454.0`**. Release-by-release verification notes (what was re-verified against
+**`desktop-2.26454.2`**. Release-by-release verification notes (what was re-verified against
 which live agent/asar) are recorded in [CHANGELOG.md](./CHANGELOG.md); the feature catalogue
 this section would otherwise duplicate lives in the sections above.
