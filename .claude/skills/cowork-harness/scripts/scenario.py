@@ -410,6 +410,7 @@ _EMBEDDED_ENUMS = {
     "assert.hook_event_fired": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_event_blocked": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_event_blocked.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_event_blocked.via": ["exit2", "json", "any"],
     "assert.no_hook_event_blocked.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_decision.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_decision.decision": ["allow", "deny", "ask", "defer", "block", "approve"],
@@ -1709,7 +1710,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 if _f is not None:
                     findings.append(_f)
         for _hk, _fields in (
-            ("hook_event_blocked", ("event",)),
+            ("hook_event_blocked", ("event", "via")),
             ("no_hook_event_blocked", ("event",)),
             ("hook_decision", ("event", "decision")),
         ):

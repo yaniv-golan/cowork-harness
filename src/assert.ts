@@ -15,7 +15,13 @@ import type {
 import { addTokenUsage } from "./decide/usage.js";
 import { checkToolCallObject, routedToolGlobs } from "./tool-call-assert.js";
 import { outputsDeleteTier, outputsDeleteEntries } from "./run/outputs-delete-tier.js";
-import { SKILL_RESULT_ASSERT_CAP, VERDICT_MODIFIER_KEYS, hookCountBoundError, questionOptionCountBoundError } from "./types.js";
+import {
+  HOOK_DECISIONS,
+  SKILL_RESULT_ASSERT_CAP,
+  VERDICT_MODIFIER_KEYS,
+  hookCountBoundError,
+  questionOptionCountBoundError,
+} from "./types.js";
 import { REDACTION_TOKEN_RE, hasRedactionToken } from "./redactable-literal.js";
 import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
@@ -1627,42 +1633,118 @@ function pendingHooks(
   return new Set(ids("hook_started").filter((id) => !responded.has(id))).size;
 }
 
-/** One `hook_response` frame, as the hook keys read it. `blocking` is the agent's deny by either channel: exit code
- *  2, or (exit 0) a JSON deny on stdout. `exit2` is exit code 2 alone. `undefined` means the frame's outcome cannot be
- *  read (no exit code). */
-type HookFrame = { name: string; exitCode?: number; outcome: string; blocking: boolean | undefined; exit2: boolean | undefined };
+/** A hook's decision as the agent applies it: `none` is a frame that decided nothing (empty or non-JSON stdout, a JSON
+ *  object without a decision, an exit code other than 0 or 2). */
+export type HookDecision = "allow" | "deny" | "ask" | "defer" | "none";
+const PERMISSION_DECISIONS = new Set(["allow", "deny", "ask", "defer"]);
+
+/** One `hook_response` frame, as the hook keys read it. `exit2` is exit code 2, the agent's blocking exit. `json` is the
+ *  decision the hook printed on stdout with exit 0, and `token` the raw value it printed (`deny`, `block`, …).
+ *  `decision` combines them: exit 2 is a deny whatever stdout holds. `undefined` means unreadable: no exit code, or
+ *  (for `json`) stdout a redaction policy rewrote or the agent truncated so it no longer parses, or a `hookEventName`
+ *  naming another event. */
+type HookFrame = {
+  name: string;
+  exitCode?: number;
+  outcome: string;
+  exit2: boolean | undefined;
+  json: HookDecision | undefined;
+  token?: string;
+  decision: HookDecision | undefined;
+};
+
+/** The JSON decision on an exit-0 frame's stdout. Only stdout that parses WHOLE as a JSON object decides: stdout is the
+ *  hook's ordinary output too, so a word like `deny`, prose, or JSON after other text decides nothing. Read
+ *  `hookSpecificOutput.permissionDecision` (its `hookEventName` must name the frame's event, as the agent requires), else
+ *  a top-level `decision` (`block` denies, `approve` allows, as the agent normalises them). `continue: false` stops the
+ *  agent but is not a decision. */
+export function readJsonDecision(stdout: string, event: unknown): { json: HookDecision | undefined; token?: string } {
+  const text = stdout.trim();
+  if (text === "") return { json: "none" };
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    return { json: hasRedactionToken(stdout) || SPILL_MARKER_RE.test(stdout) ? undefined : "none" };
+  }
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return { json: "none" };
+  const o = v as Record<string, unknown>;
+  const hso = o.hookSpecificOutput;
+  if (hso !== null && typeof hso === "object" && !Array.isArray(hso) && "permissionDecision" in hso) {
+    const h = hso as Record<string, unknown>;
+    if (h.hookEventName !== event) return { json: undefined };
+    const pd = h.permissionDecision;
+    return typeof pd === "string" && PERMISSION_DECISIONS.has(pd) ? { json: pd as HookDecision, token: pd } : { json: undefined };
+  }
+  // A redaction token where the decision was: whatever it said is gone.
+  if (typeof o.decision === "string" && hasRedactionToken(o.decision)) return { json: undefined };
+  if (o.decision === "block") return { json: "deny", token: "block" };
+  if (o.decision === "approve") return { json: "allow", token: "approve" };
+  return { json: "none" };
+}
+
+/** The channel a blocked-count reads: exit code 2, the JSON decision on stdout, or either. */
+type HookChannel = "exit2" | "json" | "any";
+function blocksVia(f: HookFrame, via: HookChannel): boolean | undefined {
+  if (via === "exit2") return f.exit2;
+  if (via === "json") return f.json === undefined ? undefined : f.json === "deny";
+  return f.decision === undefined ? undefined : f.decision === "deny";
+}
 
 /** Which channel the BARE `hook_event_blocked: <event>` counts. It has always meant exit code 2, and counting a JSON
- *  deny as well would change what an existing scenario asserts, so it stays `exit2`; the object form,
- *  `no_hook_event_blocked` and `hook_decision` read the agent's deny by either channel. */
-const BARE_HOOK_EVENT_BLOCKED_VIA: "exit2" | "any" = "exit2";
+ *  deny as well would change what an existing scenario asserts, so it stays `exit2`. The object form defaults to
+ *  `any`, as `no_hook_event_blocked` and `hook_decision` read the agent's deny. */
+const BARE_HOOK_EVENT_BLOCKED_VIA: HookChannel = "exit2";
 
 /** The `hook_response` frames for `event` (and, with `tool`, only those whose `hook_name` is `<event>:<tool>` — the
- *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered. */
+ *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered.
+ *  `untooled` is set when `tool` was asked for and the event's frames carry no tool name at all (`Stop` is named
+ *  `Stop`), so no frame could ever match it. */
 function hookFrames(
   events: NonNullable<AssertContext["contextEvents"]>,
   event: string | undefined,
   tool?: string,
-): { frames: HookFrame[]; pending: number; events: Set<string> } {
-  const inScope = (e: (typeof events)[number]) =>
-    (event === undefined || e.data?.hook_event === event) && (tool === undefined || e.data?.hook_name === `${event}:${tool}`);
+): { frames: HookFrame[]; pending: number; events: Set<string>; untooled: boolean } {
+  const ofEvent = (e: (typeof events)[number]) => event === undefined || e.data?.hook_event === event;
+  const inScope = (e: (typeof events)[number]) => ofEvent(e) && (tool === undefined || e.data?.hook_name === `${event}:${tool}`);
+  const eventFrames = events.filter((e) => (e.subtype === "hook_response" || e.subtype === "hook_started") && ofEvent(e));
+  const untooled =
+    tool !== undefined &&
+    eventFrames.length > 0 &&
+    !eventFrames.some((e) => typeof e.data?.hook_name === "string" && e.data.hook_name.includes(":"));
   const raw = events.filter((e) => e.subtype === "hook_response" && inScope(e));
   const frames = raw.map((e): HookFrame => {
     const exitCode = typeof e.data?.exit_code === "number" ? e.data.exit_code : undefined;
+    const stdout = typeof e.data?.stdout === "string" ? e.data.stdout : typeof e.data?.output === "string" ? e.data.output : undefined;
+    const { json, token } =
+      exitCode === undefined
+        ? { json: undefined }
+        : exitCode !== 0
+          ? { json: "none" as const }
+          : stdout === undefined
+            ? { json: undefined }
+            : readJsonDecision(stdout, e.data?.hook_event);
+    const exit2 = exitCode === undefined ? undefined : exitCode === 2;
     return {
       name: typeof e.data?.hook_name === "string" ? e.data.hook_name : String(e.data?.hook_event ?? event),
       exitCode,
       outcome: typeof e.data?.outcome === "string" ? e.data.outcome : "unknown",
-      blocking: exitCode === undefined ? undefined : exitCode === 2,
-      exit2: exitCode === undefined ? undefined : exitCode === 2,
+      exit2,
+      json,
+      token,
+      decision: exit2 === true ? "deny" : json,
     };
   });
   const seen = new Set(raw.map((e) => e.data?.hook_event).filter((v): v is string => typeof v === "string"));
-  return { frames, pending: pendingHooks(events, inScope), events: seen };
+  return { frames, pending: pendingHooks(events, inScope), events: seen, untooled };
 }
 
-const describeHookFrame = (f: { exitCode?: number; outcome: string }) =>
+/** The exit code alone (or the outcome, when there is none). */
+const hookExitCode = (f: { exitCode?: number; outcome: string }) =>
   f.exitCode === undefined ? `${f.outcome} (no exit code)` : String(f.exitCode);
+/** The exit code, plus the JSON decision the hook printed with it: `0, JSON deny`. */
+const describeHookFrame = (f: { exitCode?: number; outcome: string; token?: string; json?: HookDecision }) =>
+  `${hookExitCode(f)}${f.token !== undefined ? `, JSON ${f.token}` : f.exitCode === 0 && f.json === undefined ? ", stdout unreadable" : ""}`;
 
 /** A count with `unknown` frames of unreadable outcome lies in [known, known + unknown]. The verdict stands when that
  *  range lies wholly inside [min, max] (pass) or wholly outside it (fail); otherwise it is unknowable. */
@@ -1677,55 +1759,107 @@ function judgeHookCount(known: number, unknown: number, min: number, max: number
 const hookScope = (event: string, tool?: string) => `\`${event}\`${tool === undefined ? "" : ` (tool \`${tool}\`)`}`;
 const neverFired = (key: string, event: string, tool?: string) =>
   `${key}: no hook_response frame for ${hookScope(event, tool)} was recorded — the staged plugin declares no such hook, the hook never ran${tool === undefined ? "" : ", the tool that fired has another name (the shell is `Bash` at container, `mcp__workspace__bash` at hostloop)"}, its hooks.json is not at <plugin>/hooks/hooks.json (the root is silently ignored), or the recording predates --include-hook-events`;
+const untooledMessage = (key: string, event: string, tool: string) =>
+  `evidence unavailable: ${key}: \`${event}\` frames carry no tool name (their hook_name is \`${event}\`), so \`tool: ${tool}\` can match none of them — drop \`tool\` for this event`;
+const listHookFrames = (fs: HookFrame[]) =>
+  fs
+    .slice(0, 5)
+    .map((f) => `${f.name} (exit ${describeHookFrame(f)})`)
+    .join(", ") + (fs.length > 5 ? `, +${fs.length - 5} more` : "");
 
-/** `hook_event_blocked`, bare (at least one block) or `{event, tool?, min?, max?}`. */
-function checkHookEventBlocked(
-  spec: string | { event: string; tool?: string; min?: number; max?: number },
+/** Count the frames in scope that `matches` (undefined = unreadable) against [min, max], by the range rule. `noun`
+ *  names what is counted (`blocking`, `decided deny`). */
+function checkHookCount(
+  key: string,
+  o: { event: string; tool?: string; min?: number; max?: number },
   events: NonNullable<AssertContext["contextEvents"]>,
+  matches: (f: HookFrame) => boolean | undefined,
+  phrase: (n: number, scope: string) => string,
+  onNone?: (frames: HookFrame[]) => string | undefined,
 ): KeyResult {
   const fail = (message: string): KeyResult => ({ pass: false, message });
-  const o = typeof spec === "string" ? { event: spec } : spec;
-  const bound = hookCountBoundError("hook_event_blocked", o);
+  const bound = hookCountBoundError(key, o);
   if (bound !== undefined) return fail(bound);
   const min = o.min ?? (o.max === undefined ? 1 : 0);
   const max = o.max ?? Infinity;
-  const { frames, pending } = hookFrames(events, o.event, o.tool);
+  const { frames, pending, untooled } = hookFrames(events, o.event, o.tool);
   const scope = hookScope(o.event, o.tool);
+  if (untooled && o.tool !== undefined) return fail(untooledMessage(key, o.event, o.tool));
   if (frames.length === 0)
     return fail(
       pending
-        ? `evidence unavailable: hook_event_blocked: ${pending} ${scope} hook(s) started without a response — whether they blocked never reached the stream`
-        : neverFired("hook_event_blocked", o.event, o.tool),
+        ? `evidence unavailable: ${key}: ${pending} ${scope} hook(s) started without a response — what they decided never reached the stream`
+        : neverFired(key, o.event, o.tool),
     );
-  const via = typeof spec === "string" ? BARE_HOOK_EVENT_BLOCKED_VIA : "any";
-  const blocks = (f: HookFrame) => (via === "exit2" ? f.exit2 : f.blocking);
-  const blocked = frames.filter((f) => blocks(f) === true);
-  const unreadable = frames.filter((f) => blocks(f) === undefined);
+  const matched = frames.filter((f) => matches(f) === true);
+  const unreadable = frames.filter((f) => matches(f) === undefined);
   const unknown = unreadable.length + pending;
   const expected = max === Infinity ? `at least ${min}` : min === 0 ? `at most ${max}` : min === max ? `exactly ${min}` : `${min}–${max}`;
-  const listed = (fs: HookFrame[]) =>
-    fs
-      .slice(0, 5)
-      .map((f) => `${f.name} exit ${describeHookFrame(f)}`)
-      .join(", ") + (fs.length > 5 ? `, +${fs.length - 5} more` : "");
-  const verdict = judgeHookCount(blocked.length, unknown, min, max);
-  if (verdict === "pass")
-    return { pass: true, evidence: `${blocked.length} blocking ${scope} hook frame(s) of ${frames.length} (expected ${expected})` };
+  const seen = () => `exit codes seen: ${frames.map(describeHookFrame).join("; ")}`;
+  const verdict = judgeHookCount(matched.length, unknown, min, max);
+  if (verdict === "pass") return { pass: true, evidence: `${phrase(matched.length, scope)} of ${frames.length} (expected ${expected})` };
   if (verdict === "unavailable")
     return fail(
-      `evidence unavailable: hook_event_blocked: ${blocked.length} blocking ${scope} hook frame(s), plus ${unknown} whose outcome cannot be read (${[
-        unreadable.length ? listed(unreadable) : "",
+      `evidence unavailable: ${key}: ${phrase(matched.length, scope)}, plus ${unknown} whose outcome cannot be read (${[
+        unreadable.length ? listHookFrames(unreadable) : "",
         pending ? `${pending} started without a response` : "",
       ]
         .filter(Boolean)
         .join("; ")}) — expected ${expected}, which they decide`,
     );
-  if (typeof spec === "string" && blocked.length === 0)
-    return fail(
-      `hook_event_blocked: ${scope} fired ${frames.length}× but never blocked (exit codes seen: ${frames.map(describeHookFrame).join(", ")})`,
-    );
+  const note = matched.length === 0 ? onNone?.(frames) : undefined;
   return fail(
-    `hook_event_blocked: ${blocked.length} blocking ${scope} hook frame(s), expected ${expected}${blocked.length ? `: ${listed(blocked)}` : ` (exit codes seen: ${frames.map(describeHookFrame).join(", ")})`}`,
+    `${key}: ${phrase(matched.length, scope)}, expected ${expected}${matched.length ? `: ${listHookFrames(matched)}` : ` (${seen()})`}${note ?? ""}`,
+  );
+}
+
+/** `hook_event_blocked`, bare (at least one exit-2 block) or `{event, tool?, via?, min?, max?}`. */
+function checkHookEventBlocked(
+  spec: string | { event: string; tool?: string; via?: HookChannel; min?: number; max?: number },
+  events: NonNullable<AssertContext["contextEvents"]>,
+): KeyResult {
+  const o = typeof spec === "string" ? { event: spec } : spec;
+  const via: HookChannel = typeof spec === "string" ? BARE_HOOK_EVENT_BLOCKED_VIA : (spec.via ?? "any");
+  // A JSON deny the exit-2 channel did not count is named, so the author finds `via`.
+  const uncountedJson = (frames: HookFrame[]) => {
+    if (via !== "exit2") return undefined;
+    const n = frames.filter((f) => f.json === "deny").length;
+    return n
+      ? `; ${n} frame(s) denied by JSON on stdout, which ${typeof spec === "string" ? "the bare form" : "`via: exit2`"} does not count — count them with \`{event: ${o.event}, via: any}\``
+      : undefined;
+  };
+  const r = checkHookCount(
+    "hook_event_blocked",
+    o,
+    events,
+    (f) => blocksVia(f, via),
+    (n, scope) => `${n} blocking ${scope} hook frame(s)`,
+    uncountedJson,
+  );
+  // The bare form keeps its own wording for a hook that fired and never blocked.
+  if (typeof spec === "string" && !r.pass && /^hook_event_blocked: 0 blocking /.test(r.message ?? "")) {
+    const { frames } = hookFrames(events, spec);
+    return {
+      pass: false,
+      message: `hook_event_blocked: ${hookScope(spec)} fired ${frames.length}× but never blocked (exit codes seen: ${frames.map(hookExitCode).join(", ")})${uncountedJson(frames) ?? ""}`,
+    };
+  }
+  return r;
+}
+
+/** `hook_decision`: `{event, decision, tool?, min?, max?}`. `block` is `deny` and `approve` is `allow`, as the agent
+ *  normalises them. */
+function checkHookDecision(
+  spec: { event: string; decision: (typeof HOOK_DECISIONS)[number]; tool?: string; min?: number; max?: number },
+  events: NonNullable<AssertContext["contextEvents"]>,
+): KeyResult {
+  const want: HookDecision = spec.decision === "block" ? "deny" : spec.decision === "approve" ? "allow" : spec.decision;
+  return checkHookCount(
+    "hook_decision",
+    spec,
+    events,
+    (f) => (f.decision === undefined ? undefined : f.decision === want),
+    (n, scope) => `${n} ${scope} hook frame(s) decided ${want}`,
   );
 }
 
@@ -1740,19 +1874,13 @@ function checkNoHookEventBlocked(
 ): KeyResult {
   const fail = (message: string): KeyResult => ({ pass: false, message });
   const o = spec === true ? { event: undefined, tool: undefined } : spec;
-  const { frames, pending, events: seen } = hookFrames(events, o.event, o.tool);
+  const { frames, pending, events: seen, untooled } = hookFrames(events, o.event, o.tool);
+  if (untooled && o.event !== undefined && o.tool !== undefined) return fail(untooledMessage("no_hook_event_blocked", o.event, o.tool));
   const scope = o.event === undefined ? "hook" : `${hookScope(o.event, o.tool)} hook`;
-  const blocked = frames.filter((f) => f.blocking === true);
+  const blocked = frames.filter((f) => blocksVia(f, "any") === true);
   if (blocked.length > 0)
-    return fail(
-      `no_hook_event_blocked: ${blocked
-        .slice(0, 5)
-        .map((f) => `${f.name} (exit ${describeHookFrame(f)})`)
-        .join(
-          ", ",
-        )}${blocked.length > 5 ? `, +${blocked.length - 5} more` : ""} blocked — ${blocked.length} of ${frames.length} ${scope} frame(s)`,
-    );
-  const unreadable = frames.filter((f) => f.blocking === undefined);
+    return fail(`no_hook_event_blocked: ${listHookFrames(blocked)} blocked — ${blocked.length} of ${frames.length} ${scope} frame(s)`);
+  const unreadable = frames.filter((f) => blocksVia(f, "any") === undefined);
   if (unreadable.length > 0 || pending > 0)
     return fail(
       `evidence unavailable: no_hook_event_blocked: ${[
@@ -3172,6 +3300,11 @@ function check(
     if (ctx.contextEvents === undefined)
       results.push(fail(`no_hook_event_blocked: no context events captured (older run / lane without context events) — cannot verify`));
     else results.push(checkNoHookEventBlocked(a.no_hook_event_blocked, ctx.contextEvents));
+  }
+  if (a.hook_decision !== undefined) {
+    if (ctx.contextEvents === undefined)
+      results.push(fail(`hook_decision: no context events captured (older run / lane without context events) — cannot verify`));
+    else results.push(checkHookDecision(a.hook_decision, ctx.contextEvents));
   }
   for (const [key, spec, negative] of [
     ["hook_output_contains", a.hook_output_contains, false],

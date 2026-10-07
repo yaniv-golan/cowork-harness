@@ -235,6 +235,7 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
         "assert.hook_output_not_contains.stream",
         // the object forms of the hook keys (hook_event_blocked's through its union arm)
         "assert.hook_event_blocked.event",
+        "assert.hook_event_blocked.via",
         "assert.no_hook_event_blocked.event",
         "assert.hook_decision.event",
         "assert.hook_decision.decision",

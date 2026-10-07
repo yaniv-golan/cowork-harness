@@ -399,8 +399,9 @@ conversation starts with no memory of the first.
 
 ### Assert a hook's JSON decision
 
-A hook that decides by printing JSON and exiting 0 counts the same as one that exits 2: both deny. Assert the
-decision, and what the agent got back:
+A hook that decides by printing JSON and exiting 0 counts the same as one that exits 2: both deny. The one
+exception is the bare `hook_event_blocked: <event>`, which counts exit code 2 alone; its object form counts both.
+Assert the decision, and what the agent got back:
 
 ```yaml
 assert:

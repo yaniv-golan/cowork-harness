@@ -119,7 +119,7 @@ import { isVmSessionsPath } from "../vm-paths.js";
 /** Upper bound for `record --concurrency`. Above a handful, concurrent runs exhaust Docker's default address
  *  pool (each run creates two networks) and press model API rate limits — both surface as actionable errors. */
 const MAX_RECORD_CONCURRENCY = 8;
-import { evaluate, budgetFields, toolResultEvidence, HOSTLOOP_ONLY_KEYS, type AssertContext } from "../assert.js";
+import { evaluate, budgetFields, toolResultEvidence, readJsonDecision, HOSTLOOP_ONLY_KEYS, type AssertContext } from "../assert.js";
 import {
   planMutationsWithStats,
   summarizeMutationPlan,
@@ -3254,7 +3254,9 @@ function frozenHookResponses(events: string[]): Array<Record<string, unknown> | 
  *     is evidence-unavailable on replay.
  *  Both keys are reported. For `hook_output_not_contains` this is what makes the verdict-divergence check refuse
  *  the write; for `hook_output_contains` a literal hit outside the tokens still passes on replay, so the finding
- *  may be advisory — but a miss or a regex over that stream is not, and the author should hear it once, here. */
+ *  may be advisory — but a miss or a regex over that stream is not, and the author should hear it once, here.
+ *  The keys that read a hook's JSON decision (`hook_decision`, the object `hook_event_blocked` unless `via: exit2`,
+ *  `no_hook_event_blocked`) are named when the policy changed what a frame in scope decided on stdout. */
 export function redactionRewroteHookOutput(base: Cassette, redacted: Cassette): string[] {
   const findings: string[] = [];
   const baseAsserts = (base.scenario?.assert ?? []) as Array<Record<string, unknown>>;
@@ -3291,6 +3293,31 @@ export function redactionRewroteHookOutput(base: Cassette, redacted: Cassette): 
         findings.push(
           `assert[${i}] ${key} on ${String(o.event)}: ${n} \`${String(o.event)}\` hook_response frame${n === 1 ? "" : "s"} ${n === 1 ? "carries" : "carry"} a redaction token in ${stream === "any" ? "stdout or stderr" : stream} — output this check reads, so on the committed cassette a miss there (and any \`matches\` result) can only be reported evidence-unavailable. ` +
             `Ways out: narrow \`stream\` to one the policy leaves alone; use a literal \`text\` that sits outside the redacted span; or accept that this check is live-only`,
+        );
+    }
+    // The keys that read a hook's JSON decision on stdout: frames in scope whose decision the policy made
+    // unreadable (it parsed before and reads as something else, or nothing, after). The exit-2 channel ignores
+    // stdout, so the bare `hook_event_blocked` and `via: exit2` are not named.
+    for (const key of ["hook_decision", "hook_event_blocked", "no_hook_event_blocked"] as const) {
+      const v = a?.[key];
+      if (v === undefined || typeof v === "string" || (key === "hook_event_blocked" && (v as { via?: unknown })?.via === "exit2")) continue;
+      const event = v === true ? undefined : (v as { event?: unknown })?.event;
+      before ??= frozenHookResponses(base.events);
+      after ??= frozenHookResponses(redacted.events);
+      let n = 0;
+      for (let k = 0; k < before.length && k < after.length; k++) {
+        const b = before[k];
+        const r = after[k];
+        if (!b || !r || b.exit_code !== 0 || (event !== undefined && b.hook_event !== event)) continue;
+        const read = (m: Record<string, unknown>) =>
+          typeof m.stdout === "string" ? readJsonDecision(m.stdout, m.hook_event).json : undefined;
+        if (read(b) !== read(r)) n++;
+      }
+      const scope = event === undefined ? "any event" : String(event);
+      if (n)
+        findings.push(
+          `assert[${i}] ${key} on ${scope}: ${n} ${event === undefined ? "" : `\`${scope}\` `}hook_response frame${n === 1 ? "" : "s"} whose JSON decision on stdout the redaction policy made unreadable — on the committed cassette ${n === 1 ? "it counts" : "they count"} as unknown, so this check can be reported evidence-unavailable. ` +
+            `Ways out: keep the hook's stdout out of the policy, or accept that this check is live-only`,
         );
     }
   });
@@ -3522,11 +3549,14 @@ export async function assertRedactionVerdictPreserved(base: Cassette, redacted: 
   // rewrites, centred on offsets that move when it does, and a miss over a tokenised stream is re-labelled
   // evidence-unavailable — so base and redacted messages differ whenever redaction touched that output, with no
   // change to what was graded. A pass flipping to a fail is still refused (the pairs compare above), and
-  // redactionRewroteHookOutput names the downgrade at record time.
+  // redactionRewroteHookOutput names the downgrade at record time. The keys that read a hook's JSON decision
+  // (hook_decision, hook_event_blocked, no_hook_event_blocked) are compared the same way: a decision the policy made
+  // unreadable re-labels a failure evidence-unavailable without changing what was graded.
   // Keyed off the message, not the entry: one `assert:` entry can carry several keys, and only this key's own
   // message is exempt. The entry's position stays in the compared string, so two entries of the same key trading
   // outcomes still differ (both runs evaluate the same scenario, in the same order).
-  const HOOK_OUTPUT_MSG = /^(?:evidence unavailable: )?(hook_output_(?:not_)?contains)(?::|'s) /;
+  const HOOK_OUTPUT_MSG =
+    /^(?:evidence unavailable: )?(hook_output_(?:not_)?contains|hook_decision|hook_event_blocked|no_hook_event_blocked)(?::|'s) /;
   const failedMsgs = (result: RunResult): string[] =>
     result.assertions
       .map((a, i) => ({ a, i }))

@@ -4837,6 +4837,10 @@
       ".assert[].hook_event_blocked<anyOf:1>.tool": {
         "type": "string"
       },
+      ".assert[].hook_event_blocked<anyOf:1>.via": {
+        "type": "string",
+        "enum": ["exit2", "json", "any"]
+      },
       ".assert[].hook_event_fired": {
         "type": "string",
         "enum": [

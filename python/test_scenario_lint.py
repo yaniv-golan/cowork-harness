@@ -1450,6 +1450,8 @@ def test_enum_value_invalid_on_hook_keys_string_and_object_forms(tmp_path):
         "  - hook_event_blocked: Stopp\n"
         "  - hook_event_blocked: {event: Stopp, max: 0}\n"
         "  - hook_event_blocked: {event: Stop, max: 0}\n"
+        "  - hook_event_blocked: {event: Stop, via: stdout}\n"
+        "  - hook_event_blocked: {event: Stop, via: json}\n"
         "  - no_hook_event_blocked: {event: Nope}\n"
         "  - no_hook_event_blocked: true\n"
         "  - hook_decision: {event: PreToolUse, decision: denied}\n"
@@ -1463,6 +1465,7 @@ def test_enum_value_invalid_on_hook_keys_string_and_object_forms(tmp_path):
         [
             "`assert.hook_event_blocked: Stopp` is not a valid value.",
             "`assert.hook_event_blocked.event: Stopp` is not a valid value.",
+            "`assert.hook_event_blocked.via: stdout` is not a valid value.",
             "`assert.no_hook_event_blocked.event: Nope` is not a valid value.",
             "`assert.hook_decision.decision: denied` is not a valid value.",
         ]
