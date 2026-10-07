@@ -347,6 +347,53 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
     // A decision shape the reader does not model is unreadable, never "no decision".
     expect(run({ no_hook_event_blocked: { event: "PermissionRequest" } }, say("maybe")).message).toMatch(UNAVAILABLE);
   });
+  describe("permissionDecision decides only where the agent reads it: PreToolUse and PreModelSwitch", () => {
+    /** Bash's frames renamed to `event`, with `stdout` on the response. */
+    const as = (event: string, stdout: string) => (fs: Frame[]) =>
+      fs.map((f) =>
+        f.hook_name !== "PreToolUse:Bash"
+          ? f
+          : { ...f, hook_event: event, hook_name: `${event}:Bash`, ...(isResponse(f) ? { stdout, output: stdout, exit_code: 0 } : {}) },
+      );
+    const out = (event: string, extra: Record<string, unknown>) =>
+      JSON.stringify({ ...extra, hookSpecificOutput: { hookEventName: event, ...(extra.hookSpecificOutput as object) } });
+    it("Stop: a top-level block still blocks beside a stray permissionDecision allow", () => {
+      const s = out("Stop", { decision: "block", hookSpecificOutput: { permissionDecision: "allow" } });
+      const c = ctx(decisions(withStdout("Stop", s)));
+      expect(run({ no_hook_event_blocked: { event: "Stop" } }, c).pass).toBe(false);
+      expect(run({ hook_event_blocked: { event: "Stop", max: 0 } }, c).pass).toBe(false);
+      expect(run({ hook_decision: { event: "Stop", decision: "allow", max: 0 } }, c).pass).toBe(true);
+    });
+    it("PostToolUse: a permissionDecision deny decides nothing (edited: Bash's frames renamed)", () => {
+      const c = ctx(decisions(as("PostToolUse", out("PostToolUse", { hookSpecificOutput: { permissionDecision: "deny" } }))));
+      expect(run({ hook_decision: { event: "PostToolUse", decision: "deny", max: 0 } }, c).pass).toBe(true);
+      expect(run({ no_hook_event_blocked: { event: "PostToolUse" } }, c).pass).toBe(true);
+      expect(run({ hook_event_blocked: { event: "PostToolUse", max: 0 } }, c).pass).toBe(true);
+    });
+    it("PreModelSwitch: a permissionDecision deny denies (edited: Bash's frames renamed)", () => {
+      const c = ctx(decisions(as("PreModelSwitch", out("PreModelSwitch", { hookSpecificOutput: { permissionDecision: "deny" } }))));
+      expect(run({ hook_decision: { event: "PreModelSwitch", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);
+    });
+  });
+  describe("output the agent's own check rejects is unreadable", () => {
+    for (const [label, stdout] of [
+      [
+        "a top-level decision deny beside a permissionDecision deny",
+        '{"decision":"deny","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}',
+      ],
+      ["a top-level decision ask", '{"decision":"ask"}'],
+      [
+        "a hookSpecificOutput naming another event, beside a block",
+        '{"decision":"block","hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"x"}}',
+      ],
+      ["a hookSpecificOutput with no hookEventName, beside a block", '{"decision":"block","hookSpecificOutput":{"additionalContext":"x"}}'],
+    ] as const)
+      it(label, () => {
+        const c = ctx(decisions(withStdout("PreToolUse:Bash", stdout)));
+        expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1 } }, c).message).toMatch(UNAVAILABLE);
+        expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).message).toMatch(UNAVAILABLE);
+      });
+  });
   it("stdout the agent truncated is unreadable", () => {
     const cut = '{"hookSpecificOutput": {"hookEventName"\nOutput truncated (40KB total)';
     const r = run(

@@ -17,7 +17,10 @@ All notable changes to this project are documented here. The format is based on
 - **`hook_decision: {event, decision, tool?, min?, max?}`** counts a plugin's command hook frames by what the hook
   decided: `allow`, `deny`, `ask` or `defer` (`block` and `approve` are aliases of `deny` and `allow`). It reads both
   ways a hook decides: the JSON it prints on stdout with exit 0, and exit code 2, which is a deny. Only stdout that
-  parses whole as a JSON object counts as a decision, so a hook that prints the word `deny` decides nothing.
+  parses whole as a JSON object counts as a decision, so a hook that prints the word `deny` decides nothing. It
+  applies the JSON as the agent does: `hookSpecificOutput.permissionDecision` decides on `PreToolUse` and
+  `PreModelSwitch` only, where it overrides a top-level `decision`; a `PermissionRequest` hook decides by
+  `hookSpecificOutput.decision.behavior`; any other event decides by the top-level `decision` alone.
 - **`hook_event_blocked` takes a count form, `{event, tool?, via?, min?, max?}`.** It counts the blocking frames for an
   event. `{event, max: 0}` asserts the hook never blocked. `via` picks the channel: `exit2`, `json`, or `any` (the
   default). The bare `hook_event_blocked: <event>` still counts exit code 2 alone. When it fails, it names any JSON
@@ -28,8 +31,9 @@ All notable changes to this project are documented here. The format is based on
   `mcp__workspace__bash` at `hostloop`. An event whose frames carry no tool name, such as `Stop`, reports
   evidence-unavailable for any `tool`.
 - A frame whose decision cannot be read counts as unknown. That covers a missing exit code, a hook that never
-  answered, stdout that a redaction policy rewrote or the agent truncated, and a `hookEventName` naming another
-  event. An unknown frame makes a check evidence-unavailable only when it could change the verdict. `record` warns
+  answered, stdout that a redaction policy rewrote or the agent truncated, and JSON the agent rejects: a top-level
+  `decision` other than `approve` or `block`, or a `hookSpecificOutput` whose `hookEventName` is missing or names
+  another event. An unknown frame makes a check evidence-unavailable only when it could change the verdict. `record` warns
   when its redaction policy makes a hook decision that one of these keys reads unreadable.
 - A cassette whose scenario uses `hook_decision`, `no_hook_event_blocked` or the object form of `hook_event_blocked`
   is stamped v15, so an older build refuses it as too new instead of rejecting the assertion. The bare
@@ -44,6 +48,9 @@ All notable changes to this project are documented here. The format is based on
   "evidence unavailable" instead of "never blocked" or "never fired". When the hook printed a JSON deny, the "never
   blocked" message names it and points to `via: any`. The "never fired" message lists the same causes as
   `hook_event_fired`'s.
+- **The bare `hook_event_blocked: <event>` now gets the hook-attribution warning** that `hook_output_contains` gets:
+  a run warns when a second staged plugin declares a hook for the same event, or when a `protocol` run can see hooks
+  installed on the host, since a frame carries no plugin id. The verdict does not change.
 - **`hook_blocked` and `no_hook_blocked` say what they read:** the harness's own hook callbacks. A plugin's command
   hook never reaches that list, so `no_hook_blocked` passes over a plugin's block. The docs and the companion skill
   now send a plugin hook to `hook_event_blocked`, `no_hook_event_blocked` and `hook_decision`.

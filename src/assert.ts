@@ -1653,11 +1653,18 @@ type HookFrame = {
   decision: HookDecision | undefined;
 };
 
+/** The events whose hook can decide by `hookSpecificOutput.permissionDecision`. The agent ignores the field on every other
+ *  event, where only the top-level `decision` counts. */
+const PERMISSION_DECISION_EVENTS: ReadonlySet<unknown> = new Set(["PreToolUse", "PreModelSwitch"]);
+
 /** The JSON decision on an exit-0 frame's stdout. Only stdout that parses WHOLE as a JSON object decides: stdout is the
- *  hook's ordinary output too, so a word like `deny`, prose, or JSON after other text decides nothing. Read
- *  `hookSpecificOutput.permissionDecision` (its `hookEventName` must name the frame's event, as the agent requires), else
- *  a top-level `decision` (`block` denies, `approve` allows, as the agent normalises them). A PermissionRequest hook
- *  answers with `hookSpecificOutput.decision.behavior`. `continue: false` stops the agent but is not a decision. */
+ *  hook's ordinary output too, so a word like `deny`, prose, or JSON after other text decides nothing. On PreToolUse and
+ *  PreModelSwitch, `hookSpecificOutput.permissionDecision` decides, and overrides a top-level `decision`, as the agent
+ *  applies them; on other events the agent ignores it. A PermissionRequest hook answers with
+ *  `hookSpecificOutput.decision.behavior`. Otherwise the top-level `decision` decides (`block` denies, `approve` allows).
+ *  Output the agent rejects is unreadable, since the reader does not model what the agent does with it: a top-level
+ *  `decision` other than `approve`/`block`, or a `hookSpecificOutput` whose `hookEventName` does not name the frame's
+ *  event. `continue: false` stops the agent but is not a decision. */
 export function readJsonDecision(stdout: string, event: unknown): { json: HookDecision | undefined; token?: string } {
   const text = stdout.trim();
   if (text === "") return { json: "none" };
@@ -1669,23 +1676,24 @@ export function readJsonDecision(stdout: string, event: unknown): { json: HookDe
   }
   if (v === null || typeof v !== "object" || Array.isArray(v)) return { json: "none" };
   const o = v as Record<string, unknown>;
+  // A redaction token where the decision was: whatever it said is gone. Any other value fails the agent's check.
+  if (o.decision !== undefined && o.decision !== "approve" && o.decision !== "block") return { json: undefined };
   const hso = o.hookSpecificOutput;
-  // PermissionRequest answers with `decision: {behavior: "allow" | "deny"}` (the agent's own validation message).
-  if (hso !== null && typeof hso === "object" && !Array.isArray(hso) && "decision" in hso) {
+  if (hso !== undefined) {
+    if (hso === null || typeof hso !== "object" || Array.isArray(hso)) return { json: undefined };
     const h = hso as Record<string, unknown>;
     if (h.hookEventName !== event) return { json: undefined };
-    const d = h.decision as { behavior?: unknown } | null;
-    const behavior = d !== null && typeof d === "object" ? d.behavior : undefined;
-    return behavior === "allow" || behavior === "deny" ? { json: behavior, token: `behavior ${behavior}` } : { json: undefined };
+    // PermissionRequest answers with `decision: {behavior: "allow" | "deny"}` (the agent's own validation message).
+    if (event === "PermissionRequest" && "decision" in h) {
+      const d = h.decision as { behavior?: unknown } | null;
+      const behavior = d !== null && typeof d === "object" ? d.behavior : undefined;
+      return behavior === "allow" || behavior === "deny" ? { json: behavior, token: `behavior ${behavior}` } : { json: undefined };
+    }
+    if (PERMISSION_DECISION_EVENTS.has(event) && "permissionDecision" in h) {
+      const pd = h.permissionDecision;
+      return typeof pd === "string" && PERMISSION_DECISIONS.has(pd) ? { json: pd as HookDecision, token: pd } : { json: undefined };
+    }
   }
-  if (hso !== null && typeof hso === "object" && !Array.isArray(hso) && "permissionDecision" in hso) {
-    const h = hso as Record<string, unknown>;
-    if (h.hookEventName !== event) return { json: undefined };
-    const pd = h.permissionDecision;
-    return typeof pd === "string" && PERMISSION_DECISIONS.has(pd) ? { json: pd as HookDecision, token: pd } : { json: undefined };
-  }
-  // A redaction token where the decision was: whatever it said is gone.
-  if (typeof o.decision === "string" && hasRedactionToken(o.decision)) return { json: undefined };
   if (o.decision === "block") return { json: "deny", token: "block" };
   if (o.decision === "approve") return { json: "allow", token: "approve" };
   return { json: "none" };
