@@ -12,6 +12,14 @@ All notable changes to this project are documented here. The format is based on
   `assertion-catalog-outcome-files-tools.md`, `assertion-catalog-agents-skills-budgets.md` and
   `assertion-catalog-gates-hooks-modifiers.md`. The catalog was close to the size one Read returns whole, and each
   new assertion key grows it. The rows are moved unchanged. No harness behaviour changes.
+- **`latest` moves to `desktop-2.26454.2`** (agent **2.1.293**, was 2.1.289). Its `sync` reported no unknown deltas:
+  the Cowork system prompt, the sub-agent append, the egress contract, the first-party spawn env and the cloud tool
+  surface are unchanged from `desktop-2.26454.0`. The agent was staged from a release-candidate channel, so the CI
+  recipe's download base (`B=`) now names it; the stable path serves the same bytes for this version.
+  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.26454.0 → 2.26454.2 since
+    record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it; a
+    re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on
+    2.1.293.
 
 ## [4.5.0] — 2026-10-07
 
