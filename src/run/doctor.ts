@@ -166,11 +166,15 @@ export interface DoctorProbe {
  *  newest baseline pins. Never changes the check's status, and names versions only, never a path. */
 export function laneSupplyClause(staged: { version: string | null; elfExists: boolean }, pin: string | undefined): string {
   const lane = "this harness models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06";
+  const v = staged.version;
+  // "staged agent X" only when its ELF is on disk; otherwise Desktop merely names X in .sdk-version.
+  const what = v && staged.elfExists ? `Desktop staged agent ${v}` : `Desktop names agent ${v} (no ELF on disk)`;
   let supply: string;
-  if (!staged.version) supply = "no staged VM agent found";
-  else if (pin && cmpVersionStrings(staged.version, pin) > 0)
-    supply = `Desktop staged agent ${staged.version}, newer than the pinned ${pin}: run \`cowork-harness sync\``;
-  else if (pin && staged.version === pin && staged.elfExists) supply = `agent ${pin} staged and pinned`;
+  if (!v) supply = "no staged VM agent found";
+  else if (pin && cmpVersionStrings(v, pin) > 0)
+    supply = `${what}, newer than the pinned ${pin}: upgrade cowork-harness, or run \`cowork-harness sync\` if you maintain the baseline`;
+  else if (pin && cmpVersionStrings(v, pin) < 0) supply = `this Desktop is older than the pinned agent: ${what}, the baseline pins ${pin}`;
+  else if (pin && staged.elfExists) supply = `agent ${pin} staged and pinned`;
   else
     supply = `agent ${pin ?? "(unpinned)"} not staged by this Desktop (staging may be withheld by server policy, or no task has booted the VM since an update)`;
   return `${supply}; ${lane}`;

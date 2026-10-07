@@ -61,7 +61,7 @@ reproduces it and none can — that container is not something a local tool can 
 before then no setting reliably decided the lane. Check the session's own lane
 ([how](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)).
 So: behaviour conclusions (triggering, tool sequencing, gate handling) travel between lanes; anything
-asserting a **path, mount or delivery mechanism** is a claim about the local lane only. Declare
+asserting a **path, mount, delivery mechanism or egress rule** is a claim about the local lane only. Declare
 `lane: remote` when the scenario is about that lane — the affected assertions then refuse to grade
 rather than passing (see the `delivery_unobservable` WARN and the `lane: remote` load-time rejections
 in `run-record-replay.md`).

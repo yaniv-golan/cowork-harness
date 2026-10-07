@@ -44,19 +44,29 @@ describe("laneSupplyClause", () => {
   it("staged = pin, ELF present → staged and pinned", () => {
     expect(laneSupplyClause({ version: "2.1.288", elfExists: true }, "2.1.288")).toBe(`agent 2.1.288 staged and pinned; ${LANE}`);
   });
-  it("staged > pin → run sync (numeric compare: 2.1.300 > 2.1.288)", () => {
+  it("staged > pin → upgrade, or sync if you maintain the baseline", () => {
     expect(laneSupplyClause({ version: "2.1.300", elfExists: true }, "2.1.288")).toBe(
-      `Desktop staged agent 2.1.300, newer than the pinned 2.1.288: run \`cowork-harness sync\`; ${LANE}`,
+      `Desktop staged agent 2.1.300, newer than the pinned 2.1.288: upgrade cowork-harness, or run \`cowork-harness sync\` if you maintain the baseline; ${LANE}`,
     );
+  });
+  it("never says 'staged agent X' when X's ELF is absent", () => {
+    const c = laneSupplyClause({ version: "2.1.300", elfExists: false }, "2.1.288");
+    expect(c).toMatch(/^Desktop names agent 2\.1\.300 \(no ELF on disk\), newer than the pinned 2\.1\.288/);
+    expect(c).not.toContain("staged agent 2.1.300");
   });
   it("the compare is numeric, not lexical: 2.1.1000 is newer than 2.1.288, 2.1.99 is older", () => {
     expect(laneSupplyClause({ version: "2.1.1000", elfExists: true }, "2.1.288")).toMatch(/^Desktop staged agent 2\.1\.1000, newer than/);
-    expect(laneSupplyClause({ version: "2.1.99", elfExists: true }, "2.1.288")).toMatch(/^agent 2\.1\.288 not staged/);
+    expect(laneSupplyClause({ version: "2.1.99", elfExists: true }, "2.1.288")).toMatch(/^this Desktop is older than the pinned agent/);
   });
-  it("staged < pin, or = pin with the ELF missing → not staged, may be withheld", () => {
-    const notStaged = `agent 2.1.288 not staged by this Desktop (staging may be withheld by server policy, or no task has booted the VM since an update); ${LANE}`;
-    expect(laneSupplyClause({ version: "2.1.286", elfExists: true }, "2.1.288")).toBe(notStaged);
-    expect(laneSupplyClause({ version: "2.1.288", elfExists: false }, "2.1.288")).toBe(notStaged);
+  it("staged < pin → this Desktop is older than the pinned agent", () => {
+    expect(laneSupplyClause({ version: "2.1.286", elfExists: true }, "2.1.288")).toBe(
+      `this Desktop is older than the pinned agent: Desktop staged agent 2.1.286, the baseline pins 2.1.288; ${LANE}`,
+    );
+  });
+  it("= pin with the ELF missing → not staged, may be withheld", () => {
+    expect(laneSupplyClause({ version: "2.1.288", elfExists: false }, "2.1.288")).toBe(
+      `agent 2.1.288 not staged by this Desktop (staging may be withheld by server policy, or no task has booted the VM since an update); ${LANE}`,
+    );
   });
   it("no .sdk-version → no staged VM agent found", () => {
     expect(laneSupplyClause({ version: null, elfExists: false }, "2.1.288")).toBe(`no staged VM agent found; ${LANE}`);

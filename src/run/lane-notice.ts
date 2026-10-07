@@ -9,10 +9,12 @@
 
 import type { Assertion } from "../types.js";
 
-/** Assertion keys whose result depends on the run's ENVIRONMENT (paths, mounts, delivery, egress) rather than
- *  on the agent's behaviour. ONE list: the `lane: remote` load-time refusal (execute.ts) types its keys against
- *  it, and test/lane-notice.test.ts holds every `lane === "remote"` branch in assert.ts to it, so the notice
- *  and the remote-lane degradations cannot drift apart. */
+/** Assertion keys whose result depends on the run's ENVIRONMENT (paths, mounts, delivery, egress, the host loop's
+ *  path boundary) rather than on the agent's behaviour. The `lane: remote` code is CROSS-CHECKED against it, not
+ *  derived from it: execute.ts types its load-time refusal list against this one (a key outside it fails to
+ *  compile), and test/lane-notice.test.ts requires the key of every `lane === "remote"` branch in assert.ts to be
+ *  in it. Not every key here has a remote branch (`artifact_json` reads a file by path, as `artifact_text` does,
+ *  but has none). */
 export const ENVIRONMENT_SHAPED_ASSERT_KEYS = [
   "artifact_json",
   "artifact_text",
@@ -23,13 +25,18 @@ export const ENVIRONMENT_SHAPED_ASSERT_KEYS = [
   "file_absent",
   "file_exists",
   "input_unmodified",
+  "no_path_denied",
   "no_delete_in_mounts",
   "no_delete_in_outputs",
   "no_scratchpad_leak",
   "no_unexpected_files",
+  "no_vm_path_file_op",
+  "path_denied",
   "present_files_called",
+  "self_heal_ran",
   "transcript_no_host_path",
   "user_visible_artifact",
+  "vm_path_denied",
 ] as const satisfies readonly (keyof Assertion)[];
 export type EnvironmentShapedAssertKey = (typeof ENVIRONMENT_SHAPED_ASSERT_KEYS)[number];
 
