@@ -46,7 +46,7 @@ records the tool surface Desktop serves to a cloud session. No result field or c
   Pro and Max tasks do not use from 2026-10-06. A live `lane: local` run with at least one environment-shaped
   assertion (a path, mount, delivery or egress key: `file_exists`, `file_absent`, `user_visible_artifact`,
   `artifact_text`/`artifact_json`, `present_files_called`, `computer_links_resolve*`, `no_scratchpad_leak`,
-  `transcript_no_host_path`, `no_delete_in_*`, `input_unmodified`, `no_unexpected_files`, `egress_*`, and the host loop's path-boundary keys `path_denied`, `no_path_denied`, `vm_path_denied`, `no_vm_path_file_op`, `self_heal_ran`) prints one line
+  `transcript_no_host_path`, `no_delete_in_*`, `input_unmodified`, `no_unexpected_files`, `egress_*` or `expect_denied`, and the host loop's path-boundary keys `path_denied`, `no_path_denied`, `vm_path_denied`, `no_vm_path_file_op`, `self_heal_ran`) prints one line
   saying so, at most once per process; `chat` prints it once at session start. `--compact`, `--demo`, `CI` and the
   new `COWORK_HARNESS_NO_LANE_NOTICE=1` silence it. Stderr only: no result field, cassette or exit code changes.
 - **`sync` records what Desktop serves to a cloud Cowork session, in a new top-level `cloud` block.** It holds the
@@ -94,7 +94,7 @@ records the tool surface Desktop serves to a cloud session. No result field or c
 - **`doctor`'s staged-agent check says what Desktop has staged against what the baseline pins.** Its detail ends
   with one of: the agent is staged and pinned; Desktop staged a newer agent (upgrade cowork-harness, or run
   `cowork-harness sync` if you maintain the baseline); this Desktop is older than the pinned agent; the pinned agent is
-  not staged (staging may be withheld, or no task has booted the VM since an update); or no staged VM agent was found. Each ends with the local-lane note above. It names versions only, never a path, and never changes the
+  not staged (staging may be withheld, or no task has booted the VM since an update); no staged VM agent was found; or, with no baseline pin, the staged agent alone. Each ends with the local-lane note above. It names versions only, never a path, and never changes the
   check's status. It is left out under a `COWORK_AGENT_BINARY` override and off macOS.
 - **The docs and the companion skill state the lane by date.** Every tier models Cowork's local lane; from 2026-10-06
   new Pro and Max tasks run in the cloud, and before then no setting reliably decided the lane. The selector
