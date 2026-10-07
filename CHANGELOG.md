@@ -11,7 +11,8 @@ All notable changes to this project are documented here. The format is based on
 From 2026-10-06 new Pro and Max tasks run in the cloud, and every tier of this harness models Cowork's local lane.
 This release says so where it changes how a result reads: a one-line `[lane]` notice on runs with environment-shaped
 assertions, a lane and agent-supply clause in `doctor`, and date-based wording across the docs and the companion
-skill. It also moves `latest` to `desktop-2.19675.1` (agent 2.1.288) and adds the baseline `cloud` block, which
+skill. It also moves `latest` to `desktop-2.26454.0` (agent 2.1.289; `desktop-2.19675.1` is added too), keeps three
+more Desktop-owned keys from your shell out of the agent's environment, and adds the baseline `cloud` block, which
 records the tool surface Desktop serves to a cloud session. No result field or cassette format changes.
 
 ### Security
