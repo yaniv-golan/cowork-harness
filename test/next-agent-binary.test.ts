@@ -72,6 +72,16 @@ describe("buildNextAgentBinary — the fields sync re-derives are never carried 
     });
     expect(withSha).toMatchObject({ sha256: "new", shaProvenance: "measured-local", manifestChecksumMatch: "unknown" });
   });
+
+  // `answer_channel: none` is refused on a baseline without `cliCapabilities`, so a sync that dropped it would refuse
+  // the key on the next `latest`; one that carried the base's across an agent bump would vouch for an unmeasured agent.
+  it("writes the measured cliCapabilities, and never carries the base's when this sync measured none", () => {
+    const withCaps = { ...base, cliCapabilities: { permissionPrompts: true } };
+    const measured = buildNextAgentBinary(withCaps, { ...derived(null, null), cliCapabilities: { permissionPrompts: false } });
+    expect(JSON.parse(JSON.stringify(measured)).cliCapabilities).toEqual({ permissionPrompts: false });
+    const unmeasured = buildNextAgentBinary(withCaps, derived(null, null));
+    expect(JSON.parse(JSON.stringify(unmeasured))).not.toHaveProperty("cliCapabilities");
+  });
 });
 
 // The helper is only a guarantee if cmdSync uses it. Going back to a hand-written `{...baseAgentBinary, …}` would make a
@@ -85,4 +95,11 @@ describe("cmdSync builds the next agentBinary through buildNextAgentBinary", () 
   it("calls buildNextAgentBinary(baseAgentBinary, …) for nextAgentBinary", () =>
     expect(body).toMatch(/const nextAgentBinary = buildNextAgentBinary\(baseAgentBinary,/));
   it("has no hand-written spread of the base agentBinary", () => expect(body).not.toContain("...baseAgentBinary"));
+  // The staged ELF is measured in the same branch that hashes it, and the result reaches the next agentBinary.
+  it("measures cliCapabilities from the staged ELF and passes it on", () => {
+    const measuredBranch = body.slice(body.indexOf("if (existsSync(resolvedDerived)) {"), body.indexOf("} else if (officialElfChecksum"));
+    expect(measuredBranch).toContain("cliCapabilities = cliCapabilitiesOfFile(resolvedDerived);");
+    const call = body.slice(body.indexOf("const nextAgentBinary = buildNextAgentBinary("));
+    expect(call.slice(0, call.indexOf("});"))).toMatch(/\bcliCapabilities,/);
+  });
 });
