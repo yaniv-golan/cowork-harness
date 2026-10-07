@@ -1382,7 +1382,8 @@ Real Cowork always has an answer channel: every question and permission prompt r
 `answer_channel: none` removes it, to model a headless host's contract (nobody answers), and is therefore a
 deliberate departure from Cowork. Every surface labels such a run `[headless, no answer channel — not Cowork]`, and
 `stats` never pools it with a default-channel run of the same scenario. It keeps Cowork's spawn otherwise, except that
-the agent then stops offering `AskUserQuestion`, so the model asks in prose. It is also not an emulation of any
+the flag also removes `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` from the agent's toolset, so the model
+asks in prose. It is also not an emulation of any
 particular headless product. See [headless-no-answer.md](./headless-no-answer.md).
 
 ## Auto-mode permission rubric is not modeled

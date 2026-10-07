@@ -66,7 +66,8 @@ All notable changes to this project are documented here. The format is based on
   requires `permission_mode: bypassPermissions` and at least one file assertion, and it refuses at load every input
   that assumes a channel (`answers:`, `on_unanswered` and the decider flags, `permission_parity: strict`,
   `web_fetch.approved_domains`, the gate assertion keys including `gates_all_scripted`, `tool_called` naming `AskUserQuestion`), the host loop and
-  `lane: remote`. Under the flag the agent also stops offering `AskUserQuestion`, so the model asks in prose. A run that
+  `lane: remote`. The flag also removes `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` from the agent's toolset, so the
+  model asks in prose. A run that
   would otherwise be the `stalled` fail gets the new `parked_at_question` warning instead; a request that reaches the harness anyway is refused and ends the run with the new `errorSource`
   `answer_channel_violation`. Such runs are labelled `[headless, no answer channel — not Cowork]`, carry
   `RunResult.answerChannel: "none"`, and form their own `stats` group. A recording made with it stamps cassette v15,

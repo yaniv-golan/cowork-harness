@@ -13,9 +13,9 @@ surface says so: the run banner, the footer and `stats` label the run
 
 The agent is spawned with `--permission-prompts none` in place of `--permission-prompt-tool stdio`. With
 it, the agent itself denies anything that would prompt (questions, permission asks, MCP elicitations), and
-nothing reaches the harness. The agent also leaves `AskUserQuestion` out of the tools it offers the model
-(observed on agent 2.1.293), so the model has no question tool to call. Everything else about the spawn — the
-rest of the toolset, the system prompt, the mounts, the egress allowlist — is unchanged, so the delivery,
+nothing reaches the harness. The flag also removes `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` from
+the tools the agent offers the model (agent 2.1.293, the same in every permission mode), so the model has no
+question tool to call. Everything else about the spawn — the rest of the toolset, the system prompt, the mounts, the egress allowlist — is unchanged, so the delivery,
 egress, file and transcript assertions still grade real behaviour.
 
 - **A run ends `success` whether or not the skill finished.** Completion is judged from the files the
