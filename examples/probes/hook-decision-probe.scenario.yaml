@@ -12,6 +12,8 @@ name: hook-decision-probe
 baseline: latest
 session: ../sessions/hook-decision-probe.yaml
 fidelity: container
+# A hard wall-clock budget (the recorded run took 13 s) and, below, a cost ceiling the run is graded against.
+timeout_ms: 180000
 prompt: |
   Check the shell works by running `echo ready` with the Bash tool, then save a note saying "ready" to a file
   named note.txt in the outputs folder with the Write tool. If a step is blocked, don't ask me what to do: go on
@@ -29,3 +31,4 @@ assert:
   - hook_event_blocked: PreToolUse                                                     # the bare form: exit 2 alone
   - hook_event_blocked: { event: PreToolUse, via: json, tool: Bash, min: 1, max: 1 }
   - hook_event_blocked: { event: Stop, via: exit2, max: 0 }                            # Stop never exited 2
+  - max_cost_usd: 0.25                                                                 # the recorded run cost $0.066
