@@ -288,6 +288,41 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
     expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, c).pass).toBe(true);
     expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, c).pass).toBe(true);
   });
+  it("a frame with no stdout field is unreadable: `output` joins stdout and stderr, so it is never read as the decision", () => {
+    const outputOnly = (fs: Frame[]) =>
+      fs.map((f) => {
+        if (!isResponse(f) || f.hook_name !== "PreToolUse:Bash") return f;
+        const { stdout: _drop, ...rest } = f;
+        return { ...rest, output: '{"decision":"block"}\nwarning: x' };
+      });
+    const c = ctx(decisions(outputOnly));
+    expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).message).toMatch(UNAVAILABLE);
+    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, c).message).toMatch(UNAVAILABLE);
+  });
+  it("a PermissionRequest hook decides by hookSpecificOutput.decision.behavior (edited: Bash's frames renamed)", () => {
+    const asPermissionRequest = (stdout: string) => (fs: Frame[]) =>
+      fs.map((f) =>
+        f.hook_name !== "PreToolUse:Bash"
+          ? f
+          : {
+              ...f,
+              hook_event: "PermissionRequest",
+              hook_name: "PermissionRequest:Bash",
+              ...(isResponse(f) ? { stdout, output: stdout } : {}),
+            },
+      );
+    const say = (behavior: string) =>
+      ctx(
+        decisions(
+          asPermissionRequest(JSON.stringify({ hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior } } })),
+        ),
+      );
+    expect(run({ hook_decision: { event: "PermissionRequest", decision: "deny", min: 1, max: 1 } }, say("deny")).pass).toBe(true);
+    expect(run({ no_hook_event_blocked: { event: "PermissionRequest" } }, say("deny")).pass).toBe(false);
+    expect(run({ hook_decision: { event: "PermissionRequest", decision: "allow", min: 1, max: 1 } }, say("allow")).pass).toBe(true);
+    // A decision shape the reader does not model is unreadable, never "no decision".
+    expect(run({ no_hook_event_blocked: { event: "PermissionRequest" } }, say("maybe")).message).toMatch(UNAVAILABLE);
+  });
   it("stdout the agent truncated is unreadable", () => {
     const cut = '{"hookSpecificOutput": {"hookEventName"\nOutput truncated (40KB total)';
     const r = run(
