@@ -4,7 +4,12 @@ import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
 import { AnswerRule, Assertion, Scenario, ScenarioObject, VERDICT_MODIFIER_KEYS, FIDELITY_TIERS } from "../src/types.js";
-import { SERVED_HOOK_EVENTS, KNOWN_HOOK_EVENTS, LIVE_VERIFIED_PLUGIN_HOOK_EVENTS } from "../src/agent/session.js";
+import {
+  SERVED_HOOK_EVENTS,
+  KNOWN_HOOK_EVENTS,
+  LIVE_VERIFIED_PLUGIN_HOOK_EVENTS,
+  LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS,
+} from "../src/agent/session.js";
 
 const SCENARIO_PY = resolve(".claude/skills/cowork-harness/scripts/scenario.py");
 const PY = process.env.PYTHON ?? "python3";
@@ -202,6 +207,16 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
     const gen = JSON.parse(buildAssertionKeys()).liveVerifiedHookEvents as string[];
     expect([...gen].sort()).toEqual([...LIVE_VERIFIED_PLUGIN_HOOK_EVENTS].sort());
     expect(KNOWN_HOOK_EVENTS).toEqual(expect.arrayContaining(gen));
+  });
+  it("liveVerifiedHookEventTiers names, for each live-verified event, the tiers it was observed at", () => {
+    const tiers = JSON.parse(buildAssertionKeys()).liveVerifiedHookEventTiers as Record<string, string[]>;
+    expect(Object.keys(tiers).sort()).toEqual([...LIVE_VERIFIED_PLUGIN_HOOK_EVENTS].sort());
+    expect(tiers).toEqual(LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS);
+    for (const t of Object.values(tiers)) expect(t.length).toBeGreaterThan(0);
+  });
+  it.skipIf(!HAVE_PY)("scenario.py _FALLBACK_LIVE_VERIFIED_HOOK_EVENT_TIERS equals the generated liveVerifiedHookEventTiers", () => {
+    const gen = JSON.parse(buildAssertionKeys()).liveVerifiedHookEventTiers as Record<string, string[]>;
+    expect(pyDict("_FALLBACK_LIVE_VERIFIED_HOOK_EVENT_TIERS")).toEqual(gen);
   });
   it.skipIf(!HAVE_PY)("scenario.py _FALLBACK_LIVE_VERIFIED_HOOK_EVENTS equals the generated liveVerifiedHookEvents", () => {
     const gen = (JSON.parse(buildAssertionKeys()).liveVerifiedHookEvents as string[]).slice().sort();

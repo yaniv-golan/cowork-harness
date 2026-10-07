@@ -2438,3 +2438,21 @@ def test_slash_skill_quiet_when_session_unreadable(tmp_path, session):
         encoding="utf-8",
     )
     assert [x for x in scenario.lint_file(str(f)) if x.rule == _SLASH_RULE] == []
+
+
+def test_hook_event_not_served_names_the_tiers_each_event_was_verified_at(tmp_path):
+    # Each live-verified event says where it was observed firing, not a blanket "container and hostloop":
+    # Stop and PreToolUse were recorded at container only.
+    hooks = tmp_path / "plug" / "hooks"
+    hooks.mkdir(parents=True)
+    f = hooks / "hooks.json"
+    f.write_text(json.dumps({"hooks": {"Stop": [], "PostToolUse": [], "TaskCreated": []}}), encoding="utf-8")
+    msgs = {
+        x.message.split("`")[1]: x.message
+        for x in scenario._lint_hook_events(str(f))
+        if x.rule == "hook-event-not-served"
+    }
+    assert "live-verified at `container`)" in msgs["Stop"]
+    assert "hostloop" not in msgs["Stop"]
+    assert "live-verified at `container` and `hostloop`)" in msgs["PostToolUse"]
+    assert "has not been verified here" in msgs["TaskCreated"]
