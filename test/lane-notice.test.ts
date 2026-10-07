@@ -20,6 +20,10 @@ describe("laneNoticeApplies — the matrix", () => {
   it("a default run with a file_exists assert → yes", () => {
     expect(laneNoticeApplies(sc([{ file_exists: "outputs/a.md" }]), { env: env() })).toBe(true);
   });
+  it("expect_denied alone (egress, expanded after the notice) → yes", () => {
+    expect(laneNoticeApplies({ ...sc([{ transcript_contains: "x" }]), expect_denied: ["example.com"] }, { env: env() })).toBe(true);
+    expect(laneNoticeApplies({ ...sc([{ transcript_contains: "x" }]), expect_denied: [] }, { env: env() })).toBe(false);
+  });
   it("only behaviour-shaped asserts (transcript_contains) → no", () => {
     expect(laneNoticeApplies(sc([{ transcript_contains: "x" }]), { env: env() })).toBe(false);
   });

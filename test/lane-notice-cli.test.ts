@@ -18,6 +18,11 @@ beforeAll(() => {
     writeFileSync(join(dir, `${name}.yaml`), `name: ${name}\nfidelity: protocol\nsession: sessions/s.yaml\nprompt: hi\nassert:\n${assert}`);
   scenario("env", "  - file_exists: outputs/a.md\n");
   scenario("behaviour", "  - transcript_contains: hi\n");
+  // `expect_denied` is egress, expanded into `egress_denied` asserts only after the notice would print.
+  writeFileSync(
+    join(dir, "denied.yaml"),
+    "name: denied\nfidelity: container\nsession: sessions/s.yaml\nprompt: hi\nexpect_denied: [example.com]\nassert:\n  - transcript_contains: hi\n",
+  );
   mkdirSync(join(dir, "sk"));
   writeFileSync(join(dir, "sk", "SKILL.md"), "---\nname: sk\ndescription: a stub skill\n---\nbody\n");
 });
@@ -36,6 +41,9 @@ const count = (out: string) => out.split(NOTICE).length - 1;
 describe.runIf(existsSync(CLI))("the [lane] notice from the built CLI", () => {
   it("a default run of an environment-shaped scenario prints it once", () => {
     expect(count(cli(["run", "env.yaml"]))).toBe(1);
+  });
+  it("a run whose only environment-shaped check is expect_denied prints it once", () => {
+    expect(count(cli(["run", "denied.yaml"]))).toBe(1);
   });
   it("a run with only behaviour-shaped asserts does not", () => {
     expect(count(cli(["run", "behaviour.yaml"]))).toBe(0);

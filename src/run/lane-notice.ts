@@ -56,11 +56,17 @@ const silenced = (env: NodeJS.ProcessEnv) => !!env.CI || !!env[LANE_NOTICE_ENV];
 
 /** Whether a run of `scenario` gets the notice. Pure; the once-per-process latch is `maybePrintLaneNotice`. */
 export function laneNoticeApplies(
-  scenario: { lane?: "local" | "remote"; assert: readonly Partial<Record<string, unknown>>[] },
+  scenario: {
+    lane?: "local" | "remote";
+    assert: readonly Partial<Record<string, unknown>>[];
+    expect_denied?: readonly unknown[];
+  },
   opts: NoticeOpts = {},
 ): boolean {
   const env = opts.env ?? process.env;
   if ((scenario.lane ?? "local") !== "local" || opts.compact || silenced(env)) return false;
+  // `expect_denied` is egress: execute.ts expands it into `egress_denied` asserts after this notice prints.
+  if ((scenario.expect_denied?.length ?? 0) > 0) return true;
   return scenario.assert.some((a) => ENVIRONMENT_SHAPED_ASSERT_KEYS.some((k) => a[k] !== undefined));
 }
 
