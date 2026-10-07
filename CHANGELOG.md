@@ -102,10 +102,12 @@ All notable changes to this project are documented here. The format is based on
     `replay` grades the same files as the live run. Uploaded inputs are not matched, and a glob that can reach no
     user-visible root (an `uploads/` glob, say) fails and says why.
   - **Failures:** zero matches fail, naming the glob and what the nearest directory holds. More than 200 matches,
-    a walk that couldn't see the whole tree, a symlink or hardlink match, or a match with no readable body is
-    evidence-unavailable. The message lists the files that passed, failed and couldn't be evaluated.
+    a walk that couldn't see the whole tree, a link (a symlink or hardlink match, a symlinked directory on the
+    glob's path, or one where a match could be), or a match with no readable body is evidence-unavailable. The message lists the files that passed, failed and couldn't be evaluated.
   - **`authored: true`** applies to each match.
-  - **At `record`,** a match stored hash-only over the body cap is refused, as for a literal path.
+  - **At `record`,** a match stored hash-only over the body cap is refused, as for a literal path, and so is an
+    artifact walk that couldn't see the whole tree.
+  - **A glob ending in `/`** is a load error and a `lint` error.
   - **`workspace_fixture`:** a glob that matches a fixture file needs `authored:`, as a literal path does.
 
 ## [4.5.0] — 2026-10-07

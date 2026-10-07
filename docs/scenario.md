@@ -910,15 +910,19 @@ without one:
   - more than 200 files match;
   - the walk can't see the whole tree (deeper than 32 levels, over 20,000 entries, or an unreadable or escaping
     subtree);
-  - a match is a **symlink or hardlink**. A literal `artifact` follows an in-root symlink on a live run, but a
-    glob refuses it on both lanes, because a cassette holds no body for a link;
-  - a match has no readable body (over the body cap, or a read-only input).
+  - a match is a **symlink or hardlink**, a directory on the glob's literal path is a symlink, or a symlinked
+    directory sits where a match could be (a linked run directory under `runs/*`). A literal `artifact` follows an
+    in-root symlink on a live run, but a glob refuses links on both lanes, because a cassette records the link,
+    not what it points to;
+  - a match has no readable body (over the body cap, unreadable, or a read-only input).
   Under `each`, a match that plainly fails decides the verdict whatever else is unknown. Under `any`, one passing
   match decides it.
 - The failure message lists the matched files that passed, failed and couldn't be evaluated.
 - `authored: true` applies to each matched file.
 - At `record`, a match stored hash-only because it is over the body cap is refused like a literal one: it would
-  pass the live run and fail `replay`.
+  pass the live run and fail `replay`. So is a recording whose artifact walk couldn't see the whole tree, since
+  the cassette would hold only what was seen. Under `--allow-failing` both are warnings.
+- A glob ends with a file pattern: one ending in `/` is a load error.
 
 > **`is_null: false` requires the path to be present.** If the path is absent, `is_null: false` fails loud
 > (rather than vacuously passing). To assert "exists and is not null" write `exists: true` on one line and

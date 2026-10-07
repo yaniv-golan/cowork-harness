@@ -240,7 +240,7 @@ cowork-harness lint scenarios/*.yaml
 | `container-only-key-off-container` | ERROR | `no_scratchpad_leak` off `container` — hostloop's `present_files` never promotes, so there is nothing to leak (WARN on `cowork`, whose tier resolves per the baseline gate) |
 | `egress-on-protocol` | ERROR | an egress assertion (`egress_*` / `expect_denied`) on `protocol`, which enforces no egress |
 | `enum-value-invalid` | ERROR | a field value outside its allowed set |
-| `artifact-json-match` | ERROR | an `artifact_json` glob `artifact` (with `*` or `?`) with no `match`, or a literal one that sets `match` |
+| `artifact-json-match` | ERROR | an `artifact_json` glob `artifact` (with `*` or `?`) with no `match` or ending in `/`, or a literal one that sets `match` |
 | `fidelity-missing` | ERROR | no `fidelity:` (required since 4.0.0) |
 | `file-absent-contradiction` | ERROR | one path under both `file_exists` and `file_absent` |
 | `gate-needs-controlout` | INFO | gate assertions, which evaluate on replay only when the cassette has `controlOut` |
