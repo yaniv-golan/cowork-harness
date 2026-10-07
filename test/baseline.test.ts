@@ -1834,6 +1834,22 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       expect(guarded.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
       expect(guarded.env).toEqual(EXPECTED_GREEN);
     });
+    it("deriveSpawnEnv: an imported object under an ON gate follows the gate and auto-pins, as an inline gate spread does", () => {
+      const on = derive(withQ('...At("714014285")&&q.K,', '{API_TIMEOUT_MS:"5"}'));
+      expect(on.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(on.env).toEqual({ ...EXPECTED_GREEN, API_TIMEOUT_MS: "5" });
+    });
+    it("deriveSpawnEnv: a bare spread whose namespace is not a require() binding is not applied from a same-chunk export", () => {
+      const f = filesOf({
+        spawn:
+          spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + "...h.K,") +
+          ';var k={API_TIMEOUT_MS:"5"};' +
+          Q('{API_TIMEOUT_MS:"5"}').slice(Q('{API_TIMEOUT_MS:"5"}').indexOf("Object.")),
+      });
+      const r = derive(f);
+      expect(r.flags.filter((x) => !x.startsWith("NOTE:"))).toEqual([]);
+      expect(r.env).toEqual(EXPECTED_GREEN);
+    });
     it("deriveSpawnEnv: the guarded spread's object no longer resolvable → hard fail, not a silent drop", () => {
       const { env, flags } = derive(filesOf({ mod: MOD.replace('exports,"J"', 'exports,"Jgone"') }));
       expect(env).toBeNull();

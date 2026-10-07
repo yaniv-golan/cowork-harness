@@ -4048,10 +4048,11 @@ export function deriveSpawnEnv(
     // added to such an object would not hard-fail, and an allowlisted key moved into one would read as removed.
     // Resolved through the window chunk's own require() binding (resolveNamespaceRef); the object's initializer
     // must be found exactly once in the target chunk as a literal of `KEY:"…"` pairs. A guarded spread
-    // (`...<ns>.<P>(<s>)&&<ns>.<O>`) is conditional, so its keys are classified without applying (apply=false, as an
-    // off-gate spread's); a bare `...<ns>.<O>` that resolves to such an object is unconditional and applied.
-    // A guarded spread whose object cannot be resolved is a hard-fail; a bare one is left alone (it may be any
-    // non-env spread), but S6g still guards the scheduled-run key's object by counting its references.
+    // (`...<cond>&&<ns>.<O>`) is conditional: under a gate call it follows the gate as the inline gate spreads above do
+    // (ON resolves and auto-pins, OFF classifies without applying); under any other condition its keys are classified
+    // without applying. A bare `...<ns>.<O>` whose `<ns>` is a require() binding and whose object resolves is
+    // unconditional and applied. A guarded spread whose object cannot be resolved is a hard-fail; a bare one is left
+    // alone (it may be any non-env spread), but S6g still guards the scheduled-run key's object by counting its references.
     if (isW1 && files) {
       const objectOf = (ref: string): { keys: string; chunk: string } | null | "ambiguous" => {
         const r = resolveNamespaceRef(ref, scope ?? bundle, files);
@@ -4077,12 +4078,19 @@ export function deriveSpawnEnv(
           hardFail = true;
           continue;
         }
+        const gate = sm[1].match(/^(?:[\w$]+\.)?[A-Za-z_$][\w$]*\("(\d+)"\)$/);
+        const gateOn = gate !== null && gate[1] in SPAWN_GATES && gates[gate[1]]?.on;
         for (const k of enumSpawnKeys(obj.keys)) {
           enumerated.add(k.key);
-          resolveInto(k.key, sliceSpawnValue(obj.keys, k.valueStart), target, false, obj.chunk);
+          const expr = sliceSpawnValue(obj.keys, k.valueStart);
+          if (gateOn) resolveGateInner(k.key, expr, target, obj.chunk);
+          else resolveInto(k.key, expr, target, false, obj.chunk);
         }
       }
+      // Bare spreads resolve only through a real require() binding: without one, resolveNamespaceRef falls back to a
+      // loose same-chunk export lookup, and a parameter spread (`...h.env`) could then apply an unrelated object.
       for (const sm of text.matchAll(/(?<!&&)\.\.\.([\w$]+)\.([\w$]+)(?=[,}])/g)) {
+        if (!new RegExp(`(?<![\\w$])${reEsc(sm[1])}=require\\("\\./`).test(scope ?? bundle)) continue;
         const obj = objectOf(`${sm[1]}.${sm[2]}`);
         if (obj === null || obj === "ambiguous") continue;
         for (const k of enumSpawnKeys(obj.keys)) {
