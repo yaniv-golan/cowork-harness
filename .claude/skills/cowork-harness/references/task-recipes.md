@@ -442,5 +442,18 @@ assert:
 ```
 
 Leave `allow_stall` out, so ending on a question fails. `trace <run> --view questions` shows who answered each gate
-(`answeredBy`). *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` entirely and
+(`answeredBy`).
+
+If the skill may ask, but every question must have a scripted answer, script them and assert that instead:
+
+```yaml
+answers:
+  - when_question: "(?i)region"
+    choose: "All"
+assert:
+  - gates_all_scripted: true        # fails naming a gate the LLM decider, `first`, or a person answered
+  - gate_answer_count_min: 1        # and says a gate was expected (zero gates passes the line above)
+```
+
+`{include_permissions: true}` also fails a tool permission cowork parity auto-allowed. *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` entirely and
 tell the model no user is present; the harness models neither.

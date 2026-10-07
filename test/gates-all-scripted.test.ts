@@ -171,6 +171,34 @@ describe("gates_all_scripted on replay: re-classified against the cassette's fro
     expect(r.message).toContain("Bash");
   });
 
+  it("include_permissions live: the harness's own fixed denies count (a malformed web_fetch request, the fail-closed deny)", () => {
+    const ds: Decisions = [
+      { kind: "tool", name: "mcp__workspace__web_fetch", decision: "deny", by: "agent" },
+      { kind: "tool", name: "Bash", decision: "abstain→deny", by: "none", requestId: "r1" },
+    ];
+    const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
+    expect(r.pass, r.message).toBe(true);
+  });
+
+  it("include_permissions live: a parity default with a rationale this build does not know is evidence-unavailable", () => {
+    const ds: Decisions = [{ kind: "tool", name: "Bash", decision: "allow", by: "cowork", rationale: "something new" }];
+    expect(checkGatesAllScripted({ include_permissions: true }, live(ds)).message).toMatch(/^evidence unavailable/);
+  });
+
+  // The hostloop web_fetch gate records the parity default's `by` without its rationale (run.ts resolveWebFetchGate).
+  it("include_permissions live: a web_fetch allowed by cowork parity is the permissive auto-allow", () => {
+    const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision: "allow", by: "cowork" }];
+    const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
+    expect(r.pass).toBe(false);
+    expect(r.message).toContain("permissive");
+  });
+
+  it("include_permissions live: a web_fetch denied by strict parity is a fixed rule", () => {
+    const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision: "deny", by: "strict" }];
+    const r = checkGatesAllScripted({ include_permissions: true }, live(ds));
+    expect(r.pass, r.message).toBe(true);
+  });
+
   it("include_permissions on replay: an off-registry deny no frozen rule covers is a fixed rule (strict parity, the path gate)", () => {
     const ds: Decisions = [{ kind: "tool", name: "Bash", decision: "deny", by: "replay" }];
     expect(checkGatesAllScripted({ include_permissions: true }, live(ds, { frozenAnswers: [] })).pass).toBe(true);
@@ -181,9 +209,67 @@ describe("gates_all_scripted on replay: re-classified against the cassette's fro
     expect(checkGatesAllScripted({ include_permissions: true }, live(ds, { frozenAnswers: [] })).pass).toBe(true);
   });
 
+  // The hostloop web_fetch gate records its one decision under the can_use_tool name (run.ts handleDecision), not
+  // the synthetic `webfetch:<domain>` request its decider saw.
   it("include_permissions on replay: a web_fetch permission cannot be attributed and is evidence-unavailable", () => {
-    const ds: Decisions = [{ kind: "tool", name: "webfetch:example.com", decision: "allow", by: "replay" }];
+    const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision: "allow", by: "replay" }];
     expect(checkGatesAllScripted({ include_permissions: true }, live(ds, { frozenAnswers: [] })).message).toMatch(/^evidence unavailable/);
+  });
+
+  it("include_permissions on replay: a when_tool rule naming web_fetch does not attribute it (live, that rule never fires)", () => {
+    // Live, the web_fetch gate's decider is asked about `webfetch:<domain>`, so a rule for the tool name never
+    // answers it; replay must not read the rule's presence as who answered.
+    const ds: Decisions = [{ kind: "tool", name: "mcp__workspace__web_fetch", decision: "allow", by: "replay" }];
+    const r = checkGatesAllScripted(
+      { include_permissions: true },
+      live(ds, { frozenAnswers: [{ when_tool: "mcp__workspace__web_fetch", decide: "allow" }] }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/^evidence unavailable/);
+  });
+
+  it("include_permissions on replay: a permission the recording never answered (by: none) is evidence-unavailable, not a fixed rule", () => {
+    // Replay abstains when the cassette holds no answer for a request; run.ts records that as abstain→deny by none.
+    const ds: Decisions = [{ kind: "tool", name: "Bash", decision: "abstain→deny", by: "none", requestId: "r1" }];
+    const r = checkGatesAllScripted({ include_permissions: true }, live(ds, { frozenAnswers: [] }));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/^evidence unavailable/);
+  });
+
+  it("on replay, frozen answers carrying a redaction token cannot classify a gate (a redacted pattern no longer means what it did)", () => {
+    // `[REDACTED:label:hash]` read as a regex is a character class that matches nearly any question.
+    const r = checkGatesAllScripted(
+      true,
+      live(asReplayed(decisionsOf("llm-question")), {
+        frozenAnswers: [{ when_question: "[REDACTED:customer:ab12cd34ef56]", choose: "first" }],
+      }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/^evidence unavailable/);
+    expect(r.message).toContain("redact");
+  });
+
+  it("on replay, a cassette that records a live decider answering, whose frozen rules nonetheless cover every gate, is evidence-unavailable", () => {
+    // authoring.nonDeterministic says an llm/external/human/first answer happened at record time; frozen rules that
+    // cover every gate contradict it, so they are not the rules that answered.
+    const r = checkGatesAllScripted(
+      { include_permissions: true },
+      live(asReplayed(decisionsOf("scripted-question-and-permission")), {
+        frozenAnswers: PROTOCOL_SMOKE_ANSWERS,
+        recordedNonDeterministic: true,
+      }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/^evidence unavailable/);
+  });
+
+  it("on replay, a non-deterministic recording whose frozen rules miss a gate still names that gate", () => {
+    const r = checkGatesAllScripted(
+      true,
+      live(asReplayed(decisionsOf("llm-question")), { frozenAnswers: [], recordedNonDeterministic: true }),
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toContain("How should the skill handle big CSVs and messy data?");
   });
 
   it("each kept stream gets the same verdict live and replayed against its run's rules", () => {

@@ -8942,6 +8942,7 @@ export async function replayCassette(
       decisions: truncatedMsg !== undefined ? undefined : rec.decisions,
       // Replay answers every gate as `by: "replay"`; gates_all_scripted re-classifies against the frozen rules.
       frozenAnswers: cassette.scenario.answers ?? [],
+      recordedNonDeterministic: cassette.authoring?.nonDeterministic === true,
       gateOptions: rec.gateOptions,
       // A truncated cassette could not be driven, so `gateOptions` is empty because nothing was OBSERVED
       // — not because no gate fired. Flag it so question_options fails evidence-unavailable. (A cassette

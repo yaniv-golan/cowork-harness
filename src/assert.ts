@@ -584,6 +584,8 @@ export interface AssertContext {
   /** Replay only: the cassette's frozen `answers:`. A replayed decision says only `by: "replay"`, so
    *  `gates_all_scripted` re-classifies each gate against these. */
   frozenAnswers?: AnswerRule[];
+  /** Replay only: the cassette's `authoring.nonDeterministic` (a live decider answered a gate at record time). */
+  recordedNonDeterministic?: boolean;
   /** Set by verify-run only when `result.toolResults` is undefined in result.json (partial/old run).
    *  Prevents tool_result_not_contains from passing vacuously (absent ≠ empty). Undefined/false on
    *  live/replay lanes, where the structure is always present (empty = proof-of-absence). */
@@ -4242,6 +4244,7 @@ function check(
       questions: ctx.questions,
       questionsMissing: ctx.questionsMissing,
       frozenAnswers: ctx.frozenAnswers,
+      recordedNonDeterministic: ctx.recordedNonDeterministic,
     });
     results.push(r.pass ? ok(r.message) : fail(r.message));
   }

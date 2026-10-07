@@ -4,7 +4,11 @@
 // Evidence is `RunResult.decisions`, attributed by `by`. Replay answers every gate from the recording, so there
 // `by` is always "replay" and each gate is re-classified against the cassette's FROZEN `answers:` with the scripted
 // decider's own lookup. That is exact for question gates: the scripted decider runs first in the chain and, when
-// its rules cover every sub-question, answers the batch itself or throws (it never falls through).
+// its rules cover every sub-question, answers the batch itself or throws (it never falls through). It holds only
+// while the frozen rules are the ones the recording ran with, so two things make a replay unclassifiable: a
+// redaction token in the frozen answers (a redacted pattern no longer matches what it did), and a cassette whose
+// `authoring.nonDeterministic` says a live decider answered while its frozen rules cover every gate.
+import { REDACTION_MARK } from "./assert.js";
 import {
   ScriptedDecider,
   PERMISSIVE_AUTOALLOW_RATIONALE,
@@ -24,6 +28,8 @@ export interface GateEvidence {
   questionsMissing?: boolean;
   /** Replay only: the cassette's frozen `answers:`, which a `by: "replay"` decision is re-classified against. */
   frozenAnswers?: AnswerRule[];
+  /** Replay only: the cassette's `authoring.nonDeterministic` — a live decider answered at least one gate when it was recorded. */
+  recordedNonDeterministic?: boolean;
 }
 
 export type GatesAllScriptedOpt = true | { include_permissions?: boolean };
@@ -44,6 +50,8 @@ const KNOWN_BY = new Set([
   "none",
 ]);
 const WORKSPACE_WEB_FETCH_TOOL = "mcp__workspace__web_fetch";
+
+const isWebFetch = (name: string) => name === WORKSPACE_WEB_FETCH_TOOL || name.startsWith("webfetch:");
 
 type Verdict = { kind: "scripted" } | { kind: "not"; why: string } | { kind: "unavailable"; why: string };
 
@@ -75,22 +83,30 @@ function classifyPermission(d: DecisionRow, rules: ScriptedDecider | null | unde
     // The harness's own fixed rules: the hostloop protected-path gate and a malformed web_fetch request.
     case "agent":
       return { kind: "scripted" };
-    // The fail-closed deny when no decider answered: fixed, and nobody stood in.
+    // The fail-closed deny when no decider answered: fixed, and nobody stood in. On replay the same row means the
+    // recording held no answer for the request, which is missing evidence.
     case "none":
-      return { kind: "scripted" };
+      return rules === undefined ? { kind: "scripted" } : { kind: "unavailable", why: "the recording holds no answer for it" };
     case "cowork":
     case "strict":
       if (d.rationale === PERMISSIVE_AUTOALLOW_RATIONALE) return { kind: "not", why: "permissive off-registry auto-allow (cowork parity)" };
       if (d.rationale === DEFAULT_ALLOW_RATIONALE || d.rationale === STRICT_DENY_RATIONALE) return { kind: "scripted" };
+      // The hostloop web_fetch gate records the parity default's `by` without its rationale. Its request
+      // (`webfetch:<domain>`) is never on the default-allow registry, so an allow is the permissive auto-allow and
+      // a deny is strict parity's fixed rule.
+      if (d.rationale === undefined && isWebFetch(d.name)) {
+        if (d.decision === "allow") return { kind: "not", why: "permissive off-registry auto-allow (cowork parity)" };
+        if (d.decision === "deny") return { kind: "scripted" };
+      }
       return { kind: "unavailable", why: `parity default with an unrecognised rationale (${d.rationale ?? "absent"})` };
     case "replay": {
       if (rules === undefined)
         return { kind: "unavailable", why: "answered from a recording with no frozen answers to classify it against" };
       if (rules === null) return { kind: "unavailable", why: "the cassette's frozen answers do not compile" };
+      // Checked before the rules: a web_fetch gate is decided per domain (`webfetch:<domain>`) by whatever answered
+      // that request live, and a rule naming the tool never fires there. The recording does not say who answered.
+      if (isWebFetch(d.name)) return { kind: "unavailable", why: "a replayed web_fetch permission cannot be attributed" };
       if (rules.answersTool(d.name)) return { kind: "scripted" };
-      // A web_fetch gate is decided per domain by whatever terminal the run had; a recording does not say which.
-      if (d.name === WORKSPACE_WEB_FETCH_TOOL || d.name.startsWith("webfetch:"))
-        return { kind: "unavailable", why: "a replayed web_fetch permission cannot be attributed" };
       if (isDefaultAllowedTool(d.name)) return { kind: "scripted" };
       // No rule and off the registry: the parity default answered. It never abstains here, so an allow is the
       // permissive cowork auto-allow, and a deny is a fixed rule (strict parity, or the hostloop path gate).
@@ -130,6 +146,12 @@ export function checkGatesAllScripted(opt: GatesAllScriptedOpt, ev: GateEvidence
     };
   let rules: ScriptedDecider | null | undefined;
   if (ev.frozenAnswers !== undefined) {
+    if (JSON.stringify(ev.frozenAnswers).includes(REDACTION_MARK))
+      return {
+        pass: false,
+        message:
+          "evidence unavailable: the cassette's frozen answers were redacted, so they cannot show which rule answered a replayed gate",
+      };
     try {
       rules = new ScriptedDecider(ev.frozenAnswers);
     } catch {
@@ -161,6 +183,14 @@ export function checkGatesAllScripted(opt: GatesAllScriptedOpt, ev: GateEvidence
         (unavailable.length ? ` (and ${unavailable.length} unattributable)` : ""),
     };
   if (unavailable.length) return { pass: false, message: `evidence unavailable: ${unavailable.join("; ")}` };
+  // Every gate re-classified as scripted, yet the recording says a live decider answered one: the frozen rules are
+  // not the ones it ran with (the answers were edited, or the decider answered a gate this check does not see).
+  if (rules !== undefined && ev.recordedNonDeterministic)
+    return {
+      pass: false,
+      message:
+        "evidence unavailable: the cassette records that a live decider answered a gate during recording, but its frozen answers cover every gate replayed here",
+    };
   const perm = withPermissions ? `, ${permissions.length} permission decision(s) by scripted or fixed rules` : "";
   return {
     pass: true,

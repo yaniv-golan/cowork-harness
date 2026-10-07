@@ -99,6 +99,13 @@ describe("gates_all_scripted: replay agrees with live on real gate frames", () =
     expect(q!.message).not.toMatch(/evidence unavailable/);
   });
 
+  it("a cassette stamped non-deterministic whose frozen rules cover every gate is evidence-unavailable, not a pass", async () => {
+    // freezeRecordedRun writes authoring.nonDeterministic from the run; replay reads it back into the check.
+    const [q] = await replayed({ ...CASES[0]!, nonDeterministic: true });
+    expect(q!.pass).toBe(false);
+    expect(q!.message).toMatch(/^evidence unavailable/);
+  });
+
   it("a truncated recording (a gate with no recorded answer) is evidence-unavailable, never a zero-gate pass", async () => {
     const [q] = await replayed(CASES[0]!, "034e563d-8c67-4309-84df-2944d9a3ddb7"); // the question's request id
     expect(q!.pass).toBe(false);

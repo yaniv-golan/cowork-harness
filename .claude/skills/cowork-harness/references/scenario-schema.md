@@ -366,7 +366,7 @@ modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`,
-`gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
+`gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
 `path_denied`, `no_path_denied` (the latter three are also `fidelity: hostloop`-only — see
 [`assertion-catalog-gates-hooks-modifiers.md`](./assertion-catalog-gates-hooks-modifiers.md)). With `controlOut` present they evaluate; on an old
 cassette without it, a **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
@@ -471,7 +471,7 @@ debugging a run's behavior. The two are **numbered independently**: a bare "gotc
 
 2. **Gate keys need a `controlOut` cassette.** `question_asked`, `question_options`, `question_context`,
    `question_option_count`, `questions_count_max`,
-   `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`, `no_hook_blocked` only evaluate on
+   `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`, `hook_blocked`, `no_hook_blocked` only evaluate on
    replay with `controlOut`; on an old cassette they warn and are excluded (not passed).
    `gate_answers_delivered` **fails on
    unobserved delivery** (`delivered: null`) — absence of evidence is failure — but **passes
