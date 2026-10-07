@@ -4739,7 +4739,15 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
     },
     { title: "Transcript / prose", match: (k) => k.startsWith("transcript_") && k !== "transcript_no_host_path" },
     { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") },
-    { title: "Hooks", match: (k) => k.endsWith("hook_blocked") || k.startsWith("hook_event_") || k.startsWith("hook_output_") },
+    {
+      title: "Hooks",
+      match: (k) =>
+        k.endsWith("hook_blocked") ||
+        k.endsWith("hook_event_blocked") ||
+        k.startsWith("hook_event_") ||
+        k.startsWith("hook_output_") ||
+        k === "hook_decision",
+    },
     {
       title: "Path denial / VM paths",
       match: (k) => k.includes("path_denied") || k === "no_vm_path_file_op" || k === "transcript_no_host_path",
