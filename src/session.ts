@@ -269,7 +269,8 @@ export const SessionConfig = z.strictObject({
       artifacts_root: z
         .string()
         .min(1)
-        .refine((v) => !v.startsWith("/") && !v.includes("\\") && !v.split("/").includes(".."), {
+        // A pattern, not a refine, so the JSON schema carries the rule to editors too.
+        .regex(/^(?!\/)(?!.*\\)(?!(?:.*\/)?\.\.(?:\/|$))/, {
           message: "artifacts_root must be a path relative to outputs, with no `..` segment and no backslash",
         })
         .optional(),

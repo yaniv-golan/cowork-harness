@@ -7,7 +7,7 @@ import type { PlatformBaseline } from "../src/types.js";
 import { buildLaunchPlan, type LaunchPlan } from "../src/session.js";
 import { agentArgs } from "../src/runtime/argv.js";
 import { microvmAgentArgs } from "../src/runtime/microvm.js";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -66,6 +66,17 @@ describe("artifactsRootEnv", () => {
   });
   it("unset: no key at all", () => {
     expect(artifactsRootEnv(undefined, "/o")).toEqual({});
+  });
+  // Protocol's value is checked end to end (answer-channel-e2e); container was confirmed by live runs. Both sandbox
+  // spawners build the env inline, so pin that each joins onto ITS staged tree's outputs (the `mnt` root it stages
+  // and mounts), the layout stage.ts creates.
+  it.each([
+    ["container", "src/runtime/container.ts", "mntRoot", "const mntRoot = m.mntRoot;"],
+    ["microvm", "src/runtime/microvm.ts", "mntVm", "const mntVm = `${sessionVm}/mnt`;"],
+  ])("%s passes its staged tree's outputs dir", (_tier, file, root, binding) => {
+    const src = readFileSync(join(process.cwd(), file), "utf8");
+    expect(src).toContain(binding);
+    expect(src).toContain(`...artifactsRootEnv(plan.artifactsRoot, \`\${${root}}/outputs\`)`);
   });
 });
 

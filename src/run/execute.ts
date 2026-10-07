@@ -2789,8 +2789,8 @@ export function launchSourcesPreflight(
   const withModel = model !== undefined && model !== loaded.model ? applySessionOverrides(loaded, { model }) : loaded;
   const session = opts.ablateSkill ? ablateSession(withModel) : withModel;
   const baseline = opts.baseline ?? loadBaseline(scenario.baseline);
-  // The run's `answer_channel` / `artifacts_root` refusals, so a dry run, a batch pre-flight and `lint` refuse what the
-  // run would, before anything is spent. The invocation's own decider flags are checked by the run itself.
+  // The run's `answer_channel` / `artifacts_root` refusals, so a dry run and a batch pre-flight refuse what the run
+  // would, before anything is spent. The invocation's own decider flags are checked by the run itself.
   const tier = effectiveTier(scenario.fidelity, baseline);
   const channelRefusal =
     artifactsRootRefusal(session, tier, scenario.fidelity) ??

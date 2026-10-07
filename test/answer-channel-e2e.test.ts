@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { CLI, POSIX, exited, makeStubFixture, spawnCli, type StubFixture } from "./helpers/stub-agent.js";
+import { CLI, POSIX, QUESTION_FRAME, exited, makeStubFixture, spawnCli, type StubFixture } from "./helpers/stub-agent.js";
 
 const can = POSIX && existsSync(CLI);
 const DUMMY = { ANTHROPIC_API_KEY: "stub-placeholder-not-a-credential" };
@@ -48,8 +48,8 @@ const STUB = [
 
 const PARKED = "  - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: waiting }";
 
-function fixture(): StubFixture & { argv: string } {
-  const f = makeStubFixture(STUB, DUMMY);
+function fixture(body = STUB): StubFixture & { argv: string } {
+  const f = makeStubFixture(body, DUMMY);
   const argv = join(f.root, "stub.argv");
   f.env.STUB_ARGV = argv;
   // The protocol probe reads the host `claude --help`: list the option and its `none` value before the stub's own list.
@@ -136,6 +136,49 @@ describe.runIf(can)("answer_channel: none over a recorded cassette (stub agent, 
       // The accepted block still verifies.
       const ok = await cli(f, ["verify-run", live.outDir, good]);
       expect(ok.code, ok.stderr).toBe(0);
+
+      // Removing the key from the session makes the recording stale: it no longer describes this session.
+      writeFileSync(
+        join(f.cwd, "s.yaml"),
+        ["permission_mode: bypassPermissions", "agent_env:", "  artifacts_root: artifacts"].join("\n") + "\n",
+      );
+      const stale = await cli(f, ["verify-cassettes", cass]);
+      expect(stale.code).toBe(1);
+      expect(stale.stderr + stale.stdout).toMatch(/session-shape fingerprint/);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+});
+
+// An agent that ignored the flag and sent a question anyway: refused, never answered, and the run ends in error, live
+// and again on replay of its recording.
+const VIOLATING = [
+  `printf '%s\\n' "$@" > "$STUB_ARGV"`,
+  out({ type: "system", subtype: "init", session_id: "stub", model: "claude-sonnet-5", tools: [], cwd: "/tmp" }),
+  `printf '%s\\n' '${QUESTION_FRAME}'`,
+  `while IFS= read -r l; do case "$l" in *control_response*) printf '%s\\n' "$l" > "$STUB_ARGV.reply"; break;; esac; done`,
+  out({ type: "result", subtype: "success", is_error: false, result: "ok", session_id: "stub", num_turns: 1, total_cost_usd: 0.01 }),
+  "cat >/dev/null",
+].join("\n");
+
+describe.runIf(can)("a request that reaches the harness anyway (stub agent, protocol)", () => {
+  it("is denied, ends the run in error, and replays the same way", async () => {
+    const f = fixture(VIOLATING);
+    try {
+      const sc = scenario(f, "v.yaml", [PARKED]);
+      const cass = join(f.cwd, "v.cassette.json");
+      const rec = await cli(f, ["record", sc, "--out", cass, "--allow-failing", "--output-format", "json"]);
+      const live = JSON.parse(rec.stdout).results[0];
+      expect({ result: live.result, errorSource: live.errorSource }).toEqual({ result: "error", errorSource: "answer_channel_violation" });
+      // The reply the agent got: a deny, never an answer.
+      const reply = readFileSync(`${f.argv}.reply`, "utf8");
+      expect(reply).toMatch(/"behavior":"deny"/);
+      expect(reply).not.toMatch(/"answers"/);
+      const rep = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(rep.code).toBe(1);
+      const r = JSON.parse(rep.stdout).results[0];
+      expect({ result: r.result, errorSource: r.errorSource }).toEqual({ result: "error", errorSource: "answer_channel_violation" });
     } finally {
       f.cleanup();
     }

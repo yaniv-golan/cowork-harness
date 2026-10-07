@@ -13,7 +13,8 @@ import { anyGlobMatches } from "./glob.js";
  * reaches the harness.
  */
 
-/** The label every surface prints for such a run (banner, summary, `--output-format json`'s `meta.label`). */
+/** The label the human-readable surfaces print for such a run (banner, footer, `stats`); JSON readers get
+ *  `answerChannel: "none"` on each result instead. */
 export const ANSWER_CHANNEL_NONE_LABEL = "headless, no answer channel — not Cowork";
 
 /** The two argv tokens that decide who answers the agent's prompts. ONE function for every builder (the shared
@@ -113,14 +114,16 @@ export function answerChannelRefusal(args: {
     );
   if (scenario.fidelity === "cowork" || tier === "hostloop")
     return why(
-      "cannot run on the host loop (`fidelity: hostloop`, or `cowork` where it resolves there): the host loop's folder-grant and web_fetch guards are answered over the channel this key removes, so they would silently stop applying. Use `container`, `microvm` or `protocol`.",
+      "cannot run on the host loop (`fidelity: hostloop`, or `fidelity: cowork`, which can resolve there): the host loop's folder-grant and web_fetch guards are answered over the channel this key removes, so they would silently stop applying. Use `container`, `microvm` or `protocol`.",
     );
   if (scenario.lane === "remote" || (scenario.execution !== undefined && scenario.execution !== "local"))
     return why("is not supported on the cloud lane yet: its permission surface is unmeasured.");
   if (scenario.answers.length > 0)
     return why("refuses `answers:`: no question reaches the harness, so a scripted answer can never be delivered.");
   if (scenario.on_unanswered !== undefined || inv.onUnansweredFlag !== undefined)
-    return why("refuses `on_unanswered` / `--on-unanswered`: no question reaches the harness, so there is nothing to decide.");
+    return why(
+      "refuses `on_unanswered`, `--on-unanswered` and `--decider-llm`: no question reaches the harness, so there is nothing to decide.",
+    );
   if (inv.hasDecider || inv.hasExternalChannel || inv.llmModel !== undefined || inv.llmIntent !== undefined)
     return why("refuses a decider (`--decider-cmd`, `--decider-dir`, `--decider-model`): no question reaches the harness.");
   if (session.permission_parity !== "cowork")

@@ -1364,8 +1364,8 @@ export type Assertion = z.infer<typeof Assertion>;
 
 /** The assertion keys that grade a question gate the HARNESS answered (or offered to answer). A run with no answer
  *  channel (`answer_channel: none`) has no such gate, so each is refused there at load — and a new gate key MUST be
- *  added here, which a test enforces against the refusal. `questions_count_max` is deliberately absent: it counts the
- *  agent's attempts to ask, which stays meaningful without a channel. */
+ *  added here, which a test enforces against the refusal. `questions_count_max` is not a gate key; it is refused there
+ *  separately (answerChannelAssertRefusal), because it counts the questions that reach the harness and none do. */
 export const GATE_ASSERT_KEYS = [
   "question_asked",
   "question_options",
@@ -2026,8 +2026,9 @@ export interface RunResult {
   // the run ended on a question or a closing request for input (src/run/input-request.ts) having done no
   // productive tool work after its last gate (the agent asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
   // task did not complete. computeVerdict fails on this (a `stalled` signal) unless the scenario asserts
-  // allow_stall. Scenario-lane only; re-derived by the detector in run.ts on both the live and replay
-  // re-drive (NOT a persisted-then-read flag).
+  // allow_stall. Under `answer_channel: none` a closing `?` alone sets it, even after tool work, and computeVerdict
+  // reports `parked_at_question` (warn) instead. Scenario-lane only; derived by the detector in run.ts on the live
+  // and replay re-drive. `verify-run` reads it as recorded in result.json and does not re-run the detector.
   stalledOnQuestion?: boolean;
   // capability-probe outcome, so the guard roster can show "ran clean" (definitive) distinctly from
   // "couldn't verify" (unverified) and "didn't run" (skipped) — never a false ✓ for a guard that didn't run.
