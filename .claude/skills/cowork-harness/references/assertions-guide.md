@@ -50,7 +50,8 @@ them by what you're trying to prove:
 | the user was **shown** the right choices, in order | `question_options: {when_question, equals: [..]}` — the option SET/ORDER a gate offered (`question_asked` matches the text only); order is compared by default |
 | the user was **told something specific** at a gate | `question_context: {when_question, matches}` — a regex over the question label + option labels + option **descriptions**. Reach for this when the wording may land in an option's `description`, which `question_asked` and `question_options` cannot see |
 | every gate offered exactly one (or at most N) options of a kind | `question_option_count: {matches, exactly}` — counts the option LABELS matching a regex on EVERY sub-question asked (`when_question` narrows); zero sub-questions asked fails |
-| a hook blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) |
+| a **plugin's** command hook (any event: PreToolUse, Stop, …) blocked, didn't block, or decided | `hook_event_blocked: <event>` (exit 2) or `{event, tool?, via?, max: 0}`, `no_hook_event_blocked: true`, `hook_decision: {event, decision}` — stream content, no `controlOut` needed |
+| the **harness's own** hook callbacks (the built-in Task hook, a custom hook bundle) blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) — a plugin's hook never reaches this list, so `no_hook_blocked` passes over a plugin block |
 | every MCP round-trip succeeded | `no_mcp_error: true` (**live-only**) |
 | a context compaction happened | `compaction_occurred: true` |
 | THIS run wrote the file (not just that it is there) | `file_exists: {path, authored: true}` (also `user_visible_artifact`, and `authored: true` on `artifact_text`/`artifact_json`) — an untouched pre-run file fails; needs the pre-run manifest, which `authored` arms |

@@ -859,12 +859,14 @@ export const Assertion = z.strictObject({
   hook_blocked: z
     .string()
     .optional()
-    .describe("a PreToolUse hook blocked a tool whose name matches this regex (RunResult.hookEvents) — replay needs controlOut"),
+    .describe(
+      "one of the harness's own PreToolUse hook callbacks (the built-in Task hook, a custom hook bundle) blocked a tool whose name matches this regex (RunResult.hookEvents) — replay needs controlOut. A plugin's command hook never reaches this list: use hook_event_blocked / hook_decision",
+    ),
   no_hook_blocked: z
     .literal(true)
     .optional()
     .describe(
-      "no tool was hook-blocked during the run (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid",
+      "no tool was blocked by the harness's own hook callbacks (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid. A plugin's command hook never reaches this list, so this passes over a plugin block: use no_hook_event_blocked",
     ),
   hook_event_fired: z
     .enum(KNOWN_HOOK_EVENTS)
