@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { artifactsRootEnv } from "../answer-channel.js";
 import { resolve, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import { type LaunchPlan, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent } from "../session.js";
@@ -126,7 +127,7 @@ export function spawnContainer(
     proxyHost,
     // The tier-uniform agent_env knob rides in via `extra`, which spawnEnv applies LAST — no scrub
     // needed here: the container's env is a constructed allowlist, never the operator's shell.
-    extra: { ...runtimeAuthEnv(), ...plan.agentEnv },
+    extra: { ...runtimeAuthEnv(), ...plan.agentEnv, ...artifactsRootEnv(plan.artifactsRoot, `${mntRoot}/outputs`) },
   });
   // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
   // a registered tool with no backing server is a phantom capability the model can try and fail to use.

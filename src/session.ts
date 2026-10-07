@@ -114,6 +114,11 @@ export const SessionConfig = z.strictObject({
   // cowork = pre-approve built-ins (like real Cowork's allowedTools) + auto-allow unscripted
   // tools with a finding; strict = deny unmatched (for adversarial tests).
   permission_parity: z.enum(["cowork", "strict"]).default("cowork"),
+  // Who answers the agent's questions and permission asks. Absent = Cowork's channel (the harness answers over stdio).
+  // `none` models a headless host with nobody to answer: the agent gets `--permission-prompts none`, so whatever
+  // would prompt is denied inside the agent. Only `none` is accepted: a second spelling of the default would split
+  // the session fingerprint for nothing. See docs/headless-no-answer.md for what it refuses and why.
+  answer_channel: z.enum(["none"]).optional(),
 
   // --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
   folders: z.array(Folder).default([]),
@@ -257,6 +262,17 @@ export const SessionConfig = z.strictObject({
       subagent_model: z.string().optional(),
       tool_search: z.enum(["auto", "off"]).optional(), // -> ENABLE_TOOL_SEARCH
       disable_experimental_betas: z.boolean().optional(), // -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1" (also disables ToolSearch)
+      // -> COWORK_ARTIFACTS_ROOT=<outputs as the agent sees it>/<this>. A path RELATIVE to outputs, resolved per tier by
+      // the runtime that knows its own outputs path (artifactsRootEnv), so one session file means the same place on
+      // every tier. Not mapped by agentEnvOverrides for that reason. Refused on the host loop, whose shell runs in a
+      // separate container that never sees the agent's env.
+      artifacts_root: z
+        .string()
+        .min(1)
+        .refine((v) => !v.startsWith("/") && !v.includes("\\") && !v.split("/").includes(".."), {
+          message: "artifacts_root must be a path relative to outputs, with no `..` segment and no backslash",
+        })
+        .optional(),
     })
     .default({}),
 });
@@ -281,7 +297,7 @@ export const SessionConfig = z.strictObject({
  *  (a) is user-settable from a shell, (b) changes agent behaviour this harness models or reports on, and
  *  (c) is NOT set by the Cowork spawn** — so inheriting it makes the two env-inheriting tiers diverge
  *  from the other two with nothing in the baseline to justify the difference. Dozens of keys in the
- *  binary's settable-env table meet (a) alone; (b) and (c) select eight of these. **Or (d): Desktop itself lets no
+ *  binary's settable-env table meet (a) alone; (b) and (c) select nine of these. **Or (d): Desktop itself lets no
  *  user-supplied value of the key reach an agent it spawns** (it strips it from the user env it forwards), whether or
  *  not the spawn sets it; (d) selects the last three (Desktop 2.26454.0).
  *  KNOWN AND DELIBERATELY NOT SCRUBBED: `CLAUDE_CODE_COORDINATOR_MODE` itself, which enables the second
@@ -325,6 +341,9 @@ export const SCRUBBED_AGENT_ENV_KEYS = [
   "CLAUDE_CODE_SIMPLE",
   "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
   "CLAUDE_CODE_PROCESS_WRAPPER",
+  // Rule (a)-(c): a skill-contract key (`agent_env.artifacts_root` authors it) that moves where a skill writes its run
+  // status. The Cowork spawn never sets it, so an operator's export would move it on protocol/hostloop alone.
+  "COWORK_ARTIFACTS_ROOT",
 ] as const;
 
 /** Map the authored `agent_env` knob to its exact env keys. An unset field emits NO key — never an empty
@@ -428,6 +447,11 @@ export interface LaunchPlan {
   // treats `plan.agentEnv ?? {}` as a no-op; buildLaunchPlan always carries a concrete (possibly empty)
   // object from the session field.
   agentEnv?: Record<string, string>;
+  /** `agent_env.artifacts_root` as AUTHORED (relative to outputs). Each runtime resolves it against its own
+   *  agent-visible outputs path with `artifactsRootEnv` and layers the result with the knob. */
+  artifactsRoot?: string;
+  /** `answer_channel: none`: spawn with `--permission-prompts none` instead of the stdio tool (`permissionPromptArgs`). */
+  answerChannel?: "none";
   permissionMode: string;
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
@@ -1325,6 +1349,8 @@ export function buildLaunchPlan(
     agentMaxTurns: session.agent_max_turns,
     includeHookEvents: includeHookEventsFor(presentMounts),
     agentEnv: agentEnvOverrides(session.agent_env),
+    ...(session.agent_env.artifacts_root !== undefined ? { artifactsRoot: session.agent_env.artifacts_root } : {}),
+    ...(session.answer_channel ? { answerChannel: session.answer_channel } : {}),
     permissionMode: session.permission_mode,
     permissionParity: session.permission_parity,
     baseEnv,

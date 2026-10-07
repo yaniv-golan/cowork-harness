@@ -1362,6 +1362,19 @@ export const Assertion = z.strictObject({
 });
 export type Assertion = z.infer<typeof Assertion>;
 
+/** The assertion keys that grade a question gate the HARNESS answered (or offered to answer). A run with no answer
+ *  channel (`answer_channel: none`) has no such gate, so each is refused there at load — and a new gate key MUST be
+ *  added here, which a test enforces against the refusal. `questions_count_max` is deliberately absent: it counts the
+ *  agent's attempts to ask, which stays meaningful without a channel. */
+export const GATE_ASSERT_KEYS = [
+  "question_asked",
+  "question_options",
+  "question_context",
+  "question_option_count",
+  "gate_answers_delivered",
+  "gate_answer_count_min",
+] as const satisfies readonly (keyof Assertion)[];
+
 /** Verdict modifiers: assertions that verify nothing themselves — each opts into (suppresses) one
  *  default-fail in `computeVerdict`. They are pure no-op `ok()` passes in `assert.ts` and are kept on
  *  replay as no-op passes (in `cassette.ts` `alwaysContentKeys`). SINGLE SOURCE OF TRUTH: the `assert.ts`

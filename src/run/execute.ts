@@ -1,4 +1,6 @@
 import { warn, writeTextAtomic } from "../io.js";
+import { answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
+import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
 import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { ZodError } from "zod";
@@ -51,6 +53,7 @@ import {
   isConnectedContent,
   applySessionOverrides,
   expandUserPath,
+  strippedEnv,
   type LaunchPlan,
 } from "../session.js";
 import { spawnProtocol, protocolReadsOperatorConfig } from "../runtime/protocol.js";
@@ -792,6 +795,26 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // categorized `internal` — an authoring mistake reported as a harness bug.
   const vacuous = tierVacuityRefusal(scenario, baseline);
   if (vacuous) throw new UsageError(vacuous);
+
+  // `answer_channel: none` and `agent_env.artifacts_root`: refused before the run dir exists, like the checks above.
+  // Only what the USER chose counts as a decider here (`onUnansweredFlag`, not a caller's resolved `onUnanswered`).
+  const channelRefusal =
+    artifactsRootRefusal(session, effectiveFidelity, scenario.fidelity) ??
+    answerChannelRefusal({
+      scenario,
+      session,
+      tier: effectiveFidelity,
+      baseline,
+      invocation: {
+        onUnansweredFlag: opts.onUnansweredFlag,
+        hasDecider: opts.decider !== undefined,
+        hasExternalChannel: opts.externalChannel !== undefined,
+        llmModel: opts.llmModel,
+        llmIntent: opts.llmIntent,
+      },
+      probeHostCli: () => hostCliSupportsPermissionPrompts(strippedEnv(baseline)),
+    });
+  if (channelRefusal) throw new UsageError(channelRefusal);
 
   // Every declared source (plugins, skills, uploads, folders, marketplaces) is resolved and checked HERE,
   // before the run directory exists: a path that does not exist is a UsageError, and a run refused for it

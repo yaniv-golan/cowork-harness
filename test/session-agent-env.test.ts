@@ -130,7 +130,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     }
   });
 
-  it("SCRUBBED_AGENT_ENV_KEYS is exactly the eleven keys of rules (a)-(d)", () => {
+  it("SCRUBBED_AGENT_ENV_KEYS is exactly the twelve keys of rules (a)-(d)", () => {
     expect([...SCRUBBED_AGENT_ENV_KEYS].sort()).toEqual(
       [
         "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
@@ -144,6 +144,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
         "CLAUDE_CODE_SIMPLE",
         "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
         "CLAUDE_CODE_PROCESS_WRAPPER",
+        "COWORK_ARTIFACTS_ROOT",
       ].sort(),
     );
   });
