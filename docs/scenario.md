@@ -799,8 +799,9 @@ Only thirteen codes are **warn**-severity (informational, never flip pass/fail):
   once the run is re-recorded with them scripted. On a replay the message names the recorded answer, not who
   gave it live.
 - `parked_at_question` (**warn**) — a run whose session declares `answer_channel: none` ended on a question
-  nobody can answer. With no answer channel, stopping at the question is the contract the run models, so it
-  takes the place of the `stalled` fail; completion is judged from the file assertions such a scenario must
+  nobody can answer, by the same rule as `stalled` (its last message asks, and no tool ran after its last
+  gate). With no answer channel, stopping at the question is the contract the run models, so it takes the
+  place of the `stalled` fail. A skill that runs a tool before it asks passes with neither signal; completion is judged from the file assertions such a scenario must
   carry (see [headless-no-answer.md](./headless-no-answer.md)).
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see

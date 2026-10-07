@@ -340,8 +340,9 @@ Recognize these before "fixing" a non-bug:
   re-derive it: `verify-run` clears once you script every sub-question of the batch, a replay only after you
   re-record with them scripted (it reads the answers frozen in the cassette).
 - **`parked_at_question`** (`WARN`) — under `answer_channel: none` (a session with nobody to answer), the run
-  ended on a question. That is the contract such a run models, so it replaces the `stalled` fail; the scenario's
-  required file assertion decides whether the skill parked where it should.
+  ended on a question by `stalled`'s rule (no tool ran after its last gate). That is the contract such a run
+  models, so it replaces the `stalled` fail. A skill that runs a tool before asking passes with neither signal;
+  the scenario's required file assertion decides whether the skill parked where it should.
 
 The full 24-code signal table (severity + per-signal opt-out) is in
 [`references/assertion-catalog.md`](./assertion-catalog.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
