@@ -37,6 +37,7 @@ describe("assertions --list families", () => {
       [
         "gate_answer_count_min",
         "gate_answers_delivered",
+        "gates_all_scripted",
         "question_asked",
         "question_context",
         "question_option_count",

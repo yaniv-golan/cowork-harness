@@ -4687,6 +4687,17 @@
       ".assert[].gate_answers_delivered": {
         "type": "boolean"
       },
+      ".assert[].gates_all_scripted<anyOf:0>": {
+        "type": "boolean",
+        "const": true
+      },
+      ".assert[].gates_all_scripted<anyOf:1>": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].gates_all_scripted<anyOf:1>.include_permissions": {
+        "type": "boolean"
+      },
       ".assert[].hook_blocked": {
         "type": "string"
       },

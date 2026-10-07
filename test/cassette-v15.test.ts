@@ -13,6 +13,7 @@ const V15_SAMPLES: unknown[] = [
   { no_hook_event_blocked: true },
   { hook_event_blocked: { event: "Stop", max: 0 } },
   { hook_decision: { event: "PreToolUse", decision: "deny" } },
+  { gates_all_scripted: true },
 ];
 
 describe("cassette v15", () => {

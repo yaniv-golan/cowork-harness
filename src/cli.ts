@@ -4738,7 +4738,7 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
       match: (k) => k === "result" || k === "compaction_occurred" || k === "semantic_matches" || k === "semantic_pairwise",
     },
     { title: "Transcript / prose", match: (k) => k.startsWith("transcript_") && k !== "transcript_no_host_path" },
-    { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") },
+    { title: "Gates (AskUserQuestion)", match: (k) => k.startsWith("gate_") || k.startsWith("question") || k === "gates_all_scripted" },
     {
       title: "Hooks",
       match: (k) =>
