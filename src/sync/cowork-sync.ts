@@ -4064,9 +4064,11 @@ export function deriveSpawnEnv(
         if (distinct.length > 1) return "ambiguous";
         return { keys: distinct[0], chunk: r.chunk };
       };
-      for (const sm of text.matchAll(/\.\.\.([\w$]+)\.([\w$]+)\(([\w$]+)\)&&([\w$]+)\.([\w$]+)(?=[,}])/g)) {
-        if (sm[1] !== sm[4]) continue;
-        const obj = objectOf(`${sm[4]}.${sm[5]}`);
+      // Any condition counts, not only the scheduled-run `<ns>.<P>(<s>)` shape: a gate call (`...t.WJ("id")&&q.K`) or a
+      // predicate from another namespace (`...o.Y(a)&&q.K`) guards an imported object just the same, and skipping it would
+      // hide the object's keys. The condition may hold no `,`, `{` or `}`, so the match never crosses into a neighbour.
+      for (const sm of text.matchAll(/\.\.\.([^,{}]*?)&&([\w$]+)\.([\w$]+)(?=[,}])/g)) {
+        const obj = objectOf(`${sm[2]}.${sm[3]}`);
         if (obj === null || obj === "ambiguous") {
           flags.push(
             `spawn.env: the guarded spread \`${sm[0]}\` in W1 reads an imported object whose literal could not be resolved` +
@@ -4617,6 +4619,23 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
             ),
             ...[...def.matchAll(new RegExp(`(?<![\\w$])([\\w$]+):\\(\\)=>${reEsc(local)}(?![\\w$])`, "g"))].map((m) => m[1]),
           ];
+          // The importer census sees only the export getters. A module function returning the object (`function g(){return
+          // l}`, exported and spread unconditionally elsewhere) would hand it out past every guard, so each `return <L>` and
+          // `=><L>` in the defining chunk must BE an export getter. A minifier-reused local of the same name returned by
+          // another function fails loud here, never green.
+          const getterReturns = [...def.matchAll(new RegExp(`defineProperty\\(exports,"[\\w$]+",\\{[^}]*?return ${reEsc(local)}\\}`, "g"))]
+            .length;
+          const arrowExports = [...def.matchAll(new RegExp(`(?<![\\w$])[\\w$]+:\\(\\)=>${reEsc(local)}(?![\\w$])`, "g"))].length;
+          const returns = [...def.matchAll(new RegExp(`(?<![\\w$.])return ${reEsc(local)}(?=[};])`, "g"))].length;
+          const arrows = [...def.matchAll(new RegExp(`=>${reEsc(local)}(?![\\w$.(])`, "g"))].length;
+          if (returns !== getterReturns || arrows !== arrowExports) {
+            schedMiss(
+              `the ${SCHED_KEY} object ${local} is returned by a function in its module that is not an export getter ` +
+                `(${returns} return(s) vs ${getterReturns} getter(s), ${arrows} arrow(s) vs ${arrowExports} arrow export(s)) — ` +
+                "it can reach a session past every guard",
+            );
+            continue;
+          }
           let refs = 0;
           let admitted = 0;
           for (const [, imp] of files) {

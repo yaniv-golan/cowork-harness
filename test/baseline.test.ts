@@ -1804,6 +1804,36 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       expect(env).toBeNull();
       expect(flags.some((f) => f.includes("ZNEW_KEY"))).toBe(true);
     });
+    // An imported env object under ANY condition is read, not only under the scheduled-run predicate: a gate call or a
+    // predicate from another namespace must not hide its keys. And the bare and guarded branches differ in effect: a
+    // bare spread applies a pinned key's value, a guarded one only classifies it.
+    const Q = (obj: string) => `var k=${obj};Object.defineProperty(exports,"K",{enumerable:!0,get:function(){return k}});`;
+    const withQ = (spread: string, obj: string, exportName = "K") => {
+      const f = filesOf({ spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + spread) + ';var q=require("./index.chunk-Q.js");' });
+      f.set("index.chunk-Q.js", Q(obj).replace('"K"', `"${exportName}"`));
+      return f;
+    };
+    it.each([
+      ["a gate call", '...At("434204418")&&q.K,'],
+      ["a predicate from another namespace", "...o.Y(r)&&q.K,"],
+    ])("deriveSpawnEnv: a new key in an imported object guarded by %s → unknown-key hard fail", (_l, spread) => {
+      const { env, flags } = derive(withQ(spread, '{ZNEW_KEY:"1"}'));
+      expect(env).toBeNull();
+      expect(flags.some((f) => f.includes("ZNEW_KEY"))).toBe(true);
+    });
+    it("deriveSpawnEnv: a gate-guarded imported object that cannot be resolved → hard fail", () => {
+      const { env, flags } = derive(withQ('...At("434204418")&&q.K,', '{API_TIMEOUT_MS:"5"}', "Kgone"));
+      expect(env).toBeNull();
+      expect(flags.some((f) => /guarded spread .* could not be resolved/.test(f))).toBe(true);
+    });
+    it("deriveSpawnEnv: a BARE imported spread applies a pinned key's value; a GUARDED one does not", () => {
+      const bare = derive(withQ("...q.K,", '{API_TIMEOUT_MS:"5"}'));
+      expect(bare.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(bare.env).toEqual({ ...EXPECTED_GREEN, API_TIMEOUT_MS: "5" });
+      const guarded = derive(withQ('...At("434204418")&&q.K,', '{API_TIMEOUT_MS:"5"}'));
+      expect(guarded.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(guarded.env).toEqual(EXPECTED_GREEN);
+    });
     it("deriveSpawnEnv: the guarded spread's object no longer resolvable → hard fail, not a silent drop", () => {
       const { env, flags } = derive(filesOf({ mod: MOD.replace('exports,"J"', 'exports,"Jgone"') }));
       expect(env).toBeNull();
@@ -1840,12 +1870,27 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
         "I11 the spread's predicate called on something other than the session",
         () => filesOf({ spawn: spawn().replace("...o.Y(r)&&", "...o.Y(zOther)&&") }),
       ],
+      [
+        "I12 a module helper returns the object and W1 spreads it unconditionally",
+        () =>
+          filesOf({
+            mod: MOD + 'function uu(e){return l}Object.defineProperty(exports,"JJ",{enumerable:!0,get:function(){return uu}});',
+            spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + "...o.JJ(r),"),
+          }),
+      ],
     ];
     it.each(MUT)("S6g import-form mutation %s fails loud (%#)", (_label, mutate) => {
       expect(facts(mutate())).toContain("S6g scheduled-run env key");
     });
     // The count mismatch (constructions > guarded) also catches I10; this pins the dedicated reason, so dropping that
     // guard is not masked by the other.
+    it("I12 names the reason: a non-getter function returns the object", () => {
+      expect(
+        facts(
+          filesOf({ mod: MOD + 'function uu(e){return l}Object.defineProperty(exports,"JJ",{enumerable:!0,get:function(){return uu}});' }),
+        ),
+      ).toContain("returned by a function in its module that is not an export getter");
+    });
     it("I10 names the reason: the object has no importer", () => {
       expect(facts(filesOf({ spawn: spawn().replace(IMPORT_SPREAD, ""), codetab: "var s=1;" }))).toContain("no importer references it");
     });
@@ -2280,6 +2325,30 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       // Set in the sibling non-3p spread that shares the `...<ident>&&{` shape.
       expect(env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
     });
+  });
+
+  // 10a. The golden oracle below needs a live Desktop, so it skips in CI. This half runs everywhere: the newest committed
+  //      baseline's spawn.env must equal the golden map, and its spawnEnvKeys oracle must name every key it pins, so a
+  //      baseline written without the golden map's update (or the reverse) is red without a Mac.
+  it("the newest committed baseline's spawn.env deep-equals the golden map, and spawnEnvKeys covers it", () => {
+    const golden = JSON.parse(readFileSync(join(process.cwd(), "test", "fixtures", "spawn-env.golden.json"), "utf8")).env;
+    const dir = join(process.cwd(), "baselines");
+    const ver = (f: string) =>
+      f
+        .replace(/^desktop-|\.json$/g, "")
+        .split(".")
+        .map(Number);
+    const newest = readdirSync(dir)
+      .filter((f) => /^desktop-\d+\.\d+\.\d+\.json$/.test(f))
+      .sort((a, b) => {
+        const [x, y] = [ver(a), ver(b)];
+        return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+      })
+      .at(-1)!;
+    const b = JSON.parse(readFileSync(join(dir, newest), "utf8"));
+    expect(b.spawn.env).toEqual(golden);
+    const keys = new Set<string>(b.provenance.spawnEnvKeys);
+    expect(Object.keys(b.spawn.env).filter((k) => !keys.has(k))).toEqual([]);
   });
 
   // 10. Golden-map correctness oracle (non-circular): the generator over the REAL asar must deep-equal
