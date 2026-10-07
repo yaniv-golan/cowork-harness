@@ -16,8 +16,8 @@ All notable changes to this project are documented here. The format is based on
   new assertion key grows it. The rows are moved unchanged. No harness behaviour changes.
 - **`hook_decision: {event, decision, tool?, min?, max?}`** counts a plugin's command hook frames by what the hook
   decided: `allow`, `deny`, `ask` or `defer` (`block` and `approve` are aliases of `deny` and `allow`). It reads both
-  ways a hook decides: the JSON it prints on stdout, read on any exit code but 2 as the agent reads it, and exit code
-  2, which is a deny. Only stdout that
+  ways a hook decides: the JSON it prints on stdout, read on a frame the agent marks `outcome: success` (exit 0, or an
+  HTTP hook's 2xx status), and exit code 2, which is a deny. A hook the agent cancelled (timed out) decided nothing. Only stdout that
   parses whole as a JSON object counts as a decision, so a hook that prints the word `deny` decides nothing. It
   reads the JSON by the agent's rules: `hookSpecificOutput.permissionDecision` decides on `PreToolUse` and
   `PreModelSwitch` only, where it overrides a top-level `decision`; a `PermissionRequest` hook decides by
@@ -31,12 +31,18 @@ All notable changes to this project are documented here. The format is based on
 - `tool` scopes each of these keys to the tool that fired (`hook_name` is `<event>:<tool>`): `Bash` at `container`,
   `mcp__workspace__bash` at `hostloop`. An event whose frames carry no tool name, such as `Stop`, reports
   evidence-unavailable for any `tool`.
-- A frame whose decision cannot be read counts as unknown. That covers a missing exit code, a hook that never
-  answered, stdout that a redaction policy rewrote or the agent truncated, and output the agent rejects. The agent
-  marks a rejection on the frame (`outcome: "error"` with exit 0, or, at the start of stderr, its rejection of the
-  JSON, its refusal to read an incomplete capture, or its failure to run the hook), and the reader also treats as rejected a top-level `decision` other than `approve` or `block`, and a
-  `hookSpecificOutput` whose `hookEventName` is missing or names another event. An unknown frame makes a check evidence-unavailable only when it could change the verdict. `record` warns
-  when its redaction policy makes a hook decision that one of these keys reads unreadable.
+- A frame whose decision cannot be read counts as unknown, and makes a check evidence-unavailable only when it could
+  change the verdict. That covers:
+  - a JSON decision on a frame other than `outcome: success`, such as exit 1, where the frame does not show whether
+    the agent applied it;
+  - a missing exit code, or a hook that never answered;
+  - stdout that a redaction policy rewrote or the agent truncated;
+  - output the agent did not apply, which it marks on the frame: `outcome: "error"` with exit 0, or, at the start of
+    stderr, its rejection of the JSON, its refusal to read an incomplete capture, or its failure to run the hook;
+  - a top-level `decision` other than `approve` or `block`, and a `hookSpecificOutput` whose `hookEventName` is
+    missing or names another event.
+
+  `record` warns when its redaction policy makes a hook decision that one of these keys reads unreadable.
 - A cassette whose scenario uses `hook_decision`, `no_hook_event_blocked` or the object form of `hook_event_blocked`
   is stamped v15, so an older build refuses it as too new instead of rejecting the assertion. The bare
   `hook_event_blocked: <event>` stamps what it did.

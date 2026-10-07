@@ -305,28 +305,41 @@ describe("the JSON decision channel (the hook-decision recording)", () => {
     const r = run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "json", max: 0 } }, ctx(decisions(broken)));
     expect(r.message).toMatch(UNAVAILABLE);
   });
-  it("the JSON decides on any exit code but 2, as the agent reads it (edited: Bash's frame exits 1)", () => {
-    const exit1 = (stdout?: string) => (fs: Frame[]) =>
-      fs.map((f) =>
-        isResponse(f) && f.hook_name === "PreToolUse:Bash"
-          ? { ...f, exit_code: 1, outcome: "error", ...(stdout === undefined ? {} : { stdout, output: stdout }) }
-          : f,
+  describe("which frames' JSON decides (edited: Bash's response frame)", () => {
+    const edit = (patch: Frame) => (fs: Frame[]) =>
+      fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Bash" ? { ...f, ...patch } : f));
+    const c = (patch: Frame) => ctx(decisions(edit(patch)));
+    it("exit 1 with a JSON deny is unreadable: a command hook's is applied, an MCP tool hook's error is not", () => {
+      for (const patch of [
+        { exit_code: 1, outcome: "error" },
+        // An MCP tool hook whose tool reported an error: the body is both stdout and stderr.
+        { exit_code: 1, outcome: "error", stderr: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"}}' },
+      ]) {
+        expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c(patch)).message).toMatch(UNAVAILABLE);
+        expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1 } }, c(patch)).message).toMatch(
+          UNAVAILABLE,
+        );
+        expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "exit2", max: 0 } }, c(patch)).pass).toBe(true);
+      }
+    });
+    it("exit 1 with plain text on stdout decides nothing", () => {
+      const text = c({ exit_code: 1, outcome: "error", stdout: "Traceback: boom\n", output: "Traceback: boom\n" });
+      expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, text).pass).toBe(true);
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, text).pass).toBe(true);
+    });
+    it("a hook the agent cancelled decided nothing, whatever it printed first", () => {
+      const cancelled = c({ exit_code: 1, outcome: "cancelled" });
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, cancelled).pass).toBe(true);
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, cancelled).pass).toBe(true);
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c({ exit_code: 0, outcome: "cancelled" })).pass).toBe(
+        true,
       );
-    // Exit 1 with the recorded JSON deny on stdout: the agent applies it, so it is a block.
-    const deny = ctx(decisions(exit1()));
-    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, deny).pass).toBe(false);
-    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, deny).pass).toBe(true);
-    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", via: "exit2", max: 0 } }, deny).pass).toBe(true);
-    // Exit 1 with plain text on stdout decides nothing.
-    const text = ctx(decisions(exit1("Traceback: boom\n")));
-    expect(run({ hook_event_blocked: { event: "PreToolUse", tool: "Bash", max: 0 } }, text).pass).toBe(true);
-    expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", max: 0 } }, text).pass).toBe(true);
-  });
-  it("an HTTP hook's frame carries the HTTP status as its exit code, and its JSON decides (edited: Bash's frame exits 200)", () => {
-    const http = (fs: Frame[]) =>
-      fs.map((f) => (isResponse(f) && f.hook_name === "PreToolUse:Bash" ? { ...f, exit_code: 200, outcome: "success" } : f));
-    const c = ctx(decisions(http));
-    expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, c).pass).toBe(false);
+    });
+    it("an HTTP hook's frame carries the HTTP status as its exit code: on success its JSON decides", () => {
+      const http = c({ exit_code: 200, outcome: "success" });
+      expect(run({ hook_decision: { event: "PreToolUse", tool: "Bash", decision: "deny", min: 1, max: 1 } }, http).pass).toBe(true);
+      expect(run({ no_hook_event_blocked: { event: "PreToolUse", tool: "Bash" } }, http).pass).toBe(false);
+    });
   });
   it("a frame with no stdout field is unreadable: `output` joins stdout and stderr, so it is never read as the decision", () => {
     const outputOnly = (fs: Frame[]) =>

@@ -1657,8 +1657,8 @@ type HookFrame = {
  *  build can be re-checked rule by rule: find the anchor, read the code around it. Minified names change every build,
  *  so every anchor is a literal. Read from agents 2.1.289 and 2.1.293. `test/hook-decision-elf-anchors.test.ts` fails
  *  when an anchor is missing from the staged agent, and skips when none is staged. Two rules have no literal of their
- *  own, so re-check them by reading the code: the agent parses stdout and applies its JSON before it looks at the exit
- *  code (after the "does not start with {" anchor), and exit 2 blocks whatever stdout says. */
+ *  own, so re-check them by reading the code: the agent parses a command hook's stdout and applies its JSON before it
+ *  looks at the exit code (after the "does not start with {" anchor), and exit 2 blocks whatever stdout says. */
 export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }> = [
   {
     rule: "stdout that does not open with `{` is plain text, not a decision",
@@ -1683,6 +1683,11 @@ export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }
   { rule: "a capture whose stdio closed early is refused (and can block)", anchor: "hook stdio closed before end-of-stream" },
   { rule: "a granting capture whose stdio went quiet is refused (and can block)", anchor: "hook output parsed as a document that grants" },
   { rule: "a partial JSON capture is refused (and can block)", anchor: "hook output opens a JSON payload that never completed" },
+  {
+    rule: "a hook the agent cancelled (timed out) decides nothing; the agent stops before it reads stdout",
+    anchor: 'type:"hook_cancelled"',
+  },
+  { rule: "an MCP tool hook whose tool reports an error decides nothing (the frame exits 1)", anchor: "MCP tool returned an error" },
 ];
 
 /** The events whose hook can decide by `hookSpecificOutput.permissionDecision`. The agent ignores the field on every other
@@ -1754,12 +1759,33 @@ export const OBJECT_HOOK_EVENT_BLOCKED_VIA: HookChannel = "any";
 const AGENT_REJECTED_RE =
   /^(?:hook (?:stdio closed before end-of-stream|output parsed as a document that grants|output opens a JSON payload that never completed)|Hook JSON output validation failed|HTTP hook must return|Failed to run: )/;
 
+/** The JSON decision a `hook_response` frame's data carries, by the rules in `HOOK_DECISION_RULES`: `undefined` when it
+ *  cannot be read. Shared by the hook keys and record's redaction warning, so both read a frame the same way. */
+export function frameJsonDecision(d: Record<string, unknown> | undefined): { json: HookDecision | undefined; token?: string } {
+  const exitCode = typeof d?.exit_code === "number" ? d.exit_code : undefined;
+  if (exitCode === undefined) return { json: undefined };
+  // stdout alone: `output` joins stdout and stderr, so a frame without `stdout` has no readable decision.
+  const stdout = typeof d?.stdout === "string" ? d.stdout : undefined;
+  const stderr = typeof d?.stderr === "string" ? d.stderr : "";
+  // Exit 2 is a deny on its own, read by the exit-2 channel.
+  if (exitCode === 2) return { json: "none" };
+  if (AGENT_REJECTED_RE.test(stderr)) return { json: undefined };
+  // A hook the agent cancelled (it timed out) decided nothing: the agent stops before it reads stdout.
+  if (d?.outcome === "cancelled") return { json: "none" };
+  const read = stdout === undefined ? { json: undefined } : readJsonDecision(stdout, d?.hook_event);
+  // On `outcome: "success"` (exit 0, or an HTTP hook's 2xx) the JSON decides.
+  if (d?.outcome === "success") return read;
+  // On any other frame the agent may or may not have applied the JSON (it does for a command hook that exits 1, not
+  // for an MCP tool hook that reports an error), so a decision there is unreadable; stdout that decides nothing stays
+  // no decision. An exit-0 frame marked `outcome: "error"` is output the agent did not apply, and on some events that
+  // blocks, so it is unreadable whatever stdout holds.
+  return exitCode === 0 || read.json !== "none" ? { json: undefined } : read;
+}
+
 /** The `hook_response` frames for `event` (and, with `tool`, only those whose `hook_name` is `<event>:<tool>` — the
  *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered.
  *  `untooled` is set when `tool` was asked for and the event's frames carry no tool name at all (`Stop` is named
- *  `Stop`), so no frame could ever match it. The JSON on stdout decides on any exit code but 2, as the agent reads it (an
- *  HTTP hook's frame carries the HTTP status as its exit code). An exit-0 frame the agent marked `outcome: "error"` is
- *  unreadable: the agent did not apply its output, and on some events that blocks. */
+ *  `Stop`), so no frame could ever match it. Each frame's JSON decision is read by `frameJsonDecision`. */
 function hookFrames(
   events: NonNullable<AssertContext["contextEvents"]>,
   event: string | undefined,
@@ -1775,18 +1801,7 @@ function hookFrames(
   const raw = events.filter((e) => e.subtype === "hook_response" && inScope(e));
   const frames = raw.map((e): HookFrame => {
     const exitCode = typeof e.data?.exit_code === "number" ? e.data.exit_code : undefined;
-    // stdout alone: `output` joins stdout and stderr, so a frame without `stdout` has no readable decision.
-    const stdout = typeof e.data?.stdout === "string" ? e.data.stdout : undefined;
-    const stderr = typeof e.data?.stderr === "string" ? e.data.stderr : "";
-    // The agent reads the JSON on stdout whatever the exit code; exit 2 is a deny on its own.
-    const { json, token } =
-      exitCode === undefined || (exitCode !== 2 && AGENT_REJECTED_RE.test(stderr))
-        ? { json: undefined }
-        : exitCode === 2
-          ? { json: "none" as const }
-          : (exitCode === 0 && e.data?.outcome === "error") || stdout === undefined
-            ? { json: undefined }
-            : readJsonDecision(stdout, e.data?.hook_event);
+    const { json, token } = frameJsonDecision(e.data);
     const exit2 = exitCode === undefined ? undefined : exitCode === 2;
     return {
       name: typeof e.data?.hook_name === "string" ? e.data.hook_name : String(e.data?.hook_event ?? event),

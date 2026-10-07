@@ -727,6 +727,24 @@ describe("hook decisions on replay, and the redaction finding for them", () => {
     expect(redactionRewroteHookOutput(base, redactCassette(base, POLICY))).toEqual([]);
   });
 
+  it("record-time: reads frames as the keys do (edited: Bash's frame as an HTTP hook's 2xx, then as an exit 1)", () => {
+    const as = (patch: Record<string, unknown>) =>
+      framesCassette(
+        [{ no_hook_event_blocked: { event: "PreToolUse" } }],
+        loadHookDecisionFrames().map((f) => (f.subtype === "hook_response" && f.hook_name === "PreToolUse:Bash" ? { ...f, ...patch } : f)),
+      );
+    // An HTTP hook's 2xx frame decides by its JSON, so redacting that stdout is named.
+    const http = as({ exit_code: 200, outcome: "success" });
+    expect(redactionRewroteHookOutput(http, redactCassette(http, STDOUT_POLICY))[0]).toMatch(
+      /^assert\[0\] no_hook_event_blocked on PreToolUse/,
+    );
+    // An exit-1 frame's JSON deny is unreadable before redaction too, so redacting it changes nothing the key reads.
+    const exit1 = as({ exit_code: 1, outcome: "error" });
+    expect(
+      redactionRewroteHookOutput(exit1, redactCassette(exit1, STDOUT_POLICY)).filter((m) => m.includes("PreToolUse` hook_response frame")),
+    ).toEqual([]);
+  });
+
   it("record's self-check: a failing hook_decision that redaction makes unavailable does not refuse; a pass it breaks does", async () => {
     const failing = decisionCassette([{ hook_decision: { event: "PreToolUse", decision: "deny", tool: "Bash", max: 0 } }]);
     await expect(assertRedactionVerdictPreserved(failing, redactCassette(failing, STDOUT_POLICY))).resolves.toBeUndefined();
