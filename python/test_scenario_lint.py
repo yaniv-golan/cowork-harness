@@ -1442,6 +1442,34 @@ def test_enum_value_invalid_on_nested_assert_result(tmp_path):
     assert code == 1
 
 
+def test_enum_value_invalid_on_hook_keys_string_and_object_forms(tmp_path):
+    # `hook_event_blocked` takes a bare event OR `{event, ...}`: each form is checked against its own field id,
+    # and a valid object is never reported as an invalid bare event.
+    body = (
+        "assert:\n"
+        "  - hook_event_blocked: Stopp\n"
+        "  - hook_event_blocked: {event: Stopp, max: 0}\n"
+        "  - hook_event_blocked: {event: Stop, max: 0}\n"
+        "  - no_hook_event_blocked: {event: Nope}\n"
+        "  - no_hook_event_blocked: true\n"
+        "  - hook_decision: {event: PreToolUse, decision: denied}\n"
+        "  - hook_decision: {event: PreToolUse, decision: block}\n"
+        "  - hook_event_fired: Stop\n"
+    )
+    f = _write_at(tmp_path, "container", body)
+    code, findings = _lint_cmd([f], json_out=True, strict=False)
+    hits = sorted(x["message"] for x in findings if x["rule"] == "enum-value-invalid")
+    assert hits == sorted(
+        [
+            "`assert.hook_event_blocked: Stopp` is not a valid value.",
+            "`assert.hook_event_blocked.event: Stopp` is not a valid value.",
+            "`assert.no_hook_event_blocked.event: Nope` is not a valid value.",
+            "`assert.hook_decision.decision: denied` is not a valid value.",
+        ]
+    )
+    assert code == 1
+
+
 def test_enum_value_invalid_on_answers_decide(tmp_path):
     body = "answers:\n  - when_tool: Bash\n    decide: bogus\nassert:\n  - result: success\n"
     f = _write_at(tmp_path, "container", body)

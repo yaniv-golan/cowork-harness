@@ -748,43 +748,253 @@
             ]
           },
           "hook_event_blocked": {
-            "description": "that command hook BLOCKED at least once: a `hook_response` frame for the event carried `exit_code: 2` (the agent's blocking exit; the frame also carries outcome 'error'). Fails naming the exit codes/outcomes seen when the hook fired without blocking (`exit_code` is optional on the wire — a frame without it is reported as such, never counted as blocked); fails 'no hook_response' when it never fired; cannot-verify when the run has no context events. Content-class. Recorded end-to-end for `Stop`",
-            "type": "string",
-            "enum": [
-              "PreToolUse",
-              "PostToolUse",
-              "PostToolUseFailure",
-              "PostToolBatch",
-              "Notification",
-              "UserPromptSubmit",
-              "UserPromptExpansion",
-              "SessionStart",
-              "SessionEnd",
-              "Stop",
-              "StopFailure",
-              "SubagentStart",
-              "SubagentStop",
-              "PreCompact",
-              "PostCompact",
-              "PreModelSwitch",
-              "PostModelSwitch",
-              "PermissionRequest",
-              "PermissionDenied",
-              "Setup",
-              "TeammateIdle",
-              "TaskCreated",
-              "TaskCompleted",
-              "Elicitation",
-              "ElicitationResult",
-              "ConfigChange",
-              "WorktreeCreate",
-              "WorktreeRemove",
-              "InstructionsLoaded",
-              "CwdChanged",
-              "FileChanged",
-              "DirectoryAdded",
-              "MessageDisplay"
+            "description": "that command hook BLOCKED: a `hook_response` frame for the event denied, by exit code 2 or by a JSON decision on stdout with exit 0 (a PreToolUse `permissionDecision: \"deny\"`, or a top-level `decision: \"block\"`, which the agent treats alike). The bare event means at least one block. The OBJECT form `{event, tool?, min?, max?}` counts blocking frames (one per hook run: PreToolUse runs once per matching tool call, subagent calls included); `{event, max: 0}` is the per-event negative. Fails naming the exit codes/outcomes seen when the hook fired without blocking; fails 'no hook_response' when it never fired, for `max: 0` too, so a disabled hook never passes. A frame whose outcome cannot be read (no exit code, a hook that started and never answered, stdout a redaction policy rewrote or the agent truncated) is evidence-unavailable when it could change the verdict. A script the hook cannot find also exits 2, so it reads as a block. Cannot-verify when the run has no context events. Content-class. Recorded end-to-end for `Stop`",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "PreToolUse",
+                  "PostToolUse",
+                  "PostToolUseFailure",
+                  "PostToolBatch",
+                  "Notification",
+                  "UserPromptSubmit",
+                  "UserPromptExpansion",
+                  "SessionStart",
+                  "SessionEnd",
+                  "Stop",
+                  "StopFailure",
+                  "SubagentStart",
+                  "SubagentStop",
+                  "PreCompact",
+                  "PostCompact",
+                  "PreModelSwitch",
+                  "PostModelSwitch",
+                  "PermissionRequest",
+                  "PermissionDenied",
+                  "Setup",
+                  "TeammateIdle",
+                  "TaskCreated",
+                  "TaskCompleted",
+                  "Elicitation",
+                  "ElicitationResult",
+                  "ConfigChange",
+                  "WorktreeCreate",
+                  "WorktreeRemove",
+                  "InstructionsLoaded",
+                  "CwdChanged",
+                  "FileChanged",
+                  "DirectoryAdded",
+                  "MessageDisplay"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "event": {
+                    "type": "string",
+                    "enum": [
+                      "PreToolUse",
+                      "PostToolUse",
+                      "PostToolUseFailure",
+                      "PostToolBatch",
+                      "Notification",
+                      "UserPromptSubmit",
+                      "UserPromptExpansion",
+                      "SessionStart",
+                      "SessionEnd",
+                      "Stop",
+                      "StopFailure",
+                      "SubagentStart",
+                      "SubagentStop",
+                      "PreCompact",
+                      "PostCompact",
+                      "PreModelSwitch",
+                      "PostModelSwitch",
+                      "PermissionRequest",
+                      "PermissionDenied",
+                      "Setup",
+                      "TeammateIdle",
+                      "TaskCreated",
+                      "TaskCompleted",
+                      "Elicitation",
+                      "ElicitationResult",
+                      "ConfigChange",
+                      "WorktreeCreate",
+                      "WorktreeRemove",
+                      "InstructionsLoaded",
+                      "CwdChanged",
+                      "FileChanged",
+                      "DirectoryAdded",
+                      "MessageDisplay"
+                    ],
+                    "description": "the hook event whose `hook_response` frames are counted"
+                  },
+                  "tool": {
+                    "description": "only frames whose `hook_name` is `<event>:<tool>`: the exact name of the tool that fired (or the SessionStart source: `startup`, `resume`, `compact`), NOT the matcher configured in hooks.json. Tool names differ by tier: the shell is `Bash` at `container` and `mcp__workspace__bash` at `hostloop`, so the wrong name reports 'never fired'",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "min": {
+                    "description": "at least N matching frames (default 1, or 0 when only `max` is set)",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "max": {
+                    "description": "at most N matching frames",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "event"
+                ],
+                "additionalProperties": false
+              }
             ]
+          },
+          "no_hook_event_blocked": {
+            "description": "no command hook blocked: every `hook_response` frame (or, in the object form `{event, tool?}`, every frame for that event) neither exited 2 nor denied by JSON — the same blocking rule as hook_event_blocked. Never vacuous: no frame in scope fails evidence-unavailable, and the unscoped `true` also needs a frame of an event other than SessionStart/Setup, which stream even when hook events were not requested (they stream only when a staged plugin declares hooks). A frame without an exit code, or a hook that started and never answered, is evidence-unavailable. Frames carry no plugin id: a second staged plugin's hook, or a host plugin's on `protocol`, counts as a frame here (the run warns). Distinct from `no_hook_blocked`, which reads the harness's OWN PreToolUse callbacks from controlOut. Content-class",
+            "anyOf": [
+              {
+                "type": "boolean",
+                "const": true
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "event": {
+                    "type": "string",
+                    "enum": [
+                      "PreToolUse",
+                      "PostToolUse",
+                      "PostToolUseFailure",
+                      "PostToolBatch",
+                      "Notification",
+                      "UserPromptSubmit",
+                      "UserPromptExpansion",
+                      "SessionStart",
+                      "SessionEnd",
+                      "Stop",
+                      "StopFailure",
+                      "SubagentStart",
+                      "SubagentStop",
+                      "PreCompact",
+                      "PostCompact",
+                      "PreModelSwitch",
+                      "PostModelSwitch",
+                      "PermissionRequest",
+                      "PermissionDenied",
+                      "Setup",
+                      "TeammateIdle",
+                      "TaskCreated",
+                      "TaskCompleted",
+                      "Elicitation",
+                      "ElicitationResult",
+                      "ConfigChange",
+                      "WorktreeCreate",
+                      "WorktreeRemove",
+                      "InstructionsLoaded",
+                      "CwdChanged",
+                      "FileChanged",
+                      "DirectoryAdded",
+                      "MessageDisplay"
+                    ],
+                    "description": "only this event's frames"
+                  },
+                  "tool": {
+                    "description": "only frames whose `hook_name` is `<event>:<tool>`: the exact name of the tool that fired (or the SessionStart source: `startup`, `resume`, `compact`), NOT the matcher configured in hooks.json. Tool names differ by tier: the shell is `Bash` at `container` and `mcp__workspace__bash` at `hostloop`, so the wrong name reports 'never fired'",
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "event"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "hook_decision": {
+            "description": "count the `hook_response` frames for the event whose decision is `decision`, read from the hook's stdout JSON on exit 0 (`hookSpecificOutput.permissionDecision`, else top-level `decision`) or from exit code 2 (a deny). Range `min`/`max` as for hook_event_blocked (default at least 1); `tool` scopes to the tool that fired. Non-JSON stdout is no decision, not an error. Fails 'never fired' when no frame is in scope. A frame whose decision cannot be read (stdout a redaction policy rewrote so it no longer parses, truncated output, no exit code, a hook that started and never answered, a `hookEventName` that names another event) is evidence-unavailable when it could change the verdict. Content-class, so it grades on replay",
+            "type": "object",
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "PreToolUse",
+                  "PostToolUse",
+                  "PostToolUseFailure",
+                  "PostToolBatch",
+                  "Notification",
+                  "UserPromptSubmit",
+                  "UserPromptExpansion",
+                  "SessionStart",
+                  "SessionEnd",
+                  "Stop",
+                  "StopFailure",
+                  "SubagentStart",
+                  "SubagentStop",
+                  "PreCompact",
+                  "PostCompact",
+                  "PreModelSwitch",
+                  "PostModelSwitch",
+                  "PermissionRequest",
+                  "PermissionDenied",
+                  "Setup",
+                  "TeammateIdle",
+                  "TaskCreated",
+                  "TaskCompleted",
+                  "Elicitation",
+                  "ElicitationResult",
+                  "ConfigChange",
+                  "WorktreeCreate",
+                  "WorktreeRemove",
+                  "InstructionsLoaded",
+                  "CwdChanged",
+                  "FileChanged",
+                  "DirectoryAdded",
+                  "MessageDisplay"
+                ],
+                "description": "the hook event whose `hook_response` frames are counted"
+              },
+              "tool": {
+                "description": "only frames whose `hook_name` is `<event>:<tool>`: the exact name of the tool that fired (or the SessionStart source: `startup`, `resume`, `compact`), NOT the matcher configured in hooks.json. Tool names differ by tier: the shell is `Bash` at `container` and `mcp__workspace__bash` at `hostloop`, so the wrong name reports 'never fired'",
+                "type": "string",
+                "minLength": 1
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "deny",
+                  "ask",
+                  "defer",
+                  "block",
+                  "approve"
+                ],
+                "description": "the decision, as the agent applies it: `deny` (alias `block`) matches exit code 2, a PreToolUse `permissionDecision: \"deny\"` and a top-level `decision: \"block\"`; `allow` (alias `approve`) matches `permissionDecision: \"allow\"` and `decision: \"approve\"`; `ask` and `defer` match their permissionDecision"
+              },
+              "min": {
+                "description": "at least N matching frames (default 1, or 0 when only `max` is set)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "max": {
+                "description": "at most N matching frames",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "event",
+              "decision"
+            ],
+            "additionalProperties": false
           },
           "hook_output_contains": {
             "description": "a COMMAND hook's output for this event contains a text: some `hook_response` frame for `event` carries `text` (a literal substring, case-sensitive) or `matches` (a regex, case-insensitive) in its `stdout`, its `stderr`, or either (`stream`, default `any`). Every frame for the event counts, blocking ones included; an event usually fires several times (each tool call for PreToolUse, each turn for Stop). `matches` is case-insensitive and has no multiline flag, so `^` / `$` anchor the whole stream, not a line. Fails when the hook never fired, with the same diagnosis as hook_event_fired; cannot-verify when the run has no context events. On a stream a redaction policy rewrote (a replayed cassette, a scrubbed run dir), a literal miss and any `matches` result are evidence-unavailable for either key, while a literal hit outside a token counts; a needle the policy rewrote is evidence-unavailable. A miss is also evidence-unavailable when a hook for the event started and never sent a response (an async or backgrounded hook, or one still running at the end), or when the agent truncated a frame's output. Content-class, so it grades on replay. Frames carry no plugin id, so a second staged plugin hooking the same event also counts, as does a plugin installed on the host when a `protocol` run reads the real config dir; the run warns when either applies. Recorded end-to-end for `Stop`",

@@ -152,6 +152,8 @@ CONTENT_KEYS = {
     "compaction_occurred",
     "hook_event_fired",
     "hook_event_blocked",
+    "no_hook_event_blocked",
+    "hook_decision",
     "hook_output_contains",
     "hook_output_not_contains",
     "all_tasks_completed",
@@ -407,6 +409,10 @@ _EMBEDDED_ENUMS = {
     "assert.semantic_pairwise.order": ["random", "both"],
     "assert.hook_event_fired": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_event_blocked": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_event_blocked.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.no_hook_event_blocked.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_decision.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
+    "assert.hook_decision.decision": ["allow", "deny", "ask", "defer", "block", "approve"],
     "assert.hook_output_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_output_contains.stream": ["stdout", "stderr", "any"],
     "assert.hook_output_not_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
@@ -1694,6 +1700,26 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 _f = _enum_finding(f"assert.{_tk}.scope", _tv["scope"], path)
                 if _f is not None:
                     findings.append(_f)
+        # The hook keys: a bare event name (`hook_event_blocked: Stop`) is checked against the event list; the
+        # object form (`{event, ...}`) checks its own enum fields. A string must never be read as an object or
+        # an object as an invalid bare event.
+        for _hk in ("hook_event_fired", "hook_event_blocked"):
+            if _hk in _item and not isinstance(_item[_hk], dict):
+                _f = _enum_finding(f"assert.{_hk}", _item[_hk], path)
+                if _f is not None:
+                    findings.append(_f)
+        for _hk, _fields in (
+            ("hook_event_blocked", ("event",)),
+            ("no_hook_event_blocked", ("event",)),
+            ("hook_decision", ("event", "decision")),
+        ):
+            _hv = _item.get(_hk)
+            if isinstance(_hv, dict):
+                for _key in _fields:
+                    if _key in _hv:
+                        _f = _enum_finding(f"assert.{_hk}.{_key}", _hv[_key], path)
+                        if _f is not None:
+                            findings.append(_f)
         _question_options = _item.get("question_options")
         if isinstance(_question_options, dict):
             if "order" in _question_options:
