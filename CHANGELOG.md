@@ -88,6 +88,26 @@ All notable changes to this project are documented here. The format is based on
   at. `lint`'s `hook-event-not-served` message now names those tiers: `Stop` says `container`, where it used to claim
   `container` and `hostloop`.
 
+### Added
+
+- **`artifact_json` takes a glob in `artifact`, with `match: each | any`.** One assertion now checks every JSON
+  file a skill writes per run or per item, e.g.
+  `{artifact: outputs/artifacts/runs/*/run_status.json, match: each, path: status, equals: complete}`. Before this, a
+  scenario had to pin a fixed run id.
+  - **Syntax:** the `no_unexpected_files` glob syntax (`*`, `?`, whole-segment `**`; `[` is literal), matched
+    against exact filesystem names.
+  - **`match` is required with a glob and refused without one.** `lint` and the loader both report it, so a glob
+    can't silently become a literal path.
+  - **Scope:** the glob matches files under the user-visible roots only, which is what a cassette records, so
+    `replay` grades the same files as the live run. Uploaded inputs are not matched, and a glob that can reach no
+    user-visible root (an `uploads/` glob, say) fails and says why.
+  - **Failures:** zero matches fail, naming the glob and what the nearest directory holds. More than 200 matches,
+    a walk that couldn't see the whole tree, a symlink or hardlink match, or a match with no readable body is
+    evidence-unavailable. The message lists the files that passed, failed and couldn't be evaluated.
+  - **`authored: true`** applies to each match.
+  - **At `record`,** a match stored hash-only over the body cap is refused, as for a literal path.
+  - **`workspace_fixture`:** a glob that matches a fixture file needs `authored:`, as a literal path does.
+
 ## [4.5.0] — 2026-10-07
 
 From 2026-10-06 new Pro and Max tasks run in the cloud, and every tier of this harness models Cowork's local lane.
