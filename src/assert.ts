@@ -39,7 +39,7 @@ import {
   type WalkBounds,
 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
-import { anyGlobMatches, artifactGlobSegments, globToRegExp, isArtifactGlob } from "./glob.js";
+import { anyGlobMatches, artifactGlobSegments, globCouldMatchBelow, globToRegExp, isArtifactGlob } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
 import { isVmSessionsPath } from "./vm-paths.js";
 
@@ -2588,7 +2588,14 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
 
 /** Every check `artifact_json` makes on ONE file, in order: the result list a literal `artifact` pushes as-is, and
  *  what the glob form folds per matched file (see `globArtifactJson`). */
-function artifactJsonChecks(ctx: AssertContext, aj: NonNullable<Assertion["artifact_json"]>, target: string): KeyResult[] {
+function artifactJsonChecks(
+  ctx: AssertContext,
+  aj: NonNullable<Assertion["artifact_json"]>,
+  target: string,
+  /** Set when the body could not be had at all (a read error, or over the live body cap) — what a cassette records
+   *  as `unreadable` / `size`. The literal form's messages stay as they are; the glob form reads this flag. */
+  noBody?: { set: boolean },
+): KeyResult[] {
   const results: KeyResult[] = [];
   const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
   const fail = (message: string): KeyResult => ({ pass: false, message });
@@ -2637,14 +2644,18 @@ function artifactJsonChecks(ctx: AssertContext, aj: NonNullable<Assertion["artif
       // The read is inside one guard: evaluate()/check() are synchronous with no error boundary, so a
       // TOCTOU/EACCES/IO error here (the file existed at the gate but stat/read throws) would crash
       // verification instead of failing the assertion.
+      let read = false;
       try {
         const body = readBodyCapped(gate.realFile);
+        read = true;
         if ("tooLarge" in body) {
           results.push(fail(`${ARTIFACT_JSON_TOO_LARGE} (${body.tooLarge} bytes, limit 10 MiB)`));
           parsed = false;
+          if (noBody) noBody.set = true;
         } else doc = JSON.parse(body.buf.toString("utf8"));
       } catch (e) {
         parsed = false;
+        if (!read && noBody) noBody.set = true;
         results.push(fail(`artifact_json: ${target} could not be read/parsed as JSON: ${String((e as Error).message)}`));
       }
       if (parsed) {
@@ -2774,9 +2785,35 @@ function globArtifactJson(ctx: AssertContext, aj: NonNullable<Assertion["artifac
           ? ` — uploaded inputs are not matched by a glob (a cassette holds them hash-only); assert a deliverable, or name one upload literally`
           : ` — globs match files under outputs/ and the connected folders only`),
     };
+  // A link on the literal prefix below its root: the walk would start through it, but the manifest walk records the
+  // link itself and never descends, so replay could not see what live did. Live sees a symlink; replay, a link entry.
+  for (const r of roots) {
+    if (!startsWith(literal, r)) continue;
+    for (let k = r.length + 1; k <= literal.length; k++) {
+      const p = literal.slice(0, k).join("/");
+      let link = ctx.linkPaths?.has(p) === true;
+      if (!link) {
+        try {
+          link = lstatSync(join(ctx.workRoot, p)).isSymbolicLink();
+        } catch {
+          break; // nothing there: the walk finds no match below it, on either lane
+        }
+      }
+      if (link)
+        return {
+          pass: false,
+          message: `evidence unavailable: ${label} — "${p}" on the glob's path is a link; a recording keeps the link, not what it points to, so its matches cannot be read the same way on replay`,
+        };
+    }
+  }
   const walk = collectArtifactPathsWithHealth(ctx.workRoot, starts, ARTIFACT_GLOB_WALK_BOUNDS);
   const re = globToRegExp(glob);
   const matches = [...new Map(walk.entries.filter((e) => re.test(e.path)).map((e) => [e.path, e])).values()];
+  // A link the walk did not follow, where a match could lie below it (a symlinked run directory under `runs/*`).
+  // `each` cannot claim every run with one unseen, so these count as unavailable matches.
+  const linksBelow = walk.entries
+    .filter((e) => (e.linkKind || ctx.linkPaths?.has(e.path)) && !re.test(e.path) && globCouldMatchBelow(segs, e.path.split("/")))
+    .map((e) => `${e.path} (a ${e.linkKind ?? "link"} the walk does not follow, where a match could be)`);
   if (walk.containmentSkips.length || !walk.complete) {
     const why = walk.containmentSkips.length
       ? `${walk.containmentSkips.length} subtree(s) were skipped for escaping the work root (${walk.containmentSkips.slice(0, 3).join(", ")})`
@@ -2786,6 +2823,11 @@ function globArtifactJson(ctx: AssertContext, aj: NonNullable<Assertion["artifac
           .join("; ")})`;
     return { pass: false, message: `evidence unavailable: ${label} — ${why}, so the matched set is not known` };
   }
+  if (matches.length === 0 && linksBelow.length)
+    return {
+      pass: false,
+      message: `evidence unavailable: ${label} — no file matches, but ${linksBelow.length} link(s) could hold one: ${linksBelow.slice(0, 5).join("; ")}`,
+    };
   if (matches.length === 0) {
     // The deepest directory of the literal prefix that exists, and what it holds — the usual cause is a name typo.
     let near = "";
@@ -2812,16 +2854,16 @@ function globArtifactJson(ctx: AssertContext, aj: NonNullable<Assertion["artifac
     };
   const passed: string[] = [];
   const failed: string[] = [];
-  const unavailable: string[] = [];
+  const unavailable: string[] = [...linksBelow];
   for (const m of matches) {
     if (m.linkKind || ctx.linkPaths?.has(m.path)) {
       unavailable.push(`${m.path} (a ${m.linkKind ?? "link"} — no body on replay)`);
       continue;
     }
-    const bad = artifactJsonChecks(ctx, aj, m.path).filter((r): r is { pass: false; message: string } => !r.pass);
+    const noBody = { set: false };
+    const bad = artifactJsonChecks(ctx, aj, m.path, noBody).filter((r): r is { pass: false; message: string } => !r.pass);
     if (bad.length === 0) passed.push(m.path);
-    else if (bad.some((r) => r.message.startsWith("evidence unavailable") || r.message.startsWith(ARTIFACT_JSON_TOO_LARGE)))
-      unavailable.push(`${m.path} (${bad[0].message})`);
+    else if (noBody.set || bad.some((r) => r.message.startsWith("evidence unavailable"))) unavailable.push(`${m.path} (${bad[0].message})`);
     else failed.push(`${m.path} (${bad[0].message})`);
   }
   const list = (name: string, xs: string[]) =>

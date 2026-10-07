@@ -1242,6 +1242,10 @@ export const Assertion = z.strictObject({
       message: "a glob `artifact` (one with `*` or `?`) needs `match: each | any`; a literal `artifact` takes no `match`",
       path: ["match"],
     })
+    .refine((v) => !isArtifactGlob(v.artifact) || !/[/\\]$/.test(v.artifact), {
+      message: "a glob `artifact` matches files, so it cannot end in `/` (end it with a file pattern, e.g. `*/run_status.json`)",
+      path: ["artifact"],
+    })
     .optional()
     .describe("assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"),
   semantic_matches: z

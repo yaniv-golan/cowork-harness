@@ -53,3 +53,18 @@ export function artifactGlobSegments(p: string): string[] {
     .split("/")
     .filter((seg) => seg !== "" && seg !== ".");
 }
+
+/** Could a path BELOW `path` (one or more further segments) match the glob? Both are segment lists. Used to tell
+ *  whether a link entry the walk did not descend sits where a match could have been, e.g. a symlinked run directory
+ *  under `runs/*` for `runs/*` + `/run_status.json`. A whole-segment `**` consumes any number of segments. */
+export function globCouldMatchBelow(globSegs: string[], pathSegs: string[]): boolean {
+  const seg = globSegs.map((g) => (g === "**" ? null : globToRegExp(g)));
+  const go = (i: number, j: number): boolean => {
+    if (j === pathSegs.length) return i < globSegs.length;
+    if (i === globSegs.length) return false;
+    const re = seg[i];
+    if (re === null) return go(i + 1, j) || go(i, j + 1);
+    return re.test(pathSegs[j]!) && go(i + 1, j + 1);
+  };
+  return go(0, 0);
+}

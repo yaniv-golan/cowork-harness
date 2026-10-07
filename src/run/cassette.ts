@@ -77,7 +77,7 @@ import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
 // Re-exported (not re-defined): moved to the leaf module so assert.ts can use it without closing an
 // assert → cassette import cycle. Existing importers keep their path.
 export { isLosslessUtf8 } from "./artifacts.js";
-import { isLosslessUtf8 } from "./artifacts.js";
+import { collectArtifactPathsWithHealth, isLosslessUtf8 } from "./artifacts.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, expandHome, type SessionConfig } from "../session.js";
@@ -4381,6 +4381,19 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
   return hits;
 }
 
+/** When a scenario asserts a glob `artifact_json`, the manifest walk over the user-visible roots must be complete: the
+ *  live glob reads an incomplete walk as evidence-unavailable, but `buildManifest` keeps only what it could see, so a
+ *  replay of that cassette would walk a complete-looking tree and could pass. Returns what was missed, or undefined. */
+export function artifactJsonGlobWalkGap(scenario: Scenario, workRoot: string, roots: string[]): string | undefined {
+  if (!(scenario.assert ?? []).some((a) => a.artifact_json !== undefined && isArtifactGlob(a.artifact_json.artifact))) return undefined;
+  const walk = collectArtifactPathsWithHealth(workRoot, roots);
+  if (walk.complete && !walk.containmentSkips.length) return undefined;
+  return [
+    ...walk.errors.slice(0, 3).map((e) => `${e.path}: ${e.error}`),
+    ...walk.containmentSkips.slice(0, 3).map((p) => `${p}: escapes the work root`),
+  ].join("; ");
+}
+
 /** Probe for an on-disk scenario file at the two conventional locations relative to a cassette.
  *  Sibling layout: <cassetteDir>/../scenarios/<name>.yaml (the standard multi-skill repo layout).
  *  Flat layout:    <cassetteDir>/<name>.yaml (single-dir layout).
@@ -5964,6 +5977,15 @@ export async function freezeRecordedRun(
         `assert targets artifact(s) too large to commit (>${cap} B, stored hash-only): ${truncatedAsserted.join(", ")} — ` +
         `this passes at record (on-disk) but FAILS replay (no body). Raise --max-artifact-bytes / ` +
         `COWORK_HARNESS_MAX_ARTIFACT_BYTES, or assert a smaller artifact.`;
+      if (opts.allowFailing) warn(`::warning:: record: ${msg}\n`);
+      else throw new RecordPostRunRefusalError(msg, result);
+    }
+    const gap = artifactJsonGlobWalkGap(scenario, result.workDir, recordRoots);
+    if (gap) {
+      const msg =
+        `a glob artifact_json is asserted, but the artifact walk could not see the whole tree (${gap}) — ` +
+        `the cassette would hold only what was seen, so replay could pass where the live run was evidence-unavailable. ` +
+        `Make the tree readable, or assert literal paths.`;
       if (opts.allowFailing) warn(`::warning:: record: ${msg}\n`);
       else throw new RecordPostRunRefusalError(msg, result);
     }

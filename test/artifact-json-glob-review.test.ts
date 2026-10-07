@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import { Assertion as AssertionSchema } from "../src/types.js";
-import { buildManifest, materializeManifest } from "../src/run/cassette.js";
+import { buildManifest, materializeManifest, artifactJsonGlobWalkGap } from "../src/run/cassette.js";
+import type { Scenario } from "../src/types.js";
 import { collectArtifactPathsWithHealth } from "../src/run/artifacts.js";
 
 // Parity and false-green cases the glob form of `artifact_json` must hold: a link on the PATH to a match (not only
@@ -131,5 +132,28 @@ describe("artifact_json glob — load", () => {
   it("a glob ending in `/` is a load error (a directory glob would silently match files)", () => {
     const r = AssertionSchema.safeParse({ artifact_json: { artifact: "outputs/*/", match: "each", path: "x" } });
     expect(r.success).toBe(false);
+  });
+});
+
+describe("artifact_json glob — record refuses an incomplete walk", () => {
+  it.skipIf(process.getuid?.() === 0)("an unreadable subtree under a root is named when a glob is asserted, and ignored otherwise", () => {
+    const root = tree({
+      "outputs/artifacts/runs/r1/run_status.json": status("ok"),
+      "outputs/artifacts/runs/r2/run_status.json": status("ok"),
+    });
+    chmodSync(join(root, "outputs/artifacts/runs/r2"), 0o000);
+    try {
+      const glob = { assert: [{ artifact_json: { artifact: GLOB, match: "each", path: "status" } }] } as unknown as Scenario;
+      const literal = {
+        assert: [{ artifact_json: { artifact: "outputs/artifacts/runs/r1/run_status.json", path: "status" } }],
+      } as unknown as Scenario;
+      expect(artifactJsonGlobWalkGap(glob, root, ["outputs"])).toContain("outputs/artifacts/runs/r2");
+      expect(artifactJsonGlobWalkGap(literal, root, ["outputs"])).toBeUndefined();
+    } finally {
+      chmodSync(join(root, "outputs/artifacts/runs/r2"), 0o755);
+    }
+    const clean = tree({ "outputs/artifacts/runs/r1/run_status.json": status("ok") });
+    const glob = { assert: [{ artifact_json: { artifact: GLOB, match: "each", path: "status" } }] } as unknown as Scenario;
+    expect(artifactJsonGlobWalkGap(glob, clean, ["outputs"])).toBeUndefined();
   });
 });

@@ -1822,6 +1822,16 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             _art = _aj.get("artifact")
             if isinstance(_art, str):
                 _is_glob = "*" in _art or "?" in _art
+                if _is_glob and _art.endswith(("/", "\\")):
+                    findings.append(
+                        Finding(
+                            "ERROR",
+                            "artifact-json-match",
+                            f"artifact_json glob `{_art}` ends in `/`, but a glob `artifact` matches files.",
+                            "End it with a file pattern, e.g. `*/run_status.json`.",
+                            path,
+                        )
+                    )
                 if _is_glob != ("match" in _aj):
                     findings.append(
                         Finding(

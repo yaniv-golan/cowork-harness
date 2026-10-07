@@ -2517,3 +2517,10 @@ def test_artifact_json_match_enum(tmp_path):
     hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
     assert len(hits) == 1 and "assert.artifact_json.match: all" in hits[0]["message"]
     assert code == 1
+
+
+def test_artifact_json_glob_with_trailing_slash_is_an_error(tmp_path):
+    code, findings = _aj(tmp_path, "outputs/*/", ", match: each")
+    hits = [x for x in findings if x["rule"] == "artifact-json-match"]
+    assert len(hits) == 1 and "ends in" in hits[0]["message"]
+    assert code == 1
