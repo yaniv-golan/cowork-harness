@@ -19,20 +19,32 @@
     },
     "fidelity": {
       "type": "string",
-      "enum": ["protocol", "container", "microvm", "hostloop", "cowork"],
+      "enum": [
+        "protocol",
+        "container",
+        "microvm",
+        "hostloop",
+        "cowork"
+      ],
       "description": "isolation tier (REQUIRED): protocol (L0, no sandbox) | container/microvm (force a VM-loop tier) | hostloop (force host-loop) | cowork (auto-pick host-loop vs. container via Cowork's own gate logic). `container` models the VM loop, while production runs the host loop by default (gate 1143815894) — a bare relative path lands elsewhere, the shell starts elsewhere, and the offered tool set differs. Name hostloop to match production, cowork to auto-pick the way Cowork does, or container to model the VM loop deliberately."
     },
     "execution": {
       "default": "local",
       "description": "execution location axis, ORTHOGONAL to fidelity (a local privilege tier): local (default — run the agent locally) | cloud-describe (RESERVED — describe/annotate a cloud-run scenario without executing it; no runner exists yet, authoring it is a load-time error, not a silent no-op)",
       "type": "string",
-      "enum": ["local", "cloud-describe"]
+      "enum": [
+        "local",
+        "cloud-describe"
+      ]
     },
     "lane": {
       "default": "local",
       "description": "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md",
       "type": "string",
-      "enum": ["local", "remote"]
+      "enum": [
+        "local",
+        "remote"
+      ]
     },
     "prompt": {
       "type": "string",
@@ -75,18 +87,27 @@
           },
           "decide": {
             "type": "string",
-            "enum": ["allow", "deny"]
+            "enum": [
+              "allow",
+              "deny"
+            ]
           },
           "allow_if": {
             "type": "string"
           },
           "else": {
             "type": "string",
-            "enum": ["allow", "deny"]
+            "enum": [
+              "allow",
+              "deny"
+            ]
           },
           "grant": {
             "type": "string",
-            "enum": ["once", "domain"]
+            "enum": [
+              "once",
+              "domain"
+            ]
           }
         },
         "additionalProperties": false
@@ -95,7 +116,12 @@
     "on_unanswered": {
       "description": "policy when a gate arrives with no matching `answers:` rule — `fail` (default for `run`, deterministic) | `first` (pick the first offered option) | `llm` (delegate to a decider LLM) | `prompt` (interactive; valid only via `skill --on-unanswered prompt` or the adaptive-TTY default — rejected in scenario YAML under `run`)",
       "type": "string",
-      "enum": ["fail", "prompt", "llm", "first"]
+      "enum": [
+        "fail",
+        "prompt",
+        "llm",
+        "first"
+      ]
     },
     "expect_denied": {
       "default": [],
@@ -170,7 +196,9 @@
                     "type": "boolean"
                   }
                 },
-                "required": ["path"],
+                "required": [
+                  "path"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -194,7 +222,9 @@
                     "type": "boolean"
                   }
                 },
-                "required": ["path"],
+                "required": [
+                  "path"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -266,7 +296,11 @@
                   "scope": {
                     "description": "which calls count. `main` (default): the main agent, including a Skill's or Agent(fork)'s children — the set the string form reads. `subagent`: calls whose parent is a sub-agent dispatch this run recorded, at any nesting depth. `any`: every call, including one whose parent is NOT a recorded dispatch (e.g. a Skill invoked inside a sub-agent)",
                     "type": "string",
-                    "enum": ["main", "subagent", "any"]
+                    "enum": [
+                      "main",
+                      "subagent",
+                      "any"
+                    ]
                   },
                   "subagent_type": {
                     "description": "with `scope: subagent`: regex over the call's IMMEDIATE parent dispatch — its dispatch type, resolved type, or description (same matching as subagent_dispatch_healthy.type)",
@@ -293,7 +327,9 @@
                     "additionalProperties": false
                   }
                 },
-                "required": ["tool"],
+                "required": [
+                  "tool"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -365,7 +401,11 @@
                   "scope": {
                     "description": "which calls count. `main` (default): the main agent, including a Skill's or Agent(fork)'s children — the set the string form reads. `subagent`: calls whose parent is a sub-agent dispatch this run recorded, at any nesting depth. `any`: every call, including one whose parent is NOT a recorded dispatch (e.g. a Skill invoked inside a sub-agent)",
                     "type": "string",
-                    "enum": ["main", "subagent", "any"]
+                    "enum": [
+                      "main",
+                      "subagent",
+                      "any"
+                    ]
                   },
                   "subagent_type": {
                     "description": "with `scope: subagent`: regex over the call's IMMEDIATE parent dispatch — its dispatch type, resolved type, or description (same matching as subagent_dispatch_healthy.type)",
@@ -373,7 +413,9 @@
                     "minLength": 1
                   }
                 },
-                "required": ["tool"],
+                "required": [
+                  "tool"
+                ],
                 "additionalProperties": false
               }
             ]
@@ -423,12 +465,20 @@
               },
               "source": {
                 "type": "string",
-                "enum": ["pretooluse", "can_use_tool", "permission_denied"]
+                "enum": [
+                  "pretooluse",
+                  "can_use_tool",
+                  "permission_denied"
+                ]
               },
               "agent_scope": {
                 "description": "subagent = the binary's agent_id attribution present; main = absent; default any",
                 "type": "string",
-                "enum": ["main", "subagent", "any"]
+                "enum": [
+                  "main",
+                  "subagent",
+                  "any"
+                ]
               }
             },
             "additionalProperties": false
@@ -510,7 +560,9 @@
                 "description": "substring that must appear in the matched dispatch(es)' output"
               }
             },
-            "required": ["contains"],
+            "required": [
+              "contains"
+            ],
             "additionalProperties": false
           },
           "dispatch_count_max": {
@@ -589,7 +641,10 @@
                 "description": "regex matched against a tool name in that window's toolCounts"
               }
             },
-            "required": ["skill", "tool"],
+            "required": [
+              "skill",
+              "tool"
+            ],
             "additionalProperties": false
           },
           "all_tasks_completed": {
@@ -616,7 +671,10 @@
                 "description": "the status the matching task must have reached"
               }
             },
-            "required": ["match", "status"],
+            "required": [
+              "match",
+              "status"
+            ],
             "additionalProperties": false
           },
           "max_turns": {
@@ -774,7 +832,11 @@
               "stream": {
                 "description": "which output field of the frame to read: `stdout`, `stderr`, or `any` (either; the default)",
                 "type": "string",
-                "enum": ["stdout", "stderr", "any"]
+                "enum": [
+                  "stdout",
+                  "stderr",
+                  "any"
+                ]
               },
               "text": {
                 "description": "a literal substring, case-sensitive; NON-EMPTY (an empty text is in every output)",
@@ -787,7 +849,9 @@
                 "minLength": 1
               }
             },
-            "required": ["event"],
+            "required": [
+              "event"
+            ],
             "additionalProperties": false
           },
           "hook_output_not_contains": {
@@ -836,7 +900,11 @@
               "stream": {
                 "description": "which output field of the frame to read: `stdout`, `stderr`, or `any` (either; the default)",
                 "type": "string",
-                "enum": ["stdout", "stderr", "any"]
+                "enum": [
+                  "stdout",
+                  "stderr",
+                  "any"
+                ]
               },
               "text": {
                 "description": "a literal substring, case-sensitive; NON-EMPTY (an empty text is in every output)",
@@ -849,7 +917,9 @@
                 "minLength": 1
               }
             },
-            "required": ["event"],
+            "required": [
+              "event"
+            ],
             "additionalProperties": false
           },
           "no_scratchpad_leak": {
@@ -930,7 +1000,9 @@
                 "type": "boolean"
               }
             },
-            "required": ["artifact"],
+            "required": [
+              "artifact"
+            ],
             "additionalProperties": false
           },
           "input_unmodified": {
@@ -1003,7 +1075,10 @@
               "order": {
                 "description": "`exact` (default) compares order as well as membership — an option list re-ordered by the model is the defect this key exists for; `any` compares membership only",
                 "type": "string",
-                "enum": ["exact", "any"]
+                "enum": [
+                  "exact",
+                  "any"
+                ]
               }
             },
             "additionalProperties": false
@@ -1022,7 +1097,9 @@
                 "description": "regex that must match somewhere in the selected gate(s)' founder-visible payload (case-insensitive). NON-EMPTY: an empty pattern compiles to //i and matches every field of every gate, so it would green any run that fired one — a required field whose empty value asserts nothing is worse than an absent one"
               }
             },
-            "required": ["matches"],
+            "required": [
+              "matches"
+            ],
             "additionalProperties": false
           },
           "question_option_count": {
@@ -1062,7 +1139,9 @@
                 "maximum": 9007199254740991
               }
             },
-            "required": ["matches"],
+            "required": [
+              "matches"
+            ],
             "additionalProperties": false
           },
           "questions_count_max": {
@@ -1084,7 +1163,10 @@
           "result": {
             "description": "the run's final result was success | error",
             "type": "string",
-            "enum": ["success", "error"]
+            "enum": [
+              "success",
+              "error"
+            ]
           },
           "allow_permissive_auto_allow": {
             "description": "(verdict modifier) suppress the default-fail when the run recorded a cowork-parity permissive auto-allow — for tests that deliberately assert Cowork's permissive behavior",
@@ -1177,7 +1259,9 @@
                 "type": "boolean"
               }
             },
-            "required": ["artifact"],
+            "required": [
+              "artifact"
+            ],
             "additionalProperties": false
           },
           "semantic_matches": {
@@ -1229,7 +1313,9 @@
                 "type": "boolean"
               }
             },
-            "required": ["rubric"],
+            "required": [
+              "rubric"
+            ],
             "additionalProperties": false
           },
           "semantic_pairwise": {
@@ -1257,12 +1343,19 @@
               "pass_if": {
                 "description": "default not_worse: the assert passes when, against EVERY reference, the run wins (win), wins or ties (not_worse), or was graded at all (any — metric only). both_bad fails win and not_worse",
                 "type": "string",
-                "enum": ["win", "not_worse", "any"]
+                "enum": [
+                  "win",
+                  "not_worse",
+                  "any"
+                ]
               },
               "order": {
                 "description": "default random: which output the judge sees first is a seeded coin per run, assert and reference. both: judge both orders (twice the judge calls); a win/loss split scores as a tie, any other disagreement keeps the worse outcome. Each order's own outcome is recorded (assertions[].pairwise[].orders: candidate_first, ref_first); candidate_first winning more often than ref_first across runs is position bias",
                 "type": "string",
-                "enum": ["random", "both"]
+                "enum": [
+                  "random",
+                  "both"
+                ]
               },
               "judge_model": {
                 "description": "override the run-level pinned judge model for this assert",
@@ -1385,7 +1478,10 @@
           },
           "better": {
             "type": "string",
-            "enum": ["higher", "lower"],
+            "enum": [
+              "higher",
+              "lower"
+            ],
             "description": "which direction is an improvement"
           },
           "scale": {
@@ -1403,18 +1499,27 @@
             "type": "number"
           }
         },
-        "required": ["id", "artifact", "path", "better"],
+        "required": [
+          "id",
+          "artifact",
+          "path",
+          "better"
+        ],
         "additionalProperties": false,
         "oneOf": [
           {
             "type": "object",
-            "required": ["scale"],
+            "required": [
+              "scale"
+            ],
             "properties": {
               "scale": {}
             },
             "not": {
               "type": "object",
-              "required": ["unbounded"],
+              "required": [
+                "unbounded"
+              ],
               "properties": {
                 "unbounded": {}
               }
@@ -1422,13 +1527,17 @@
           },
           {
             "type": "object",
-            "required": ["unbounded"],
+            "required": [
+              "unbounded"
+            ],
             "properties": {
               "unbounded": {}
             },
             "not": {
               "type": "object",
-              "required": ["scale"],
+              "required": [
+                "scale"
+              ],
               "properties": {
                 "scale": {}
               }
@@ -1438,7 +1547,10 @@
       }
     }
   },
-  "required": ["fidelity", "prompt"],
+  "required": [
+    "fidelity",
+    "prompt"
+  ],
   "additionalProperties": false,
   "not": {
     "anyOf": [
@@ -1446,13 +1558,17 @@
         "allOf": [
           {
             "type": "object",
-            "required": ["assert"],
+            "required": [
+              "assert"
+            ],
             "properties": {
               "assert": {
                 "type": "array",
                 "contains": {
                   "type": "object",
-                  "required": ["no_delete_in_outputs"],
+                  "required": [
+                    "no_delete_in_outputs"
+                  ],
                   "properties": {
                     "no_delete_in_outputs": {}
                   }
@@ -1462,13 +1578,17 @@
           },
           {
             "type": "object",
-            "required": ["assert"],
+            "required": [
+              "assert"
+            ],
             "properties": {
               "assert": {
                 "type": "array",
                 "contains": {
                   "type": "object",
-                  "required": ["allow_outputs_delete"],
+                  "required": [
+                    "allow_outputs_delete"
+                  ],
                   "properties": {
                     "allow_outputs_delete": {}
                   }
@@ -1482,13 +1602,17 @@
         "allOf": [
           {
             "type": "object",
-            "required": ["assert"],
+            "required": [
+              "assert"
+            ],
             "properties": {
               "assert": {
                 "type": "array",
                 "contains": {
                   "type": "object",
-                  "required": ["no_delete_in_outputs"],
+                  "required": [
+                    "no_delete_in_outputs"
+                  ],
                   "properties": {
                     "no_delete_in_outputs": {}
                   }
@@ -1498,13 +1622,17 @@
           },
           {
             "type": "object",
-            "required": ["assert"],
+            "required": [
+              "assert"
+            ],
             "properties": {
               "assert": {
                 "type": "array",
                 "contains": {
                   "type": "object",
-                  "required": ["allow_delete_in"],
+                  "required": [
+                    "allow_delete_in"
+                  ],
                   "properties": {
                     "allow_delete_in": {
                       "type": "array",
