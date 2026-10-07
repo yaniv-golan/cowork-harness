@@ -207,7 +207,10 @@ permissive behaviour is deliberately what the scenario is about.
 
 A Desktop update deletes the prior version's staged agent while often leaving an empty version dir, so
 a scenario pinning that agent version resolves to nothing. `doctor` validates the agent for its own
-current baseline, not what each scenario pins, so it can report ready seconds before the run fails.
+current baseline, not what each scenario pins, so it can report ready seconds before the run fails. Its
+staged-agent row ends with what Desktop has staged against that pin: staged and pinned; a newer agent staged
+(run `cowork-harness sync`); the pinned agent not staged (staging may be withheld, or no task has booted the VM
+since the update); or none found.
 
 To keep the exact pin, **recover the pinned ELF**: re-download that version from the release channel,
 check its sha256 against the baseline's, and set `COWORK_AGENT_BINARY` to it
