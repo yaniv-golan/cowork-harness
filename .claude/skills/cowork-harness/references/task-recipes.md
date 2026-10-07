@@ -329,18 +329,20 @@ Each recipe below uses only shipped flags and keys. Each says what it does **not
 
 ### Force a context compaction
 
-Pin a session, run the task, compact it by hand, then check it, then continue:
+Pin a session, run the task, compact it by hand, check that turn, then continue:
 
 ```bash
 cowork-harness skill ./my-plugin "<the task>" --session-id compact-1
 cowork-harness skill ./my-plugin "/compact" --session-id compact-1 --resume
-cowork-harness verify-run <run-dir> compacted.yaml     # assert: [{compaction_occurred: true}]
+jq -e '[.contextEvents[]? | select(.subtype=="compact_boundary")] | length > 0' <run-dir>/turns/2/result.json
 cowork-harness skill ./my-plugin "<continue the task>" --session-id compact-1 --resume
-cowork-harness verify-run <run-dir> next-turn.yaml     # what the next turn must still do
+cowork-harness trace <run-dir>        # shows the latest turn: what the continued task did
 ```
 
-`verify-run` reads the run dir's latest turn, so check `compaction_occurred` right after the `/compact` turn, before
-the next one. *Does not prove:* that the skill behaves as it would after an automatic compaction. A manual
+The run dir is the one each turn's `[status]` line prints. A resumed session's dir holds one `turns/<n>/` per
+turn, and `verify-run` refuses a dir with more than one turn, so the `compaction_occurred` assert cannot be checked
+on it: read the `/compact` turn's own `result.json` instead (`jq` exits `0` when it recorded a compaction, `1` when it
+did not). *Does not prove:* that the skill behaves as it would after an automatic compaction. A manual
 `/compact` may not re-attach skills exactly as autocompact does (not verified). Observed in agent 2.1.289: re-attached
 skill text is capped at about 20,000 characters in total, truncation marker included, within a 25,000-token budget
 across all re-attached skills, so a long `SKILL.md` can come back cut.
