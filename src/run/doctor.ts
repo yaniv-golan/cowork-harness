@@ -1,7 +1,7 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { FIDELITY_TIERS } from "../types.js";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve, basename } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ import {
   loadBaseline,
   sha256File,
   isPatchBump,
+  cmpVersionStrings,
 } from "../baseline.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
 import { limaPath, vmStatus, instanceName, vmProvisioned } from "../runtime/lima.js";
@@ -155,6 +156,29 @@ export interface DoctorProbe {
   // at all; the only I/O is a local `image inspect`. OPTIONAL — omitted by test doubles so the check is
   // simply NOT run. A locally-BUILT image returns `local` (uncomparable), never a false "stale".
   imageFreshness?(): ImageFreshness;
+  // macOS only: the VM agent Desktop has staged (`claude-code-vm/.sdk-version`, null when absent) and whether
+  // its ELF exists. OPTIONAL — a probe without it (every test double that predates it) gets no lane/supply
+  // clause, so the agent check's detail is unchanged for it.
+  stagedVmAgent?(): { version: string | null; elfExists: boolean } | null;
+}
+
+/** The lane/supply clause appended to the `agent` check's detail. Compares what Desktop has staged with what the
+ *  newest baseline pins. Never changes the check's status, and names versions only, never a path. */
+export function laneSupplyClause(staged: { version: string | null; elfExists: boolean }, pin: string | undefined): string {
+  const lane = "this harness models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06";
+  const v = staged.version;
+  // "staged agent X" only when its ELF is on disk; otherwise Desktop merely names X in .sdk-version.
+  const what = v && staged.elfExists ? `Desktop staged agent ${v}` : `Desktop names agent ${v} (no ELF on disk)`;
+  let supply: string;
+  if (!v) supply = "no staged VM agent found";
+  else if (!pin) supply = `${what}; no baseline pin to compare`;
+  else if (cmpVersionStrings(v, pin) > 0)
+    supply = `${what}, newer than the pinned ${pin}: upgrade cowork-harness, or run \`cowork-harness sync\` if you maintain the baseline`;
+  else if (cmpVersionStrings(v, pin) < 0) supply = `this Desktop is older than the pinned agent: ${what}, the baseline pins ${pin}`;
+  else if (staged.elfExists) supply = `agent ${pin} staged and pinned`;
+  else
+    supply = `agent ${pin} not staged by this Desktop (staging may be withheld by server policy, or no task has booted the VM since an update)`;
+  return `${supply}; ${lane}`;
 }
 
 /** Map a harness-published LOCAL image tag to its GHCR source ref, or null for a custom/overridden image.
@@ -362,6 +386,17 @@ export const realProbe: DoctorProbe = {
       return { ok: false, error: (e as Error).message };
     }
   },
+  stagedVmAgent() {
+    if (process.platform !== "darwin") return null;
+    const vmDir = join(homedir(), "Library/Application Support/Claude/claude-code-vm");
+    let version: string | null = null;
+    try {
+      version = readFileSync(join(vmDir, ".sdk-version"), "utf8").trim() || null;
+    } catch {
+      /* not staged */
+    }
+    return { version, elfExists: version !== null && existsSync(join(vmDir, version, "claude")) };
+  },
   hasPython3() {
     const r = spawnSync("python3", ["--version"], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
@@ -551,11 +586,24 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     // A parity-patch substitution stays `ok` (it's safe — the ELF is never executed there), but the note
     // names the pinned-vs-found versions so the substitution is visible rather than silent.
     const parityNote = agent.ok && agent.note ? `  [${agent.note}]` : "";
+    // Lane/supply clause: what Desktop staged vs what the newest baseline pins. Not on an override, where the
+    // binary is the caller's choice, nor where the probe cannot read Desktop's staging (off macOS).
+    let laneNote = "";
+    const staged = process.env.COWORK_AGENT_BINARY ? null : (probe.stagedVmAgent?.() ?? null);
+    if (staged) {
+      let pin: string | undefined;
+      try {
+        pin = loadBaseline("latest").agentVersion;
+      } catch {
+        /* no baseline: the baseline check reports it */
+      }
+      laneNote = `  [${laneSupplyClause(staged, pin)}]`;
+    }
     return {
       id: "agent",
       title: parityMount ? "Staged agent binary (VM ELF, parity mount)" : "Staged agent binary (VM/container ELF)",
       status: agent.ok ? "ok" : "fail",
-      detail: agent.ok ? agent.path + shaNote + parityNote : agent.error.split("\n")[0],
+      detail: (agent.ok ? agent.path + shaNote + parityNote : agent.error.split("\n")[0]) + laneNote,
       remedy: agent.ok ? undefined : agentRemedy(agent.kind, parityMount),
       required: true,
     };

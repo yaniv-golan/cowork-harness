@@ -1,6 +1,6 @@
 # Run, record and lock
 
-Tracks `cowork-harness 4.4.1` (baseline `desktop-2.26454.0`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
+Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.0`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
 
 ## Part II — RUN, RECORD & LOCK
 
@@ -248,7 +248,7 @@ Recognize these before "fixing" a non-bug:
   scratchpad walk, absent delivery telemetry, or a resumed turn) — "cannot tell" never reads as "clean".
   **The fix is lane-dependent — and so is the PATH.** On `lane: local`, write deliverables where the user
   can see them, and give the file tools an **absolute** path under the outputs directory the agent's prompt
-  names. On the desktop-local host-loop lane (what production runs), against Desktop **2.7032.0 and later**,
+  names. On the local lane's host loop (what Desktop ran when measured), against Desktop **2.7032.0 and later**,
   the agent process runs outside the session (`/var/empty`), so a relative `Read`/`Write`/`Edit` — a bare
   filename or `outputs/x.md` alike — is **refused** ("File is in a directory that is denied by your
   permission settings."); only a pathless or relative `Grep`/`Glob` is redirected to outputs. (Before

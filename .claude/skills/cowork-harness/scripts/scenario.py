@@ -1383,7 +1383,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 "no `fidelity:` — the key is required (since 4.0.0); `run`, `record` and the loader "
                 "refuse this scenario.",
                 "Add a tier: `fidelity: container` keeps the pre-4.0 behaviour (it was the default) and "
-                "models the VM-LOOP lane; production runs HOST-LOOP by default (gate 1143815894), so "
+                "models the VM-LOOP lane; Cowork's local lane runs HOST-LOOP by default (gate 1143815894), so "
                 "`fidelity: hostloop` matches it and `fidelity: cowork` auto-picks the way Cowork does. "
                 "Switching tiers can COST you assertions: `no_scratchpad_leak` is container-only (an "
                 "error elsewhere) and `transcript_no_host_path` fails by design at hostloop/protocol. "

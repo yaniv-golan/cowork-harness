@@ -224,13 +224,12 @@ be reached by the model.
 ## Lanes (`lane:`) — which delivery contract the run is held to
 
 Cowork runs a session in one of two lanes: **local** (the agent on the user's machine) or **remote** (an
-Anthropic-hosted cloud container). As of Desktop 2.19675.0 the composer offers no per-session lane picker,
-and no setting reliably decides the lane; for Pro and Max plans, Anthropic
-[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new
-tasks run in the cloud from 2026-10-06 (see
+Anthropic-hosted cloud container).
+[From 2026-10-06 new Pro and Max tasks run in the cloud](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile);
+before then no setting reliably decided the lane (see
 [fidelity-gaps.md → Which lane a session actually ran on](./fidelity-gaps.md#which-lane-a-session-actually-ran-on)).
 The lanes disagree about what *delivered* means, so a scenario declares which contract it is testing
-against. `local` is this harness's default because it emulates the local lane; Cowork's
+against. `local` is this harness's default because `local` is the lane every tier models; Cowork's
 [documented default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview) is the cloud.
 
 | | `lane: local` (default) | `lane: remote` |
@@ -259,9 +258,9 @@ and the rest of the `mcp__remote-devices__*` tools) is deliberately not modeled:
 mean real command execution and real writes on the operator's machine on behalf of a simulated session.
 See [fidelity-gaps.md](./fidelity-gaps.md).
 
-**When to reach for it.** Set `lane: remote` to check whether a skill's delivery survives the cloud lane
-(Anthropic [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile)
-that from 2026-10-06 new Pro and Max tasks run in the cloud). A skill that delivers by writing into
+**When to reach for it.** `lane: remote` is the contract to hold a skill to when it will run on new Pro and Max
+tasks, which run in the cloud from 2026-10-06: it checks whether the skill's delivery survives the cloud lane. A
+skill that delivers by writing into
 `outputs/` and nothing else will fail there — that is the finding, not a harness bug.
 
 ## Fidelity tiers (`fidelity:`)
@@ -475,7 +474,7 @@ without actually running the agent. For **content correctness**, match the asser
   (`outputs/` + each connected folder), while `file_exists` only checks `mnt/<path>` and does not check
   folder-relative deliverables.
 
-  > **Where a relative path actually lands — measured on desktop-local Cowork, 2026-08-27.** An earlier
+  > **Where a relative path actually lands — measured on Cowork's local lane, 2026-08-27.** An earlier
   > version of this bullet said a model told to write `outputs/foo` writes `mnt/<folder>/outputs/foo`. That
   > was wrong about production *and* about both harness tiers.
   >
@@ -484,7 +483,7 @@ without actually running the agent. For **content correctness**, match the asser
   > by your permission settings.") and only a relative `Grep`/`Glob` is re-anchored to outputs. Give the
   > file tools an absolute path under outputs.
   >
-  > **Before Desktop 2.7032.0**, on the **desktop-local** lane the file tools resolved a relative path
+  > **Before Desktop 2.7032.0**, on the **local** lane the file tools resolved a relative path
   > against **`outputs/`**, **regardless of whether a folder was connected** — a connected folder sat
   > *beside* `outputs`, it did not become the file-tool base. Three consequences a skill author had to know
   > on those Desktops:
@@ -505,8 +504,8 @@ without actually running the agent. For **content correctness**, match the asser
   >
   > | lane | file-tool base | write a deliverable as |
   > |---|---|---|
-  > | desktop-local **host-loop** (production today, gate `1143815894` force-ON), Desktop **2.7032.0+** | none: the agent runs at `/var/empty`, and a relative `Read`/`Write`/`Edit` is **refused** | an **absolute** path under the outputs dir the prompt names |
-  > | desktop-local **host-loop**, Desktop before 2.7032.0 | `outputs/` | a **bare filename** |
+  > | local-lane **host-loop** (production on 2026-08-27, gate `1143815894` force-ON), Desktop **2.7032.0+** | none: the agent runs at `/var/empty`, and a relative `Read`/`Write`/`Edit` is **refused** | an **absolute** path under the outputs dir the prompt names |
+  > | local-lane **host-loop**, Desktop before 2.7032.0 | `outputs/` | a **bare filename** |
   > | **VM-loop** (`fidelity: container`/`microvm`) | the session root, i.e. the scratchpad | a path under `{{workspaceFolder}}`, or deliver via `present_files` |
   > | **cloud** | `/home/claude`; no `mnt/` tree at all | neither of the above applies |
   >
@@ -528,7 +527,7 @@ without actually running the agent. For **content correctness**, match the asser
   > files as "wrote to"/"viewed" regardless of where they landed, so a file appearing there is NOT evidence
   > it is undelivered.
   >
-  > **A `Write` under outputs is user-visible the moment it lands** on the desktop-local lane (before
+  > **A `Write` under outputs is user-visible the moment it lands** on the local lane (before
   > Desktop 2.7032.0 a bare `Write` landed there; from it the path must be absolute), so `present_files`
   > on it is a no-op promotion rather than the step that delivers it.
 
@@ -577,7 +576,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `transcript_matches: <regex>` | the transcript matches the regex (case-insensitive) — fuzzy content for stochastic prose, e.g. `'SOM:?\s*\$[0-9.]+\s*M'`. **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `transcript_not_matches: <regex>` | it does not match (e.g. no leaked stack trace / `undefined`). **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so text the agent emitted only inside a tool call (an `AskUserQuestion` gate question or option, a tool result) can never match at any phrasing; use the gate keys (`question_asked`, `question_context`, `question_options`) or `tool_result_contains` for those. |
 | `file_exists: <path>` | the path exists under the run's `work/` (e.g. `outputs/x.md`). Object form `{path, authored}`: `authored: true` also requires that THIS run created or rewrote it (see [`workspace_fixture`](#starting-from-a-saved-workspace-workspace_fixture)); `authored: false` states an inherited file is fine |
-| `user_visible_artifact: <path>` (or `{path, authored}`, as `file_exists`) | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — a file the agent writes under the outputs dir is already under a user-visible root, so this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. **The correct path is LANE-DEPENDENT** — see "Where a relative path actually lands" above. On the desktop-local **host-loop** lane (production today) against Desktop **2.7032.0+**, any relative `Write` — `actions.md` or `outputs/actions.md` — is **refused**; write an absolute path under the outputs dir. (Before 2.7032.0 the file tools were rooted at `outputs/`, so a bare filename landed there and `outputs/actions.md` doubled to `outputs/outputs/actions.md`.) At `fidelity: container`/`microvm` (VM-loop) the base is the session root instead, so a bare filename lands in the scratchpad and you want `{{workspaceFolder}}` or `present_files`. Measured 2026-08-27. Describing the OUTCOME rather than a path also sidesteps the lane split — the delivery *tool* is named `present_files` on the desktop-local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
+| `user_visible_artifact: <path>` (or `{path, authored}`, as `file_exists`) | the path exists **and** is under a user-visible root (`outputs/` + each connected folder's mount name) — i.e. the deliverable the user actually sees in Cowork. **Footgun:** if your skill delivers by writing to its working dir (the scratchpad) and calling `present_files` (rather than writing directly under `outputs/`), that promotion is modeled **only on `fidelity: container`**. On `hostloop` there is nothing to promote — a file the agent writes under the outputs dir is already under a user-visible root, so this assertion passes. On `microvm`/`protocol` the file stays in the scratchpad and this assertion false-reds. **The correct path is LANE-DEPENDENT** — see "Where a relative path actually lands" above. On the local lane's **host-loop** (what Desktop ran when measured) against Desktop **2.7032.0+**, any relative `Write` — `actions.md` or `outputs/actions.md` — is **refused**; write an absolute path under the outputs dir. (Before 2.7032.0 the file tools were rooted at `outputs/`, so a bare filename landed there and `outputs/actions.md` doubled to `outputs/outputs/actions.md`.) At `fidelity: container`/`microvm` (VM-loop) the base is the session root instead, so a bare filename lands in the scratchpad and you want `{{workspaceFolder}}` or `present_files`. Measured 2026-08-27. Describing the OUTCOME rather than a path also sidesteps the lane split — the delivery *tool* is named `present_files` on the local lane and `SendUserFile` on remote Cowork ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"), so a skill is better off describing the outcome than naming either. |
 | `no_delete_in_outputs: true` | no delete op (`rm`/`mv`/…) touched `mnt/outputs` — **only `true` is valid**; writing `false` is rejected by the schema. It checks on **every baseline**. Whether Cowork itself allows the delete depends on the release: from Desktop 2.16120.0 a normal session mounts outputs `rwd` and deletes succeed; before that it was `rw` and `unlink`/`rmdir` failed with `EPERM`. **Omitting the key** therefore means: on a baseline recording outputs `rw`, a detected delete still fails the run via the `outputs_delete` verdict signal, which fires *because* the key was not authored (accept an intended one with `allow_outputs_delete: true`); on a baseline recording `rwd` (including `latest`), nothing checks outputs deletes — author the key to keep the check (see [fidelity gaps](./fidelity-gaps.md#deletes-in-outputs-follow-the-baselines-recorded-mount-mode)). Detects operations that UNLINK a name — a post-run bash-command scan plus a filesystem diff of `outputs/` per turn, not mount-level enforcement, so a green means none was *detected*, not that the mount enforced anything. A detected delete **fails** when the filesystem diff of `outputs/` proves it (a path present at turn start is gone), when a delete in command or call position has an `outputs/` path as its own operand (`rm`/`rmdir`/`unlink`/`shred -u` as a command — also behind `sudo`/`env`/`timeout`/`xargs`, inside `sh -c`/`eval`/`$(…)`, or launched through Python's `os.system`/`subprocess` — `find`/`fd` with `-delete` or `-exec rm`, `os.remove(…)`/`shutil.rmtree(…)`/`Path(…).unlink()`, or a move out of outputs), or when the diff could not verify the turn. A hit that rests only on the detector's inference — an unprovable target, a `cd` into outputs followed by a relative path, or an outputs path that merely shares a statement with a word like `rm` (a Python variable `rm = json.load(open(".../outputs/r.json"))`, quoted prose, a `sed`/`grep` pattern, a trailing comment) — with a clean diff is the `outputs_delete_unconfirmed` **warn** instead (an authored key passes on it; the `outputs_delete_unconfirmed` warn is still raised in the run output, and the hit is also kept as the assertion's evidence in the JSON envelope). A *statement* is one fragment of the command split on newline, `;`, `&&` and `\|\|` (quote-blind, after comments are stripped and same-command `VAR=value` assignments expanded one level), so some real deletes land in the warn tier — a loop body whose operand is the loop variable (`for f in …; do rm "$f"; done`), a `cd` then a relative path, chained variables (`A=…; B=$A/x; rm "$B"`), a Python path held in a variable set on another line (`p = …` then `os.remove(p)`, or `for p in …:` then `p.unlink()`), wrappers with flag combinations the classifier does not model (`sudo -Hu user rm`, `git -C dir rm`), and calls outside the modelled set such as Node's `fs.promises.rm(…)`; and quoted text in which a delete command with an outputs operand follows a shell separator, subshell or keyword — the classifier does not track quotes (`echo 'note; rm mnt/outputs/x'`, `echo "a & rm …/outputs/x"`), and a heredoc that *writes* a script rather than running it (`cat <<EOF > clean.sh` with an `rm …/outputs/x` line) still fails — waive that with `allow_outputs_delete`. A statement over 4 KiB or a command over 16 KiB is judged by the stricter original rule (a delete word, or `mv`, and an outputs path anywhere), so a huge one-line body with a variable named `rm` fails again. A command whose variable expansion would exceed the scanner's work budget (about a hundred distinct variables referenced in one 10 KB line) is not expanded: every mount it names literally counts as deleted in, and the classifier answers `named` when its own expansion is over the budget too. An operand joined through an empty variable (`$B${A}C` with `A=""`) is kept unprovable — flagged, never cleared as safe. When the diff could not verify the turn and nothing was flagged, the key distinguishes the two halves: an incomplete **post-run** walk fails it as evidence-unavailable (every output could have vanished unseen), while an incomplete **turn-start** snapshot, or a diff in `result.json` that is incomplete or malformed, passes it with the `outputs_diff_unavailable` warn (the text scan still ran and found nothing; only the pre-existing-file check is missing). Emptying a file in place (`truncate`, `>`, `shred` without `-u`) is not a delete and is permitted by Cowork, so it is not flagged. Renames: the command scan never flags `mv` within outputs, and the filesystem diff does not report a rename to a NEW path or a file the turn created being moved onto an existing one; but a file that existed at turn start, moved onto another file that also existed at turn start, IS reported (`outputs/a.md removed`), so it fails this key on every baseline and the default verdict on a `rw` baseline |
 | `no_delete_in_mounts: true` | no delete op touched `outputs` or any `rw` connected folder, except mounts waived by `allow_delete_in`. It covers `outputs` on **every** baseline, including those (Desktop 2.16120.0+) where Cowork allows an outputs delete: its own evidence is the bash-command scan, and unless outputs is waived, authoring it also arms the outputs check, so a delete only the filesystem diff saw fails the run as `outputs_delete` (the signal, not this assertion; `allow_outputs_delete` waives it). Production denies `unlink`/`rmdir` on a `rw` connected folder until per-mount approval, so `no_delete_in_outputs` asserts only part of the rule; this is the mount-wide form. **Only `true` is valid.** Same post-run-scan caveat: a green means none was *detected*, not that the mount enforced anything |
 | `no_unexpected_files: [<glob>, …]` | every **newly created** file under a user-visible root matches ≥1 workRoot-relative glob (`**` matches any depth — e.g. `outputs/handoff/**` for per-run subdirs); `[]` = no new files allowed; **new-files-only** (overwrite-in-place is invisible — pair with `artifact_json` / producer stamping); post-hoc detection like `no_delete_in_outputs`, not mount enforcement; live/verify-run without pre-run manifest ⇒ evidence-unavailable (live runs capture the baseline only when this key is asserted; recordings always capture, so a later assert-add replays without re-record); captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir); replay-checkable when the cassette carries `artifacts` **and** `preRunPaths`; an **incomplete** post-run filesystem walk (an unreadable subtree — permission/I-O error — not just a missing pre-run manifest) also ⇒ evidence-unavailable, so "no strays" is never trusted from a partial walk |
@@ -629,7 +628,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `all_tasks_completed: true` | every task in the run's task list reached status `completed` — **requires ≥1 task** (a zero-task run fails; assert `task_count_min` for presence); **only `true` is valid**; also fails **evidence unavailable** ("malformed") when any TaskCreate result was unparseable (corrupt task telemetry) |
 | `task_count_min: <N>` | at least N tasks were created (`RunResult.tasks.length >= N`) — the presence companion for task assertions; also fails **evidence unavailable** ("malformed") when any TaskCreate result was unparseable (corrupt task telemetry) |
 | `task_status: {match, status}` | a task whose subject or id matches the `match` regex reached `status` — also fails **evidence unavailable** ("malformed") when any TaskCreate result was unparseable (corrupt task telemetry), mirroring `all_tasks_completed`/`task_count_min` |
-| `no_scratchpad_leak: true` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuously passes if nothing was presented (pair with a presence check to require a delivery); content-class: both the `present_files` tool_use and its own tool_result live in the ordinary events stream, so this is meaningfully replay-checkable at the tier it evaluates on — the re-drive reproduces the classification at container, where the agent's cwd IS the session root the live lane measures from (at hostloop a re-drive has only the recorded cwd — `mnt/outputs` before Desktop 2.7032.0, `/private/var/empty` from it — so the booleans are not equivalent there); fails as **evidence unavailable** when `presentedFiles` telemetry is absent (an old run predating this key); **container-only on the merits**: hostloop serves `present_files` but never promotes (its handler passes a validated path through unchanged), so there is no scratch→outputs copy for this key to check — that's not a detection gap, though: at hostloop a delivered file under the outputs dir is visible there immediately (see `user_visible_artifact`'s footgun note above). On microvm and protocol, `present_files` isn't served at all, so there's no delivery record for this key to check — cannot-verify. Use `container` for present_files-based delivery you want this key to verify, or write directly to `outputs/`; **the tool name is lane-specific** — `present_files` is the desktop-local lane's tool (the one this harness emulates) while remote Cowork delivers via the agent-native `SendUserFile`, so a skill should describe the delivery outcome rather than naming either tool ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"); this key asserts the harness-side delivery record either way; **only `true` is valid** |
+| `no_scratchpad_leak: true` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuously passes if nothing was presented (pair with a presence check to require a delivery); content-class: both the `present_files` tool_use and its own tool_result live in the ordinary events stream, so this is meaningfully replay-checkable at the tier it evaluates on — the re-drive reproduces the classification at container, where the agent's cwd IS the session root the live lane measures from (at hostloop a re-drive has only the recorded cwd — `mnt/outputs` before Desktop 2.7032.0, `/private/var/empty` from it — so the booleans are not equivalent there); fails as **evidence unavailable** when `presentedFiles` telemetry is absent (an old run predating this key); **container-only on the merits**: hostloop serves `present_files` but never promotes (its handler passes a validated path through unchanged), so there is no scratch→outputs copy for this key to check — that's not a detection gap, though: at hostloop a delivered file under the outputs dir is visible there immediately (see `user_visible_artifact`'s footgun note above). On microvm and protocol, `present_files` isn't served at all, so there's no delivery record for this key to check — cannot-verify. Use `container` for present_files-based delivery you want this key to verify, or write directly to `outputs/`; **the tool name is lane-specific** — `present_files` is the local lane's tool (the one this harness emulates) while remote Cowork delivers via the agent-native `SendUserFile`, so a skill should describe the delivery outcome rather than naming either tool ([fidelity-gaps.md](./fidelity-gaps.md), "File delivery"); this key asserts the harness-side delivery record either way; **only `true` is valid** |
 | `present_files_called: true` | at least one file was actually delivered via the `present_files` tool (at least one call carried a well-formed `file_path`, counted at the invocation — **not** read off the classified `presentedFiles` list, so a redaction policy that rewrites host paths cannot turn a real delivery into "never called"; a run whose every call carried an unusable path reports cannot-verify) — the presence companion to `no_scratchpad_leak` (which passes vacuously when nothing was presented). Pair them to require a delivery **and** require it not to leak; **`fidelity: container` or `hostloop`** — the harness serves `present_files` at both (hostloop via a handler mirroring production's own host-loop branch: validate the path, pass it through, no promotion). `protocol` and `microvm` report cannot-verify. See the `no_scratchpad_leak` row, which stays container-only for a different reason; and see the lane note above: the tool name differs on remote Cowork; **only `true` is valid** |
 | `max_cost_usd: <N>` | the run's SDK-reported cost is ≤ N USD (the agent session only — the `semantic_matches` judge and the LLM decider (`on_unanswered: llm` / `--decider-llm`) are separate model calls that are **not** included) — fails as **evidence unavailable** when cost telemetry is absent (an old run predating this key). **Live lane only in spirit**: on replay this asserts the *frozen recording's* cost, not fresh spend — a cost regression is caught by a live run, not a token-free replay |
 | `max_tokens: <N>` | `usage.input_tokens + usage.output_tokens` ≤ N (cache-read/creation tokens excluded — priced separately). Same replay caveat as `max_cost_usd`: asserts the recording, not fresh spend |
@@ -1533,6 +1532,128 @@ vouching against stale labels — re-`--keep` a fresh run (or re-record). A kept
 > gates + offered labels out of that run's `events.jsonl` for free — fix your `answers:` without re-paying for
 > a record. Just re-`--keep` after a skill change that moves gate phrasing (per the currency rule above). A
 > mismatched `choose:` is reported with the **offered options** so you can fix the anchor from the error alone.
+
+### Recipes for goals the harness has no flag for
+
+The companion skill carries the same recipes ([task-recipes.md, Recipe 8](https://github.com/yaniv-golan/cowork-harness/blob/main/.claude/skills/cowork-harness/references/task-recipes.md#recipe-8--goals-the-harness-has-no-flag-for)).
+Each recipe below uses only shipped flags and keys. Each says what it does **not** prove.
+
+#### Force a context compaction
+
+Pin a session, run the task, compact it by hand, check that turn, then continue:
+
+```bash
+cowork-harness skill ./my-plugin "<the task>" --session-id compact-1
+cowork-harness skill ./my-plugin "/compact" --session-id compact-1 --resume
+jq -e '[.contextEvents[]? | select(.subtype=="compact_boundary")] | length > 0' <run-dir>/turns/2/result.json
+cowork-harness skill ./my-plugin "<continue the task>" --session-id compact-1 --resume
+cowork-harness trace <run-dir>        # shows the latest turn: what the continued task did
+```
+
+The run dir is the one each turn's `[status]` line prints. A resumed session's dir holds one `turns/<n>/` per
+turn, and `verify-run` refuses a dir with more than one turn, so the `compaction_occurred` assert cannot be checked
+on it: read the `/compact` turn's own `result.json` instead (`jq` exits `0` when it recorded a compaction, `1` when it
+did not). *Does not prove:* that the skill behaves as it would after an automatic compaction. A manual
+`/compact` may not re-attach skills exactly as autocompact does (not verified), and re-attached skill text can come
+back truncated, so a long `SKILL.md` may not return whole.
+
+#### Ablate one `SKILL.md` section
+
+Copy the plugin, delete the section from the copy, and run the two as `eval` arms.
+Size it first, at no cost:
+
+```bash
+cp -R ./my-plugin /tmp/nosec && $EDITOR /tmp/nosec/skills/<skill>/SKILL.md   # remove the section
+cowork-harness eval scenarios/ --arm full=./my-plugin --arm nosec=/tmp/nosec --dry-run --target-effect 30
+```
+
+*Does not prove:* which section drove a given action; it shows only whether removing it changes the graded outcome.
+
+#### Test a skill's parsing of a Desktop form reply
+
+Desktop's elicitation form sends its answers as the next user
+message, as one line. Send that line as a resumed turn: `cowork-harness skill ./my-plugin "<the reply line>" --session-id s --resume`. The format,
+from Desktop's own form guide:
+
+- one line: `<Title> details — Label: value · Label: value`, labels being the form's field names in sentence case;
+- a multi-select value comma-joined; a short multi-line value flattened with ` / `; a value of 81–200 characters
+  in quotes;
+- a value over 200 characters shown as `Label: (N chars — see below)`, and repeated in full after a
+  `--- Full content ---` line;
+- a skipped form arrives as one fixed sentence saying it was skipped.
+
+*Does not prove:* that the model would choose the form (the harness serves no `visualize` tools; see
+[fidelity-gaps.md](./fidelity-gaps.md#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here)),
+or that a file the form attaches arrives.
+
+#### Resume the work in a new conversation
+
+Keep the first run, export its outputs, and start a second scenario from
+them:
+
+```bash
+cowork-harness run step1.yaml --keep
+cowork-harness fixture export <run-dir> --out scenarios/step1-out
+```
+
+```yaml
+# scenarios/step2.yaml
+workspace_fixture: step1-out
+assert:
+  - file_exists: {path: outputs/next.md, authored: true}            # this conversation wrote it
+  - file_exists: {path: outputs/brief.md, authored: false}          # carried over, not rewritten
+```
+
+Record step 2 with `--out` inside the same tree as the fixture: `record` refuses a fixture outside the cassette's git repository (outside git, outside the cassette's directory).
+*Does not prove:* how Cowork treats a new task over the same folder on either lane (not verified); the second
+conversation starts with no memory of the first.
+
+#### Assert a hook's JSON decision
+
+A hook that decides by printing JSON and exiting 0 is not a block to
+`hook_event_blocked`, which counts exit code 2 only. Read the hook's output, and what the agent got back:
+
+```yaml
+assert:
+  - hook_output_contains: {event: PreToolUse, stream: stdout, matches: '"permissionDecision"\s*:\s*"deny"'}
+  - tool_result_contains: "blocked by policy"
+  # updatedInput: the recorded call input is what the model sent; the rewrite shows in the paired result
+  - tool_called: {tool: Bash, result: {matches: 'outputs/archive/'}}
+  - hook_event_blocked: Stop        # a Stop hook that blocks with exit 2
+```
+
+*Does not prove:* which tool a hook frame was about (frames do not name it), or that the model read the reason.
+
+#### Schema-check a written file
+
+In the Python lane, pass a `jsonschema` check as the predicate:
+
+```python
+import jsonschema
+def valid(doc):
+    jsonschema.validate(doc, SCHEMA)   # raises with the failing path
+    return True
+result.assert_artifact_json("outputs/cap.json", valid)
+```
+
+In a scenario, name the exact paths (`artifact_json` per file) and add `no_unexpected_files` so no other file slips
+in. *Does not prove:* anything about a file whose name you did not list (no globbing).
+
+#### Hold a skill to an unattended host
+
+Make any question fail the run, and give the answers in the prompt:
+
+```yaml
+fidelity: container
+on_unanswered: fail            # the default for `run`; say it anyway
+prompt: "Build the weekly report. Assume: region = all, format = markdown; ask nothing."
+assert:
+  - questions_count_max: 0
+```
+
+Leave `allow_stall` out, so ending on a question fails. `trace <run> --view questions` shows who answered each gate
+(`answeredBy`). *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` entirely and
+tell the model no user is present; the harness models neither.
 
 ### Debugging with `chat`
 

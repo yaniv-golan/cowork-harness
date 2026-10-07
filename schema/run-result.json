@@ -212,7 +212,7 @@
     "lane": {
       "type": "string",
       "enum": ["local", "remote"],
-      "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because no setting reliably decides Cowork's lane and the lane leaves no trace in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
+      "description": "Which Cowork product lane's DELIVERY CONTRACT this run was held to, as declared by the scenario. Distinct from `execution.location` (where the run physically happened): the lane is declared intent, because the lane leaves no trace (and before 2026-10-06 no setting reliably decided Cowork's lane) in a run's evidence. Absent = local. On `remote`, location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at session end) and present_files is not served."
     },
     "execution": {
       "type": "object",

@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 4.4.1` (baseline `desktop-2.26454.0`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.0`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -321,3 +321,125 @@ load-bearing gates with `--answer` once you know which fire.
 `critique` finds what is wrong; `skill`/`run` checks it works. The loop's procedure, with `hillclimb run` as its
 runner, is its own page: [`hillclimb-recipe.md`](hillclimb-recipe.md). The command reference is
 [`hillclimb.md`](hillclimb.md).
+
+## Recipe 8 — Goals the harness has no flag for
+
+Also in [docs/scenario.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#recipes-for-goals-the-harness-has-no-flag-for).
+Each recipe below uses only shipped flags and keys. Each says what it does **not** prove.
+
+### Force a context compaction
+
+Pin a session, run the task, compact it by hand, check that turn, then continue:
+
+```bash
+cowork-harness skill ./my-plugin "<the task>" --session-id compact-1
+cowork-harness skill ./my-plugin "/compact" --session-id compact-1 --resume
+jq -e '[.contextEvents[]? | select(.subtype=="compact_boundary")] | length > 0' <run-dir>/turns/2/result.json
+cowork-harness skill ./my-plugin "<continue the task>" --session-id compact-1 --resume
+cowork-harness trace <run-dir>        # shows the latest turn: what the continued task did
+```
+
+The run dir is the one each turn's `[status]` line prints. A resumed session's dir holds one `turns/<n>/` per
+turn, and `verify-run` refuses a dir with more than one turn, so the `compaction_occurred` assert cannot be checked
+on it: read the `/compact` turn's own `result.json` instead (`jq` exits `0` when it recorded a compaction, `1` when it
+did not). *Does not prove:* that the skill behaves as it would after an automatic compaction. A manual
+`/compact` may not re-attach skills exactly as autocompact does (not verified), and re-attached skill text can come
+back truncated, so a long `SKILL.md` may not return whole.
+
+### Ablate one `SKILL.md` section
+
+Copy the plugin, delete the section from the copy, and run the two as `eval` arms.
+Size it first, at no cost:
+
+```bash
+cp -R ./my-plugin /tmp/nosec && $EDITOR /tmp/nosec/skills/<skill>/SKILL.md   # remove the section
+cowork-harness eval scenarios/ --arm full=./my-plugin --arm nosec=/tmp/nosec --dry-run --target-effect 30
+```
+
+*Does not prove:* which section drove a given action; it shows only whether removing it changes the graded outcome.
+
+### Test a skill's parsing of a Desktop form reply
+
+Desktop's elicitation form sends its answers as the next user
+message, as one line. Send that line as a resumed turn: `cowork-harness skill ./my-plugin "<the reply line>" --session-id s --resume`. The format,
+from Desktop's own form guide:
+
+- one line: `<Title> details — Label: value · Label: value`, labels being the form's field names in sentence case;
+- a multi-select value comma-joined; a short multi-line value flattened with ` / `; a value of 81–200 characters
+  in quotes;
+- a value over 200 characters shown as `Label: (N chars — see below)`, and repeated in full after a
+  `--- Full content ---` line;
+- a skipped form arrives as one fixed sentence saying it was skipped.
+
+*Does not prove:* that the model would choose the form (the harness serves no `visualize` tools; see
+[fidelity-gaps.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here)),
+or that a file the form attaches arrives.
+
+### Resume the work in a new conversation
+
+Keep the first run, export its outputs, and start a second scenario from
+them:
+
+```bash
+cowork-harness run step1.yaml --keep
+cowork-harness fixture export <run-dir> --out scenarios/step1-out
+```
+
+```yaml
+# scenarios/step2.yaml
+workspace_fixture: step1-out
+assert:
+  - file_exists: {path: outputs/next.md, authored: true}            # this conversation wrote it
+  - file_exists: {path: outputs/brief.md, authored: false}          # carried over, not rewritten
+```
+
+Record step 2 with `--out` inside the same tree as the fixture: `record` refuses a fixture outside the cassette's git repository (outside git, outside the cassette's directory).
+*Does not prove:* how Cowork treats a new task over the same folder on either lane (not verified); the second
+conversation starts with no memory of the first.
+
+### Assert a hook's JSON decision
+
+A hook that decides by printing JSON and exiting 0 is not a block to
+`hook_event_blocked`, which counts exit code 2 only. Read the hook's output, and what the agent got back:
+
+```yaml
+assert:
+  - hook_output_contains: {event: PreToolUse, stream: stdout, matches: '"permissionDecision"\s*:\s*"deny"'}
+  - tool_result_contains: "blocked by policy"
+  # updatedInput: the recorded call input is what the model sent; the rewrite shows in the paired result
+  - tool_called: {tool: Bash, result: {matches: 'outputs/archive/'}}
+  - hook_event_blocked: Stop        # a Stop hook that blocks with exit 2
+```
+
+*Does not prove:* which tool a hook frame was about (frames do not name it), or that the model read the reason.
+
+### Schema-check a written file
+
+In the Python lane, pass a `jsonschema` check as the predicate:
+
+```python
+import jsonschema
+def valid(doc):
+    jsonschema.validate(doc, SCHEMA)   # raises with the failing path
+    return True
+result.assert_artifact_json("outputs/cap.json", valid)
+```
+
+In a scenario, name the exact paths (`artifact_json` per file) and add `no_unexpected_files` so no other file slips
+in. *Does not prove:* anything about a file whose name you did not list (no globbing).
+
+### Hold a skill to an unattended host
+
+Make any question fail the run, and give the answers in the prompt:
+
+```yaml
+fidelity: container
+on_unanswered: fail            # the default for `run`; say it anyway
+prompt: "Build the weekly report. Assume: region = all, format = markdown; ask nothing."
+assert:
+  - questions_count_max: 0
+```
+
+Leave `allow_stall` out, so ending on a question fails. `trace <run> --view questions` shows who answered each gate
+(`answeredBy`). *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` entirely and
+tell the model no user is present; the harness models neither.

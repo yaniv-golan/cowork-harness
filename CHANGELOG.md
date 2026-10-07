@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.5.0] — 2026-10-07
+
+From 2026-10-06 new Pro and Max tasks run in the cloud, and every tier of this harness models Cowork's local lane.
+This release says so where it changes how a result reads: a one-line `[lane]` notice on runs with environment-shaped
+assertions, a lane and agent-supply clause in `doctor`, and date-based wording across the docs and the companion
+skill. It also moves `latest` to `desktop-2.26454.0` (agent 2.1.289; `desktop-2.19675.1` is added too), keeps three
+more Desktop-owned keys from your shell out of the agent's environment, and adds the baseline `cloud` block, which
+records the tool surface Desktop serves to a cloud session. No result field or cassette format changes.
+
 ### Security
 
 - **Bumped the transitive `source-map-js` 1.2.1 → 1.2.2**, clearing a Dependabot high-severity advisory. It is a
@@ -33,6 +42,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **A `[lane]` notice on stderr says which lane a run models.** Every tier reproduces Cowork's local lane, which new
+  Pro and Max tasks do not use from 2026-10-06. A live `lane: local` run with at least one environment-shaped
+  assertion (a path, mount, delivery or egress key: `file_exists`, `file_absent`, `user_visible_artifact`,
+  `artifact_text`/`artifact_json`, `present_files_called`, `computer_links_resolve*`, `no_scratchpad_leak`,
+  `transcript_no_host_path`, `no_delete_in_*`, `input_unmodified`, `no_unexpected_files`, `egress_*` or `expect_denied`, and the host loop's path-boundary keys `path_denied`, `no_path_denied`, `vm_path_denied`, `no_vm_path_file_op`, `self_heal_ran`) prints one line
+  saying so, at most once per process; `chat` prints it once at session start. `--compact`, `--demo`, `CI` and the
+  new `COWORK_HARNESS_NO_LANE_NOTICE=1` silence it. Stderr only: no result field, cassette or exit code changes.
 - **`sync` records what Desktop serves to a cloud Cowork session, in a new top-level `cloud` block.** It holds the
   tool list of Desktop's `remote-devices` server, one fingerprint (SHA-256 and code-point count) per conditional
   branch of each tool's description, and `unreachable`: the cloud-session features no local reproduction can reach.
@@ -75,6 +91,14 @@ All notable changes to this project are documented here. The format is based on
   for a model listed in the org's managed config (`thinkingAlwaysOnModels`), even with extended thinking off. The
   harness reads no managed config. See
   [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels).
+- **`doctor`'s staged-agent check says what Desktop has staged against what the baseline pins.** Its detail ends
+  with one of: the agent is staged and pinned; Desktop staged a newer agent (upgrade cowork-harness, or run
+  `cowork-harness sync` if you maintain the baseline); this Desktop is older than the pinned agent; the pinned agent is
+  not staged (staging may be withheld, or no task has booted the VM since an update); no staged VM agent was found; or, with no baseline pin, the staged agent alone. Each ends with the local-lane note above. It names versions only, never a path, and never changes the
+  check's status. It is left out under a `COWORK_AGENT_BINARY` override and off macOS.
+- **The docs and the companion skill state the lane by date.** Every tier models Cowork's local lane; from 2026-10-06
+  new Pro and Max tasks run in the cloud, and before then no setting reliably decided the lane. The selector
+  observations in [docs/fidelity-gaps.md](./docs/fidelity-gaps.md) move under a dated History heading.
 - **New baseline `desktop-2.19675.1`** (agent **2.1.288**).
   - Unchanged from `desktop-2.19675.0`: the Cowork system prompt, the sub-agent append, the egress contract, the
     model/effort config and the first-party `spawn.env`. Gate provenance moved: Desktop's runtime config gains two
@@ -85,6 +109,24 @@ All notable changes to this project are documented here. The format is based on
     `send_user_message` went from `toolsSome` (declared in some sessions) to `toolsAll` (declared in every session
     read). With two frames from one account, this may reflect the account or the sessions read rather than the
     release.
+
+### Documentation
+
+- **Recipes for goals the harness has no flag for**, in [docs/scenario.md](./docs/scenario.md#recipes-for-goals-the-harness-has-no-flag-for)
+  and the companion skill's task recipes: force a context compaction (a resumed `/compact` turn, checked in that turn's `result.json`),
+  ablate one `SKILL.md` section (a second `eval` arm, sized with `--dry-run --target-effect`), test a skill's parsing of
+  a Desktop form reply (a resumed turn in the reply's format), resume the work in a new conversation (`fixture export`
+  then `workspace_fixture:` with `authored` checks), assert a hook's JSON decision (`hook_output_contains`, since
+  `hook_event_blocked` counts exit code 2 only), schema-check a written file (the Python lane with `jsonschema`), and
+  hold a skill to an unattended host. Each says what it does not prove.
+- **The companion skill's authoring reference says a scenario's `session:` is a path to a session file**, never a
+  nested block, which fails to load; a scenario that tests a plugin needs a session file.
+- **[docs/fidelity-gaps.md](./docs/fidelity-gaps.md) corrects how a Desktop form reply arrives**: one line,
+  `<Title> details — Label: value · …`, with long values after a `--- Full content ---` line, not bullet points.
+- **A cloud-lane entry: a skill attached before the cloud session exists gets its tokens unexpanded.**
+  `${CLAUDE_PLUGIN_ROOT}`, `$ARGUMENTS`, `${CLAUDE_SKILL_DIR}` and `${CLAUDE_PLUGIN_DATA}` reach the model literally and
+  `!cmd` lines do not run (observed on Desktop 2.19675.0). The harness does not emulate this;
+  [docs/plugin-root.md](./docs/plugin-root.md) points to it.
 
 ## [4.4.1] — 2026-10-05
 

@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 4.4.1` (baseline `desktop-2.26454.0`).
+Self-contained reference. Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.0`).
 
 > **This page vs. the repo docs.** This is the **offline snapshot** that ships inside the installed
 > plugin — it is self-contained on purpose. The repo carries four other fidelity views, each answering a
@@ -207,7 +207,11 @@ permissive behaviour is deliberately what the scenario is about.
 
 A Desktop update deletes the prior version's staged agent while often leaving an empty version dir, so
 a scenario pinning that agent version resolves to nothing. `doctor` validates the agent for its own
-current baseline, not what each scenario pins, so it can report ready seconds before the run fails.
+current baseline, not what each scenario pins, so it can report ready seconds before the run fails. Its
+staged-agent row ends with what Desktop has staged against that pin: staged and pinned; a newer agent staged
+(upgrade cowork-harness, or run `cowork-harness sync` if you maintain the baseline); this Desktop older than the
+pin; the pinned agent not staged (staging may be withheld, or no task has booted the VM
+since the update); or none found.
 
 To keep the exact pin, **recover the pinned ELF**: re-download that version from the release channel,
 check its sha256 against the baseline's, and set `COWORK_AGENT_BINARY` to it
@@ -298,7 +302,7 @@ up often enough to spell out:
   behavior). See [`docs/cassette.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md) § "Still skipped on replay" and [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) § "Which
   assertions survive replay."
 - **`present_files` assertions can't verify off the tiers that serve the tool.** `no_scratchpad_leak` and
-  `present_files_called` check the `present_files` delivery path — the desktop-local lane's tool; remote
+  `present_files_called` check the `present_files` delivery path — the local lane's tool (not used by new Pro and Max tasks from 2026-10-06); remote
   Cowork delivers via the agent-native `SendUserFile` instead, so never hardcode a delivery tool name in
   a SKILL.md (Gotcha 24 in `gotchas.md`). **The harness** serves `present_files` on `container` **and `hostloop`**
   — not `microvm`/`protocol`. `present_files_called` works at both; `no_scratchpad_leak` stays

@@ -1,6 +1,6 @@
 # Authoring a scenario
 
-Tracks `cowork-harness 4.4.1` (baseline `desktop-2.26454.0`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
+Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.0`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
 
 ## Part I — AUTHOR a scenario
 
@@ -11,8 +11,10 @@ provenance, and the scaffold/lint tools that keep the YAML honest.
 ### Two files: session vs scenario
 
 - **`sessions/*.yaml`** — pre-prompt setup: `model`, mounts (`folders`), and discovery
-  (marketplaces / plugins / skills / mcp). One session is reused by many scenarios. A scenario that
-  omits `session:` gets an all-defaults **inline** session (not a file on disk).
+  (marketplaces / plugins / skills / mcp). One session is reused by many scenarios. A scenario's
+  `session:` is a **path** to such a file, never a nested block: `session: { plugins: … }` fails to load. A
+  scenario that omits `session:` gets an all-defaults session with no plugin declared, so a scenario that tests a
+  plugin needs a session file.
 - **`scenarios/*.yaml`** — the test: `prompt`, scripted `answers:`, and `assert:`.
 
 This split matters: release ground truth (`baseline:` / `baselines/`, produced by `sync`) is
@@ -52,18 +54,16 @@ Set the tier in the **scenario's `fidelity:` field**, not a flag — `run` rejec
 (it's a `skill`/`chat` flag; `run` takes fidelity only from the scenario). See
 `references/fidelity-and-answers.md`.
 
-**Every tier models Cowork's DESKTOP-LOCAL lane** — agent on the user's machine, shell rooted at
+**Every tier models Cowork's LOCAL lane** — agent on the user's machine, shell rooted at
 `/sessions/<id>`, folders at `/sessions/<id>/mnt/<name>`, delivery via `present_files`. Cowork's
 **remote** lane runs server-side in a cloud container with a different filesystem (`$HOME/mnt/`),
 different delivery (`/mnt/user-data/outputs/` + `SendUserFile`) and a server-authored prompt; no tier
-reproduces it and none can — that container is not something a local tool can stand up. No setting
-reliably decides which lane a real session gets: sessions ran in the cloud with "Only on this computer"
-**on** (observed 2026-10-02), and for Pro and Max plans Anthropic
-[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new
-tasks run in the cloud from 2026-10-06. Check the session's own lane
+reproduces it and none can — that container is not something a local tool can stand up.
+[From 2026-10-06 new Pro and Max tasks run in the cloud](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile);
+before then no setting reliably decided the lane. Check the session's own lane
 ([how](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)).
 So: behaviour conclusions (triggering, tool sequencing, gate handling) travel between lanes; anything
-asserting a **path, mount or delivery mechanism** is a claim about the local lane only. Declare
+asserting a **path, mount, delivery mechanism or egress rule** is a claim about the local lane only. Declare
 `lane: remote` when the scenario is about that lane — the affected assertions then refuse to grade
 rather than passing (see the `delivery_unobservable` WARN and the `lane: remote` load-time rejections
 in `run-record-replay.md`).

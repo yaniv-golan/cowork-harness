@@ -105,7 +105,7 @@ export function buildHostLoopNativeEnv(
  *  decision is unaffected (it realpaths candidate and roots itself); this only governs the diagnostic. */
 /** The host-loop cwd SPLIT, in one place because the two halves are only correct TOGETHER.
  *
- *  Production keeps them deliberately different. Measured on desktop-local Cowork 2026-08-27 (before
+ *  Production keeps them deliberately different. Measured on Cowork's local lane 2026-08-27 (before
  *  Desktop 2.7032.0):
  *   - the agent process sits at the OUTPUTS dir, so its file tools resolve a bare `Write` there
  *     (from 2.7032.0 it sits at `/var/empty` instead and a relative Write is refused — `processCwd`);
@@ -511,7 +511,7 @@ function spawnHostLoopTracked(
   const { markTearingDown, deregister: deregisterSidecarReap } = hlSidecar;
 
   // Every `mcp__workspace__bash` call starts at the bare SESSION ROOT — not a connected folder, not
-  // outputs. MEASURED on desktop-local Cowork 2026-08-27, twice: `pwd` returned `/sessions/<id>` with no
+  // outputs. MEASURED on Cowork's local lane 2026-08-27, twice: `pwd` returned `/sessions/<id>` with no
   // folder connected AND with one connected. Cowork's own sub-agent prompt says the same thing: "Each
   // command starts in `<vmCwd>`; anything written outside `<vmCwd>/mnt/` (including /tmp) stays in that
   // environment and never reaches the user or your file tools."

@@ -25,7 +25,7 @@ And because every run is recorded, you get the thing a transcript can't give you
 
 > **New here?** Start by running a committed cassette `replay` and browsing [`examples/`](./examples/) (see [examples/README.md](./examples/README.md)) to see green runs before any setup — then read [docs/boundary.md](./docs/boundary.md) (the limitations model) and [docs/session.md](./docs/session.md) (the file you'll author).
 
-> **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime. Cowork runs a session in one of two lanes: **local** — the Desktop app driving the agent on your own machine against an Apple Virtualization.framework microVM sandbox (on the pinned baseline the agent loop runs on the **host** and reaches into the VM for shell; a VM-loop configuration that runs the whole agent inside the microVM also exists — see [DESIGN.md](./DESIGN.md), "Which Cowork? — both are implemented") — or **remote**, where the agent runs in an Anthropic-hosted cloud container (Anthropic [documents the cloud as Cowork's default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview), and for Pro and Max plans [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that new tasks run in the cloud from 2026-10-06, with tasks already running on the user's computer finishing there). **This harness emulates the local lane's runtime**, and holds a run to either lane's *delivery* contract via a scenario's [`lane:`](./docs/scenario.md#lanes-lane--which-delivery-contract-the-run-is-held-to) key — the lanes deliver files differently, which is the part that changes skill behaviour (see [docs/fidelity-gaps.md](./docs/fidelity-gaps.md), "File delivery"). You **cannot** drive the local microVM from a script (Cowork's session control plane is closed off; see [DESIGN.md §1](./DESIGN.md#1-what-real-cowork-actually-is-and-why-scripting-it-is-closed) for why). What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in cowork mode (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.
+> **What this is and isn't.** This is an *emulator of the contract*, not the Desktop runtime. Cowork runs a session in one of two lanes: **local** — the Desktop app driving the agent on your own machine against an Apple Virtualization.framework microVM sandbox (on the pinned baseline the agent loop runs on the **host** and reaches into the VM for shell; a VM-loop configuration that runs the whole agent inside the microVM also exists — see [DESIGN.md](./DESIGN.md), "Which Cowork? — both are implemented") — or **remote**, where the agent runs in an Anthropic-hosted cloud container (Anthropic [documents the cloud as Cowork's default](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview); [from 2026-10-06 new Pro and Max tasks run in the cloud](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile)). **This harness emulates the local lane's runtime**, which new Pro and Max tasks do not use from 2026-10-06, and holds a run to either lane's *delivery* contract via a scenario's [`lane:`](./docs/scenario.md#lanes-lane--which-delivery-contract-the-run-is-held-to) key — the lanes deliver files differently, which is the part that changes skill behaviour (see [docs/fidelity-gaps.md](./docs/fidelity-gaps.md), "File delivery"). You **cannot** drive the local microVM from a script (Cowork's session control plane is closed off; see [DESIGN.md §1](./DESIGN.md#1-what-real-cowork-actually-is-and-why-scripting-it-is-closed) for why). What you *can* faithfully reproduce is everything that actually changes how a **skill** behaves: the same agent binary in cowork mode (`CLAUDE_CODE_IS_COWORK=1` — there is no `--cowork` flag), the same mount layout, the same egress allowlist, and the same permission/question protocol. That's what this project does.
 
 **Zero-friction preview — no token, no Docker.** A committed cassette replays from a fresh clone (the example
 cassette ships in the repo; just Node ≥ 22):
@@ -36,7 +36,7 @@ npm ci && npm run build
 node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 ```
 
-(Installing globally — `npm install -g "cowork-harness@^4.4.1"` — gives you the `cowork-harness` CLI for your own
+(Installing globally — `npm install -g "cowork-harness@^4.5.0"` — gives you the `cowork-harness` CLI for your own
 scenarios and cassettes; the bundled example above also replays from a global install — see the `$(npm root -g)` path below.)
 
 Full setup → [Quick start](./docs/cli.md#quick-start).
@@ -49,8 +49,8 @@ Three ways to use this project. Each row is the whole hook — follow the link f
 
 | I want to… | Start here | Needs |
 |---|---|---|
-| **Run scenarios myself** from a terminal | **[docs/cli.md](./docs/cli.md)**<br><br>`npm i -g "cowork-harness@^4.4.1"`<br>`cowork-harness replay examples/replays/example-pdf-skill.cassette.json` | Node ≥ 22. The replay demo above is token-free and needs nothing else; live tiers above `protocol` need Docker + a staged agent binary |
-| **Have Claude Code drive it** for me | **[docs/companion-skill.md](./docs/companion-skill.md)**<br><br>`/plugin marketplace add yaniv-golan/cowork-harness`<br>`/plugin install cowork-harness@cowork-harness` | Claude Code. The skill self-bootstraps the CLI via `npx "cowork-harness@^4.4.1"` |
+| **Run scenarios myself** from a terminal | **[docs/cli.md](./docs/cli.md)**<br><br>`npm i -g "cowork-harness@^4.5.0"`<br>`cowork-harness replay examples/replays/example-pdf-skill.cassette.json` | Node ≥ 22. The replay demo above is token-free and needs nothing else; live tiers above `protocol` need Docker + a staged agent binary |
+| **Have Claude Code drive it** for me | **[docs/companion-skill.md](./docs/companion-skill.md)**<br><br>`/plugin marketplace add yaniv-golan/cowork-harness`<br>`/plugin install cowork-harness@cowork-harness` | Claude Code. The skill self-bootstraps the CLI via `npx "cowork-harness@^4.5.0"` |
 | **Gate my skill in CI** | **[docs/ci.md](./docs/ci.md)**<br><br>`- uses: yaniv-golan/cowork-harness@v4`<br>`  with: { command: replay, path: cassettes/ }` | Nothing for the token-free gate; the live lane needs a self-hosted runner with Docker + an agent binary |
 
 Improving a skill round by round with Claude Code's `/claude-api hillclimb` loop? The harness is its runner, with
@@ -247,7 +247,7 @@ L2  microvm parity    Optional. Agent inside a real Linux microVM (Lima/Apple-VZ
 
 ### Which Cowork *lane* this models — read this before trusting an environment assertion
 
-Every tier above reproduces Cowork's **desktop-local lane**: the agent runs on your machine, shell
+Every tier above reproduces Cowork's **local lane**: the agent runs on your machine, shell
 commands land in a Linux sandbox rooted at `/sessions/<id>`, attached folders appear under
 `/sessions/<id>/mnt/<name>`, and finished files reach the user through `present_files`.
 
@@ -255,13 +255,9 @@ Cowork also has a **remote lane**, where the session runs server-side in an ephe
 that reaches your machine over a link. There the filesystem, the shell tool, and file delivery are all
 different — folders arrive under `$HOME/mnt/`, deliverables go to `/mnt/user-data/outputs/` and are
 handed over with `SendUserFile`, and the environment prompt is authored by the server rather than by
-Desktop. **No setting reliably decides which lane you get.** Cowork's "Only on this computer" option
-(Settings → Cowork in the older composer, Settings → General → Tasks in the merged interface) has been
-**on** while sessions still ran in the cloud (observed 2026-10-02); on 2026-10-03 the older Cowork composer ran
-sessions locally and the merged composer ran them in the cloud (2 of 2 each, one Personal/Max organization), and
-on Desktop 2.19675.0 the composer offers no per-session lane picker. For Pro and Max plans, Anthropic
-[announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that from 2026-10-06
-new tasks run in the cloud and the option is removed, and that tasks already running on the user's computer stay there. To know which
+Desktop. Before 2026-10-06 no setting reliably decided which lane a session got (dated observations in
+[docs/fidelity-gaps.md](./docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on)). From 2026-10-06 new Pro and
+Max tasks, scheduled tasks included, run in the cloud. To know which
 lane a session ran on, check the session itself — see
 [docs/fidelity-gaps.md → Which lane a session actually ran on](./docs/fidelity-gaps.md#which-lane-a-session-actually-ran-on).
 
@@ -354,7 +350,7 @@ See [DESIGN.md](./DESIGN.md) for the full parity matrix, the known deltas vs. re
 
 ## Limitations
 
-- **One lane, deliberately.** Every tier models Cowork's desktop-local lane. The remote (cloud) lane runs server-side with a different filesystem, shell tool, delivery mechanism and a server-authored prompt; no tier reproduces it, and `lane: remote` exists to make the resulting blind spots refuse to grade rather than pass. See [Which Cowork lane this models](#which-cowork-lane-this-models--read-this-before-trusting-an-environment-assertion).
+- **The local lane only.** Every tier models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06. The remote (cloud) lane runs server-side with a different filesystem, shell tool, delivery mechanism and a server-authored prompt; no tier reproduces it, and `lane: remote` exists to make the resulting blind spots refuse to grade rather than pass. See [Which Cowork lane this models](#which-cowork-lane-this-models--read-this-before-trusting-an-environment-assertion).
 - **Not the full Desktop network transport.** L1 is a container, not a VM; L2 *is* a real Apple-VZ microVM but still does not reproduce Cowork's gVisor netstack — its egress is the same allowlist proxy as L1 (with a guest iptables firewall in front). If your skill depends on VM-kernel specifics, validate at L2; if it depends on packet-level gVisor behavior, no tier reproduces it.
 - **Cowork in-guest context is partial.** Desktop supplies host-loop staging, runtime `mountPath` RPC, and the bridge. We reproduce the *filesystem and cowork mode*, not those host-side services. Skills that call Desktop-only host RPCs won't run here (they wouldn't be portable anyway).
 - **The agent binary is the staged ELF** (`claude-code-vm/<ver>/claude`), **bind-mounted** from your own Claude Desktop install — nothing Anthropic-owned is bundled or installed. There is **no npm path**; override the path with `COWORK_AGENT_BINARY`. Check licensing/ToS for your use.

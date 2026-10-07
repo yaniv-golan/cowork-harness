@@ -1,6 +1,6 @@
 # Debugging a run
 
-Tracks `cowork-harness 4.4.1` (baseline `desktop-2.26454.0`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
+Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.0`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
 
 ## Part III — Debug
 
@@ -94,16 +94,14 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   bare `trace` digests the whole run. The view set is actively being extended — run `trace --help` for
   the current list rather than relying on a fixed enumeration here.
 - **`lane: local|remote`** (scenario key, default `local`) — which Cowork lane's DELIVERY CONTRACT the run
-  is held to. As of Desktop 2.19675.0 the composer offers no per-session lane
-  picker and no setting reliably decides the lane (for Pro and Max plans, Anthropic
-  [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that
-  new tasks run in the cloud from 2026-10-06); the lanes disagree about what *delivered* means. On `remote`,
+  is held to. `local` is the default and models the local lane, which new Pro and Max tasks do not use from
+  2026-10-06 (they run in the cloud); the lanes disagree about what *delivered* means. A live `local` run with an
+  environment-shaped assertion (a path, mount, delivery or egress key) prints one `[lane]` line on stderr saying
+  so, once per process; `--compact`/`--demo`, `CI` and `COWORK_HARNESS_NO_LANE_NOTICE=1` silence it. On `remote`,
   location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at
   session end), `present_files` is NOT served, and `user_visible_artifact` /
   `present_files_called` / `no_scratchpad_leak` are rejected at LOAD time as unable to pass. Reach for it
-  to check a skill's delivery survives the cloud lane (Anthropic
-  [announces](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile) that
-  from 2026-10-06 new Pro and Max tasks run in the cloud). Orthogonal to `fidelity` — a `lane: remote`
+  to check a skill's delivery survives the cloud lane, where new Pro and Max tasks run from 2026-10-06. Orthogonal to `fidelity` — a `lane: remote`
   scenario still runs locally.
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,

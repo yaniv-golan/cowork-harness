@@ -38,6 +38,7 @@ import { checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { PATH_GATE_TOOL_NAMES } from "../hostloop/pretooluse-path-hook.js";
 import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
+import { maybePrintChatLaneNotice } from "./lane-notice.js";
 import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
 const log = (s: string) => process.stderr.write(s);
@@ -301,6 +302,8 @@ export async function cmdChat(args: string[]) {
   // mirroring execute.ts's hardening so a re-run can't collide on the sidecar container name.
   const runToken = `r${process.hrtime.bigint().toString(36)}`;
   // no process.env mutation — pass proxy/network explicitly so concurrent calls don't stomp.
+  // Which lane this session models: once, at session start (lane-notice.ts).
+  maybePrintChatLaneNotice();
   // Unit-lane spawn guard: everything below starts containers or a real agent.
   assertSpawnAllowed(`\`chat\` at ${fidelity}`);
   // protocol tier runs the host claude binary with no Docker sandbox, so no sidecar is needed.

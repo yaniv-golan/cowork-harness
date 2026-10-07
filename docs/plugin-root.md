@@ -106,6 +106,10 @@ skill text does not show. `lint-skill` reports the whole root passed as the valu
 and every other braced use as an INFO (see
 [Catch both before a paid run](#catch-both-before-a-paid-run)).
 
+On the cloud lane, a skill attached before the cloud session exists receives these tokens unexpanded; the harness
+does not emulate that. See
+[fidelity-gaps.md → A skill attached before the cloud session exists](./fidelity-gaps.md#a-skill-attached-before-the-cloud-session-exists--tokens-arrive-unexpanded-not-emulated).
+
 ## How the tiers map
 
 The harness reproduces host-loop and VM-loop plugin staging as two distinct mount layouts (different
