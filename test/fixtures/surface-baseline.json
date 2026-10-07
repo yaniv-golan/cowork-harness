@@ -4690,7 +4690,64 @@
       ".assert[].hook_blocked": {
         "type": "string"
       },
-      ".assert[].hook_event_blocked": {
+      ".assert[].hook_decision": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].hook_decision.decision": {
+        "type": "string",
+        "enum": ["allow", "deny", "ask", "defer", "block", "approve"],
+        "required": true
+      },
+      ".assert[].hook_decision.event": {
+        "type": "string",
+        "enum": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PostToolBatch",
+          "Notification",
+          "UserPromptSubmit",
+          "UserPromptExpansion",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PreCompact",
+          "PostCompact",
+          "PreModelSwitch",
+          "PostModelSwitch",
+          "PermissionRequest",
+          "PermissionDenied",
+          "Setup",
+          "TeammateIdle",
+          "TaskCreated",
+          "TaskCompleted",
+          "Elicitation",
+          "ElicitationResult",
+          "ConfigChange",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "InstructionsLoaded",
+          "CwdChanged",
+          "FileChanged",
+          "DirectoryAdded",
+          "MessageDisplay"
+        ],
+        "required": true
+      },
+      ".assert[].hook_decision.max": {
+        "type": "integer"
+      },
+      ".assert[].hook_decision.min": {
+        "type": "integer"
+      },
+      ".assert[].hook_decision.tool": {
+        "type": "string"
+      },
+      ".assert[].hook_event_blocked<anyOf:0>": {
         "type": "string",
         "enum": [
           "PreToolUse",
@@ -4727,6 +4784,58 @@
           "DirectoryAdded",
           "MessageDisplay"
         ]
+      },
+      ".assert[].hook_event_blocked<anyOf:1>": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].hook_event_blocked<anyOf:1>.event": {
+        "type": "string",
+        "enum": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PostToolBatch",
+          "Notification",
+          "UserPromptSubmit",
+          "UserPromptExpansion",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PreCompact",
+          "PostCompact",
+          "PreModelSwitch",
+          "PostModelSwitch",
+          "PermissionRequest",
+          "PermissionDenied",
+          "Setup",
+          "TeammateIdle",
+          "TaskCreated",
+          "TaskCompleted",
+          "Elicitation",
+          "ElicitationResult",
+          "ConfigChange",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "InstructionsLoaded",
+          "CwdChanged",
+          "FileChanged",
+          "DirectoryAdded",
+          "MessageDisplay"
+        ],
+        "required": true
+      },
+      ".assert[].hook_event_blocked<anyOf:1>.max": {
+        "type": "integer"
+      },
+      ".assert[].hook_event_blocked<anyOf:1>.min": {
+        "type": "integer"
+      },
+      ".assert[].hook_event_blocked<anyOf:1>.tool": {
+        "type": "string"
       },
       ".assert[].hook_event_fired": {
         "type": "string",
@@ -4910,6 +5019,56 @@
       ".assert[].no_hook_blocked": {
         "type": "boolean",
         "const": true
+      },
+      ".assert[].no_hook_event_blocked<anyOf:0>": {
+        "type": "boolean",
+        "const": true
+      },
+      ".assert[].no_hook_event_blocked<anyOf:1>": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].no_hook_event_blocked<anyOf:1>.event": {
+        "type": "string",
+        "enum": [
+          "PreToolUse",
+          "PostToolUse",
+          "PostToolUseFailure",
+          "PostToolBatch",
+          "Notification",
+          "UserPromptSubmit",
+          "UserPromptExpansion",
+          "SessionStart",
+          "SessionEnd",
+          "Stop",
+          "StopFailure",
+          "SubagentStart",
+          "SubagentStop",
+          "PreCompact",
+          "PostCompact",
+          "PreModelSwitch",
+          "PostModelSwitch",
+          "PermissionRequest",
+          "PermissionDenied",
+          "Setup",
+          "TeammateIdle",
+          "TaskCreated",
+          "TaskCompleted",
+          "Elicitation",
+          "ElicitationResult",
+          "ConfigChange",
+          "WorktreeCreate",
+          "WorktreeRemove",
+          "InstructionsLoaded",
+          "CwdChanged",
+          "FileChanged",
+          "DirectoryAdded",
+          "MessageDisplay"
+        ],
+        "required": true
+      },
+      ".assert[].no_hook_event_blocked<anyOf:1>.tool": {
+        "type": "string"
       },
       ".assert[].no_lost_write_back": {
         "type": "boolean",
