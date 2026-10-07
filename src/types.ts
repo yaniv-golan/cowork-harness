@@ -855,13 +855,13 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files itself is now served at BOTH container and hostloop, but this key's promotion/leak semantics apply only at container: production's own host-loop branch validates a path and passes it through WITHOUT promoting (a delivered file under the outputs dir is already user-visible there), so there is no scratch→outputs copy to leak, and at hostloop this key is cannot-verify rather than a claim the tool is absent (use fidelity: container for present_files-based delivery; microvm still doesn't serve the tool at all). present_files is the DESKTOP-LOCAL lane's tool; remote Cowork delivers via the agent-native SendUserFile instead, so a skill should describe the delivery outcome rather than naming either tool (docs/fidelity-gaps.md, 'File delivery'); only `true` is valid",
+      "every file presented via present_files that was in the scratchpad was successfully promoted to outputs (none left behind); vacuous pass if nothing was presented — pair with a presence check to require a delivery; content-class (re-derived from the tool_use/tool_result stream, so checkable on replay too); CONTAINER TIER ONLY — present_files itself is now served at BOTH container and hostloop, but this key's promotion/leak semantics apply only at container: production's own host-loop branch validates a path and passes it through WITHOUT promoting (a delivered file under the outputs dir is already user-visible there), so there is no scratch→outputs copy to leak, and at hostloop this key is cannot-verify rather than a claim the tool is absent (use fidelity: container for present_files-based delivery; microvm still doesn't serve the tool at all). present_files is the LOCAL lane's tool; remote Cowork delivers via the agent-native SendUserFile instead, so a skill should describe the delivery outcome rather than naming either tool (docs/fidelity-gaps.md, 'File delivery'); only `true` is valid",
     ),
   present_files_called: z
     .literal(true)
     .optional()
     .describe(
-      "at least one file was actually delivered via the present_files tool (at least one call carried a well-formed file_path). Presence is read from the INVOCATION count, not from the classified presentedFiles list, so it is unaffected by a redaction policy that rewrites host paths; a run that called the tool but whose every call carried an unusable path reports cannot-verify, never 'the tool was never called'. The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented, and stays container-only) — pair them to require a delivery AND require it not to leak; CONTAINER + HOSTLOOP TIERS — the harness serves present_files at both, mirroring real Cowork advertising the tool in both its VM and host-loop modes; every other tier is still a harness coverage gap (see docs/fidelity-gaps.md, 'File delivery'). present_files is the DESKTOP-LOCAL lane's tool name; remote Cowork uses the agent-native SendUserFile (docs/fidelity-gaps.md, 'File delivery') — this key asserts the harness-side delivery record either way; only `true` is valid",
+      "at least one file was actually delivered via the present_files tool (at least one call carried a well-formed file_path). Presence is read from the INVOCATION count, not from the classified presentedFiles list, so it is unaffected by a redaction policy that rewrites host paths; a run that called the tool but whose every call carried an unusable path reports cannot-verify, never 'the tool was never called'. The presence companion to no_scratchpad_leak (which passes vacuously when nothing was presented, and stays container-only) — pair them to require a delivery AND require it not to leak; CONTAINER + HOSTLOOP TIERS — the harness serves present_files at both, mirroring real Cowork advertising the tool in both its VM and host-loop modes; every other tier is still a harness coverage gap (see docs/fidelity-gaps.md, 'File delivery'). present_files is the LOCAL lane's tool name; remote Cowork uses the agent-native SendUserFile (docs/fidelity-gaps.md, 'File delivery') — this key asserts the harness-side delivery record either way; only `true` is valid",
     ),
   egress_denied: z.string().optional().describe("egress to this host was denied"),
   egress_allowed: z.string().optional().describe("egress to this host was allowed"),
@@ -1425,7 +1425,7 @@ export const ScenarioObject = z.strictObject({
   //   fidelity  — the isolation tier the harness runs in (protocol/container/microvm/hostloop)
   //   execution — WHERE the run happens (local; cloud-describe reserved)
   //   lane      — WHICH Cowork product lane's contract the run is held to
-  // Cowork has no per-session lane picker on 2.19675.0 and no setting reliably decides the lane
+  // Before 2026-10-06 no setting reliably decided the lane; from that date new Pro and Max tasks run in the cloud
   // (docs/fidelity-gaps.md, "Which lane a session actually ran on"); the two lanes disagree about what
   // "delivered" means. `local` keeps every existing scenario's meaning unchanged.
   lane: z
@@ -1855,7 +1855,7 @@ export interface RunResult {
   scratchpadEvidenceComplete?: boolean;
   /** The scenario's declared Cowork product lane — which delivery contract this run was held to. Distinct
    *  from `execution.location` (where the run PHYSICALLY happened, always local in this harness): the lane
-   *  is DECLARED intent, because no setting reliably decides Cowork's lane and the lane leaves no trace
+   *  is DECLARED intent, because the lane leaves no trace (and before 2026-10-06 no setting reliably decided it)
    *  in a run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
   lane?: "local" | "remote";
   scenario: string;

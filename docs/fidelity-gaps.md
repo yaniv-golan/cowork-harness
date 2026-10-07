@@ -39,8 +39,8 @@ server-side in a cloud container that reaches the user's machine over a device b
 Max tasks (scheduled tasks included) run in the cloud, per Anthropic's
 [web, desktop and mobile article](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile).
 Anthropic's [architecture overview](https://support.claude.com/en/articles/14479288-claude-cowork-architecture-overview)
-describes the cloud as Cowork's default and says organisation deployments can still run sessions on the user's
-machine. To know which lane a given session ran on, check the session itself: see
+describes the cloud as Cowork's default and says local execution remains available for existing desktop deployments;
+on Pro and Max plans it covers only tasks and scheduled tasks started on the device before 2026-10-06. To know which lane a given session ran on, check the session itself: see
 [Which lane a session actually ran on](#which-lane-a-session-actually-ran-on); how the lane was chosen before
 2026-10-06 is under [History (to 2026-10-03)](#history-to-2026-10-03-what-chose-the-lane).
 
@@ -163,7 +163,7 @@ a live bug report can be placed on the right lane before it is compared to a har
 | Outputs | `/mnt/user-data/outputs -> /mnt/attach/outputs`, empty throughout; presenting a file from `/home/claude` produced the card | `mnt/outputs` is the channel; `present_files` promotes into it |
 | Links | every `computer://` form renders as plain text; a bare absolute path becomes a broken `https://claude.ai/home/claude/…` link | `computer://` links resolve (`computer_links_resolve` at hostloop) |
 | `CLAUDE_CODE_DESKTOP_APP_VERSION` | **unset** (and the agent reads it only under the `claude-desktop`/`local-agent` entrypoints) | set by Desktop ≥ 2.2553.1 and by this harness at hostloop from the baseline |
-| Hook lifecycle frames | `CLAUDE_CODE_REMOTE=true` turns on `hook_started`/`hook_response` frames for **every** hook event — the same switch as the CLI's `--include-hook-events`, which Desktop never passes. This is why a Stop hook was visible there and is not on a Desktop-local stream | frames for SessionStart/Setup only; the harness passes the flag itself, at every tier including `protocol`, when a staged plugin declares hooks |
+| Hook lifecycle frames | `CLAUDE_CODE_REMOTE=true` turns on `hook_started`/`hook_response` frames for **every** hook event — the same switch as the CLI's `--include-hook-events`, which Desktop never passes. This is why a Stop hook was visible there and is not on a local-lane stream | frames for SessionStart/Setup only; the harness passes the flag itself, at every tier including `protocol`, when a staged plugin declares hooks |
 | Plugin root | `/root/.claude/plugins/synced/<org-uuid>_<account-uuid>/<plugin>/` (`CLAUDE_CODE_SYNC_PLUGINS=1`) | `mnt/.local-plugins/…` (docs/plugin-root.md) |
 | Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1. The agent-facing name, `mcp__remote-devices__<server>__<tool>`, is from asar 2.19675.0 | conditionally stubbed to zero tools by Desktop, never stubbed here (see the plugin-MCP section under "Plugins" for the two conditions — the bridge is a third data point for that open decision) |
 | Plugin hooks | `Stop` fired (block → resend; no UI notice). `SessionStart` fired only on `source: "resume"`, never `startup` — inferred: plugins sync after the session starts. Cowork ships its **own** Stop hooks here (`stop-hook-reply-gate.py`, `stop-hook-git-check.sh` under `/home/claude/.claude/`) | hooks run at every tier (at `protocol` as native host processes; there, without a sealed managed config dir, a plugin installed on the host runs its hooks too); `hook_event_fired` / `hook_event_blocked` grade them, and `hook_output_contains` / `hook_output_not_contains` what they printed |
@@ -1601,7 +1601,7 @@ nothing in context and changes no tool-selection outcome.
 Cowork has **two** file-delivery tools, one per product lane, and an agent only ever sees the one for the
 surface it runs on:
 
-- **Desktop-local sandbox** (the lane this harness emulates): the Desktop host serves
+- **Local-lane sandbox** (the lane this harness emulates): the Desktop host serves
   `mcp__cowork__present_files` on the `cowork` SDK-MCP server — schema
   `{files: [{file_path: string}]}`, `alwaysLoad` — which promotes scratchpad files into `mnt/outputs`.
   The spawn's explicit `tools:` allowlist does **not** include `SendUserFile`, so the agent-native tool is
@@ -1809,7 +1809,7 @@ is not misfiled as a harness bug — triage the lane first ([how](#which-lane-a-
 Probing a *remote* Cowork session ("print your file-delivery tool schema") reports `SendUserFile` with a
 required `status`, which diffs against this harness as "wrong name AND wrong schema". It is neither: the
 two lanes genuinely disagree, and a harness that adopted `SendUserFile` would green skills that then fail
-on real desktop-local Cowork — inverting the failure class the harness exists to catch. When a probe and
+on Cowork's real local lane — inverting the failure class the harness exists to catch. When a probe and
 this harness disagree about file delivery, establish which lane the probe ran on first:
 `CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and `remote_cowork` on the remote one (read it
 from a hook, not the VM shell; other

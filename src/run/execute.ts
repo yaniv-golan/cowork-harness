@@ -2394,7 +2394,7 @@ export function fidelityOmitted(raw: unknown): boolean {
 }
 
 /** The one-line remedy for a scenario without `fidelity:`. `container` was the default before 4.0.0, so it
- *  keeps a scenario's behaviour identical; `hostloop` is what production runs. */
+ *  keeps a scenario's behaviour identical; `hostloop` is what Desktop runs on the local lane. */
 export const FIDELITY_REQUIRED_REMEDY =
   "add `fidelity: container` to keep the pre-4.0 behaviour (it was the default), or `fidelity: hostloop` to match production";
 

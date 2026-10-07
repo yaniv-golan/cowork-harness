@@ -157,7 +157,7 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
  */
 /** Is this produced file one the user actually got?
  *
- *  LANE-PARAMETERISED ON PURPOSE. On the desktop-local lane a file under a user-visible root is delivered
+ *  LANE-PARAMETERISED ON PURPOSE. On the local lane a file under a user-visible root is delivered
  *  by LOCATION — no tool call needed (Cowork's own prompt tells the agent to save deliverables there).
  *  On the remote lane location delivers nothing: only membership in the delivered set counts (verified by
  *  live probe — writing to /mnt/user-data/outputs/ produced no card and an empty Outputs panel).

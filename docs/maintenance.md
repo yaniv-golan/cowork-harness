@@ -277,8 +277,8 @@ committed baseline and say why in that baseline's `$comment`.
 
    > **PRECONDITION for any live probe of real Cowork: the probe session must run on the local lane.**
    > [From 2026-10-06 new Pro and Max tasks run in the cloud](https://support.claude.com/en/articles/15520349-use-claude-cowork-on-web-desktop-and-mobile),
-   > so a local-lane probe cannot be taken from a Pro or Max account; it needs an account whose plan still
-   > runs tasks locally. Before that date no setting reliably selected the lane (sessions ran in the cloud
+   > so a local-lane probe cannot be taken from a Pro or Max account; it needs an account that still gets
+   > local tasks (in our observation, a Team-plan organization). Before that date no setting reliably selected the lane (sessions ran in the cloud
    > with Cowork's local-only setting **on**, observed 2026-10-02). A cloud-lane session runs under a server-authored prompt with
    > no `## Cowork environment` section at all, and you will be diffing a lane this harness does not
    > model. Start a FRESH session and confirm its lane before probing — see
@@ -380,8 +380,8 @@ committed baseline and say why in that baseline's `$comment`.
      an unobserved newest baseline; `--allow-unobserved-init-surface` downgrades that to a warning for an
      emergency release.
    - **After the local-lane sunset.** From 2026-10-06 new Pro and Max Cowork tasks run in the cloud, and a
-     cloud session writes no local init frame. So before syncing, run one local task on an account whose
-     plan still has the local lane; otherwise the surface is recorded unobserved and the preflight refuses
+     cloud session writes no local init frame. So before syncing, run one local task on an account that
+     still gets local tasks (in our observation, a Team-plan organization); otherwise the surface is recorded unobserved and the preflight refuses
      it.
    - **Reading the diff.** A tool or server appearing or disappearing is the signal. A tool moving between
      `toolsAll` and `toolsSome` depends on which kinds of session happened to be read (at 2.7032.0 some

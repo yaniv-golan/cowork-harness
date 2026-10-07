@@ -725,7 +725,7 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "This gate is SERVER-SIDE and Desktop-version-INDEPENDENT (it flipped off->on via " +
       '`source:"defaultValue"` with the asar byte-identical, 1.37937.1 -> .3) — do NOT go looking for a ' +
       "Desktop change. " +
-      "WARNING, not a refusal: probed live 2026-08-27 on desktop-local Cowork (agent 2.1.246, hl branch, " +
+      "WARNING, not a refusal: probed live 2026-08-27 on Cowork's local lane (agent 2.1.246, hl branch, " +
       "no folder connected). A real sub-agent's environment section matched the committed asset on all " +
       "four load-bearing claims — host cwd, mcp__workspace__bash in an isolated Linux env, folders under " +
       "<vmCwd>/mnt/, and shell starting in <vmCwd> with non-mnt writes reaching neither the user nor the " +
@@ -742,8 +742,8 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
       "If the sub-agent append matters to what you are about to ship, re-probe (dispatch a sub-agent, ask " +
       "for its environment section verbatim, diff the three composed parts) rather than trusting this note. " +
       "NOTE the probe has a PRECONDITION: the session must run on the LOCAL lane. Cowork's " +
-      "`Only on this computer` setting (localAgentMode) does not reliably select it (cloud runs seen with " +
-      "it ON), and Anthropic announces its removal for Pro/Max from 2026-10-06. Confirm the session ran " +
+      "`Only on this computer` setting (localAgentMode) did not reliably select it (cloud runs seen with " +
+      "it ON), and from 2026-10-06 new Pro/Max tasks run in the cloud. Confirm the session ran " +
       "locally before probing; see docs/fidelity-gaps.md, 'Which lane a session actually ran on'.",
   ];
 }
