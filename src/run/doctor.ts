@@ -171,12 +171,13 @@ export function laneSupplyClause(staged: { version: string | null; elfExists: bo
   const what = v && staged.elfExists ? `Desktop staged agent ${v}` : `Desktop names agent ${v} (no ELF on disk)`;
   let supply: string;
   if (!v) supply = "no staged VM agent found";
-  else if (pin && cmpVersionStrings(v, pin) > 0)
+  else if (!pin) supply = `${what}; no baseline pin to compare`;
+  else if (cmpVersionStrings(v, pin) > 0)
     supply = `${what}, newer than the pinned ${pin}: upgrade cowork-harness, or run \`cowork-harness sync\` if you maintain the baseline`;
-  else if (pin && cmpVersionStrings(v, pin) < 0) supply = `this Desktop is older than the pinned agent: ${what}, the baseline pins ${pin}`;
-  else if (pin && staged.elfExists) supply = `agent ${pin} staged and pinned`;
+  else if (cmpVersionStrings(v, pin) < 0) supply = `this Desktop is older than the pinned agent: ${what}, the baseline pins ${pin}`;
+  else if (staged.elfExists) supply = `agent ${pin} staged and pinned`;
   else
-    supply = `agent ${pin ?? "(unpinned)"} not staged by this Desktop (staging may be withheld by server policy, or no task has booted the VM since an update)`;
+    supply = `agent ${pin} not staged by this Desktop (staging may be withheld by server policy, or no task has booted the VM since an update)`;
   return `${supply}; ${lane}`;
 }
 

@@ -43,6 +43,10 @@ afterEach(() => {
 describe("laneSupplyClause", () => {
   it("staged = pin, ELF present → staged and pinned", () => {
     expect(laneSupplyClause({ version: "2.1.288", elfExists: true }, "2.1.288")).toBe(`agent 2.1.288 staged and pinned; ${LANE}`);
+    // No baseline pin: it names what is staged, and never claims the agent is missing.
+    expect(laneSupplyClause({ version: "2.1.288", elfExists: true }, undefined)).toBe(
+      `Desktop staged agent 2.1.288; no baseline pin to compare; ${LANE}`,
+    );
   });
   it("staged > pin → upgrade, or sync if you maintain the baseline", () => {
     expect(laneSupplyClause({ version: "2.1.300", elfExists: true }, "2.1.288")).toBe(
