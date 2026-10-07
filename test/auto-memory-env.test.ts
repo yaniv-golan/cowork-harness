@@ -107,9 +107,9 @@ describe("autoMemoryEnv", () => {
     expect(autoMemoryEnv({} as PlatformBaseline)).toEqual({ [KEY]: "1" });
     expect(autoMemoryEnv(g({ [AUTO_MEMORY_GATE]: { value: true } }))).toEqual({ [KEY]: "1" });
   });
-  // Every committed baseline, not a sample: 32 record the gate off and 9 predate it (no row). A future sync that
+  // Every committed baseline, not a sample: 33 record the gate off and 9 predate it (no row). A future sync that
   // legitimately records the gate ON turns this red — next to sync's WARNING note, that is the point.
-  it("every committed baseline resolves to disabled: 32 rows off, 9 with no row", () => {
+  it("every committed baseline resolves to disabled: 33 rows off, 9 with no row", () => {
     const dir = join(import.meta.dirname, "..", "baselines");
     let off = 0;
     let noRow = 0;
@@ -119,7 +119,7 @@ describe("autoMemoryEnv", () => {
       if (readGateBool(b, AUTO_MEMORY_GATE) === false) off++;
       else noRow++;
     }
-    expect({ off, noRow }).toEqual({ off: 32, noRow: 9 });
+    expect({ off, noRow }).toEqual({ off: 33, noRow: 9 });
   });
 });
 

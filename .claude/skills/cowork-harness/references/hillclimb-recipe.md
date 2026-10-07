@@ -1,6 +1,6 @@
 # Recipe 7 — Climb a skill with `/claude-api hillclimb` and the harness as its runner
 
-Tracks `cowork-harness 4.4.1` (baseline `desktop-2.19675.1`). It needs a `cowork-harness` whose
+Tracks `cowork-harness 4.4.1` (baseline `desktop-2.26454.0`). It needs a `cowork-harness` whose
 `hillclimb --help` lists `--skill` (help goes to stderr). This page is the loop's procedure, step by step, in the order of the
 `/claude-api hillclimb` guide. Every mechanic (flags, refusals, the gate, `regrade`, `freeze-ref`, exit codes,
 row keys) is in [`hillclimb.md`](hillclimb.md); the setup and the full list of differences from the guide's own

@@ -18,10 +18,11 @@ import { EFFORT_THINKING_ENV_KEYS } from "../effort-env.js";
  *  later; `assertIsolationSupported` refuses an older CLI before any model call.
  *
  *  What is NOT isolated, by design: USER settings stay, so `apiKeyHelper` auth keeps working, and the call inherits
- *  the harness's own environment (auth, PATH, proxy). Three things narrow what that lets through for grading:
+ *  the harness's own environment (auth, PATH, proxy). Four things narrow what that lets through for grading:
  *  - the effort is pinned per role with `--effort` (`GRADER_EFFORT`), which outranks a user-settings `effortLevel`;
  *  - the effort/thinking env keys (`EFFORT_THINKING_ENV_KEYS`) are dropped from the inherited environment, since the
  *    CLI reads `CLAUDE_CODE_EFFORT_LEVEL` ahead of `--effort`;
+ *  - the bare-mode and process-wrapper keys (`GRADER_SHELL_DROP_KEYS`) are dropped too;
  *  - `--settings` blanks the same keys (`GRADER_SETTINGS`): the CLI applies a user-settings or global-config `env`
  *    block inside itself, after this spawn, and flag settings are applied after both, so a blank wins. Every reader
  *    takes `""` as unset or false. That is read from the 2.1.288 binary, not observed live, so `userSettingsEffort`
@@ -59,9 +60,12 @@ export const GRADER_EFFORT: Readonly<Record<GraderRole, string>> = { judge: "hig
 /** The CLI's effort levels, lowest first (its `maxEffortLevel` enum). */
 const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max"];
 
-/** Flag settings every call carries: the effort/thinking env keys blanked, so a user-settings or global-config `env`
- *  block cannot set them (see `ISOLATION_ARGS`). */
-export const GRADER_SETTINGS = { env: Object.fromEntries(EFFORT_THINKING_ENV_KEYS.map((k) => [k, ""])) as Record<string, string> };
+/** Flag settings every call carries: the effort/thinking env keys and `CLAUDE_CODE_SIMPLE` blanked, so a user-settings
+ *  or global-config `env` block cannot set them (see `ISOLATION_ARGS`). The host CLI reads `CLAUDE_CODE_SIMPLE` as a
+ *  boolean that takes only 1/true/yes/on, so `""` is off. */
+export const GRADER_SETTINGS = {
+  env: Object.fromEntries([...EFFORT_THINKING_ENV_KEYS, "CLAUDE_CODE_SIMPLE"].map((k) => [k, ""])) as Record<string, string>,
+};
 
 /** `extraArgs` with the grader `--settings` added — merged into a `--settings` JSON the caller already passes (its
  *  `env` keeps every other key; the blanked ones win), never a second `--settings`. A `--settings` naming a FILE cannot
@@ -145,11 +149,21 @@ function warnSettingsEffort(role: GraderRole): void {
   }
 }
 
+/** Operator-shell keys that change what the host CLI is, not only how hard it thinks: `CLAUDE_CODE_SIMPLE=1` is its
+ *  `--bare` mode, which also reads Anthropic auth only from `ANTHROPIC_API_KEY` or an `apiKeyHelper` (never OAuth or
+ *  the keychain), so an export would silently change the grader's credential; `CLAUDE_CODE_PROCESS_WRAPPER` wraps the
+ *  processes it launches. The agent's tiers scrub these two and `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`
+ *  (`SCRUBBED_AGENT_ENV_KEYS` in src/session.ts); that third key only renames SDK-type MCP servers' tools, and a grader
+ *  call runs with `--strict-mcp-config` and no SDK server, so it changes nothing here. Not closed: the process wrapper
+ *  also has its own settings key, which a user, managed or flag settings file can still set; only the environment
+ *  variable is dropped. */
+export const GRADER_SHELL_DROP_KEYS = ["CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_PROCESS_WRAPPER"] as const;
+
 /** The host-`claude` call's environment: the harness's own, minus the keys that would change its effort or thinking
- *  (see `ISOLATION_ARGS`). Everything else — auth, PATH, proxy — is kept. */
+ *  (see `ISOLATION_ARGS`) and `GRADER_SHELL_DROP_KEYS`. Everything else — auth, PATH, proxy — is kept. */
 export function graderSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
-  for (const k of EFFORT_THINKING_ENV_KEYS) delete env[k];
+  for (const k of [...EFFORT_THINKING_ENV_KEYS, ...GRADER_SHELL_DROP_KEYS]) delete env[k];
   return env;
 }
 
@@ -215,7 +229,7 @@ export function assertIsolationSupported(bin: string): void {
     if (cached !== true) throw cached;
     return;
   }
-  const help = spawnSync(bin, ["--help"], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 15_000 });
+  const help = spawnSync(bin, ["--help"], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 15_000, env: graderSpawnEnv() });
   if (help.error) {
     const code = (help.error as NodeJS.ErrnoException).code;
     // Not a version problem, and not a verdict to remember: the probe itself did not complete.
@@ -239,7 +253,12 @@ export function assertIsolationSupported(bin: string): void {
   const missing = ISOLATION_FLAGS.filter((f) => !helpDeclaresFlag(text, f));
   let verdict: true | Error = true;
   if (missing.length) {
-    const version = spawnSync(bin, ["--version"], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 15_000 });
+    const version = spawnSync(bin, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      timeout: 15_000,
+      env: graderSpawnEnv(),
+    });
     const v = (version.stdout ?? "").trim() || "unknown version";
     verdict = new Error(
       `the host \`claude\` (${bin}, ${v}) does not accept ${missing.join(", ")} — ` +
@@ -308,7 +327,12 @@ export function transportIdentity(
   }
   let v = cliVersions.get(bin);
   if (v === undefined) {
-    const r = spawnSync(bin, ["--version"], { stdio: ["ignore", "pipe", "pipe"], encoding: "utf8", timeout: 15_000 });
+    const r = spawnSync(bin, ["--version"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      timeout: 15_000,
+      env: graderSpawnEnv(),
+    });
     v = (r.stdout ?? "").trim().split(/\s+/)[0] || null;
     cliVersions.set(bin, v);
   }

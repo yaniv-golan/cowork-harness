@@ -6,6 +6,8 @@ import {
   claudeCliCompleteStructured,
   withGraderSettings,
   defaultManagedMcpPath,
+  graderSpawnEnv,
+  assertIsolationSupported,
   helpDeclaresFlag,
   isolationRefusal,
   resetIsolationPreflight as resetPreflight,
@@ -115,10 +117,10 @@ function resetIsolationPreflight(managedMcpPath = join(dir, "no-managed-mcp.json
   resetPreflight(managedMcpPath);
 }
 
-// The --settings value every grader call carries: the three effort/thinking keys blanked, so a user-settings `env`
-// block cannot set them (flag settings apply after user settings).
+// The --settings value every grader call carries: the three effort/thinking keys and the bare-mode key blanked, so a
+// user-settings `env` block cannot set them (flag settings apply after user settings).
 const GRADER_SETTINGS_JSON = JSON.stringify({
-  env: { CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "" },
+  env: { CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "", CLAUDE_CODE_SIMPLE: "" },
 });
 
 let prevForbid: string | undefined;
@@ -623,7 +625,13 @@ describe("per-role effort and the settings counter-override", () => {
     expect(out.filter((a) => a === "--settings")).toHaveLength(1);
     expect(out.slice(0, 2)).toEqual(["--json-schema", "{}"]);
     expect(JSON.parse(out[out.indexOf("--settings") + 1]!)).toEqual({
-      env: { KEEP: "1", CLAUDE_CODE_EFFORT_LEVEL: "", CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "", CLAUDE_CODE_DISABLE_THINKING: "" },
+      env: {
+        KEEP: "1",
+        CLAUDE_CODE_EFFORT_LEVEL: "",
+        CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: "",
+        CLAUDE_CODE_DISABLE_THINKING: "",
+        CLAUDE_CODE_SIMPLE: "",
+      },
       other: true,
     });
   });
@@ -720,5 +728,44 @@ describe("helpDeclaresFlag / defaultManagedMcpPath", () => {
     expect(defaultManagedMcpPath("darwin")).toBe("/Library/Application Support/ClaudeCode/managed-mcp.json");
     expect(defaultManagedMcpPath("linux")).toBe("/etc/claude-code/managed-mcp.json");
     expect(defaultManagedMcpPath("win32")).toBe("C:\\Program Files\\ClaudeCode\\managed-mcp.json");
+  });
+});
+
+describe("graderSpawnEnv", () => {
+  it("the --help/--version preflight probes run with the same dropped environment as the grader call", () => {
+    const d = mkdtempSync(join(tmpdir(), "grader-probe-"));
+    const dump = join(d, "env.txt");
+    const bin = join(d, "claude");
+    // One dump per probe (`--help`, `--version`), so a later probe cannot overwrite an earlier one's environment.
+    writeFileSync(bin, `#!/bin/sh\nenv > "${dump}$1"\necho "Usage: claude"\nexit 0\n`, { mode: 0o755 });
+    vi.stubEnv("CLAUDE_CODE_SIMPLE", "1");
+    try {
+      try {
+        assertIsolationSupported(bin);
+      } catch {
+        // a stub without the isolation flags is refused; only the probe's environment matters here
+      }
+      const probes = ["--help", "--version"].filter((a) => existsSync(dump + a));
+      expect(probes).toContain("--help");
+      for (const a of probes) {
+        const env = readFileSync(dump + a, "utf8");
+        expect(env, a).toContain("PATH=");
+        expect(env, a).not.toMatch(/^CLAUDE_CODE_SIMPLE=/m);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("drops the operator's bare-mode and process-wrapper keys, and keeps auth and PATH", () => {
+    const env = graderSpawnEnv({
+      CLAUDE_CODE_SIMPLE: "1",
+      CLAUDE_CODE_PROCESS_WRAPPER: "/usr/bin/wrap",
+      CLAUDE_CODE_EFFORT_LEVEL: "low",
+      CLAUDE_CODE_OAUTH_TOKEN: "tok",
+      PATH: "/bin",
+    });
+    expect(env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "tok", PATH: "/bin" });
   });
 });

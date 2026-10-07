@@ -130,7 +130,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     }
   });
 
-  it("SCRUBBED_AGENT_ENV_KEYS is exactly the eight inheritance-asymmetric keys", () => {
+  it("SCRUBBED_AGENT_ENV_KEYS is exactly the eleven keys of rules (a)-(d)", () => {
     expect([...SCRUBBED_AGENT_ENV_KEYS].sort()).toEqual(
       [
         "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
@@ -141,6 +141,9 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
         "CLAUDE_CODE_EFFORT_LEVEL",
         "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
         "CLAUDE_CODE_DISABLE_THINKING",
+        "CLAUDE_CODE_SIMPLE",
+        "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
+        "CLAUDE_CODE_PROCESS_WRAPPER",
       ].sort(),
     );
   });
@@ -232,5 +235,40 @@ describe("PYTHONDONTWRITEBYTECODE reaches the agent spawn env on every tier (Des
   });
   it("hostloop (native process env)", () => {
     expect(buildHostLoopNativeEnv(base(), { configDir: "/tmp/cfg" }).PYTHONDONTWRITEBYTECODE).toBe("1");
+  });
+});
+
+// Rule (d), Desktop 2.26454.0: keys Desktop lets no user-supplied value of reach an agent it spawns. Each test makes
+// the operator layer actually carry the key (or the scrub is untested), and the hostloop case uses a baseline WITHOUT
+// the key: with one that pins it, the baseline overlay would produce the pinned value whether or not the scrub ran.
+describe("keys Desktop strips from user env do not reach the agent from the operator's shell", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const RULE_D = { CLAUDE_CODE_SIMPLE: "1", CLAUDE_AGENT_SDK_MCP_NO_PREFIX: "1", CLAUDE_CODE_PROCESS_WRAPPER: "/usr/bin/env" } as const;
+  const withoutKey = (k: string) => {
+    const base = loadBaseline("latest");
+    const env = { ...(base.spawn?.env ?? {}) } as Record<string, string>;
+    delete env[k];
+    return { ...base, spawn: { ...base.spawn, env } } as never;
+  };
+
+  for (const [k, v] of Object.entries(RULE_D)) {
+    it(`protocol does not inherit an operator-exported ${k}`, () => {
+      vi.stubEnv(k, v);
+      const plan = { baseEnv: { ...process.env }, agentEnv: {} } as unknown as LaunchPlan;
+      expect(plan.baseEnv[k]).toBe(v);
+      expect(buildProtocolEnv(plan, loadBaseline("latest"))[k]).toBeUndefined();
+    });
+
+    it(`hostloop scrubs an operator-exported ${k} (baseline without the key)`, () => {
+      vi.stubEnv(k, v);
+      expect(buildHostLoopNativeEnv(withoutKey(k), { configDir: "/tmp/cfg" })[k]).toBeUndefined();
+    });
+  }
+
+  it('hostloop: the baseline\'s pinned "0" replaces an operator-exported CLAUDE_CODE_SIMPLE=1', () => {
+    vi.stubEnv("CLAUDE_CODE_SIMPLE", "1");
+    const base = loadBaseline("latest");
+    const pinned = { ...base, spawn: { ...base.spawn, env: { ...(base.spawn?.env ?? {}), CLAUDE_CODE_SIMPLE: "0" } } } as never;
+    expect(buildHostLoopNativeEnv(pinned, { configDir: "/tmp/cfg" }).CLAUDE_CODE_SIMPLE).toBe("0");
   });
 });

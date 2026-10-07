@@ -272,7 +272,7 @@ export const SessionConfig = z.strictObject({
  *  parameter and the agent's frontmatter (read ungated), while
  *  `COORDINATOR_FORCE_WORKER_INHERIT_MODEL` discards the dispatch parameter **only when
  *  `CLAUDE_CODE_COORDINATOR_MODE` is also set** (its read site is `if(Ts()&&<key>)`, and `Ts()` is that
- *  mode's predicate) — and **the Cowork spawn sets neither** (absent from the baseline's 24-key
+ *  mode's predicate) — and **the Cowork spawn sets neither** (absent from the baseline's
  *  `spawn.env`). So an operator who has one exported was getting different sub-agent model resolution on
  *  hostloop/protocol than on container/microvm, in the exact shape this constant exists to prevent.
  *
@@ -281,7 +281,9 @@ export const SessionConfig = z.strictObject({
  *  (a) is user-settable from a shell, (b) changes agent behaviour this harness models or reports on, and
  *  (c) is NOT set by the Cowork spawn** — so inheriting it makes the two env-inheriting tiers diverge
  *  from the other two with nothing in the baseline to justify the difference. Dozens of keys in the
- *  binary's settable-env table meet (a) alone; (b) and (c) are what select these eight.
+ *  binary's settable-env table meet (a) alone; (b) and (c) select eight of these. **Or (d): Desktop itself lets no
+ *  user-supplied value of the key reach an agent it spawns** (it strips it from the user env it forwards), whether or
+ *  not the spawn sets it; (d) selects the last three (Desktop 2.26454.0).
  *  KNOWN AND DELIBERATELY NOT SCRUBBED: `CLAUDE_CODE_COORDINATOR_MODE` itself, which enables the second
  *  key above and swaps the coordinator system prompt and the Task tool description. It fails (b) as
  *  currently written — the harness models no coordinator surface — so scrubbing it would suppress a
@@ -312,6 +314,17 @@ export const SCRUBBED_AGENT_ENV_KEYS = [
   // or whether thinking is on, which is what the session's `effort` and `extended_thinking` model, so they fail
   // (b). Revisit if the harness ever models thinking mode or the beta-header set.
   ...EFFORT_THINKING_ENV_KEYS,
+  // Rule (d), Desktop 2.26454.0: keys Desktop lets no user-supplied value of reach any agent it spawns. The Cowork
+  // spawn forwards no user env at all, and the Code-tab spawn, which does forward the user's configured env vars,
+  // strips these three (the process-wrapper key since before 2.19675.1; the other two since 2.26454.0). Desktop also
+  // pins the two new ones to "0" in its base env, which the baseline spawn.env carries, so on hostloop the scrubbed
+  // operator value is replaced by the pinned "0"; protocol has no baseline overlay, so there they are simply not
+  // inherited. CLAUDE_CODE_SIMPLE=1 would put the agent in its --bare mode (no plugins, hooks, auto-memory or
+  // CLAUDE.md), so an export would silently remove surfaces the harness models. CLAUDE_CODE_PROCESS_WRAPPER makes the
+  // agent wrap the processes it launches.
+  "CLAUDE_CODE_SIMPLE",
+  "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
+  "CLAUDE_CODE_PROCESS_WRAPPER",
 ] as const;
 
 /** Map the authored `agent_env` knob to its exact env keys. An unset field emits NO key — never an empty

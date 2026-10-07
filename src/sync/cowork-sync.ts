@@ -3444,6 +3444,10 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   // allowlist entry cannot silently start admitting an unconditional or re-keyed construction.
   CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:
     "frameArtifactsEnabled server-flag-conditional (default absent); shared-predicate conditionality asserted by S6d",
+  // Desktop 2.26454.0 moved the construction into a one-key module object, `l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}`,
+  // exported with its predicate; W1 spreads it as `...o.Y(a)&&o.J`, and the Code-tab spawn also uses it, under its own
+  // condition (`…?.scheduledTaskId!==void 0&&Object.assign(env,s.J)`). applyWindow enumerates the imported object's
+  // keys; S6g counts every reference to it. The 2.19675.0 shape below is still admitted.
   // Desktop 2.19675.0. One W1 construction site: `...Sd(a)&&{CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}`, with
   // `function Sd(e){return e.sessionType===t.WR}` and `t.WR` resolving to the literal "scheduled" — set
   // only for scheduled-task runs. The harness models an interactive session (no sessionType), so there is
@@ -3500,6 +3504,8 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_TAGS",
   "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+  // Desktop still sends it, but agent 2.1.289 does not read it (the name is absent from its binary); pinned anyway, so
+  // the baseline keeps matching what Desktop constructs.
   "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL",
   // Gate 1595132361-conditional (Desktop >=1.46388.3). PINNED, not allowlisted: it has a 1p W1 site
   // and no host/settings/3p conditionality there. While the gate reads off, WI-4 classifies the key and
@@ -3543,6 +3549,16 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   // 0 times in agent 2.1.241 and 6 times each in 2.1.246, so this is a live contract, not a dormant one.
   "CLAUDE_CODE_PROMPT_CACHE_TTL",
   "CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL",
+  // Desktop 2.26454.0. Both UNCONDITIONAL "0" literals in W2 (the base-env helper), between
+  // CLAUDE_CODE_DISABLE_TERMINAL_TITLE and MCP_CONNECTION_NONBLOCKING, before the 3p spread — so every first-party
+  // Cowork session receives them. Same call as PYTHONDONTWRITEBYTECODE (also W2): pin, so a later gate or value
+  // change is a --diff line. Read in agent 2.1.289 as booleans that accept only 1/true/yes/on, so "0" is the same as
+  // unset: CLAUDE_CODE_SIMPLE=1 is the agent's --bare mode (no plugin sync, hooks, auto-memory or CLAUDE.md
+  // discovery); CLAUDE_AGENT_SDK_MCP_NO_PREFIX applies to SDK-type MCP servers' tool-name prefixing only. Desktop
+  // also strips both from the user env its Code-tab spawn forwards; the harness mirrors that on the tiers that
+  // inherit the operator's shell (SCRUBBED_AGENT_ENV_KEYS in src/session.ts).
+  "CLAUDE_CODE_SIMPLE",
+  "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
   // Desktop 2.16120.0. UNCONDITIONAL in W2 (`…API_TIMEOUT_MS:String(<t>),PYTHONDONTWRITEBYTECODE:"1",
   // CLAUDE_CODE_DISABLE_CRON:…`), first-party and 3p alike — the only insert in that builder. Same call as
   // its W2 neighbours: every Cowork session receives it ⇒ pin. Effect: python under the agent's process
@@ -4029,6 +4045,75 @@ export function deriveSpawnEnv(
         work = work.replace(sm[0], "");
       }
     }
+    // Imported-object spreads (Desktop 2.26454.0: `...o.Y(a)&&o.J`, where `o.J` is a module's one-key object
+    // literal). Their keys are not in the window text, so without this the generic pass never sees them: a new key
+    // added to such an object would not hard-fail, and an allowlisted key moved into one would read as removed.
+    // Resolved through the window chunk's own require() binding (resolveNamespaceRef); the object's initializer
+    // must be found exactly once in the target chunk as a literal of `KEY:"…"` pairs. A guarded spread
+    // (`...<cond>&&<ns>.<O>`) is conditional: under a gate call it follows the gate as the inline gate spreads above do
+    // (ON resolves and auto-pins, OFF classifies without applying); under any other condition its keys are classified
+    // without applying. A bare `...<ns>.<O>` whose `<ns>` is a require() binding and whose object resolves is
+    // unconditional and applied. A guarded spread whose object cannot be resolved is a hard-fail; a bare one is left
+    // alone (it may be any non-env spread), but S6g still guards the scheduled-run key's object by counting its references.
+    if (isW1 && files) {
+      const objectOf = (ref: string): { keys: string; chunk: string } | null | "ambiguous" => {
+        const r = resolveNamespaceRef(ref, scope ?? bundle, files);
+        if (!r) return null;
+        const inits = [
+          ...r.chunk.matchAll(new RegExp(`(?<![\\w$.])${reEsc(r.local)}=(\\{(?:["']?[A-Z][A-Z0-9_]*["']?:"[^"]*",?)+\\})`, "g")),
+        ];
+        const distinct = [...new Set(inits.map((m) => m[1]))];
+        if (distinct.length === 0) return null;
+        if (distinct.length > 1) return "ambiguous";
+        return { keys: distinct[0], chunk: r.chunk };
+      };
+      // Not only the scheduled-run `<ns>.<P>(<s>)` shape: a gate call (`...t.WJ("id")&&q.K`) or a predicate from another
+      // namespace (`...o.Y(a)&&q.K`) guards an imported object just the same, and a hoisted same-chunk object
+      // (`...At("id")&&Ab`, `var Ab={…}`) is the same move without the import. Skipping any of them would hide the
+      // object's keys. Every W1 spread ending in `&&<ident>` or `&&<ns>.<ident>` is read; what this does not see is a
+      // condition holding `,`, `{` or `}` (excluded, so the match never crosses into a neighbour), and the
+      // single-text mode, where there is no files map to resolve through.
+      for (const sm of text.matchAll(/\.\.\.([^,{}]*?)&&([\w$]+)(?:\.([\w$]+))?(?=[,}])/g)) {
+        const obj = objectOf(sm[3] ? `${sm[2]}.${sm[3]}` : sm[2]);
+        if (obj === null || obj === "ambiguous") {
+          flags.push(
+            `spawn.env: the guarded spread \`${sm[0]}\` in W1 reads an object whose literal could not be resolved` +
+              `${obj === "ambiguous" ? " unambiguously" : ""} — its keys are invisible to this check; re-derive; ${SPAWN_NO_BYPASS}`,
+          );
+          hardFail = true;
+          continue;
+        }
+        const gate = sm[1].match(/^(?:[\w$]+\.)?[A-Za-z_$][\w$]*\("(\d+)"\)$/);
+        const gateOn = gate !== null && gate[1] in SPAWN_GATES && gates[gate[1]]?.on;
+        for (const k of enumSpawnKeys(obj.keys)) {
+          enumerated.add(k.key);
+          const expr = sliceSpawnValue(obj.keys, k.valueStart);
+          if (gateOn) resolveGateInner(k.key, expr, target, obj.chunk);
+          else resolveInto(k.key, expr, target, false, obj.chunk);
+        }
+      }
+      // Bare spreads resolve only through a real require() binding: without one, resolveNamespaceRef falls back to a
+      // loose same-chunk export lookup, and a parameter spread (`...h.env`) could then apply an unrelated object.
+      for (const sm of text.matchAll(/(?<!&&)\.\.\.([\w$]+)\.([\w$]+)(?=[,}])/g)) {
+        if (!new RegExp(`(?<![\\w$])${reEsc(sm[1])}=require\\("\\./`).test(scope ?? bundle)) continue;
+        const obj = objectOf(`${sm[1]}.${sm[2]}`);
+        // The namespace IS a module import, so this spread brings that module's object into the env unconditionally;
+        // one whose literal is not all string pairs (`{KEY:someVar}`) or not unique cannot be read, and skipping it
+        // would apply its keys unseen.
+        if (obj === null || obj === "ambiguous") {
+          flags.push(
+            `spawn.env: the spread \`${sm[0]}\` in W1 reads an imported object whose literal could not be resolved` +
+              `${obj === "ambiguous" ? " unambiguously" : ""} — its keys are invisible to this check; re-derive; ${SPAWN_NO_BYPASS}`,
+          );
+          hardFail = true;
+          continue;
+        }
+        for (const k of enumSpawnKeys(obj.keys)) {
+          enumerated.add(k.key);
+          resolveInto(k.key, sliceSpawnValue(obj.keys, k.valueStart), target, true, obj.chunk);
+        }
+      }
+    }
     for (const k of enumSpawnKeys(work)) {
       enumerated.add(k.key);
       resolveInto(k.key, sliceSpawnValue(work, k.valueStart), target, true, scope);
@@ -4178,7 +4263,14 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     // bare const — the body-shape anchor (branch 2) stays the disambiguator (globally unique, shape- not
     // name-keyed); only the arm capture widens to admit a dot, then a dotted arm is resolved through the
     // export-alias hop before the 31999 assertion.
-    const m = bundle.match(/(?:maxThinkingTokens:[^,}]{0,60}|return [\w$]+\?\?[\w$]+\?\?![\w$]+)\?([\w$.]+):0\}/);
+    // Desktop 2.26454.0 parenthesises the condition and adds one more disjunct: `return(e??n??!r)||i?<const>:0}`,
+    // where `i` is true for a model on the managed-config `thinkingAlwaysOnModels` list (a documented gap; the
+    // harness does not model that list). Admitted EXACTLY as `||<ident>`: an `&&`, a negation or any other shape
+    // changes WHEN the budget applies and must fail closed, as S6d/S6f/S6g do on a reshape. The groups stay
+    // non-capturing so m[1] is still the arm. Not checked: what the extra disjunct is. It is a helper parameter, so S4
+    // admits any single identifier there and does not trace the call sites to confirm the argument is the managed-list
+    // lookup (in 2.26454.0 both callers pass it, the spawn and the mid-session override).
+    const m = bundle.match(/(?:maxThinkingTokens:[^,}]{0,60}|return[ (][\w$]+\?\?[\w$]+\?\?![\w$]+(?:\)\|\|[\w$]+)?)\?([\w$.]+):0\}/);
     if (!m) miss("S4 maxThinkingTokens", "the maxThinkingTokens capture is gone");
     else {
       // B6 (Desktop 1.25927.0): the arm is a MANGLED namespace property (`E.f`) reached through the
@@ -4522,6 +4614,117 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         if (!ref) schedMiss(`the predicate's comparand ${cmp[1]} could not be resolved`);
         else if (!new RegExp(`(?<![\\w$.])${reEsc(ref.local)}="scheduled"(?![\\w$])`).test(ref.chunk))
           schedMiss(`the predicate's comparand ${cmp[1]} no longer resolves to "scheduled"`);
+      }
+    }
+    // IMPORT FORM (Desktop 2.26454.0). The key lives in a one-key module object `<L>={KEY:"1"}`, exported (e.g. as
+    // `J`) next to its predicate (e.g. `Y`), and reached from other chunks as `<b>.<E>` through `<b>=require(...)`.
+    // The object literal is the construction (ctorRe counts it). What must be guarded is every USE, and one object can
+    // have several: in 2.26454.0 the Cowork spawn spreads it (`...o.Y(a)&&o.J`) and the Code-tab spawn assigns it under
+    // its own condition (`I(r)?.scheduledTaskId!==void 0&&Object.assign(Z,s.J)`). So every reference in every importer
+    // is counted and each must sit in one of those two admitted shapes, with the spread's predicate resolved to the
+    // exact `return <s>.sessionType===<"scheduled">` body in the DEFINING chunk. A bare spread or assign of the object
+    // inside its own module, where no importer's guard applies, fails. The object counts as guarded only when it has at
+    // least one reference and all of them are admitted (an unreferenced object fails closed: its use moved somewhere
+    // this counter cannot see).
+    if (files) {
+      const objRe = new RegExp(`(?<![\\w$.])([\\w$]+)=\\{["']?${SCHED_KEY}["']?:"1"\\}`, "g");
+      for (const [name, def] of files) {
+        for (const om of def.matchAll(objRe)) {
+          const local = om[1];
+          if (
+            new RegExp(`\\.\\.\\.${reEsc(local)}(?=[,})])`).test(def) ||
+            new RegExp(`Object\\.assign\\([^)]*,${reEsc(local)}\\)`).test(def)
+          ) {
+            schedMiss(`the ${SCHED_KEY} object ${local} is spread or assigned inside its own module, where no importer's guard applies`);
+            continue;
+          }
+          const exportNames = [
+            ...[...def.matchAll(new RegExp(`defineProperty\\(exports,"([\\w$]+)",\\{[^}]*?return ${reEsc(local)}\\}`, "g"))].map(
+              (m) => m[1],
+            ),
+            ...[...def.matchAll(new RegExp(`(?<![\\w$])([\\w$]+):\\(\\)=>${reEsc(local)}(?![\\w$])`, "g"))].map((m) => m[1]),
+          ];
+          // The importer census sees only the export getters. A module function returning the object (`function g(){return
+          // l}`, exported and spread unconditionally elsewhere) would hand it out past every guard, so each `return <L>` and
+          // `=><L>` in the defining chunk must BE an export getter. A minifier-reused local of the same name returned by
+          // another function fails loud here, never green.
+          const getterReturns = [...def.matchAll(new RegExp(`defineProperty\\(exports,"[\\w$]+",\\{[^}]*?return ${reEsc(local)}\\}`, "g"))]
+            .length;
+          const arrowExports = [...def.matchAll(new RegExp(`(?<![\\w$])[\\w$]+:\\(\\)=>${reEsc(local)}(?![\\w$])`, "g"))].length;
+          const returns = [...def.matchAll(new RegExp(`(?<![\\w$.])return ${reEsc(local)}(?=[};])`, "g"))].length;
+          const arrows = [...def.matchAll(new RegExp(`=>${reEsc(local)}(?![\\w$.(])`, "g"))].length;
+          if (returns !== getterReturns || arrows !== arrowExports) {
+            schedMiss(
+              `the ${SCHED_KEY} object ${local} is returned by a function in its module that is not an export getter ` +
+                `(${returns} return(s) vs ${getterReturns} getter(s), ${arrows} arrow(s) vs ${arrowExports} arrow export(s)) — ` +
+                "it can reach a session past every guard",
+            );
+            continue;
+          }
+          let refs = 0;
+          let admitted = 0;
+          for (const [, imp] of files) {
+            const bindings = [...imp.matchAll(new RegExp(`(?<![\\w$])([\\w$]+)=require\\("\\./${reEsc(name)}"\\)`, "g"))].map((m) => m[1]);
+            for (const b of bindings)
+              for (const exp of exportNames)
+                // Not a member access (`x.b.E`), but a spread's `...b.E` IS a reference: excluding every preceding dot
+                // would hide each unguarded spread of the object, the shape this census exists to catch.
+                for (const rm of imp.matchAll(
+                  new RegExp(`(?<![\\w$])(?:(?<=\\.\\.\\.)|(?<!\\.))${reEsc(b)}\\.${reEsc(exp)}(?![\\w$])`, "g"),
+                )) {
+                  refs++;
+                  const at = rm.index ?? 0;
+                  const before = imp.slice(Math.max(0, at - 160), at);
+                  const after = imp.slice(at + rm[0].length, at + rm[0].length + 1);
+                  const spread = before.match(new RegExp(`\\.\\.\\.${reEsc(b)}\\.([\\w$]+)\\(([\\w$]+)\\)&&$`));
+                  const codeTab =
+                    after === ")" &&
+                    new RegExp(`[\\w$]+\\([\\w$]+\\)\\?\\.scheduledTaskId!==void 0&&Object\\.assign\\([\\w$]+,$`).test(before);
+                  if (spread && (after === "," || after === "}")) {
+                    const [, pred, arg] = spread;
+                    if (
+                      !new RegExp(`(?<![\\w$.])${reEsc(arg)}\\.sessionType(?![\\w$])`).test(imp.slice(Math.max(0, at - 3000), at + 3000))
+                    ) {
+                      schedMiss(
+                        `the spread ${b}.${pred}(${arg})&&${b}.${exp} reads ${arg}, which is not read as the session's sessionType beside it`,
+                      );
+                      continue;
+                    }
+                    const pref = resolveNamespaceRef(`${b}.${pred}`, imp, files);
+                    const header = pref ? new RegExp(`function ${reEsc(pref.local)}\\(([\\w$]+)\\)\\{`).exec(pref.chunk) : null;
+                    const body = pref && header ? braceBodyOf(pref.chunk, header[0]) : null;
+                    const cmp =
+                      header && body !== null
+                        ? body.match(new RegExp(`^return ${reEsc(header[1])}\\.sessionType===("scheduled"|[\\w$]+(?:\\.[\\w$]+)?)$`))
+                        : null;
+                    if (!pref || !cmp) {
+                      schedMiss(
+                        `the predicate ${b}.${pred} guarding ${b}.${exp} is not exactly \`return <s>.sessionType===<scheduled>\` in its module`,
+                      );
+                      continue;
+                    }
+                    if (cmp[1] !== '"scheduled"') {
+                      const cref = resolveNamespaceRef(cmp[1], pref.chunk, files);
+                      if (!cref || !new RegExp(`(?<![\\w$.])${reEsc(cref.local)}="scheduled"(?![\\w$])`).test(cref.chunk)) {
+                        schedMiss(`the predicate ${b}.${pred}'s comparand ${cmp[1]} no longer resolves to "scheduled"`);
+                        continue;
+                      }
+                    }
+                    admitted++;
+                  } else if (codeTab) admitted++;
+                  else
+                    schedMiss(
+                      `the ${SCHED_KEY} object is used as ${b}.${exp} in a shape that is neither the guarded spawn spread nor ` +
+                        "the Code-tab scheduledTaskId assign — it may reach a session that is not a scheduled run",
+                    );
+                }
+          }
+          if (refs === 0)
+            schedMiss(
+              `the ${SCHED_KEY} object ${local} is defined but no importer references it — its use moved where this counter cannot see`,
+            );
+          else if (admitted === refs) guarded++;
+        }
       }
     }
     if (ctors === 0 && bundle.includes(SCHED_KEY))

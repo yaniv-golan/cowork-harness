@@ -1761,6 +1761,183 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(checkSpawnContractFacts([...broken.values()].join(""), broken).join("\n")).toContain("S6c Artifact gate");
   });
 
+  // Desktop 2.26454.0: the scheduled-run key moved into a one-key module object, `l={KEY:"1"}`, exported (J) beside
+  // its predicate (Y). W1 spreads it as `...o.Y(a)&&o.J`, and the Code-tab spawn assigns the same object under its
+  // own condition (`I(r)?.scheduledTaskId!==void 0&&Object.assign(Z,s.J)`). Single-text mode never exercises the
+  // two require() hops this depends on, so the fixture is a files map: spawn, module, main and Code-tab chunks.
+  describe("S6g import form (2.26454.0): the scheduled-run object reached through a module", () => {
+    const MOD =
+      'var t=require("./index.chunk-MAIN.js");var l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"};function u(e){return e.sessionType===t.kW}' +
+      'Object.defineProperty(exports,"J",{enumerable:!0,get:function(){return l}});' +
+      'Object.defineProperty(exports,"Y",{enumerable:!0,get:function(){return u}});';
+    const MAIN = 'Object.defineProperty(exports,"kW",{enumerable:!0,get:function(){return x9}});var q=1,x9="scheduled";';
+    const CODETAB =
+      'var s=require("./index.chunk-MOD.js");function I(r){return r}var Z={};I(r)?.scheduledTaskId!==void 0&&Object.assign(Z,s.J);';
+    const IMPORT_SPREAD = "...o.Y(r)&&o.J,";
+    const spawn = () =>
+      fixture2255310().replace(
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},',
+        '...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"},' + IMPORT_SPREAD,
+      ) + ';var o=require("./index.chunk-MOD.js");';
+    const filesOf = (over: Partial<Record<"spawn" | "mod" | "main" | "codetab", string>> = {}) =>
+      new Map([
+        ["index.chunk-spawn.js", over.spawn ?? spawn()],
+        ["index.chunk-MOD.js", over.mod ?? MOD],
+        ["index.chunk-MAIN.js", over.main ?? MAIN],
+        ["index.chunk-CODETAB.js", over.codetab ?? CODETAB],
+      ]);
+    const facts = (files: Map<string, string>) => checkSpawnContractFacts([...files.values()].join(""), files).join("\n");
+    const derive = (files: Map<string, string>) => deriveSpawnEnv([...files.values()].join(""), greenGates(), files);
+
+    it("control: both references admitted → S6g clean; deriveSpawnEnv enumerates the key and does not pin it", () => {
+      expect(spawn()).toContain(IMPORT_SPREAD);
+      expect(facts(filesOf())).toBe("");
+      const { env, flags, keys } = derive(filesOf());
+      expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(env).toEqual(EXPECTED_GREEN); // allowlisted, never pinned
+      expect(keys).toContain("CLAUDE_CODE_HOST_SCHEDULED_RUN"); // the regex-rot oracle still sees it
+    });
+    it("deriveSpawnEnv: a new key added to the imported object → unknown-key hard fail", () => {
+      const { env, flags } = derive(
+        filesOf({ mod: MOD.replace('l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}', 'l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1",ZNEW_KEY:"1"}') }),
+      );
+      expect(env).toBeNull();
+      expect(flags.some((f) => f.includes("ZNEW_KEY"))).toBe(true);
+    });
+    // An imported env object under ANY condition is read, not only under the scheduled-run predicate: a gate call or a
+    // predicate from another namespace must not hide its keys. And the bare and guarded branches differ in effect: a
+    // bare spread applies a pinned key's value, a guarded one only classifies it.
+    const Q = (obj: string) => `var k=${obj};Object.defineProperty(exports,"K",{enumerable:!0,get:function(){return k}});`;
+    const withQ = (spread: string, obj: string, exportName = "K") => {
+      const f = filesOf({ spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + spread) + ';var q=require("./index.chunk-Q.js");' });
+      f.set("index.chunk-Q.js", Q(obj).replace('"K"', `"${exportName}"`));
+      return f;
+    };
+    it.each([
+      ["a gate call", '...At("434204418")&&q.K,'],
+      ["a predicate from another namespace", "...o.Y(r)&&q.K,"],
+    ])("deriveSpawnEnv: a new key in an imported object guarded by %s → unknown-key hard fail", (_l, spread) => {
+      const { env, flags } = derive(withQ(spread, '{ZNEW_KEY:"1"}'));
+      expect(env).toBeNull();
+      expect(flags.some((f) => f.includes("ZNEW_KEY"))).toBe(true);
+    });
+    it("deriveSpawnEnv: a gate-guarded imported object that cannot be resolved → hard fail", () => {
+      const { env, flags } = derive(withQ('...At("434204418")&&q.K,', '{API_TIMEOUT_MS:"5"}', "Kgone"));
+      expect(env).toBeNull();
+      expect(flags.some((f) => /guarded spread .* could not be resolved/.test(f))).toBe(true);
+    });
+    it("deriveSpawnEnv: a BARE imported spread applies a pinned key's value; a GUARDED one does not", () => {
+      const bare = derive(withQ("...q.K,", '{API_TIMEOUT_MS:"5"}'));
+      expect(bare.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(bare.env).toEqual({ ...EXPECTED_GREEN, API_TIMEOUT_MS: "5" });
+      const guarded = derive(withQ('...At("434204418")&&q.K,', '{API_TIMEOUT_MS:"5"}'));
+      expect(guarded.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(guarded.env).toEqual(EXPECTED_GREEN);
+    });
+    it("deriveSpawnEnv: a bare spread of an imported object whose literal is not all string pairs → hard fail", () => {
+      const { env, flags } = derive(withQ("...q.K,", "{API_TIMEOUT_MS:zVar}"));
+      expect(env).toBeNull();
+      expect(flags.some((f) => /spread .* reads an imported object whose literal could not be resolved/.test(f))).toBe(true);
+    });
+    // A hoisted same-chunk object under a gate is the same move without the import.
+    const hoisted = (obj: string, gate = "434204418") =>
+      filesOf({ spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + `...At("${gate}")&&zAb,`) + `;var zAb=${obj};` });
+    it("deriveSpawnEnv: a new key in a gate-guarded HOISTED same-chunk object → unknown-key hard fail", () => {
+      const { env, flags } = derive(hoisted('{ZNEW_KEY:"1"}'));
+      expect(env).toBeNull();
+      expect(flags.some((f) => f.includes("ZNEW_KEY"))).toBe(true);
+    });
+    it("deriveSpawnEnv: a gate-guarded hoisted object that is not a string-pair literal → hard fail", () => {
+      const { env, flags } = derive(hoisted("{API_TIMEOUT_MS:zVar}"));
+      expect(env).toBeNull();
+      expect(flags.some((f) => /guarded spread .* could not be resolved/.test(f))).toBe(true);
+    });
+    it("deriveSpawnEnv: a hoisted object follows its gate — OFF classifies, ON auto-pins", () => {
+      const off = derive(hoisted('{API_TIMEOUT_MS:"5"}'));
+      expect(off.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(off.env).toEqual(EXPECTED_GREEN);
+      const on = derive(hoisted('{API_TIMEOUT_MS:"5"}', "714014285"));
+      expect(on.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(on.env).toEqual({ ...EXPECTED_GREEN, API_TIMEOUT_MS: "5" });
+    });
+    it("deriveSpawnEnv: an imported object under an ON gate follows the gate and auto-pins, as an inline gate spread does", () => {
+      const on = derive(withQ('...At("714014285")&&q.K,', '{API_TIMEOUT_MS:"5"}'));
+      expect(on.flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(on.env).toEqual({ ...EXPECTED_GREEN, API_TIMEOUT_MS: "5" });
+    });
+    it("deriveSpawnEnv: a bare spread whose namespace is not a require() binding is not applied from a same-chunk export", () => {
+      const f = filesOf({
+        spawn:
+          spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + "...h.K,") +
+          ';var k={API_TIMEOUT_MS:"5"};' +
+          Q('{API_TIMEOUT_MS:"5"}').slice(Q('{API_TIMEOUT_MS:"5"}').indexOf("Object.")),
+      });
+      const r = derive(f);
+      expect(r.flags.filter((x) => !x.startsWith("NOTE:"))).toEqual([]);
+      expect(r.env).toEqual(EXPECTED_GREEN);
+    });
+    it("deriveSpawnEnv: the guarded spread's object no longer resolvable → hard fail, not a silent drop", () => {
+      const { env, flags } = derive(filesOf({ mod: MOD.replace('exports,"J"', 'exports,"Jgone"') }));
+      expect(env).toBeNull();
+      expect(flags.some((f) => /guarded spread .* could not be resolved/.test(f))).toBe(true);
+    });
+
+    const MUT: Array<[string, () => Map<string, string>]> = [
+      [
+        "I1 an unguarded spread of the object added beside the guarded one",
+        () => filesOf({ spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + "...o.J,") }),
+      ],
+      [
+        "I2 the Code-tab scheduledTaskId guard stripped",
+        () => filesOf({ codetab: CODETAB.replace("I(r)?.scheduledTaskId!==void 0&&", "") }),
+      ],
+      ["I3 a third importer spreads the object", () => filesOf({ codetab: CODETAB + "var w={...s.J};" })],
+      [
+        "I4 the object widened",
+        () => filesOf({ mod: MOD.replace('l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}', 'l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1",X:"1"}') }),
+      ],
+      ["I5 the value changed", () => filesOf({ mod: MOD.replace('HOST_SCHEDULED_RUN:"1"}', 'HOST_SCHEDULED_RUN:"0"}') })],
+      [
+        "I6 the predicate widened",
+        () => filesOf({ mod: MOD.replace("return e.sessionType===t.kW}", 'return e.sessionType===t.kW||e.sessionType==="agent"}') }),
+      ],
+      ["I7 the predicate negated", () => filesOf({ mod: MOD.replace("return e.sessionType===t.kW}", "return e.sessionType!==t.kW}") })],
+      ["I8 the comparand re-pointed", () => filesOf({ main: MAIN.replace('x9="scheduled"', 'x9="agent"') })],
+      ["I9 the object spread inside its own module", () => filesOf({ mod: MOD + "var w={...l};" })],
+      [
+        "I10 the object defined but referenced by no importer",
+        () => filesOf({ spawn: spawn().replace(IMPORT_SPREAD, ""), codetab: "var s=1;" }),
+      ],
+      [
+        "I11 the spread's predicate called on something other than the session",
+        () => filesOf({ spawn: spawn().replace("...o.Y(r)&&", "...o.Y(zOther)&&") }),
+      ],
+      [
+        "I12 a module helper returns the object and W1 spreads it unconditionally",
+        () =>
+          filesOf({
+            mod: MOD + 'function uu(e){return l}Object.defineProperty(exports,"JJ",{enumerable:!0,get:function(){return uu}});',
+            spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + "...o.JJ(r),"),
+          }),
+      ],
+    ];
+    it.each(MUT)("S6g import-form mutation %s fails loud (%#)", (_label, mutate) => {
+      expect(facts(mutate())).toContain("S6g scheduled-run env key");
+    });
+    // The count mismatch (constructions > guarded) also catches I10; this pins the dedicated reason, so dropping that
+    // guard is not masked by the other.
+    it("I12 names the reason: a non-getter function returns the object", () => {
+      expect(
+        facts(
+          filesOf({ mod: MOD + 'function uu(e){return l}Object.defineProperty(exports,"JJ",{enumerable:!0,get:function(){return uu}});' }),
+        ),
+      ).toContain("returned by a function in its module that is not an export getter");
+    });
+    it("I10 names the reason: the object has no importer", () => {
+      expect(facts(filesOf({ spawn: spawn().replace(IMPORT_SPREAD, ""), codetab: "var s=1;" }))).toContain("no importer references it");
+    });
+  });
+
   // Back-compat: an asar with NO Artifact spread and NO env key stays clean — every committed baseline's
   // bundle predates 1.28929.0, so S6c/S6d must be inert there rather than newly failing.
   it("pre-1.28929.0 shape (no Artifact spread, no env key) stays clean", () => {
@@ -1787,6 +1964,19 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     const { env, flags } = deriveSpawnEnv(w2, greenGates());
     expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
     expect(env).toEqual({ ...EXPECTED_GREEN, PYTHONDONTWRITEBYTECODE: "1" });
+  });
+
+  // Desktop 2.26454.0: W2 gained two UNCONDITIONAL "0" literals after the terminal-title key. Pinned, so they enter
+  // spawn.env and a later gate or value change is a --diff line rather than an unknown-key hard fail.
+  it('2.26454.0: the unconditional W2 CLAUDE_CODE_SIMPLE and CLAUDE_AGENT_SDK_MCP_NO_PREFIX keys are PINNED to "0"', () => {
+    const w2 = fixture().replace(
+      "API_TIMEOUT_MS:String(FKd),",
+      'API_TIMEOUT_MS:String(FKd),CLAUDE_CODE_SIMPLE:"0",CLAUDE_AGENT_SDK_MCP_NO_PREFIX:"0",',
+    );
+    expect(w2).toContain("CLAUDE_AGENT_SDK_MCP_NO_PREFIX");
+    const { env, flags } = deriveSpawnEnv(w2, greenGates());
+    expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+    expect(env).toEqual({ ...EXPECTED_GREEN, CLAUDE_CODE_SIMPLE: "0", CLAUDE_AGENT_SDK_MCP_NO_PREFIX: "0" });
   });
 
   // 1b. Minifier-rename regression: the gate-check helper's name is minifier-assigned and changed
@@ -1860,6 +2050,33 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     // A genuine construction of the key still fires S17 even alongside the benign getter form.
     const withRealKey = variant.replace('CLAUDE_CODE_IS_COWORK:"1"', 'CLAUDE_CODE_USE_COWORK_PLUGINS:"1",CLAUDE_CODE_IS_COWORK:"1"');
     expect(checkSpawnContractFacts(withRealKey).some((f) => f.includes("S17"))).toBe(true);
+  });
+
+  // Desktop 2.26454.0: the S4 helper parenthesises its condition and adds one disjunct, `return(e??n??!r)||i?<arm>:0}`
+  // (`i`: the model is on the managed-config thinkingAlwaysOnModels list, a documented gap). Admitted exactly as
+  // `||<ident>`; any other reshape changes when the budget applies and must fail closed.
+  describe("S4: the 2.26454.0 helper shape", () => {
+    const s4 = (helperBody: string) =>
+      fixture()
+        .replace(
+          "maxThinkingTokens:r.extendedThinkingEnabled??!mOt()?FKa:0}",
+          "maxThinkingTokens:zLp(r.extendedThinkingEnabled,ovr,mOt(),zS(m))}",
+        )
+        .replace("function FnA", `function zLp(e,n,r,i){${helperBody}}function FnA`);
+    const s4flags = (v: string) => checkSpawnContractFacts(v).filter((f) => f.includes("S4"));
+    it("control: `return(e??n??!r)||i?FKa:0}` is clean", () => {
+      const v = s4("return(e??n??!r)||i?FKa:0");
+      expect(v).not.toBe(fixture());
+      expect(checkSpawnContractFacts(v)).toEqual([]);
+    });
+    it.each([
+      ["||i → &&i", "return(e??n??!r)&&i?FKa:0"],
+      ["||i → ||!0", "return(e??n??!r)||!0?FKa:0"],
+      ["the const changed", "return(e??n??!r)||i?FKa:0", (v: string) => v.replace("FKa=31999", "FKa=12345")],
+    ] as Array<[string, string, ((v: string) => string)?]>)("mutation %s → S4 flags", (_label, body, post) => {
+      const v = (post ?? ((x: string) => x))(s4(body));
+      expect(s4flags(v).length).toBeGreaterThan(0);
+    });
   });
 
   // 1d. 1.20186.0 build-shape regression: the member-receiver + export-alias re-anchors (A2/B1–B6) must
@@ -2150,6 +2367,30 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       // Set in the sibling non-3p spread that shares the `...<ident>&&{` shape.
       expect(env?.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
     });
+  });
+
+  // 10a. The golden oracle below needs a live Desktop, so it skips in CI. This half runs everywhere: the newest committed
+  //      baseline's spawn.env must equal the golden map, and its spawnEnvKeys oracle must name every key it pins, so a
+  //      baseline written without the golden map's update (or the reverse) is red without a Mac.
+  it("the newest committed baseline's spawn.env deep-equals the golden map, and spawnEnvKeys covers it", () => {
+    const golden = JSON.parse(readFileSync(join(process.cwd(), "test", "fixtures", "spawn-env.golden.json"), "utf8")).env;
+    const dir = join(process.cwd(), "baselines");
+    const ver = (f: string) =>
+      f
+        .replace(/^desktop-|\.json$/g, "")
+        .split(".")
+        .map(Number);
+    const newest = readdirSync(dir)
+      .filter((f) => /^desktop-\d+\.\d+\.\d+\.json$/.test(f))
+      .sort((a, b) => {
+        const [x, y] = [ver(a), ver(b)];
+        return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+      })
+      .at(-1)!;
+    const b = JSON.parse(readFileSync(join(dir, newest), "utf8"));
+    expect(b.spawn.env).toEqual(golden);
+    const keys = new Set<string>(b.provenance.spawnEnvKeys);
+    expect(Object.keys(b.spawn.env).filter((k) => !keys.has(k))).toEqual([]);
   });
 
   // 10. Golden-map correctness oracle (non-circular): the generator over the REAL asar must deep-equal

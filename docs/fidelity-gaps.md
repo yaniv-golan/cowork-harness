@@ -21,13 +21,13 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 36 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 37 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
-- **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
+- **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Thinking forced on for managed-config models](#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
 - **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
 - **Permissions & limits** — [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
@@ -708,6 +708,25 @@ when a turn switched off the requested model, each with the trigger the agent re
 the session fingerprint hashes the session file's `model:`, so editing that file after recording is
 reported as staleness rather than passing silently — the fingerprint covers the *file*, while
 `environment.model` names the model that actually ran, which differ when a recording used `--model`.
+
+---
+
+## Thinking forced on for managed-config models (`thinkingAlwaysOnModels`)
+
+**Real Cowork behaviour:** in Desktop 2.26454.0 and later, the managed config (the same org-managed object that carries
+`allowedModels` and the per-model effort and context-window settings) may hold a `thinkingAlwaysOnModels` list.
+When the session's model is on it, Desktop sends the full thinking budget (31999) at spawn, and again on a mid-session
+override, even when the session has extended thinking turned off. The list is unset by default, so the
+toggle alone decides for every org that does not set it.
+
+**Harness behaviour:** `extended_thinking: false` sends `--thinking disabled` whatever the model.
+The harness reads no managed config, and the list is the org's, not the app's, so `sync` cannot derive it
+from the bundle. The baseline's S4 check admits the extra condition in the helper shape and still asserts the
+31999 budget, so a change to the budget or to when it applies is still caught.
+
+**Why it matters for a test result:** only for a run that turns thinking off, for an org that lists its model.
+There, real Cowork thinks and the harness does not, so effort, cost, latency and any assertion on the agent's
+reasoning can differ. For such an org, leave `extended_thinking` on for the listed models to match it.
 
 ---
 
