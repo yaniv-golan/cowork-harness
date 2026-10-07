@@ -1654,7 +1654,8 @@ type HookFrame = {
 };
 
 /** The events whose hook can decide by `hookSpecificOutput.permissionDecision`. The agent ignores the field on every other
- *  event, where only the top-level `decision` counts. */
+ *  event, where only the top-level `decision` counts. Read from the agent's hook-output handler in 2.1.289 and 2.1.293,
+ *  which apply the same rule. */
 const PERMISSION_DECISION_EVENTS: ReadonlySet<unknown> = new Set(["PreToolUse", "PreModelSwitch"]);
 
 /** The JSON decision on an exit-0 frame's stdout. Only stdout that parses WHOLE as a JSON object decides: stdout is the
