@@ -14,6 +14,7 @@ const V15_SAMPLES: unknown[] = [
   { hook_event_blocked: { event: "Stop", max: 0 } },
   { hook_decision: { event: "PreToolUse", decision: "deny" } },
   { gates_all_scripted: true },
+  { artifact_json: { artifact: "outputs/artifacts/runs/*/run_status.json", match: "each", path: "status", equals: "complete" } },
 ];
 
 describe("cassette v15", () => {
@@ -57,6 +58,17 @@ describe("cassette v15", () => {
     ])
       expect(requiredVersionFor({ prompt: "x", assert: [a] }), JSON.stringify(a)).toBe(15);
     expect(requiredVersionFor({ prompt: "x", assert: [{ hook_event_blocked: "Stop" }] })).toBe(12);
+  });
+
+  it("an artifact_json glob stamps 15 by its glob or its match key; a literal path stamps as before", () => {
+    const v = (aj: object) => requiredVersionFor({ prompt: "x", assert: [{ artifact_json: { path: "status", equals: "ok", ...aj } }] });
+    // A v14 reader would grade a glob without `match` as a literal path that never exists: a wrong verdict, not a refusal.
+    expect(v({ artifact: "outputs/runs/*/s.json" })).toBe(15);
+    expect(v({ artifact: "outputs/**/s.json", match: "any" })).toBe(15);
+    expect(v({ artifact: "outputs/s.json", match: "each" })).toBe(15);
+    expect(v({ artifact: "outputs/runs/?.json", match: "each", authored: true })).toBe(15);
+    expect(v({ artifact: "outputs/s.json" })).toBe(12);
+    expect(v({ artifact: "outputs/s.json", authored: true })).toBe(14);
   });
 
   it("the bump alone stamps nothing at 15: a plain scenario still stamps the epoch floor", () => {
