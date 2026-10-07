@@ -611,8 +611,19 @@ export const V14_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
 ];
 
 /** The assertion-level features that need a v15 reader, as V14_ASSERT_FEATURES is for v14: a new assertion key an
- *  older reader cannot read appends a predicate here, and a sample to test/cassette-v15.test.ts. Empty until one lands. */
-export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [];
+ *  older reader cannot read appends a predicate here, and a sample to test/cassette-v15.test.ts. */
+export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
+  // `no_hook_event_blocked` — the key itself, as for `semantic_pairwise`.
+  (a) => !!a && typeof a === "object" && "no_hook_event_blocked" in (a as object),
+  // The object form of `hook_event_blocked` ({event, tool?, via?, min?, max?}). A v14 reader's schema takes only the
+  // bare event name, which stays unstamped.
+  (a) => {
+    const v = a && typeof a === "object" ? (a as Record<string, unknown>).hook_event_blocked : undefined;
+    return v !== null && typeof v === "object";
+  },
+  // `hook_decision` — the key itself.
+  (a) => !!a && typeof a === "object" && "hook_decision" in (a as object),
+];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
 function usesToolCallObjectForm(a: unknown): boolean {

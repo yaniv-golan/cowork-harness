@@ -31,6 +31,9 @@ All notable changes to this project are documented here. The format is based on
   answered, stdout that a redaction policy rewrote or the agent truncated, and a `hookEventName` naming another
   event. An unknown frame makes a check evidence-unavailable only when it could change the verdict. `record` warns
   when its redaction policy makes a hook decision that one of these keys reads unreadable.
+- A cassette whose scenario uses `hook_decision`, `no_hook_event_blocked` or the object form of `hook_event_blocked`
+  is stamped v15, so an older build refuses it as too new instead of rejecting the assertion. The bare
+  `hook_event_blocked: <event>` stamps what it did.
 - `run`, `record` and `lint` refuse a negative hook key alongside a positive one that can never both pass, such as
   `no_hook_event_blocked: true` with `hook_event_blocked: Stop`, as they refuse `no_hook_blocked` with `hook_blocked`.
 
