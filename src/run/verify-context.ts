@@ -428,6 +428,8 @@ export function assertContextFromRunDir(
     fsDiff: result.fsDiff,
     mountDeletes: scan.mountDeletes ?? [],
     questions: sidecarQuestions ?? [],
+    // undefined on a result.json written before the field: gates_all_scripted then fails evidence-unavailable.
+    decisions: result.decisions,
     gateOptions: vrGateOptions,
     gateOptionsMissing,
     hostPathLeaked: scan.hostPathLeaked,

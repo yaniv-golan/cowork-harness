@@ -1887,6 +1887,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       fsDiff,
       mountDeletes: scan.mountDeletes,
       questions: record.questions,
+      decisions: record.decisions,
       gateOptions: record.gateOptions,
       hostPathLeaked: scan.hostPathLeaked,
       selfHealRan: scan.selfHealRan,

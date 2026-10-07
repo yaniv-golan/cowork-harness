@@ -11,7 +11,9 @@ import type {
   ToolNotCalledObject,
   TokenUsage,
   JudgedDocFingerprint,
+  AnswerRule,
 } from "./types.js";
+import { checkGatesAllScripted } from "./gates-scripted.js";
 import { addTokenUsage } from "./decide/usage.js";
 import { checkToolCallObject, routedToolGlobs } from "./tool-call-assert.js";
 import { outputsDeleteTier, outputsDeleteEntries } from "./run/outputs-delete-tier.js";
@@ -576,6 +578,12 @@ export interface AssertContext {
   /** Set by verify-run only when trace.json is absent/unreadable. Prevents questions_count_max from
    *  passing vacuously on missing evidence (absent ≠ zero questions). Undefined/false on live/replay lanes. */
   questionsMissing?: boolean;
+  /** The run's gate decisions (`RunResult.decisions`), for `gates_all_scripted`. Undefined when the lane has none
+   *  to give (a result.json written before the field) — the key then fails evidence-unavailable. */
+  decisions?: RunResult["decisions"];
+  /** Replay only: the cassette's frozen `answers:`. A replayed decision says only `by: "replay"`, so
+   *  `gates_all_scripted` re-classifies each gate against these. */
+  frozenAnswers?: AnswerRule[];
   /** Set by verify-run only when `result.toolResults` is undefined in result.json (partial/old run).
    *  Prevents tool_result_not_contains from passing vacuously (absent ≠ empty). Undefined/false on
    *  live/replay lanes, where the structure is always present (empty = proof-of-absence). */
@@ -4227,6 +4235,15 @@ function check(
           : fail(`only ${delivered} gate answer(s) confirmed delivered, need ≥ ${a.gate_answer_count_min}`),
       );
     }
+  }
+  if (a.gates_all_scripted !== undefined) {
+    const r = checkGatesAllScripted(a.gates_all_scripted, {
+      decisions: ctx.decisions,
+      questions: ctx.questions,
+      questionsMissing: ctx.questionsMissing,
+      frozenAnswers: ctx.frozenAnswers,
+    });
+    results.push(r.pass ? ok(r.message) : fail(r.message));
   }
   if (a.artifact_text !== undefined) {
     const at = a.artifact_text;

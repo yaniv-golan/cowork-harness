@@ -8421,6 +8421,8 @@ export const QUESTION_GATE_KEYS: (keyof Assertion)[] = [
   "questions_count_max",
   "gate_answers_delivered",
   "gate_answer_count_min",
+  // Reads the decisions the re-drive records from controlOut, re-classified against the frozen `answers:`.
+  "gates_all_scripted",
   "hook_blocked",
   "no_hook_blocked",
   // Decision-level pathDenials — reconstructed from cassette.events + controlOut (the can_use_tool
@@ -8934,6 +8936,10 @@ export async function replayCassette(
       outputsDeletes: [],
       mountDeletes: [], // replay has no live scan — the same shape outputsDeletes already uses here
       questions: rec.questions,
+      // A truncated cassette was never driven, so its empty decision list means "not observed", not "no gates".
+      decisions: truncatedMsg !== undefined ? undefined : rec.decisions,
+      // Replay answers every gate as `by: "replay"`; gates_all_scripted re-classifies against the frozen rules.
+      frozenAnswers: cassette.scenario.answers ?? [],
       gateOptions: rec.gateOptions,
       // A truncated cassette could not be driven, so `gateOptions` is empty because nothing was OBSERVED
       // — not because no gate fired. Flag it so question_options fails evidence-unavailable. (A cassette
