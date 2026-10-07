@@ -2808,8 +2808,8 @@ def _lint_hook_events(path):
                 "INFO", "hook-event-not-served",
                 f"`{name}` {fires} — but cowork-harness "
                 f"itself installs only {', '.join(sorted(SERVED_HOOK_EVENTS))} on `initialize`. "
-                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` (and `hook_output_*` for what it "
-                f"printed) grade it from the agent's own "
+                f"`hook_event_fired: {name}` / `hook_event_blocked: {name}` (and `hook_decision` for what it "
+                f"decided, `hook_output_*` for what it printed) grade it from the agent's own "
                 f"hook_response frames (the harness passes --include-hook-events because this plugin declares "
                 f"hooks); but if real Cowork installs a `{name}` hook of its own, the harness does not reproduce "
                 f"it, so anything driven by that is absent here. (Cowork installs hooks of its own for "

@@ -114,7 +114,7 @@ export function warnUnservedHookEvents(pluginRoots: string[], warn: (msg: string
                   : "the agent accepts it as a real event and loads a plugin's own hooks itself (whether a " +
                     "harness run ever reaches this event's trigger has not been verified here)"
               }. This harness installs only ${[...SERVED_HOOK_EVENTS].join(", ")} itself: ` +
-                `\`hook_event_fired: ${name}\` / \`hook_event_blocked: ${name}\` (and \`hook_output_*\` for what it printed) grade it from the agent's own ` +
+                `\`hook_event_fired: ${name}\` / \`hook_event_blocked: ${name}\` (and \`hook_decision\` for what it decided, \`hook_output_*\` for what it printed) grade it from the agent's own ` +
                 `hook_response frames (the harness passes --include-hook-events because this plugin declares ` +
                 `hooks), and if real Cowork installs a \`${name}\` hook of its own it is not reproduced here ` +
                 `(it installs hooks for PreToolUse, PostToolUse and UserPromptSubmit only). Assert the hook's ` +
@@ -208,9 +208,11 @@ export function logHostHookNotice(pluginRoots: string[], warn: (m: string) => vo
   }
 }
 
-/** `hook_output_*` reads every `hook_response` frame for an event, and a frame carries no plugin id — so the
- *  output cannot be attributed to the plugin under test when another hook can answer the same event: another
- *  hook's text can satisfy `hook_output_contains` or fail `hook_output_not_contains`. Two such cases:
+/** `hook_output_*`, `hook_decision` and the blocked keys read every `hook_response` frame for an event, and a frame
+ *  carries no plugin id — so the output or decision cannot be attributed to the plugin under test when another hook
+ *  can answer the same event: another hook's text can satisfy `hook_output_contains` or fail
+ *  `hook_output_not_contains`, and another hook's frame can satisfy `no_hook_event_blocked` (it shows a hook ran and
+ *  did not block). The warning qualifies the verdict; it does not change it. Two such cases:
  *   - more than one staged plugin declares the asserted event;
  *   - `operatorHooksVisible`: the agent reads the operator's real config dir (at `protocol` without the sealed
  *     managed config), so a plugin installed on the host runs its hooks in the same session. Its SessionStart /
@@ -220,21 +222,45 @@ export function logHostHookNotice(pluginRoots: string[], warn: (m: string) => vo
  *  verdict means, like the host-hook disclosure, rather than decorating the run. Never throws. */
 export function warnAmbiguousHookOutput(
   pluginRoots: string[],
-  asserts: ReadonlyArray<{ hook_output_contains?: { event: string }; hook_output_not_contains?: { event: string } }>,
+  asserts: ReadonlyArray<{
+    hook_output_contains?: { event: string };
+    hook_output_not_contains?: { event: string };
+    hook_event_blocked?: string | { event: string };
+    no_hook_event_blocked?: true | { event: string };
+    hook_decision?: { event: string };
+  }>,
   operatorHooksVisible: boolean,
   warn: (msg: string) => void,
 ): void {
-  const events = new Set<string>();
-  for (const a of asserts)
-    for (const v of [a.hook_output_contains, a.hook_output_not_contains]) if (v && typeof v.event === "string") events.add(v.event);
-  if (events.size === 0) return;
+  // event → the keys that read its frames. The unscoped `no_hook_event_blocked: true` reads every event's frames, so
+  // it takes every event a staged plugin declares (and, with operator hooks visible, any event at all: EVERY_EVENT).
+  const EVERY_EVENT = "*";
+  const byEvent = new Map<string, Set<string>>();
+  const add = (ev: string, key: string) => byEvent.set(ev, (byEvent.get(ev) ?? new Set()).add(key));
+  for (const a of asserts) {
+    for (const [key, v] of [
+      ["hook_output_*", a.hook_output_contains],
+      ["hook_output_*", a.hook_output_not_contains],
+      ["hook_event_blocked", typeof a.hook_event_blocked === "string" ? { event: a.hook_event_blocked } : a.hook_event_blocked],
+      ["no_hook_event_blocked", a.no_hook_event_blocked === true ? { event: EVERY_EVENT } : a.no_hook_event_blocked],
+      ["hook_decision", a.hook_decision],
+    ] as const)
+      if (v && typeof v.event === "string") add(v.event, key);
+  }
+  if (byEvent.size === 0) return;
   let declaring: Array<{ root: string; events: string[] }> = [];
   try {
     declaring = pluginRootsWithRunnableHooks(pluginRoots);
   } catch {
     return;
   }
-  for (const ev of [...events].sort()) {
+  const every = byEvent.get(EVERY_EVENT);
+  if (every) {
+    byEvent.delete(EVERY_EVENT);
+    for (const d of declaring) for (const ev of d.events) add(ev, [...every][0]!);
+  }
+  if (every && operatorHooksVisible && byEvent.size === 0) byEvent.set("any event", new Set(every));
+  for (const [ev, keys] of [...byEvent].sort(([a], [b]) => a.localeCompare(b))) {
     const roots = declaring.filter((d) => d.events.includes(ev)).map((d) => d.root);
     const reasons: string[] = [];
     if (roots.length > 1) reasons.push(`${roots.length} staged plugins declare \`${ev}\` (${roots.join(", ")})`);
@@ -244,8 +270,8 @@ export function warnAmbiguousHookOutput(
       );
     if (reasons.length)
       warn(
-        `::warning:: [hooks] hook_output_* on \`${ev}\`: ${reasons.join("; ")} — hook_response frames carry no plugin id, ` +
-          `so the output graded cannot be attributed to one hook. Stage only the plugin under test${
+        `::warning:: [hooks] ${[...keys].sort().join(" / ")} on \`${ev}\`: ${reasons.join("; ")} — hook_response frames carry no plugin id, ` +
+          `so the output or decision graded cannot be attributed to one hook. Stage only the plugin under test${
             operatorHooksVisible ? " and seal the config dir (COWORK_MANAGED_CONFIG=1 with a token)" : ""
           }, or match text only it prints.\n`,
       );

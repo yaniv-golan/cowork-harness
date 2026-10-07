@@ -377,6 +377,31 @@ describe("warnAmbiguousHookOutput: output that cannot be attributed to one plugi
     expect(msgs([plugin(["Stop"]), plugin(["PreToolUse"])], NOT)).toEqual([]);
     expect(msgs([plugin(["Stop"]), plugin(["Stop"])], [{ hook_event_fired: "Stop" }], true)).toEqual([]);
   });
+
+  it("covers the blocked and decision keys too, naming the keys that read the event", () => {
+    const two = [plugin(["Stop", "PreToolUse"]), plugin(["Stop", "PreToolUse"])];
+    const out = msgs(two, [
+      { hook_event_blocked: "Stop" },
+      { hook_event_blocked: { event: "Stop", max: 0 } },
+      { hook_decision: { event: "PreToolUse", decision: "deny" } },
+    ]);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatch(/hook_decision on `PreToolUse`: 2 staged plugins/);
+    expect(out[1]).toMatch(/hook_event_blocked on `Stop`: 2 staged plugins/);
+  });
+
+  it("no_hook_event_blocked: true reads every event, so it warns for each event two plugins declare", () => {
+    const out = msgs([plugin(["Stop", "PreToolUse"]), plugin(["Stop"])], [{ no_hook_event_blocked: true }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/no_hook_event_blocked on `Stop`: 2 staged plugins/);
+    expect(msgs([plugin(["Stop"])], [{ no_hook_event_blocked: true }])).toEqual([]);
+  });
+
+  it("no_hook_event_blocked: true with operator hooks visible warns even when no staged plugin declares hooks", () => {
+    const out = msgs([], [{ no_hook_event_blocked: true }], true);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/no_hook_event_blocked on `any event`: this protocol run reads your real config dir/);
+  });
 });
 
 // A hook_started whose hook_response never arrived (paired by hook_id): an async or backgrounded hook, or one still

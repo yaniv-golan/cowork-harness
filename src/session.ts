@@ -418,8 +418,8 @@ export interface LaunchPlan {
    *  frames for EVERY hook event, not just SessionStart/Setup (the binary's default list). Telemetry only:
    *  the flag gates the three frame emitters and nothing the model sees. Desktop's own spawn never passes
    *  it, so it is emitted ONLY when a staged plugin declares runnable hooks — otherwise there is nothing
-   *  to observe and the argv stays byte-identical to production's. Powers `hook_event_fired` /
-   *  `hook_event_blocked`. */
+   *  to observe and the argv stays byte-identical to production's. Powers `hook_event_fired`,
+   *  `hook_event_blocked`, `no_hook_event_blocked`, `hook_decision` and `hook_output_*`. */
   includeHookEvents?: boolean;
   // The tier-uniform agent-env knob (agentEnvOverrides(session.agent_env)) — each runtime layers this
   // LAST over its own env construction (knob wins), after scrubbing SCRUBBED_AGENT_ENV_KEYS from the
