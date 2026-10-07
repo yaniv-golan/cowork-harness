@@ -259,7 +259,8 @@ export function warnAmbiguousHookOutput(
     byEvent.delete(EVERY_EVENT);
     for (const d of declaring) for (const ev of d.events) add(ev, [...every][0]!);
   }
-  if (every && operatorHooksVisible && byEvent.size === 0) byEvent.set("any event", new Set(every));
+  // No staged plugin declares an event to attribute it to: name it once, beside any event another key names.
+  if (every && operatorHooksVisible && !declaring.some((d) => d.events.length > 0)) byEvent.set("any event", new Set(every));
   for (const [ev, keys] of [...byEvent].sort(([a], [b]) => a.localeCompare(b))) {
     const roots = declaring.filter((d) => d.events.includes(ev)).map((d) => d.root);
     const reasons: string[] = [];
