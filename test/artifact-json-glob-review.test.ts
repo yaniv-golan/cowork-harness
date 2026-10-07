@@ -193,3 +193,19 @@ describe("artifact_json glob — the literal prefix matches native names exactly
     });
   }
 });
+
+describe("artifact_json glob — an unreadable directory on the literal prefix", () => {
+  it.skipIf(process.getuid?.() === 0)("is evidence-unavailable naming the error, not a spelling miss", () => {
+    const root = tree({ "outputs/artifacts/runs/r1/run_status.json": status("ok") });
+    chmodSync(join(root, "outputs/artifacts"), 0o000);
+    try {
+      const [live] = evaluate([{ artifact_json: { artifact: GLOB, match: "each", path: "status", equals: "ok" } }], ctx(root));
+      expect(live!.pass).toBe(false);
+      expect(live!.message).toContain("evidence unavailable");
+      expect(live!.message).toContain("EACCES");
+      expect(live!.message).not.toContain("not there as spelled");
+    } finally {
+      chmodSync(join(root, "outputs/artifacts"), 0o755);
+    }
+  });
+});
