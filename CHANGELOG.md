@@ -88,6 +88,12 @@ All notable changes to this project are documented here. The format is based on
   at. `lint`'s `hook-event-not-served` message now names those tiers: `Stop` says `container`, where it used to claim
   `container` and `hostloop`.
 
+### Upgrade notes
+
+- **A cassette whose scenario uses the `artifact_json` glob (or `match`) is stamped `cassetteVersion` 15 and
+  needs this release to replay.** An older harness refuses it as too new, so pin the harness version in CI before
+  you record one.
+
 ### Added
 
 - **`artifact_json` takes a glob in `artifact`, with `match: each | any`.** One assertion now checks every JSON
