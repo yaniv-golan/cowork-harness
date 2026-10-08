@@ -13,8 +13,8 @@ import type { Assertion } from "../types.js";
  *  path boundary) rather than on the agent's behaviour. The `lane: remote` code is CROSS-CHECKED against it, not
  *  derived from it: execute.ts types its load-time refusal list against this one (a key outside it fails to
  *  compile), and test/lane-notice.test.ts requires the key of every `lane === "remote"` branch in assert.ts to be
- *  in it. Not every key here has a remote branch (`artifact_json` reads a file by path, as `artifact_text` does,
- *  but has none). */
+ *  in it. Not every key here has a remote branch (`file_exists` reads the local tree on every lane: it is the
+ *  documented remote-lane proxy, with `transcript_matches`). */
 export const ENVIRONMENT_SHAPED_ASSERT_KEYS = [
   "artifact_json",
   "artifact_text",

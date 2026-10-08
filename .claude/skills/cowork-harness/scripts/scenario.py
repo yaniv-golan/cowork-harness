@@ -2145,12 +2145,16 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
     # I: manifest-backed keys need an artifacts manifest on replay. On `lane: remote`, a key that is ALSO
     # in LANE_REMOTE_INCOMPATIBLE_KEYS (user_visible_artifact) already got the ERROR above and is rejected
     # at scenario-LOAD time -- it can never reach a replay to re-record for, so "re-record so it evaluates"
-    # is unreachable advice for that key (same rationale as the tier-rule suppression above). Filtered
-    # per-key, not the whole block: the other manifest keys (file_exists, artifact_json, ...) are NOT
-    # lane-rejected and stay genuinely reachable and worth advising about on `lane: remote`.
+    # is unreachable advice for that key (same rationale as the tier-rule suppression above). The same holds
+    # for artifact_json / artifact_text, which load but FAIL at assertion time on that lane (its container
+    # filesystem is not locally observable, so there is no body to read): a manifest cannot make them
+    # evaluate. Filtered per-key, not the whole block: file_exists and the other manifest keys stay
+    # reachable and worth advising about on `lane: remote`.
     manifest_present = sorted(assert_keys & MANIFEST_KEYS)
     if lane == "remote":
-        manifest_present = [k for k in manifest_present if k not in LANE_REMOTE_INCOMPATIBLE_KEYS]
+        manifest_present = [
+            k for k in manifest_present if k not in LANE_REMOTE_INCOMPATIBLE_KEYS and k not in ("artifact_json", "artifact_text")
+        ]
     if cassette_records is not None:
         manifest_present = [
             key for key in manifest_present if not _all_matching_cassettes_prove(cassette_records, path, key)

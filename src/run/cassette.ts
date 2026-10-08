@@ -497,7 +497,8 @@ export interface Cassette {
 //  ("re-record" — the wrong remedy). Every other scenario stamps exactly what it did. No hashing or shape
 //  change; HASH_FORMAT_EPOCH stays at 12.
 // v15: the same mechanism for the keys added after v14 (an assert-level key appends a predicate to
-//  V15_ASSERT_FEATURES below; a top-level key adds a KEY_REQUIRED_VERSION entry returning 15). The stamp stays requirement-based: a cassette that uses no v15
+//  V15_ASSERT_FEATURES below; a top-level key adds a KEY_REQUIRED_VERSION entry returning 15). Also `lane: remote`
+//  with an `artifact_json` entry, a pair no per-key entry sees (see requiredVersionFor). The stamp stays requirement-based: a cassette that uses no v15
 //  feature stamps exactly what it did, so the bump alone changes no existing cassette or verify-cassettes result.
 //  No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
 export const CASSETTE_VERSION = 15;
@@ -662,7 +663,12 @@ export function requiredVersionFor(scenario: unknown, frozen?: { answerChannel?:
   // `answerChannel` is frozen beside the scenario, not in it, and a v14 reader ignores an unknown top-level key: it
   // would replay a run that parked at a question as the `stalled` fail. Every write site passes the cassette's value.
   const channel = frozen?.answerChannel === "none" ? 15 : 0;
-  return Math.max(BASE, channel, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
+  // Two keys together, so neither per-key entry can see it: on `lane: remote` a v15 reader refuses `artifact_json`
+  // (that lane's container filesystem is not locally observable), while a v14 reader grades the local work-root file
+  // and can pass. `artifact_text` refused there from the start, so it needs nothing.
+  const remoteJson =
+    s.lane === "remote" && Array.isArray(s.assert) && s.assert.some((a) => !!a && typeof a === "object" && "artifact_json" in a) ? 15 : 0;
+  return Math.max(BASE, channel, remoteJson, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
 }
 
 const DEFAULT_MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker

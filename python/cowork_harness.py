@@ -178,6 +178,13 @@ class Result:
 
     def assert_artifact_json(self, rel_path: str, predicate: Callable[[Any], bool]) -> "Result":
         # artifacts live under the work dir (mnt/); e.g. "outputs/cap.json"
+        # `lane: remote` still executes locally, so the file is on disk — but that lane's container filesystem is
+        # not observable from outside it. The CLI's `artifact_json` refuses there; so does this helper.
+        assert self.data.get("lane") != "remote", (
+            f"artifact_json cannot be evaluated on `lane: remote` — a remote container's filesystem is not locally "
+            f"observable, so there is no body to parse ({rel_path}). Assert on the agent's own statement of the "
+            f"content, or use `lane: local`"
+        )
         p = Path(self.work_dir) / rel_path
         assert p.exists(), f"artifact not found: {rel_path} (at {p})"
         data = json.loads(p.read_text())

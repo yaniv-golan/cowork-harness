@@ -148,11 +148,11 @@ describe("artifact_text", () => {
     expect(run({ artifact_text: { artifact: "outputs.bin", contains: ["secret"] } }, ctx(bin)).pass).toBe(false);
   });
 
-  it("names the lane on `lane: remote` instead of reporting a bare 'file not found'", () => {
-    // Not a false green either way — the file is missing on both paths — but on a lane with no locally
-    // observable filesystem, "file not found" reads as "the skill didn't write it". artifact_json still
-    // has this wart; the new key does not inherit it.
-    const r = run({ artifact_text: { artifact: "outputs/report.md", contains: ["x"] } }, ctx(root(), { lane: "remote" }));
+  it("is refused on `lane: remote`, though the body on disk would match", () => {
+    // `lane: remote` executes locally, so outputs/report.md IS on disk and `contains: ["clean"]` passes on
+    // `lane: local`. Without the lane branch this would be a pass over a body the cloud lane never shows anyone.
+    expect(run({ artifact_text: { artifact: "outputs/report.md", contains: ["clean"] } }, ctx(root())).pass).toBe(true);
+    const r = run({ artifact_text: { artifact: "outputs/report.md", contains: ["clean"] } }, ctx(root(), { lane: "remote" }));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/lane: remote/);
     expect(r.message).not.toMatch(/file not found/);

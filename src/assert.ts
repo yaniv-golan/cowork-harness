@@ -2586,6 +2586,17 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
   }
 }
 
+/** The refusal `artifact_text` and `artifact_json` give on `lane: remote`. That lane still EXECUTES locally, so the
+ *  file the skill wrote is on the local work root and reading it would succeed — but the contract it models is a
+ *  remote container whose filesystem nobody outside it can read, so a verdict over the local body is a pass the
+ *  cloud lane could never produce. Existence is different: `file_exists` stays the documented remote-lane proxy
+ *  (with `transcript_matches`), because a written path is what the agent can name; its CONTENT is not observable.
+ *  The metrics extractor refuses the same reads on this lane (src/metrics.ts). One function, so the two keys read
+ *  alike. */
+function remoteLaneBodyRefusal(key: "artifact_text" | "artifact_json", verb: "scan" | "parse"): string {
+  return `${key} cannot be evaluated on \`lane: remote\` — a remote container's filesystem is not locally observable, so there is no body to ${verb}. Assert on the agent's own statement of the content (\`transcript_matches\`), or use \`lane: local\``;
+}
+
 /** Every check `artifact_json` makes on ONE file, in order: the result list a literal `artifact` pushes as-is, and
  *  what the glob form folds per matched file (see `globArtifactJson`). */
 function artifactJsonChecks(
@@ -4587,15 +4598,7 @@ function check(
       // Rejected by the schema too; repeated because evaluate() is also reached by hand-built contexts.
       results.push(fail("artifact_text: set at least one of contains / not_contains / matches / not_matches"));
     } else if (ctx.lane === "remote") {
-      // `artifact_json` has no such branch and reds with a bare "file not found" here, which reads as
-      // "the skill didn't write it" when the truth is "this lane has no locally observable filesystem".
-      // Not a false green either way — a missing file fails both — but a misleading message on a lane
-      // where the assertion can never be satisfied is worth one branch.
-      results.push(
-        fail(
-          `artifact_text cannot be evaluated on \`lane: remote\` — a remote container's filesystem is not locally observable, so there is no body to scan. Assert on the agent's own statement of the content (\`transcript_matches\`), or use \`lane: local\``,
-        ),
-      );
+      results.push(fail(remoteLaneBodyRefusal("artifact_text", "scan")));
     } else if (!file) {
       results.push(fail(`unsafe artifact_text path "${at.artifact}" — must stay under the work root (no absolute paths or "..")`));
     } else {
@@ -4695,7 +4698,12 @@ function check(
   }
   if (a.artifact_json !== undefined) {
     const aj = a.artifact_json;
-    if (isArtifactGlob(aj.artifact)) results.push(globArtifactJson(ctx, aj));
+    // Same order as artifact_text: a literal `authored: true` is reported first, then the lane. The glob form folds
+    // authorship per matched file, and on this lane there is no file set to fold over.
+    if (ctx.lane === "remote") {
+      if (aj.authored === true && !isArtifactGlob(aj.artifact)) results.push(authorshipCheck(ctx, aj.artifact, "artifact_json"));
+      results.push(fail(remoteLaneBodyRefusal("artifact_json", "parse")));
+    } else if (isArtifactGlob(aj.artifact)) results.push(globArtifactJson(ctx, aj));
     else results.push(...artifactJsonChecks(ctx, aj, aj.artifact));
   }
   // VM-path-boundary + path-denial assertions. `VM_PATH` is exact-or-prefix — NEVER a bare

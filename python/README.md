@@ -226,6 +226,8 @@ assert len([s for s in r.subagents]) >= 1
   - `rel_path` is e.g. `"artifacts/<slug>/sizing.json"` — a skill's structured output usually lands under
     `mnt/artifacts/`, while `mnt/outputs/` holds the user-visible deliverable.
   - `rel_path` omits the `mnt/` prefix, so pass `"outputs/metrics.json"`, not `"mnt/outputs/metrics.json"`.
+  - Raises on a `lane: remote` run, as the CLI's `artifact_json` fails there: the run executes locally, but that
+    lane's container filesystem is not observable from outside it.
   - This Python predicate (full callable, autocomplete, `print(d)`) is the **structured-content** path —
     strictly richer than a YAML scenario's content assertions; prefer it over a YAML predicate when
     you're already in Python.

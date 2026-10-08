@@ -101,7 +101,8 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   so, once per process; `--compact`/`--demo`, `CI` and `COWORK_HARNESS_NO_LANE_NOTICE=1` silence it. On `remote`,
   location delivers nothing (a remote container has no auto-delivering outputs dir and is reclaimed at
   session end), `present_files` is NOT served, and `user_visible_artifact` /
-  `present_files_called` / `no_scratchpad_leak` are rejected at LOAD time as unable to pass. Reach for it
+  `present_files_called` / `no_scratchpad_leak` are rejected at LOAD time as unable to pass;
+  `file_absent`, `artifact_text` and `artifact_json` fail when graded (no observable filesystem). Reach for it
   to check a skill's delivery survives the cloud lane, where new Pro and Max tasks run from 2026-10-06. Orthogonal to `fidelity` — a `lane: remote`
   scenario still runs locally.
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,

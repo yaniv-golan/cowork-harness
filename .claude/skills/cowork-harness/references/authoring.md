@@ -66,7 +66,8 @@ So: behaviour conclusions (triggering, tool sequencing, gate handling) travel be
 asserting a **path, mount, delivery mechanism or egress rule** is a claim about the local lane only. Declare
 `lane: remote` when the scenario is about that lane — the affected assertions then refuse to grade
 rather than passing (see the `delivery_unobservable` WARN and the `lane: remote` load-time rejections
-in `run-record-replay.md`).
+in `run-record-replay.md`; `file_absent`, `artifact_text` and `artifact_json` load but fail when graded,
+since that lane's container filesystem is not locally observable).
 
 ### Choose an answer path (gates: AskUserQuestion + tool-permission)
 

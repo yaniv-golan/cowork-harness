@@ -336,3 +336,26 @@ def test_example_skill_runs(cowork):
         pytest.skip("set COWORK_TEST_SKILL to a skill folder to run this lane")
     r = cowork.skill(skill_dir).run("do something useful", fidelity="container", on_unanswered="first")
     r.assert_success()
+
+
+# ---- assert_artifact_json on lane: remote: the CLI key refuses there, so the helper must too ----
+
+def _artifact_run(tmp_path, lane=None):
+    (tmp_path / "outputs").mkdir()
+    (tmp_path / "outputs" / "state.json").write_text('{"status": "ok"}')
+    data = {"result": "success", "workDir": str(tmp_path)}
+    if lane is not None:
+        data["lane"] = lane
+    return Result(data, "")
+
+
+def test_assert_artifact_json_reads_the_file_on_lane_local(tmp_path):
+    _artifact_run(tmp_path).assert_artifact_json("outputs/state.json", lambda d: d["status"] == "ok")
+
+
+def test_assert_artifact_json_refuses_on_lane_remote(tmp_path):
+    # `lane: remote` executes locally, so the file is on disk and the predicate would hold: a pass the cloud
+    # lane could never produce.
+    r = _artifact_run(tmp_path, lane="remote")
+    with pytest.raises(AssertionError, match="cannot be evaluated on `lane: remote`"):
+        r.assert_artifact_json("outputs/state.json", lambda d: d["status"] == "ok")

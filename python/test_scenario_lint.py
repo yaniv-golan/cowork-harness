@@ -470,6 +470,23 @@ def test_lane_remote_still_flags_manifest_needs_snapshot_for_other_manifest_keys
     assert "manifest-needs-snapshot" in rules
 
 
+@pytest.mark.parametrize(
+    "item",
+    [
+        "artifact_json: {artifact: outputs/x.json, path: a, equals: 1}",
+        "artifact_text: {artifact: outputs/x.md, contains: [a]}",
+    ],
+)
+def test_lane_remote_drops_manifest_needs_snapshot_for_the_body_reading_keys(item, tmp_path):
+    """`artifact_json` / `artifact_text` fail at assertion time on `lane: remote` (no observable body), so a
+    manifest cannot make them evaluate there: "re-record so they evaluate" is advice for a key that can't pass."""
+    rules = {f.rule for f in scenario.lint_file(str(_write_lane(tmp_path, "remote", f"assert:\n  - {item}\n")))}
+    assert "manifest-needs-snapshot" not in rules
+    # Mutation guard: on lane: local the advisory still fires for them.
+    rules = {f.rule for f in scenario.lint_file(str(_write_lane(tmp_path, "local", f"assert:\n  - {item}\n")))}
+    assert "manifest-needs-snapshot" in rules
+
+
 def test_present_files_key_error_gates_without_strict(tmp_path):
     # ERROR always gates -- nonzero exit even without --strict (mirrors host-path-assert-tier's exit class).
     f = _write_at(tmp_path, "protocol", "assert:\n  - present_files_called: true\n")
