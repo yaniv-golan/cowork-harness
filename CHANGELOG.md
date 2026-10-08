@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Two Desktop form replies in `examples/data/form-replies/`**, for testing a skill that parses one. Each keeps the
+  shape of a real Cowork reply, with every title, label and value replaced: a date, a multi-select, quoted and
+  ` / `-flattened values, and values over 200 characters folded under `--- Full content ---`. A test pins both to
+  Desktop's reply format byte for byte.
+
+### Documentation
+
+- **The form-reply format is described as Desktop builds it.** A reply with a value over 200 characters is not one
+  line: each folded value follows a blank line and a `--- Full content ---` line, under a `[Label]` line. The title
+  is the form's own header (usually `<Topic> details`), a form with no header has no title prefix, an empty answer is
+  left out, and ` / ` replaces newlines inside a value, never the separator between picks (that is `, `). Fixed in
+  the task recipe, `docs/scenario.md` and `docs/fidelity-gaps.md`.
+
+- **Correction to the 4.6.0 upgrade note on re-stamped cassettes.** It said a re-stamped `container`, `microvm` or
+  `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on 2.1.293. The note appears only when
+  the agent that recorded the cassette differs from the one the re-stamped baseline pins: a cassette recorded on an
+  older agent (2.1.289, say) keeps it, and one already recorded on 2.1.293 shows no note after the re-stamp.
+- **`docs/eval.md` says what `eval` compares:** binary pass rates per assertion row. It does not grade or compare a
+  scenario's `metrics:`; `hillclimb` does.
+
 ## [4.6.0] — 2026-10-08
 
 This release adds assertions about how a run was decided and what a skill wrote: `gates_all_scripted` (every question
