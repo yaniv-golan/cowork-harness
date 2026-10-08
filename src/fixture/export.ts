@@ -262,7 +262,11 @@ export function exportFixture(opts: {
   // otherwise silently keep the file it meant to drop.
   const excludes = (opts.exclude ?? []).map((e) => e.split("\\").join("/").replace(/^\.\//, "").replace(/\/+$/, ""));
   const excludeHits = new Set<string>();
-  const excludedBy = (rel: string): string | undefined => excludes.find((e) => e !== "" && (rel === e || rel.startsWith(`${e}/`)));
+  // Excluding an entry credits every --exclude at or under it: an excluded directory is not walked, so a file
+  // also named inside it would otherwise never be reached and read as a typo.
+  const excludedBy = (rel: string): string[] =>
+    excludes.filter((e) => e !== "" && (rel === e || rel.startsWith(`${e}/`) || e.startsWith(`${rel}/`)));
+  const isExcluded = (rel: string): boolean => excludes.some((e) => e !== "" && (rel === e || rel.startsWith(`${e}/`)));
 
   const src = NoFollowRoot.existing(outputsDir);
   const files: Array<{ rel: string; data: Buffer; mode: number }> = [];
@@ -282,9 +286,8 @@ export function exportFixture(opts: {
     for (const d of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const abs = join(dir, d.name);
       const rel = relative(src.root, abs);
-      const ex = excludedBy(rel);
-      if (ex !== undefined) {
-        excludeHits.add(ex);
+      if (isExcluded(rel)) {
+        for (const e of excludedBy(rel)) excludeHits.add(e);
         skipped.push({ file: rel, why: "excluded" });
         continue;
       }

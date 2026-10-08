@@ -197,7 +197,7 @@ function fixtureFindings(file: string, scenario: Scenario): LintFinding[] {
     });
     if (!here) return out;
   }
-  let files: Array<{ path: string }>;
+  let files: Array<{ path: string; tokens: boolean }>;
   try {
     files = scanWorkspaceFixture(scenario.workspace_fixture).files;
   } catch (e) {
@@ -214,6 +214,18 @@ function fixtureFindings(file: string, scenario: Scenario): LintFinding[] {
       },
     ];
   }
+  // The protocol tier has no session layout to write session paths into (resolveLaunchSources refuses it).
+  if (scenario.fidelity === "protocol" && files.some((f) => f.tokens))
+    out.push({
+      severity: "ERROR",
+      rule: "workspace-fixture-invalid",
+      message:
+        `the run refuses this workspace_fixture: ${files.filter((f) => f.tokens).length} file(s) hold session-path tokens ` +
+        `(fixture export --session-paths), but the protocol tier has no session layout (no /sessions/<id>, no mnt/) to substitute them with`,
+      fix: `Run the scenario at fidelity hostloop, container or microvm, or re-export the fixture without --session-paths. ${dryRun}`,
+      file,
+      line: null,
+    });
   const refusal = workspaceFixtureAssertRefusal(scenario, files);
   return refusal
     ? [

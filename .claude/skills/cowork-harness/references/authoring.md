@@ -283,7 +283,7 @@ cowork-harness lint scenarios/*.yaml
 | `unpaired-gates-all-scripted` | WARN | `gates_all_scripted` with neither `gate_answer_count_min` (≥ 1) nor `questions_count_max` — zero gates passes it, so nothing says whether gates were expected |
 | `scenario-invalid` | ERROR | the harness's scenario loader refuses the file (via `cowork-harness lint` only — see below) |
 | `baseline-unknown` | ERROR | `baseline:` names no baseline this CLI ships (via `cowork-harness lint` only) |
-| `workspace-fixture-invalid` | ERROR | the run refuses the scenario's `workspace_fixture` directory — missing, a symlink, a hard link, agent-config paths, untracked files in git mode, empty, or over a size cap (via `cowork-harness lint` only) |
+| `workspace-fixture-invalid` | ERROR | the run refuses the scenario's `workspace_fixture` directory — missing, a symlink, a hard link, agent-config paths, untracked files in git mode, empty, over a size cap, a binary file holding a session-path token, or session-path tokens at `fidelity: protocol` (via `cowork-harness lint` only) |
 | `workspace-fixture-not-relative` | WARN | `workspace_fixture` is an absolute or `~/` path rather than one relative to the scenario file — it names a directory on one machine; when it does not exist where lint runs it is not checked (via `cowork-harness lint` only) |
 | `workspace-fixture-vacuous-assert` | ERROR | a `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json` names a file (or directory) the `workspace_fixture` provides without stating `authored:` — it would pass on the fixture alone (via `cowork-harness lint` only) |
 | `lint-loader-internal` | ERROR | the wrapper could not run its loader check on a file — a harness bug; it never falls back to a lint that skipped the loader |

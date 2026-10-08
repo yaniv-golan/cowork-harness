@@ -58,7 +58,7 @@ import {
 } from "../session.js";
 import { spawnProtocol, protocolReadsOperatorConfig } from "../runtime/protocol.js";
 import { spawnContainer } from "../runtime/container.js";
-import { spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
+import { hostLoopSessionRoots, spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { warnUnservedHookEvents, warnAmbiguousHookOutput, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
@@ -1321,7 +1321,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const hostLoopOpts =
         effectiveFidelity === "hostloop"
           ? (() => {
-              const hostMnt = join(resolve(outDir), "work", "session", "mnt");
+              // The same host session dir spawnHostLoop runs the agent in (and a workspace_fixture's file-tools token gets).
+              const hostMnt = join(hostLoopSessionRoots(baseline, sessionId, outDir).sessionRoot, "mnt");
               const skillsDir = join(plan.configDir, "skills");
               const skillsStaged = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
               return {

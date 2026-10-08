@@ -29,8 +29,12 @@ All notable changes to this project are documented here. The format is based on
     signature of a fixture without tokens does not change.
   - A fixture exported from a container or microvm run warns when staged on hostloop: there it holds only the
     bash path, which the file tools cannot open.
-- `fixture export --exclude <path>` (repeatable) leaves out a file, or everything under a directory. An
-  `--exclude` that names nothing is refused.
+  - Staging refuses a root that holds a quote, a backslash, whitespace or a control character (a `--run-dir`
+    with a space, say), before writing any file. `lint` reports a fixture with tokens at `fidelity: protocol`.
+  - JSON payload: a new `substituted` key (`{file, count}` per rewritten file), and a new `refused[].kind`,
+    `token`.
+- `fixture export --exclude <path>` (repeatable) leaves out a file, or everything under a directory. Excluded
+  paths are listed in `skipped` with `why: "excluded"`. An `--exclude` that names nothing is refused.
 
 ## [4.6.1] — 2026-10-09
 

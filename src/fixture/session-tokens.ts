@@ -10,6 +10,8 @@
 //
 // Leaf module: export.ts and workspace.ts both import it, so the two ends share one text test and one token set.
 
+import { UsageError } from "../errors.js";
+
 /** The session root as the agent's FILE TOOLS see it. */
 export const SESSION_ROOT_TOKEN = "__COWORK_HARNESS_SESSION_ROOT__";
 /** The session root as the agent's BASH sees it (`/sessions/<id>`). */
@@ -49,7 +51,7 @@ const NAME_CHAR = /[A-Za-z0-9._~-]/;
  * Replace each bounded occurrence of each `from` with its token, at BYTE level: the buffer is read as Latin-1
  * (one char per byte), so a file that is not UTF-8 is never re-encoded. A `from` is matched as its UTF-8 bytes.
  * Bounded as `namesRunPath` bounds a run path: the byte before does not continue a name or a URL path, the one
- * after does not continue a name (`/` or a quote does). Longest `from` first, so a root that contains another
+ * after does not continue a name (`/` or a quote does; a `.` that ends a sentence does too). Longest `from` first, so a root that contains another
  * is replaced whole.
  */
 export function tokenizeSessionPaths(buf: Buffer, roots: ReadonlyArray<{ from: string; token: string }>): { data: Buffer; count: number } {
@@ -64,7 +66,9 @@ export function tokenizeSessionPaths(buf: Buffer, roots: ReadonlyArray<{ from: s
       const before = s[i - 1];
       const after = s[i + needle.length];
       if (before !== undefined && NAME_CHAR.test(before)) continue;
-      if (after !== undefined && (NAME_CHAR.test(after) || after === "@")) continue;
+      // A `.` ends the path when the sentence ends there (`… is /sessions/x. Done`); elsewhere it continues a name.
+      const sentenceEnd = after === "." && (s[i + needle.length + 1] === undefined || /\s/.test(s[i + needle.length + 1]!));
+      if (after !== undefined && !sentenceEnd && (NAME_CHAR.test(after) || after === "@")) continue;
       out += s.slice(at, i) + token;
       at = i + needle.length;
       count++;
@@ -83,16 +87,23 @@ export function sessionRootValueProblem(v: string): string | undefined {
   return undefined;
 }
 
+/** Why `roots` cannot be written into a fixture, or undefined. */
+export function sessionRootsProblem(roots: SessionRoots): string | undefined {
+  for (const v of [roots.sessionRoot, roots.vmSessionRoot]) {
+    const problem = sessionRootValueProblem(v);
+    if (problem) return `cannot write this run's session root into the workspace_fixture: ${problem}`;
+  }
+  return undefined;
+}
+
 /** Write `roots` in place of the tokens. Throws when a value cannot be inserted safely (see
  *  {@link sessionRootValueProblem}), or when the file is not UTF-8 and a value is not ASCII (its UTF-8 bytes
  *  would be mojibake in the file's own encoding). */
 export function substituteSessionTokens(buf: Buffer, roots: SessionRoots): Buffer {
-  for (const v of [roots.sessionRoot, roots.vmSessionRoot]) {
-    const problem = sessionRootValueProblem(v);
-    if (problem) throw new Error(`cannot substitute the session root: ${problem}`);
-  }
+  const problem = sessionRootsProblem(roots);
+  if (problem) throw new UsageError(problem);
   if (!isUtf8(buf) && !/^[\x00-\x7f]*$/.test(roots.sessionRoot + roots.vmSessionRoot))
-    throw new Error("cannot substitute a non-ASCII session root into a file that is not UTF-8");
+    throw new UsageError("cannot write a non-ASCII session root into a workspace_fixture file that is not UTF-8");
   let s = buf.toString("latin1");
   s = s.split(SESSION_ROOT_TOKEN).join(Buffer.from(roots.sessionRoot, "utf8").toString("latin1"));
   s = s.split(VM_SESSION_ROOT_TOKEN).join(Buffer.from(roots.vmSessionRoot, "utf8").toString("latin1"));

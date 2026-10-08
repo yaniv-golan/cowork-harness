@@ -1,6 +1,5 @@
 // `fixture export --session-paths` / `--exclude`, and the staging half: a session-path token in a committed
 // fixture becomes the new session's root, as the tier's agent sees it.
-import { createHash } from "node:crypto";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +27,7 @@ import { fixtureBinariesHashOnly } from "../src/run/cassette.js";
 import { hostPathTokens } from "../src/run/host-path-tokens.js";
 import { scanText } from "../src/scan.js";
 import { UsageError } from "../src/errors.js";
+import { loaderFindings } from "../src/run/lint-load.js";
 
 const SID = "local_abc";
 let tmp: string;
@@ -64,8 +64,8 @@ const put = (rel: string, data: string | Buffer) => {
 };
 const got = (rel: string) => readFileSync(join(out(), rel), "utf8");
 
-/** The deck-review shape: the file tools' host view and bash's guest view of the same session. */
-function deckReviewShape(): void {
+/** A two-view hostloop shape: the file tools' host view and bash's guest view of the same session. */
+function twoViewShape(): void {
   put("artifacts/.host-outputs-dir.json", JSON.stringify({ host_outputs_dir: outputs }));
   put("artifacts/.host-outputs-probe", outputs);
   put("artifacts/report.json", JSON.stringify({ report: `/sessions/${SID}/mnt/outputs/artifacts/report.md`, n: 3 }));
@@ -75,7 +75,7 @@ function deckReviewShape(): void {
 
 describe("fixture export --session-paths", () => {
   it("default export still refuses a session path as run_path, and names --session-paths as the remedy", () => {
-    deckReviewShape();
+    twoViewShape();
     const r = exportFixture(base());
     expect(r.exitCode).toBe(2);
     expect(r.refused.map((f) => f.file).sort()).toEqual([
@@ -90,7 +90,7 @@ describe("fixture export --session-paths", () => {
   });
 
   it("tokenises both views of THIS session and leaves every other byte alone", () => {
-    deckReviewShape();
+    twoViewShape();
     const r = exportFixture(base({ sessionPaths: true }));
     expect(r.exitCode).toBe(0);
     expect(JSON.parse(got("artifacts/.host-outputs-dir.json")).host_outputs_dir).toBe(`${SESSION_ROOT_TOKEN}/mnt/outputs`);
@@ -175,7 +175,7 @@ describe("fixture export --session-paths", () => {
   });
 
   it("uses the RECORDED outputs path, so a moved run dir still tokenises what its agent wrote", () => {
-    deckReviewShape();
+    twoViewShape();
     const moved = join(tmp, "elsewhere", SID);
     mkdirSync(dirname(moved), { recursive: true });
     renameSync(run, moved);
@@ -228,6 +228,20 @@ describe("tokenizeSessionPaths — bounded matches only", () => {
       expect(scanText(t, "", []).filter((f) => f.cls === "path")).toEqual([]);
     }
   });
+  it("pins the token strings and the scheme: renaming one changes what committed fixtures hold", () => {
+    expect([SESSION_ROOT_TOKEN, VM_SESSION_ROOT_TOKEN, SESSION_TOKEN_SCHEME]).toEqual([
+      "__COWORK_HARNESS_SESSION_ROOT__",
+      "__COWORK_HARNESS_VM_SESSION_ROOT__",
+      "t1",
+    ]);
+  });
+  it("a root that ends a sentence is still the root", () => {
+    expect(tokenizeSessionPaths(Buffer.from(`Your work dir is /sessions/${SID}. Done.`), roots).data.toString()).toBe(
+      `Your work dir is ${VM_SESSION_ROOT_TOKEN}. Done.`,
+    );
+    expect(tokenizeSessionPaths(Buffer.from(`/sessions/${SID}.`), roots).count).toBe(1);
+    expect(tokenizeSessionPaths(Buffer.from(`/sessions/${SID}.bak`), roots).count).toBe(0);
+  });
   it("neither token contains the other", () => {
     expect(SESSION_ROOT_TOKEN.includes(VM_SESSION_ROOT_TOKEN) || VM_SESSION_ROOT_TOKEN.includes(SESSION_ROOT_TOKEN)).toBe(false);
   });
@@ -235,7 +249,7 @@ describe("tokenizeSessionPaths — bounded matches only", () => {
 
 describe("fixture export --exclude", () => {
   it("drops a named file or a directory, listing it as excluded", () => {
-    deckReviewShape();
+    twoViewShape();
     const r = exportFixture(base({ exclude: ["artifacts/.host-outputs-probe", "./artifacts/run_status.json"] }));
     expect(r.refused.map((f) => f.file).sort()).toEqual(["artifacts/.host-outputs-dir.json", "artifacts/report.json"]);
     rmSync(out(), { recursive: true, force: true });
@@ -243,6 +257,16 @@ describe("fixture export --exclude", () => {
     expect(d.exitCode).toBe(0);
     expect(d.written).toEqual(["plain.md"]);
     expect(d.skipped).toEqual([{ file: "artifacts", why: "excluded" }]);
+  });
+  it("an --exclude inside an excluded directory is not a typo", () => {
+    twoViewShape();
+    for (const exclude of [
+      ["artifacts", "artifacts/report.json"],
+      ["artifacts/report.json", "artifacts"],
+    ]) {
+      rmSync(out(), { recursive: true, force: true });
+      expect(exportFixture(base({ exclude })).exitCode).toBe(0);
+    }
   });
   it("an --exclude that names nothing is refused", () => {
     put("a.txt", "x");
@@ -255,7 +279,7 @@ describe("fixture export --exclude", () => {
 
 describe("staging a tokenised fixture", () => {
   function exported(): string {
-    deckReviewShape();
+    twoViewShape();
     expect(exportFixture(base({ sessionPaths: true })).exitCode).toBe(0);
     return out();
   }
@@ -320,11 +344,33 @@ describe("staging a tokenised fixture", () => {
     expect(call("container").workspaceFixture?.files.some((f) => f.tokens)).toBe(true);
   });
 
+  it("lint reports the protocol refusal; other tiers lint clean", () => {
+    const fx = exported();
+    const lint = (fidelity: string) => {
+      const p = join(tmp, `${fidelity}.yaml`);
+      writeFileSync(p, `fidelity: ${fidelity}\nprompt: p\nworkspace_fixture: fixture\nassert:\n  - result: success\n`);
+      return loaderFindings([p], { loadBaseline: () => ({}) }).filter((f) => f.rule === "workspace-fixture-invalid");
+    };
+    expect(fx).toBe(join(tmp, "fixture"));
+    expect(lint("protocol").map((f) => f.message)).toEqual([expect.stringMatching(/protocol tier has no session layout/)]);
+    expect(lint("container")).toEqual([]);
+  });
+
   it("a binary fixture file holding a token is refused at scan", () => {
     const fx = join(tmp, "fxb");
     mkdirSync(fx);
     writeFileSync(join(fx, "b.bin"), Buffer.concat([Buffer.from([0, 1]), Buffer.from(SESSION_ROOT_TOKEN)]));
     expect(() => scanWorkspaceFixture(fx)).toThrow(/is binary and holds a session-path token/);
+  });
+
+  it("a root that cannot be written refuses the fixture before any file is staged", () => {
+    const scan = scanWorkspaceFixture(exported());
+    const o = join(tmp, "bad");
+    mkdirSync(o);
+    expect(() => stageWorkspaceFixture(scan, o, { sessionRoot: "/runs dir/x/work/session", vmSessionRoot: "/sessions/x" })).toThrow(
+      UsageError,
+    );
+    expect(readdirSync(o)).toEqual([]);
   });
 
   it("refuses a root value that would break the file's syntax, and a non-ASCII root into a non-UTF-8 file", () => {
@@ -356,14 +402,13 @@ describe("the substitution stamp in the fixture signature", () => {
     { path: "run.sh", sha256: "b".repeat(64), exec: true },
   ];
   it("leaves an untokenised fixture's signature exactly as before (no cassette re-record)", () => {
-    const h = createHash("sha256");
-    for (const f of files) h.update(`F:${f.path}\0${f.sha256}\0${f.exec ? "x" : "-"}\0`);
-    expect(workspaceFixtureSig(files)).toBe(h.digest("hex"));
+    // The value 4.6.0 computes for this list.
+    expect(workspaceFixtureSig(files)).toBe("c860f88be9ec965939be60437014548188902d35d09a42330495a2164805b37c");
     expect(workspaceFixtureSig(files.map((f) => ({ ...f, tokens: false })))).toBe(workspaceFixtureSig(files));
   });
   it("a tokenised file changes the signature and carries the scheme in its per-file sig", () => {
     expect(workspaceFixtureSig([{ ...files[0]!, tokens: true }, files[1]!])).not.toBe(workspaceFixtureSig(files));
-    deckReviewShape();
+    twoViewShape();
     expect(exportFixture(base({ sessionPaths: true })).exitCode).toBe(0);
     const scan = scanWorkspaceFixture(out());
     const sigs = new Map(scan.fileSigs);

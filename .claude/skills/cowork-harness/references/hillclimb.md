@@ -159,7 +159,7 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
 
 `run` refuses (exit 2) until `_state.json` holds an approved `harness_sha`, and again whenever it changes. The
 sha covers every scenario file, its session file, its uploads and its `workspace_fixture` files (exec bits
-included), the lockfiles in the current directory, the `_state.json` `harness_paths` entries, and the harness
+and the session-path substitution scheme included), the lockfiles in the current directory, the `_state.json` `harness_paths` entries, and the harness
 version and baseline. It is computed over every case, whatever `--case` selects, so a canary and the full pass
 need the same approval. The plugin the loop edits is never in it, and a `harness_paths` entry inside that
 plugin is refused. Review the change, then run once with `--dry-run --approve-harness` to record the new sha

@@ -1688,6 +1688,10 @@ assert:
 ```
 
 Record step 2 with `--out` inside the same tree as the fixture: `record` refuses a fixture outside the cassette's git repository (outside git, outside the cassette's directory).
+If the export refuses files as `run_path` because step 1 wrote its own session paths into them (a probe, an
+output path it reads back), re-run it with `--session-paths`: staging writes step 2's session paths in their
+place. Export from a run at the tier step 2 uses: a fixture from a container run staged on hostloop gets a
+warning, since there the file tools cannot open a `/sessions/` path.
 *Does not prove:* how Cowork treats a new task over the same folder on either lane (not verified); the second
 conversation starts with no memory of the first.
 

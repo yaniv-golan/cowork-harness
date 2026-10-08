@@ -27,6 +27,7 @@ import {
   containsSessionToken,
   SESSION_ROOT_TOKEN,
   SESSION_TOKEN_SCHEME,
+  sessionRootsProblem,
   substituteSessionTokens,
   VM_SESSION_ROOT_TOKEN,
   type SessionRoots,
@@ -299,7 +300,11 @@ export function stageWorkspaceFixture(
   outputsDir: string,
   roots?: SessionRoots,
 ): { sessionRootTokens: number; vmSessionRootTokens: number } {
-  if (roots === undefined && scan.files.some((f) => f.tokens))
+  const tokenised = scan.files.some((f) => f.tokens);
+  // Before anything is written: a root that cannot be inserted refuses the whole fixture, never half of it.
+  const rootsProblem = tokenised && roots !== undefined ? sessionRootsProblem(roots) : undefined;
+  if (rootsProblem) throw new UsageError(`workspace_fixture ${scan.dir}: ${rootsProblem}`);
+  if (roots === undefined && tokenised)
     throw new UsageError(
       `workspace_fixture ${scan.dir}: holds session-path tokens (fixture export --session-paths), but this tier has no session layout to substitute — run it at a tier with one (hostloop, container, microvm)`,
     );
@@ -346,10 +351,11 @@ export function crossTierFixtureWarning(
 ): string | undefined {
   if (counts.vmSessionRootTokens === 0 || counts.sessionRootTokens > 0) return undefined;
   return (
-    `::warning:: workspace_fixture ${scan.dir}: its session paths were all recorded as the VM path (${VM_SESSION_ROOT_TOKEN}), ` +
-    `which is what an export from a container or microvm run produces — there one path serves both the file tools and bash, so ` +
-    `the export cannot tell which root a skill meant. On hostloop the file tools run on the host and cannot open a /sessions/ path; ` +
-    `a skill that reads one of these paths back through its file tools will fail. Re-export the fixture from a hostloop run.\n`
+    `::warning:: workspace_fixture ${scan.dir}: its session paths were all recorded as the VM path (${VM_SESSION_ROOT_TOKEN}). ` +
+    `If it was exported from a container or microvm run, that is all such an export can produce — there one path serves both the ` +
+    `file tools and bash, so the export cannot tell which root a skill meant. On hostloop the file tools run on the host and cannot ` +
+    `open a /sessions/ path, so a skill that reads one of these paths back through its file tools will fail; re-export the fixture ` +
+    `from a hostloop run. (A hostloop export whose skill recorded only bash paths is fine.)\n`
   );
 }
 

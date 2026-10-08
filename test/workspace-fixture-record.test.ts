@@ -67,7 +67,9 @@ function bundle(): { root: string; scenarioPath: string; fixture: string } {
   return { root, scenarioPath, fixture };
 }
 
-async function recordIt() {
+/** `markTokenised`: fixture files whose recorded per-file sig carries the session-path stamp, as a fixture from
+ *  `fixture export --session-paths` records them (the record tail reads the stamp from the fingerprint). */
+async function recordIt(markTokenised: string[] = []) {
   const b = bundle();
   const scenario = loadScenarioPure(b.scenarioPath);
   const outDir = join(tmp("wsfr-run-"), "run");
@@ -114,7 +116,13 @@ async function recordIt() {
     userVisibleRoots: ["outputs"],
     preRunPaths: readPreRunManifest(outDir),
     preRunHashes: readPreRunManifestHashes(outDir),
-    fingerprint: withWorkspaceFixtureSig({ baseline: LIVE, hashFormat: "jcs1" }, plan.workspaceFixture),
+    fingerprint: (() => {
+      const fp = withWorkspaceFixtureSig({ baseline: LIVE, hashFormat: "jcs1" }, plan.workspaceFixture);
+      return {
+        ...fp,
+        workspaceFixtureFileSigs: fp.workspaceFixtureFileSigs!.map(([p, sig]) => [p, markTokenised.includes(p) ? `${sig}+t1` : sig]),
+      };
+    })(),
     assertions: [],
     egress: [],
   } as unknown as RunResult;
@@ -126,6 +134,15 @@ async function recordIt() {
 }
 
 describe("record → replay of a fixture scenario through the real record tail", () => {
+  it("records an untouched file staging wrote session paths into hash-only, read from the fingerprint's +t1 stamp", async () => {
+    const { cassettePath, stderr } = await recordIt(["report.md"]);
+    const raw = JSON.parse(readFileSync(cassettePath, "utf8"));
+    const report = (raw.artifacts as Array<Record<string, unknown>>).find((a) => a.path === "outputs/report.md")!;
+    expect(report).toMatchObject({ truncated: true, truncationReason: "fixture" });
+    expect(report.body).toBeUndefined();
+    expect(stderr).toMatch(/2 untouched binary or session-path file\(s\) recorded hash-only/);
+  });
+
   it("freezes the relative ref, the staged signature, hash-only untouched binaries, and says what it inlined", async () => {
     const { cassettePath, plan, stderr } = await recordIt();
     const raw = JSON.parse(readFileSync(cassettePath, "utf8"));
