@@ -1476,11 +1476,14 @@ is merely open.
 model to collect any missing arguments through the `visualize` server's elicitation module —
 `mcp__visualize__read_me` to load the form patterns, then `mcp__visualize__show_widget` to render a form
 with pills, free text, dates and a file dropzone — and to reserve `AskUserQuestion` for one-off
-clarifications mid-task. The user's answers then arrive as **one line in the next user message**, not as a
-tool result: `<Title> details — Label: value · Label: value`, with multi-select values comma-joined, a value of
-81–200 characters quoted, and a longer one shown as `(N chars — see below)` and repeated in full after a
-`--- Full content ---` line; a skipped form arrives as one fixed sentence. To test a skill's parsing of it, send such
-a line as a resumed turn (see [Recipes for goals the harness has no flag for](./scenario.md#recipes-for-goals-the-harness-has-no-flag-for)). The guidance is live for standard accounts (`286376943`, on/force).
+clarifications mid-task. The user's answers then arrive as **the next user message**, not as a tool result: a
+compact line, `<Title> — Label: value · Label: value` (the title is the form's header, usually `<Topic> details`),
+with multi-select values comma-joined, newlines in a short value replaced by ` / `, a value over 80 characters after
+that quoted, a file shown as `<name> (attached)` (the file itself is attached to the message), and a value over 200
+raw characters shown as `(N chars — see below)` and repeated in full under a `[Label]` line after a
+`--- Full content ---` line, which makes the message span several lines; a skipped form arrives as one fixed
+sentence. Two real-shaped replies ship in [`examples/data/form-replies/`](../examples/data/form-replies/). To test a skill's parsing of it, send such
+a message as a resumed turn (see [Recipes for goals the harness has no flag for](./scenario.md#recipes-for-goals-the-harness-has-no-flag-for)). The guidance is live for standard accounts (`286376943`, on/force).
 
 **It is guidance, not enforcement, and production splits roughly evenly.** Measured across a corpus of
 real Cowork session transcripts that all received this guidance: about half of the turns that collected

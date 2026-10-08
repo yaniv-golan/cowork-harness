@@ -1,0 +1,12 @@
+Pitch review details — Stage focus: Seed, Series A · Next board meeting: 2026-11-12 · Team size: Six engineers and two in sales · Recent traction: (470 chars — see below) · Concerns: (294 chars — see below)
+
+--- Full content ---
+[Recent traction]
+Revenue grew from a pilot with two design partners to eleven paying teams over the last two quarters. Most of the growth came from referrals inside existing customers rather than outbound, and the average contract doubled once teams moved from the trial tier to the annual plan. Churn so far is one team, which left after an acquisition. Usage is concentrated in weekly planning sessions, with a long tail of ad hoc reviews that we have not yet tried to grow on purpose.
+
+[Concerns]
+Pricing: we have not tested a higher tier yet.
+Hiring: the second sales hire is still open after three months.
+Competition: a larger vendor announced a similar feature last month.
+Runway: fourteen months at the current burn, less if hiring lands.
+Board: one seat changes hands after this round.

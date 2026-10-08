@@ -237,7 +237,8 @@ gate until you do one of two things:
   `agentVersion`; at `hostloop` it is the native agent's version in `agentBinary.nativeStagedPath`. At
   `protocol` the agent is the `claude` on your `PATH`, which no baseline pins, so nothing is checked
   there, and a `cowork` cassette that does not record its resolved tier is not checked either. The note
-  does not fail the gate; re-record to clear it.
+  does not fail the gate; re-record to clear it. A cassette already recorded on the pinned agent has no note, before
+  or after a re-stamp.
 
 **It refuses rather than guessing.** `rehash` **errors** on a content mismatch, on unreadable sources, on
 a mode or agent-scope change, on `fileSigs` it cannot align entry-for-entry, and on a hand-authored digest

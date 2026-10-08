@@ -138,6 +138,9 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is
   not a win-rate distribution, and never compares arm A's output with arm B's directly. A reference that cannot be
   read counts as a refusal, never a fail, and a missing one refuses the whole eval before any run.
 - **Units.** Each rep is one run, graded once ("runs × grades").
+- **Pass rates only.** Every row is a pass or a fail per rep, and `eval` compares how often each arm passes. A
+  scenario's `metrics:` are not graded or compared here; [`hillclimb`](./hillclimb.md#numbers-a-scenario-declares-metrics)
+  is the loop that records and compares them.
 
 ## Flags
 

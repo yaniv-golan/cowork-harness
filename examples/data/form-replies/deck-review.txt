@@ -1,0 +1,8 @@
+Deck review details — Audience: seed_vc_partner · Company pitch: "We help small finance teams close the month in days instead of weeks by reconciling bank feeds against the ledger automatically." · Market notes: (216 chars — see below) · Competition: (270 chars — see below) · Questions: "Is the market slide too long for a first meeting?  /  / Should the traction chart lead the deck?  /  / Which metric belongs on slide two?  /  / Anything missing."
+
+--- Full content ---
+[Market notes]
+The buyers are finance leads at companies with ten to two hundred employees. They already pay for an accounting system and a bank feed, and the close is still a spreadsheet exercise. We sell per entity, not per seat.
+
+[Competition]
+Two incumbents bundle reconciliation into their accounting suites, but both stop at matching transactions and leave exceptions to a manual queue. A handful of newer tools target the same gap from the audit side, with longer onboarding and a higher floor price than ours.

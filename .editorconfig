@@ -10,3 +10,8 @@ indent_size = 2
 
 [*.md]
 trim_trailing_whitespace = false
+
+# Desktop form replies pinned byte for byte: no final newline, trailing spaces kept.
+[examples/data/form-replies/*.txt]
+insert_final_newline = false
+trim_trailing_whitespace = false
