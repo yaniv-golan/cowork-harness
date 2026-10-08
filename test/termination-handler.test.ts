@@ -206,7 +206,11 @@ describe.runIf(POSIX)("termination handler", () => {
       const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"],
         agentSpawnOptions({ cwd: work, env: process.env, stdio: ["pipe", "ignore", "ignore", 3] }, "r" + process.pid));
       writeFileSync(join($DIR, "child.pid"), String(child.pid));
-      registerAgent(() => agentTreeAgent(child, { runTag: "r" + process.pid, runStartMs, workDir: work }));
+      // Built once and registered as is, as the run path registers it (execute.ts). A factory that built a new agent
+      // per call would take the constructor's process listing on every lookup, the second signal's included, and
+      // this test would time that listing instead of the second signal's path, which takes none.
+      const agent = agentTreeAgent(child, { runTag: "r" + process.pid, runStartMs, workDir: work });
+      registerAgent(() => agent);
       let sentAt = 0;
       process.on("exit", () => writeFileSync(join($DIR, "ms"), String(Date.now() - sentAt)));
       // Timed from the SECOND signal: the first one's terminate() takes a process listing (slow under load);
