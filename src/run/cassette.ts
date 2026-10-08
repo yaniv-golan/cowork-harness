@@ -4634,7 +4634,7 @@ export const RECORD_USAGE =
   "       --dry-run: resolve and CHECK without recording. A single scenario file runs every pre-spend refusal the real record runs (prompt policy, assert contradictions, host-inventory, slug collision) and refuses identically — same --out, same flags, so the verdict is binding. A DIRECTORY reports the path-dependent ones as advisory 'would-refuse'/'would-warn' notes instead, labelled by verdict kind (a dir target takes no --out, so the destination is a guess), and gates only on the path-independent ones.\n" +
   "       --allow-host-inventory-findings: write a recording the scan DID flag. The separate, louder decision; needed only when the captured inventory is genuinely part of the fixture.\n" +
   "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
-  "       --case <stem>: with a dir/ target, record only the scenario whose file name (without .yaml/.yml) is <stem>; repeat for more. The checks, the --dry-run preview and the --max-budget-usd pre-flight then cover the named scenarios only. A stem that names no scenario in the dir is a usage error (exit 2). Not valid with a single scenario file or --rerecord-stale.\n" +
+  "       --case <stem>: with a dir/ target, record only the scenario whose file name (without .yaml/.yml) is <stem>, or whose path-safe id (as the error lists it) is; case-sensitive; repeat for more. The checks, the --dry-run preview and the --max-budget-usd pre-flight then cover the named scenarios only. A stem that names no scenario in the dir is a usage error (exit 2). Not valid with a single scenario file or --rerecord-stale.\n" +
   "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch, or the scenarios --case names) has cost more than x (exit 1, like the other pre-spend refusals).\n" +
   "                             At --concurrency 1 a running total also stops the batch once x is reached; above that it is a pre-flight estimate only.\n" +
   '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"] [--decider-model <id>]] | [--on-unanswered fail|first]\n' +
@@ -4847,6 +4847,27 @@ export async function cmdRecord(args: string[]) {
       log(
         `· --case: ${disc.scenarios.length + disc.broken.length} of ${all.scenarios.length + all.broken.length} scenario file(s) selected`,
       );
+    // Two scenarios with the same `name:` write one cassette path. The whole-dir batch refuses that pair; under
+    // --case only the selected one runs, and it replaces the cassette the other one wrote, so say so.
+    if (caseSelectors.length) {
+      const chosen = new Set(disc.scenarios);
+      const byPath = new Map<string, string[]>();
+      for (const f of all.scenarios) {
+        try {
+          const cp = defaultCassettePath(parseScenarioFile(f).name);
+          byPath.set(cp, [...(byPath.get(cp) ?? []), f]);
+        } catch {
+          /* classified broken by discovery */
+        }
+      }
+      for (const [cp, files] of byPath) {
+        const left = files.filter((f) => !chosen.has(f));
+        if (left.length && left.length < files.length)
+          warn(
+            `::warning:: record --case: ${files.filter((f) => chosen.has(f)).join(", ")} writes ${cp}, which ${left.join(", ")} (not selected) also writes: recording replaces that cassette. Give them distinct \`name:\` values.\n`,
+          );
+      }
+    }
     return (selected = disc);
   };
   const casesField = caseSelectors.length ? { cases: caseSelectors } : {};

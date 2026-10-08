@@ -190,6 +190,20 @@ describe.skipIf(!can)("record <dir> --case: files that do not load", () => {
   });
 });
 
+describe.skipIf(!can)("record <dir> --case: a cassette path shared with an unselected scenario", () => {
+  it("warns that the selected scenario replaces the cassette the other one writes", () => {
+    const { root, work } = corpus();
+    writeFileSync(join(work, "x.yaml"), scenarioYaml("same"));
+    writeFileSync(join(work, "y.yaml"), scenarioYaml("same"));
+    // The whole dir refuses the pair; one of them selected runs, with a warning naming the other.
+    expect(cli(["record", work, "--dry-run"], root).code).toBe(1);
+    const r = cli(["record", work, "--case", "x", "--dry-run"], root);
+    expect(r.code, r.all).toBe(0);
+    expect(r.err).toMatch(/x\.yaml writes \S*same\.cassette\.json, which \S*y\.yaml \(not selected\) also writes/);
+    expect(cli(["record", work, "--case", "a", "--dry-run"], root).err).not.toMatch(/also writes/);
+  });
+});
+
 describe("selectDiscovered", () => {
   const disc = { scenarios: ["/d/a.yaml", "/d/c.yml"], skipped: ["/d/s.yaml"], broken: [{ file: "/d/b.yaml", error: "bad" }] };
   it("returns the discovery unchanged with no selectors", () => {
