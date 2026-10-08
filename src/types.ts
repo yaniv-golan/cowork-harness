@@ -2361,7 +2361,8 @@ export interface RunResult {
         | "fork_result_truncated"
         | "fork_result_unpaired"
         | "fork_result_background"
-        | "fork_calls_unrecorded";
+        | "fork_calls_unrecorded"
+        | "lane_remote_evidence_files";
       /** The offending authored paths — or, for the `fork_result_*` reasons, the offending `Skill` calls' skill names. */
       paths?: string[];
     };

@@ -238,7 +238,7 @@ export function gradeFor(
     if (a.semantic_pairwise === undefined) return;
     // Keyed by compose key, not assert index: a re-scoped assert reads another document of the same reference.
     for (const o of authoredGrades[i]?.pairwise ?? [])
-      if (o.refDocSha256 !== undefined) refShas[`${pairwiseComposeKey(a)}/${o.ref}`] = o.refDocSha256;
+      if (o.refDocSha256 !== undefined) refShas[`${pairwiseComposeKey(a, r?.lane)}/${o.ref}`] = o.refDocSha256;
   });
   // Each `order: both` comparison's per-order outcomes, against every reference, so position bias can be computed from a
   // flow dir (`explanation.win` is the human view: baseline only, capped, untrusted). Keyed by assert index, not compose

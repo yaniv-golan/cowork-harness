@@ -555,7 +555,7 @@ export function judgedPlan(
         const had = e.pairwise.map((x) => x.ref).filter((n) => n !== o.variant);
         const gating = e.pairwise.some((x) => (x.gate === false) !== (x.ref !== BASELINE_REF));
         if (gating || had.length !== refNames.length || !refNames.every((n) => had.includes(n))) why.push("opponents_changed");
-        const key = pairwiseComposeKey(a);
+        const key = pairwiseComposeKey(a, c.scenario.lane);
         for (const x of e.pairwise) {
           if (x.refDocSha256 === undefined) continue;
           const store = o.refs.find((r) => r.name === x.ref)?.store;
@@ -943,7 +943,7 @@ function staleCopied(
     for (const o of a.pairwise ?? []) {
       if ((copiedOnly && !o.copied) || o.refDocSha256 === undefined) continue;
       const store = refs.find((r) => r.name === o.ref)?.store;
-      const now = store ? readRefDoc(store, c.id, pairwiseComposeKey(asrt)) : undefined;
+      const now = store ? readRefDoc(store, c.id, pairwiseComposeKey(asrt, c.scenario.lane)) : undefined;
       if (now?.status === "ok" && now.sha256 !== o.refDocSha256) out.add(o.ref);
     }
   }
@@ -966,7 +966,7 @@ function shapeMismatch(row: Row, result: RunResult, c: HillclimbCase): string | 
   for (let i = 0; i < now.length; i++) {
     if (keysOf(live[i]!.assertion) !== keysOf(now[i]!))
       return `assertion ${i} is \`${keysOf(now[i]!)}\` now, \`${keysOf(live[i]!.assertion)}\` in its run`;
-    if (now[i]!.semantic_pairwise && pairwiseComposeKey(now[i]!) !== pairwiseComposeKey(live[i]!.assertion))
+    if (now[i]!.semantic_pairwise && pairwiseComposeKey(now[i]!, c.scenario.lane) !== pairwiseComposeKey(live[i]!.assertion, result.lane))
       return `assertion ${i} (semantic_pairwise) has another evidence scope than in its run`;
   }
   return undefined;

@@ -28,6 +28,7 @@ export const ENVIRONMENT_SHAPED_ASSERT_KEYS = [
   "no_path_denied",
   "no_delete_in_mounts",
   "no_delete_in_outputs",
+  "no_lost_write_back",
   "no_scratchpad_leak",
   "no_unexpected_files",
   "no_vm_path_file_op",

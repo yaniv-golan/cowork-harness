@@ -83,13 +83,15 @@ export function candidateDocument(ctx: AssertContext, a: Assertion): ReturnType<
   return { ...built, candidate: redactHostPaths(built.doc).text };
 }
 
-/** The compose key a reference document for this assert is stored under. */
-export function pairwiseComposeKey(a: Assertion): string {
+/** The compose key a reference document for this assert is stored under, on the scenario's lane: a remote document
+ *  is transcript-only, so it has its own key (see `composeKey`). Every caller in src passes the lane. */
+export function pairwiseComposeKey(a: Assertion, lane?: "local" | "remote"): string {
   const o = judgedOpts(a)!;
   return composeKey(COMPOSER_ID, {
     includeSubagentText: o.includeSubagentText,
     includeForkResults: o.includeForkResults,
     evidenceFiles: o.evidenceFiles,
+    lane,
   });
 }
 
@@ -143,7 +145,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         `::warning:: [semantic_pairwise] rubric criterion ${redacted.length === 1 ? "index" : "indexes"} ${redacted.join(",")} contained a ` +
           `scrubbed secret value and ${redacted.length === 1 ? "was" : "were"} sent to the judge redacted.\n`,
       );
-    const key = pairwiseComposeKey(a);
+    const key = pairwiseComposeKey(a, ctx.lane);
     const outcomes: Outcome[] = [];
     let warnedSelfJudge = false;
     let cost: number | undefined;

@@ -97,7 +97,14 @@ export function pairwiseRefsRefusal(scenario: Scenario, setup: PairwiseSetup, mo
     for (const r of refs) {
       stores.add(r.store);
       if (!setup.neutralRefs.has(r.name) && (setup.gateRefs === undefined || setup.gateRefs.has(r.name)))
-        reqs.push({ caseId: setup.caseId, assertIndex: i, refName: r.name, store: r.store, composeKey: pairwiseComposeKey(a), taskSha256 });
+        reqs.push({
+          caseId: setup.caseId,
+          assertIndex: i,
+          refName: r.name,
+          store: r.store,
+          composeKey: pairwiseComposeKey(a, scenario.lane),
+          taskSha256,
+        });
     }
   }
   problems.push(...checkRefsBeforeSpend(reqs).map((p) => p.message));

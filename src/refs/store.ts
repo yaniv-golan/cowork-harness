@@ -100,10 +100,20 @@ const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").dig
  *  surfaces as a missing document for the new key, never as a silent comparison across composers. */
 export function composeKey(
   composerId: string,
-  o: { includeSubagentText: boolean; includeForkResults: boolean; evidenceFiles: readonly string[] | undefined },
+  o: {
+    includeSubagentText: boolean;
+    includeForkResults: boolean;
+    evidenceFiles: readonly string[] | undefined;
+    /** `lane: remote` composes a transcript-only document, so it gets its own key: a remote candidate never meets a
+     *  local reference (or the reverse), and a store frozen before this split reads as missing, loudly. A local key
+     *  is the same hash as before the lane existed. */
+    lane?: "local" | "remote";
+  },
 ): string {
   const scope = o.evidenceFiles === undefined ? null : [...o.evidenceFiles].sort();
-  return sha256(JSON.stringify([composerId, o.includeSubagentText, o.includeForkResults, scope])).slice(0, 16);
+  const parts: unknown[] = [composerId, o.includeSubagentText, o.includeForkResults, scope];
+  if (o.lane === "remote") parts.push("lane:remote");
+  return sha256(JSON.stringify(parts)).slice(0, 16);
 }
 
 function assertCaseId(caseId: string): void {

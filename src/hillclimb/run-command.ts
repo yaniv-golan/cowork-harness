@@ -373,7 +373,9 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
         // other refusal (a store a mount exposes) names its own fix.
         const store = join(resolve(deps.cwd, flowArg), BASELINE_REF, "ref");
         const e = readRefEntry(store, c.id);
-        const keys = (c.scenario.assert ?? []).filter((a) => a.semantic_pairwise !== undefined).map(pairwiseComposeKey);
+        const keys = (c.scenario.assert ?? [])
+          .filter((a) => a.semantic_pairwise !== undefined)
+          .map((a) => pairwiseComposeKey(a, c.scenario.lane));
         const docs = e.status === "ok" ? keys.map((k) => readRefDoc(store, c.id, k).status) : [];
         const samePrompt = e.status === "ok" && e.taskSha256 === sha256(c.scenario.prompt);
         // Only a refusal about the baseline reference itself gets a reference repair.
@@ -507,6 +509,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
                 caseId: c.id,
                 scenarioFile: c.file,
                 assertions: c.scenario.assert,
+                lane: c.scenario.lane,
                 prompt: c.scenario.prompt,
                 results,
                 secrets: [...deps.secrets],

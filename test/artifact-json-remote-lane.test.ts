@@ -89,7 +89,7 @@ describe("artifact_json on `lane: remote` — evidence unavailable, every form",
   });
 });
 
-describe("artifact_json `authored: true` on `lane: remote` — same order as artifact_text", () => {
+describe("artifact_json `authored: true` on `lane: remote` — the lane refusal alone", () => {
   const authoredCtx = (root: string) =>
     ctx(root, {
       lane: "remote",
@@ -98,25 +98,14 @@ describe("artifact_json `authored: true` on `lane: remote` — same order as art
     });
   const roots = () => tree({ "outputs/changed.json": '{"a":2}', "outputs/same.json": '{"a":1}' });
 
-  // One assertion reports its FIRST failure, so the order decides which message a reader sees.
-  it("authorship passes, so the lane refusal is what fails the assertion", () => {
-    const [r] = evaluate(
-      [{ artifact_json: { artifact: "outputs/changed.json", authored: true, path: "a", equals: 2 } }],
-      authoredCtx(roots()),
-    );
-    expect(r.pass).toBe(false);
-    expect(r.message).toMatch(LANE);
-  });
-
-  it("a failing authorship check is reported ahead of the lane refusal", () => {
-    const [r] = evaluate(
-      [{ artifact_json: { artifact: "outputs/same.json", authored: true, path: "a", equals: 1 } }],
-      authoredCtx(roots()),
-    );
-    expect(r.pass).toBe(false);
-    expect(r.message).toMatch(/authored/);
-    expect(r.message).not.toMatch(LANE);
-  });
+  // Authorship compares the container's file with the pre-run manifest, so on this lane it is a read of the same
+  // unobservable file: the lane refusal is reported, whether authorship would have passed or failed locally.
+  for (const file of ["outputs/changed.json", "outputs/same.json"])
+    it(`${file}: the lane refusal is what fails the assertion`, () => {
+      const [r] = evaluate([{ artifact_json: { artifact: file, authored: true, path: "a", exists: true } }], authoredCtx(roots()));
+      expect(r.pass).toBe(false);
+      expect(r.message).toMatch(LANE);
+    });
 });
 
 describe("artifact_json on a replayed `lane: remote` cassette", () => {
