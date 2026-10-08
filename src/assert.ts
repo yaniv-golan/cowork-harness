@@ -2592,7 +2592,8 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
  *  cloud lane could never produce. Existence is different: `file_exists` stays the documented remote-lane proxy
  *  (with `transcript_matches`), because a written path is what the agent can name; its CONTENT is not observable.
  *  The metrics extractor refuses the same reads on this lane (src/metrics.ts). One function, so the two keys read
- *  alike. */
+ *  alike. Not the whole set of local-tree reads on this lane: `no_unexpected_files`, `input_unmodified` and the
+ *  semantic judges' file evidence still read the local tree there. */
 function remoteLaneBodyRefusal(key: "artifact_text" | "artifact_json", verb: "scan" | "parse"): string {
   return `${key} cannot be evaluated on \`lane: remote\` — a remote container's filesystem is not locally observable, so there is no body to ${verb}. Assert on the agent's own statement of the content (\`transcript_matches\`), or use \`lane: local\``;
 }

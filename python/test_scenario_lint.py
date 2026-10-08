@@ -487,6 +487,27 @@ def test_lane_remote_drops_manifest_needs_snapshot_for_the_body_reading_keys(ite
     assert "manifest-needs-snapshot" in rules
 
 
+@pytest.mark.parametrize(
+    "item",
+    [
+        "artifact_json: {artifact: outputs/x.json, path: a, equals: 1}",
+        "artifact_json: {artifact: 'outputs/*/x.json', match: any, path: a, equals: 1}",
+        "artifact_text: {artifact: outputs/x.md, contains: [a]}",
+        "file_absent: outputs/x.md",
+    ],
+)
+def test_lane_remote_warns_on_a_key_that_always_fails_there(item, tmp_path):
+    """These load on `lane: remote` but always fail when graded (no observable filesystem). Dropping the
+    manifest advice alone would leave lint calling the scenario clean; the author must hear it before paying."""
+    found = [f for f in scenario.lint_file(str(_write_lane(tmp_path, "remote", f"assert:\n  - {item}\n"))) if f.rule == "lane-remote-unobservable-key"]
+    assert len(found) == 1 and found[0].severity == "WARN"
+    assert item.split(":")[0] in found[0].message
+    assert not any(
+        f.rule == "lane-remote-unobservable-key"
+        for f in scenario.lint_file(str(_write_lane(tmp_path, "local", f"assert:\n  - {item}\n")))
+    )
+
+
 def test_present_files_key_error_gates_without_strict(tmp_path):
     # ERROR always gates -- nonzero exit even without --strict (mirrors host-path-assert-tier's exit class).
     f = _write_at(tmp_path, "protocol", "assert:\n  - present_files_called: true\n")

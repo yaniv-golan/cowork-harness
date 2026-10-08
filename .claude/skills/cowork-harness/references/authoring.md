@@ -66,8 +66,9 @@ So: behaviour conclusions (triggering, tool sequencing, gate handling) travel be
 asserting a **path, mount, delivery mechanism or egress rule** is a claim about the local lane only. Declare
 `lane: remote` when the scenario is about that lane — the affected assertions then refuse to grade
 rather than passing (see the `delivery_unobservable` WARN and the `lane: remote` load-time rejections
-in `run-record-replay.md`; `file_absent`, `artifact_text` and `artifact_json` load but fail when graded,
-since that lane's container filesystem is not locally observable).
+in `run-record-replay.md`; among the keys that load, `file_absent`, `artifact_text` and `artifact_json` fail
+when graded, since that lane's container filesystem is not locally observable. Other keys that read the work
+tree, such as `no_unexpected_files` and `input_unmodified`, still grade the local tree on that lane).
 
 ### Choose an answer path (gates: AskUserQuestion + tool-permission)
 
@@ -253,9 +254,10 @@ cowork-harness lint scenarios/*.yaml
 | `host-path-assert-cowork` | WARN | `transcript_no_host_path` on `cowork` — it fails by design if the tier resolves to hostloop |
 | `host-path-assert-tier` | ERROR | `transcript_no_host_path` on `hostloop` / `protocol`, where it fails by design |
 | `lane-remote-incompatible-key` | ERROR | `present_files_called` / `no_scratchpad_leak` / `user_visible_artifact` on `lane: remote` (the runtime rejects them at load, so the tier rules are suppressed there) |
+| `lane-remote-unobservable-key` | WARN | `artifact_json` / `artifact_text` / `file_absent` on `lane: remote`: they load but always fail when graded, since that lane's container filesystem is not locally observable (assert `file_exists` + `transcript_matches` instead) |
 | `linter-extra-findings-invalid` | ERROR | the loader findings `cowork-harness lint` hands the linter could not be read |
 | `linter-unclassified-key` | ERROR | a valid assertion key this linter cannot classify (the linter is out of date) |
-| `manifest-needs-snapshot` | INFO | manifest-backed keys, which evaluate on replay only when the cassette carries an `artifacts` manifest |
+| `manifest-needs-snapshot` | INFO | manifest-backed keys, which evaluate on replay only when the cassette carries an `artifacts` manifest (not reported on `lane: remote` for `user_visible_artifact` / `artifact_json` / `artifact_text`, which cannot pass there) |
 | `mixed-assert-item` | WARN | one assert item mixing replay-checkable and live-only keys (replay drops the live-only half) |
 | `no-scenarios` | ERROR | a linted directory with no `*.yaml` / `*.yml` |
 | `not-found` | ERROR | a named file that does not exist |

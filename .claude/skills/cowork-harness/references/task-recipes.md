@@ -58,7 +58,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v15.json`](htt
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 15 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 whatever its `lane:`, 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, and 14 when a `semantic_matches` entry carries `include_fork_results`) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 15 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 unless a key lifts it: 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, 14 for a v14 key such as `include_fork_results` on `semantic_matches`, 15 for a v15 one such as `gates_all_scripted`, a glob `artifact_json`, any `artifact_json` on `lane: remote`, or a recording under `answer_channel: none`; the full list is in the cassette docs' version table) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |

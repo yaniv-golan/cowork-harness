@@ -1654,6 +1654,23 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             )
         )
 
+    # W: keys that load on `lane: remote` but always FAIL when graded there: that lane's container filesystem is
+    # not locally observable, so there is no body to read and no absence to prove. Not an ERROR: the runtime does
+    # not refuse them at load, so the scenario runs (and pays) before it fails.
+    lane_unobservable = sorted(assert_keys & {"artifact_json", "artifact_text", "file_absent"})
+    if lane == "remote" and lane_unobservable:
+        findings.append(
+            Finding(
+                "WARN",
+                "lane-remote-unobservable-key",
+                f"{lane_unobservable} on `lane: remote` -- that lane's container filesystem is not locally "
+                "observable, so these keys always fail when graded (after the run is paid for).",
+                "Assert the written path with `file_exists` and the agent's own statement of the content with "
+                "`transcript_matches`, or set `lane: local` if this scenario models the desktop lane.",
+                path,
+            )
+        )
+
     # `lane: remote` already rejected these above; tier advice there is unreachable (the lane check
     # fires first, at load, regardless of tier) -- do not tell an author to change a tier that cannot help.
     if lane != "remote":
@@ -2148,7 +2165,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
     # is unreachable advice for that key (same rationale as the tier-rule suppression above). The same holds
     # for artifact_json / artifact_text, which load but FAIL at assertion time on that lane (its container
     # filesystem is not locally observable, so there is no body to read): a manifest cannot make them
-    # evaluate. Filtered per-key, not the whole block: file_exists and the other manifest keys stay
+    # evaluate, and `lane-remote-unobservable-key` above already says so. Filtered per-key, not the whole block: file_exists and the other manifest keys stay
     # reachable and worth advising about on `lane: remote`.
     manifest_present = sorted(assert_keys & MANIFEST_KEYS)
     if lane == "remote":
@@ -2463,6 +2480,7 @@ LINT_RULES = {
     "host-path-assert-cowork": "WARN",
     "host-path-assert-tier": "ERROR",
     "lane-remote-incompatible-key": "ERROR",
+    "lane-remote-unobservable-key": "WARN",
     "linter-extra-findings-invalid": "ERROR",
     "linter-unclassified-key": "ERROR",
     "manifest-needs-snapshot": "INFO",
