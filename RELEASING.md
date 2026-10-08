@@ -151,7 +151,9 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 > `check:versions`). The list below documents *what it touches* — keep it accurate if you add a new
 > version-bearing string, and add that string to `scripts/bump-version.ts` too.
 
-1. `package.json` → `"version"` (then run `npm install` to update `package-lock.json`).
+1. `package.json` → `"version"`, and `package-lock.json`'s root `version` and `packages[""].version`. The bump
+   edits those two lockfile fields in place. It never runs `npm install`, which re-resolves the tree with the local
+   npm and can drop fields such as the platform bindings' `libc`.
 2. `.claude-plugin/marketplace.json` → `plugins[0].version`.
 3. `.claude/skills/cowork-harness/.claude-plugin/plugin.json` → `"version"`.
 4. `.claude/skills/cowork-harness/SKILL.md` → frontmatter `version:`, the `tracks-harness:` line,
@@ -467,8 +469,8 @@ does not apply here. Everything else in the normal flow does.
    - **Source, tests, docs**: where `main` already carries the fix and has evolved it further, `main` wins.
    - **Version strings**: run `npm run bump -- X.Y.Z --write` again. It also catches version-bearing files
      that `main` added after the branch point (a new `references/*.md` stamp, say), which the merge
-     itself never touches. Afterwards, check `git diff origin/main -- package-lock.json`: the bump runs
-     `npm install`, and a local npm version can rewrite unrelated lockfile fields.
+     itself never touches. It edits only the lockfile's two root version fields, so take `main`'s
+     `package-lock.json` for any dependency conflict before re-running it.
    - **Workflows**: keep `main`'s, adding anything the branch introduced that `main` lacks.
 
    Commit as `chore: merge release/X.Y.Z back into main`, then:

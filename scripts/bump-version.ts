@@ -4,7 +4,7 @@
 // observability…"). Dry-run is the DEFAULT; --write is required to modify files.
 //
 //   tsx scripts/bump-version.ts <X.Y.Z>            # dry-run: print the diff summary, write nothing
-//   tsx scripts/bump-version.ts <X.Y.Z> --write    # write files, sync lockfile, self-verify
+//   tsx scripts/bump-version.ts <X.Y.Z> --write    # write files (lockfile included), self-verify
 //
 // (Deliberately no --dry-run flag: `npm run bump X --dry-run` would silently drop the flag — npm
 // eats it unless forwarded via `--` — and do a REAL bump. Default-safe avoids that trap.)
@@ -16,11 +16,14 @@
 // move and the new SKILL.md release-note bullet are also NOT automated here — both are content, not
 // mechanical substitution; main() prints a reminder.
 //
+// The lockfile is bumped by its two root version fields, like any other target, not by `npm install
+// --package-lock-only`: that re-resolves the whole tree with whatever npm is installed, and npm 11.7.0 dropped the
+// `libc` fields from every platform-binding entry during a bump, so `npm ci` on Linux lost glibc vs musl.
+//
 // Dry-run is the default (see above). Each rewriter is registered per file in FILE_REWRITERS, and a test
 // runs every one against the real file it is registered for, so a rewriter whose target has left the file
 // fails instead of silently no-opping at bump time.
 
-import { execSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -114,6 +117,21 @@ const CI_RECIPE_EXAMPLE: Rewriter = {
   replacement: (v) => `$1${v}$2`,
 };
 
+/** package-lock.json's top-level `version`, the line after the root `name`. Anchored to the file's first lines so
+ *  no dependency's `version` can match. */
+const LOCKFILE_ROOT_VERSION: Rewriter = {
+  name: "lockfile-root-version",
+  pattern: /^(\{\n  "name": "cowork-harness",\n  "version": ")\d+\.\d+\.\d+(")/,
+  replacement: (v) => `$1${v}$2`,
+};
+
+/** package-lock.json's `packages[""].version`, the root package's own entry. */
+const LOCKFILE_ROOT_PACKAGE_VERSION: Rewriter = {
+  name: "lockfile-root-package-version",
+  pattern: /("packages": \{\n    "": \{\n      "name": "cowork-harness",\n      "version": ")\d+\.\d+\.\d+(")/,
+  replacement: (v) => `$1${v}$2`,
+};
+
 // ---------------------------------------------------------------------------
 // Per-file composition. Each target file gets exactly the pattern set the release-process plan
 // (P3) specifies for it — never a blanket regex applied to every file, which would corrupt
@@ -145,6 +163,7 @@ const CI_MD = "docs/ci.md";
  *  silent no-op at bump time, and that is how a dead heading rewriter went unnoticed for releases. */
 export const FILE_REWRITERS: Readonly<Record<string, readonly Rewriter[]>> = {
   "package.json": [JSON_VERSION_FIELD],
+  "package-lock.json": [LOCKFILE_ROOT_VERSION, LOCKFILE_ROOT_PACKAGE_VERSION],
   [MARKETPLACE_JSON]: [JSON_VERSION_FIELD],
   [PLUGIN_JSON]: [JSON_VERSION_FIELD],
   [SKILL_MD]: [
@@ -170,6 +189,7 @@ export const FILE_REWRITERS: Readonly<Record<string, readonly Rewriter[]>> = {
 /** Files this script knows how to edit, in the order they're reported. */
 export const TARGET_FILES: readonly string[] = [
   "package.json",
+  "package-lock.json",
   MARKETPLACE_JSON,
   PLUGIN_JSON,
   SKILL_MD,
@@ -272,9 +292,6 @@ function main(): void {
     writeFileSync(join(REPO_ROOT, e.file), e.after, "utf8");
   }
   process.stdout.write(`\nWrote ${changed.length} file(s).\n`);
-
-  process.stdout.write("\nSyncing lockfile (npm install --package-lock-only)...\n");
-  execSync("npm install --package-lock-only", { cwd: REPO_ROOT, stdio: "inherit" });
 
   process.stdout.write("\nSelf-verifying with check:versions...\n");
   const { ok, errors, values } = checkVersions();
