@@ -100,6 +100,39 @@ export function terminationRequested(): NodeJS.Signals | undefined {
   return terminating;
 }
 
+const INTERRUPTS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/** The interrupt a synchronous child died of: killed by SIGINT, SIGTERM or SIGHUP, or exiting with the shell's
+ *  128 + signo for one. A terminal Ctrl-C signals the whole foreground group, so a child the harness is blocked on
+ *  can die of it before the harness's own handler has run: its failure is that interrupt, not an error of its own. */
+export function childInterruptSignal(r: { status: number | null; signal: NodeJS.Signals | null }): NodeJS.Signals | undefined {
+  if (r.signal && INTERRUPTS.includes(r.signal)) return r.signal;
+  return INTERRUPTS.find((s) => r.status === 128 + (constants.signals[s] ?? 0));
+}
+
+/** A step stopped because a child it waited on died of an interrupt (see {@link childInterruptSignal}). The CLI's
+ *  top level turns it into {@link interrupt}, never an error exit. */
+export class InterruptedError extends Error {
+  constructor(
+    readonly signal: NodeJS.Signals,
+    what: string,
+  ) {
+    super(`${what} was interrupted (${signal})`);
+    this.name = "InterruptedError";
+  }
+}
+
+/** Handle `sig` as if it had arrived: the same stop-and-exit sequence, exit status 128 + signo. For a caller that
+ *  learned of the interrupt from a child before the process's own signal was handled. */
+export function interrupt(sig: NodeJS.Signals): void {
+  onSignal(sig);
+}
+
+/** The exit status a pending interrupt owes, or undefined when none has been handled. */
+export function interruptExitCode(): number | undefined {
+  return terminating ? 128 + (constants.signals[terminating] ?? 0) : undefined;
+}
+
 /** Called by a caller about to start new work (the next scenario, a cassette write) once the process is
  *  being terminated: never returns, because the handler owns the exit and fires within the grace period.
  *  Parking instead of throwing keeps a Ctrl-C from surfacing as a stack trace / `internal` error. */

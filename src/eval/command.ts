@@ -23,7 +23,7 @@ import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
 import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
 import { tildeify } from "../io.js";
-import { installTerminationHandler, parkIfTerminating, registerTerminationStep } from "../termination.js";
+import { installTerminationHandler, parkIfTerminating, registerTerminationStep, InterruptedError } from "../termination.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsRoot } from "../run/trace-view.js";
 import { checkBatchBudget, noHistoryCauseText, runsDirInfo } from "../run/budget.js";
@@ -795,6 +795,7 @@ export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ 
     try {
       inside = isInsideGitWorkTree(snapRoot);
     } catch (e) {
+      if (e instanceof InterruptedError) throw e;
       throw new EvalStagingError(
         `could not tell whether the temp dir ${tildeify(snapRoot)} is inside a git work tree (${(e as Error).message.replace(/^could not tell whether .*? is inside a git work tree \((.*?)\);.*$/s, "$1")}): set TMPDIR to a directory git can answer for, outside any work tree`,
       );

@@ -9,6 +9,7 @@
 // so the snapshot — which lives outside any work tree by refusal — is delivered and hashed by the raw walk
 // over exactly the files the stager would have delivered from the source.
 import { execFileSync, spawnSync } from "node:child_process";
+import { InterruptedError, childInterruptSignal } from "../termination.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -105,6 +106,9 @@ export function isInsideGitWorkTree(p: string): boolean {
   }
   if (!statSync(dir).isDirectory()) dir = dirname(dir);
   const r = spawnSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", env: gitEnvWithoutAmbientRepo() });
+  // A git the operator's Ctrl-C killed answered nothing: that is the interrupt, not a refusal about the path.
+  const intr = childInterruptSignal(r);
+  if (intr) throw new InterruptedError(intr, "git");
   if (r.status === null || r.error) return true;
   if (r.status === 0) return r.stdout.trim() === "true";
   // Only git's own "not a repository" answer clears the path. Any other failure (a repository git refuses

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { ANSWER_CHANNEL_NONE_LABEL } from "./answer-channel.js";
+import { InterruptedError, interrupt } from "./termination.js";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5366,6 +5367,8 @@ function cmdInspect(args: string[]) {
 main().catch((e) => {
   const command = process.argv[2] ?? "";
   const json = isJsonOutput(process.argv.slice(2));
+  // A child died of the operator's interrupt before this process's own handler ran: handle it as that interrupt.
+  if (e instanceof InterruptedError) return interrupt(e.signal);
   if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
   if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
   if (e instanceof UsageError) fail(command, "usage", e.message, (e as UsageError).hint, json);
