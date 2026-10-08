@@ -1,6 +1,6 @@
 # Run, record and lock
 
-Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.2`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
+Tracks `cowork-harness 4.6.0` (baseline `desktop-2.26454.2`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
 
 ## Part II — RUN, RECORD & LOCK
 
@@ -45,7 +45,8 @@ the discovery/encode/record dance entirely and answer gates **live during the re
 `run` takes no `--dry-run`: to check that a scenario **loads** without spending, `cowork-harness lint
 <file.yaml>` runs the real loader (and resolves a named `baseline:`); `cowork-harness record <file.yaml>
 --dry-run` runs the real loader too AND the same scenario-level
-refusals the real `record` applies (`on_unanswered: prompt`, and an unsatisfiable assert pairing) **plus the
+refusals the real `record` applies (`on_unanswered: prompt`, an unsatisfiable assert pairing, and the
+`answer_channel: none` and `agent_env.artifacts_root` refusals) **plus the
 cassette-portability pre-flight below**, so it cannot green something a paid run would reject. **That binding
 guarantee is the SINGLE-FILE form only** — it takes the real `--out` and the real flags, so its verdict is the
 one a paid run would give. Two inputs it reports rather than refuses, at exit 0 under `inputErrors[]` with a

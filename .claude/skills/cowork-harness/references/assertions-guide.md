@@ -1,6 +1,6 @@
 # Assertions guide
 
-Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.2`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog starts at `assertion-catalog.md`, which indexes the per-family files that hold every key's row.
+Tracks `cowork-harness 4.6.0` (baseline `desktop-2.26454.2`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog starts at `assertion-catalog.md`, which indexes the per-family files that hold every key's row.
 
 ### Assertions: two orthogonal axes
 
@@ -11,7 +11,7 @@ Conflating these is the **biggest landmine**. An assertion key has two independe
   not: match prose with `transcript_matches` / `transcript_contains` (stable lexical markers only —
   not semantic content the model paraphrases, which re-records red); check structured JSON with YAML
   `artifact_json` (or the [pytest lane](https://github.com/yaniv-golan/cowork-harness/blob/main/python/README.md) for complex predicates), not via a transcript substring.
-  To check a command that RAN (not one the agent mentioned), use the object form `tool_called: {tool: <name>, input: {command: <regex>}, scope?, result?}` — see [assertion-catalog.md](./assertion-catalog.md).
+  To check a command that RAN (not one the agent mentioned), use the object form `tool_called: {tool: <name>, input: {command: <regex>}, scope?, result?}` — see [assertion-catalog-outcome-files-tools.md](./assertion-catalog-outcome-files-tools.md).
 - **Axis B — survives `replay`?** *Independent of Axis A.* On the token-free `replay` lane, only
   **content keys** evaluate; filesystem / egress keys are skipped (live-only) — loudly, via an
   `::warning::` annotation, not a silent no-op. A key

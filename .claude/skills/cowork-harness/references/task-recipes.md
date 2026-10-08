@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.2`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 4.6.0` (baseline `desktop-2.26454.2`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -13,18 +13,21 @@ a paid live re-record? Walk this tree — the answer is usually no:
 
 1. **Content / always-replay keys** (`transcript_*`, `tool_called`/`tool_not_called`,
    `tool_result_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`/`no_skill_triggered`,
-   `result`, `max_turns`, `tool_calls_max`, `max_cost_usd`, `max_tokens`) →
+   `result`, `max_turns`, `tool_calls_max`, `max_cost_usd`, `max_tokens`, and the hook keys `hook_event_fired`,
+   `hook_event_blocked`, `no_hook_event_blocked`, `hook_decision`, `hook_output_*`, read from the recorded frames) →
    `cowork-harness replay <cassette> --assert-from <scenario.yaml>`. Token-free, no re-record.
    If the recording genuinely lacks the telemetry a key needs (very old cassettes), the key fails
    **loud** as `evidence-unavailable` — that is correct behavior, not a bug; only then re-record.
-2. **Gate keys** (`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`) on a cassette
+2. **Gate keys** (`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`) on a cassette
    **with `controlOut`** (any modern recording) → same token-free `--assert-from` path.
 3. **Gate keys** on a **pre-`controlOut`** cassette → one re-record unlocks gate asserts for that
    cassette permanently.
 4. **Filesystem / egress keys** (`file_exists` without an artifact manifest, `file_absent` — live-only
    whatever the cassette carries — `egress_allowed`,
    `egress_denied`, `no_delete_in_outputs`) → live lane **by design**; replay skips them with a
-   loud `::warning::`. Keep them in the scenario, run them on the nightly live gate.
+   loud `::warning::`. Keep them in the scenario, run them on the nightly live gate. `artifact_json` (a literal path
+   or a glob) and `file_exists` with an artifact manifest re-evaluate token-free on replay: a glob grades the same
+   user-visible files the cassette recorded.
 
 **The one hard caveat:** `--assert-from` **hard-fails on recording-shaping drift** — if the
 scenario's `prompt:`, `answers:`, baseline, or skill content differ from what shaped the
@@ -170,7 +173,8 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    first branch that **cannot grade true**, no matter how the skill behaves — the evidence simply
    isn't in the document (only a skill's own result, with `include_fork_results: true`, is). Such a claim looks reasonable, survives drafting, and silently caps your pass
    rate. Assert tool use with the structural keys instead (`tool_called`, `present_files_called`,
-   `subagent_dispatched`, `hook_blocked`) — and, for what a command actually ran, the object form
+   `subagent_dispatched`, `hook_event_blocked` / `hook_decision` for a plugin's hook, `hook_blocked` for the
+   harness's own) — and, for what a command actually ran, the object form
    `tool_called: {tool: [Bash, mcp__workspace__bash], input: {command: <regex>}}` — and reserve `semantic_matches` for what the agent *said* or
    *wrote*. For a fan-out skill whose real work happens in sub-agents, add `include_subagent_text: true`.
    For a foreground `context: fork` skill, add `include_fork_results: true` (it also lets a claim like
@@ -457,7 +461,8 @@ assert:
   - gate_answer_count_min: 1        # and says a gate was expected (zero gates passes the line above)
 ```
 
-`{include_permissions: true}` also fails a tool permission cowork parity auto-allowed. *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` and tell the
-model no user is present; the harness does not model them. To check instead that a skill parks correctly when
+With `{include_permissions: true}` it also fails when a permissive auto-allow, not a scripted or fixed rule,
+decided a tool permission. *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion`
+and tell the model no user is present; the harness does not model them. To check instead that a skill parks correctly when
 nobody can answer at all, use the session key `answer_channel: none`: the agent gets no question tool, and the run
 is graded by the status file the skill writes ([docs/headless-no-answer.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/headless-no-answer.md)).

@@ -281,8 +281,8 @@ _FALLBACK_KNOWN_HOOK_EVENTS_ORDERED = [
     "CwdChanged", "FileChanged", "DirectoryAdded", "MessageDisplay",
 ]
 _FALLBACK_KNOWN_HOOK_EVENTS = set(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED)
-# The subset a plugin hook has been OBSERVED to fire for here (live-verified 2026-08-01, container +
-# hostloop). Kept apart from the known set because the message wording depends on which claim we can
+# The subset a plugin hook has been OBSERVED to fire for here, at the tiers in
+# _FALLBACK_LIVE_VERIFIED_HOOK_EVENT_TIERS below. Kept apart from the known set because the message wording depends on which claim we can
 # make: accepted-by-the-validator is not reached-by-a-run.
 _FALLBACK_LIVE_VERIFIED_HOOK_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreToolUse"}
 # The tiers each was observed at (mirrors LIVE_VERIFIED_PLUGIN_HOOK_EVENT_TIERS in src/agent/session.ts).

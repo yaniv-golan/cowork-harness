@@ -1700,8 +1700,22 @@ assert:
 ```
 
 Leave `allow_stall` out, so ending on a question fails. `trace <run> --view questions` shows who answered each gate
-(`answeredBy`). *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` and tell
-the model no user is present; the harness does not model them. To check instead that a skill parks correctly when
+(`answeredBy`).
+
+If the skill may ask, but every question must have a scripted answer, script them and assert that instead:
+
+```yaml
+answers:
+  - when_question: "(?i)region"
+    choose: "All"
+assert:
+  - gates_all_scripted: true        # fails naming a gate the LLM decider, `first`, or a person answered
+  - gate_answer_count_min: 1        # and says a gate was expected (zero gates passes the line above)
+```
+
+With `{include_permissions: true}` it also fails when a permissive auto-allow, not a scripted or fixed rule,
+decided a tool permission. *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion`
+and tell the model no user is present; the harness does not model them. To check instead that a skill parks correctly when
 nobody can answer at all, use the session key `answer_channel: none`: the agent gets no question tool, and the run is
 graded by the status file the skill writes ([headless-no-answer.md](./headless-no-answer.md)).
 

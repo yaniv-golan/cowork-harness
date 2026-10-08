@@ -1,6 +1,6 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.2`). It needs a `cowork-harness` whose
+Tracks `cowork-harness 4.6.0` (baseline `desktop-2.26454.2`). It needs a `cowork-harness` whose
 `hillclimb --help` lists `--skill` (help goes to stderr). The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.
@@ -171,7 +171,9 @@ lists every file. It is a change detector, not a security boundary: the permissi
 is what bounds an unattended run.
 
 `regrade` applies the same gate: a rubric fix is a scenario edit, so `regrade` refuses (exit 2) until the new sha
-is approved. `--approve-harness` on `regrade` records it, and is yours there too.
+is approved. `--approve-harness` on `regrade` records it, and is yours there too. `regrade` also applies the scenario's
+load rules, so a scenario edited to `answer_channel: none` while it still carries `answers:` or a gate assertion is
+refused there too.
 
 ## Refused before any spend (exit 2)
 
