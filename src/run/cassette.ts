@@ -4832,7 +4832,9 @@ export async function cmdRecord(args: string[]) {
       asJson,
     );
   // Discovery for both directory arms, narrowed by `--case`. A selector that names nothing is a usage error.
+  let selected: ScenarioDiscovery | undefined;
   const discoverSelected = (): ScenarioDiscovery => {
+    if (selected) return selected;
     const all = discoverScenarios(target);
     let disc: ScenarioDiscovery;
     try {
@@ -4845,9 +4847,12 @@ export async function cmdRecord(args: string[]) {
       log(
         `· --case: ${disc.scenarios.length + disc.broken.length} of ${all.scenarios.length + all.broken.length} scenario file(s) selected`,
       );
-    return disc;
+    return (selected = disc);
   };
   const casesField = caseSelectors.length ? { cases: caseSelectors } : {};
+  // Selected now, so a mistyped stem is refused as one before the credential guard of the real arm, which would
+  // otherwise answer first and point at a missing token.
+  if (caseSelectors.length) discoverSelected();
 
   // Live-decider validation. Reuse the run/skill rules; reject ambiguous/unsupported combos
   // up front so a paid record never starts under a mis-specified policy.

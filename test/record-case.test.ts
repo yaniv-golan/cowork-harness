@@ -87,6 +87,16 @@ describe.skipIf(!can)("record <dir> --case: the budget pre-flight prices the nam
     expect(cli(["record", work, "--case", "b", "--case", "c", "--dry-run", "--max-budget-usd", "0.75"], root).code).toBe(0);
   });
 
+  it("an unpriced scenario left out of the selection is not in the budget's unpriced list", () => {
+    const { root, work } = corpus();
+    writeFileSync(join(work, "fresh.yaml"), scenarioYaml());
+    const whole = json(cli(["record", work, "--dry-run", "--max-budget-usd", "5", "--output-format", "json"], root).out);
+    expect(whole.budget.unpriced).toEqual(["fresh"]);
+    expect(whole.budget.enforced).toBe("lower_bound");
+    const one = json(cli(["record", work, "--case", "a", "--dry-run", "--max-budget-usd", "5", "--output-format", "json"], root).out);
+    expect(one.budget).toMatchObject({ basis: "batch", enforced: true, unpriced: [], estimateUsd: 0.5 });
+  });
+
   it("text mode says how many files were selected", () => {
     const { root, work } = corpus();
     const r = cli(["record", work, "--case", "c", "--dry-run"], root);
@@ -102,13 +112,22 @@ describe.skipIf(!can)("record <dir> --case: selection errors are usage errors, b
     const r = cli(["record", work, "--case", "zzz", "--dry-run", "--max-budget-usd", "5"], root);
     expect(r.code).toBe(2);
     expect(r.all).toMatch(/no case matches "zzz"\. Cases: a, b, c/);
-    // Same rule on the real arm, which checks credentials first: with a placeholder key it reaches the selection.
-    const real = spawnSync("node", [CLI, "record", work, "--case", "zzz"], {
-      encoding: "utf8",
-      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: root, ...PINNED, ANTHROPIC_API_KEY: "stub-placeholder-not-a-credential" },
-    });
-    expect(real.status).toBe(2);
-    expect(real.stderr).toMatch(/no case matches "zzz"/);
+    // Same rule on the real arm, and before its credential guard: with or without a key, the error names the stem.
+    for (const key of ["", "stub-placeholder-not-a-credential"]) {
+      const real = spawnSync("node", [CLI, "record", work, "--case", "zzz"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          COWORK_HARNESS_RUNS_DIR: root,
+          ...PINNED,
+          ANTHROPIC_API_KEY: key,
+          CLAUDE_CODE_OAUTH_TOKEN: "",
+          ANTHROPIC_AUTH_TOKEN: "",
+        },
+      });
+      expect(real.status, key).toBe(2);
+      expect(real.stderr, key).toMatch(/no case matches "zzz"/);
+    }
   });
 
   it("a stem that names a YAML file with no `prompt:` says it is not a scenario", () => {

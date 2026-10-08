@@ -643,13 +643,14 @@ right before the exit:
 
 ```jsonc
 { "tool": "cowork-harness", "version": "...", "command": "record", "ok": true,
-  "target": "<dir>", "rerecordStale?": true,
+  "target": "<dir>", "cases?": ["<stem>"],         // <dir/> --case only: the selectors as given
+  "rerecordStale?": true,
   "items": [ { "file?": "<scenario>", "cassette?": "<cassette>",
                "status": "recorded" | "failed" | "skipped-budget",
                "error?": "string",                 // failed only
                "verdict?": { "pass": bool, ... }, // recorded, or failed after the run: the run's verdict
                "result?": { /* RunResult + verdict/provenance/outcome, as single-file record publishes it */ } } ],
-  "skipped?": ["<non-scenario file>"],             // <dir/> only: files without a `prompt:`
+  "skipped?": ["<non-scenario file>"],             // <dir/> only: files without a `prompt:` ([] under --case)
   "error": null }
 ```
 
@@ -764,7 +765,7 @@ was passed and on a `--repeat` lane, which skips the pre-flight and enforces a r
   "capUsd": 0.5,                       // the --max-budget-usd value
   "basis": "single" | "batch",         // single: each scenario's OWN worst observed cost vs the cap (run, skill,
                                        //   a record file, each scenario of run <dir/>); batch: the SUM over a
-                                       //   record <dir/> / --rerecord-stale batch, or over an eval's schedule
+                                       //   record <dir/> (its --case selection) / --rerecord-stale batch, or over an eval's schedule
                                        //   (each scenario's worst x its 2 x --reps runs), vs the cap
   "enforced": true | false | "lower_bound",
                                        // true: every scenario was priced. false (single): at least one scenario
@@ -793,7 +794,8 @@ category and never replaces one; it is **absent** on every other error, so `erro
 When the refusal replaces a payload envelope, that payload's findings stay on the error envelope as the
 same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `target`, `scenarios`,
 `skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
-`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`; an `eval` refusal
+`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`; both `record <dir/>`
+refusals also carry `cases` under `--case`; an `eval` refusal
 carries the `plan` when one was computed before it (on a dry run, or a real eval with `--max-budget-usd`, whose
 plan is cost-only), and a dry run's refusal always carries `dryRun: true`. (Through 4.2.1
 these went to stderr only, and the message prose was the only discriminator.)
