@@ -58,7 +58,8 @@ in both the app bundle and the agent binary.
 Anthropic's; standing up a local imitation would be authoring an environment rather than reproducing
 one, with no production to verify it against. What exists instead is `lane: remote` on a scenario,
 which makes the affected assertions **refuse to grade** rather than pass — `file_absent` reports
-evidence-unavailable, delivery is reported unobservable.
+evidence-unavailable, `artifact_text` / `artifact_json` fail (no observable body), delivery is reported
+unobservable.
 
 **Practical consequence.** Behaviour-shaped conclusions travel between lanes: whether a skill
 triggers, how it sequences tools, which questions it asks, whether it honours a permission gate.

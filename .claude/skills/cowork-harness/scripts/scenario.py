@@ -21,6 +21,8 @@ lint flags (see references/scenario-schema.md for the why of each):
   E  `present_files_called` on protocol/microvm    (served at container+hostloop)
   E  `present_files_called`/`no_scratchpad_leak`/`user_visible_artifact` on `lane: remote`
                                                   (runtime rejects at LOAD time; tier rules suppressed)
+  W  `artifact_json`/`artifact_text`/`file_absent` on `lane: remote`
+                                                  (load, but always fail when graded: no observable filesystem)
   E  `requires_capabilities` on `fidelity: protocol` (probe can't run → hard-fails
                                                       unless allow_missing_capability)
   E  `fidelity-missing`        a scenario (it has `prompt:`) with no `fidelity:` key -- required since
@@ -1654,6 +1656,26 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             )
         )
 
+    # W: keys that load on `lane: remote` but always FAIL when graded there: that lane's container filesystem is
+    # not locally observable, so there is no body to read and no absence to prove. Not an ERROR: the runtime does
+    # not refuse them at load, so the scenario runs (and pays) before it fails.
+    lane_unobservable = sorted(assert_keys & {"artifact_json", "artifact_text", "file_absent"})
+    if lane == "remote" and lane_unobservable:
+        findings.append(
+            Finding(
+                "WARN",
+                "lane-remote-unobservable-key",
+                f"{lane_unobservable} on `lane: remote` -- that lane's container filesystem is not locally "
+                "observable, so these keys always fail when graded on a live run or verify-run, after the run "
+                "is paid for (file_absent is live-only, so replay skips it).",
+                "For artifact_json / artifact_text: assert the written path with `file_exists` and the agent's "
+                "own statement of the content with `transcript_matches`. For file_absent: assert the agent's "
+                "statement with `transcript_not_matches`. Or set `lane: local` if this scenario models the "
+                "desktop lane.",
+                path,
+            )
+        )
+
     # `lane: remote` already rejected these above; tier advice there is unreachable (the lane check
     # fires first, at load, regardless of tier) -- do not tell an author to change a tier that cannot help.
     if lane != "remote":
@@ -2145,12 +2167,16 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
     # I: manifest-backed keys need an artifacts manifest on replay. On `lane: remote`, a key that is ALSO
     # in LANE_REMOTE_INCOMPATIBLE_KEYS (user_visible_artifact) already got the ERROR above and is rejected
     # at scenario-LOAD time -- it can never reach a replay to re-record for, so "re-record so it evaluates"
-    # is unreachable advice for that key (same rationale as the tier-rule suppression above). Filtered
-    # per-key, not the whole block: the other manifest keys (file_exists, artifact_json, ...) are NOT
-    # lane-rejected and stay genuinely reachable and worth advising about on `lane: remote`.
+    # is unreachable advice for that key (same rationale as the tier-rule suppression above). The same holds
+    # for artifact_json / artifact_text, which load but FAIL at assertion time on that lane (its container
+    # filesystem is not locally observable, so there is no body to read): a manifest cannot make them
+    # evaluate, and `lane-remote-unobservable-key` above already says so. Filtered per-key, not the whole block: file_exists and the other manifest keys stay
+    # reachable and worth advising about on `lane: remote`.
     manifest_present = sorted(assert_keys & MANIFEST_KEYS)
     if lane == "remote":
-        manifest_present = [k for k in manifest_present if k not in LANE_REMOTE_INCOMPATIBLE_KEYS]
+        manifest_present = [
+            k for k in manifest_present if k not in LANE_REMOTE_INCOMPATIBLE_KEYS and k not in ("artifact_json", "artifact_text")
+        ]
     if cassette_records is not None:
         manifest_present = [
             key for key in manifest_present if not _all_matching_cassettes_prove(cassette_records, path, key)
@@ -2459,6 +2485,7 @@ LINT_RULES = {
     "host-path-assert-cowork": "WARN",
     "host-path-assert-tier": "ERROR",
     "lane-remote-incompatible-key": "ERROR",
+    "lane-remote-unobservable-key": "WARN",
     "linter-extra-findings-invalid": "ERROR",
     "linter-unclassified-key": "ERROR",
     "manifest-needs-snapshot": "INFO",

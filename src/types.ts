@@ -981,7 +981,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw",
+      "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw. Fails on `lane: remote`: that lane's container filesystem is not locally observable, so there is no body to read",
     ),
   input_unmodified: z
     .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
@@ -1251,7 +1251,9 @@ export const Assertion = z.strictObject({
       path: ["artifact"],
     })
     .optional()
-    .describe("assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null)"),
+    .describe(
+      "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Fails on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
+    ),
   semantic_matches: z
     .strictObject({
       rubric: z

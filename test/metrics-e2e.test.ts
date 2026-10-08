@@ -10,6 +10,7 @@ import { join } from "node:path";
 import Ajv from "ajv";
 import { spawnSync } from "node:child_process";
 import { executeScenario, parseScenarioFile } from "../src/run/execute.js";
+import { reevaluateRun } from "../src/run/verify-context.js";
 import { POSIX, QUESTION_FRAME, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
 
 const line = (o: unknown) => `printf '%s\\n' '${JSON.stringify(o)}'`;
@@ -169,6 +170,26 @@ describe.runIf(POSIX)("scenario metrics, through the real executeScenario (proto
       {},
     );
     expect(r.metrics).toEqual([{ id: "words", unavailable: "remote" }]);
+  }, 120_000);
+
+  // artifact_json reads the same file the metric does, and refuses on the same lane — live, and through the
+  // result.json lane that verify-run reads back. The lane: local twin passes both ways over the same file.
+  it("artifact_json on lane: remote fails live and on verify-run; the lane: local twin passes", async () => {
+    const aj = ["assert:", "  - artifact_json: {artifact: outputs/m.json, path: words, equals: 1200}"];
+    for (const lane of ["remote", "local"] as const) {
+      const sc = parseScenarioFile(scenario(`aj-${lane}`, "write", [`lane: ${lane}`, ...aj]));
+      const r = await executeScenario(sc, {});
+      const live = r.assertions.find((a) => "artifact_json" in a.assertion);
+      expect(persisted(`aj-${lane}`).lane ?? "local").toBe(lane);
+      const re = reevaluateRun(r.outDir!, sc);
+      expect(re.ok).toBe(true);
+      const verify = re.ok ? re.deterministic.find((a) => "artifact_json" in a.assertion) : undefined;
+      for (const a of [live, verify]) {
+        expect(a, lane).toBeDefined();
+        expect(a!.pass, lane).toBe(lane === "local");
+        if (lane === "remote") expect(a!.message).toMatch(/artifact_json cannot be evaluated on `lane: remote`/);
+      }
+    }
   }, 120_000);
 
   it("absent when nothing is declared, and for an empty list", async () => {

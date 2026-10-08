@@ -71,6 +71,22 @@ describe("cassette v15", () => {
     expect(v({ artifact: "outputs/s.json", authored: true })).toBe(14);
   });
 
+  // `lane: remote` alone stamps v11 (KEY_REQUIRED_VERSION). With an artifact_json entry it needs v15: a v14 reader grades
+  // that key over the local work-root file, a pass the remote lane's contract says cannot be evidence. Both values are
+  // in the frozen scenario, so rehash reads them where record does.
+  it("lane: remote with an artifact_json entry stamps 15; either one alone stamps as before", () => {
+    const aj = { artifact_json: { artifact: "outputs/s.json", path: "status", equals: "ok" } };
+    expect(requiredVersionFor({ prompt: "x", lane: "remote", assert: [aj] })).toBe(15);
+    expect(requiredVersionFor({ prompt: "x", lane: "remote", assert: [{ result: "success" }, aj] })).toBe(15);
+    expect(requiredVersionFor({ prompt: "x", lane: "remote", assert: [{ result: "success" }] })).toBe(12);
+    expect(requiredVersionFor({ prompt: "x", lane: "local", assert: [aj] })).toBe(12);
+    expect(requiredVersionFor({ prompt: "x", assert: [aj] })).toBe(12);
+    // artifact_text has refused on this lane since it shipped, so every reader that knows the key already does.
+    expect(
+      requiredVersionFor({ prompt: "x", lane: "remote", assert: [{ artifact_text: { artifact: "outputs/s.md", contains: ["a"] } }] }),
+    ).toBe(12);
+  });
+
   // `answerChannel` is frozen at the cassette's top level, not in the scenario, and a v14 reader ignores an unknown
   // top-level key: it would replay a run parked at a question as the `stalled` fail. The floor routes it to "too new".
   it("a recording with no answer channel stamps 15; the frozen field is read beside the scenario", () => {

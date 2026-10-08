@@ -1222,7 +1222,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry. A `gates_all_scripted`, `no_hook_event_blocked` or
   `hook_decision` entry, a `hook_event_blocked` entry in its object form, or an `artifact_json` entry whose `artifact`
   is a glob or that carries `match` stamps **v15**, so a v14 reader refuses it as too new instead of misreading it (it
-  would grade the glob as a literal path). So does a recording whose top-level `answerChannel` is `"none"`: a v14
+  would grade the glob as a literal path), and so does any `artifact_json` entry in a `lane: remote` scenario (a v14
+  reader grades the local file there; v15 fails it). So does a recording whose top-level `answerChannel` is `"none"`: a v14
   reader ignores the field and would grade a run that parked at a question as `stalled`.
   The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
