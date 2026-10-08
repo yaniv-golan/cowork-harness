@@ -40,7 +40,8 @@ examples/
   sessions/    pre-prompt setup (model, mounts, plugins) — referenced by scenarios via `session:`
   skills/      the example skills under test (each a Claude Code plugin folder)
   data/        sample inputs the scenarios consume (CSVs, a PDF, an mcp.json — a shape sample only; no
-               bundled session wires it in — see docs/discovery.md for `mcp.config` usage)
+               bundled session wires it in — see docs/discovery.md for `mcp.config` usage), and
+               form-replies/, two Desktop form replies for testing a skill that parses one
   replays/     committed synthetic cassettes for token-free, Docker-free `replay`
   matrices/    `run --matrix <file>` compatibility-matrix configs (baseline/model/skill_dir axes)
   answer-policies/  reusable scripted-answer YAML fragments, loaded with `--answer-policy <yaml>` on

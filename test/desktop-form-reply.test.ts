@@ -7,44 +7,41 @@ import { resolve } from "node:path";
 // of them are a date, a multi-select, a quoted value, a ` / `-flattened value or a folded one, and how many lines a
 // folded value spans), with every title, label and value replaced. The tests below pin both to the serializer.
 
-/** A port of Desktop's `submitElicitation` payload builder (app.asar 2.26454.2, the elicitation widget script). Kept
- *  literal on purpose: it is the reference the fixtures and the docs are checked against, not harness code. */
+/** The reply format, implemented here from the behaviour of Desktop 2.26454.2's form widget (read from its bundle,
+ *  and matching six real replies): the reference the fixtures and the docs are checked against, not harness code. */
+const FOLD_OVER = 200;
+const QUOTE_OVER = 80;
+const EMPTY_FORM = "proceeding with defaults.";
+
+function labelOf(fieldName: string): string {
+  const suffixes: Array<[string, string]> = [
+    ["_other", " (other)"],
+    ["_file", " file"],
+    ["_text", ""],
+  ];
+  const hit = suffixes.find(([s]) => fieldName.endsWith(s));
+  const base = (hit ? fieldName.slice(0, -hit[0].length) : fieldName).replaceAll("_", " ");
+  return base.charAt(0).toUpperCase() + base.slice(1) + (hit ? hit[1] : "");
+}
+
 function serializeElicitation(title: string | undefined, answers: Record<string, string | string[]>): string {
-  const humanizeKey = (key: string): string => {
-    let k = key;
-    let suffix = "";
-    if (k.endsWith("_other")) {
-      k = k.slice(0, -"_other".length);
-      suffix = " (other)";
-    } else if (k.endsWith("_file")) {
-      k = k.slice(0, -"_file".length);
-      suffix = " file";
-    } else if (k.endsWith("_text")) {
-      k = k.slice(0, -"_text".length);
+  const head = title ? `${title} \u2014 ` : "";
+  const shown: string[] = [];
+  const folded: string[] = [];
+  for (const [field, answer] of Object.entries(answers)) {
+    if (answer === "" || (Array.isArray(answer) && answer.length === 0)) continue; // a [""] answer still shows, empty
+    const text = Array.isArray(answer) ? answer.join(", ") : answer;
+    const label = labelOf(field);
+    if (text.length > FOLD_OVER) {
+      shown.push(`${label}: (${text.length} chars \u2014 see below)`);
+      folded.push(`[${label}]\n${text}`);
+      continue;
     }
-    const words = k.replace(/_/g, " ");
-    return words.charAt(0).toUpperCase() + words.slice(1) + suffix;
-  };
-  const FOLD_AT = 200;
-  const prefix = title ? `${title} — ` : "";
-  const pairs: string[] = [];
-  const folds: string[] = [];
-  for (const [k, v] of Object.entries(answers)) {
-    if (v === "" || (Array.isArray(v) && v.length === 0)) continue;
-    const raw = Array.isArray(v) ? v.join(", ") : v;
-    const label = humanizeKey(k);
-    if (raw.length > FOLD_AT) {
-      pairs.push(`${label}: (${raw.length} chars — see below)`);
-      folds.push(`[${label}]\n${raw}`);
-    } else {
-      const flat = raw.replace(/\r?\n/g, " / ");
-      const value = flat.length > 80 ? `"${flat}"` : flat;
-      pairs.push(`${label}: ${value}`);
-    }
+    const oneLine = text.replace(/\r?\n/g, " / ");
+    shown.push(`${label}: ${oneLine.length > QUOTE_OVER ? `"${oneLine}"` : oneLine}`);
   }
-  let payload = pairs.length === 0 ? `${prefix}proceeding with defaults.` : `${prefix}${pairs.join(" · ")}`;
-  if (folds.length > 0) payload += `\n\n--- Full content ---\n${folds.join("\n\n")}`;
-  return payload;
+  const line = head + (shown.length ? shown.join(" \u00b7 ") : EMPTY_FORM);
+  return folded.length ? `${line}\n\n--- Full content ---\n${folded.join("\n\n")}` : line;
 }
 
 const DIR = resolve("examples/data/form-replies");
