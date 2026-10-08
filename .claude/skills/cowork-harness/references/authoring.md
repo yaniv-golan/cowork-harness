@@ -254,7 +254,7 @@ cowork-harness lint scenarios/*.yaml
 | `host-path-assert-cowork` | WARN | `transcript_no_host_path` on `cowork` — it fails by design if the tier resolves to hostloop |
 | `host-path-assert-tier` | ERROR | `transcript_no_host_path` on `hostloop` / `protocol`, where it fails by design |
 | `lane-remote-incompatible-key` | ERROR | `present_files_called` / `no_scratchpad_leak` / `user_visible_artifact` on `lane: remote` (the runtime rejects them at load, so the tier rules are suppressed there) |
-| `lane-remote-unobservable-key` | WARN | `artifact_json` / `artifact_text` / `file_absent` on `lane: remote`: they load but always fail when graded, since that lane's container filesystem is not locally observable (assert `file_exists` + `transcript_matches` instead) |
+| `lane-remote-unobservable-key` | WARN | `artifact_json` / `artifact_text` / `file_absent` on `lane: remote`: they load but always fail when graded on a live run or verify-run (replay skips the live-only `file_absent`), since that lane's container filesystem is not locally observable. Instead, assert `file_exists` + `transcript_matches` for content, or `transcript_not_matches` for an absence |
 | `linter-extra-findings-invalid` | ERROR | the loader findings `cowork-harness lint` hands the linter could not be read |
 | `linter-unclassified-key` | ERROR | a valid assertion key this linter cannot classify (the linter is out of date) |
 | `manifest-needs-snapshot` | INFO | manifest-backed keys, which evaluate on replay only when the cassette carries an `artifacts` manifest (not reported on `lane: remote` for `user_visible_artifact` / `artifact_json` / `artifact_text`, which cannot pass there) |

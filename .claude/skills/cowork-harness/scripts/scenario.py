@@ -21,6 +21,8 @@ lint flags (see references/scenario-schema.md for the why of each):
   E  `present_files_called` on protocol/microvm    (served at container+hostloop)
   E  `present_files_called`/`no_scratchpad_leak`/`user_visible_artifact` on `lane: remote`
                                                   (runtime rejects at LOAD time; tier rules suppressed)
+  W  `artifact_json`/`artifact_text`/`file_absent` on `lane: remote`
+                                                  (load, but always fail when graded: no observable filesystem)
   E  `requires_capabilities` on `fidelity: protocol` (probe can't run → hard-fails
                                                       unless allow_missing_capability)
   E  `fidelity-missing`        a scenario (it has `prompt:`) with no `fidelity:` key -- required since
@@ -1664,9 +1666,12 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 "WARN",
                 "lane-remote-unobservable-key",
                 f"{lane_unobservable} on `lane: remote` -- that lane's container filesystem is not locally "
-                "observable, so these keys always fail when graded (after the run is paid for).",
-                "Assert the written path with `file_exists` and the agent's own statement of the content with "
-                "`transcript_matches`, or set `lane: local` if this scenario models the desktop lane.",
+                "observable, so these keys always fail when graded on a live run or verify-run, after the run "
+                "is paid for (file_absent is live-only, so replay skips it).",
+                "For artifact_json / artifact_text: assert the written path with `file_exists` and the agent's "
+                "own statement of the content with `transcript_matches`. For file_absent: assert the agent's "
+                "statement with `transcript_not_matches`. Or set `lane: local` if this scenario models the "
+                "desktop lane.",
                 path,
             )
         )
