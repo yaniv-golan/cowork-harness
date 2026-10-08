@@ -2481,3 +2481,46 @@ def test_gates_all_scripted_paired_is_silent(pair, tmp_path):
 def test_gates_all_scripted_with_a_zero_floor_still_warns(tmp_path):
     # `gate_answer_count_min: 0` always holds, so it states nothing about whether gates were expected.
     assert UNPAIRED in _rules("assert:\n  - gates_all_scripted: true\n  - gate_answer_count_min: 0\n", tmp_path)
+
+
+# --- artifact-json-match: a glob `artifact` needs `match`, a literal one refuses it (the loader's rule) ---------
+
+
+def _aj(tmp_path, art, extra=""):
+    body = f'assert:\n  - artifact_json: {{artifact: "{art}", path: status, equals: ok{extra}}}\n'
+    return _lint_cmd([_write_at(tmp_path, "container", body)], json_out=True, strict=False)
+
+
+def test_artifact_json_glob_without_match_is_an_error(tmp_path):
+    code, findings = _aj(tmp_path, "outputs/runs/*/run_status.json")
+    hits = [x for x in findings if x["rule"] == "artifact-json-match"]
+    assert len(hits) == 1 and hits[0]["severity"] == "ERROR"
+    assert "match: each" in hits[0]["fix"] and "match: any" in hits[0]["fix"]
+    assert code == 1
+
+
+def test_artifact_json_literal_with_match_is_an_error(tmp_path):
+    code, findings = _aj(tmp_path, "outputs/a.json", ", match: each")
+    hits = [x for x in findings if x["rule"] == "artifact-json-match"]
+    assert len(hits) == 1 and "literal" in hits[0]["message"]
+    assert code == 1
+
+
+def test_artifact_json_glob_with_match_is_clean_and_bracket_is_literal(tmp_path):
+    for art, extra in (("outputs/runs/?/run_status.json", ", match: any"), ("outputs/[a].json", "")):
+        _, findings = _aj(tmp_path, art, extra)
+        assert not [x for x in findings if x["rule"] in ("artifact-json-match", "enum-value-invalid")], art
+
+
+def test_artifact_json_match_enum(tmp_path):
+    code, findings = _aj(tmp_path, "outputs/runs/*/run_status.json", ", match: all")
+    hits = [x for x in findings if x["rule"] == "enum-value-invalid"]
+    assert len(hits) == 1 and "assert.artifact_json.match: all" in hits[0]["message"]
+    assert code == 1
+
+
+def test_artifact_json_glob_with_trailing_slash_is_an_error(tmp_path):
+    code, findings = _aj(tmp_path, "outputs/*/", ", match: each")
+    hits = [x for x in findings if x["rule"] == "artifact-json-match"]
+    assert len(hits) == 1 and "ends in" in hits[0]["message"]
+    assert code == 1

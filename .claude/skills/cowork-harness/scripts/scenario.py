@@ -440,6 +440,7 @@ _EMBEDDED_ENUMS = {
     "assert.hook_output_contains.stream": ["stdout", "stderr", "any"],
     "assert.hook_output_not_contains.event": list(_FALLBACK_KNOWN_HOOK_EVENTS_ORDERED),
     "assert.hook_output_not_contains.stream": ["stdout", "stderr", "any"],
+    "assert.artifact_json.match": ["each", "any"],
 }
 
 
@@ -1810,6 +1811,41 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 _f = _enum_finding("assert.question_options.order", _value, path)
                 if _f is not None:
                     findings.append(_f)
+        # artifact_json: `match` is required with a glob `artifact` (`*` or `?`; `[` is literal) and refused on a
+        # literal one -- the loader's rule (src/types.ts), mirrored so a skill-side lint doesn't pass what `run` rejects.
+        _aj = _item.get("artifact_json")
+        if isinstance(_aj, dict):
+            if "match" in _aj:
+                _f = _enum_finding("assert.artifact_json.match", _aj["match"], path)
+                if _f is not None:
+                    findings.append(_f)
+            _art = _aj.get("artifact")
+            if isinstance(_art, str):
+                _is_glob = "*" in _art or "?" in _art
+                if _is_glob and _art.endswith(("/", "\\")):
+                    findings.append(
+                        Finding(
+                            "ERROR",
+                            "artifact-json-match",
+                            f"artifact_json glob `{_art}` ends in `/`, but a glob `artifact` matches files.",
+                            "End it with a file pattern, e.g. `*/run_status.json`.",
+                            path,
+                        )
+                    )
+                if _is_glob != ("match" in _aj):
+                    findings.append(
+                        Finding(
+                            "ERROR",
+                            "artifact-json-match",
+                            f"artifact_json `{_art}` is a glob with no `match`."
+                            if _is_glob
+                            else f"artifact_json `{_art}` is a literal path but sets `match`.",
+                            "Add `match: each` (every matched file) or `match: any` (at least one)."
+                            if _is_glob
+                            else "Drop `match` -- it applies only to a glob `artifact` (one with `*` or `?`).",
+                            path,
+                        )
+                    )
 
     # E: authored replay_protocol_fidelity
     if "replay_protocol_fidelity" in assert_keys:
@@ -2415,6 +2451,7 @@ LINT_RULES = {
     "container-only-key-off-container": "ERROR",
     "egress-on-protocol": "ERROR",
     "enum-value-invalid": "ERROR",
+    "artifact-json-match": "ERROR",
     "fidelity-missing": "ERROR",
     "file-absent-contradiction": "ERROR",
     "gate-needs-controlout": "INFO",

@@ -198,6 +198,10 @@
       "once",
       "domain"
     ],
+    "assert.artifact_json.match": [
+      "each",
+      "any"
+    ],
     "assert.hook_decision.decision": [
       "allow",
       "deny",

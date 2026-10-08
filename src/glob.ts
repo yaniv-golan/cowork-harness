@@ -38,3 +38,33 @@ export function anyGlobMatches(globs: string[], path: string): boolean {
   const p = path.replace(/\\/g, "/");
   return globs.some((g) => globToRegExp(g).test(p));
 }
+
+/** true iff an `artifact_json.artifact` is a glob: it holds `*` or `?`. `[` is NOT a glob character here, as in
+ *  `globToRegExp` (it escapes `[` to a literal), so detection and matching cannot disagree on a path like `a[1].json`. */
+export function isArtifactGlob(p: string): boolean {
+  return /[*?]/.test(p);
+}
+
+/** The path segments of an `artifact_json` glob, with `\` read as `/` and empty and `.` segments dropped — the form
+ *  both the evaluator and the record-time guard match against walk paths (which carry no `./`). */
+export function artifactGlobSegments(p: string): string[] {
+  return p
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((seg) => seg !== "" && seg !== ".");
+}
+
+/** Could a path BELOW `path` (one or more further segments) match the glob? Both are segment lists. Used to tell
+ *  whether a link entry the walk did not descend sits where a match could have been, e.g. a symlinked run directory
+ *  under `runs/*` for `runs/*` + `/run_status.json`. A whole-segment `**` consumes any number of segments. */
+export function globCouldMatchBelow(globSegs: string[], pathSegs: string[]): boolean {
+  const seg = globSegs.map((g) => (g === "**" ? null : globToRegExp(g)));
+  const go = (i: number, j: number): boolean => {
+    if (j === pathSegs.length) return i < globSegs.length;
+    if (i === globSegs.length) return false;
+    const re = seg[i];
+    if (re === null) return go(i + 1, j) || go(i, j + 1);
+    return re.test(pathSegs[j]!) && go(i + 1, j + 1);
+  };
+  return go(0, 0);
+}

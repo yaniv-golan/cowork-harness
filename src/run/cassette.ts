@@ -77,7 +77,7 @@ import { gitEnvWithoutAmbientRepo } from "./skill-files.js";
 // Re-exported (not re-defined): moved to the leaf module so assert.ts can use it without closing an
 // assert → cassette import cycle. Existing importers keep their path.
 export { isLosslessUtf8 } from "./artifacts.js";
-import { isLosslessUtf8 } from "./artifacts.js";
+import { collectArtifactPathsWithHealth, isLosslessUtf8 } from "./artifacts.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, expandHome, type SessionConfig } from "../session.js";
@@ -136,7 +136,7 @@ import {
   explainNoMutations,
   type MutationCoverage,
 } from "./mutate.js";
-import { anyGlobMatches } from "../glob.js";
+import { anyGlobMatches, artifactGlobSegments, globToRegExp, isArtifactGlob } from "../glob.js";
 import { compileUserRegex } from "../regex.js";
 import { toolNameSpellings } from "./tool-name-canonicalization.js";
 import { toolCallObjectRegexes } from "../tool-call-assert.js";
@@ -625,6 +625,14 @@ export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
   (a) => !!a && typeof a === "object" && "hook_decision" in (a as object),
   // `gates_all_scripted` — the key itself, either form: a v14 reader's strict assertion schema rejects it.
   (a) => !!a && typeof a === "object" && "gates_all_scripted" in (a as object),
+  // The `artifact_json` glob: the `match` key (any value: a v14 reader rejects the key), and a glob `artifact` even
+  // without one — a v14 reader would grade the glob as a literal path that never exists, a wrong verdict.
+  (a) => {
+    const aj = a && typeof a === "object" ? (a as Record<string, unknown>).artifact_json : undefined;
+    if (!aj || typeof aj !== "object") return false;
+    const o = aj as Record<string, unknown>;
+    return "match" in o || (typeof o.artifact === "string" && isArtifactGlob(o.artifact));
+  },
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -4354,7 +4362,12 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
   // assert.ts). (A pre-v8 entry with no reason is not flagged — this guard only runs at record time, where
   // buildManifest always sets the reason.)
   const truncatedAbs = new Set<string>();
-  for (const a of artifacts) if (a.truncated && a.truncationReason === "size") truncatedAbs.add(resolve(workRoot, a.path));
+  const truncatedRel: string[] = [];
+  for (const a of artifacts)
+    if (a.truncated && a.truncationReason === "size") {
+      truncatedAbs.add(resolve(workRoot, a.path));
+      truncatedRel.push(a.path);
+    }
   if (truncatedAbs.size === 0) return [];
   const hits: string[] = [];
   for (const a of scenario.assert ?? []) {
@@ -4363,10 +4376,30 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
     // a deliverable big enough to be worth scanning for a leak is exactly the one that clears the cap.
     for (const target of [a.artifact_json?.artifact, a.artifact_text?.artifact]) {
       if (!target) continue;
+      // A glob `artifact_json` names every size-truncated entry it matches. Its walk covers only the user-visible
+      // roots, which the manifest holds in full, so matching the manifest's paths is matching what it would read.
+      if (a.artifact_json?.artifact === target && isArtifactGlob(target)) {
+        const re = globToRegExp(artifactGlobSegments(target).join("/"));
+        for (const p of truncatedRel) if (re.test(p) && !hits.includes(p)) hits.push(p);
+        continue;
+      }
       if (truncatedAbs.has(resolve(workRoot, target)) && !hits.includes(target)) hits.push(target);
     }
   }
   return hits;
+}
+
+/** When a scenario asserts a glob `artifact_json`, the manifest walk over the user-visible roots must be complete: the
+ *  live glob reads an incomplete walk as evidence-unavailable, but `buildManifest` keeps only what it could see, so a
+ *  replay of that cassette would walk a complete-looking tree and could pass. Returns what was missed, or undefined. */
+export function artifactJsonGlobWalkGap(scenario: Scenario, workRoot: string, roots: string[]): string | undefined {
+  if (!(scenario.assert ?? []).some((a) => a.artifact_json !== undefined && isArtifactGlob(a.artifact_json.artifact))) return undefined;
+  const walk = collectArtifactPathsWithHealth(workRoot, roots);
+  if (walk.complete && !walk.containmentSkips.length) return undefined;
+  return [
+    ...walk.errors.slice(0, 3).map((e) => `${e.path}: ${e.error}`),
+    ...walk.containmentSkips.slice(0, 3).map((p) => `${p}: escapes the work root`),
+  ].join("; ");
 }
 
 /** Probe for an on-disk scenario file at the two conventional locations relative to a cassette.
@@ -5952,6 +5985,15 @@ export async function freezeRecordedRun(
         `assert targets artifact(s) too large to commit (>${cap} B, stored hash-only): ${truncatedAsserted.join(", ")} — ` +
         `this passes at record (on-disk) but FAILS replay (no body). Raise --max-artifact-bytes / ` +
         `COWORK_HARNESS_MAX_ARTIFACT_BYTES, or assert a smaller artifact.`;
+      if (opts.allowFailing) warn(`::warning:: record: ${msg}\n`);
+      else throw new RecordPostRunRefusalError(msg, result);
+    }
+    const gap = artifactJsonGlobWalkGap(scenario, result.workDir, recordRoots);
+    if (gap) {
+      const msg =
+        `a glob artifact_json is asserted, but the artifact walk could not see the whole tree (${gap}) — ` +
+        `the cassette would hold only what was seen, so replay could pass where the live run was evidence-unavailable. ` +
+        `Make the tree readable, or assert literal paths.`;
       if (opts.allowFailing) warn(`::warning:: record: ${msg}\n`);
       else throw new RecordPostRunRefusalError(msg, result);
     }

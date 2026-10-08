@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, statSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve, relative, isAbsolute, sep, dirname, extname } from "node:path";
 import type {
@@ -31,9 +31,15 @@ import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext }
 import { scrub } from "./secrets.js";
 import { finalizeRationale } from "./decide/semantic-judge.js";
 import { scrubForTerminal, warn } from "./io.js";
-import { DEFAULT_AUTHORED_PER_FILE_BYTES, authoredTotalBytes, collectArtifactPathsWithHealth, isLosslessUtf8 } from "./run/artifacts.js";
+import {
+  DEFAULT_AUTHORED_PER_FILE_BYTES,
+  authoredTotalBytes,
+  collectArtifactPathsWithHealth,
+  isLosslessUtf8,
+  type WalkBounds,
+} from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
-import { anyGlobMatches } from "./glob.js";
+import { anyGlobMatches, artifactGlobSegments, globCouldMatchBelow, globToRegExp, isArtifactGlob } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
 import { isVmSessionsPath } from "./vm-paths.js";
 
@@ -2580,6 +2586,330 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
   }
 }
 
+/** Every check `artifact_json` makes on ONE file, in order: the result list a literal `artifact` pushes as-is, and
+ *  what the glob form folds per matched file (see `globArtifactJson`). */
+function artifactJsonChecks(
+  ctx: AssertContext,
+  aj: NonNullable<Assertion["artifact_json"]>,
+  target: string,
+  /** Set when the body could not be had at all (a read error, or over the live body cap) — what a cassette records
+   *  as `unreadable` / `size`. The literal form's messages stay as they are; the glob form reads this flag. */
+  noBody?: { set: boolean },
+): KeyResult[] {
+  const results: KeyResult[] = [];
+  const ok = (evidence?: string): KeyResult => ({ pass: true, evidence });
+  const fail = (message: string): KeyResult => ({ pass: false, message });
+  if (aj.authored === true) results.push(authorshipCheck(ctx, target, "artifact_json"));
+  const gate = artifactBodyGate(ctx, target);
+  if (gate.kind === "unsafe")
+    results.push(fail(`unsafe artifact_json path "${target}" — must stay under the work root (no absolute paths or "..")`));
+  else {
+    if (gate.kind === "link") {
+      results.push(
+        fail(
+          `evidence unavailable: "${target}" was a symlink/hardlink at record time — its content is not in the cassette (replay materializes a 0-byte placeholder); re-record or assert on the deliverable`,
+        ),
+      );
+    } else if (gate.kind === "escape") {
+      results.push(fail(`unsafe artifact_json path "${target}" — symlink target escapes the work root`));
+    } else if (gate.kind === "not_found") {
+      results.push(fail(`artifact_json: file not found: ${target} (under ${ctx.workRoot})`));
+    } else if (gate.kind === "not_regular") {
+      results.push(fail(`artifact_json: ${target} is not a regular file`));
+    } else if (gate.kind === "body_less") {
+      // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
+      // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
+      // also falls here — it's a record-time read failure, so the both-causes text is the safe hint.
+      const { replayReason, liveReadonly } = gate;
+      const cause =
+        replayReason === "fixture"
+          ? `(an untouched binary workspace_fixture file — recorded hash-only; assert artifact_json on what the step writes)`
+          : replayReason === "input"
+            ? `(an uploaded input — its content is captured hash-only, never inlined; assert artifact_json on a deliverable instead)`
+            : liveReadonly || replayReason === "readonly"
+              ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
+              : replayReason === "size"
+                ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
+                : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
+      results.push(
+        fail(
+          `evidence unavailable: artifact_json target "${target}" was captured body-less ` +
+            cause +
+            ` — content is not in the cassette, so it cannot be evaluated on replay`,
+        ),
+      );
+    } else {
+      let doc: unknown;
+      let parsed = true;
+      // The read is inside one guard: evaluate()/check() are synchronous with no error boundary, so a
+      // TOCTOU/EACCES/IO error here (the file existed at the gate but stat/read throws) would crash
+      // verification instead of failing the assertion.
+      let read = false;
+      try {
+        const body = readBodyCapped(gate.realFile);
+        read = true;
+        if ("tooLarge" in body) {
+          results.push(fail(`${ARTIFACT_JSON_TOO_LARGE} (${body.tooLarge} bytes, limit 10 MiB)`));
+          parsed = false;
+          if (noBody) noBody.set = true;
+        } else doc = JSON.parse(body.buf.toString("utf8"));
+      } catch (e) {
+        parsed = false;
+        if (!read && noBody) noBody.set = true;
+        results.push(fail(`artifact_json: ${target} could not be read/parsed as JSON: ${String((e as Error).message)}`));
+      }
+      if (parsed) {
+        const r = resolveDotPath(doc, aj.path);
+        if (r.state === "unresolved") {
+          // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the
+          // false-green at the field level).
+          results.push(
+            fail(`artifact_json: path "${aj.path}" unresolvable in ${target} — intermediate "${r.at}" is missing or not an object`),
+          );
+        } else {
+          const present = r.state === "value";
+          const val = r.state === "value" ? r.value : undefined;
+          let any = false;
+          if (aj.exists !== undefined) {
+            any = true;
+            results.push(
+              present === aj.exists ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" exists=${present}, expected ${aj.exists}`),
+            );
+          }
+          if (aj.absent !== undefined) {
+            any = true;
+            const absent = r.state === "absent";
+            results.push(absent === aj.absent ? ok() : fail(`artifact_json: "${aj.path}" absent=${absent}, expected ${aj.absent}`));
+          }
+          if (aj.is_null !== undefined) {
+            any = true;
+            if (!present) {
+              results.push(
+                fail(
+                  `artifact_json: "${aj.path ?? "(root)"}" is_null: path is absent — cannot determine null-ness (use absent: true to assert absence)`,
+                ),
+              );
+            } else {
+              const isNull = val === null;
+              results.push(
+                isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is_null=${isNull}, expected ${aj.is_null}`),
+              );
+            }
+          }
+          if (aj.equals !== undefined) {
+            any = true;
+            results.push(
+              present && jsonEq(val, aj.equals)
+                ? ok()
+                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected ${JSON.stringify(aj.equals)}`),
+            );
+          }
+          if (aj.gt !== undefined) {
+            any = true;
+            results.push(
+              typeof val === "number" && val > aj.gt
+                ? ok()
+                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
+            );
+          }
+          // Set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
+          // (LLM-extracted) values where `equals` would churn across re-records. `present &&` guard mirrors
+          // `equals` so an absent value never vacuously satisfies it.
+          if (aj.in !== undefined) {
+            any = true;
+            results.push(
+              present && Array.isArray(aj.in) && aj.in.some((x) => jsonEq(val, x))
+                ? ok()
+                : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected one of ${JSON.stringify(aj.in)}`),
+            );
+          }
+          // No operator → an existence assertion (the value must be present).
+          if (!any)
+            results.push(
+              present ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is not present (no operator given → existence check)`),
+            );
+        }
+      }
+    }
+  }
+  return results;
+}
+
+/** The live over-cap message of `artifact_json` — named so the glob form classifies it as evidence-unavailable by the
+ *  same text the literal form prints. */
+const ARTIFACT_JSON_TOO_LARGE = "artifact_json: file too large to parse as JSON";
+
+/** A glob `artifact_json` reads at most this many matched files; more is evidence-unavailable, never a verdict over a
+ *  sample. */
+export const ARTIFACT_GLOB_MAX_MATCHES = 200;
+/** The walk bounds of a glob `artifact_json`: past either one the walk is incomplete, so the verdict is unavailable. */
+export const ARTIFACT_GLOB_WALK_BOUNDS: WalkBounds = { maxDepth: 32, maxEntries: 20_000 };
+
+/** A glob `artifact_json`, folded to ONE result. The walk is rooted at the user-visible roots — what replay
+ *  materializes — and only where the glob's literal prefix can reach, so the live and replay lanes see the same file
+ *  set. Each match goes through `artifactJsonChecks` (and so `artifactBodyGate`). A link match (a symlink or hardlink
+ *  on the live walk, a link entry on replay) is evidence-unavailable before any read: the literal form follows an
+ *  in-root symlink live, but replay holds no body for it, and a glob must give one verdict on both lanes.
+ *   - zero matches: fail, naming the glob and what the nearest existing directory holds;
+ *   - more than ARTIFACT_GLOB_MAX_MATCHES, or an incomplete walk: evidence-unavailable;
+ *   - each: any failing match ⇒ fail; else any unavailable match ⇒ unavailable; else pass;
+ *   - any:  ≥1 passing match ⇒ pass; else any unavailable ⇒ unavailable; else fail.
+ *  Names are matched exactly as the filesystem returns them (no case or Unicode folding). */
+function globArtifactJson(ctx: AssertContext, aj: NonNullable<Assertion["artifact_json"]>): KeyResult {
+  const segs = artifactGlobSegments(aj.artifact);
+  if (isAbsolute(aj.artifact) || aj.artifact.replace(/\\/g, "/").startsWith("/") || segs.includes(".."))
+    return {
+      pass: false,
+      message: `unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`,
+    };
+  const glob = segs.join("/");
+  const literal = segs.slice(
+    0,
+    segs.findIndex((seg) => isArtifactGlob(seg)),
+  );
+  const roots = ctx.userVisiblePrefixes.map((r) => r.split("/").filter((seg) => seg !== ""));
+  const startsWith = (a: string[], b: string[]) => a.length >= b.length && b.every((seg, i) => seg === a[i]);
+  // Where the walk starts: the literal prefix when it lies inside a root, the root when it lies inside the prefix.
+  const starts = [
+    ...new Set(roots.flatMap((r) => (startsWith(literal, r) ? [literal.join("/")] : startsWith(r, literal) ? [r.join("/")] : []))),
+  ];
+  const label = `artifact_json "${aj.artifact}" (match: ${aj.match})`;
+  // A glob no user-visible root can hold matches nothing on any run: say so, never report it as an empty walk.
+  // uploads/ is named because it is the usual case: uploaded inputs are replayed hash-only, so they are not matched.
+  if (!starts.length)
+    return {
+      pass: false,
+      message:
+        `${label}: the glob reaches no user-visible root (${ctx.userVisiblePrefixes.join(", ")}), so it can never match` +
+        (literal[0] === "uploads"
+          ? ` — uploaded inputs are not matched by a glob (a cassette holds them hash-only); assert a deliverable, or name one upload literally`
+          : ` — globs match files under outputs/ and the connected folders only`),
+    };
+  // A link on the literal prefix below its root: the walk would start through it, but the manifest walk records the
+  // link itself and never descends, so replay could not see what live did. Live sees a symlink; replay, a link entry.
+  for (const r of roots) {
+    if (!startsWith(literal, r)) continue;
+    for (let k = r.length + 1; k <= literal.length; k++) {
+      const p = literal.slice(0, k).join("/");
+      // Exact native names: the segment must be one of its parent's readdir names as spelled. Opening the authored
+      // spelling instead would let a case-insensitive filesystem (macOS) fold `ARTIFACTS` onto `artifacts`, or NFD
+      // onto NFC — a pass there that is a miss on Linux. Folding may only ever err toward refusing.
+      let names: string[] | undefined;
+      try {
+        names = readdirSync(join(ctx.workRoot, ...literal.slice(0, k - 1)));
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        // Absent: nothing below it on either lane. Any other error (EACCES, EIO) is a parent that exists but
+        // can't be listed — what it holds is unknown, so this is no evidence of a miss.
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          const parent = literal.slice(0, k - 1).join("/");
+          return {
+            pass: false,
+            message: `evidence unavailable: ${label} — "${parent}" on the glob's path could not be listed (${code ?? String(e)})`,
+          };
+        }
+        names = undefined;
+      }
+      if (!names?.includes(literal[k - 1]!)) {
+        const parent = literal.slice(0, k - 1).join("/");
+        const shown = (names ?? []).sort().slice(0, 10).join(", ");
+        return {
+          pass: false,
+          message:
+            `${label}: no file matches — "${p}" is not there as spelled (names match exactly, with no case or Unicode folding)` +
+            (names ? `; ${parent}/ holds: ${shown || "(nothing)"}` : ""),
+        };
+      }
+      let link = ctx.linkPaths?.has(p) === true;
+      if (!link) {
+        try {
+          link = lstatSync(join(ctx.workRoot, p)).isSymbolicLink();
+        } catch {
+          break; // nothing there: the walk finds no match below it, on either lane
+        }
+      }
+      if (link)
+        return {
+          pass: false,
+          message: `evidence unavailable: ${label} — "${p}" on the glob's path is a link; a recording keeps the link, not what it points to, so its matches cannot be read the same way on replay`,
+        };
+    }
+  }
+  const walk = collectArtifactPathsWithHealth(ctx.workRoot, starts, ARTIFACT_GLOB_WALK_BOUNDS);
+  const re = globToRegExp(glob);
+  const matches = [...new Map(walk.entries.filter((e) => re.test(e.path)).map((e) => [e.path, e])).values()];
+  // A link the walk did not follow, where a match could lie below it (a symlinked run directory under `runs/*`).
+  // `each` cannot claim every run with one unseen, so these count as unavailable matches.
+  const linksBelow = walk.entries
+    .filter((e) => (e.linkKind || ctx.linkPaths?.has(e.path)) && !re.test(e.path) && globCouldMatchBelow(segs, e.path.split("/")))
+    .map((e) => `${e.path} (a ${e.linkKind ?? "link"} the walk does not follow, where a match could be)`);
+  if (walk.containmentSkips.length || !walk.complete) {
+    const why = walk.containmentSkips.length
+      ? `${walk.containmentSkips.length} subtree(s) were skipped for escaping the work root (${walk.containmentSkips.slice(0, 3).join(", ")})`
+      : `the walk was incomplete (${walk.errors
+          .slice(0, 3)
+          .map((e) => `${e.path}: ${e.error}`)
+          .join("; ")})`;
+    return { pass: false, message: `evidence unavailable: ${label} — ${why}, so the matched set is not known` };
+  }
+  if (matches.length === 0 && linksBelow.length)
+    return {
+      pass: false,
+      message: `evidence unavailable: ${label} — no file matches, but ${linksBelow.length} link(s) could hold one: ${linksBelow.slice(0, 5).join("; ")}`,
+    };
+  if (matches.length === 0) {
+    // The deepest directory of the literal prefix that exists, and what it holds — the usual cause is a name typo.
+    let near = "";
+    for (let i = literal.length; i >= 0; i--) {
+      const dir = containedPath(ctx.workRoot, literal.slice(0, i).join("/") || ".");
+      if (dir && existsSync(dir) && statSync(dir).isDirectory()) {
+        let names: string[] = [];
+        try {
+          names = readdirSync(dir).sort();
+        } catch {
+          // an unreadable directory shows as empty; the fail below stands either way
+        }
+        const shown = names.slice(0, 10).join(", ") + (names.length > 10 ? `, … (${names.length} entries)` : "");
+        near = ` — ${literal.slice(0, i).join("/") || "(work root)"}/ holds: ${shown || "(nothing)"}`;
+        break;
+      }
+    }
+    return { pass: false, message: `${label}: no file matches (walked ${starts.join(", ")})${near}` };
+  }
+  if (matches.length > ARTIFACT_GLOB_MAX_MATCHES)
+    return {
+      pass: false,
+      message: `evidence unavailable: ${label} matched ${matches.length} files, over the cap of ${ARTIFACT_GLOB_MAX_MATCHES} — narrow the glob`,
+    };
+  const passed: string[] = [];
+  const failed: string[] = [];
+  const unavailable: string[] = [...linksBelow];
+  for (const m of matches) {
+    if (m.linkKind || ctx.linkPaths?.has(m.path)) {
+      unavailable.push(`${m.path} (a ${m.linkKind ?? "link"} — no body on replay)`);
+      continue;
+    }
+    const noBody = { set: false };
+    const bad = artifactJsonChecks(ctx, aj, m.path, noBody).filter((r): r is { pass: false; message: string } => !r.pass);
+    if (bad.length === 0) passed.push(m.path);
+    else if (noBody.set || bad.some((r) => r.message.startsWith("evidence unavailable"))) unavailable.push(`${m.path} (${bad[0].message})`);
+    else failed.push(`${m.path} (${bad[0].message})`);
+  }
+  const list = (name: string, xs: string[]) =>
+    xs.length ? `\n  ${name} (${xs.length}): ${xs.slice(0, 20).join("; ")}${xs.length > 20 ? "; …" : ""}` : "";
+  const detail = list("passed", passed) + list("failed", failed) + list("unavailable", unavailable);
+  if (aj.match === "any" ? passed.length > 0 : failed.length === 0 && unavailable.length === 0)
+    return { pass: true, evidence: `${label}: ${passed.length} of ${matches.length} matched file(s) pass` };
+  // A proven failing match settles `each` whatever else is unknown; otherwise an unknown match leaves it unproven.
+  const unknown = unavailable.length > 0 && (aj.match === "any" || failed.length === 0);
+  return {
+    pass: false,
+    message: unknown
+      ? `evidence unavailable: ${label} — ${unavailable.length} matched file(s) could not be evaluated${detail}`
+      : `${label}: ${aj.match === "each" ? `${failed.length} of ${matches.length} matched file(s) fail` : `none of ${matches.length} matched file(s) pass`}${detail}`,
+  };
+}
+
 function check(
   a: Assertion,
   ctx: AssertContext,
@@ -4365,135 +4695,8 @@ function check(
   }
   if (a.artifact_json !== undefined) {
     const aj = a.artifact_json;
-    if (aj.authored === true) results.push(authorshipCheck(ctx, aj.artifact, "artifact_json"));
-    const gate = artifactBodyGate(ctx, aj.artifact);
-    if (gate.kind === "unsafe")
-      results.push(fail(`unsafe artifact_json path "${aj.artifact}" — must stay under the work root (no absolute paths or "..")`));
-    else {
-      if (gate.kind === "link") {
-        results.push(
-          fail(
-            `evidence unavailable: "${aj.artifact}" was a symlink/hardlink at record time — its content is not in the cassette (replay materializes a 0-byte placeholder); re-record or assert on the deliverable`,
-          ),
-        );
-      } else if (gate.kind === "escape") {
-        results.push(fail(`unsafe artifact_json path "${aj.artifact}" — symlink target escapes the work root`));
-      } else if (gate.kind === "not_found") {
-        results.push(fail(`artifact_json: file not found: ${aj.artifact} (under ${ctx.workRoot})`));
-      } else if (gate.kind === "not_regular") {
-        results.push(fail(`artifact_json: ${aj.artifact} is not a regular file`));
-      } else if (gate.kind === "body_less") {
-        // Precise remedy when the cause is known (read-only ⇒ assert on a deliverable; over-cap ⇒ raise
-        // the cap). A pre-v8 entry carries no reason ⇒ name both causes (we can't tell). "unreadable"
-        // also falls here — it's a record-time read failure, so the both-causes text is the safe hint.
-        const { replayReason, liveReadonly } = gate;
-        const cause =
-          replayReason === "fixture"
-            ? `(an untouched binary workspace_fixture file — recorded hash-only; assert artifact_json on what the step writes)`
-            : replayReason === "input"
-              ? `(an uploaded input — its content is captured hash-only, never inlined; assert artifact_json on a deliverable instead)`
-              : liveReadonly || replayReason === "readonly"
-                ? `(read-only connected-folder input — its content is never captured; assert artifact_json on a deliverable instead)`
-                : replayReason === "size"
-                  ? `(larger than the artifact-body cap — raise --max-artifact-bytes to capture it)`
-                  : `(a read-only connected-folder input, or an artifact larger than the body cap — if an input, assert on a deliverable; if a large deliverable, raise --max-artifact-bytes)`;
-        results.push(
-          fail(
-            `evidence unavailable: artifact_json target "${aj.artifact}" was captured body-less ` +
-              cause +
-              ` — content is not in the cassette, so it cannot be evaluated on replay`,
-          ),
-        );
-      } else {
-        let doc: unknown;
-        let parsed = true;
-        // The read is inside one guard: evaluate()/check() are synchronous with no error boundary, so a
-        // TOCTOU/EACCES/IO error here (the file existed at the gate but stat/read throws) would crash
-        // verification instead of failing the assertion.
-        try {
-          const body = readBodyCapped(gate.realFile);
-          if ("tooLarge" in body) {
-            results.push(fail(`artifact_json: file too large to parse as JSON (${body.tooLarge} bytes, limit 10 MiB)`));
-            parsed = false;
-          } else doc = JSON.parse(body.buf.toString("utf8"));
-        } catch (e) {
-          parsed = false;
-          results.push(fail(`artifact_json: ${aj.artifact} could not be read/parsed as JSON: ${String((e as Error).message)}`));
-        }
-        if (parsed) {
-          const r = resolveDotPath(doc, aj.path);
-          if (r.state === "unresolved") {
-            // Malformed/truncated artifact for this path — fail loud, NOT a vacuous "absent" pass (the
-            // false-green at the field level).
-            results.push(
-              fail(`artifact_json: path "${aj.path}" unresolvable in ${aj.artifact} — intermediate "${r.at}" is missing or not an object`),
-            );
-          } else {
-            const present = r.state === "value";
-            const val = r.state === "value" ? r.value : undefined;
-            let any = false;
-            if (aj.exists !== undefined) {
-              any = true;
-              results.push(
-                present === aj.exists ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" exists=${present}, expected ${aj.exists}`),
-              );
-            }
-            if (aj.absent !== undefined) {
-              any = true;
-              const absent = r.state === "absent";
-              results.push(absent === aj.absent ? ok() : fail(`artifact_json: "${aj.path}" absent=${absent}, expected ${aj.absent}`));
-            }
-            if (aj.is_null !== undefined) {
-              any = true;
-              if (!present) {
-                results.push(
-                  fail(
-                    `artifact_json: "${aj.path ?? "(root)"}" is_null: path is absent — cannot determine null-ness (use absent: true to assert absence)`,
-                  ),
-                );
-              } else {
-                const isNull = val === null;
-                results.push(
-                  isNull === aj.is_null ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is_null=${isNull}, expected ${aj.is_null}`),
-                );
-              }
-            }
-            if (aj.equals !== undefined) {
-              any = true;
-              results.push(
-                present && jsonEq(val, aj.equals)
-                  ? ok()
-                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected ${JSON.stringify(aj.equals)}`),
-              );
-            }
-            if (aj.gt !== undefined) {
-              any = true;
-              results.push(
-                typeof val === "number" && val > aj.gt
-                  ? ok()
-                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected > ${aj.gt}`),
-              );
-            }
-            // Set membership — the resolved value deep-equals one of a fixed set. Stable for stochastic
-            // (LLM-extracted) values where `equals` would churn across re-records. `present &&` guard mirrors
-            // `equals` so an absent value never vacuously satisfies it.
-            if (aj.in !== undefined) {
-              any = true;
-              results.push(
-                present && Array.isArray(aj.in) && aj.in.some((x) => jsonEq(val, x))
-                  ? ok()
-                  : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected one of ${JSON.stringify(aj.in)}`),
-              );
-            }
-            // No operator → an existence assertion (the value must be present).
-            if (!any)
-              results.push(
-                present ? ok() : fail(`artifact_json: "${aj.path ?? "(root)"}" is not present (no operator given → existence check)`),
-              );
-          }
-        }
-      }
-    }
+    if (isArtifactGlob(aj.artifact)) results.push(globArtifactJson(ctx, aj));
+    else results.push(...artifactJsonChecks(ctx, aj, aj.artifact));
   }
   // VM-path-boundary + path-denial assertions. `VM_PATH` is exact-or-prefix — NEVER a bare
   // `startsWith("/sessions")`, which would wrongly match "/sessionsfoo". `hostloopOnly` mirrors the

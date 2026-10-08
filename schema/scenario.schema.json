@@ -1461,7 +1461,15 @@
               "artifact": {
                 "type": "string",
                 "minLength": 1,
-                "description": "relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json)"
+                "description": "relative path to a JSON artifact under the work root (e.g. outputs/cap_state.json), or a glob (`*`, `?`, whole-segment `**`; `[` is literal) over the user-visible roots (outputs/ and connected folders), which then needs `match`"
+              },
+              "match": {
+                "description": "required with a glob `artifact`, refused on a literal one: `each` = every matched file satisfies the predicate, `any` = at least one does. Zero matches fail; more than 200 matches, or a match that is a link or has no readable body, is evidence-unavailable",
+                "type": "string",
+                "enum": [
+                  "each",
+                  "any"
+                ]
               },
               "path": {
                 "description": "dotted path into the JSON (e.g. me.run_id); omit to target the whole document (an explicit empty string is rejected)",

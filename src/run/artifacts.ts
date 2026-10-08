@@ -116,7 +116,11 @@ export function collectArtifactPaths(workRoot: string, prefixes: string[]): Arti
 
 /** F18: like `collectArtifactPaths`, but also reports walk completeness + path-scoped errors. See
  *  `collectArtifactsWithHealth`'s doc comment — same additive convention. */
-export function collectArtifactPathsWithHealth(workRoot: string, prefixes: string[]): { entries: ArtifactPathEntry[] } & WalkHealth {
+export function collectArtifactPathsWithHealth(
+  workRoot: string,
+  prefixes: string[],
+  bounds?: WalkBounds,
+): { entries: ArtifactPathEntry[] } & WalkHealth {
   const out: ArtifactPathEntry[] = [];
   const visited = new Set<string>();
   const health: WalkHealth = { complete: true, errors: [], containmentSkips: [] };
@@ -128,8 +132,16 @@ export function collectArtifactPathsWithHealth(workRoot: string, prefixes: strin
     health.errors.push({ path: "", error: errMsg(err) });
     return { entries: out, ...health };
   }
-  for (const prefix of prefixes) walkPaths(join(workRoot, prefix), prefix, workRootReal, visited, out, health);
+  for (const prefix of prefixes) walkPaths(join(workRoot, prefix), prefix, workRootReal, visited, out, health, bounds);
   return { entries: out, ...health };
+}
+
+/** Opt-in limits on a paths walk. Past either one the walk stops descending and marks itself incomplete (an
+ *  error is recorded), so a caller that needs the whole set reads "could not see everything", never "empty".
+ *  `maxDepth` counts directory levels below each start prefix; `maxEntries` counts emitted entries per start prefix. */
+export interface WalkBounds {
+  maxDepth: number;
+  maxEntries: number;
 }
 
 /** Like `collectArtifactPaths` but rooted at an ARBITRARY directory mapped to `prefix` (the hostloop
@@ -168,8 +180,17 @@ function walkPaths(
   visited: Set<string>,
   out: ArtifactPathEntry[],
   health?: WalkHealth,
+  bounds?: WalkBounds,
 ): void {
-  const walk = (abs: string, rel: string) => {
+  const startLen = out.length;
+  const walk = (abs: string, rel: string, depth: number) => {
+    if (bounds && depth > bounds.maxDepth) {
+      if (health) {
+        health.complete = false;
+        health.errors.push({ path: rel, error: `walk depth bound (${bounds.maxDepth}) reached` });
+      }
+      return;
+    }
     let real: string;
     try {
       real = realpathSync(abs); // only reached for real (non-symlink) directories — see the loop below
@@ -202,6 +223,13 @@ function walkPaths(
     for (const name of entries.sort()) {
       const childAbs = join(abs, name);
       const childRel = rel ? `${rel}/${name}` : name;
+      if (bounds && out.length - startLen >= bounds.maxEntries) {
+        if (health) {
+          health.complete = false;
+          health.errors.push({ path: childRel, error: `walk entry bound (${bounds.maxEntries}) reached` });
+        }
+        return;
+      }
       let st;
       try {
         st = lstatSync(childAbs); // lstat: does NOT follow symlinks
@@ -218,11 +246,11 @@ function walkPaths(
         continue;
       }
       if (st.isDirectory())
-        walk(childAbs, childRel); // traversal-only, never emitted
+        walk(childAbs, childRel, depth + 1); // traversal-only, never emitted
       else if (st.isFile()) out.push(st.nlink > 1 ? { path: childRel, linkKind: "hardlink" } : { path: childRel });
     }
   };
-  walk(startAbs, startRel);
+  walk(startAbs, startRel, 0);
 }
 
 /** `scratchpad` = the agent's working area OUTSIDE every user-visible root — files it produced that the

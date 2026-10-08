@@ -671,7 +671,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `transcript_no_host_path: true` | no host path (a path under a host home or system root: `Users`, `home`, `root`, the Cowork install dir `opt/cowork`, and the macOS `private/var`, `private/tmp`, `var/folders` and `Volumes` roots, each written here without its leading slash — also inside a `file://` or `computer://` link) leaked into model-visible text (a path that came verbatim from the scenario's own input files, prompt, or declared plugins' or local skills' files is not a leak — see `host_path_leak` below) — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
-| `artifact_json: {…}` | assert over a JSON artifact's contents — see below. Both `artifact_*` keys take `authored: true\|false` with the `file_exists` meaning |
+| `artifact_json: {…}` | assert over a JSON artifact's contents — see below. `artifact` may be a glob with `match: each\|any` (one check over many files). Both `artifact_*` keys take `authored: true\|false` with the `file_exists` meaning |
 | `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts (a dangling link fails, naming which target was checked — host path, work tree, or replay manifest); **requires ≥1 link** (zero links fails — use `computer_links_resolve_if_present` for the presence-free variant) — **only `true` is valid**, writing `false` is rejected by the schema **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so a `computer://` link that appeared only inside a tool call or its result is invisible to it. |
 | `computer_links_resolve_if_present: true` | like `computer_links_resolve` but passes vacuously when the transcript has zero `computer://` links — the presence-free variant; **only `true` is valid** **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so a `computer://` link that appeared only inside a tool call or its result is invisible to it. |
 
@@ -888,6 +888,41 @@ The three states are **distinct**: `absent` (the final key is missing from a par
 `is_null` (present but JSON `null`) vs an **unresolved intermediate** segment (the artifact is malformed for
 that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
 dependency-free and side-effect-free.)
+
+**One check over many files: a glob `artifact`.** When the skill writes one JSON file per run or per item, put a
+glob in `artifact` and say how the matches combine with `match:`, which is required with a glob and refused
+without one:
+```yaml
+- artifact_json: { artifact: outputs/artifacts/runs/*/run_status.json, match: each, path: status, equals: "complete" }
+- artifact_json: { artifact: outputs/reports/**/summary.json, match: any, path: verdict, in: ["pass", "warn"] }
+```
+- `match: each` passes when **every** matched file satisfies the check; `match: any` when **at least one** does.
+- The glob syntax is the one `no_unexpected_files` uses: `*` and `?` within a path segment, and `**` as a whole
+  segment for any depth. `[` is a literal character. Names match exactly as the filesystem spells them, with no
+  case or Unicode folding.
+- The glob covers the **user-visible roots** only (`outputs/` and the connected folders), the set a cassette
+  records, so a live run and its `replay` see the same files. A file anywhere else never matches, and **uploaded
+  inputs are not matched** (a cassette holds them hash-only). A glob that can reach no user-visible root, one
+  starting with `uploads/` for example, fails and says why.
+- **Zero matches fail.** The message names the glob and lists what the nearest existing directory holds, since the
+  usual cause is a misspelled name.
+- **Evidence-unavailable** (a fail) when:
+  - more than 200 files match;
+  - the walk can't see the whole tree (more than 32 levels below the glob's fixed leading part, over 20,000 entries,
+    or an unreadable or escaping subtree, including an unreadable directory on that fixed part);
+  - a match is a **symlink or hardlink**, a directory on the glob's literal path is a symlink, or a symlinked
+    directory sits where a match could be (a linked run directory under `runs/*`). A literal `artifact` follows an
+    in-root symlink on a live run, but a glob refuses links on both lanes, because a cassette records the link,
+    not what it points to;
+  - a match has no readable body (over the body cap, unreadable, or a read-only input).
+  Under `each`, a match that plainly fails decides the verdict whatever else is unknown. Under `any`, one passing
+  match decides it.
+- The failure message lists the matched files that passed, failed and couldn't be evaluated.
+- `authored: true` applies to each matched file.
+- At `record`, a match stored hash-only because it is over the body cap is refused like a literal one: it would
+  pass the live run and fail `replay`. So is a recording whose artifact walk couldn't see the whole tree, since
+  the cassette would hold only what was seen. Under `--allow-failing` both are warnings.
+- A glob ends with a file pattern: one ending in `/` is a load error.
 
 > **`is_null: false` requires the path to be present.** If the path is absent, `is_null: false` fails loud
 > (rather than vacuously passing). To assert "exists and is not null" write `exists: true` on one line and
@@ -1642,8 +1677,9 @@ def valid(doc):
 result.assert_artifact_json("outputs/cap.json", valid)
 ```
 
-In a scenario, name the exact paths (`artifact_json` per file) and add `no_unexpected_files` so no other file slips
-in. *Does not prove:* anything about a file whose name you did not list (no globbing).
+In a scenario, name the exact paths (`artifact_json` per file), or cover a set with a glob `artifact` and
+`match: each`, and add `no_unexpected_files` so no other file slips in. `artifact_json` checks fields one dotted path
+at a time, not a whole schema. *Does not prove:* anything about a file no path or glob you listed reaches.
 
 #### Hold a skill to an unattended host
 

@@ -259,6 +259,7 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
         "assert.tool_not_called.scope",
         "assert.semantic_pairwise.pass_if",
         "assert.semantic_pairwise.order",
+        "assert.artifact_json.match",
       ].sort(),
     );
     expect(enums.fidelity).toEqual([...FIDELITY_TIERS]);
