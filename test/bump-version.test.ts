@@ -221,6 +221,7 @@ describe("TARGET_FILES", () => {
   it("lists every file the plan's P3 table calls out, and nothing else", () => {
     expect(TARGET_FILES).toEqual([
       "package.json",
+      "package-lock.json",
       ".claude-plugin/marketplace.json",
       ".claude/skills/cowork-harness/.claude-plugin/plugin.json",
       ".claude/skills/cowork-harness/SKILL.md",
@@ -294,4 +295,29 @@ describe("every live rewriter matches the REAL file it is registered for", () =>
       });
     }
   }
+});
+
+// The lockfile is bumped by its two root version fields, in place. `npm install --package-lock-only` used to do it,
+// and that re-resolves the whole tree with whatever npm is on the machine: npm 11.7.0 dropped the `libc` fields from
+// every platform-binding entry during the 4.6.0 bump, so `npm ci` on Linux could no longer tell glibc from musl.
+describe("package-lock.json is bumped in place", () => {
+  it("rewrites exactly the root and root-package version fields of the REAL lockfile, and nothing else", () => {
+    const real = readFileSync(resolve("package-lock.json"), "utf8");
+    const next = rewriteFileContent("package-lock.json", real, "9.9.9");
+    const a = real.split("\n");
+    const b = next.split("\n");
+    expect(b.length).toBe(a.length);
+    const changed = a.flatMap((line, i) => (line === b[i] ? [] : [i]));
+    expect(changed).toHaveLength(2);
+    for (const i of changed) expect(b[i]).toMatch(/^\s*"version": "9\.9\.9",$/);
+    const lock = JSON.parse(next) as { version: string; packages: Record<string, { version?: string }> };
+    expect(lock.version).toBe("9.9.9");
+    expect(lock.packages[""]!.version).toBe("9.9.9");
+    expect(next.match(/"libc"/g)?.length ?? 0).toBe(real.match(/"libc"/g)?.length ?? 0);
+  });
+
+  it("the --write path runs no npm command (an npm install re-resolves the tree and rewrites it)", () => {
+    const src = readFileSync(resolve("scripts/bump-version.ts"), "utf8");
+    expect(src).not.toMatch(/execSync\(\s*["'`]npm /);
+  });
 });
