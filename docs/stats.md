@@ -16,7 +16,7 @@ reads it back.
   `stats`/`trace`/`scaffold` too — see [docs/cli.md → Commands at a glance](./cli.md#commands-at-a-glance).
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
-runLabel?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
+runLabel?, answerChannel?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
 cacheReadTokens?, modelCostUsd?, judgeCostUsd?, deciderCostUsd?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
 
 `costUsd` is the run's `cost.usd`: the agent session's own SDK-reported spend. It does **not** include
@@ -124,7 +124,9 @@ view (`cache-tokens` shows cache-read-token p50/p95; `model-cost` shows per-mode
 from the plain `cost` metric's overall run cost). `--last <n>`
 windows to the N most recent runs **per group** (not globally — a global cut would starve a
 low-frequency scenario out of the window entirely once a high-frequency one dominates recent rows). A
-group is a scenario unless `--group-by` says otherwise; see *Grouping by generation* below.
+group is a scenario unless `--group-by` says otherwise; see *Grouping by generation* below. A run made under
+`answer_channel: none` is always its own group, under every `--group-by`: its summary carries
+`answerChannel: "none"` and its text line the `[headless, no answer channel — not Cowork]` label.
 
 `--metric` is a text-mode-only view narrower — `--output-format json` always returns every field for every
 scenario regardless of `--metric`, the same convention `--quiet`/`--verbose` already follow elsewhere in

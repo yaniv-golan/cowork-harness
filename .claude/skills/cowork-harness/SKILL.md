@@ -124,8 +124,9 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
    the gate it answers.
 4. **`replay` evaluates the FROZEN scenario.** Editing `scenarios/*.yaml` changes nothing on a plain
    `replay`: re-check an `assert:` edit with `replay --assert-from <file>`, and re-record for any other key.
-5. **Some keys pass on absence.** `gate_answers_delivered` passes when no gate fired — pair it with
-   `gate_answer_count_min: 1`. `tool_called` proves a tool ran, not that it was attempted.
+5. **Some keys pass on absence.** `gate_answers_delivered` and `gates_all_scripted` pass when no gate fired —
+   pair either with `gate_answer_count_min: 1` (or declare `questions_count_max: 0`). `tool_called` proves a
+   tool ran, not that it was attempted.
 6. **An untracked skill mounts empty.** `git add` a new skill before testing it, and commit before
    recording the cassette that locks it.
 7. **The tier decides what exists.** `protocol` has no sandbox and no egress, tool names differ per tier

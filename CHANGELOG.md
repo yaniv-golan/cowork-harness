@@ -71,7 +71,9 @@ records and replays exactly as before.
   never vacuous: with no frame in scope it reports evidence-unavailable.
 - `tool` scopes each of these keys to the tool that fired (`hook_name` is `<event>:<tool>`): `Bash` at `container`,
   `mcp__workspace__bash` at `hostloop`. An event whose frames carry no tool name, such as `Stop`, reports
-  evidence-unavailable for any `tool`.
+  evidence-unavailable for any `tool`. Each of these keys gets the hook-attribution warning `hook_output_contains`
+  gets (a second staged plugin declaring the event, or hooks installed on the host visible at `protocol`), since a
+  frame carries no plugin id; the verdict does not change.
 - A frame whose decision cannot be read counts as unknown, and makes a check evidence-unavailable only when it could
   change the verdict. That covers:
   - a JSON decision on a frame other than `outcome: success`, such as exit 1, where the frame does not show whether
@@ -163,6 +165,8 @@ records and replays exactly as before.
   with `match: each` or `any`), on `run`, `verify-run` and `replay`, with `artifact_text`'s wording, and the Python
   helper's `assert_artifact_json` raises on such a run. `lint` warns (`lane-remote-unobservable-key`) on
   `artifact_json`, `artifact_text` or `file_absent` on `lane: remote`, which load but always fail when graded there.
+  On that lane `lint` no longer reports `manifest-needs-snapshot` for `artifact_json` or `artifact_text`, since a
+  manifest cannot make them evaluate.
 
 ### Documentation
 
@@ -170,7 +174,8 @@ records and replays exactly as before.
   conventions every key shares and the verdict-signal table, and links three new files that hold the per-key rows:
   `assertion-catalog-outcome-files-tools.md`, `assertion-catalog-agents-skills-budgets.md` and
   `assertion-catalog-gates-hooks-modifiers.md`. The catalog was close to the size one Read returns whole, and each
-  new assertion key grows it. The rows are moved unchanged. No harness behaviour changes.
+  new assertion key grows it. The rows are moved as they stood; the 4.6.0 key additions and the `hook_blocked`
+  rewording above land in their new files. No harness behaviour changes.
 
 ## [4.5.0] — 2026-10-07
 

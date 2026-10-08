@@ -1314,8 +1314,10 @@ resolution above, which no run can observe.
 
 ### What this actually costs you
 
-- A scenario cannot **assert** on any event but `PreToolUse`; `hook_blocked`/`no_hook_blocked` are
-  `PreToolUse`-scoped in effect. This is about gating, not about hooks running — a plugin's own hooks do
+- A scenario can gate on the harness's **own** hook decisions only for `PreToolUse`: `hook_blocked` /
+  `no_hook_blocked` read the harness's PreToolUse callbacks. A plugin's own hook, on any event, is asserted
+  from its `hook_response` frames instead (`hook_event_fired`, `hook_event_blocked`, `no_hook_event_blocked`,
+  `hook_decision`, `hook_output_*`). This is about gating, not about hooks running — a plugin's own hooks do
   run (next section).
 - The `PreToolUse:Skill` context injection is absent, so a skill whose behaviour depends on it will act
   differently here than in production.
