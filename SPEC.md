@@ -1223,8 +1223,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `hook_decision` entry, a `hook_event_blocked` entry in its object form, or an `artifact_json` entry whose `artifact`
   is a glob or that carries `match` stamps **v15**, so a v14 reader refuses it as too new instead of misreading it (it
   would grade the glob as a literal path). So does a recording whose top-level `answerChannel` is `"none"`: a v14
-  reader ignores the field and would grade a run that parked at a question as `stalled`. The minimum supported read
-  version is **v9**
+  reader ignores the field and would grade a run that parked at a question as `stalled`.
+  The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`
