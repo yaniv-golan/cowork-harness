@@ -161,3 +161,43 @@ describe("spawnProtocol — the config root it reports for the sub-agent reasoni
     expect(run(plan).subagentConfigRoot).toBeUndefined();
   });
 });
+
+describe("spawnProtocol — answer_channel: none and agent_env.artifacts_root", () => {
+  beforeEach(() => spawnMock.mockClear());
+  const run = (over: Partial<LaunchPlan>) => {
+    const root = mkdtempSync(join(tmpdir(), "proto-answer-"));
+    const outDir = join(root, "out");
+    spawnProtocol(SCENARIO, BASELINE, minimalPlan([], over), outDir);
+    const [, args, opts] = spawnMock.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv }];
+    return { args, env: opts.env, outDir };
+  };
+
+  it("absent key: the stdio tool, and no --permission-prompts", () => {
+    const { args } = run({});
+    expect(args[args.indexOf("--permission-prompt-tool") + 1]).toBe("stdio");
+    expect(args).not.toContain("--permission-prompts");
+  });
+
+  it("none: removes exactly the stdio pair and adds --permission-prompts none", () => {
+    // Each run stages its own config dir, so its --settings path differs; nothing else may.
+    const norm = (a: string[]) => a.map((x) => (x.endsWith("settings.json") ? "<settings>" : x));
+    const before = norm(run({}).args);
+    spawnMock.mockClear();
+    const after = norm(run({ answerChannel: "none" }).args);
+    expect(after).not.toContain("--permission-prompt-tool");
+    expect(after[after.indexOf("--permission-prompts") + 1]).toBe("none");
+    const i = before.indexOf("--permission-prompt-tool");
+    expect([...before.slice(0, i), "--permission-prompts", "none", ...before.slice(i + 2)]).toEqual(after);
+  });
+
+  it("artifacts_root resolves against the HOST outputs dir; an operator export does not leak", () => {
+    const { env, outDir } = run({ artifactsRoot: "artifacts", baseEnv: { COWORK_ARTIFACTS_ROOT: "/stray" } });
+    expect(env.COWORK_ARTIFACTS_ROOT).toBe(join(outDir, "work", "outputs", "artifacts"));
+  });
+
+  it("no artifacts_root: the operator's export is scrubbed and nothing is set", () => {
+    const { env } = run({ baseEnv: { COWORK_ARTIFACTS_ROOT: "/stray", PATH: "/usr/bin" } });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.COWORK_ARTIFACTS_ROOT).toBeUndefined();
+  });
+});

@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { artifactsRootEnv, permissionPromptArgs } from "../answer-channel.js";
 import { spawn } from "node:child_process";
 import { mkdirSync, cpSync, existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
@@ -23,8 +24,11 @@ import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
  * baseline-derived key is the auto-memory switch (`autoMemoryEnv`), which every tier sets. Extracted from
  * `spawnProtocol` so this env-construction step is unit-testable at the actual runtime call site.
  */
-export function buildProtocolEnv(plan: LaunchPlan, baseline: PlatformBaseline): NodeJS.ProcessEnv {
+export function buildProtocolEnv(plan: LaunchPlan, baseline: PlatformBaseline, outputsDir?: string): NodeJS.ProcessEnv {
   const env = protocolOperatorEnv(plan);
+  // `agent_env.artifacts_root`, in the knob layer: the agent runs on the host here, so outputs is the HOST path the
+  // caller staged. Its operator export was scrubbed above (SCRUBBED_AGENT_ENV_KEYS).
+  if (outputsDir !== undefined) Object.assign(env, artifactsRootEnv(plan.artifactsRoot, outputsDir));
   // Desktop's auto-memory switch for the modeled session (see autoMemoryEnv). The operator's own export is
   // deleted first — see AUTO_MEMORY_ENV_KEY. The knob cannot carry this key (its schema is strict), so applying it
   // after the knob changes no precedence. Off the managed branch L0 reads the operator's real config dir; with the
@@ -195,7 +199,7 @@ export function spawnProtocol(
   //   - else (local OAuth): keep the real config dir for auth, and layer our
   //     discovery settings via --settings so plugins/skills/mcp still apply.
   // Scrub the inheritance-asymmetric operator keys, then overlay the agent_env knob — see buildProtocolEnv.
-  const env: NodeJS.ProcessEnv = buildProtocolEnv(plan, baseline);
+  const env: NodeJS.ProcessEnv = buildProtocolEnv(plan, baseline, join(work, "outputs"));
   const settingsFile = join(plan.configDir, "settings.json");
   const useManagedConfig = managedConfigMode(env);
   const discoveryArgs: string[] = [];
@@ -212,8 +216,9 @@ export function spawnProtocol(
     "stream-json",
     "--output-format",
     "stream-json",
-    "--permission-prompt-tool",
-    "stdio", // routes can_use_tool / AskUserQuestion to our Controller (verified)
+    // routes can_use_tool / AskUserQuestion to our Controller (verified); `answer_channel: none` declares nobody instead.
+    // Shared with the sandbox tiers' argv (permissionPromptArgs).
+    ...permissionPromptArgs(plan),
     "--include-partial-messages",
     ...discoveryArgs,
     ...(plan.model ? ["--model", plan.model] : []),

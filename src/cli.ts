@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ANSWER_CHANNEL_NONE_LABEL } from "./answer-channel.js";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,8 @@ import {
   listBaselineNames,
   sha256File,
   countStringInFile,
+  cliCapabilitiesOfFile,
+  type CliCapabilities,
   deriveNativeStagedPath,
   nativeManifestBuild,
   buildNextAgentBinary,
@@ -3259,9 +3262,13 @@ async function cmdSync(args: string[]) {
     );
   let shaFields: { sha256?: string; shaProvenance?: string; manifestChecksumMatch?: boolean | "unknown" } = {};
   let stringSentinels: Record<string, number> | undefined;
+  // CLI capabilities (agentBinary.cliCapabilities): the same measure-or-carry lifecycle as the sentinels.
+  const baseCliCapabilities = (baseAgentBinary.cliCapabilities ?? undefined) as CliCapabilities | undefined;
+  let cliCapabilities: CliCapabilities | undefined;
   if (existsSync(resolvedDerived)) {
     const measured = sha256File(resolvedDerived);
     stringSentinels = Object.fromEntries(AGENT_STRING_SENTINELS.map((s) => [s, countStringInFile(resolvedDerived, s)]));
+    cliCapabilities = cliCapabilitiesOfFile(resolvedDerived);
     shaFields = {
       sha256: measured,
       shaProvenance: "measured-local",
@@ -3278,7 +3285,10 @@ async function cmdSync(args: string[]) {
     // no manifest fallback — yet the ELF is immutable per version, so for the SAME agentVersion the
     // base's count is not stale: carry it rather than silently dropping the tripwire on an online
     // same-version re-sync after a prune (mirrors the offline-same-version branch below).
-    if ((base.agentVersion as string | undefined) === res.agentVersion) stringSentinels = baseSentinels;
+    if ((base.agentVersion as string | undefined) === res.agentVersion) {
+      stringSentinels = baseSentinels;
+      cliCapabilities = baseCliCapabilities;
+    }
   } else if ((base.agentVersion as string | undefined) === res.agentVersion) {
     // offline re-sync of the same version — keep what the base recorded rather than dropping it.
     shaFields = {
@@ -3287,6 +3297,7 @@ async function cmdSync(args: string[]) {
       manifestChecksumMatch: baseAgentBinary.manifestChecksumMatch as boolean | "unknown" | undefined,
     };
     stringSentinels = baseSentinels;
+    cliCapabilities = baseCliCapabilities;
   }
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
@@ -3299,6 +3310,7 @@ async function cmdSync(args: string[]) {
     shaProvenance: shaFields.shaProvenance,
     manifestChecksumMatch: shaFields.manifestChecksumMatch,
     stringSentinels,
+    cliCapabilities,
   });
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
@@ -3645,7 +3657,8 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
   ]
     .filter(Boolean)
     .join(" ");
-  const base = `${s.scenario}${identity ? ` (${identity})` : ""}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
+  const channel = s.answerChannel === "none" ? ` [${ANSWER_CHANNEL_NONE_LABEL}]` : "";
+  const base = `${s.scenario}${identity ? ` (${identity})` : ""}${channel}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
   const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
   const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
   if (metric === "pass-rate") return base;

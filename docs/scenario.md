@@ -724,10 +724,10 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 #### Verdict signals
 
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
-are twenty-three codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
+are twenty-four codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
 `result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
 `result.verdict.signals[].severity` or the run's exit code instead.
-Only twelve codes are **warn**-severity (informational, never flip pass/fail):
+Only thirteen codes are **warn**-severity (informational, never flip pass/fail):
 
 - `outputs_delete_unconfirmed` (**warn**, live lane) — a delete-shaped command near `mnt/outputs` that
   nothing confirms: no output present at turn start was deleted, and no flagged delete has an outputs path as
@@ -798,6 +798,11 @@ Only twelve codes are **warn**-severity (informational, never flip pass/fail):
   `verify-run` from the scenario you pass: `verify-run` clears once every sub-question is scripted, a replay
   once the run is re-recorded with them scripted. On a replay the message names the recorded answer, not who
   gave it live.
+- `parked_at_question` (**warn**) — a run whose session declares `answer_channel: none` ended on a question
+  nobody can answer: its last message ends in `?`, whether or not tools ran before it. With no answer channel,
+  stopping at the question is the contract the run models, so it takes the place of the `stalled` fail and never
+  changes the verdict. A finished answer ending on an offer warns too, and a request without a `?` does not; completion is judged from the file assertions such a scenario must
+  carry (see [headless-no-answer.md](./headless-no-answer.md)).
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see
   [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion
@@ -1074,7 +1079,7 @@ corresponds to the scenario, this path is safe by construction:
   does not move the **replay** verdict — plain, `--strict` or `--assert-from`. The notice says so; re-record
   if the session changed. It *is* fingerprinted, and `verify-cassettes` checks that hash and reports a
   change as staleness (exit 1): `sessionFingerprint` covers the session's pinned `model:` and connected
-  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects` and `agent_env` when set. A model
+  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects`, `agent_env`, `answer_channel` and `agent_env.artifacts_root` when set. A model
   supplied by `--model` or `COWORK_HARNESS_MODEL` is not in it (`environment.model` records what ran), and a
   cassette recorded before `model` joined the hash gets a note, not a failure — re-record to gain that
   coverage. (Skill *content* under the session IS guarded — next bullet.)
@@ -1694,8 +1699,10 @@ assert:
 ```
 
 Leave `allow_stall` out, so ending on a question fails. `trace <run> --view questions` shows who answered each gate
-(`answeredBy`). *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` entirely and
-tell the model no user is present; the harness models neither.
+(`answeredBy`). *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` and tell
+the model no user is present; the harness does not model them. To check instead that a skill parks correctly when
+nobody can answer at all, use the session key `answer_channel: none`: the agent gets no question tool, and the run is
+graded by the status file the skill writes ([headless-no-answer.md](./headless-no-answer.md)).
 
 ### Debugging with `chat`
 

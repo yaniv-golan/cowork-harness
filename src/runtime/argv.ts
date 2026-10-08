@@ -1,4 +1,5 @@
 import { DESKTOP_APP_VERSION_MIN_VERSION, cmpVersionStrings, recordedLayoutDivergence } from "../baseline.js";
+import { permissionPromptArgs } from "../answer-channel.js";
 import { warn } from "../io.js";
 import type { PlatformBaseline } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
@@ -88,8 +89,9 @@ export function baseAgentArgs(
     "stream-json",
     "--output-format",
     "stream-json",
-    "--permission-prompt-tool",
-    "stdio",
+    // Who answers the agent's prompts: the stdio channel, or nobody under `answer_channel: none`. Shared with
+    // protocol's argv through permissionPromptArgs so the two sites cannot drift.
+    ...permissionPromptArgs(plan),
     "--permission-mode",
     // The session's permission_mode (threaded onto plan.permissionMode) must win at L1/L2 too — L0
     // already honors it. Without this, agentArgs hard-wired the baseline default and a session asking

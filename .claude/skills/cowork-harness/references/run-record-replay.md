@@ -16,7 +16,10 @@ deterministic re-run. Use `cowork-harness trace <id>` to digest a run. If only a
 run itself was fine), `cowork-harness verify-run <run-dir> <scenario.yaml>` re-checks the `assert:` block against
 a **kept** run dir (`--keep`, or a `--session-id` run) with no live re-record — tokens-free, ~1s per iteration.
 When the scenario declares `answers:`, verify-run **also** checks they still match the run's actual gates (a
-reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). `verify-run`
+reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). It reports the
+stall signals (`stalled`, `parked_at_question`) from the flag recorded in the run's `result.json` and does not re-run
+the stall detector, so a run recorded by an earlier build shows no `parked_at_question` there, while a `replay` of its
+cassette re-runs the detector and does. `verify-run`
 never calls the semantic judge, so a `semantic_matches` or `semantic_pairwise` assert is not re-graded by it; after a rubric change,
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` re-grades those against the kept run (the judge call
 is the only spend) and reports whether the judge read the same document the live judge did (widening the evidence
@@ -339,8 +342,14 @@ Recognize these before "fixing" a non-bug:
   sub-questions and who answered; `result.partlyScriptedGates` has the lists. `replay` and `verify-run`
   re-derive it: `verify-run` clears once you script every sub-question of the batch, a replay only after you
   re-record with them scripted (it reads the answers frozen in the cassette).
+- **`parked_at_question`** (`WARN`) — under `answer_channel: none` (a session with nobody to answer), the run
+  ended on a `?`, whether or not tools ran first. That is the contract such a run models, so it replaces the
+  `stalled` fail and never changes the verdict; the scenario's required file assertion decides whether the skill
+  parked where it should. Known misses: an offer ("Want me to…?") warns too; a request without `?` does not.
+  A recording made under the key freezes `answerChannel: "none"` at the cassette's top level and stamps v15, so
+  replay runs with the channel still absent and an older build refuses the cassette as too new.
 
-The full 23-code signal table (severity + per-signal opt-out) is in
+The full 24-code signal table (severity + per-signal opt-out) is in
 [`references/assertion-catalog.md`](./assertion-catalog.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 

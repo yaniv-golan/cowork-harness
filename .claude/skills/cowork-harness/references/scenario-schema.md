@@ -178,12 +178,21 @@ agent_max_turns: 500              # optional turn ceiling -> agent --max-turns; 
                                   # (distinct from the max_turns ASSERTION)
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
+# answer_channel: none           # NOT Cowork: nobody answers the agent (--permission-prompts none; the agent then
+                                  # offers no AskUserQuestion/EnterPlanMode/ExitPlanMode). Needs bypassPermissions +
+                                  # a positive file assertion (file_absent doesn't count) + a
+                                  # baseline that records cliCapabilities (protocol: a host claude whose --help lists
+                                  # it). Refuses answers/deciders, permission_parity: strict, approved_domains, the
+                                  # gate keys, questions_count_max, tool_called: AskUserQuestion, hostloop/cowork and
+                                  # lane: remote. A closing `?` is parked_at_question (warn), not stalled. Full list:
+                                  # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/headless-no-answer.md
 
 # sub-agent / tool-search env knob (tier-uniform; maps to agent env vars)
 agent_env:
   subagent_model: claude-opus-4-8   # -> CLAUDE_CODE_SUBAGENT_MODEL
   tool_search: auto                 # auto | off -> ENABLE_TOOL_SEARCH; omit = binary default (ToolSearch ON)
   disable_experimental_betas: false # true -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 (also disables ToolSearch)
+  artifacts_root: artifacts         # -> COWORK_ARTIFACTS_ROOT=<outputs as the agent sees it>/artifacts; refused at hostloop
 
 # fenced debug escape hatch (NOT reachable via Cowork's UI)
 debug:

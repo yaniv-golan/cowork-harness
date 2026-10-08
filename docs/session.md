@@ -37,6 +37,8 @@ extended_thinking: true          # real Cowork on/off toggle (setExtendedThinkin
 agent_max_turns: 500             # optional turn ceiling -> agent --max-turns; omit for the agent default (distinct from the max_turns ASSERTION)
 permission_mode: default         # setPermissionMode: default | acceptEdits | plan | bypassPermissions
 permission_parity: cowork        # cowork (unscripted tool calls allowed, Cowork default) | strict (deny unscripted)
+# answer_channel: none           # NOT Cowork: a headless host with nobody to answer the agent (see headless-no-answer.md);
+                                 # requires permission_mode: bypassPermissions. Omit for Cowork's channel.
 account_name: Ada Lovelace       # {{accountName}} in the prompt append's <env> "User name:" line; default "User" (>=1.18286.0 reconstruction)
 
 # ── fenced debug escape hatch (NOT reachable via Cowork's UI) ────────────────────
@@ -56,6 +58,7 @@ agent_env:
   subagent_model: claude-haiku-x            # -> CLAUDE_CODE_SUBAGENT_MODEL
   tool_search: "off"                        # -> ENABLE_TOOL_SEARCH ("auto" | "off"); omit for the binary default (ON)
   disable_experimental_betas: false         # -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS="1" when true (also disables ToolSearch)
+  artifacts_root: artifacts                 # -> COWORK_ARTIFACTS_ROOT=<outputs as the agent sees it>/artifacts (not on hostloop)
 
 # ── work folders / projects (Cowork "add folder" / Spaces) → mnt/<folder-name> ──
 #    (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)
@@ -162,6 +165,7 @@ that skill instead of the shared root.
 | `agent_max_turns` | number | turn ceiling | a positive integer → the agent's `--max-turns` (early-exits after N agentic turns). Omit for the agent's own default — faithful to interactive Cowork, which passes no `--max-turns` (only scheduled tasks default to 100). **Distinct from the `max_turns` assertion**, which is a post-hoc upper-bound *check*, not a ceiling *setter*. |
 | `permission_mode` | enum | permission mode | `default` \| `acceptEdits` \| `plan` \| `bypassPermissions` → `--permission-mode`. |
 | `permission_parity` | enum | (harness policy) | `cowork` (default) \| `strict`. `cowork` mirrors Cowork's permission default — unscripted tool calls are allowed; `strict` denies any tool call that no scripted answer / decider covers. Affects the harness `Decider`, not a Cowork control. |
+| `answer_channel` | enum | *(none — not a Cowork setting)* | `none` only; omit for Cowork's answer channel. Models a headless host with **nobody to answer** the agent: it is spawned with `--permission-prompts none` instead of the stdio permission tool, so permission prompts are denied inside the agent, and `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` are removed from its toolset. Requires `permission_mode: bypassPermissions`; refuses `answers:`, `on_unanswered`, deciders, `permission_parity: strict`, `web_fetch.approved_domains`, the gate assertion keys, `questions_count_max` and `tool_called: AskUserQuestion`; refused at `hostloop`/`cowork` and on `lane: remote`; the scenario must assert a file the skill writes (`file_absent` does not count). A stop at a question is reported as `parked_at_question` (warn), not `stalled`. Every surface labels the run `[headless, no answer channel — not Cowork]`. Full contract: [headless-no-answer.md](./headless-no-answer.md). |
 | `account_name` | string | signed-in account name | Rendered into the prompt append's `<env>` "User name:" line (`{{accountName}}`, ≥1.18286.0 reconstruction). Real Cowork uses the signed-in account's name; defaults to `"User"` when unset. |
 | `debug.max_thinking_tokens` | number | *(none — harness-only escape hatch)* | **NOT reachable via Cowork's UI.** A fenced override that emits `--max-thinking-tokens <N>` verbatim, bypassing `extended_thinking`'s on(31999)/off boundary. A positive integer only (0/negative rejected). A run authored with this does not represent a real Cowork config — use it only for targeted local testing. |
 | `debug.thinking_display` | `"summarized"` \| `"omitted"` | *(none — harness-only escape hatch)* | **NOT reachable via Cowork's UI.** Emits `--thinking-display <mode>`. `"summarized"` forces readable (never raw — the API returns no chain-of-thought) thinking TEXT for BOTH the main loop and sub-agents; `"omitted"` forces the empty-text mode. Omitted ⇒ no flag ⇒ the API's per-model default applies (`"summarized"` on Sonnet 4.6, `"omitted"` on Opus 4.8 / Sonnet 5, where thinking text comes back empty → `RunResult.thinking` / `subagents[].reasoning` mark it `redacted:true`). Real Cowork passes no such flag; a run authored with this diverges from Cowork and costs extra tokens — local debugging only. |
@@ -177,7 +181,7 @@ an operator-exported `CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or
 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` silently affects only the two env-inheriting tiers — the exact
 same session behaves differently depending on which fidelity tier you run it at. `agent_env` is the
 authored, uniform replacement: it applies across **all four execution tiers**
-(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and **eleven**
+(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and **twelve**
 keys are **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers that inherit one)
 before any baseline/knob overlay — so a stray shell value can never leak through on some tiers and not
 others. Three of them are the keys above. Three more set effort and thinking, and the session's `effort` and
@@ -194,13 +198,16 @@ change sub-agent model resolution on two tiers only. If you need either, set it 
 in the environment the harness inherits. The last three mirror Desktop, which lets no value of them from your settings
 reach an agent it spawns: `CLAUDE_CODE_SIMPLE` (set to `1` it puts the agent in its bare mode, without plugins, hooks,
 auto-memory or `CLAUDE.md`), `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`, and `CLAUDE_CODE_PROCESS_WRAPPER`. Desktop sets the
-first two to `0` itself, and so does the baseline on every tier that applies it.
+first two to `0` itself, and so does the baseline on every tier that applies it. The twelfth, `COWORK_ARTIFACTS_ROOT`, is
+the key `agent_env.artifacts_root` below sets; Cowork never sets it, so an export of it would move where a skill writes
+its run status on two tiers only.
 
 | Field | Type | Env key | Notes |
 |---|---|---|---|
 | `agent_env.subagent_model` | string | `CLAUDE_CODE_SUBAGENT_MODEL` | Binary precedence (verified in agent 2.1.260): dispatch param > frontmatter > **env** > inherit. This knob is the LOWEST non-inherit layer — it does NOT outrank a sub-agent's own `model:` frontmatter or a `model:` passed at dispatch. |
 | `agent_env.tool_search` | enum | `ENABLE_TOOL_SEARCH` | `"auto"` \| `"off"`. **Naming trap:** unset (key absent) is binary mode `tst` — ToolSearch is **ON** first-party by default. There is no `"standard"` value to set here; the binary's own `"standard"` mode name means **DISABLED**, not "the standard/default mode" — `tool_search: "off"` is the correct way to disable it, emitting `ENABLE_TOOL_SEARCH="off"` (the binary's actual disable spelling). |
 | `agent_env.disable_experimental_betas` | boolean | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `true` emits `"1"`; also disables ToolSearch as a side effect on the binary side. Omit/`false` emits no key. |
+| `agent_env.artifacts_root` | string | `COWORK_ARTIFACTS_ROOT` | A path **relative to outputs** (no leading `/`, no `..`, no backslash). Each tier resolves it against outputs **as the agent sees it** — `/sessions/<id>/mnt/outputs/<path>` in `container`/`microvm`, the staged host path on `protocol` — so one session file names the same place everywhere, and an `artifact_json` path `outputs/<path>/…` reads what the skill wrote. For a skill that takes its run-status directory from this variable. **Refused at `hostloop`** (and `cowork`, which can resolve there): the host loop runs shell commands in a separate container that never sees the agent's environment, so a script would not see the variable. The session fingerprint hashes the authored string, not the per-tier path. |
 
 **Precedence is tier-qualified** (not a single uniform three-layer rule):
 

@@ -528,7 +528,7 @@ such an edit). The `session` is **not drift-checked on the replay path**, so a s
 re-assert does not move the replay verdict — the notice states this; re-record if the session changed.
 It *is* fingerprinted, but only `verify-cassettes` checks that hash (§11.1): `sessionFingerprint`
 covers the session's connected `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch` and the `model:` the
-session file pins, plus `projects` and `agent_env` when set. A model supplied by `--model` or
+session file pins, plus `projects`, `agent_env`, `answer_channel` and `agent_env.artifacts_root` when set. A model supplied by `--model` or
 `COWORK_HARNESS_MODEL` is not in that hash; the cassette's `environment.model` records the model that ran.
 
 **`replay_protocol_fidelity` (O7 guard):** after the run, `replay` re-serializes each decision
@@ -837,7 +837,7 @@ abridged to the fields most consumers branch on. The complete field list is
   "baseline": "string",                          // platform baseline appVersion
   "result": "success" | "error",                // did the agent turn end without error (NOT "task completed")
   "resultErrorKind?": "transport|agent|usage_limit", // when result==="error": a tail-end transport drop, a genuine agent/skill failure, or usage_limit (quota exhausted — is_error + HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)
-  "errorSource?": "spawn|protocol|exit|agent|result|no_result|timeout|decider_timeout", // finer diagnostic detail alongside resultErrorKind; no_result = stream ended with no terminal event; timeout = the harness's own wall-clock limit fired; decider_timeout = an external decider channel did not answer a gate within its backstop (an unanswered-gate partial)
+  "errorSource?": "spawn|protocol|exit|agent|result|no_result|timeout|decider_timeout|answer_channel_violation", // finer diagnostic detail alongside resultErrorKind; no_result = stream ended with no terminal event; timeout = the harness's own wall-clock limit fired; decider_timeout = an external decider channel did not answer a gate within its backstop (an unanswered-gate partial); answer_channel_violation = a run under `answer_channel: none` received a question or permission request anyway (refused, never answered)
   "resultSubtype?": "string",                    // the SDK result message's subtype verbatim (e.g. error_max_turns), pass-through diagnostic
   "stderrLogPath?": "string",                    // absolute path to the agent's full stderr log; live only, absent on replay
   "stalledOnQuestion?": bool,                     // H2/H3: ended on a question or closing request for input, no productive tool work after its last gate → `stalled` verdict fail unless allow_stall
@@ -1222,7 +1222,9 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry. A `gates_all_scripted`, `no_hook_event_blocked` or
   `hook_decision` entry, a `hook_event_blocked` entry in its object form, or an `artifact_json` entry whose `artifact`
   is a glob or that carries `match` stamps **v15**, so a v14 reader refuses it as too new instead of misreading it (it
-  would grade the glob as a literal path). The minimum supported read version is **v9**
+  would grade the glob as a literal path). So does a recording whose top-level `answerChannel` is `"none"`: a v14
+  reader ignores the field and would grade a run that parked at a question as `stalled`.
+  The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`

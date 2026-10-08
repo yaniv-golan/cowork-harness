@@ -60,6 +60,32 @@ All notable changes to this project are documented here. The format is based on
 - `run`, `record` and `lint` refuse a negative hook key alongside a positive one that can never both pass, such as
   `no_hook_event_blocked: true` with `hook_event_blocked: Stop`, as they refuse `no_hook_blocked` with `hook_blocked`.
 
+- **`answer_channel: none` (session key): a run with nobody to answer the agent.** It models a headless host's
+  contract and is not a Cowork setting: the agent is spawned with `--permission-prompts none` in place of the stdio
+  permission tool, so questions and permission prompts are denied inside the agent and never reach the harness. It
+  requires `permission_mode: bypassPermissions` and at least one file assertion, and it refuses at load every input
+  that assumes a channel (`answers:`, `on_unanswered` and the decider flags, `permission_parity: strict`,
+  `web_fetch.approved_domains`, the gate assertion keys including `gates_all_scripted`, `questions_count_max`,
+  `tool_called` naming `AskUserQuestion`), the host loop and `lane: remote`; `file_absent` alone does not count as the
+  file assertion. `record --dry-run`, batch pre-flights, `verify-run`, `replay --assert-from` / `--reassert` and `hillclimb regrade`
+  apply the same rules. A `protocol` run needs a host `claude` whose `--help` lists `--permission-prompts none`. The flag also removes `AskUserQuestion`, `EnterPlanMode` and
+  `ExitPlanMode` from the agent's toolset, so the model asks in prose. A successful run whose last message ends in
+  `?` gets the new `parked_at_question` warning, never the `stalled` fail, and `eval` counts it as a completed rep
+  (rule `parked_at_question`); a request that reaches the harness anyway is refused and ends the run with the new
+  `errorSource` `answer_channel_violation`. Such runs are labelled `[headless, no answer channel — not Cowork]`,
+  carry `RunResult.answerChannel: "none"`, and form their own `stats` group. A recording made with it stamps
+  cassette v15, so an older build refuses it as too new rather than replaying it with the channel present. See
+  `docs/headless-no-answer.md`.
+- **`agent_env.artifacts_root` (session key)** sets `COWORK_ARTIFACTS_ROOT` to a path under outputs as the agent sees
+  it on each tier, for a skill that takes its run-status directory from that variable. Refused at `hostloop` and
+  `fidelity: cowork`, since the host loop's shell never sees the agent's environment. The operator's own export of the variable is now scrubbed at `protocol`
+  and `hostloop`.
+- **Baseline field `agentBinary.cliCapabilities.permissionPrompts`**, recorded by `sync` from the staged agent
+  (recorded in `desktop-2.26454.0` and `desktop-2.26454.2`). A baseline without it is refused for
+  `answer_channel: none` with a re-sync hint.
+- The session fingerprint now covers `answer_channel` and `agent_env.artifacts_root` when set; a session without
+  them hashes exactly as before.
+
 ### Changed
 
 - **`latest` moves to `desktop-2.26454.2`** (agent **2.1.293**, was 2.1.289). Its `sync` reported no unknown deltas:

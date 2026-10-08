@@ -1200,3 +1200,24 @@ describe("reindexFromRunsTree — pre-layout dirs are REPORTED, never silently d
     }
   });
 });
+
+describe("answer_channel: none in the index and stats", () => {
+  it("the row carries answerChannel from the result, and omits it otherwise", () => {
+    expect(indexRowFromResult(rr({ answerChannel: "none" }), { command: "run", partial: false }).answerChannel).toBe("none");
+    expect("answerChannel" in indexRowFromResult(rr({}), { command: "run", partial: false })).toBe(false);
+  });
+
+  it.each(["scenario", "fidelity", "label", "skill-hash"] as const)(
+    "never pools a no-channel run with a default-channel run of the same scenario (--group-by %s)",
+    (groupBy) => {
+      const rows = [
+        row({ scenario: "a", pass: true, runLabel: "L", skillHash: "h" }),
+        row({ scenario: "a", pass: false, runLabel: "L", skillHash: "h", answerChannel: "none" }),
+      ];
+      const s = buildStats(rows, { groupBy }).summaries.filter((x) => x.scenario === "a");
+      expect(s).toHaveLength(2);
+      expect(s.find((x) => x.answerChannel === "none")?.passRate).toBe(0);
+      expect(s.find((x) => x.answerChannel === undefined)?.passRate).toBe(1);
+    },
+  );
+});

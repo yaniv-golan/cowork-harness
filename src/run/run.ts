@@ -442,7 +442,13 @@ export interface RunRecord {
   // or "timeout" when the harness's wall-clock limit killed the run, or "decider_timeout" when an external
   // decider channel did not answer a gate within its backstop. Undefined when no error fired; a
   // recovered non-fatal agent error that later succeeds keeps its first source. Optional ⇒ no literal churn.
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
+  // "answer_channel_violation": the session declared `answer_channel: none` and a question or prompt reached the
+  // harness anyway (see Run.disableAnswerChannel).
+  errorSource?:
+    "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout" | "answer_channel_violation";
+  // Under `answer_channel: none`, each control request that reached the harness anyway (a CLI that ignored the
+  // flag). Never answered; the run ends `error`. Absent when none arrived.
+  answerChannelViolations?: Array<{ kind: DecisionRequest["kind"]; name: string }>;
   // the SDK result message's `subtype` verbatim (error_max_turns / error_during_execution / success / …).
   // Pass-through diagnostic — captured on the result event, surfaced so a debugger can tell turn-exhaustion
   // from a generic execution error. Undefined until a result event with a subtype is seen.
@@ -703,6 +709,8 @@ export class Run {
   // WORKSPACE_WEB_FETCH_TOOL is answered by resolveWebFetchGate (the shared provenance/domain decision)
   // instead of falling through to the ordinary decider chain.
   private webFetchGate = false;
+  // Set by disableAnswerChannel() — `answer_channel: none`. When true, no request is ever decided.
+  private noAnswerChannel = false;
 
   constructor(
     private session: AgentSession,
@@ -1326,6 +1334,11 @@ export class Run {
     if (timedOut) {
       this.rec.result = "error";
       this.rec.errorSource = "timeout";
+    } else if (this.rec.answerChannelViolations?.length) {
+      // The run's own premise failed (a request reached a run with no answer channel), so whatever the agent then
+      // did is not evidence of the declared contract.
+      this.rec.result = "error";
+      this.rec.errorSource = "answer_channel_violation";
     }
     // no-terminal-event detection (the reviewer's turn/time-exhaustion black box). This block runs only on
     // a clean loop-end — an UnansweredError from handleDecision throws PAST it (→ buildPartialResult), and
@@ -1360,7 +1373,11 @@ export class Run {
     const lastGateIdx = this.toolLog.map((t) => t.name).lastIndexOf("AskUserQuestion");
     const productiveAfterGate = this.toolLog.slice(lastGateIdx + 1).filter((t) => t.name !== "AskUserQuestion").length;
     const asksForInput = lastText.endsWith("?") || (lastGateIdx >= 0 && endsOnRequestForInput(lastText));
-    if (this.rec.result === "success" && asksForInput && productiveAfterGate === 0) {
+    // Under `answer_channel: none` the agent is offered no question tool, so a gated skill runs its script, then asks
+    // in prose and ends its turn: (3) can never hold. There a closing `?` alone marks the stop, which computeVerdict
+    // reports as `parked_at_question` (warn), never `stalled`. Only the `?`: no gate fires to arm the wider wording.
+    const parkedWithoutChannel = this.noAnswerChannel && lastText.endsWith("?");
+    if (this.rec.result === "success" && ((asksForInput && productiveAfterGate === 0) || parkedWithoutChannel)) {
       this.rec.stalledOnQuestion = true;
     }
     // pair each answered gate with its tool_result (by toolUseId). delivered=true iff a non-error
@@ -1504,6 +1521,11 @@ export class Run {
   }
 
   private async handleDecision(req: DecisionRequest) {
+    if (this.noAnswerChannel) {
+      (this.rec.answerChannelViolations ??= []).push({ kind: req.kind, name: nameOf(req) });
+      this.session.respond(req.id, noChannelRefusal(req));
+      return;
+    }
     if (req.kind === "question")
       for (const q of req.questions) {
         this.rec.questions.push(questionLabel(q));
@@ -1790,6 +1812,14 @@ export class Run {
     this.webFetchGate = true;
   }
 
+  /** `answer_channel: none`: the agent was spawned with `--permission-prompts none`, so no request should ever
+   *  reach the harness. If one does (a CLI that ignored the flag), it is NOT decided — answering it would fabricate
+   *  the channel the run declares absent. It is refused (deny/cancel/decline) so the agent cannot hang, recorded,
+   *  and the run ends `error` with errorSource `answer_channel_violation`. */
+  disableAnswerChannel(): void {
+    this.noAnswerChannel = true;
+  }
+
   /** The shared webfetch:<domain> decision core — consults the Decider (so scenario `--answer
    *  webfetch:…` rules still match) and returns the decided request/response/attribution WITHOUT
    *  recording anything. `null` = the domain is already approved (an "Allow all for website" hit —
@@ -1885,6 +1915,13 @@ function kindOf(req: DecisionRequest): DecisionRecord["kind"] {
 function nameOf(req: DecisionRequest): string {
   return req.kind === "permission" ? req.tool : req.kind === "question" ? "AskUserQuestion" : req.kind;
 }
+/** The reply to a request under `answer_channel: none`: the same fail-closed shapes as denyLike, and a QUESTION is
+ *  refused too (a permission deny, which the session serializes as a deny envelope) — never answered. */
+function noChannelRefusal(req: DecisionRequest): DecisionResponse {
+  if (req.kind === "question") return { kind: "permission", behavior: "deny", message: "no answer channel" };
+  return denyLike(req);
+}
+
 function denyLike(req: DecisionRequest): any {
   if (req.kind === "permission") return { kind: "permission", behavior: "deny", message: "no decider" };
   if (req.kind === "dialog") return { kind: "dialog", behavior: "cancelled" };

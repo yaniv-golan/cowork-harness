@@ -88,6 +88,10 @@ export const PlatformBaseline = z.looseObject({
     // `sync --diff` tripwire: a changed count is the trigger to re-verify the feature wiring; nothing
     // consumes it at runtime.
     stringSentinels: z.record(z.string(), z.number()).optional(),
+    // CLI capabilities of the staged agent that a harness feature depends on, extracted by `sync` from the ELF's
+    // strings (`cliCapabilitiesOfBuffer`). Same lifecycle as `stringSentinels`. ABSENT means unknown (a baseline
+    // synced before the field existed), and a feature that needs a capability refuses on unknown — never assumes it.
+    cliCapabilities: z.strictObject({ permissionPrompts: z.boolean() }).optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z
@@ -1358,6 +1362,20 @@ export const Assertion = z.strictObject({
 });
 export type Assertion = z.infer<typeof Assertion>;
 
+/** The assertion keys that grade a question gate the HARNESS answered (or offered to answer). A run with no answer
+ *  channel (`answer_channel: none`) has no such gate, so each is refused there at load — and a new gate key MUST be
+ *  added here, which a test enforces against the refusal. `questions_count_max` is not a gate key; it is refused there
+ *  separately (answerChannelAssertRefusal), because it counts the questions that reach the harness and none do. */
+export const GATE_ASSERT_KEYS = [
+  "question_asked",
+  "question_options",
+  "question_context",
+  "question_option_count",
+  "gate_answers_delivered",
+  "gate_answer_count_min",
+  "gates_all_scripted",
+] as const satisfies readonly (keyof Assertion)[];
+
 /** Verdict modifiers: assertions that verify nothing themselves — each opts into (suppresses) one
  *  default-fail in `computeVerdict`. They are pure no-op `ok()` passes in `assert.ts` and are kept on
  *  replay as no-op passes (in `cassette.ts` `alwaysContentKeys`). SINGLE SOURCE OF TRUTH: the `assert.ts`
@@ -1832,7 +1850,8 @@ export interface RunStatus {
   durationMs?: number;
   // terminal-error diagnostics, surfaced so a failure-output debugger gets more than a bare "error"
   // (these live in result.json but not status.json before this). Present only on a terminal error write.
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
+  errorSource?:
+    "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout" | "answer_channel_violation";
   // classifies the error KIND — surfaced here so a batch/status watcher can halt-fast on `usage_limit`
   // (quota exhausted; retrying into a spent quota just burns the batch) rather than treating it as generic.
   resultErrorKind?: "transport" | "agent" | "usage_limit";
@@ -1966,6 +1985,9 @@ export interface RunResult {
    *  is DECLARED intent, because the lane leaves no trace (and before 2026-10-06 no setting reliably decided it)
    *  in a run's evidence. Absent ⇒ `local`, so every pre-existing result keeps its meaning. */
   lane?: "local" | "remote";
+  /** `"none"` when the session declared `answer_channel: none` (a headless run with nobody to answer the agent — not
+   *  Cowork). Absent otherwise, so every existing result keeps its meaning. Stats never pool the two. */
+  answerChannel?: "none";
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   /** A keyed fingerprint of the scrub set this run's records were scrubbed with (`src/scrub-set.ts`): one HMAC per
@@ -1992,7 +2014,8 @@ export interface RunResult {
    *  partial). Additive diagnostic detail alongside
    *  the coarse verdict-relevant `resultErrorKind`; consumed by nobody in the verdict. Absent on a clean run;
    *  a run that recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
-  errorSource?: "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout";
+  errorSource?:
+    "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout" | "answer_channel_violation";
   /** The SDK result message's `subtype` verbatim (e.g. `error_max_turns`, `error_during_execution`,
    *  `success`) — a pass-through diagnostic so a debugger can tell turn-exhaustion from a generic execution
    *  error without the harness inventing a taxonomy. Present when a result event carried a subtype. */
@@ -2003,8 +2026,9 @@ export interface RunResult {
   // the run ended on a question or a closing request for input (src/run/input-request.ts) having done no
   // productive tool work after its last gate (the agent asked for input and stopped) while result==="success". A false-green: the SDK turn didn't error, but the
   // task did not complete. computeVerdict fails on this (a `stalled` signal) unless the scenario asserts
-  // allow_stall. Scenario-lane only; re-derived by the detector in run.ts on both the live and replay
-  // re-drive (NOT a persisted-then-read flag).
+  // allow_stall. Under `answer_channel: none` a closing `?` alone sets it, even after tool work, and computeVerdict
+  // reports `parked_at_question` (warn) instead. Scenario-lane only; derived by the detector in run.ts on the live
+  // and replay re-drive. `verify-run` reads it as recorded in result.json and does not re-run the detector.
   stalledOnQuestion?: boolean;
   // capability-probe outcome, so the guard roster can show "ran clean" (definitive) distinctly from
   // "couldn't verify" (unverified) and "didn't run" (skipped) — never a false ✓ for a guard that didn't run.
@@ -2399,7 +2423,8 @@ export interface RunResult {
         | "ended_with_question"
         | "undelivered_deliverables"
         | "delivery_unobservable"
-        | "partly_scripted_gate";
+        | "partly_scripted_gate"
+        | "parked_at_question";
       severity: "fail" | "warn";
       message: string;
     }>;

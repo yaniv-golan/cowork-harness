@@ -654,6 +654,8 @@ export function erroredHint(d: { bucket: RepBucket; rule: string }): string {
     case "source_decider_timeout":
     case "thrown_decider_timeout":
       return "The --decider-cmd / --decider-dir channel did not answer in time: check the helper.";
+    case "source_answer_channel_violation":
+      return "Under answer_channel: none the agent sent a question or permission request anyway: check that the agent version honours --permission-prompts none.";
     default:
       return "A termination the classifier does not recognise: read the run dirs.";
   }

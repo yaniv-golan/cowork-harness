@@ -55,6 +55,9 @@ export interface RunIndexRow {
    *  against $16.67 actual across three runs). The index is also the only cost record that survives run-dir
    *  pruning, so a spend trend built from it was systematically light. */
   critiqueTotalUsd?: number;
+  /** `"none"` for a run whose session declared `answer_channel: none` (RunResult.answerChannel). Absent = the
+   *  stdio channel, which is also what every row written before the field means. `stats` never pools the two. */
+  answerChannel?: "none";
   signals: string[]; // VerdictSignal["code"][]
   costUsd?: number;
   tokens?: number;
@@ -162,6 +165,7 @@ export function indexRowFromResult(
     skillHash: result.fingerprint?.skillHash?.slice(0, 12), // short prefix — the full hash lives in result.json
     turn: result.turn,
     critiqueRole: critiqueRoleFor(runId, result.turn),
+    ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
     signals: verdict.signals.map((s) => s.code),
     costUsd: budget.costUsd,
     tokens: budget.tokensTotal,
@@ -232,6 +236,8 @@ function isValidRunIndexRow(x: unknown): x is RunIndexRow {
   // of `buildStats` — the CLI crashing on exactly the input class this quarantine exists to absorb.
   if (r.skillHash !== undefined && typeof r.skillHash !== "string") return false;
   if (r.runLabel !== undefined && typeof r.runLabel !== "string") return false;
+  // Consumed by the stats group key, like the two above.
+  if (r.answerChannel !== undefined && r.answerChannel !== "none") return false;
   if (typeof r.git !== "object" || r.git === null) return false;
   const git = r.git as Record<string, unknown>;
   if (git.branch !== null && typeof git.branch !== "string") return false;
@@ -692,6 +698,8 @@ export type StatsGroupBy = "scenario" | "skill-hash" | "label" | "fidelity";
 
 export interface StatsSummary {
   scenario: string;
+  /** `"none"` on the group of runs made with no answer channel — always its own group (see resolveGroups). */
+  answerChannel?: "none";
   /** Set only when grouping by that field — the group's identity, NOT folded into `scenario` (which
    *  stays exactly what it always was, so a consumer matching on it keeps working). */
   skillHash?: string;
@@ -798,6 +806,7 @@ function skillHashMatches(rowHash: string | undefined, query: string): boolean {
  *  splitting a joined key back apart is not reliably possible either. */
 interface StatsGroup {
   scenario: string;
+  answerChannel?: "none";
   skillHash?: string;
   runLabel?: string;
   fidelity?: string;
@@ -894,7 +903,10 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
     groupBy === "skill-hash" ? r.skillHash : groupBy === "label" ? r.runLabel : groupBy === "fidelity" ? tierOf(r) : undefined;
   // NUL joins the composite: `--label` is unvalidated freeform (it may contain spaces, `=`, anything a
   // shell will pass), so any printable separator could collide two distinct generations into one group.
-  const keyOf = (r: RunIndexRow, identity: string | undefined) => (groupBy === "scenario" ? r.scenario : `${r.scenario}\0${identity}`);
+  // A run with no answer channel models a different host (not Cowork), so it NEVER pools with a default-channel run
+  // of the same scenario, under any grouping: the channel is part of every key.
+  const keyOf = (r: RunIndexRow, identity: string | undefined) =>
+    (groupBy === "scenario" ? r.scenario : `${r.scenario}\0${identity}`) + (r.answerChannel === "none" ? "\0answer_channel:none" : "");
 
   // Rows lacking the grouping field are DROPPED, not bucketed under a blank key — counted so the caller
   // can say so out loud rather than silently under-reporting. Counted over RUN rows only, which is what
@@ -916,6 +928,7 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
         ...(groupBy === "skill-hash" ? { skillHash: identity } : {}),
         ...(groupBy === "label" ? { runLabel: identity } : {}),
         ...(groupBy === "fidelity" ? { fidelity: identity } : {}),
+        ...(r.answerChannel === "none" ? { answerChannel: "none" as const } : {}),
         rows: [],
         spend: [],
       };
@@ -960,7 +973,7 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
 export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsResult {
   const { groups, hashlessRuns } = resolveGroups(rows, filters);
   const summaries: StatsSummary[] = [];
-  for (const { scenario, skillHash, runLabel, fidelity, rows: group, spend } of groups.values()) {
+  for (const { scenario, answerChannel, skillHash, runLabel, fidelity, rows: group, spend } of groups.values()) {
     // Roll-ups are IN here and nowhere else above — see `carriesSpend`. `undefined`, not 0, when nothing
     // in the group was priced: the house rule is that an unpriced row is skipped rather than counted as
     // zero, and a `$0.0000` total would read as "this was free" instead of "we could not tell".
@@ -981,6 +994,8 @@ export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsRes
     const tiers = [...new Set(group.map(tierOf))].sort();
     summaries.push({
       scenario,
+      // A separate group per channel (see resolveGroups' key); named so the two lines are distinguishable.
+      ...(answerChannel !== undefined ? { answerChannel } : {}),
       // undefined-valued keys are dropped by JSON.stringify, so these appear only when grouped on.
       ...(skillHash !== undefined ? { skillHash } : {}),
       ...(runLabel !== undefined ? { runLabel } : {}),

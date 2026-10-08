@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { artifactsRootEnv } from "../answer-channel.js";
 import type { TerminableAgent } from "../termination.js";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -164,7 +165,7 @@ export function spawnMicroVm(
     proxyHost: proxyUrl,
     // The tier-uniform agent_env knob rides in via `extra`, which spawnEnv applies LAST — no scrub
     // needed here: the microvm's env is a constructed allowlist, never the operator's shell.
-    extra: { ...runtimeAuthEnv(), ...plan.agentEnv },
+    extra: { ...runtimeAuthEnv(), ...plan.agentEnv, ...artifactsRootEnv(plan.artifactsRoot, `${mntVm}/outputs`) },
   });
   // Keep SECRET values off the `limactl shell …` argv (host-visible via ps). Public env rides
   // argv via `env KEY=value`; secrets are handed to the guest over a stdin PROLOGUE the shell script

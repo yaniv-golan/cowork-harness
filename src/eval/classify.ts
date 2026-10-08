@@ -20,7 +20,17 @@ type ResultErrorKind = NonNullable<RunResult["resultErrorKind"]>;
 
 /** Every `RunResult.errorSource` member. The `satisfies` below fails the typecheck if a member is added to
  *  the type and not here, and the Record in `ERROR_SOURCE_RULE` fails it until the member has a rule. */
-export const ERROR_SOURCES = ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout"] as const;
+export const ERROR_SOURCES = [
+  "spawn",
+  "protocol",
+  "exit",
+  "agent",
+  "result",
+  "no_result",
+  "timeout",
+  "decider_timeout",
+  "answer_channel_violation",
+] as const;
 export const RESULT_ERROR_KINDS = ["transport", "agent", "usage_limit"] as const;
 type Missing<Union, Listed> = Exclude<Union, Listed> extends never ? true : false;
 const errorSourcesComplete: Missing<ErrorSource, (typeof ERROR_SOURCES)[number]> = true;
@@ -50,6 +60,7 @@ export type ClassifiableResult = Partial<
     | "resultErrorKind"
     | "resultSubtype"
     | "stalledOnQuestion"
+    | "answerChannel"
     | "partial"
     | "unansweredGate"
     | "models"
@@ -99,6 +110,7 @@ const ERROR_SOURCE_RULE: Record<ErrorSource, "infra" | "agent" | "by_kind" | "ag
   spawn: "infra", // the harness could not start the agent (Docker, a missing staged binary)
   protocol: "infra", // the stream-json channel broke
   decider_timeout: "infra", // a --decider-cmd / --decider-dir channel did not answer within its backstop
+  answer_channel_violation: "infra", // under answer_channel: none, the agent sent a request anyway (it ignored the flag)
   timeout: "agent", // the run never finished its task within the wall-clock limit
   no_result: "agent", // the stream ended with no terminal event (turn/time exhaustion)
   result: "by_kind", // the SDK's own is_error result
@@ -148,6 +160,7 @@ function thrownKind(e: unknown): ThrownKind {
  *  | thrown BoundaryError                                                  | errored_infra                     |
  *  | thrown UnansweredError                                                | errored_agent                     |
  *  | thrown anything else / no result at all                               | unclassified                      |
+ *  | success, errorSource absent or `agent`, no kind, stalled, no channel   | valid (parked_at_question)        |
  *  | success, errorSource absent or `agent`, no kind, stalled, allow_stall | valid (stall_allowed)             |
  *  | success, errorSource absent or `agent`, no kind, stalled              | errored_agent                     |
  *  | success, errorSource absent or `agent`, no kind                       | valid                             |
@@ -200,6 +213,9 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
   if (r.result === "success") {
     if ((source === undefined || source === "agent") && kind === undefined) {
       if (r.stalledOnQuestion !== true) return out("valid", "success");
+      // Under `answer_channel: none` a stop at a question is the contract, reported as the `parked_at_question` warn
+      // (verdict.ts); completion is judged from the file assertion such a scenario must carry.
+      if (r.answerChannel === "none") return out("valid", "parked_at_question");
       // A stall is the agent's own failure unless the scenario opted out. The flag is run.ts's detector: a closing
       // `?`, or (after a gate) a cued closing request for input such as "Please share X so I can…" — see
       // input-request.ts. The opt-out is the same predicate the `stalled` verdict signal uses (verdict.ts), over the

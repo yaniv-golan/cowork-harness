@@ -216,3 +216,19 @@ describe("provenance on the --repeat rollup", () => {
     expect(roll.provenance.ablatedRuns).toBe(3);
   });
 });
+
+describe("renderFooter — the no-answer-channel label", () => {
+  it("names a headless run as not Cowork on the footer line, pass or fail", () => {
+    const pass = sink();
+    renderFooter(r({ answerChannel: "none" }), plan(), { write: pass.write });
+    expect(pass.text()).toContain("[headless, no answer channel — not Cowork]");
+    const fail = sink();
+    renderFooter(r({ answerChannel: "none", result: "error" }), plan(), { write: fail.write });
+    expect(fail.text()).toContain("[headless, no answer channel — not Cowork]");
+  });
+  it("prints nothing extra for a default-channel run", () => {
+    const s = sink();
+    renderFooter(r({}), plan(), { write: s.write });
+    expect(s.text()).not.toContain("answer channel");
+  });
+});

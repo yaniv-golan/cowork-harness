@@ -71,6 +71,27 @@ describe("cassette v15", () => {
     expect(v({ artifact: "outputs/s.json", authored: true })).toBe(14);
   });
 
+  // `answerChannel` is frozen at the cassette's top level, not in the scenario, and a v14 reader ignores an unknown
+  // top-level key: it would replay a run parked at a question as the `stalled` fail. The floor routes it to "too new".
+  it("a recording with no answer channel stamps 15; the frozen field is read beside the scenario", () => {
+    expect(requiredVersionFor({ prompt: "x" }, { answerChannel: "none" })).toBe(15);
+    expect(requiredVersionFor({ prompt: "x" }, { answerChannel: undefined })).toBe(12);
+    expect(requiredVersionFor({ prompt: "x" }, {})).toBe(12);
+    // Any value an on-disk cassette could carry that is not `none` leaves the stamp alone.
+    expect(requiredVersionFor({ prompt: "x" }, { answerChannel: "stdio" })).toBe(12);
+  });
+
+  // The floor holds only where the frozen value is passed: a write site that calls with the scenario alone would
+  // stamp a no-channel recording 12. Each stamping call in the source must pass a second argument.
+  it("every stamping call site passes the frozen fields", () => {
+    const src = readFileSync(join(process.cwd(), "src", "run", "cassette.ts"), "utf8");
+    const calls = [...src.matchAll(/requiredVersionFor\(([^()]*(?:\([^()]*\))?[^()]*)\)/g)]
+      .map((m) => m[1])
+      .filter((args) => !args.includes(": unknown")); // the definition
+    expect(calls).toHaveLength(3);
+    for (const args of calls) expect(args, args).toMatch(/,\s*\S/);
+  });
+
   it("the bump alone stamps nothing at 15: a plain scenario still stamps the epoch floor", () => {
     expect(requiredVersionFor({ prompt: "x" })).toBe(12);
     expect(requiredVersionFor({ prompt: "x", assert: [{ result: "success" }] })).toBe(12);

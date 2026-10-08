@@ -153,7 +153,8 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
     { "path": "outputs/link-to-elsewhere", "bytes": 0, "sha256": "", "linkKind": "symlink" } // v10: symlink/hardlink — path+kind only, never dereferenced, so a link stray is still visible to no_unexpected_files
   ],
   "fingerprint": { "baseline": "…", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"], "promptAssetsHash": "…" }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries; promptAssetsHash: sha16 over the baseline's committed prompt-asset files, keyed independently of `baseline` (appVersion) — see the prompt-assets staleness class below)
-  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (model/folders/plugins/skills/mcp/egress/web_fetch, plus projects and agent_env when set) — verify-cassettes-only, never the default replay verdict
+  "answerChannel": "none", // v15: present only when recorded under `answer_channel: none`; replay re-drives with the channel still absent
+  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (model/folders/plugins/skills/mcp/egress/web_fetch, plus projects, agent_env, answer_channel and agent_env.artifacts_root when set) — verify-cassettes-only, never the default replay verdict
   "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
   "timeline": [ /* … */ ], // harness-observation timeline (see src/agent/timeline.ts): seq/ts/line/type per meaningful in-run event, in total order; `ts` is wall-clock-observation-time, frozen not recomputed on replay — informational only, no verdict impact. ABSENT on a pre-timeline cassette or when timeline.jsonl was empty/unreadable at record time
   "timelineHeader": { "startedAtMono": "…", "startedAtWall": "…" }, // written once as timeline.jsonl's first line; `startedAtMono` is the raw `process.hrtime.bigint()` start value (as a string) that every `timeline[].ts` is milliseconds-elapsed-since; `startedAtWall` is the wall-clock anchor so absolute times are recoverable from the relative `ts` stream
@@ -184,7 +185,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 | **v13** | has an `assert:` entry using the object form of `tool_called` / `tool_not_called` | v12: refuses as too new (see below) |
 | **v14** | has a `semantic_matches` entry carrying `include_fork_results` (any value), or a `semantic_pairwise` entry — one bump shared by the keys that need a v14 reader | v13: refuses as too new — upgrade the harness, don't re-record |
 | **v14** | declares `workspace_fixture` (an older reader would replay it without the fixture staleness check), or has an `assert:` entry using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry | v13: refuses as too new — upgrade the harness, don't re-record |
-| **v15** | has a `gates_all_scripted` entry (either form), a `no_hook_event_blocked` or `hook_decision` entry, a `hook_event_blocked` entry in its object form (`{event, …}`; the bare event name stays v14-readable), or an `artifact_json` entry whose `artifact` is a glob or that carries `match` (a v14 reader would grade the glob as a literal path) | v14: refuses as too new — upgrade the harness, don't re-record |
+| **v15** | has a `gates_all_scripted` entry (either form), a `no_hook_event_blocked` or `hook_decision` entry, a `hook_event_blocked` entry in its object form (`{event, …}`; the bare event name stays v14-readable), or an `artifact_json` entry whose `artifact` is a glob or that carries `match` (a v14 reader would grade the glob as a literal path). Also a recording made under `answer_channel: none`, whose `answerChannel` is frozen beside the scenario: a v14 reader ignores that field and would grade a run that parked at a question as `stalled` | v14: refuses as too new — upgrade the harness, don't re-record |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes
@@ -871,7 +872,7 @@ possible.
   own drift. (With `COWORK_HARNESS_AGENT_SCOPE=skill`, a changed `agents/<x>.md` is attributed to skill `x`,
   matching the hash boundary.)
 - **`session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch
-  config changed since record; projects and agent_env are hashed only when set) — re-record`** (v9+) — the recorded `sessionFingerprint` no longer matches the
+  config changed since record; projects, agent_env, answer_channel and agent_env.artifacts_root are hashed only when set) — re-record`** (v9+) — the recorded `sessionFingerprint` no longer matches the
   live session's SHAPE. Distinct from `fingerprint.skillHash` (skill/plugin file content): a folder swapped or
   egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
   `verify-cassettes` **only**, gated by the same `--skip-staleness` flag as the rest of this list — it never

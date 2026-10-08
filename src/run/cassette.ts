@@ -11,6 +11,7 @@ import {
   HILLCLIMB_USAGE,
 } from "../hillclimb/usage.js";
 import { recordedFixtureRefusal, scanWorkspaceFixture } from "../fixture/workspace.js";
+import { answerChannelAssertRefusal } from "../answer-channel.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS } from "../eval/usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
@@ -419,6 +420,10 @@ export interface Cassette {
   // so it never changes the default `replay` verdict (not even under `--strict`). ABSENT on a pre-v9
   // cassette → not checked (backward-compat: an existing committed cassette never goes stale from this).
   sessionFingerprint?: string;
+  // v15: the recorded session's `answer_channel` (`"none"`; absent = the stdio channel). FROZEN because the session
+  // file is not readable at rehash or replay time, and both read it: `requiredVersionFor` stamps v15 from it, and
+  // replay re-drives with the channel disabled so a recorded request replays as a violation, not an answer.
+  answerChannel?: "none";
   // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
   // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS
   // (guaranteed record-time-accurate) map instead of re-deriving it from the session file on disk AT
@@ -648,13 +653,16 @@ function usesToolCallObjectForm(a: unknown): boolean {
  *  callers hold values of different strictness — `record` has a parsed `Scenario`, `rehash` has an
  *  on-disk cassette's frozen scenario read through CassetteShape's loose passthrough, not the strict
  *  schema. */
-export function requiredVersionFor(scenario: unknown): number {
+export function requiredVersionFor(scenario: unknown, frozen?: { answerChannel?: unknown }): number {
   const s = (scenario ?? {}) as Record<string, unknown>;
   // Derived, never hard-coded: this is what actually gets STAMPED at both write sites, so a hash-format
   // bump that moved only CASSETTE_VERSION/HASH_FORMAT_EPOCH would write new-algorithm digests into
   // cassettes stamped with an old version — permanently mislabelled, and unprovable at the next epoch.
   const BASE = HASH_FORMAT_EPOCH;
-  return Math.max(BASE, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
+  // `answerChannel` is frozen beside the scenario, not in it, and a v14 reader ignores an unknown top-level key: it
+  // would replay a run that parked at a question as the `stalled` fail. Every write site passes the cassette's value.
+  const channel = frozen?.answerChannel === "none" ? 15 : 0;
+  return Math.max(BASE, channel, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
 }
 
 const DEFAULT_MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
@@ -1612,6 +1620,12 @@ export function buildSessionFingerprint(
     ...(!opts?.omitProjects && cfg.projects.length
       ? { projects: [...cfg.projects].map((pr) => ({ uuid: pr.uuid, from: pr.from })).sort((a, b) => a.uuid.localeCompare(b.uuid)) }
       : {}),
+    // Who answers the agent, and where a skill is told to write its run status: both change the run's inputs. Hashed
+    // only when set, so a session without them hashes byte-identically to before. `artifacts_root` is the AUTHORED
+    // relative value — `agentEnvOverrides` does not map it, because its resolution differs per tier, and the hash
+    // must not.
+    ...(cfg.answer_channel !== undefined ? { answer_channel: cfg.answer_channel } : {}),
+    ...(cfg.agent_env.artifacts_root !== undefined ? { artifacts_root: cfg.agent_env.artifacts_root } : {}),
   };
   return createHash("sha256")
     .update(Buffer.from(JSON.stringify(shape), "utf8"))
@@ -3763,6 +3777,7 @@ const CassetteShape = z.looseObject({
   // v9 (Finding 23/24) — both optional; absent on any pre-v9 cassette (backward-compat).
   sessionFingerprint: z.string().optional(),
   folderPrefixMap: z.array(z.object({ from: z.string(), mount: z.string() })).optional(),
+  answerChannel: z.literal("none").optional(),
 });
 
 /** the ONE place the default cassette path is computed from a scenario name. Both `record --dry-run`
@@ -6013,7 +6028,7 @@ export async function freezeRecordedRun(
   }
   // The STAMPED version — the minimum a reader needs to interpret THIS scenario, not the build's max
   // (CASSETTE_VERSION). Nearly every scenario (lane: local/omitted) stamps v10, unchanged (P8).
-  const stampedVersion = requiredVersionFor(relocatable);
+  const stampedVersion = requiredVersionFor(relocatable, { answerChannel: result.answerChannel });
   // Read once — the decision stream feeds both the cassette body and the label-provenance stamp below.
   const recordedControlOut = safeLines(join(result.outDir, "control-out.jsonl"));
   const base: Cassette = {
@@ -6056,6 +6071,7 @@ export async function freezeRecordedRun(
     // like `fingerprint`'s own skillHash-less case; `sessionFingerprintDrift` treats undefined as
     // "not checked" (never a false mismatch).
     sessionFingerprint: buildSessionFingerprint(scenario.session, undefined),
+    ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
     // v9: record-time connected-folder host-path -> mount-name map (Finding 24) — undefined when the
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
@@ -6242,6 +6258,7 @@ function replayErrorResult(file: string): RunResult {
     turn: undefined, // replay reconstructs one recorded run; no multi-turn attribution
     command: "replay", // #48
     lane: undefined, // unreadable cassette — no scenario to read a lane from
+    answerChannel: undefined,
     metrics: undefined, // nothing was driven, so nothing is measured
     scratchpadEvidenceComplete: false, // no run happened; nothing was observed
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
@@ -6789,7 +6806,7 @@ async function writeReassertedAssertBlock(
   // record does, or an older CLI meets a v12-stamped cassette carrying v13 semantics and says "re-record"
   // instead of "too new". Never LOWER the stamp: the rest of the cassette was written for the old one.
   const raw = rawCassette as { cassetteVersion?: number; $schema?: string };
-  const stamp = Math.max(raw.cassetteVersion ?? 0, requiredVersionFor(rawCassette.scenario));
+  const stamp = Math.max(raw.cassetteVersion ?? 0, requiredVersionFor(rawCassette.scenario, rawCassette));
   if (stamp !== raw.cassetteVersion) {
     raw.cassetteVersion = stamp;
     raw.$schema = cassetteSchemaUrl(stamp);
@@ -7136,6 +7153,9 @@ export async function cmdReplay(args: string[]) {
         // A missing list, or a fixture name the redaction policy rewrote, refuses an unannotated one as unverifiable.
         const vacuous = recordedFixtureRefusal(onDisk, rc.cassette.fingerprint?.workspaceFixtureFileSigs);
         if (vacuous) throw new Error(`--assert-from: ${vacuous}`);
+        // A recording with no answer channel is re-graded only by a block its own load check would accept.
+        const noChannel = rc.cassette.answerChannel === "none" ? answerChannelAssertRefusal(onDisk.assert ?? []) : undefined;
+        if (noChannel) throw new Error(`--assert-from: ${noChannel}`);
         warnUncheckableOnDiskKeys(rc.cassette, rc.cassette.scenario, onDisk);
         // Shallow clone — never mutate the parsed cassette in place.
         cassette = {
@@ -7755,7 +7775,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia, vcSessionOverride);
       if (sfd.drifted)
         staleness.push(
-          "session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects and agent_env are hashed only when set) — re-record",
+          "session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects, agent_env, answer_channel and agent_env.artifacts_root are hashed only when set) — re-record",
         );
       if (sfd.note) notes.push(sfd.note);
     }
@@ -8002,7 +8022,7 @@ export async function cmdRehash(args: string[]): Promise<void> {
     // The version THIS scenario requires — not CASSETTE_VERSION (the build's max). Without this,
     // `rehash` would bump a lane-free v10 cassette to v11 for no interpretive reason, reintroducing the
     // blanket cost P8 exists to avoid via the very command this plan names as the recovery path.
-    const requiredVersion = requiredVersionFor(cassette.scenario);
+    const requiredVersion = requiredVersionFor(cassette.scenario, cassette);
 
     // INVARIANT BEFORE SKIP. `cassetteVersion` says which reader is required; `fingerprint.hashFormat`
     // says which transform produced the digests. Nothing ties them together, and the skip below returns
@@ -8663,6 +8683,8 @@ export async function replayCassette(
   // pass Infinity as dialogTimeoutMs — the synchronous decider resolves before any timer,
   // and there is no child, so the synchronous respond() is safe here.
   const run = new Run(session, replayDecider, hooks, "replay", Infinity);
+  // A recording made with no answer channel replays with none: a request in its stream is a violation, as it was live.
+  if (cassette.answerChannel === "none") run.disableAnswerChannel();
   let rec: RunRecord;
   let truncatedMsg: string | undefined;
   try {
@@ -9314,6 +9336,7 @@ export async function replayCassette(
       // A replay is held to the lane the RECORDED scenario declared — the frozen contract, not the
       // replaying machine's. Absent on a cassette recorded before the axis existed ⇒ local.
       lane: cassette.scenario.lane,
+      answerChannel: cassette.answerChannel,
       // A replay materializes a recorded tree; it runs no scratchpad walk of its own, so it cannot answer
       // the undelivered question — cannot-tell, never a clean read.
       scratchpadEvidenceComplete: false,

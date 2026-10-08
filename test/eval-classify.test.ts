@@ -78,6 +78,7 @@ const ERROR_ROWS: Record<ErrorSource, Record<ResultErrorKind | "-", string>> = {
   spawn: { "-": "errored_infra", transport: "errored_infra", agent: "errored_infra", usage_limit: "errored_infra" },
   protocol: { "-": "errored_infra", transport: "errored_infra", agent: "errored_infra", usage_limit: "errored_infra" },
   decider_timeout: { "-": "errored_infra", transport: "errored_infra", agent: "errored_infra", usage_limit: "errored_infra" },
+  answer_channel_violation: { "-": "errored_infra", transport: "errored_infra", agent: "errored_infra", usage_limit: "errored_infra" },
   timeout: { "-": "errored_agent", transport: "errored_infra", agent: "errored_agent", usage_limit: "errored_infra" },
   no_result: { "-": "errored_agent", transport: "errored_infra", agent: "errored_agent", usage_limit: "errored_infra" },
   result: { "-": "unclassified", transport: "errored_infra", agent: "errored_agent", usage_limit: "errored_infra" },

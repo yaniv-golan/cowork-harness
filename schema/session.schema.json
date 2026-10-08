@@ -47,6 +47,12 @@
         "strict"
       ]
     },
+    "answer_channel": {
+      "type": "string",
+      "enum": [
+        "none"
+      ]
+    },
     "folders": {
       "default": [],
       "type": "array",
@@ -325,6 +331,11 @@
         },
         "disable_experimental_betas": {
           "type": "boolean"
+        },
+        "artifacts_root": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!\\/)(?!.*\\\\)(?!(?:.*\\/)?\\.\\.(?:\\/|$))"
         }
       },
       "additionalProperties": false

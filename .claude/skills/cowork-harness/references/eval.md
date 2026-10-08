@@ -51,7 +51,8 @@ answered (the agent's `Not logged in` / `Authentication required` reply, rule `a
 spend limit as its final message, even on a nonzero exit after spend, rule `usage_limit`; or only
 `<synthetic>` models at $0, rule `no_model_answered`). An agent-caused failure (timeout, max turns,
 unanswered question, crash) then fails every row of its rep, even with its pin unknown. A run that stalled
-on a question is graded normally when the scenario asserts `allow_stall: true`, as on `run`. Only after that
+on a question is graded normally when the scenario asserts `allow_stall: true`, as on `run`, and so is one under
+`answer_channel: none` (rule `parked_at_question`). Only after that
 are a pin the agent did not honour (false, or unknown on a rep that completed) and a snapshot that changed
 excluded and reported. A loud UNCLASSIFIED count means a termination the classifier does not know — read
 those runs. Per scenario: if EVERY rep of both arms errored, or every rep of one arm is infrastructure,

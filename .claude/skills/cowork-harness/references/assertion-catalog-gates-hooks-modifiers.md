@@ -4,6 +4,9 @@ Tracks `cowork-harness 4.5.0` (baseline `desktop-2.26454.2`). Part 3 of 3 of the
 keys is an AND; glob vs regex name matching) and the verdict-signal table are in
 [`assertion-catalog.md`](./assertion-catalog.md); the other parts are [`assertion-catalog-outcome-files-tools.md`](./assertion-catalog-outcome-files-tools.md), [`assertion-catalog-agents-skills-budgets.md`](./assertion-catalog-agents-skills-budgets.md).
 
+Under the session key `answer_channel: none` the question and gate keys below, `questions_count_max` included, are
+refused at load: no question reaches the harness to grade.
+
 | Assertion | Passes when |
 |---|---|
 | `question_asked: <regex>` | the agent asked an AskUserQuestion whose **question text** matches (`question`, falling back to `header`). Text only — for the options it offered, use `question_options` ⚠️ **Model-composed text, reworded run to run** — pin a producer-authored constant, not model prose. |

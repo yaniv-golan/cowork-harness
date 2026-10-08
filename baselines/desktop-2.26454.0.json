@@ -16,6 +16,9 @@
     "manifestChecksumMatch": true,
     "stringSentinels": {
       "tengu_saddle_lantern": 2
+    },
+    "cliCapabilities": {
+      "permissionPrompts": true
     }
   },
   "guest": {

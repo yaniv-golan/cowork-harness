@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "../agent/session.js";
 import { budgetFields, evaluate, expandExpectDenied, judgedOpts, toolResultEvidence, type AssertContext } from "../assert.js";
 import { recordedFixtureFileSigs, recordedFixtureRefusal } from "../fixture/workspace.js";
+import { answerChannelAssertRefusal } from "../answer-channel.js";
 import { remeasureMetrics } from "../metrics.js";
 import type { Assertion, RunResult, Scenario } from "../types.js";
 import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./artifacts.js";
@@ -543,6 +544,9 @@ export function reevaluateRun(
   const { ctx, result, scenario } = loaded;
   const vacuousFixture = recordedFixtureRefusal(scenario, recordedFixtureFileSigs(runDir) ?? result.fingerprint?.workspaceFixtureFileSigs);
   if (vacuousFixture) return { ok: false, kind: "usage", message: `${opts.command ?? "verify-run"}: ${vacuousFixture}` };
+  // A run with no answer channel is graded only by a block its own load check would accept.
+  const noChannel = result.answerChannel === "none" ? answerChannelAssertRefusal(scenario.assert) : undefined;
+  if (noChannel) return { ok: false, kind: "usage", message: `${opts.command ?? "verify-run"}: ${noChannel}` };
   const deterministic = evaluate(scenario.assert, ctx, { quietSharedCapture: opts.quietSharedCapture === true });
   deterministic.push(...expandExpectDenied(scenario.expect_denied, ctx.egress, ctx.egressMissing));
   return { ...loaded, deterministic, metrics: remeasureMetrics(ctx, result, scenario.metrics) };

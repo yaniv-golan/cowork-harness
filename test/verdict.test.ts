@@ -234,6 +234,21 @@ describe("computeVerdict (the single verdict source)", () => {
     expect(computeVerdict(rr({}), "live").signals.some((s) => s.code === "stalled")).toBe(false); // not stalled → no signal
   });
 
+  it("under answer_channel: none a stall is a parked note (warn), never the stalled fail", () => {
+    const parked = rr({ stalledOnQuestion: true, answerChannel: "none" });
+    for (const lane of ["live", "replay"] as const) {
+      const v = computeVerdict(parked, lane);
+      expect(v.pass).toBe(true);
+      expect(v.signals.map((s) => [s.code, s.severity])).toContainEqual(["parked_at_question", "warn"]);
+      expect(v.signals.some((s) => s.code === "stalled")).toBe(false);
+    }
+    // The note never rescues a failing file assertion: completion is still judged from the files.
+    const unfinished = rr({ stalledOnQuestion: true, answerChannel: "none", assertions: [assn({ file_exists: "outputs/x" }, false)] });
+    expect(computeVerdict(unfinished, "live").pass).toBe(false);
+    // No stall → no note.
+    expect(computeVerdict(rr({ answerChannel: "none" }), "live").signals.some((s) => s.code === "parked_at_question")).toBe(false);
+  });
+
   it("reports host-path/outputs-delete as unverified (not ok) when scan evidence is absent", () => {
     const v = computeVerdict(rr({ scan: undefined }), "live");
     const byName = Object.fromEntries(v.guards.map((g) => [g.name, g.status]));

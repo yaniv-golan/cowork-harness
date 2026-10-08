@@ -1,0 +1,11 @@
+# Session for the headless gated probe: no answer channel, so the skill's gate is never answered.
+# `answer_channel: none` requires bypassPermissions (any other mode would also deny Cowork's own tools).
+model: claude-sonnet-5
+answer_channel: none
+permission_mode: bypassPermissions
+agent_env:
+  # COWORK_ARTIFACTS_ROOT = <outputs as the agent sees it>/artifacts, on every tier.
+  artifacts_root: artifacts
+plugins:
+  local_plugins:
+    - ../probes/gated-probe

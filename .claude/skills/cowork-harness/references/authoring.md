@@ -136,6 +136,10 @@ run's echoed `--answer "<q>=<choice>"` footer lines into the scenario's `answers
 being unattended. Skip the transcribe step only for one-off/exploratory runs.
 <!-- answer-channels:end -->
 
+**Nobody will answer at all** (a headless host where the skill must park at its gate): none of the channels
+above. Use the session key `answer_channel: none`, which removes the question tool and grades the skill's own
+status file. It is not a Cowork setting; see [docs/headless-no-answer.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/headless-no-answer.md).
+
 **For a QUESTION gate, never hand-write the `req-N.json`/`resp-N.json` files.** `gates` and `answer` wrap
 the protocol — the atomic temp+rename, the `{id, answers}` envelope, the multiSelect array shape.
 Hand-rolling a Monitor over the raw files is the single most common mistake on this channel.

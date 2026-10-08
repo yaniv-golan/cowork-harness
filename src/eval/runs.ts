@@ -150,6 +150,7 @@ export function buildRunsLine(args: {
                 { finalMessage: scrub(r.finalMessage, collectSecrets()).slice(0, FINAL_MESSAGE_MAX) }
               : {}),
             ...(r.stalledOnQuestion !== undefined ? { stalledOnQuestion: r.stalledOnQuestion } : {}),
+            ...(r.answerChannel !== undefined ? { answerChannel: r.answerChannel } : {}),
             ...(r.partial !== undefined ? { partial: r.partial } : {}),
             ...(r.unansweredGate !== undefined ? { unansweredGate: r.unansweredGate } : {}),
             ...(r.models !== undefined ? { models: r.models } : {}),
