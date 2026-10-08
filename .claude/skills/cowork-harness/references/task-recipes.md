@@ -457,7 +457,8 @@ assert:
   - gate_answer_count_min: 1        # and says a gate was expected (zero gates passes the line above)
 ```
 
-`{include_permissions: true}` also fails a tool permission cowork parity auto-allowed. *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion` and tell the
-model no user is present; the harness does not model them. To check instead that a skill parks correctly when
+With `{include_permissions: true}` it also fails when a permissive auto-allow, not a scripted or fixed rule,
+decided a tool permission. *Does not prove:* scheduled-task behaviour. Real scheduled tasks remove `AskUserQuestion`
+and tell the model no user is present; the harness does not model them. To check instead that a skill parks correctly when
 nobody can answer at all, use the session key `answer_channel: none`: the agent gets no question tool, and the run
 is graded by the status file the skill writes ([docs/headless-no-answer.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/headless-no-answer.md)).
