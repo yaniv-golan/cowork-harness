@@ -93,6 +93,7 @@ regressions.
 | **LLM decider** | `on_unanswered: llm` (YAML) **or** `--decider-llm` (CLI) | ❌ flags `nonDeterministic` |
 | **Spawned helper** | `--decider-cmd '<helper>'` | depends on the helper |
 | **In-band (driving agent)** | `--decider-dir <FRESH, EMPTY dir>` + `gates`/`answer` (arm a Monitor on the dir) | ❌ flags `nonDeterministic` |
+| **Nobody** (headless host, not Cowork) | session `answer_channel: none`: the agent gets `--permission-prompts none` and no question tool; grade the skill's status file (`artifact_json`) | ✅ — refuses `answers:`, the deciders and the gate keys |
 
 Pick with the decision tree in `authoring.md`'s *Choose an answer path* — the discriminator is **"will this run
 be re-executed unattended?"**, not "which row looks closest". `--decider-dir`'s one unique property is that

@@ -37,7 +37,13 @@ lint flags (see references/scenario-schema.md for the why of each):
   E  a presence assert + its absence sibling            (unsatisfiable; run/skill/record refuse it:
                                                        questions_count_max:0 vs gate presence,
                                                        no_hook_blocked vs hook_blocked,
+                                                       no_hook_event_blocked / hook_event_blocked {max: 0}
+                                                       vs hook_event_blocked / hook_decision deny,
                                                        no_path_denied vs path_denied/vm_path_denied)
+  E  `artifact-json-match`     an `artifact_json` glob (`*`/`?`) with no `match`, one ending in `/`,
+                               or a literal path with `match`
+  W  `unpaired-gates-all-scripted` `gates_all_scripted` with neither `gate_answer_count_min` nor
+                               `questions_count_max` (it passes when no gate fired)
   W  `transcript_no_host_path` on `fidelity: cowork` (tier resolves per baseline gate —
                                                       incompatible if it lands hostloop)
   W  `no_scratchpad_leak` on `fidelity: cowork`    (tier resolves per baseline gate)
