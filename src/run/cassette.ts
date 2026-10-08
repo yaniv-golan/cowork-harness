@@ -3752,6 +3752,10 @@ export function selectDiscovered(disc: ScenarioDiscovery, selectors: readonly st
     ...disc.broken.map((b) => ({ file: b.file, broken: b })),
   ].map((e) => ({ ...e, stem: stemOf(e.file), id: pathSafeId(stemOf(e.file)) }));
   for (const sel of selectors) {
+    // `a.yaml` beside `a.yml`: one stem, two files, and no selector that tells them apart.
+    const same = entries.filter((e) => e.stem === sel);
+    if (same.length > 1)
+      throw new UsageError(`--case "${sel}" names ${same.map((e) => basename(e.file)).join(" and ")}, which share a stem: rename one`);
     if (entries.some((e) => e.stem === sel || e.id === sel)) continue;
     const other = disc.skipped.find((f) => stemOf(f) === sel);
     if (other) throw new UsageError(`--case "${sel}": ${other} is not a scenario (it has no \`prompt:\`)`);

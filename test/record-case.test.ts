@@ -102,8 +102,13 @@ describe.skipIf(!can)("record <dir> --case: selection errors are usage errors, b
     const r = cli(["record", work, "--case", "zzz", "--dry-run", "--max-budget-usd", "5"], root);
     expect(r.code).toBe(2);
     expect(r.all).toMatch(/no case matches "zzz"\. Cases: a, b, c/);
-    // Same rule on the real arm, before the credential guard would matter: no spend either way.
-    expect(cli(["record", work, "--case", "zzz"], root).code).toBe(2);
+    // Same rule on the real arm, which checks credentials first: with a placeholder key it reaches the selection.
+    const real = spawnSync("node", [CLI, "record", work, "--case", "zzz"], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: root, ...PINNED, ANTHROPIC_API_KEY: "stub-placeholder-not-a-credential" },
+    });
+    expect(real.status).toBe(2);
+    expect(real.stderr).toMatch(/no case matches "zzz"/);
   });
 
   it("a stem that names a YAML file with no `prompt:` says it is not a scenario", () => {
@@ -178,6 +183,11 @@ describe("selectDiscovered", () => {
       broken: [{ file: "/d/b.yaml", error: "bad" }],
     });
     expect(selectDiscovered(disc, ["c"])).toEqual({ scenarios: ["/d/c.yml"], skipped: [], broken: [] });
+  });
+  it("refuses a stem two files share (a.yaml beside a.yml), naming both", () => {
+    expect(() => selectDiscovered({ scenarios: ["/d/a.yaml", "/d/a.yml"], skipped: [], broken: [] }, ["a"])).toThrow(
+      /--case "a" names a\.yaml and a\.yml, which share a stem: rename one/,
+    );
   });
   it("throws a UsageError naming an unknown selector or a non-scenario file", () => {
     expect(() => selectDiscovered(disc, ["x"])).toThrow(UsageError);
