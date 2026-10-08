@@ -19,7 +19,7 @@ All notable changes to this project are documented here. The format is based on
   line: each folded value follows a blank line and a `--- Full content ---` line, under a `[Label]` line. The title
   is the form's own header (usually `<Topic> details`), a form with no header has no title prefix, an empty answer is
   left out, and ` / ` replaces newlines inside a value, never the separator between picks (that is `, `). Fields
-  come in the order the form collects them (pill groups, then files, then text and dates), and a file field reads
+  come in the order the form collects them (pill groups, then files, then the remaining fields), and a file field reads
   `<name> (attached)` while the file itself is attached to the message. The recipe now sends the reply with
   `--prompt-file`, so the shell cannot expand a `$` in it. Fixed in the task recipe, `docs/scenario.md` and
   `docs/fidelity-gaps.md`.
