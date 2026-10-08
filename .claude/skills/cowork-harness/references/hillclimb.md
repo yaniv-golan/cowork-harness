@@ -171,7 +171,9 @@ lists every file. It is a change detector, not a security boundary: the permissi
 is what bounds an unattended run.
 
 `regrade` applies the same gate: a rubric fix is a scenario edit, so `regrade` refuses (exit 2) until the new sha
-is approved. `--approve-harness` on `regrade` records it, and is yours there too.
+is approved. `--approve-harness` on `regrade` records it, and is yours there too. `regrade` also applies the scenario's
+load rules, so a scenario edited to `answer_channel: none` while it still carries `answers:` or a gate assertion is
+refused there too.
 
 ## Refused before any spend (exit 2)
 

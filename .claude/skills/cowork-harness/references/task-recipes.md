@@ -13,18 +13,21 @@ a paid live re-record? Walk this tree — the answer is usually no:
 
 1. **Content / always-replay keys** (`transcript_*`, `tool_called`/`tool_not_called`,
    `tool_result_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`/`no_skill_triggered`,
-   `result`, `max_turns`, `tool_calls_max`, `max_cost_usd`, `max_tokens`) →
+   `result`, `max_turns`, `tool_calls_max`, `max_cost_usd`, `max_tokens`, and the hook keys `hook_event_fired`,
+   `hook_event_blocked`, `no_hook_event_blocked`, `hook_decision`, `hook_output_*`, read from the recorded frames) →
    `cowork-harness replay <cassette> --assert-from <scenario.yaml>`. Token-free, no re-record.
    If the recording genuinely lacks the telemetry a key needs (very old cassettes), the key fails
    **loud** as `evidence-unavailable` — that is correct behavior, not a bug; only then re-record.
-2. **Gate keys** (`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`) on a cassette
+2. **Gate keys** (`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`) on a cassette
    **with `controlOut`** (any modern recording) → same token-free `--assert-from` path.
 3. **Gate keys** on a **pre-`controlOut`** cassette → one re-record unlocks gate asserts for that
    cassette permanently.
 4. **Filesystem / egress keys** (`file_exists` without an artifact manifest, `file_absent` — live-only
    whatever the cassette carries — `egress_allowed`,
    `egress_denied`, `no_delete_in_outputs`) → live lane **by design**; replay skips them with a
-   loud `::warning::`. Keep them in the scenario, run them on the nightly live gate.
+   loud `::warning::`. Keep them in the scenario, run them on the nightly live gate. `artifact_json` (a literal path
+   or a glob) and `file_exists` with an artifact manifest re-evaluate token-free on replay: a glob grades the same
+   user-visible files the cassette recorded.
 
 **The one hard caveat:** `--assert-from` **hard-fails on recording-shaping drift** — if the
 scenario's `prompt:`, `answers:`, baseline, or skill content differ from what shaped the
@@ -170,7 +173,8 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    first branch that **cannot grade true**, no matter how the skill behaves — the evidence simply
    isn't in the document (only a skill's own result, with `include_fork_results: true`, is). Such a claim looks reasonable, survives drafting, and silently caps your pass
    rate. Assert tool use with the structural keys instead (`tool_called`, `present_files_called`,
-   `subagent_dispatched`, `hook_blocked`) — and, for what a command actually ran, the object form
+   `subagent_dispatched`, `hook_event_blocked` / `hook_decision` for a plugin's hook, `hook_blocked` for the
+   harness's own) — and, for what a command actually ran, the object form
    `tool_called: {tool: [Bash, mcp__workspace__bash], input: {command: <regex>}}` — and reserve `semantic_matches` for what the agent *said* or
    *wrote*. For a fan-out skill whose real work happens in sub-agents, add `include_subagent_text: true`.
    For a foreground `context: fork` skill, add `include_fork_results: true` (it also lets a claim like

@@ -115,7 +115,9 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   individual runs behind each summary with their `skillHash`/`runLabel`, so
   you can tell which arm a run belonged to without opening its `result.json`. `--last <n>` windows per group.
 - **`result.json` carries the raw fields** the assertions read: `verdict`, `lane` (which Cowork delivery
-  contract the run was held to — see gotcha 24 in `gotchas.md`), `scratchpadEvidenceComplete` (did a COMPLETE scratchpad
+  contract the run was held to — see gotcha 24 in `gotchas.md`), `answerChannel` (`"none"` on a run with nobody to
+  answer; such a run is labelled `[headless, no answer channel — not Cowork]`, and `stats` lists it as its own row
+  under every `--group-by`), `scratchpadEvidenceComplete` (did a COMPLETE scratchpad
   walk observe this run — what distinguishes "nothing was left undelivered" from "cannot tell"), `cost` (`cost.usd` = the SDK's
   `total_cost_usd` for the run — the authoritative single-run spend of the agent session, which leaves out the `semantic_matches` judge and the LLM decider calls; NOT the same source as summing
   `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),

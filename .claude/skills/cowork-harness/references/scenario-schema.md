@@ -195,7 +195,9 @@ agent_env:
   subagent_model: claude-opus-4-8   # -> CLAUDE_CODE_SUBAGENT_MODEL
   tool_search: auto                 # auto | off -> ENABLE_TOOL_SEARCH; omit = binary default (ToolSearch ON)
   disable_experimental_betas: false # true -> CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 (also disables ToolSearch)
-  artifacts_root: artifacts         # -> COWORK_ARTIFACTS_ROOT=<outputs as the agent sees it>/artifacts; refused at hostloop
+  artifacts_root: artifacts         # -> COWORK_ARTIFACTS_ROOT=<outputs as the agent sees it>/artifacts; refused at hostloop and cowork,
+                                    # whose host-loop shell never sees the agent's env. An operator's own export of
+                                    # the variable never reaches the agent at protocol or hostloop: set it here
 
 # fenced debug escape hatch (NOT reachable via Cowork's UI)
 debug:
