@@ -16,14 +16,16 @@ describe.runIf(havePython)("lane: remote refusals — runtime and linter agree",
       py,
       [
         "-c",
-        "import json,sys; sys.path.insert(0, sys.argv[1]); import scenario as s; print(json.dumps([sorted(s.LANE_REMOTE_INCOMPATIBLE_KEYS), list(s.LANE_REMOTE_EVIDENCE_FILES_KEYS)]))",
+        "import json,sys; sys.path.insert(0, sys.argv[1]); import scenario as s; print(json.dumps([sorted(s.LANE_REMOTE_INCOMPATIBLE_KEYS), list(s.LANE_REMOTE_EVIDENCE_FILES_KEYS), list(s.LANE_REMOTE_AUTHORED_KEYS)]))",
         SCRIPTS,
       ],
       { encoding: "utf8" },
     );
     expect(r.status, r.stderr).toBe(0);
-    const [keys, byValue] = JSON.parse(r.stdout) as [string[], string[]];
+    const [keys, byValue, authored] = JSON.parse(r.stdout) as [string[], string[], string[]];
     expect(keys).toEqual(Object.keys(LANE_REMOTE_INCOMPATIBLE).sort());
+    // by value, in laneRemoteLoadRefusal: semantic_* with evidence_files, file_exists with authored: true
     expect(byValue).toEqual(["semantic_matches", "semantic_pairwise"]);
+    expect(authored).toEqual(["file_exists"]);
   });
 });

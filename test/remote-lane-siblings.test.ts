@@ -3,13 +3,14 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { COMPOSER_ID, evaluate, runSemanticJudges, type AssertContext } from "../src/assert.js";
+import { COMPOSER_ID, composeJudgedDocument, evaluate, runSemanticJudges, type AssertContext } from "../src/assert.js";
 import { captureAuthoredFilesWithHealth } from "../src/run/artifacts.js";
 import { makeSemanticJudge } from "../src/decide/semantic-judge.js";
 import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
 import { composeKey } from "../src/refs/store.js";
+import { LANE_REMOTE_INCOMPATIBLE } from "../src/run/lane-notice.js";
 import { loadScenarioPure } from "../src/run/execute.js";
-import { preSpendVerdicts } from "../src/run/cassette.js";
+import { preSpendVerdicts, replayCassette } from "../src/run/cassette.js";
 import type { Assertion } from "../src/types.js";
 
 // `lane: remote` still EXECUTES locally, so every key below reads a local tree that exists and can pass. The contract
@@ -124,7 +125,7 @@ describe("authored: true on lane: remote is undecidable; plain file_exists stays
   });
 });
 
-// R13: semantic_matches on `lane: remote` is judged on the transcript only. The oracle is the PROMPT the real
+// semantic_matches on `lane: remote` is judged on the transcript only. The oracle is the PROMPT the real
 // request builder sends (makeSemanticJudge with an injected transport), over a context captured from a real tree —
 // a marker planted in an authored file, a sub-agent's text and a dropped file's path must reach no field of it.
 describe("semantic_matches on lane: remote — the judge sees the transcript only", () => {
@@ -204,7 +205,7 @@ describe("semantic_pairwise references are stored per lane", () => {
   });
 });
 
-// R11: a key that can never pass on lane: remote is a LOAD error (before any spend), on every path that starts a run:
+// A key that can never pass on lane: remote is a LOAD error (before any spend), on every path that starts a run:
 // the scenario loader, and the shared pre-spend list `record` runs — which `record --from-embedded` reaches without
 // the loader.
 describe("lane: remote refuses at load the keys that can never pass there", () => {
@@ -221,6 +222,7 @@ describe("lane: remote refuses at load the keys that can never pass there", () =
     ["no_scratchpad_leak", "no_scratchpad_leak: true"],
     ["semantic_matches", "semantic_matches: {rubric: [x], evidence_files: [outputs/a.md]}"],
     ["semantic_pairwise", "semantic_pairwise: {refs: [r], evidence_files: [outputs/a.md]}"],
+    ["file_exists", "file_exists: {path: outputs/a.md, authored: true}"],
   ];
   const file = (lane: string, item: string) => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-lane-load-"));
@@ -247,5 +249,107 @@ describe("lane: remote refuses at load the keys that can never pass there", () =
   it("input_unmodified and file_exists load on remote", () => {
     expect(() => loadScenarioPure(file("remote", "input_unmodified: uploads/**"))).not.toThrow();
     expect(() => loadScenarioPure(file("remote", "file_exists: outputs/a.md"))).not.toThrow();
+  });
+});
+
+describe("the transcript-only note survives the judge document's size cap", () => {
+  it("is the first section, so a cut at the end never removes it", () => {
+    const c = ctx(tree(), { lane: "remote", finalMessage: "done", transcript: "t".repeat(400_000) });
+    const d = composeJudgedDocument(c, false, undefined, false);
+    expect(d.doc.startsWith("## Evidence scope (transcript only)")).toBe(true);
+    expect(d.fingerprint.sections[0]?.kind).toBe("health");
+  });
+});
+
+// The other direction of the lane-notice cross-check: a key refused at load must also refuse when it reaches the
+// evaluator another way (a replayed older cassette, verify-run of a kept run). A key added to the load list alone fails
+// here until it has its assertion-time branch.
+describe("every key refused at load on lane: remote also refuses at assertion time", () => {
+  const SAMPLE: Record<keyof typeof LANE_REMOTE_INCOMPATIBLE, Assertion> = {
+    present_files_called: { present_files_called: true },
+    no_scratchpad_leak: { no_scratchpad_leak: true },
+    user_visible_artifact: { user_visible_artifact: "outputs/report.md" },
+    artifact_text: { artifact_text: { artifact: "outputs/report.md", contains: ["hi"] } },
+    artifact_json: { artifact_json: { artifact: "outputs/report.json", path: "a", equals: 1 } },
+    file_absent: { file_absent: "outputs/none.md" },
+    no_unexpected_files: { no_unexpected_files: ["outputs/report.md"] },
+    computer_links_resolve: { computer_links_resolve: true },
+    computer_links_resolve_if_present: { computer_links_resolve_if_present: true },
+    no_lost_write_back: { no_lost_write_back: true },
+  } as Record<keyof typeof LANE_REMOTE_INCOMPATIBLE, Assertion>;
+  it("covers the whole load list", () => expect(Object.keys(SAMPLE).sort()).toEqual(Object.keys(LANE_REMOTE_INCOMPATIBLE).sort()));
+  for (const [key, a] of Object.entries(SAMPLE))
+    it(key, () => {
+      const root = tree({ "outputs/report.md": "hi", "outputs/report.json": '{"a":1}' });
+      const [r] = evaluate(
+        [a],
+        ctx(root, {
+          lane: "remote",
+          effectiveFidelity: "container",
+          preRunPaths: [],
+          preRunHashes: {},
+          authoredFiles: [],
+          linkResolution: { mode: "live" },
+          transcript: "no links",
+        }),
+      );
+      expect(r.pass).toBe(false);
+      expect(r.message).toMatch(/lane: remote/);
+    });
+});
+
+describe("lane: remote — the paths that skip the load check still refuse", () => {
+  it("a --resume turn (no pre-run manifest of its own) is still judged on the transcript, not refused for the baseline", async () => {
+    const prompts: string[] = [];
+    const judge = makeSemanticJudge({
+      model: "m",
+      complete: async (prompt) => {
+        prompts.push(prompt);
+        return { text: '{"results":[{"index":0,"pass":true}]}', model: "m" };
+      },
+    });
+    const a = { semantic_matches: { rubric: ["x"] } } as Assertion;
+    const c = ctx(tree(), {
+      lane: "remote",
+      transcript: "t",
+      authoredFiles: [],
+      authoredFilesHealth: { omittedPaths: [], totalCapExhausted: false, readErrors: [], noPreRunManifest: true } as never,
+    });
+    await runSemanticJudges([a], c, judge);
+    const [r] = evaluate([a], c);
+    expect(prompts).toHaveLength(1);
+    expect(r.semanticEvidence?.reason).toBe("graded");
+  });
+
+  it("an older lane: remote cassette replays no_unexpected_files and computer_links_resolve as lane failures", async () => {
+    const events = [
+      JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: `[r](computer:///sessions/${SID}/mnt/outputs/r.md)` }] },
+      }),
+      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+    ];
+    const body = "hi";
+    const cassette = {
+      scenario: {
+        name: "c",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container" as const,
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        lane: "remote",
+        assert: [{ no_unexpected_files: ["outputs/r.md"] }, { computer_links_resolve: true }, { result: "success" }],
+      },
+      events,
+      preRunPaths: [],
+      artifacts: [{ path: "outputs/r.md", bytes: 2, sha256: createHash("sha256").update(body).digest("hex"), body }],
+    } as any;
+    const r = await replayCassette(cassette);
+    const failed = r.assertions.filter((x) => !x.pass);
+    expect(failed.map((x) => Object.keys(x.assertion)[0]).sort()).toEqual(["computer_links_resolve", "no_unexpected_files"]);
+    for (const f of failed) expect(f.message).toMatch(/lane: remote/);
   });
 });

@@ -2674,16 +2674,10 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
     throw new Error(
       `${context}: \`execution: cloud-describe\` is reserved — no runner exists yet, so authoring it is a load-time error rather than a silent no-op. Remove it (or use the default \`execution: local\`) until a cloud runner ships.`,
     );
-  // `lane: remote` + a present_files-shaped assertion is incoherent by construction: that lane serves no
-  // cowork MCP server, so those keys can only ever report can't-verify. Rejecting at LOAD time follows the
-  // `cloud-describe` precedent above — an authored assertion that CANNOT pass should cost a config error,
-  // not a paid run that fails at assertion time.
-  //
-  // The remedy this message offers is deliberately NOT "assert the delivery itself": the harness models no
-  // remote delivery tool at all (production's is the agent-native `SendUserFile`), so there is currently
-  // NOTHING on this lane to assert a delivery against. Advising it sent a consumer looking for a key that
-  // does not exist. Until a remote delivery tool is served, the honest remedies are the weaker
-  // path-plus-statement proxy or switching lanes — say exactly that.
+  // `lane: remote`: every key that can never pass there (delivery by location, file bodies, absence, links,
+  // authored sources, `file_exists` with `authored: true`, `semantic_*` with `evidence_files`) is a config error at
+  // load, following the `cloud-describe` precedent above, not a paid run that fails at assertion time. The list and
+  // a remedy per reason live in `laneRemoteLoadRefusal` (lane-notice.ts), which record's pre-spend checks call too.
   const laneRefusal = laneRemoteLoadRefusal(scenario);
   if (laneRefusal) throw new Error(`${context}: ${laneRefusal}`);
   // assert[] patterns

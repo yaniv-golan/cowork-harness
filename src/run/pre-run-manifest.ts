@@ -279,7 +279,7 @@ export function readPreRunManifestUnavailableReasons(outDir: string): Record<str
 }
 
 /** The manifest's provenance ("local-walk" today; "remote-unavailable" is RESERVED for a future cloud
- *  producer — see the write-site comment in capturePreRunManifest). undefined = no manifest, an older
+ *  producer, not `lane: remote` — see the write-site comment in capturePreRunManifest). undefined = no manifest, an older
  *  manifest predating this field, or a value that isn't one of the two known literals — callers must
  *  NOT treat undefined as "local-walk"; forward-compat callers should treat an unrecognized value the
  *  same conservative way they treat an absent manifest (evidence-unavailable), never assume it's safe. */

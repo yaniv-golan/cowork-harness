@@ -531,7 +531,7 @@ const AuthoredFlag = z
   .boolean()
   .optional()
   .describe(
-    "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+    "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check. Undecidable on `lane: remote` (it compares the container's file with the pre-run manifest); `file_exists` with it is rejected at load there.",
   );
 export const PresenceObject = z.strictObject({
   path: z.string().min(1).describe("the file's path under the work root (as in the string form)"),
@@ -958,7 +958,7 @@ export const Assertion = z.strictObject({
     .array(z.string().min(1))
     .optional()
     .describe(
-      "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), and a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable",
+      "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), and a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable. Rejected at load on `lane: remote`, where the agent's container filesystem is not locally observable.",
     ),
   file_absent: z
     .string()
@@ -987,14 +987,14 @@ export const Assertion = z.strictObject({
     .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
     .optional()
     .describe(
-      "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector)",
+      "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector). On `lane: remote` it reads the local stand-in for the inputs, which in production live on the user's device (unconfirmed for the cloud lane).",
     ),
   self_heal_ran: z.boolean().optional().describe("skill resolved scripts via /sessions (plugin-root self-heal)"),
   no_lost_write_back: z
     .literal(true)
     .optional()
     .describe(
-      "fails if the run authored an interactive HTML artifact (or a .py/.js generator of one) whose relative Submit/POST write-back is lost under Cowork — runs the static Tier A analyzer over the files the run authored; a lost write-back on an ADDED agent-authored source fails, a pre-existing file the skill merely modified on a read-write mount is advisory; could-not-verify (fail-closed) on a --resume scratchpad or an unanalyzable candidate; runs on every live sandbox tier including microvm (outputs snapshotted from the VM); only `true` is valid (omit to skip). LIVE/verify-run only — skipped on replay",
+      "fails if the run authored an interactive HTML artifact (or a .py/.js generator of one) whose relative Submit/POST write-back is lost under Cowork — runs the static Tier A analyzer over the files the run authored; a lost write-back on an ADDED agent-authored source fails, a pre-existing file the skill merely modified on a read-write mount is advisory; could-not-verify (fail-closed) on a --resume scratchpad or an unanalyzable candidate; runs on every live sandbox tier including microvm (outputs snapshotted from the VM); only `true` is valid (omit to skip). LIVE/verify-run only — skipped on replay. Rejected at load on `lane: remote`, where the agent's container filesystem is not locally observable.",
     ),
   transcript_no_host_path: z
     .literal(true)
@@ -1006,13 +1006,13 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip). Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here",
+      "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip). Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here. Rejected at load on `lane: remote`, where the agent's container filesystem is not locally observable.",
     ),
   computer_links_resolve_if_present: z
     .literal(true)
     .optional()
     .describe(
-      "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here",
+      "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here. Rejected at load on `lane: remote`, where the agent's container filesystem is not locally observable.",
     ),
   question_asked: z
     .string()
@@ -1285,7 +1285,7 @@ export const Assertion = z.strictObject({
             "against zero authored evidence — the failure message lists the paths the run actually authored. When set, the " +
             "capture also spends its size budget on these files FIRST and exempts them from the per-file cap, and an " +
             "in-scope file that is still omitted or truncated fails evidence-unavailable (raise `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES` when a large deliverable legitimately needs more). Omitted = every authored file is " +
-            "judged and any omission refuses the verdict (the default, unchanged)",
+            "judged and any omission refuses the verdict (the default, unchanged). Rejected at load on `lane: remote`, where the judge sees the transcript only",
         ),
       include_subagent_text: z
         .boolean()
@@ -1346,7 +1346,7 @@ export const Assertion = z.strictObject({
         })
         .optional()
         .describe(
-          "scope the run's AUTHORED-FILE evidence exactly as semantic_matches.evidence_files does; the frozen reference must have been composed with the same scope",
+          "scope the run's AUTHORED-FILE evidence exactly as semantic_matches.evidence_files does; the frozen reference must have been composed with the same scope. Rejected at load on `lane: remote`, where the judge sees the transcript only.",
         ),
       include_subagent_text: z
         .boolean()
@@ -1563,7 +1563,8 @@ export const ScenarioObject = z.strictObject({
       "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): " +
         "local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | " +
         "remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. " +
-        "Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md",
+        "Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md. " +
+        "On remote, every assertion that reads files inside the agent's container is rejected at load, and a semantic judge sees the transcript only",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z

@@ -11,8 +11,8 @@ import type { Assertion } from "../types.js";
 
 /** Assertion keys whose result depends on the run's ENVIRONMENT (paths, mounts, delivery, egress, the host loop's
  *  path boundary) rather than on the agent's behaviour. The `lane: remote` code is CROSS-CHECKED against it, not
- *  derived from it: execute.ts types its load-time refusal list against this one (a key outside it fails to
- *  compile), and test/lane-notice.test.ts requires the key of every `lane === "remote"` branch in assert.ts to be
+ *  derived from it: `LANE_REMOTE_INCOMPATIBLE` below, the load-time refusal list, is typed against this one (a key
+ *  outside it fails to compile), and test/lane-notice.test.ts requires the key of every `lane === "remote"` branch in assert.ts to be
  *  in it. Not every key here has a remote branch (`file_exists` reads the local tree on every lane: it is the
  *  documented remote-lane proxy, with `transcript_matches`). */
 export const ENVIRONMENT_SHAPED_ASSERT_KEYS = [
@@ -103,8 +103,10 @@ const BODY =
   "it reads the body of a file the run wrote, which lives in a remote container whose filesystem is not locally observable. Assert the written path with `file_exists` and the agent's own statement of the content with `transcript_matches`, or set `lane: local`.";
 const ABSENCE =
   "it proves an absence over a tree a remote container holds, whose filesystem is not locally observable — a clean local read is not evidence. Assert the agent's own statement with `transcript_not_matches`, or set `lane: local`.";
-const LINKS =
-  "a `computer://` link is the local lane's delivery convention, and a remote container's filesystem is not locally observable, so there is nothing to resolve a link against. Assert the written path plus the agent's own statement of it (`file_exists` + `transcript_matches`), or that no link was given (`transcript_not_matches: \"computer://\"`), or set `lane: local`.";
+const LINKS_WHY =
+  "a `computer://` link is the local lane's delivery convention, and a remote container's filesystem is not locally observable, so there is nothing to resolve a link against.";
+const LINKS = `${LINKS_WHY} Assert the written path plus the agent's own statement of it (\`file_exists\` + \`transcript_matches\`), or set \`lane: local\`.`;
+const LINKS_IF_PRESENT = `${LINKS_WHY} Assert that no link was given (\`transcript_not_matches: "computer://"\`), or set \`lane: local\`.`;
 const AUTHORED =
   "it analyses the files the run authored, which live in a remote container whose filesystem is not locally observable. Set `lane: local` to check it.";
 
@@ -121,10 +123,12 @@ export const LANE_REMOTE_INCOMPATIBLE = {
   file_absent: ABSENCE,
   no_unexpected_files: ABSENCE,
   computer_links_resolve: LINKS,
-  computer_links_resolve_if_present: LINKS,
+  computer_links_resolve_if_present: LINKS_IF_PRESENT,
   no_lost_write_back: AUTHORED,
 } as const satisfies Partial<Record<EnvironmentShapedAssertKey, string>>;
 
+const AUTHORSHIP =
+  "with `authored: true` it compares the container's file with the pre-run manifest, and a remote container's filesystem is not locally observable. Drop `authored` (a written path is the documented proxy on this lane), or set `lane: local`.";
 const SEMANTIC_FILES =
   "its `evidence_files` names files to grade, and on this lane the files the run wrote live in a remote container whose filesystem is not locally observable, so the judge sees the transcript only. Drop `evidence_files` and write the rubric about what the agent said, or set `lane: local`.";
 
@@ -138,6 +142,9 @@ export function laneRemoteLoadRefusal(scenario: {
   for (const a of scenario.assert) {
     for (const [key, why] of Object.entries(LANE_REMOTE_INCOMPATIBLE))
       if (a[key] !== undefined) return `\`${key}\` cannot pass on \`lane: remote\` — ${why}`;
+    const fe = a.file_exists as { authored?: unknown } | string | undefined;
+    if (typeof fe === "object" && fe !== null && fe.authored === true)
+      return `\`file_exists\` cannot pass on \`lane: remote\` — ${AUTHORSHIP}`;
     for (const key of ["semantic_matches", "semantic_pairwise"] as const) {
       const files = (a[key] as { evidence_files?: unknown[] } | undefined)?.evidence_files;
       if (Array.isArray(files) && files.length > 0) return `\`${key}\` cannot pass on \`lane: remote\` — ${SEMANTIC_FILES}`;

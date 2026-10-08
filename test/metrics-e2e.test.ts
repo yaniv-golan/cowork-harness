@@ -188,6 +188,30 @@ describe.runIf(POSIX)("scenario metrics, through the real executeScenario (proto
     for (const a of [live, verify]) expect(a?.pass).toBe(true);
   }, 120_000);
 
+  // verify-run of a kept run reads the lane from result.json, not from the scenario it is handed: a run recorded on
+  // lane: remote (by an older release, or a scenario changed since) grades its file keys as lane refusals.
+  it("verify-run of a kept run whose result.json says lane: remote refuses the file keys", async () => {
+    const sc = parseScenarioFile(scenario("vr-remote", "write", ["assert:", "  - no_unexpected_files: [outputs/m.json]"]));
+    const r = await executeScenario(sc, {});
+    expect(r.assertions.find((a) => "no_unexpected_files" in a.assertion)?.pass).toBe(true);
+    const paths: string[] = [];
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = join(d, e.name);
+        if (e.isDirectory() && e.name !== "work") walk(p);
+        else if (e.name === "result.json") paths.push(p);
+      }
+    };
+    walk(r.outDir!);
+    expect(paths.length).toBeGreaterThan(0);
+    for (const p of paths) writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), lane: "remote" }));
+    const re = reevaluateRun(r.outDir!, sc);
+    expect(re.ok).toBe(true);
+    const v = re.ok ? re.deterministic.find((a) => "no_unexpected_files" in a.assertion) : undefined;
+    expect(v?.pass).toBe(false);
+    expect(v?.message).toMatch(/lane: remote/);
+  }, 120_000);
+
   it("absent when nothing is declared, and for an empty list", async () => {
     const a = await executeScenario(parseScenarioFile(scenario("none", "write", [])), {});
     expect(a.metrics).toBeUndefined();

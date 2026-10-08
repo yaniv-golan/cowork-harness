@@ -13,18 +13,24 @@ All notable changes to this project are documented here. The format is based on
   lane's filesystem is not observable. A scenario on `lane: remote` that uses `artifact_text`, `artifact_json`,
   `file_absent`, `no_unexpected_files`, `computer_links_resolve`, `computer_links_resolve_if_present`,
   `no_lost_write_back`, or `semantic_matches` / `semantic_pairwise` with `evidence_files` no longer loads: `run`,
-  `record`, `lint`, `verify-run` and `regrade` refuse it with the key and a remedy, and `verify-cassettes` marks its
-  cassette unverifiable (exit 3). Assert the written path with `file_exists` and what the agent said with
-  `transcript_matches` / `transcript_not_matches`, or set `lane: local`. Plain `replay` of an older cassette with
-  one of these keys on `lane: remote` fails that assertion instead (`file_absent` and the `semantic_*` keys are
-  live-only, so replay skips them as before).
+  `record`, `lint`, `verify-run` and `regrade` refuse it with the key and a remedy, and `verify-cassettes` reports
+  its cassette unverifiable (exit 3) when it reads the scenario from the source the cassette records. So does
+  `file_exists` with `authored: true`. Assert the written path with plain `file_exists` and what the agent said
+  with `transcript_matches` / `transcript_not_matches`, or set `lane: local`. Plain `replay` of an older cassette
+  on `lane: remote` now fails a `no_unexpected_files` or `computer_links_resolve(_if_present)` assertion
+  (`artifact_text` / `artifact_json` already failed there in 4.6.0; `file_absent`, `no_lost_write_back` and the
+  `semantic_*` keys are live-only, so replay skips them as before).
 - **`lint` exits 1 on those scenarios.** 4.6.0 reported `artifact_json`, `artifact_text` and `file_absent` on
   `lane: remote` as the WARN `lane-remote-unobservable-key`; that rule is retired, and the keys are now the ERROR
   `lane-remote-incompatible-key` with the others above.
 - **`semantic_matches` / `semantic_pairwise` on `lane: remote` are judged on the transcript and final answer only.**
   No authored file, capture-health path or sub-agent text reaches the judge, so a rubric about a file's content
-  grades differently. A `semantic_pairwise` reference is stored per lane: a reference frozen from a `lane: remote`
-  run before this release reads as missing; re-freeze it.
+  grades differently, and `regrade` of a kept 4.6.0 `lane: remote` run reports the judged document as changed. A
+  `semantic_pairwise` reference is stored per lane: a reference frozen from a `lane: remote` run before this release
+  reads as missing. Re-run the reference's variant and freeze from that run; a run kept from an earlier release cannot
+  be re-frozen, since its judged document included file bodies.
+- **The `[lane]` notice now also fires for `no_lost_write_back`** on a `lane: local` run, since it reads the files
+  the run authored.
 
 ### Added
 

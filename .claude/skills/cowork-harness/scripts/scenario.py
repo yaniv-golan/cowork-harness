@@ -239,7 +239,7 @@ LANE_REMOTE_INCOMPATIBLE_FIXES = {
     "artifact_json": "Assert the written path with `file_exists` and the agent's own statement of the content with `transcript_matches`, or set `lane: local`.",
     "file_absent": "Assert the agent's own statement with `transcript_not_matches`, or set `lane: local`.",
     "no_unexpected_files": "Assert the agent's own statement with `transcript_not_matches`, or set `lane: local`.",
-    "computer_links_resolve": _DELIVERY_FIX,
+    "computer_links_resolve": "Assert the written path plus the agent's own statement of it (`file_exists` + `transcript_matches`), or set `lane: local`.",
     "computer_links_resolve_if_present": "Assert that no link was given (`transcript_not_matches: \"computer://\"`), or set `lane: local`.",
     "no_lost_write_back": "Set `lane: local` to check it.",
 }
@@ -247,6 +247,8 @@ LANE_REMOTE_INCOMPATIBLE_KEYS = set(LANE_REMOTE_INCOMPATIBLE_FIXES)
 # Refused on `lane: remote` by VALUE, not key: a judged assert naming `evidence_files` (the judge sees the
 # transcript only there). Without evidence_files they load and are judged on the transcript.
 LANE_REMOTE_EVIDENCE_FILES_KEYS = ("semantic_matches", "semantic_pairwise")
+# ... and `file_exists` with `authored: true` (authorship reads the container's file; plain file_exists is the proxy).
+LANE_REMOTE_AUTHORED_KEYS = ("file_exists",)
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
 VERDICT_MODIFIER_KEYS = {
     "allow_permissive_auto_allow",
@@ -1675,17 +1677,23 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 if isinstance(_v, dict) and isinstance(_v.get("evidence_files"), list) and _v["evidence_files"]:
                     if _k not in lane_incompatible:
                         lane_incompatible.append(_k)
+            for _k in LANE_REMOTE_AUTHORED_KEYS:
+                _v = _it.get(_k)
+                if isinstance(_v, dict) and _v.get("authored") is True and _k not in lane_incompatible:
+                    lane_incompatible.append(_k)
         for _k in sorted(lane_incompatible):
             findings.append(
                 Finding(
                     "ERROR",
                     "lane-remote-incompatible-key",
-                    f"`{_k}`{' with `evidence_files`' if _k in LANE_REMOTE_EVIDENCE_FILES_KEYS else ''} on `lane: remote` "
+                    f"`{_k}`{' with `evidence_files`' if _k in LANE_REMOTE_EVIDENCE_FILES_KEYS else ' with `authored: true`' if _k in LANE_REMOTE_AUTHORED_KEYS else ''} on `lane: remote` "
                     "-- it can never pass there (that lane's container filesystem is not locally observable, and "
                     "location delivers nothing). The runtime rejects this at scenario LOAD time, before the run starts.",
                     LANE_REMOTE_INCOMPATIBLE_FIXES.get(
                         _k,
-                        "Drop `evidence_files` and write the rubric about what the agent said, or set `lane: local`.",
+                        "Drop `authored` (a written path is the documented proxy on this lane), or set `lane: local`."
+                        if _k in LANE_REMOTE_AUTHORED_KEYS
+                        else "Drop `evidence_files` and write the rubric about what the agent said, or set `lane: local`.",
                     ),
                     path,
                 )
@@ -1911,8 +1919,12 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                     "token-free `replay` lane the live-only ones are skipped (with a loud warning) and the verdict "
                     "modifiers verify nothing, so a replay PR gate would verify nothing.",
                     "Add a content assertion (result / transcript_* / tool_* / subagent_*) or a "
-                    "manifest-backed one (file_exists / user_visible_artifact / artifact_json), or run this "
-                    "scenario only on the live (run/record) lane.",
+                    + (
+                        "manifest-backed one (file_exists; the others are refused on `lane: remote`)"
+                        if lane == "remote"
+                        else "manifest-backed one (file_exists / user_visible_artifact / artifact_json)"
+                    )
+                    + ", or run this scenario only on the live (run/record) lane.",
                     path,
                 )
             )
@@ -2183,7 +2195,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
     # in LANE_REMOTE_INCOMPATIBLE_KEYS (user_visible_artifact) already got the ERROR above and is rejected
     # at scenario-LOAD time -- it can never reach a replay to re-record for, so "re-record so it evaluates"
     # is unreachable advice for that key (same rationale as the tier-rule suppression above). The same holds
-    # for artifact_json / artifact_text, which load but FAIL at assertion time on that lane (its container
+    # for artifact_json / artifact_text, which are rejected at load on that lane too (its container
     # filesystem is not locally observable, so there is no body to read): a manifest cannot make them
     # evaluate, and `lane-remote-incompatible-key` above already refuses them. Filtered per-key, not the whole block: file_exists and the other manifest keys stay
     # reachable and worth advising about on `lane: remote`.

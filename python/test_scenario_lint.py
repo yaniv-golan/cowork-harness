@@ -397,6 +397,7 @@ LANE_REMOTE_ITEMS = {
     "no_lost_write_back": "no_lost_write_back: true",
     "semantic_matches": "semantic_matches: {rubric: [x], evidence_files: [outputs/x.md]}",
     "semantic_pairwise": "semantic_pairwise: {refs: [r], evidence_files: [outputs/x.md]}",
+    "file_exists": "file_exists: {path: outputs/x.md, authored: true}",
 }
 LANE_REMOTE_KEYS = tuple(LANE_REMOTE_ITEMS)
 
@@ -2566,3 +2567,13 @@ def test_artifact_json_glob_with_trailing_slash_is_an_error(tmp_path):
     hits = [x for x in findings if x["rule"] == "artifact-json-match"]
     assert len(hits) == 1 and "ends in" in hits[0]["message"]
     assert code == 1
+
+
+def test_replay_noop_advice_names_only_keys_the_lane_allows(tmp_path):
+    """On `lane: remote` user_visible_artifact and artifact_json are refused at load: the advice must not offer them."""
+    body = "assert:\n  - egress_denied: example.com\n"
+    for lane, offered in (("remote", False), ("local", True)):
+        found = [f for f in scenario.lint_file(str(_write_lane(tmp_path, lane, body))) if f.rule == "replay-noop"]
+        assert len(found) == 1, lane
+        assert ("artifact_json" in found[0].fix) is offered, lane
+        assert "file_exists" in found[0].fix

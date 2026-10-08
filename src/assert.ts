@@ -1435,6 +1435,16 @@ export function composeJudgedDocument(
     parts.push(text);
     kinds.push(path !== undefined ? { kind, path } : { kind });
   };
+  // `lane: remote`: tell the judge what it is NOT seeing, so a missing file section is not read as "nothing was
+  // written". FIRST, so the aggregate cap (which cuts from the end) can never drop it. Kind "health": not graded
+  // evidence.
+  if (ctx.lane === "remote")
+    push(
+      "health",
+      `## Evidence scope (transcript only)\nThis run models a remote container whose files are not observable from outside it, so ` +
+        `NO authored file${includeSubagentText ? " and no sub-agent output" : ""} is shown. Grade only what the transcript and final answer ` +
+        `show the agent said and did; do NOT infer that a file was or was not written from the absence of file sections.`,
+    );
   if (ctx.finalMessage) push("final", `## Final answer\n${capForJudge(s(ctx.finalMessage), JUDGE_FINAL_CAP)}`);
   push("transcript", `## Transcript\n${capForJudge(s(ctx.transcript ?? ""), JUDGE_TRANSCRIPT_CAP)}`);
   // OPT-IN sub-agent text. `ctx.transcript` carries top-level assistant_text ONLY (run.ts drops any
@@ -1556,15 +1566,6 @@ export function composeJudgedDocument(
       `## Evidence health (INCOMPLETE)\nThe authored-file evidence above is NOT complete — do NOT infer content is absent just because it is not shown here:\n${notes.join("\n")}`,
     );
   }
-  // `lane: remote`: tell the judge what it is NOT seeing, so a missing file section is not read as "nothing was
-  // written". Kind "health": not graded evidence, after the authored region like the capture-health note.
-  if (ctx.lane === "remote")
-    push(
-      "health",
-      `## Evidence scope (transcript only)\nThis run models a remote container whose files are not observable from outside it, so ` +
-        `NO authored file${includeSubagentText ? " and no sub-agent output" : ""} is shown. Grade only what the transcript and final answer ` +
-        `show the agent said and did; do NOT infer that a file was or was not written from the absence of file sections.`,
-    );
   // Did the aggregate cap eat into the evidence? Measured as the OFFSET AT WHICH each region ends, not as
   // "the document overflowed at all" — an earlier, blunter version of this compared `doc.length` to the cap
   // and refused whenever ANYTHING was trimmed. That false-failed the common shape where every graded byte
@@ -3155,7 +3156,10 @@ function check(
         )
         .join("; ");
       semanticEvidence = { reason: "graded", paths: scopeAuthoredEvidence(ctx, p.evidence_files).files.map((f) => f.path) };
-      results.push(gated.every(passes) ? ok(`pairwise (${passIf}): ${summary}`) : fail(`pairwise (${passIf}): ${summary}`));
+      const laneNote = ctx.lane === "remote" ? "; judged on the transcript only (lane: remote)" : "";
+      results.push(
+        gated.every(passes) ? ok(`pairwise (${passIf}): ${summary}${laneNote}`) : fail(`pairwise (${passIf}): ${summary}${laneNote}`),
+      );
     }
   }
   if (a.tool_result_contains !== undefined) {
@@ -4156,6 +4160,8 @@ function check(
     }
   }
   if (a.input_unmodified !== undefined) {
+    // `lane: remote` deliberately NOT guarded: the inputs live on the user's device, so the local stand-in is read.
+    // UNCONFIRMED whether an in-container edit of a staged copy reaches the device; confirm on a real cloud capture.
     if (ctx.preRunOrigin === "remote-unavailable" || ctx.preRunOrigin === "local-unreadable") {
       results.push(
         fail(

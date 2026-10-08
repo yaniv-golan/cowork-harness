@@ -609,3 +609,42 @@ describe("semantic_pairwise — composedDoc, attempts, deadline", () => {
     expect(r!.message).toMatch(/pairwise judge not run/);
   });
 });
+
+describe("semantic_pairwise on lane: remote — transcript only, against a remote reference", () => {
+  const MARK = "PAIRWISE-FILE-MARKER-3b9f";
+  const SUB = "PAIRWISE-SUBAGENT-MARKER-4c2a";
+  const remoteCtx = (finalMessage: string) =>
+    ctx({
+      lane: "remote",
+      finalMessage,
+      authoredFiles: [{ path: "outputs/report.md", content: `report ${MARK}` }],
+      subagents: [{ description: "helper", reasoning: [{ kind: "text", text: SUB }] }] as unknown as AssertContext["subagents"],
+    });
+  it("the candidate sent carries no authored file or sub-agent text, and the verdict says transcript only", async () => {
+    const a = assertOf({ include_subagent_text: true });
+    // A remote reference lives under the remote compose key.
+    const refDoc = candidateDocument(remoteCtx("REFERENCE ANSWER"), a).candidate;
+    freezeRef(join(tmp, "baseline"), "case_1", SRC, { [pairwiseComposeKey(a, "remote")]: refDoc }, META());
+    const c = remoteCtx("CANDIDATE ANSWER");
+    const seen: PairwiseInput[] = [];
+    await runPairwiseJudges([a], c, opts(a, { judgeFor: fakeJudge("win", seen) }));
+    expect(seen).toHaveLength(1);
+    for (const side of [seen[0]!.candidate, seen[0]!.reference]) {
+      expect(side).not.toContain(MARK);
+      expect(side).not.toContain(SUB);
+      expect(side).not.toContain("outputs/report.md");
+      expect(side).toMatch(/transcript only/i);
+    }
+    const [r] = evaluate([a], c);
+    expect(r!.pass).toBe(true);
+    expect(r!.evidence).toMatch(/judged on the transcript only \(lane: remote\)/);
+  });
+  it("a reference frozen under the local key reads as missing for a remote candidate", async () => {
+    const a = assertOf();
+    freezeFrom(join(tmp, "baseline"), a, "LOCAL REFERENCE");
+    const c = remoteCtx("CANDIDATE ANSWER");
+    await runPairwiseJudges([a], c, opts(a));
+    const [r] = evaluate([a], c);
+    expect(r!.pairwise?.[0]?.status).toBe("missing");
+  });
+});
