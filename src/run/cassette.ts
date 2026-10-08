@@ -13,6 +13,8 @@ import {
 import { recordedFixtureRefusal, scanWorkspaceFixture } from "../fixture/workspace.js";
 import { answerChannelAssertRefusal } from "../answer-channel.js";
 import { laneRemoteLoadRefusal } from "./lane-notice.js";
+import { selectCases, stemOf } from "../hillclimb/cases.js";
+import { pathSafeId } from "../hillclimb/ids.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS } from "../eval/usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
@@ -3738,6 +3740,30 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
   return out;
 }
 
+/** `record <dir> --case <stem>`: keep the discovered files the selectors name, by file stem or its path-safe id
+ *  (hillclimb's rule, without its match on the scenario's `name:`). Everything after discovery (the checks, the
+ *  dry-run estimate, the budget pre-flight, the batch) then sees the selection only. A selected file that does not
+ *  load stays broken; an unselected one is not this run's. Throws UsageError on a selector that names nothing, or
+ *  names a YAML file that is not a scenario. */
+export function selectDiscovered(disc: ScenarioDiscovery, selectors: readonly string[]): ScenarioDiscovery {
+  if (selectors.length === 0) return disc;
+  const entries = [
+    ...disc.scenarios.map((file) => ({ file, broken: undefined as ScenarioDiscovery["broken"][number] | undefined })),
+    ...disc.broken.map((b) => ({ file: b.file, broken: b })),
+  ].map((e) => ({ ...e, stem: stemOf(e.file), id: pathSafeId(stemOf(e.file)) }));
+  for (const sel of selectors) {
+    if (entries.some((e) => e.stem === sel || e.id === sel)) continue;
+    const other = disc.skipped.find((f) => stemOf(f) === sel);
+    if (other) throw new UsageError(`--case "${sel}": ${other} is not a scenario (it has no \`prompt:\`)`);
+  }
+  const chosen = new Set(selectCases(entries, selectors));
+  return {
+    scenarios: entries.filter((e) => chosen.has(e) && e.broken === undefined).map((e) => e.file),
+    skipped: [],
+    broken: entries.filter((e) => chosen.has(e)).flatMap((e) => (e.broken ? [e.broken] : [])),
+  };
+}
+
 /** `RunResult.metrics` on replay: the frozen scenario's declared metrics, measured against the materialized manifest
  *  through the live lane's own gates. The cassette scenario is read leniently, so the declaration is validated here;
  *  an invalid one is skipped loudly (absent). A metric the RECORDING cannot support — no artifact manifest, a body it
@@ -4510,6 +4536,8 @@ export const RECORD_VALUE_FLAGS = [
   "--concurrency",
   "--max-budget-usd",
 ] as const;
+/** `--case <stem>`, once per scenario to select from a directory target. */
+export const RECORD_REPEATED_FLAGS = ["--case"] as const;
 
 // --- Flag-coverage guard registry (P9) -------------------------------------------------------------
 //
@@ -4596,13 +4624,14 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // copies each one had (cli.ts's was already a superset for `replay`; `verify-cassettes`' two copies had
 // textually diverged --margins prose — the cli.ts wording is kept as the single source).
 export const RECORD_USAGE =
-  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--model <id>] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
+  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--model <id>] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--case <stem>]… [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
   "       --model <id>: pin the model for this recording, overriding the session's `model:` (env COWORK_HARNESS_MODEL sets a default). A cassette freezes whatever model recorded it, so pinning here is what makes the recording's model a stated fact rather than a property of this machine. A scenario that resolves no model (this flag, the session's `model:`, or the env var) is refused before spending, exit 1 — on --dry-run and on every batch item before the first spawn.\n" +
   "       --allow-host-inventory-fixture: proceed PAST THE PRE-FLIGHT when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette could freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. This bypasses that pre-flight only — the finished recording is still scanned, and a real finding still refuses the write and quarantines it.\n" +
   "       --dry-run: resolve and CHECK without recording. A single scenario file runs every pre-spend refusal the real record runs (prompt policy, assert contradictions, host-inventory, slug collision) and refuses identically — same --out, same flags, so the verdict is binding. A DIRECTORY reports the path-dependent ones as advisory 'would-refuse'/'would-warn' notes instead, labelled by verdict kind (a dir target takes no --out, so the destination is a guess), and gates only on the path-independent ones.\n" +
   "       --allow-host-inventory-findings: write a recording the scan DID flag. The separate, louder decision; needed only when the captured inventory is genuinely part of the fixture.\n" +
   "       --concurrency <N>: record a dir/ batch (or --rerecord-stale) N at a time (default 1, max 8). Runs are fully isolated; the bound is for Docker address pool + API rate limits.\n" +
-  "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch) has cost more than x (exit 1, like the other pre-spend refusals).\n" +
+  "       --case <stem>: with a dir/ target, record only the scenario whose file name (without .yaml/.yml) is <stem>; repeat for more. The checks, the --dry-run preview and the --max-budget-usd pre-flight then cover the named scenarios only. A stem that names no scenario in the dir is a usage error (exit 2). Not valid with a single scenario file or --rerecord-stale.\n" +
+  "       --max-budget-usd <x>: refuse before spending if prior-run history says this scenario (or, on a batch, the whole batch, or the scenarios --case names) has cost more than x (exit 1, like the other pre-spend refusals).\n" +
   "                             At --concurrency 1 a running total also stops the batch once x is reached; above that it is a pre-flight estimate only.\n" +
   '       answer gates LIVE: [--decider-dir <dir>] (single scenario only) | [--decider-llm [--intent "<one line>"] [--decider-model <id>]] | [--on-unanswered fail|first]\n' +
   "       (a live decider flags the cassette non-deterministic — re-recording may drift; replay stays deterministic. --rerecord-stale rejects these flags.)\n" +
@@ -4661,7 +4690,7 @@ function recordedItem(base: { file?: string; cassette?: string }, result: RunRes
  *  failed — which includes a batch the budget cap stopped early (`skipped-budget` items, exit 0). */
 function recordBatchEnvelope(
   ok: boolean,
-  payload: { target: string; rerecordStale?: true; items: RecordBatchItem[]; skipped?: string[] },
+  payload: { target: string; cases?: string[]; rerecordStale?: true; items: RecordBatchItem[]; skipped?: string[] },
 ): string {
   return jsonPayloadEnvelope("record", ok, payload);
 }
@@ -4680,7 +4709,8 @@ export async function cmdRecord(args: string[]) {
         // consts above — do not fork this list back into a local literal (that's the drift P3 fixed).
         booleans: [...RECORD_BOOLEAN_FLAGS],
         values: [...RECORD_VALUE_FLAGS],
-        noDashValue: ["--out", "--decider-dir", "--model"],
+        repeated: [...RECORD_REPEATED_FLAGS],
+        noDashValue: ["--out", "--decider-dir", "--model", "--case"],
         enums: { "--output-format": ["text", "json"], "--on-unanswered": ["fail", "first"] },
         // no `-V`: verbose is long-only everywhere (`-v` is version at the top level; the A3 shift-key-typo fix).
         aliases: { "-q": "--quiet" },
@@ -4776,6 +4806,44 @@ export async function cmdRecord(args: string[]) {
   if (isDir && p.options["--out"] !== undefined) {
     return fail("record", "usage", "record: --out names a single cassette file and is not valid for a directory batch", undefined, asJson);
   }
+  // `--case` narrows a directory of scenarios to the named ones, so every check and the budget pre-flight cover only
+  // those. Refused here, before the dry-run branch, so each combination gets this reason and not a later one.
+  const caseSelectors = p.repeated["--case"] ?? [];
+  if (caseSelectors.length && rerecordStale)
+    return fail(
+      "record",
+      "usage",
+      "record: --case selects scenarios from a scenario directory and cannot be combined with --rerecord-stale (which re-records the drifted cassettes in a cassette directory)",
+      undefined,
+      asJson,
+    );
+  if (caseSelectors.length && !isDir)
+    return fail(
+      "record",
+      "usage",
+      existsSync(target)
+        ? `record: --case selects scenarios from a directory; ${target} is a single scenario, so drop --case`
+        : `record: --case selects scenarios from a directory; ${target} is not a directory`,
+      undefined,
+      asJson,
+    );
+  // Discovery for both directory arms, narrowed by `--case`. A selector that names nothing is a usage error.
+  const discoverSelected = (): ScenarioDiscovery => {
+    const all = discoverScenarios(target);
+    let disc: ScenarioDiscovery;
+    try {
+      disc = selectDiscovered(all, caseSelectors);
+    } catch (e) {
+      if (e instanceof UsageError) return fail("record", "usage", `record: ${e.message}`, undefined, asJson);
+      throw e;
+    }
+    if (caseSelectors.length && !asJson)
+      log(
+        `· --case: ${disc.scenarios.length + disc.broken.length} of ${all.scenarios.length + all.broken.length} scenario file(s) selected`,
+      );
+    return disc;
+  };
+  const casesField = caseSelectors.length ? { cases: caseSelectors } : {};
 
   // Live-decider validation. Reuse the run/skill rules; reject ambiguous/unsupported combos
   // up front so a paid record never starts under a mis-specified policy.
@@ -4878,7 +4946,7 @@ export async function cmdRecord(args: string[]) {
     const agentPayload = agent.ok ? { ok: true as const, path: agent.path } : { ok: false as const, error: agent.error };
 
     if (isDir) {
-      const disc = discoverScenarios(target);
+      const disc = discoverSelected();
       // Scenario-level refusals, per file. A dry run over N scenarios exists to learn about all N in one
       // pass, so this collects EVERY offender instead of failing at the first — aborting early turns a
       // 24-scenario preflight into 24 sequential round trips, which is the same cost the refusal exists
@@ -4963,6 +5031,7 @@ export async function cmdRecord(args: string[]) {
           jsonPayloadEnvelope("record", disc.scenarios.length > 0 && refusals.length === 0 && disc.broken.length === 0, {
             dryRun: true,
             target,
+            ...casesField,
             scenarios: disc.scenarios,
             skipped: disc.skipped,
             broken: disc.broken,
@@ -5052,6 +5121,7 @@ export async function cmdRecord(args: string[]) {
         preflightBatchBudget("record", parsedNames, maxBudgetUsd, asJson, {
           dryRun: true,
           target,
+          ...casesField,
           scenarios: disc.scenarios,
           skipped: disc.skipped,
           broken: disc.broken,
@@ -5397,7 +5467,7 @@ export async function cmdRecord(args: string[]) {
 
   // batch a directory of scenarios.
   if (isDir) {
-    const disc = discoverScenarios(target);
+    const disc = discoverSelected();
     for (const s of disc.skipped) log(`· skipped (not a scenario — no \`prompt:\`): ${s}`);
     for (const b of disc.broken) log(`✗ ${b.file}: ${stripScenarioPrefix(b.error, b.file)}`);
     if (disc.scenarios.length === 0) {
@@ -5466,7 +5536,7 @@ export async function cmdRecord(args: string[]) {
       }
       // A refusal replaces the batch payload; keep the files that did not load on the error envelope, in
       // the `broken[]` shape the dry-run payload uses.
-      preflightBatchBudget("record", names, maxBudgetUsd, asJson, { target, broken: disc.broken, skipped: disc.skipped });
+      preflightBatchBudget("record", names, maxBudgetUsd, asJson, { target, ...casesField, broken: disc.broken, skipped: disc.skipped });
       if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
     }
     const batchBudget = batchBudgetTracker(maxBudgetUsd, concurrency === 1);
@@ -5544,6 +5614,7 @@ export async function cmdRecord(args: string[]) {
       out(
         recordBatchEnvelope(failures === 0, {
           target,
+          ...casesField,
           items: [...batchItems, ...disc.broken.map((b): RecordBatchItem => ({ file: b.file, status: "failed", error: b.error }))],
           skipped: disc.skipped,
         }),
@@ -7457,7 +7528,7 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     command: "record",
     booleanFlags: RECORD_BOOLEAN_FLAGS,
     valueFlags: RECORD_VALUE_FLAGS,
-    repeatedFlags: [],
+    repeatedFlags: RECORD_REPEATED_FLAGS,
     aliases: { "-q": "--quiet" },
     usage: RECORD_USAGE,
     allowlist: RECORD_ALLOWLIST,
