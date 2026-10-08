@@ -1617,18 +1617,23 @@ cowork-harness eval scenarios/ --arm full=./my-plugin --arm nosec=/tmp/nosec --d
 
 #### Test a skill's parsing of a Desktop form reply
 
-Desktop's elicitation form sends its answers as the next user message. Send that message as a resumed turn:
-`cowork-harness skill ./my-plugin "$(cat reply.txt)" --session-id s --resume`. Two real-shaped replies ship in
+Desktop's elicitation form sends its answers as the next user message. Send that message as a resumed turn, from a
+file so the shell cannot expand a `$` in it: `cowork-harness skill ./my-plugin --prompt-file reply.txt --session-id s
+--resume`. Two real-shaped replies ship in
 [`examples/data/form-replies/`](../examples/data/form-replies/). The format, as Desktop's serializer builds it:
 
 - a compact line, `<Title> — Label: value · Label: value`. The title is the form's header, usually `<Topic> details`;
-  with no header there is no title prefix. Labels are the field names in sentence case: `_text` is dropped, `_file`
-  becomes ` file`, `_other` becomes ` (other)`;
+  with no header there is no title prefix. Labels are the field names with underscores as spaces and the first
+  letter capitalised: `_text` is dropped, `_file` becomes ` file`, `_other` becomes ` (other)`. Fields come in the
+  order the form collects them: pill groups (each followed by its `(other)` text), then file groups, then text and
+  date fields; text values are trimmed;
 - a multi-select value comma-joined; newlines in a value of up to 200 characters replaced by ` / `; such a value
   over 80 characters (after that) in quotes;
 - a value over 200 characters shown as `Label: (N chars — see below)` and repeated in full, newlines kept, after a
   blank line and a `--- Full content ---` line, under a `[Label]` line (blank lines between folded values), so
   such a reply spans several lines;
+- a file field shown as `Label: <name> (attached)` (several files comma-joined); the file itself arrives as an
+  attachment on that message, not in its text, so pass it with `--upload <file>` on the same resumed turn;
 - an empty answer left out; a form with every answer empty arrives as `<Title> — proceeding with defaults.`;
 - a skipped form arrives as one fixed sentence saying it was skipped.
 

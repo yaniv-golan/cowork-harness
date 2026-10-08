@@ -20,6 +20,8 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
   not the `remote_plugins` path a UI-installed plugin has (`mnt/.remote-plugins/plugin_<id>`). A skill that
   locates its own files at runtime sees a different path under each, so the comparison holds for the
   `local_plugins` layout only.
+- Every row is a pass or a fail per rep, and `eval` compares pass rates. A scenario's `metrics:` are not graded or
+  compared here; `hillclimb` records and compares them.
 - scenarios × 2 × `--reps` live runs (10 per scenario at the default `--reps 5`), interleaved, plus one judge
   call per `semantic_matches` assert per run. The start-up line prints the job count.
 - Before an A/B, plan it: `eval … --dry-run --target-effect 30pp` runs nothing and prints, from the runs

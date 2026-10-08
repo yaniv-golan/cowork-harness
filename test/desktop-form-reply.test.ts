@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 // Desktop's elicitation form sends its answers as the next user message. These two fixtures are that message, in
-// the shape a real one has: each is modelled on one real Cowork reply (its title shape, its fields in order, which
-// of them are a date, a multi-select, a quoted value, a ` / `-flattened value or a folded one, and how many lines a
-// folded value spans), with every title, label and value replaced. The tests below pin both to the serializer.
+// the shape a real one has: each is modelled on one real Cowork reply (its title shape, which fields are a date, a
+// multi-select, a quoted value, a ` / `-flattened value or a folded one, and how many lines a folded value spans),
+// with every title, label and value replaced. Fields are in the order 2.26454.2's form collects them: pill groups
+// (multi-selects) first, then file groups, then text and date fields. The tests below pin both to the format.
 
 /** The reply format, implemented here from the behaviour of Desktop 2.26454.2's form widget (read from its bundle,
  *  and matching six real replies): the reference the fixtures and the docs are checked against, not harness code. */
@@ -68,10 +69,10 @@ function foldLines(reply: string): number[] {
 }
 
 describe("Desktop form-reply fixtures match the 2.26454.2 serializer byte for byte", () => {
-  it("pitch-review.txt: a date, a multi-select, a short value and two folded values (one spanning several lines)", () => {
+  it("pitch-review.txt: a multi-select, a date, a short value and two folded values (one spanning several lines)", () => {
     const expected = serializeElicitation("Pitch review details", {
-      next_board_meeting: "2026-11-12",
       stage_focus: ["Seed", "Series A"],
+      next_board_meeting: "2026-11-12",
       team_size: "Six engineers and two in sales",
       recent_traction_text:
         "Revenue grew from a pilot with two design partners to eleven paying teams over the last two quarters. " +
@@ -109,9 +110,9 @@ describe("Desktop form-reply fixtures match the 2.26454.2 serializer byte for by
 });
 
 describe("the fixtures keep the shape of the real replies they were modelled on", () => {
-  it("pitch-review.txt: date, multi, plain, fold, fold; the second folded value spans 5 lines", () => {
+  it("pitch-review.txt: multi, date, plain, fold, fold; the second folded value spans 5 lines", () => {
     const reply = read("pitch-review.txt");
-    expect(shape(reply)).toEqual(["date", "multi", "plain", "fold", "fold"]);
+    expect(shape(reply)).toEqual(["multi", "date", "plain", "fold", "fold"]);
     expect(foldLines(reply)).toEqual([1, 5]);
     expect(reply.endsWith("\n")).toBe(false);
   });

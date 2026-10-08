@@ -1478,11 +1478,12 @@ model to collect any missing arguments through the `visualize` server's elicitat
 with pills, free text, dates and a file dropzone — and to reserve `AskUserQuestion` for one-off
 clarifications mid-task. The user's answers then arrive as **the next user message**, not as a tool result: a
 compact line, `<Title> — Label: value · Label: value` (the title is the form's header, usually `<Topic> details`),
-with multi-select values comma-joined, newlines in a short value replaced by ` / `, a value of 81–200 characters
-quoted, and a longer one shown as `(N chars — see below)` and repeated in full under a `[Label]` line after a
+with multi-select values comma-joined, newlines in a short value replaced by ` / `, a value over 80 characters after
+that quoted, a file shown as `<name> (attached)` (the file itself is attached to the message), and a value over 200
+raw characters shown as `(N chars — see below)` and repeated in full under a `[Label]` line after a
 `--- Full content ---` line, which makes the message span several lines; a skipped form arrives as one fixed
 sentence. Two real-shaped replies ship in [`examples/data/form-replies/`](../examples/data/form-replies/). To test a skill's parsing of it, send such
-a line as a resumed turn (see [Recipes for goals the harness has no flag for](./scenario.md#recipes-for-goals-the-harness-has-no-flag-for)). The guidance is live for standard accounts (`286376943`, on/force).
+a message as a resumed turn (see [Recipes for goals the harness has no flag for](./scenario.md#recipes-for-goals-the-harness-has-no-flag-for)). The guidance is live for standard accounts (`286376943`, on/force).
 
 **It is guidance, not enforcement, and production splits roughly evenly.** Measured across a corpus of
 real Cowork session transcripts that all received this guidance: about half of the turns that collected
