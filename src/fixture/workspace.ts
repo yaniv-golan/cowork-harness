@@ -27,6 +27,7 @@ import {
   containsSessionToken,
   SESSION_ROOT_TOKEN,
   SESSION_TOKEN_SCHEME,
+  fileEncodingProblem,
   sessionRootsProblem,
   substituteSessionTokens,
   VM_SESSION_ROOT_TOKEN,
@@ -316,6 +317,12 @@ export function stageWorkspaceFixture(
     );
   const src = NoFollowRoot.existing(scan.dir);
   const dst = NoFollowRoot.existing(outputsDir);
+  // Every tokenised file's encoding too, before anything is written (the loop re-reads and re-verifies each one).
+  if (roots !== undefined)
+    for (const f of scan.files.filter((x) => x.tokens)) {
+      const problem = fileEncodingProblem(src.readBytes(join(src.root, ...f.path.split("/"))), roots);
+      if (problem) throw new UsageError(`workspace_fixture ${scan.dir}: ${describe(f.path)}: ${problem}`);
+    }
   const counts = { sessionRootTokens: 0, vmSessionRootTokens: 0 };
   for (const f of scan.files) {
     const bytes = src.readBytes(join(src.root, ...f.path.split("/")));

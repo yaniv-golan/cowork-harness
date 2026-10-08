@@ -260,12 +260,10 @@ describe("fixture export --exclude", () => {
   });
   it("an --exclude inside an excluded directory is not a typo", () => {
     twoViewShape();
-    for (const exclude of [
-      ["artifacts", "artifacts/report.json"],
-      ["artifacts/report.json", "artifacts"],
-    ]) {
+    for (const exclude of [["artifacts", "artifacts/report.json"], ["artifacts/report.json", "artifacts"], ["artifacts//report.json"]]) {
       rmSync(out(), { recursive: true, force: true });
-      expect(exportFixture(base({ exclude })).exitCode).toBe(0);
+      // --session-paths: the files left in are exported, so exit 0 means no --exclude was read as a typo.
+      expect(exportFixture(base({ exclude, sessionPaths: true })).exitCode).toBe(0);
     }
   });
   it("an --exclude that names nothing is refused", () => {
@@ -370,7 +368,19 @@ describe("staging a tokenised fixture", () => {
     expect(() => stageWorkspaceFixture(scan, o, { sessionRoot: "/runs dir/x/work/session", vmSessionRoot: "/sessions/x" })).toThrow(
       UsageError,
     );
+    expect(() => stageWorkspaceFixture(scan, o, { sessionRoot: "/runs'x/work/session", vmSessionRoot: "/sessions/x" })).toThrow(/quote/);
     expect(readdirSync(o)).toEqual([]);
+    // A non-ASCII root into a Latin-1 file: refused before the (earlier-sorted) plain file is written.
+    const fx = join(tmp, "fxl");
+    mkdirSync(fx);
+    writeFileSync(join(fx, "a.md"), "plain\n");
+    writeFileSync(join(fx, "z.csv"), Buffer.concat([Buffer.from([0xe9, 0x20]), Buffer.from(SESSION_ROOT_TOKEN)]));
+    const o2 = join(tmp, "bad2");
+    mkdirSync(o2);
+    expect(() => stageWorkspaceFixture(scanWorkspaceFixture(fx), o2, { sessionRoot: "/Users/é/w", vmSessionRoot: "/sessions/x" })).toThrow(
+      /not UTF-8/,
+    );
+    expect(readdirSync(o2)).toEqual([]);
   });
 
   it("refuses a root value that would break the file's syntax, and a non-ASCII root into a non-UTF-8 file", () => {
@@ -442,6 +452,8 @@ describe("per-tier roots", () => {
       const b = loadBaseline(name);
       const r = hostLoopSessionRoots(b, "local_x", "/r/run");
       expect(r.vmSessionRoot, name).toBe(resolveMounts(b, "local_x").sessionRoot);
+      // export tokenises `/sessions/<id>`: a baseline that moves the root would desync the two ends.
+      if (b.spawn) expect(r.vmSessionRoot, name).toBe("/sessions/local_x");
       expect(r.sessionRoot, name).toBe("/r/run/work/session");
     }
   });

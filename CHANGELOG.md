@@ -25,7 +25,8 @@ All notable changes to this project are documented here. The format is based on
     load.
   - Every other path, another session's included, is still refused, and so is every secret.
   - Binary files are never rewritten, and a file that already holds a token is refused.
-  - A file with tokens adds `+t1` to its fixture signature and is recorded hash-only in a cassette. The
+  - A file with tokens adds `+t1` to its fixture signature and, while the step leaves it untouched, is recorded
+    hash-only in a cassette. The
     signature of a fixture without tokens does not change.
   - A fixture exported from a container or microvm run warns when staged on hostloop: there it holds only the
     bash path, which the file tools cannot open.

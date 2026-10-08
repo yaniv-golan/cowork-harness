@@ -260,7 +260,14 @@ export function exportFixture(opts: {
 
   // --exclude: outputs-relative, compared on path segments. One that names nothing is refused — a typo would
   // otherwise silently keep the file it meant to drop.
-  const excludes = (opts.exclude ?? []).map((e) => e.split("\\").join("/").replace(/^\.\//, "").replace(/\/+$/, ""));
+  const excludes = (opts.exclude ?? []).map((e) =>
+    e
+      .split("\\")
+      .join("/")
+      .replace(/\/{2,}/g, "/")
+      .replace(/^\.\//, "")
+      .replace(/\/+$/, ""),
+  );
   const excludeHits = new Set<string>();
   // Excluding an entry credits every --exclude at or under it: an excluded directory is not walked, so a file
   // also named inside it would otherwise never be reached and read as a typo.

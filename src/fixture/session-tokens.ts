@@ -83,8 +83,16 @@ export function tokenizeSessionPaths(buf: Buffer, roots: ReadonlyArray<{ from: s
  *  would break the file's syntax rather than name a path. */
 export function sessionRootValueProblem(v: string): string | undefined {
   if (!v.startsWith("/")) return `${JSON.stringify(v)} is not an absolute path`;
-  if (/["\\\s\p{Cc}]/u.test(v)) return `${JSON.stringify(v)} holds a quote, a backslash, whitespace or a control character`;
+  if (/["'\\\s\p{Cc}]/u.test(v)) return `${JSON.stringify(v)} holds a quote, a backslash, whitespace or a control character`;
   return undefined;
+}
+
+/** Why `roots` cannot be written into THIS file, or undefined: a non-ASCII root's UTF-8 bytes would be mojibake in
+ *  a file that is not UTF-8. */
+export function fileEncodingProblem(buf: Buffer, roots: SessionRoots): string | undefined {
+  return !isUtf8(buf) && !/^[\x00-\x7f]*$/.test(roots.sessionRoot + roots.vmSessionRoot)
+    ? "cannot write a non-ASCII session root into a workspace_fixture file that is not UTF-8"
+    : undefined;
 }
 
 /** Why `roots` cannot be written into a fixture, or undefined. */
@@ -102,8 +110,8 @@ export function sessionRootsProblem(roots: SessionRoots): string | undefined {
 export function substituteSessionTokens(buf: Buffer, roots: SessionRoots): Buffer {
   const problem = sessionRootsProblem(roots);
   if (problem) throw new UsageError(problem);
-  if (!isUtf8(buf) && !/^[\x00-\x7f]*$/.test(roots.sessionRoot + roots.vmSessionRoot))
-    throw new UsageError("cannot write a non-ASCII session root into a workspace_fixture file that is not UTF-8");
+  const encoding = fileEncodingProblem(buf, roots);
+  if (encoding) throw new UsageError(encoding);
   let s = buf.toString("latin1");
   s = s.split(SESSION_ROOT_TOKEN).join(Buffer.from(roots.sessionRoot, "utf8").toString("latin1"));
   s = s.split(VM_SESSION_ROOT_TOKEN).join(Buffer.from(roots.vmSessionRoot, "utf8").toString("latin1"));
