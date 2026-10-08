@@ -6,8 +6,41 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.6.0] — 2026-10-08
+
+This release adds assertions about how a run was decided and what a skill wrote: `gates_all_scripted` (every question
+gate answered by a script), three ways to read what a plugin's command hook decided (`hook_decision`,
+`no_hook_event_blocked` and a count form of `hook_event_blocked`), and a glob form of `artifact_json` that checks every
+per-run JSON file a skill writes. The session key `answer_channel: none` runs a scenario with nobody to answer the
+agent, for a skill that must also finish headless; it models a headless host, not Cowork. `latest` moves to
+`desktop-2.26454.2` (agent 2.1.293). Cassette format v15 carries the new keys; a scenario that uses none of them
+records and replays exactly as before.
+
+### Upgrade notes
+
+- **Cassettes: re-stamp, no re-record needed for the harness itself.** `latest` now resolves to `desktop-2.26454.2`,
+  so a cassette recorded through `baseline: latest` reports `[stale] baseline moved 2.26454.0 → 2.26454.2 since
+  record — re-record`. Its spawn contract is unchanged, so re-stamping `fingerprint.baseline` clears it; a re-stamped
+  `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on 2.1.293.
+  The harness's own spawn path changes only for a session that sets `answer_channel: none` or
+  `agent_env.artifacts_root`, and an operator's own `COWORK_ARTIFACTS_ROOT` export no longer reaches the agent at
+  `protocol` and `hostloop`. The bundled cassettes are re-stamped to `2.26454.2`.
+- **A cassette that uses a 4.6.0 key is stamped v15 and needs 4.6.0 to replay.** That is `gates_all_scripted`,
+  `hook_decision`, `no_hook_event_blocked`, the object form of `hook_event_blocked`, an `artifact_json` glob or
+  `match`, or a recording made under `answer_channel: none`. An older harness refuses it as too new, so pin the
+  harness version in CI before you record one. Each new key is also a 4.6.0 floor for the scenario or session file
+  itself: an older CLI rejects an unknown key at load (`Unrecognized key`, exit 2).
+- **An `artifact_json` `artifact` containing `*` or `?` is now a glob.** Such a path used to name a file literally;
+  it now needs `match:` and matches by pattern (`?` and `*` also match themselves, so such a file is still reached,
+  along with any other name the pattern fits).
+
 ### Added
 
+- **Cassette format v15.** This build reads and writes cassettes up to `cassetteVersion` 15
+  (`schema/cassette.v15.json`; `schema/cassette.v14.json` is retained). The stamp stays per-scenario: a cassette
+  whose scenario uses no v15 feature is stamped exactly as before (the bare `hook_event_blocked: <event>` included),
+  so no existing cassette or `verify-cassettes` result changes. An older build refuses a v15 cassette as too new
+  (upgrade) rather than as an unrecognized assertion.
 - **New assertion `gates_all_scripted`.** It passes only when every question gate was answered by a scripted
   `answers:` rule, and fails naming the gate when the LLM decider, `on_unanswered: first`, or an external or human
   decider answered one. `{include_permissions: true}` also requires every permission decision to come from a scripted
@@ -16,14 +49,7 @@ All notable changes to this project are documented here. The format is based on
   permission, frozen answers that were redacted, and a cassette that records a live decider's answer while its
   frozen rules cover every gate are evidence-unavailable on replay. So is a run whose decision record is missing (a
   `result.json` from an older build, a truncated recording); it never passes. A run where no gate fired passes;
-  `lint` warns unless the key is paired with `gate_answer_count_min` or `questions_count_max`. A scenario using it
-  stamps cassette v15.
-- **Cassette format v15.** This build reads and writes cassettes up to `cassetteVersion` 15 (`schema/cassette.v15.json`; `schema/cassette.v14.json` is retained). The stamp stays per-scenario: a cassette whose scenario uses no v15 feature is stamped exactly as before, so no existing cassette or `verify-cassettes` result changes. An older build refuses a v15 cassette as too new (upgrade) rather than as an unrecognized assertion.
-- **The companion skill's assertion catalog is split by family.** `references/assertion-catalog.md` keeps the
-  conventions every key shares and the verdict-signal table, and links three new files that hold the per-key rows:
-  `assertion-catalog-outcome-files-tools.md`, `assertion-catalog-agents-skills-budgets.md` and
-  `assertion-catalog-gates-hooks-modifiers.md`. The catalog was close to the size one Read returns whole, and each
-  new assertion key grows it. The rows are moved unchanged. No harness behaviour changes.
+  `lint` warns unless the key is paired with `gate_answer_count_min` or `questions_count_max`.
 - **`hook_decision: {event, decision, tool?, min?, max?}`** counts a plugin's command hook frames by what the hook
   decided: `allow`, `deny`, `ask` or `defer` (`block` and `approve` are aliases of `deny` and `allow`). It reads both
   ways a hook decides: the JSON it prints on stdout, read on a frame the agent marks `outcome: success` (exit 0, or an
@@ -54,12 +80,27 @@ All notable changes to this project are documented here. The format is based on
     missing or names another event.
 
   `record` warns when its redaction policy makes a hook decision that one of these keys reads unreadable.
-- A cassette whose scenario uses `hook_decision`, `no_hook_event_blocked` or the object form of `hook_event_blocked`
-  is stamped v15, so an older build refuses it as too new instead of rejecting the assertion. The bare
-  `hook_event_blocked: <event>` stamps what it did.
 - `run`, `record` and `lint` refuse a negative hook key alongside a positive one that can never both pass, such as
   `no_hook_event_blocked: true` with `hook_event_blocked: Stop`, as they refuse `no_hook_blocked` with `hook_blocked`.
-
+- **`artifact_json` takes a glob in `artifact`, with `match: each | any`.** One assertion now checks every JSON
+  file a skill writes per run or per item, e.g.
+  `{artifact: outputs/artifacts/runs/*/run_status.json, match: each, path: status, equals: complete}`. Before this, a
+  scenario had to pin a fixed run id.
+  - **Syntax:** the `no_unexpected_files` glob syntax (`*`, `?`, whole-segment `**`; `[` is literal), matched
+    against exact filesystem names.
+  - **`match` is required with a glob and refused without one.** `lint` and the loader both report it, so a glob
+    can't silently become a literal path.
+  - **Scope:** the glob matches files under the user-visible roots only, which is what a cassette records, so
+    `replay` grades the same files as the live run. Uploaded inputs are not matched, and a glob that can reach no
+    user-visible root (an `uploads/` glob, say) fails and says why.
+  - **Failures:** zero matches fail, naming the glob and what the nearest directory holds. More than 200 matches,
+    a walk that couldn't see the whole tree, a link (a symlink or hardlink match, a symlinked directory on the
+    glob's path, or one where a match could be), or a match with no readable body is evidence-unavailable. The message lists the files that passed, failed and couldn't be evaluated.
+  - **`authored: true`** applies to each match.
+  - **At `record`,** a match stored hash-only over the body cap is refused, as for a literal path, and so is an
+    artifact walk that couldn't see the whole tree.
+  - **A glob ending in `/`** is a load error and a `lint` error.
+  - **`workspace_fixture`:** a glob that matches a fixture file needs `authored:`, as a literal path does.
 - **`answer_channel: none` (session key): a run with nobody to answer the agent.** It models a headless host's
   contract and is not a Cowork setting: the agent is spawned with `--permission-prompts none` in place of the stdio
   permission tool, so questions and permission prompts are denied inside the agent and never reach the harness. It
@@ -92,10 +133,6 @@ All notable changes to this project are documented here. The format is based on
   the Cowork system prompt, the sub-agent append, the egress contract, the first-party spawn env and the cloud tool
   surface are unchanged from `desktop-2.26454.0`. The agent was staged from a release-candidate channel, so the CI
   recipe's download base (`B=`) now names it; the stable path serves the same bytes for this version.
-  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.26454.0 → 2.26454.2 since
-    record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it; a
-    re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on
-    2.1.293.
 - **The bare `hook_event_blocked: <event>` keeps its verdicts; some failure messages change.** When no frame blocked
   and one frame cannot be read (no exit code, or a hook that started and never answered), the failure now reads
   "evidence unavailable" instead of "never blocked" or "never fired". When the hook printed a JSON deny, the "never
@@ -114,36 +151,13 @@ All notable changes to this project are documented here. The format is based on
   at. `lint`'s `hook-event-not-served` message now names those tiers: `Stop` says `container`, where it used to claim
   `container` and `hostloop`.
 
-### Upgrade notes
+### Documentation
 
-- **A cassette whose scenario uses the `artifact_json` glob (or `match`) is stamped `cassetteVersion` 15 and
-  needs this release to replay.** An older harness refuses it as too new, so pin the harness version in CI before
-  you record one.
-- **An `artifact_json` `artifact` containing `*` or `?` is now a glob.** Such a path used to name a file literally;
-  it now needs `match:` and matches by pattern (`?` and `*` also match themselves, so such a file is still reached,
-  along with any other name the pattern fits).
-
-### Added
-
-- **`artifact_json` takes a glob in `artifact`, with `match: each | any`.** One assertion now checks every JSON
-  file a skill writes per run or per item, e.g.
-  `{artifact: outputs/artifacts/runs/*/run_status.json, match: each, path: status, equals: complete}`. Before this, a
-  scenario had to pin a fixed run id.
-  - **Syntax:** the `no_unexpected_files` glob syntax (`*`, `?`, whole-segment `**`; `[` is literal), matched
-    against exact filesystem names.
-  - **`match` is required with a glob and refused without one.** `lint` and the loader both report it, so a glob
-    can't silently become a literal path.
-  - **Scope:** the glob matches files under the user-visible roots only, which is what a cassette records, so
-    `replay` grades the same files as the live run. Uploaded inputs are not matched, and a glob that can reach no
-    user-visible root (an `uploads/` glob, say) fails and says why.
-  - **Failures:** zero matches fail, naming the glob and what the nearest directory holds. More than 200 matches,
-    a walk that couldn't see the whole tree, a link (a symlink or hardlink match, a symlinked directory on the
-    glob's path, or one where a match could be), or a match with no readable body is evidence-unavailable. The message lists the files that passed, failed and couldn't be evaluated.
-  - **`authored: true`** applies to each match.
-  - **At `record`,** a match stored hash-only over the body cap is refused, as for a literal path, and so is an
-    artifact walk that couldn't see the whole tree.
-  - **A glob ending in `/`** is a load error and a `lint` error.
-  - **`workspace_fixture`:** a glob that matches a fixture file needs `authored:`, as a literal path does.
+- **The companion skill's assertion catalog is split by family.** `references/assertion-catalog.md` keeps the
+  conventions every key shares and the verdict-signal table, and links three new files that hold the per-key rows:
+  `assertion-catalog-outcome-files-tools.md`, `assertion-catalog-agents-skills-budgets.md` and
+  `assertion-catalog-gates-hooks-modifiers.md`. The catalog was close to the size one Read returns whole, and each
+  new assertion key grows it. The rows are moved unchanged. No harness behaviour changes.
 
 ## [4.5.0] — 2026-10-07
 
