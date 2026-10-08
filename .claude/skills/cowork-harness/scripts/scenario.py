@@ -20,7 +20,7 @@ lint flags (see references/scenario-schema.md for the why of each):
   E  `no_scratchpad_leak` off container            (container-only: hostloop serves the tool but never promotes)
   E  `present_files_called` on protocol/microvm    (served at container+hostloop)
   E  a key that can never pass on `lane: remote` (delivery, file bodies, absence, links,
-     no_lost_write_back; semantic_* with evidence_files)
+     no_lost_write_back; file_exists with authored: true; semantic_* with evidence_files)
                                                   (runtime rejects at LOAD time; tier rules suppressed)
   E  `requires_capabilities` on `fidelity: protocol` (probe can't run → hard-fails
                                                       unless allow_missing_capability)

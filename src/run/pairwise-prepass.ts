@@ -84,8 +84,9 @@ export function candidateDocument(ctx: AssertContext, a: Assertion): ReturnType<
 }
 
 /** The compose key a reference document for this assert is stored under, on the scenario's lane: a remote document
- *  is transcript-only, so it has its own key (see `composeKey`). Every caller in src passes the lane. */
-export function pairwiseComposeKey(a: Assertion, lane?: "local" | "remote"): string {
+ *  is transcript-only, so it has its own key (see `composeKey`). The lane is a required argument (undefined = local) so
+ *  a caller that drops it fails to compile instead of silently reading the local key. */
+export function pairwiseComposeKey(a: Assertion, lane: "local" | "remote" | undefined): string {
   const o = judgedOpts(a)!;
   return composeKey(COMPOSER_ID, {
     includeSubagentText: o.includeSubagentText,

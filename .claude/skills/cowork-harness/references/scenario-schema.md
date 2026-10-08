@@ -49,7 +49,8 @@ lane: local                         # OPTIONAL — which Cowork lane's DELIVERY 
                                     # unverifiable/can't-verify at assertion time. So is every key that
                                     # reads files inside the agent's container: artifact_text /
                                     # artifact_json / file_absent / no_unexpected_files /
-                                    # computer_links_resolve* / no_lost_write_back, and semantic_* with
+                                    # computer_links_resolve* / no_lost_write_back, file_exists with
+                                    # authored: true, and semantic_* with
                                     # evidence_files (semantic_* without it is judged on the transcript
                                     # only). Assert file_exists + transcript_matches instead; input_unmodified
                                     # still reads the local stand-in (unconfirmed). Orthogonal to fidelity

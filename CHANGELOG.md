@@ -17,7 +17,8 @@ All notable changes to this project are documented here. The format is based on
   its cassette unverifiable (exit 3) when it reads the scenario from the source the cassette records. So does
   `file_exists` with `authored: true`. Assert the written path with plain `file_exists` and what the agent said
   with `transcript_matches` / `transcript_not_matches`, or set `lane: local`. Plain `replay` of an older cassette
-  on `lane: remote` now fails a `no_unexpected_files` or `computer_links_resolve(_if_present)` assertion
+  on `lane: remote` now fails a `no_unexpected_files`, `computer_links_resolve(_if_present)` or
+  `file_exists` with `authored: true` assertion
   (`artifact_text` / `artifact_json` already failed there in 4.6.0; `file_absent`, `no_lost_write_back` and the
   `semantic_*` keys are live-only, so replay skips them as before).
 - **`lint` exits 1 on those scenarios.** 4.6.0 reported `artifact_json`, `artifact_text` and `file_absent` on
@@ -25,7 +26,8 @@ All notable changes to this project are documented here. The format is based on
   `lane-remote-incompatible-key` with the others above.
 - **`semantic_matches` / `semantic_pairwise` on `lane: remote` are judged on the transcript and final answer only.**
   No authored file, capture-health path or sub-agent text reaches the judge, so a rubric about a file's content
-  grades differently, and `regrade` of a kept 4.6.0 `lane: remote` run reports the judged document as changed. A
+  grades differently, and `regrade` of a kept 4.6.0 `lane: remote` run with a judged assertion refuses with
+  `doc_drift` (exit 2) unless `--allow-doc-drift`, since the judged document now differs. A
   `semantic_pairwise` reference is stored per lane: a reference frozen from a `lane: remote` run before this release
   reads as missing. Re-run the reference's variant and freeze from that run; a run kept from an earlier release cannot
   be re-frozen, since its judged document included file bodies.

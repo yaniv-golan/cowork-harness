@@ -669,7 +669,12 @@ describe("runHillclimbCommand", () => {
           join(cwd, "flow", "baseline", "ref"),
           "alpha",
           { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
-          { [pairwiseComposeKey(sc.assert.find((x) => x.semantic_pairwise)!)]: "OLD ANSWER" },
+          {
+            [pairwiseComposeKey(
+              sc.assert.find((x) => x.semantic_pairwise)!,
+              undefined,
+            )]: "OLD ANSWER",
+          },
           { harnessVersion: "t", composerId: "c", scenario: "alpha", taskSha256: "0".repeat(64) },
         );
         const r = await runHillclimbCommand(args("--approve-harness", "--variant", "v1"), deps());
@@ -684,7 +689,10 @@ describe("runHillclimbCommand", () => {
       it("a damaged baseline document is refused with 'start a fresh flow dir', never a freeze-ref that cannot repair it", async () => {
         pairwise();
         const sc = loadCases(join(cwd, "evals")).cases[0]!.scenario;
-        const key = pairwiseComposeKey(sc.assert.find((x) => x.semantic_pairwise)!);
+        const key = pairwiseComposeKey(
+          sc.assert.find((x) => x.semantic_pairwise)!,
+          undefined,
+        );
         const store = join(cwd, "flow", "baseline", "ref");
         freezeRef(
           store,

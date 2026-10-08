@@ -91,7 +91,7 @@ describe.runIf(POSIX)("semantic_pairwise through the real executeScenario (proto
       join(dir, "refs"),
       "pairwise-e2e",
       { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
-      { [pairwiseComposeKey(sc.assert[0]!)]: "FROZEN REFERENCE ANSWER" },
+      { [pairwiseComposeKey(sc.assert[0]!, undefined)]: "FROZEN REFERENCE ANSWER" },
       { harnessVersion: "t", composerId: "c", scenario: "pairwise-e2e", taskSha256: sha("what is the answer?") },
     );
     const calls: StructuredCall[] = [];
@@ -132,7 +132,7 @@ describe.runIf(POSIX)("semantic_pairwise through the real executeScenario (proto
       join(dir, "refs"),
       "pairwise-e2e",
       { command: "test", runDir: "~/r", resultSha256: "a".repeat(64) },
-      { [pairwiseComposeKey(sc.assert[0]!)]: "AN ANSWER TO ANOTHER QUESTION" },
+      { [pairwiseComposeKey(sc.assert[0]!, undefined)]: "AN ANSWER TO ANOTHER QUESTION" },
       { harnessVersion: "t", composerId: "c", scenario: "pairwise-e2e", taskSha256: sha("what is the capital of France?") },
     );
     const calls: StructuredCall[] = [];

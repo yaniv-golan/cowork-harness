@@ -68,7 +68,7 @@ asserting a **path, mount, delivery mechanism or egress rule** is a claim about 
 rather than passing. A check that depends on files inside the agent's container can never pass there, so it is
 rejected at LOAD time (`lane-remote-incompatible-key` in lint): delivery by location, file bodies
 (`artifact_text`/`artifact_json`), absence (`file_absent`/`no_unexpected_files`), `computer://` links,
-`no_lost_write_back`, and `semantic_*` with `evidence_files`. `semantic_*` without it is judged on the transcript
+`no_lost_write_back`, `file_exists` with `authored: true`, and `semantic_*` with `evidence_files`. `semantic_*` without it is judged on the transcript
 only. `input_unmodified` still reads the local stand-in for the user's inputs (unconfirmed for the cloud lane), and
 plain `file_exists` is the proxy for a written path. Delivery itself is the `delivery_unobservable` WARN (see
 `run-record-replay.md`).
@@ -256,7 +256,7 @@ cowork-harness lint scenarios/*.yaml
 | `hook-output-control-char` | ERROR | a `hook_output_contains` / `hook_output_not_contains` `text` or `matches` holding a control character (a double-quoted YAML `\b` is a backspace) — the harness refuses it at load |
 | `host-path-assert-cowork` | WARN | `transcript_no_host_path` on `cowork` — it fails by design if the tier resolves to hostloop |
 | `host-path-assert-tier` | ERROR | `transcript_no_host_path` on `hostloop` / `protocol`, where it fails by design |
-| `lane-remote-incompatible-key` | ERROR | a key that can never pass on `lane: remote`, which the runtime refuses at load: `present_files_called` / `no_scratchpad_leak` / `user_visible_artifact` (delivery), `artifact_text` / `artifact_json` (file bodies), `file_absent` / `no_unexpected_files` (absence), `computer_links_resolve(_if_present)`, `no_lost_write_back`, and `semantic_matches` / `semantic_pairwise` with `evidence_files`. Tier rules are suppressed there |
+| `lane-remote-incompatible-key` | ERROR | a key that can never pass on `lane: remote`, which the runtime refuses at load: `present_files_called` / `no_scratchpad_leak` / `user_visible_artifact` (delivery), `artifact_text` / `artifact_json` (file bodies), `file_absent` / `no_unexpected_files` (absence), `computer_links_resolve(_if_present)`, `no_lost_write_back`, `file_exists` with `authored: true`, and `semantic_matches` / `semantic_pairwise` with `evidence_files`. Tier rules are suppressed there |
 | `linter-extra-findings-invalid` | ERROR | the loader findings `cowork-harness lint` hands the linter could not be read |
 | `linter-unclassified-key` | ERROR | a valid assertion key this linter cannot classify (the linter is out of date) |
 | `manifest-needs-snapshot` | INFO | manifest-backed keys, which evaluate on replay only when the cassette carries an `artifacts` manifest (not reported on `lane: remote` for `user_visible_artifact` / `artifact_json` / `artifact_text`, which cannot pass there) |

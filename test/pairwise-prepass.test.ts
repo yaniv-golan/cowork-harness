@@ -56,7 +56,7 @@ const META = (task = TASK) => ({ harnessVersion: "t", composerId: "c", scenario:
 /** Freeze the document a run with `finalMessage` would produce, into `store`, for assertion `a`, for `task`. */
 function freezeFrom(store: string, a: Assertion, finalMessage: string, task = TASK): void {
   const doc = candidateDocument(ctx({ finalMessage }), a).candidate;
-  freezeRef(store, "case_1", SRC, { [pairwiseComposeKey(a)]: doc }, META(task));
+  freezeRef(store, "case_1", SRC, { [pairwiseComposeKey(a, undefined)]: doc }, META(task));
 }
 
 /** A judge that always returns `outcome`, recording every input it saw. */
@@ -365,7 +365,7 @@ describe("semantic_pairwise — review fixes", () => {
   it("an unchecked reference is visible on its outcome", async () => {
     const a = assertOf();
     const doc = candidateDocument(ctx({ finalMessage: "R" }), a).candidate;
-    freezeRef(join(tmp, "baseline"), "case_1", SRC, { [pairwiseComposeKey(a)]: doc }, { ...META(), unchecked: true });
+    freezeRef(join(tmp, "baseline"), "case_1", SRC, { [pairwiseComposeKey(a, undefined)]: doc }, { ...META(), unchecked: true });
     const c = ctx({ finalMessage: "C" });
     await runPairwiseJudges([a], c, opts(a));
     expect(evaluate([a], c)[0]!.pairwise![0]).toMatchObject({ status: "graded", unchecked: true });
@@ -412,7 +412,7 @@ describe("semantic_pairwise — task identity", () => {
   it("a reference frozen for a different task is never compared (missing, with the reason)", async () => {
     const a = assertOf();
     const doc = candidateDocument(ctx({ finalMessage: "R" }), a).candidate;
-    freezeRef(join(tmp, "baseline"), "case_1", SRC, { [pairwiseComposeKey(a)]: doc }, { ...META(), taskSha256: "9".repeat(64) });
+    freezeRef(join(tmp, "baseline"), "case_1", SRC, { [pairwiseComposeKey(a, undefined)]: doc }, { ...META(), taskSha256: "9".repeat(64) });
     const c = ctx({ finalMessage: "C" });
     const seen: PairwiseInput[] = [];
     await runPairwiseJudges([a], c, opts(a, { judgeFor: fakeJudge("win", seen) }));

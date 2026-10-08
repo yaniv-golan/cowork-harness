@@ -193,11 +193,13 @@ describe.runIf(POSIX)("hillclimb pairwise: baseline → freeze → a later varia
     const added = freezeCaseRef(input(two.assert));
     expect(added, JSON.stringify(added)).toMatchObject({ status: "added", rep: 0 });
     // The run never composed the new key: it is added unchecked, visibly.
-    expect(readRefDoc(join(flow, "baseline", "ref"), "alpha", pairwiseComposeKey(two.assert[1]!))).toMatchObject({
+    expect(readRefDoc(join(flow, "baseline", "ref"), "alpha", pairwiseComposeKey(two.assert[1]!, undefined))).toMatchObject({
       status: "ok",
       unchecked: true,
     });
-    expect(readRefDoc(join(flow, "baseline", "ref"), "alpha", pairwiseComposeKey(two.assert[0]!))).not.toHaveProperty("unchecked");
+    expect(readRefDoc(join(flow, "baseline", "ref"), "alpha", pairwiseComposeKey(two.assert[0]!, undefined))).not.toHaveProperty(
+      "unchecked",
+    );
     // The run is pruned: a third scope cannot be added from it.
     rmSync(base.outDir, { recursive: true, force: true });
     const three = parseScenarioFile(
