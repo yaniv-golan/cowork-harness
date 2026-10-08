@@ -27,9 +27,13 @@ records and replays exactly as before.
   `protocol` and `hostloop`. The bundled cassettes are re-stamped to `2.26454.2`.
 - **A cassette that uses a 4.6.0 key is stamped v15 and needs 4.6.0 to replay.** That is `gates_all_scripted`,
   `hook_decision`, `no_hook_event_blocked`, the object form of `hook_event_blocked`, an `artifact_json` glob or
-  `match`, or a recording made under `answer_channel: none`. An older harness refuses it as too new, so pin the
-  harness version in CI before you record one. Each new key is also a 4.6.0 floor for the scenario or session file
+  `match`, a `lane: remote` scenario with an `artifact_json` entry, or a recording made under `answer_channel: none`.
+  An older harness refuses it as too new (for `lane: remote`, instead of passing it), so pin the harness version in CI
+  before you record one. Each new key is also a 4.6.0 floor for the scenario or session file
   itself: an older CLI rejects an unknown key at load (`Unrecognized key`, exit 2).
+- **A `lane: remote` scenario or cassette that asserts `artifact_json` now fails, on replay too, and re-recording
+  cannot make it pass.** Assert the written path with `file_exists` and the agent's statement of the content with
+  `transcript_matches`, or set `lane: local`. `lint --strict` exits 1 on these scenarios.
 - **An `artifact_json` `artifact` containing `*` or `?` is now a glob.** Such a path used to name a file literally;
   it now needs `match:` and matches by pattern (`?` and `*` also match themselves, so such a file is still reached,
   along with any other name the pattern fits).
@@ -150,6 +154,15 @@ records and replays exactly as before.
 - **`assertion-keys.json` gains `liveVerifiedHookEventTiers`**, the tiers each live-verified hook event was observed
   at. `lint`'s `hook-event-not-served` message now names those tiers: `Stop` says `container`, where it used to claim
   `container` and `hostloop`.
+
+### Fixed
+
+- **`artifact_json` fails on `lane: remote`, as `artifact_text` does.** A `lane: remote` scenario still runs locally,
+  so `artifact_json` read the file the skill wrote on the local work root and could pass, although that lane's
+  container filesystem is not observable from outside it. It now fails there in every form (a literal path, or a glob
+  with `match: each` or `any`), on `run`, `verify-run` and `replay`, with `artifact_text`'s wording, and the Python
+  helper's `assert_artifact_json` raises on such a run. `lint` warns (`lane-remote-unobservable-key`) on
+  `artifact_json`, `artifact_text` or `file_absent` on `lane: remote`, which load but always fail when graded there.
 
 ### Documentation
 
