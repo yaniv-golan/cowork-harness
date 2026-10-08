@@ -10,6 +10,6 @@ prompt: |
   Run the gated probe.
 assert:
   # the status file the skill's own script wrote, before the gate
-  - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: waiting }
+  - artifact_json: { artifact: outputs/artifacts/runs/*/run_status.json, match: each, path: status, equals: waiting }
   # the script that writes it actually ran (not the model writing the file itself)
   - tool_called: { tool: Bash, input: { command: "step1\\.py" } }

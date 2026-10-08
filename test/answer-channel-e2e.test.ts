@@ -46,7 +46,7 @@ const STUB = [
   "cat >/dev/null",
 ].join("\n");
 
-const PARKED = "  - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: waiting }";
+const PARKED = "  - artifact_json: { artifact: outputs/artifacts/runs/*/run_status.json, match: each, path: status, equals: waiting }";
 
 function fixture(body = STUB): StubFixture & { argv: string } {
   const f = makeStubFixture(body, DUMMY);

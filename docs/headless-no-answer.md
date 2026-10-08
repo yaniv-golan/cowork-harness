@@ -100,14 +100,14 @@ fidelity: container
 prompt: "…invoke the gated skill…"
 assert:
   # the status file the skill's own script wrote before the gate (paths are relative to the work root)
-  - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: waiting }
+  - artifact_json: { artifact: outputs/artifacts/runs/*/run_status.json, match: each, path: status, equals: waiting }
   # the script that writes it ran, rather than the model writing the file itself
   - tool_called: { tool: Bash, input: { command: "step1\\.py" } }
 ```
 
-`artifact_json` takes a literal path, so the run id must be predictable: pin it in the skill's own
-fixture, or read a fixed id the skill documents. A working copy of this pair is
-`examples/probes/gated-probe-headless.scenario.yaml` with `examples/sessions/gated-probe-headless.yaml`.
+The glob with `match: each` covers whatever run id the skill picks, and fails when no status file was
+written at all (zero matches fail). A literal path works too when the skill uses a fixed run id. A working
+copy of this pair is `examples/probes/gated-probe-headless.scenario.yaml` with `examples/sessions/gated-probe-headless.yaml`.
 
 ## What this is not
 
