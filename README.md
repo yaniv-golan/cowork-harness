@@ -263,9 +263,9 @@ lane a session ran on, check the session itself — see
 
 The harness **cannot execute the remote lane**: that container is Anthropic's, not something a local
 tool can stand up. What it does instead is refuse to fake it. Declare `lane: remote` on a scenario and
-the assertions that depend on observing a local filesystem degrade honestly — `file_absent` reports
-evidence-unavailable rather than passing, `artifact_text` / `artifact_json` fail rather than grading the local
-body, and delivery is reported as unobservable — so a green never
+the assertions that depend on files inside the agent's container degrade honestly — the keys that can never
+pass there (file bodies, absence, links, delivery by location) are refused before the run starts, a semantic judge
+sees the transcript only, and delivery is reported as unobservable — so a green never
 means more than it should.
 
 **What this means for you.** Behaviour-shaped conclusions travel between lanes: whether your skill

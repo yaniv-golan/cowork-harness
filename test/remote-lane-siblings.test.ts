@@ -8,6 +8,8 @@ import { captureAuthoredFilesWithHealth } from "../src/run/artifacts.js";
 import { makeSemanticJudge } from "../src/decide/semantic-judge.js";
 import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
 import { composeKey } from "../src/refs/store.js";
+import { loadScenarioPure } from "../src/run/execute.js";
+import { preSpendVerdicts } from "../src/run/cassette.js";
 import type { Assertion } from "../src/types.js";
 
 // `lane: remote` still EXECUTES locally, so every key below reads a local tree that exists and can pass. The contract
@@ -199,5 +201,51 @@ describe("semantic_pairwise references are stored per lane", () => {
     expect(pairwiseComposeKey(a, "remote")).not.toBe(local);
     const o = { includeSubagentText: false, includeForkResults: false, evidenceFiles: undefined };
     expect(local).toBe(composeKey(COMPOSER_ID, o)); // the pre-lane formula
+  });
+});
+
+// R11: a key that can never pass on lane: remote is a LOAD error (before any spend), on every path that starts a run:
+// the scenario loader, and the shared pre-spend list `record` runs — which `record --from-embedded` reaches without
+// the loader.
+describe("lane: remote refuses at load the keys that can never pass there", () => {
+  const NEVER: Array<[string, string]> = [
+    ["artifact_text", "artifact_text: {artifact: outputs/a.md, contains: [x]}"],
+    ["artifact_json", "artifact_json: {artifact: outputs/a.json, path: a, equals: 1}"],
+    ["file_absent", "file_absent: outputs/a.md"],
+    ["no_unexpected_files", "no_unexpected_files: [outputs/a.md]"],
+    ["computer_links_resolve", "computer_links_resolve: true"],
+    ["computer_links_resolve_if_present", "computer_links_resolve_if_present: true"],
+    ["no_lost_write_back", "no_lost_write_back: true"],
+    ["user_visible_artifact", "user_visible_artifact: outputs/a.md"],
+    ["present_files_called", "present_files_called: true"],
+    ["no_scratchpad_leak", "no_scratchpad_leak: true"],
+    ["semantic_matches", "semantic_matches: {rubric: [x], evidence_files: [outputs/a.md]}"],
+    ["semantic_pairwise", "semantic_pairwise: {refs: [r], evidence_files: [outputs/a.md]}"],
+  ];
+  const file = (lane: string, item: string) => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-lane-load-"));
+    const p = join(dir, "s.yaml");
+    writeFileSync(
+      p,
+      ["baseline: latest", "fidelity: container", "prompt: hi", `lane: ${lane}`, "assert:", `  - ${item}`].join("\n") + "\n",
+    );
+    return p;
+  };
+  for (const [key, item] of NEVER) {
+    it(`${key}: refused at load on remote, loads on local`, () => {
+      expect(() => loadScenarioPure(file("remote", item))).toThrow(new RegExp(`\`${key}\` cannot pass on \`lane: remote\``));
+      expect(() => loadScenarioPure(file("local", item))).not.toThrow();
+      // The pre-spend list `record` runs refuses it too (record --from-embedded never reaches the loader).
+      const sc = loadScenarioPure(file("local", item));
+      const v = preSpendVerdicts({ ...sc, lane: "remote" }, join(tmpdir(), "x.cassette.json"), { force: true });
+      expect(v.some((x) => x.kind === "refuse" && x.message.includes(`\`${key}\` cannot pass on \`lane: remote\``))).toBe(true);
+    });
+  }
+  it("semantic_matches without evidence_files loads on remote (judged on the transcript only)", () => {
+    expect(() => loadScenarioPure(file("remote", "semantic_matches: {rubric: [x]}"))).not.toThrow();
+  });
+  it("input_unmodified and file_exists load on remote", () => {
+    expect(() => loadScenarioPure(file("remote", "input_unmodified: uploads/**"))).not.toThrow();
+    expect(() => loadScenarioPure(file("remote", "file_exists: outputs/a.md"))).not.toThrow();
   });
 });

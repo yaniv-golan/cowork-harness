@@ -57,9 +57,10 @@ in both the app bundle and the agent binary.
 **The harness cannot execute the remote lane and does not pretend to.** That container is
 Anthropic's; standing up a local imitation would be authoring an environment rather than reproducing
 one, with no production to verify it against. What exists instead is `lane: remote` on a scenario,
-which makes the affected assertions **refuse to grade** rather than pass — `file_absent` reports
-evidence-unavailable, `artifact_text` / `artifact_json` fail (no observable body), delivery is reported
-unobservable.
+which makes the affected assertions **refuse to grade** rather than pass — the keys that read files inside the
+agent's container are refused at load, a semantic judge sees the transcript only, and delivery is reported
+unobservable. `input_unmodified` still reads the local stand-in for the user's inputs; whether a cloud run's edit
+of a staged copy reaches the device is unconfirmed.
 
 **Practical consequence.** Behaviour-shaped conclusions travel between lanes: whether a skill
 triggers, how it sequences tools, which questions it asks, whether it honours a permission gate.

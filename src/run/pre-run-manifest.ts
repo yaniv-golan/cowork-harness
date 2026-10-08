@@ -180,7 +180,9 @@ export function capturePreRunManifest(plan: LaunchPlan, workRoot: string, outDir
   }
   // origin of the pre-run baseline. "local-walk" = the filesystem was walked locally by this function.
   // "local-unreadable" = a connected-folder source was unreadable so the baseline is incomplete.
-  // "remote-unavailable" is RESERVED for a future cloud run whose filesystem is not locally observable.
+  // "remote-unavailable" is RESERVED for a future cloud run whose filesystem is not locally observable. It is
+  // NOT set for `lane: remote`, which walks its baseline locally: that lane is guarded on `ctx.lane` instead,
+  // because this value would also flip input_unmodified, whose local read of device inputs stays.
   // Both non-"local-walk" values make no_unexpected_files / input_unmodified fail EVIDENCE-UNAVAILABLE
   // (see the assert.ts guard clauses) — never a vacuous pass on an incomplete/unwalkable tree.
   const origin = baselineUnreadable ? "local-unreadable" : "local-walk";

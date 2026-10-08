@@ -382,30 +382,55 @@ def _write_lane(tmp_path, lane, yaml_body, tier="container", name="sc.yaml"):
     return f
 
 
-# The runtime (src/run/execute.ts) throws at scenario LOAD time for these three keys on `lane: remote`.
-# The linter must catch it offline, before a paid run.
-LANE_REMOTE_KEYS = ("present_files_called", "no_scratchpad_leak", "user_visible_artifact")
+# The runtime (src/run/lane-notice.ts `laneRemoteLoadRefusal`) throws at scenario LOAD time for these on
+# `lane: remote`: each can never pass there. The linter must catch it offline, before a paid run.
+LANE_REMOTE_ITEMS = {
+    "present_files_called": "present_files_called: true",
+    "no_scratchpad_leak": "no_scratchpad_leak: true",
+    "user_visible_artifact": "user_visible_artifact: outputs/x.md",
+    "artifact_text": "artifact_text: {artifact: outputs/x.md, contains: [a]}",
+    "artifact_json": "artifact_json: {artifact: outputs/x.json, path: a, equals: 1}",
+    "file_absent": "file_absent: outputs/x.md",
+    "no_unexpected_files": "no_unexpected_files: [outputs/x.md]",
+    "computer_links_resolve": "computer_links_resolve: true",
+    "computer_links_resolve_if_present": "computer_links_resolve_if_present: true",
+    "no_lost_write_back": "no_lost_write_back: true",
+    "semantic_matches": "semantic_matches: {rubric: [x], evidence_files: [outputs/x.md]}",
+    "semantic_pairwise": "semantic_pairwise: {refs: [r], evidence_files: [outputs/x.md]}",
+}
+LANE_REMOTE_KEYS = tuple(LANE_REMOTE_ITEMS)
 
 
 @pytest.mark.parametrize("key", LANE_REMOTE_KEYS)
 def test_lane_remote_incompatible_key_is_error(key, tmp_path):
-    value = "outputs/x.md" if key == "user_visible_artifact" else "true"
-    body = f"assert:\n  - {key}: {value}\n"
+    body = f"assert:\n  - {LANE_REMOTE_ITEMS[key]}\n"
     findings = [f for f in scenario.lint_file(str(_write_lane(tmp_path, "remote", body))) if f.rule == "lane-remote-incompatible-key"]
     assert len(findings) == 1, key
     assert findings[0].severity == "ERROR"
     assert key in findings[0].message
     assert "lane: local" in findings[0].fix or "lane: local" in findings[0].message
+    # The old remedy pointed at a key that does not exist on this lane.
+    assert "Assert the delivery itself" not in findings[0].fix
 
 
 @pytest.mark.parametrize("key", LANE_REMOTE_KEYS)
 @pytest.mark.parametrize("lane", ("local", None))
 def test_lane_local_or_omitted_is_clean(key, lane, tmp_path):
     """`local` is the default; neither it nor an omitted lane may trip the rule."""
-    value = "outputs/x.md" if key == "user_visible_artifact" else "true"
-    body = f"assert:\n  - {key}: {value}\n"
+    body = f"assert:\n  - {LANE_REMOTE_ITEMS[key]}\n"
     f = _write_lane(tmp_path, lane, body) if lane else _write_at(tmp_path, "container", body)
     assert not any(x.rule == "lane-remote-incompatible-key" for x in scenario.lint_file(str(f)))
+
+
+def test_lane_remote_semantic_without_evidence_files_is_clean(tmp_path):
+    """Judged on the transcript only on `lane: remote`: it loads, so lint must not refuse it."""
+    body = "assert:\n  - semantic_matches: {rubric: [x]}\n"
+    assert not any(x.rule == "lane-remote-incompatible-key" for x in scenario.lint_file(str(_write_lane(tmp_path, "remote", body))))
+
+
+def test_lane_remote_unobservable_warn_is_retired():
+    """4.6.0's WARN for artifact_json/artifact_text/file_absent became this ERROR: the keys now fail at load."""
+    assert "lane-remote-unobservable-key" not in scenario.LINT_RULES
 
 
 def test_lane_remote_suppresses_the_tier_rule(tmp_path):
@@ -485,27 +510,6 @@ def test_lane_remote_drops_manifest_needs_snapshot_for_the_body_reading_keys(ite
     # Mutation guard: on lane: local the advisory still fires for them.
     rules = {f.rule for f in scenario.lint_file(str(_write_lane(tmp_path, "local", f"assert:\n  - {item}\n")))}
     assert "manifest-needs-snapshot" in rules
-
-
-@pytest.mark.parametrize(
-    "item",
-    [
-        "artifact_json: {artifact: outputs/x.json, path: a, equals: 1}",
-        "artifact_json: {artifact: 'outputs/*/x.json', match: any, path: a, equals: 1}",
-        "artifact_text: {artifact: outputs/x.md, contains: [a]}",
-        "file_absent: outputs/x.md",
-    ],
-)
-def test_lane_remote_warns_on_a_key_that_always_fails_there(item, tmp_path):
-    """These load on `lane: remote` but always fail when graded (no observable filesystem). Dropping the
-    manifest advice alone would leave lint calling the scenario clean; the author must hear it before paying."""
-    found = [f for f in scenario.lint_file(str(_write_lane(tmp_path, "remote", f"assert:\n  - {item}\n"))) if f.rule == "lane-remote-unobservable-key"]
-    assert len(found) == 1 and found[0].severity == "WARN"
-    assert item.split(":")[0] in found[0].message
-    assert not any(
-        f.rule == "lane-remote-unobservable-key"
-        for f in scenario.lint_file(str(_write_lane(tmp_path, "local", f"assert:\n  - {item}\n")))
-    )
 
 
 def test_present_files_key_error_gates_without_strict(tmp_path):

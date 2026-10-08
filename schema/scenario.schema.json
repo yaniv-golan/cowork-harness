@@ -1173,12 +1173,12 @@
             }
           },
           "file_absent": {
-            "description": "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Fails evidence-unavailable on `lane: remote` and on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
+            "description": "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Rejected at load on `lane: remote`, and fails evidence-unavailable on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
             "type": "string",
             "minLength": 1
           },
           "artifact_text": {
-            "description": "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw. Fails on `lane: remote`: that lane's container filesystem is not locally observable, so there is no body to read",
+            "description": "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw. Rejected at load on `lane: remote`: that lane's container filesystem is not locally observable, so there is no body to read",
             "type": "object",
             "properties": {
               "artifact": {
@@ -1455,7 +1455,7 @@
             "type": "boolean"
           },
           "artifact_json": {
-            "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Fails on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
+            "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Rejected at load on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
             "type": "object",
             "properties": {
               "artifact": {

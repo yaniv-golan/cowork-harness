@@ -39,7 +39,7 @@ import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { deriveOutcome } from "./outcome.js";
 import { loadBaseline, stampedOutputsMountMode } from "../baseline.js";
-import { maybePrintLaneNotice, type EnvironmentShapedAssertKey } from "./lane-notice.js";
+import { laneRemoteLoadRefusal, maybePrintLaneNotice } from "./lane-notice.js";
 import { outputsCheckArmed } from "./outputs-delete-tier.js";
 import {
   loadSession,
@@ -2684,19 +2684,8 @@ function validateScenarioRegexes(scenario: Scenario, scenarioPath: string): void
   // NOTHING on this lane to assert a delivery against. Advising it sent a consumer looking for a key that
   // does not exist. Until a remote delivery tool is served, the honest remedies are the weaker
   // path-plus-statement proxy or switching lanes — say exactly that.
-  if (scenario.lane === "remote") {
-    const LANE_INCOMPATIBLE = [
-      "present_files_called",
-      "no_scratchpad_leak",
-      "user_visible_artifact",
-    ] as const satisfies readonly EnvironmentShapedAssertKey[];
-    for (const a of scenario.assert)
-      for (const key of LANE_INCOMPATIBLE)
-        if (a[key] !== undefined)
-          throw new Error(
-            `${context}: \`${key}\` cannot pass on \`lane: remote\` — that lane serves no present_files and delivers nothing by location, so the key can only report "cannot verify". Tool-level delivery is NOT YET ASSERTABLE on this lane (the harness models no remote delivery tool; production uses the agent-native SendUserFile). Either assert the written path plus the agent's own statement of it (\`file_exists\` + \`transcript_matches\` — a weaker proxy, since the semantic judge cannot see tool calls), or set \`lane: local\` if this scenario models the desktop lane.`,
-          );
-  }
+  const laneRefusal = laneRemoteLoadRefusal(scenario);
+  if (laneRefusal) throw new Error(`${context}: ${laneRefusal}`);
   // assert[] patterns
   for (const a of scenario.assert) {
     for (const key of [

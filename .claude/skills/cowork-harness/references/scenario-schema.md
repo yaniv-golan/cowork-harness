@@ -46,10 +46,13 @@ lane: local                         # OPTIONAL — which Cowork lane's DELIVERY 
                                     # can't reach a remote session) — so `user_visible_artifact` and
                                     # present_files_called/no_scratchpad_leak are REJECTED AT SCENARIO-LOAD
                                     # TIME (before the run starts, before any spend), not left to fail
-                                    # unverifiable/can't-verify at assertion time. file_absent /
-                                    # artifact_text / artifact_json load but FAIL when graded (the container
-                                    # filesystem is not locally observable; assert file_exists +
-                                    # transcript_matches instead). Orthogonal to fidelity
+                                    # unverifiable/can't-verify at assertion time. So is every key that
+                                    # reads files inside the agent's container: artifact_text /
+                                    # artifact_json / file_absent / no_unexpected_files /
+                                    # computer_links_resolve* / no_lost_write_back, and semantic_* with
+                                    # evidence_files (semantic_* without it is judged on the transcript
+                                    # only). Assert file_exists + transcript_matches instead; input_unmodified
+                                    # still reads the local stand-in (unconfirmed). Orthogonal to fidelity
                                     # and execution — a `lane: remote` scenario still runs locally.
                                     # Delivery semantics only; the remote device bridge is deliberately
                                     # unmodeled.

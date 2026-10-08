@@ -965,7 +965,7 @@ export const Assertion = z.strictObject({
     .min(1)
     .optional()
     .describe(
-      "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Fails evidence-unavailable on `lane: remote` and on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
+      "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Rejected at load on `lane: remote`, and fails evidence-unavailable on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
     ),
   artifact_text: z
     .strictObject({
@@ -981,7 +981,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw. Fails on `lane: remote`: that lane's container filesystem is not locally observable, so there is no body to read",
+      "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw. Rejected at load on `lane: remote`: that lane's container filesystem is not locally observable, so there is no body to read",
     ),
   input_unmodified: z
     .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
@@ -1252,7 +1252,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Fails on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
+      "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Rejected at load on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
     ),
   semantic_matches: z
     .strictObject({
@@ -2674,7 +2674,7 @@ export interface RunResult {
   /** Provenance of the pre-run baseline (`pre-run-manifest.json`'s `origin`). "local-walk" = the tree was
    *  walked locally and the path/hash maps are complete; "local-unreadable" = a connected-folder source
    *  could not be walked so the baseline is PARTIAL; "remote-unavailable" is reserved for a future cloud
-   *  producer. Persisted so the plan-less lanes (verify-run reads result.json; replay reads the cassette)
+   *  producer (not `lane: remote`, which walks locally and is guarded on `lane`). Persisted so the plan-less lanes (verify-run reads result.json; replay reads the cassette)
    *  can make `no_unexpected_files` / `input_unmodified` fail evidence-unavailable on a non-`local-walk`
    *  baseline instead of diffing an incomplete tree. undefined = an older run/manifest predating the field
    *  (the assertion falls back to the preRunPaths/preRunHashes presence check, never assumes local-walk). */

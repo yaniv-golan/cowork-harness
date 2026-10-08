@@ -513,7 +513,8 @@ export interface AssertContext {
    *  run whose filesystem isn't locally observable: no_unexpected_files / input_unmodified must then fail
    *  evidence-unavailable — the same loud path taken when preRunPaths/preRunHashes are absent entirely —
    *  never a vacuous pass just because a (locally meaningless) preRunPaths/preRunHashes happens to be
-   *  present. undefined today on every real caller; only a hand-constructed ctx sets this. */
+   *  present. undefined today on every real caller; only a hand-constructed ctx sets this. `lane: remote` does NOT
+   *  set it (its baseline is walked locally); the keys that cannot hold there are guarded on `lane` instead. */
   preRunOrigin?: "local-walk" | "remote-unavailable" | "local-unreadable";
   /** True on a `--resume` turn. Such a turn captures no pre-run manifest of its own; the manifest it reads is the
    *  FIRST turn's. `authored: true` keys on this flag (and fails evidence-unavailable), never on the manifest being
