@@ -6,7 +6,6 @@ import { rollupPasses, type RepeatRollup } from "./repeat.js";
 import type { MatrixRollup, MatrixRepeatRollup } from "./matrix.js";
 import { deriveOutcome } from "./outcome.js";
 import { writeAllSync } from "../io.js";
-import { interruptExitCode } from "../termination.js";
 import { budgetStatus, type BudgetStatus } from "./budget-status.js";
 
 /** The `--max-budget-usd` marker as a frame fragment: `{budget}` when a pre-flight recorded a status, `{}`
@@ -256,7 +255,5 @@ export function fail(
     log(message);
     if (hint) log(hint);
   }
-  // An error raised while an interrupt is being handled (a child the stop killed, say) is a consequence of it: the
-  // exit status is the interrupt's, as it would have been had the handler exited first.
-  process.exit(interruptExitCode() ?? exitCode ?? (category === "boundary" ? 3 : 2));
+  process.exit(exitCode ?? (category === "boundary" ? 3 : 2));
 }

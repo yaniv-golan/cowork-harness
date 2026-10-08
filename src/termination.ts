@@ -128,11 +128,6 @@ export function interrupt(sig: NodeJS.Signals): void {
   onSignal(sig);
 }
 
-/** The exit status a pending interrupt owes, or undefined when none has been handled. */
-export function interruptExitCode(): number | undefined {
-  return terminating ? 128 + (constants.signals[terminating] ?? 0) : undefined;
-}
-
 /** Called by a caller about to start new work (the next scenario, a cassette write) once the process is
  *  being terminated: never returns, because the handler owns the exit and fires within the grace period.
  *  Parking instead of throwing keeps a Ctrl-C from surfacing as a stack trace / `internal` error. */

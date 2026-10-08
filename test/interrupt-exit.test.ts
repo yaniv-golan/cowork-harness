@@ -34,7 +34,10 @@ describe("childInterruptSignal", () => {
   });
 });
 
-describe.runIf(process.platform !== "win32")("fail() honours an interrupt already being handled", () => {
+// Once a signal has been handled, the handler's exit hook makes every exit report it (`process.exitCode` set in an
+// "exit" listener wins over the code passed to process.exit), so an error path needs no check of its own. What it
+// cannot see is a signal not handled yet: the child-status mapping above covers that.
+describe.runIf(process.platform !== "win32")("an error exit after a handled interrupt reports the interrupt", () => {
   const run = (body: string) => {
     const dir = mkdtempSync(join(tmpdir(), "interrupt-exit-"));
     const script = join(dir, "s.mts");
