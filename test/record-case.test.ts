@@ -131,6 +131,15 @@ describe.skipIf(!can)("record <dir> --case: selection errors are usage errors, b
     expect(cli(["record", work, "--case", id, "--dry-run"], root).code).toBe(0);
   });
 
+  // The dash sweep runs on a single file, where the single-file refusal also exits 2 naming --case; on a directory
+  // only the parser's guard says the value is missing (otherwise `--dry-run` becomes a stem and the run is no dry run).
+  it("a forgotten value is refused as one, not taken as a stem", () => {
+    const { root, work } = corpus();
+    const r = cli(["record", work, "--case", "--dry-run"], root);
+    expect(r.code).toBe(2);
+    expect(r.all).toMatch(/--case: missing value \(got flag-looking --dry-run\)/);
+  });
+
   it("refuses --case with a single scenario file, a missing path, or --rerecord-stale (exit 2)", () => {
     const { root, work } = corpus();
     const file = cli(["record", join(work, "a.yaml"), "--case", "a", "--dry-run"], root);

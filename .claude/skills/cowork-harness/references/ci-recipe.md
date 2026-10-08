@@ -246,6 +246,7 @@ filesystem/egress-only check on the replay lane (a silent no-op). Author new sce
 ```bash
 cowork-harness record scenarios/my-test.yaml      # live run that also writes the cassette
 cowork-harness record scenarios/                  # batch: record every scenario in the dir
+cowork-harness record scenarios/ --case my-test    # only the named file stems (repeat --case); the budget cap prices them alone
 cowork-harness record cassettes/ --rerecord-stale # re-record ONLY the cassettes whose fingerprint drifted
 cowork-harness replay cassettes/my-test.cassette.json  # token-free re-evaluation of content assertions
 cowork-harness replay cassettes/                   # replay every *.cassette.json in the committed dir
