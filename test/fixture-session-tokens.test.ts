@@ -211,9 +211,10 @@ describe("tokenizeSessionPaths — bounded matches only", () => {
     expect(tokenizeSessionPaths(Buffer.from(text), roots).count).toBe(n);
   });
   it("replaces the longer root first", () => {
+    // Listed shortest first: the order given must not decide it.
     const t = tokenizeSessionPaths(Buffer.from("/a/b/work/session/x"), [
-      { from: "/a/b/work/session", token: SESSION_ROOT_TOKEN },
       { from: "/a", token: VM_SESSION_ROOT_TOKEN },
+      { from: "/a/b/work/session", token: SESSION_ROOT_TOKEN },
     ]);
     expect(t.data.toString()).toBe(`${SESSION_ROOT_TOKEN}/x`);
   });
