@@ -1267,6 +1267,12 @@ export function resolveLaunchSources(
           `so it must live outside every mounted folder, upload, plugin and skill dir`,
       );
     workspaceFixture = scanWorkspaceFixture(opts.workspaceFixture);
+    if (tier === "protocol" && workspaceFixture.files.some((f) => f.tokens))
+      throw new UsageError(
+        `workspace_fixture ${opts.workspaceFixture}: ${workspaceFixture.files.filter((f) => f.tokens).length} file(s) hold session-path tokens ` +
+          `(fixture export --session-paths), but the protocol tier has no session layout (no /sessions/<id>, no mnt/) to substitute them with — ` +
+          `run it at fidelity hostloop, container or microvm`,
+      );
   }
 
   return { pinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders, ...(workspaceFixture ? { workspaceFixture } : {}) };

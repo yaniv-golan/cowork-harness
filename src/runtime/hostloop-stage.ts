@@ -7,7 +7,8 @@ import { warn } from "../io.js";
 import type { LaunchPlan } from "../session.js";
 import type { HostLoopBindMount } from "./argv.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
-import { stageWorkspaceFixture } from "../fixture/workspace.js";
+import { crossTierFixtureWarning, stageWorkspaceFixture } from "../fixture/workspace.js";
+import type { SessionRoots } from "../fixture/session-tokens.js";
 
 export type { HostLoopBindMount };
 
@@ -36,7 +37,7 @@ export function resolveHostLoopBindMounts(plan: LaunchPlan, sessionRoot: string)
  *  real paths), NO mnt/.claude config copy (the native process reads plan.configDir via CLAUDE_CONFIG_DIR;
  *  the sidecar gets only skills/projects as ro binds), mcp.json staged into the CONFIG dir (a host path
  *  the native argv can reference), same resume-skips-recopy semantics as stageWorkspace. */
-export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string): { mcpHostPath?: string } {
+export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: SessionRoots): { mcpHostPath?: string } {
   for (const d of ["uploads", "outputs", ".local-plugins", ".remote-plugins"]) mkdirSync(join(mntHost, d), { recursive: true });
   mkdirSync(join(plan.configDir, "projects"), { recursive: true }); // production: Dr(join(c,"projects"))
   if (!plan.resume) {
@@ -57,7 +58,12 @@ export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string): { mcp
       }
     }
     // workspace_fixture: fresh runs only, after the mounts, before the pre-run manifest (as stageWorkspace).
-    if (plan.workspaceFixture) stageWorkspaceFixture(plan.workspaceFixture, join(mntHost, "outputs"));
+    // Its session-path tokens get the host session dir (the native file tools) and the VM session root (bash).
+    if (plan.workspaceFixture) {
+      const counts = stageWorkspaceFixture(plan.workspaceFixture, join(mntHost, "outputs"), fixtureRoots);
+      const crossTier = crossTierFixtureWarning(plan.workspaceFixture, counts);
+      if (crossTier) warn(crossTier);
+    }
     // mcp.json: resolved via resolveDeclaredSource exactly as stageWorkspace does, but into
     // join(plan.configDir, "mcp.json") — the native argv's --mcp-config takes this HOST path (there is
     // no configGuest for a native process). Same softMissing/resume exemptions.

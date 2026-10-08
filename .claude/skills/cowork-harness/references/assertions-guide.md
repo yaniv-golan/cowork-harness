@@ -84,6 +84,10 @@ Start the run from the state the earlier steps leave behind instead:
 1. Run the pipeline once to the point you want (or stop it there) with `--keep`, then
    `cowork-harness fixture export <run-dir> --out fixtures/after-scoring` — it copies the run's `outputs/`
    byte-for-byte and refuses (writing nothing) a file that carries a secret or a host path. Commit the directory.
+   If the skill records its own paths and reads them back (an outputs-dir probe, a sub-agent's output path, a
+   deliverable path it compares as a string), the export refuses those files as `run_path`: add
+   `--session-paths` and staging writes the new run's session paths into them (not at `fidelity: protocol`).
+   `--exclude <path>` drops a file the step can re-create instead.
 2. Point the scenario at it and ask for the late step only:
 
    ```yaml

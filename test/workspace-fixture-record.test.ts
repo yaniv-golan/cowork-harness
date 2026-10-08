@@ -140,7 +140,7 @@ describe("record → replay of a fixture scenario through the real record tail",
     expect(byPath.get("outputs/chart.bin")!.body).toBeDefined();
     expect(byPath.get("outputs/report.md")!.body).toContain("total: 7");
     expect(stderr).toMatch(/workspace_fixture — 1 untouched fixture file\(s\) \(19 bytes\) are inlined/);
-    expect(stderr).toMatch(/1 untouched binary file\(s\) recorded hash-only/);
+    expect(stderr).toMatch(/1 untouched binary or session-path file\(s\) recorded hash-only/);
   });
 
   it("replays green from the written file, reports the scenario-relative ref, and a fixture edit stales it", async () => {

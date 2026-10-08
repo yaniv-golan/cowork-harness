@@ -32,7 +32,7 @@ function fixture(resume: boolean) {
 describe("stageWorkspace — resume staging (fidelity guard)", () => {
   it("fresh run (!resume) copies .claude, mounts, and mcp.json", () => {
     const { mntHost, plan } = fixture(false);
-    const res = stageWorkspace(plan, mntHost);
+    const res = stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     expect(existsSync(join(mntHost, ".claude", "settings.json"))).toBe(true);
     expect(readFileSync(join(mntHost, ".projects/proj1/file.txt"), "utf8")).toBe("ORIGINAL");
     expect(existsSync(join(mntHost, ".claude", "mcp.json"))).toBe(true);
@@ -51,7 +51,7 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     // mutate the host SOURCES so a (wrong) re-copy would be detectable
     writeFileSync(join(configDir, "settings.json"), '{"v":999}');
 
-    const res = stageWorkspace(plan, mntHost);
+    const res = stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
 
     // the agent's session file survives, and the in-session mount edit is NOT reverted
     expect(readFileSync(join(mntHost, ".claude", "projects", "sess.jsonl"), "utf8")).toBe("AGENT_SESSION");
@@ -67,20 +67,22 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     mkdirSync(join(mntHost, ".claude"), { recursive: true });
     writeFileSync(join(mntHost, ".claude", "mcp.json"), '{"mcpServers":{"old":1}}'); // stale leftover
     (plan as { mcpConfig: string | null }).mcpConfig = null; // current plan declares no MCP
-    const res = stageWorkspace(plan, mntHost);
+    const res = stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     expect(res.mcpStaged).toBe(false); // must NOT leak the removed MCP servers into the new run
   });
 
   it("fresh run with a declared-but-missing mcp.config throws (no silent drop)", () => {
     const { mntHost, plan } = fixture(false);
     (plan as { mcpConfig: string | null }).mcpConfig = join(mntHost, "..", "nope-mcp.json"); // does not exist
-    expect(() => stageWorkspace(plan, mntHost)).toThrow(/mcp.config not found/);
+    expect(() => stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).toThrow(
+      /mcp.config not found/,
+    );
   });
 
   it("resume does NOT throw on a missing mcp.config source (the staged copy persists)", () => {
     const { mntHost, plan } = fixture(true);
     (plan as { mcpConfig: string | null }).mcpConfig = join(mntHost, "..", "nope-mcp.json");
-    expect(() => stageWorkspace(plan, mntHost)).not.toThrow();
+    expect(() => stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).not.toThrow();
   });
 
   it("a fresh-run mcp.config pointing at a DIRECTORY fails loud (not an opaque cpSync EISDIR)", () => {
@@ -88,7 +90,9 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     const dir = join(root, "mcp-as-dir");
     mkdirSync(dir, { recursive: true });
     (plan as { mcpConfig: string | null }).mcpConfig = dir; // present, but wrong kind
-    expect(() => stageWorkspace(plan, mntHost)).toThrow(/mcp.config must be a file/);
+    expect(() => stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).toThrow(
+      /mcp.config must be a file/,
+    );
   });
 
   it("a directory mcp.config fails even under COWORK_HARNESS_SOFT_MISSING (wrong-kind, not missing)", () => {
@@ -100,7 +104,9 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     process.env.COWORK_HARNESS_SOFT_MISSING = "1";
     try {
       // softMissing downgrades MISSING sources, but a present-but-wrong-kind source is malformed: still loud.
-      expect(() => stageWorkspace(plan, mntHost)).toThrow(/mcp.config must be a file/);
+      expect(() => stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).toThrow(
+        /mcp.config must be a file/,
+      );
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_SOFT_MISSING;
       else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
@@ -109,7 +115,7 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
 
   it("bare dirs are always created (idempotent), even on resume", () => {
     const { mntHost, plan } = fixture(true);
-    const res = stageWorkspace(plan, mntHost);
+    const res = stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     for (const d of ["uploads", "outputs", ".projects", ".claude"]) {
       expect(existsSync(join(mntHost, d))).toBe(true);
     }
@@ -127,14 +133,18 @@ describe("stageWorkspace — resume staging (fidelity guard)", () => {
     // pre-create mntHost (and .claude so the config copy succeeds) then symlink .projects out of tree.
     mkdirSync(join(mntHost, ".claude"), { recursive: true });
     symlinkSync(outside, join(mntHost, ".projects")); // dest parent now resolves outside mntHost
-    expect(() => stageWorkspace(plan, mntHost)).toThrow(/resolves outside the session tree/);
+    expect(() => stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).toThrow(
+      /resolves outside the session tree/,
+    );
   });
 
   it("throws (not silent skip) when a mount source vanished after plan validation (#23)", () => {
     const { mntHost, plan } = fixture(false);
     // simulate a TOCTOU vanish: buildLaunchPlan validated a present source, then it disappeared
     (plan.mounts[0] as { hostPath: string }).hostPath = join(mkdtempSync(join(tmpdir(), "stage-gone-")), "does-not-exist");
-    expect(() => stageWorkspace(plan, mntHost)).toThrow(/mount source vanished/);
+    expect(() => stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).toThrow(
+      /mount source vanished/,
+    );
   });
 });
 
@@ -169,7 +179,7 @@ describe("stageWorkspace — resume MCP diagnostic", () => {
       resume: true,
     } as unknown as LaunchPlan;
 
-    const res = stageWorkspace(plan, mntHost);
+    const res = stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     expect(res.mcpStaged).toBe(false);
 
     const written = warnSpy.mock.calls.map((c: any) => String(c[0])).join("");
@@ -196,7 +206,7 @@ describe("stageWorkspace — resume MCP diagnostic", () => {
       resume: true,
     } as unknown as LaunchPlan;
 
-    const res = stageWorkspace(plan, mntHost);
+    const res = stageWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     expect(res.mcpStaged).toBe(true);
     const written = warnSpy.mock.calls.map((c: any) => String(c[0])).join("");
     expect(written).not.toMatch(/--resume.*mcp|mcp.*--resume/i);

@@ -1058,7 +1058,7 @@
         },
         "workspaceFixtureFileSigs": {
           "type": "array",
-          "description": "per-file [path, sig] behind workspaceFixtureSig (fixture-relative paths; the sig is the content sha256, suffixed `+x` for an executable file).",
+          "description": "per-file [path, sig] behind workspaceFixtureSig (fixture-relative paths; the sig is the content sha256, suffixed `+x` for an executable file and `+t1` for a file staging writes the session's paths into).",
           "items": {
             "type": "array",
             "items": {

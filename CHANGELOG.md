@@ -14,6 +14,23 @@ All notable changes to this project are documented here. The format is based on
   scenario of a large corpus is priced as that scenario instead of the whole directory. A stem that names no scenario
   is a usage error (exit 2) that names it and lists the ids it can select. The JSON payload carries `cases`.
   `--case` is refused with a single scenario file or `--rerecord-stale`.
+- `fixture export --session-paths` keeps the files a skill writes its own session paths into, such as an
+  outputs-dir probe, a sub-agent's output path or a deliverable path compared as a string. Without it, export
+  refuses them.
+  - In each text file, this run's session root becomes a token: `__COWORK_HARNESS_SESSION_ROOT__` for the
+    root the file tools see (on hostloop, the run dir's `work/session`), and
+    `__COWORK_HARNESS_VM_SESSION_ROOT__` for the one bash sees (`/sessions/<id>`).
+  - When a `workspace_fixture` is staged, the new run's roots are written in place of the tokens. This works on
+    hostloop, container and microvm. The protocol tier has no session layout, so it refuses such a fixture at
+    load.
+  - Every other path, another session's included, is still refused, and so is every secret.
+  - Binary files are never rewritten, and a file that already holds a token is refused.
+  - A file with tokens adds `+t1` to its fixture signature and is recorded hash-only in a cassette. The
+    signature of a fixture without tokens does not change.
+  - A fixture exported from a container or microvm run warns when staged on hostloop: there it holds only the
+    bash path, which the file tools cannot open.
+- `fixture export --exclude <path>` (repeatable) leaves out a file, or everything under a directory. An
+  `--exclude` that names nothing is refused.
 
 ## [4.6.1] — 2026-10-09
 

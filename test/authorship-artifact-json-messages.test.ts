@@ -213,7 +213,7 @@ describe("artifact_json evidence gates — every branch, byte-exact", () => {
   it("body-less on replay: fixture", () => {
     const truncatedPaths = new Map([["outputs/new.json", "fixture" as const]]);
     expect(one(aj("outputs/new.json"), ctx({ truncatedPaths }))).toMatchInlineSnapshot(
-      `"FAIL evidence unavailable: artifact_json target "outputs/new.json" was captured body-less (an untouched binary workspace_fixture file — recorded hash-only; assert artifact_json on what the step writes) — content is not in the cassette, so it cannot be evaluated on replay"`,
+      `"FAIL evidence unavailable: artifact_json target "outputs/new.json" was captured body-less (an untouched binary or session-path workspace_fixture file — recorded hash-only; assert artifact_json on what the step writes) — content is not in the cassette, so it cannot be evaluated on replay"`,
     );
   });
   it("body-less on replay: input", () => {

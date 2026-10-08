@@ -191,7 +191,7 @@
             "minItems": 2,
             "maxItems": 2
           },
-          "description": "v14: per-file `[path, sig]` behind `workspaceFixtureSig` (fixture-relative paths, redacted like `fileSigs`; the sig is the content sha256, suffixed `+x` for an executable file), so a `fixture` finding names the changed files."
+          "description": "v14: per-file `[path, sig]` behind `workspaceFixtureSig` (fixture-relative paths, redacted like `fileSigs`; the sig is the content sha256, suffixed `+x` for an executable file and `+t1` for a file staging writes the session's paths into), so a `fixture` finding names the changed files."
         },
         "promptAssetsHash": {
           "type": "string",

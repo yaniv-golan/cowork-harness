@@ -58,7 +58,7 @@ describe("hostloop-stage", () => {
       writeFileSync(join(folderSrc, "f.txt"), "hi");
       const folderMount: Mount = { hostPath: folderSrc, mountPath: "myfolder", mode: "rw", kind: "folder" };
       const plan = makePlan({ mounts: [folderMount] }, configDir);
-      stageHostLoopWorkspace(plan, mntHost);
+      stageHostLoopWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
       for (const d of ["uploads", "outputs", ".local-plugins", ".remote-plugins"]) expect(existsSync(join(mntHost, d))).toBe(true);
       expect(existsSync(join(mntHost, "myfolder"))).toBe(false); // never copied
     });
@@ -68,14 +68,16 @@ describe("hostloop-stage", () => {
       writeFileSync(uploadSrc, "payload");
       const uploadMount: Mount = { hostPath: uploadSrc, mountPath: "uploads/u.txt", mode: "r", kind: "upload" };
       const plan = makePlan({ mounts: [uploadMount] }, configDir);
-      stageHostLoopWorkspace(plan, mntHost);
+      stageHostLoopWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
       expect(readFileSync(join(mntHost, "uploads", "u.txt"), "utf8")).toBe("payload");
     });
 
     it("throws (not silent skip) when a non-folder mount source vanished after plan validation (#24)", () => {
       const uploadMount: Mount = { hostPath: join(base, "gone.txt"), mountPath: "uploads/gone.txt", mode: "r", kind: "upload" };
       const plan = makePlan({ mounts: [uploadMount] }, configDir);
-      expect(() => stageHostLoopWorkspace(plan, mntHost)).toThrow(/mount source vanished/);
+      expect(() => stageHostLoopWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).toThrow(
+        /mount source vanished/,
+      );
     });
 
     it("throws BoundaryError when a staged mount path resolves outside the session tree via a symlinked parent", () => {
@@ -87,7 +89,9 @@ describe("hostloop-stage", () => {
       mkdirSync(src, { recursive: true });
       const pluginMount: Mount = { hostPath: src, mountPath: "escaped-parent/plugin", mode: "r", kind: "local-plugin" };
       const plan = makePlan({ mounts: [pluginMount] }, configDir);
-      expect(() => stageHostLoopWorkspace(plan, mntHost)).toThrow(BoundaryError);
+      expect(() => stageHostLoopWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).toThrow(
+        BoundaryError,
+      );
     });
 
     it("resume skips re-staging entirely", () => {
@@ -96,7 +100,7 @@ describe("hostloop-stage", () => {
       writeFileSync(uploadSrc, "payload2");
       const uploadMount: Mount = { hostPath: uploadSrc, mountPath: "uploads/u2.txt", mode: "r", kind: "upload" };
       const plan = makePlan({ mounts: [uploadMount], resume: true }, configDir);
-      stageHostLoopWorkspace(plan, mntHost);
+      stageHostLoopWorkspace(plan, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
       expect(existsSync(join(mntHost, "uploads", "u2.txt"))).toBe(false);
     });
   });

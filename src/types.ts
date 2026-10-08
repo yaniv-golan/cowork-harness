@@ -1762,13 +1762,14 @@ export interface Fingerprint {
    *  Absent on cassettes recorded before this field existed → informational note, never a finding. */
   promptAssetsHash?: string;
   /** v14: the `workspace_fixture` content signature — sha256 over the fixture's sorted (path, sha256, exec bit)
-   *  triples (src/fixture/workspace.ts `workspaceFixtureSig`), taken from the files actually STAGED. Replay
+   *  triples, plus the session-path substitution scheme for a file that holds session-path tokens
+   *  (src/fixture/workspace.ts `workspaceFixtureSig`), taken from the committed bytes of the files actually STAGED. Replay
    *  recomputes it from the scenario's fixture dir (resolved against the cassette): a mismatch is a `fixture`
    *  staleness finding, a missing dir `unverifiable-fixture`. Absent when the scenario declares no fixture. */
   workspaceFixtureSig?: string;
   /** v14: per-file `[path, sig]` behind `workspaceFixtureSig` (fixture-relative paths, redacted like
-   *  `fileSigs`; the sig is the content sha256, suffixed `+x` for an executable file), so a drift finding names
-   *  the file. */
+   *  `fileSigs`; the sig is the content sha256, suffixed `+x` for an executable file and `+t1` for a file
+   *  staging writes the session's paths into), so a drift finding names the file. */
   workspaceFixtureFileSigs?: Array<[string, string]>;
 }
 

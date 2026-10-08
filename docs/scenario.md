@@ -1194,7 +1194,8 @@ fixture its cassette could only reference by climbing out of that repository (th
 machine's directory names). `cowork-harness fixture export <run-dir> --out <dir>` turns a kept
 run's outputs into one ([cli.md](./cli.md)).
 
-**Staging.** Fresh runs only, on every tier: after the mounts, before the pre-run manifest. A `--resume`
+**Staging.** Fresh runs only, on every tier (a fixture with session-path tokens excepted — see below): after
+the mounts, before the pre-run manifest. A `--resume`
 turn re-stages nothing, but it must still declare the SAME `workspace_fixture` (and session) as the first turn:
 the fixture is part of the pinned session's identity, so a turn that drops or changes it is refused as
 belonging to another project. A host path a
@@ -1202,6 +1203,27 @@ fixture file contains counts as user-supplied input, so quoting it is not a `hos
 exemption uploads get, at `container` and `microvm` (the tiers where that signal is armed). A `--resume` turn
 never re-stages — it sees whatever the skill left in `outputs/`. A fresh run whose outputs dir is not empty is
 refused (a pinned `--session-id` re-run at `microvm` clears the previous run's outputs first).
+
+**Session paths.** A skill that records where its files are and reads that back (an outputs-dir probe, a
+sub-agent's output path, a deliverable path it compares as a string) needs those paths to name THIS session.
+`fixture export --session-paths` ([cli.md](./cli.md)) rewrites the recorded session's roots to two tokens, and
+staging writes this run's roots in their place, in text files only:
+
+| token | hostloop | container, microvm |
+|---|---|---|
+| `__COWORK_HARNESS_SESSION_ROOT__` (the file tools' view) | the run dir's `work/session` | `/sessions/<id>` |
+| `__COWORK_HARNESS_VM_SESSION_ROOT__` (bash's view) | `/sessions/<id>` | `/sessions/<id>` |
+
+The protocol tier has no session layout (no `/sessions/<id>`, no `mnt/`), so a fixture with tokens is refused
+there at load, before anything is spawned. Refused at load on every tier: a binary file holding a token (only
+text is rewritten, so the agent would read the raw token). Refused at staging: a root that holds a quote, a
+backslash, whitespace or a control character (a `--run-dir` with a space, say), which would break the syntax of
+the file it is written into, and a non-ASCII root written into a file that is not UTF-8. A fixture exported from
+a container or microvm run carries only the bash token, because there one path serves the file tools and bash
+alike. Staged on hostloop, where the file tools run on the host and cannot open a `/sessions/` path, it gets a
+warning; re-export such a fixture from a hostloop run. The signature covers the committed (tokenised) bytes,
+so it does not change from one session to the next. A file with tokens is stamped with the substitution scheme
+(`+t1` in its per-file signature), so a cassette recorded under a different scheme reads as stale.
 
 **Authorship — what the step produced.** Because the fixture lands before the pre-run manifest is taken, an
 untouched fixture file is **pre-run**, not authored: `semantic_matches` grades only the files this run created
@@ -1239,7 +1261,9 @@ in its manifest like any other outputs file, so replay needs no fixture and know
 Text fixture files are inlined (and go through the record redaction policy — when the policy rewrites an
 untouched one, its pre-run hash is recorded as the redacted body's, so it still reads as unchanged and
 `input_unmodified` on it stays checkable on replay); an untouched binary one is recorded hash-only (`truncationReason: "fixture"` — `file_exists` still passes on replay, a body assertion is
-evidence-unavailable). The fixture's content signature (`fingerprint.workspaceFixtureSig`) is part of the
+evidence-unavailable), and so is an untouched file staging wrote session paths into: its staged bytes name the
+recording session (on hostloop, a path under the runs dir), and the committed fixture already holds its portable
+form. The fixture's content signature (`fingerprint.workspaceFixtureSig`) is part of the
 staleness check: replay recomputes it from the fixture directory, and a changed fixture is a `fixture` finding
 (a warning by default; `--strict`, `--fail-on-skill-drift` and an explicit `--session` fail it), while a
 fixture that cannot be found or scanned is `unverifiable-fixture`, which fails the replay. Only the

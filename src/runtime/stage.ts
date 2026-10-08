@@ -7,6 +7,7 @@ import { containedRealPath } from "../boundary-paths.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { BoundaryError } from "../errors.js";
 import { stageWorkspaceFixture } from "../fixture/workspace.js";
+import type { SessionRoots } from "../fixture/session-tokens.js";
 
 /** Subdirs the writable session tree always pre-creates under mnt (idempotent). `.local-plugins` (not
  *  `.local-plugins/cache`) so both the gated `marketplaces/<mp>/<plugin>` and legacy `cache/<x>` plugin
@@ -37,7 +38,9 @@ export interface StageResult {
  * but cpSync merges and plan.configDir has no projects/ — the session file survives regardless.
  * Skipping it on resume is nonetheless the faithful behavior, so the guard now covers all of it.)
  */
-export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
+/** `fixtureRoots`: the session root as this tier's agent sees it (file tools / bash) — written in place of a
+ *  workspace_fixture's session-path tokens. */
+export function stageWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: SessionRoots): StageResult {
   for (const d of BARE_DIRS) mkdirSync(join(mntHost, d), { recursive: true });
   const mcpDest = join(mntHost, ".claude", "mcp.json");
 
@@ -76,7 +79,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string): StageResult {
     // workspace_fixture: turn-1 state, copied into outputs/ after the mounts and before the caller captures the
     // pre-run manifest (so an untouched fixture file is pre-run, not authored). Inside the !resume branch: a
     // resumed turn sees whatever the skill left in outputs/.
-    if (plan.workspaceFixture) stageWorkspaceFixture(plan.workspaceFixture, join(mntHost, "outputs"));
+    if (plan.workspaceFixture) stageWorkspaceFixture(plan.workspaceFixture, join(mntHost, "outputs"), fixtureRoots);
     // A declared mcp.config whose source is missing must FAIL on a fresh run (it was silently dropped
     // before — no --mcp-config, no error). Resolved HERE, not in buildLaunchPlan, because resume (the
     // else branch) must stay exempt: on resume the source may be gone but the staged copy persists.

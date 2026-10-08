@@ -105,7 +105,7 @@ function idleRun() {
   const dir = makeFixture();
   const mnt = join(tmp("wsfh-live-"), "mnt");
   const plan = planFor(dir);
-  stageWorkspace(plan, mnt);
+  stageWorkspace(plan, mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
   const preRunHashes: Record<string, string | null> = {};
   for (const f of plan.workspaceFixture!.files) preRunHashes[`outputs/${f.path}`] = f.sha256;
   return { mnt, preRunHashes, preRunPaths: Object.keys(preRunHashes), files: plan.workspaceFixture!.files };

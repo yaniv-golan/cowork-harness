@@ -2668,7 +2668,7 @@ function artifactJsonChecks(
       const { replayReason, liveReadonly } = gate;
       const cause =
         replayReason === "fixture"
-          ? `(an untouched binary workspace_fixture file — recorded hash-only; assert artifact_json on what the step writes)`
+          ? `(an untouched binary or session-path workspace_fixture file — recorded hash-only; assert artifact_json on what the step writes)`
           : replayReason === "input"
             ? `(an uploaded input — its content is captured hash-only, never inlined; assert artifact_json on a deliverable instead)`
             : liveReadonly || replayReason === "readonly"
@@ -4693,7 +4693,7 @@ function check(
       } else if (bodyLess) {
         const cause =
           replayReason === "fixture"
-            ? "(an untouched binary workspace_fixture file — recorded hash-only; assert on what the step writes)"
+            ? "(an untouched binary or session-path workspace_fixture file — recorded hash-only; assert on what the step writes)"
             : replayReason === "input"
               ? "(an uploaded input — captured hash-only, never inlined)"
               : replayReason === "readonly" || liveReadonly

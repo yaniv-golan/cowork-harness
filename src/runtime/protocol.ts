@@ -170,6 +170,8 @@ export function spawnProtocol(
   // workspace_fixture: turn-1 state. Protocol re-copies its mounts on EVERY turn (no resume guard above), so the
   // fixture needs its own: re-staging on a resumed turn would overwrite what turn 1 wrote over the fixture (and
   // the non-empty-outputs refusal would fire). Before the manifest, so an untouched fixture file is pre-run.
+  // No session layout here, so no roots: a fixture with session-path tokens is refused (resolveLaunchSources
+  // refuses it before spend; this is the backstop).
   if (plan.workspaceFixture && !plan.resume) stageWorkspaceFixture(plan.workspaceFixture, join(work, "outputs"));
 
   // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
