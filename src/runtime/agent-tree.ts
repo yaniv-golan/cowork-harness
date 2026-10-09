@@ -52,8 +52,8 @@ export const NO_ORPHAN_SWEEP_ENV = "COWORK_HARNESS_NO_ORPHAN_SWEEP";
 /**
  * The synchronous listing (at construction, on a `result` frame, and in every terminate/force-kill except a
  * second signal's) is what the stop acts on: when it fails, the stop falls back to an earlier listing and a
- * process started since then can survive. `ps -A` has been measured at 1.4–2.4 s on a loaded Mac with ~1,300
- * processes, so the limit is 10 s — about four times that — and a listing that timed out is taken once more
+ * process started since then can survive. A listing takes ~0.1 s even with many concurrent listers (see `psArgs`);
+ * the limit is 10 s, far above that, and a listing that timed out is taken once more
  * (not once a signal is being handled; see `refreshAt`).
  * The listing runs before the grace period starts, so it never shortens the Desktop-matched settle and grace
  * windows; it does delay the start of the stop by that long.
@@ -111,8 +111,9 @@ function parseLstart(tokens: string[]): number | undefined {
   return new Date(Number(year), m, Number(day), Number(t[1]), Number(t[2]), Number(t[3])).getTime();
 }
 
-/** Parse `ps -A -o pid=,ppid=,pgid=,uid=,tty=,lstart=,comm=`. `lstart` is five tokens and `comm` may hold
- *  spaces, so `comm` is last and takes the rest of the line. Unparseable lines are dropped. */
+/** Parse `ps -A -o pid=,ppid=,pgid=,uid=,tty=,lstart=,comm=` (with `tdev=` for `tty=` on macOS; see {@link psArgs}).
+ *  `lstart` is five tokens and `comm` may hold spaces, so `comm` is last and takes the rest of the line. Unparseable
+ *  lines are dropped. */
 export function parsePsSnapshot(text: string): ProcRow[] {
   const rows: ProcRow[] = [];
   for (const line of text.split("\n")) {
@@ -163,7 +164,16 @@ export interface AgentTreeDeps {
   warn(msg: string): void;
 }
 
-const PS_ARGS = ["-A", "-o", "pid=,ppid=,pgid=,uid=,tty=,lstart=,comm="];
+/** The listing's arguments. The controlling terminal is asked for as `tdev=` on macOS: `tty=` makes `ps` turn each
+ *  terminal device into a name, and that lookup serializes across concurrent `ps` runs (one listing took ~4 s with 12
+ *  others running; with `tdev=` the same listing takes ~0.1 s), so every stop and run start waited on other processes'
+ *  listings. The walk and the sweep only ask whether a process has a terminal, which the device number answers (`??`
+ *  is none, as before). Linux keeps `tty=`: procps accepts `tdev` but prints `-` for every process (which would read
+ *  as "no terminal" everywhere), and its `tty=` reads /proc without that cost. */
+export function psArgs(platform: NodeJS.Platform = process.platform): string[] {
+  return ["-A", "-o", `pid=,ppid=,pgid=,uid=,${platform === "darwin" ? "tdev" : "tty"}=,lstart=,comm=`];
+}
+const PS_ARGS = psArgs();
 const PS_ENV = () => ({ ...process.env, LC_ALL: "C" });
 const PS_MAX_BUFFER = 16 * 1024 * 1024;
 
