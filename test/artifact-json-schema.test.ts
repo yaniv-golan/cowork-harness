@@ -176,7 +176,8 @@ describe("artifact_json.schema — evaluation", () => {
 
   it("with `path`, the schema applies to the value there; an absent path fails rather than validating nothing", () => {
     expect(run({ me: { name: "a", age: 1 } }, { path: "me", schema: PERSON }).pass).toBe(true);
-    const r = run({ other: 1 }, { path: "me", schema: { type: "object", properties: {} } });
+    // `not: {type: "null"}` accepts `undefined`, so only the presence guard can fail this.
+    const r = run({ other: 1 }, { path: "me", schema: { not: { type: "null" } } });
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/me/);
   });
@@ -186,11 +187,13 @@ describe("artifact_json.schema — evaluation", () => {
     expect(run({ name: "a", age: 3 }, { path: "age", equals: 4, schema: { type: "integer" } }).pass).toBe(false);
   });
 
-  it("does not echo a long enum's allowed values, and caps each error", () => {
-    const r = run("zzz", { schema: { type: "string", enum: Array.from({ length: 1000 }, (_, i) => `value-${i}`) } });
-    expect(r.pass).toBe(false);
-    expect(r.message).not.toContain("value-999");
-    expect(r.message!.length).toBeLessThan(2000);
+  it("does not echo an enum's allowed values, and caps each error", () => {
+    const short = run("zzz", { schema: { type: "string", enum: ["alpha-value", "beta-value"] } });
+    expect(short.pass).toBe(false);
+    expect(short.message).not.toContain("alpha-value");
+    const long = run("zzz", { schema: { type: "string", pattern: `^${"a".repeat(600)}$` } });
+    expect(long.pass).toBe(false);
+    expect(long.message!.length).toBeLessThan(600);
   });
 
   it("scrubs a secret out of an error before it is shown", () => {
