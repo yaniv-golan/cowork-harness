@@ -1,6 +1,6 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.6.0` (baseline `desktop-2.26454.2`). It needs a `cowork-harness` whose
+Tracks `cowork-harness 4.6.0` (baseline `desktop-2.31226.0`). It needs a `cowork-harness` whose
 `hillclimb --help` lists `--skill` (help goes to stderr). The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.

@@ -41,8 +41,25 @@ All notable changes to this project are documented here. The format is based on
   ` / `-flattened values, and values over 200 characters folded under `--- Full content ---`. A test pins both to
   Desktop's reply format byte for byte.
 
+### Changed
+
+- **`latest` moves to `desktop-2.31226.0`** (agent **2.1.293**, unchanged). The Cowork system prompt, the sub-agent
+  append, the egress contract and the first-party spawn env are unchanged from `desktop-2.26454.2`. The baseline records
+  one new spawn-env key, `CLAUDE_CODE_DESKTOP_SKILL_SWITCHES`, which Desktop sets only for third-party deployments, and
+  the reworded `device_bash` descriptions of the cloud tool surface.
+  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.26454.2 → 2.31226.0 since
+    record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it. The
+    bundled cassettes are re-stamped to `2.31226.0`.
+  - **`provenance.spawnEnvSpreadCount` moves 35 → 38:** Desktop added three conditional spreads, all on third-party
+    paths (the new key, and two existing third-party keys now behind their own conditions). Reading the called
+    function counts the same as the old inline helper: the call itself is not counted, the spreads inside it are.
+
 ### Fixed
 
+- **`sync` reads Desktop 2.31226.0's spawn env.** That release builds the shared env through a called function, so
+  `sync` derived no spawn env and refused the baseline (`W3 … window length 198 is outside the 200–20000 sanity
+  band`). It now follows the call to the object the function returns, and flags any call it cannot follow instead of
+  reading it as opaque. The spawn env it derives for every earlier Desktop baseline is unchanged.
 - **`lane: remote` no longer passes on the local copy of the container's files.** The keys listed above are refused
   at load and, for a run or cassette that reaches the evaluator another way, fail when graded with the same
   reason. `authored: true` is undecidable on that lane (it compares the container's file with the pre-run

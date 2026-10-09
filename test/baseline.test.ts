@@ -1225,6 +1225,170 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     USE_STAGING_OAUTH: "",
   };
 
+  // Desktop 2.31226.0 moved the shared-env helper's object into a called function: the helper returns
+  // `{DISABLE_AUTOUPDATER:"1",...F(…)}` and every other key lives in F. These build the same env both ways.
+  describe("W3 call spreads (a helper whose keys live in a called function)", () => {
+    const W3_INNER = W3.slice(W3.indexOf("...A.workspace"), W3.lastIndexOf("}}"));
+    const helper = (spreads: string) => `function FKzrn(){var q;return{DISABLE_AUTOUPDATER:"1",${spreads}}}`;
+    const callee = (name: string, body: string, params = "A,t,n") => `function ${name}(${params}){return{${body}}}`;
+    const withW3 = (w3: string) => fixture().replace(W3, w3);
+    const split = (extra = "") => withW3(`${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", W3_INNER)}${extra}`);
+    const real = (fl: string[]) => fl.filter((f) => !f.startsWith("NOTE:"));
+
+    it("reads the callee's keys: the same env, keys and spread count as the inline helper", () => {
+      const inline = deriveSpawnEnv(fixture(), greenGates());
+      const followed = deriveSpawnEnv(split(), greenGates());
+      expect(real(followed.flags)).toEqual([]);
+      expect(followed.env).toEqual(inline.env);
+      expect(followed.keys).toEqual(inline.keys);
+      // The followed call is not counted (it is resolved); the callee's own spreads are.
+      expect(followed.spreadCount).toBe(inline.spreadCount);
+    });
+
+    it("a new key inside the callee is an unknown key, not hidden behind the spread", () => {
+      const r = deriveSpawnEnv(
+        withW3(`${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", `NEW_SPAWN_KEY:"1",${W3_INNER}`)}`),
+        greenGates(),
+      );
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/unknown key NEW_SPAWN_KEY/);
+    });
+
+    it("every value call spread is followed, not only the first", () => {
+      const r = deriveSpawnEnv(
+        withW3(
+          `${helper("...FKwbt(A,t,{s:1}),...FKq(A,t)")};${callee("FKwbt", W3_INNER)};${callee("FKq", `NEW_SPAWN_KEY:"1",${W3_INNER}`, "A,t")}`,
+        ),
+        greenGates(),
+      );
+      expect(real(r.flags).join("\n")).toMatch(/unknown key NEW_SPAWN_KEY/);
+    });
+
+    it("a predicate call (`...f()&&{…}`) is not followed: the inline helper reads as before", () => {
+      const pred = fixture().replace("...A.route&&{", "...A.route()&&{");
+      const r = deriveSpawnEnv(pred, greenGates());
+      expect(real(r.flags)).toEqual([]);
+      expect(r.env).toEqual(deriveSpawnEnv(fixture(), greenGates()).env);
+    });
+
+    it("follows a callee in another chunk through its require() binding", () => {
+      const a = `var ns=require("./index.chunk-ENV.js");${helper("...ns.wbt(A,t,{s:1})")};${W2};${W1}${STIER};${MODELCFG}TAIL`;
+      const b = `Object.defineProperty(exports,"wbt",{enumerable:!0,get:function(){return FKwbt}});${callee("FKwbt", W3_INNER)}`;
+      const files = new Map([
+        ["index.chunk-MAIN.js", `HEADER;${a}`],
+        ["index.chunk-ENV.js", b],
+      ]);
+      const r = deriveSpawnEnv([...files.values()].join(""), greenGates(), files);
+      expect(real(r.flags)).toEqual([]);
+      expect(r.env).toEqual(deriveSpawnEnv(fixture(), greenGates()).env);
+      // Without the binding the namespace is not followed through a loose lookup: it flags.
+      const unbound = new Map([...files].map(([k, v]) => [k, v.replace('var ns=require("./index.chunk-ENV.js");', "")]));
+      expect(real(deriveSpawnEnv([...unbound.values()].join(""), greenGates(), unbound).flags).join("\n")).toMatch(
+        /not a require\(\) binding/,
+      );
+    });
+
+    it("resolves the callee's values in the chunk its function lives in, not a chunk that shares its text", () => {
+      const body = `MCP_TOOL_TIMEOUT:String(FKz9),${W3_INNER}`;
+      const a = `var ns=require("./index.chunk-ENV.js");${helper("...ns.wbt(A,t,{s:1})")};${W2};${W1}${STIER};${MODELCFG}TAIL`;
+      const env = `var FKz9=7e4;Object.defineProperty(exports,"wbt",{enumerable:!0,get:function(){return FKwbt}});${callee("FKwbt", body, "A,t")}`;
+      // An earlier chunk holding the same object text without the binding: a prefix lookup would read values there.
+      const decoy = `/* copy */ function FKcopy(){return{${body}}}`;
+      const files = new Map([
+        ["index.chunk-DECOY.js", decoy],
+        ["index.chunk-MAIN.js", `HEADER;${a}`],
+        ["index.chunk-ENV.js", env],
+      ]);
+      const r = deriveSpawnEnv([...files.values()].join(""), greenGates(), files);
+      expect(real(r.flags)).toEqual([]);
+    });
+
+    it("flags a callee it cannot read: missing, ambiguous, an arrow function, two returns, or a nested call spread", () => {
+      const cases: [string, string, RegExp][] = [
+        ["missing", `${helper("...FKwbt(A,t,{s:1})")}`, /0 `function FKwbt\(` definitions/],
+        [
+          "ambiguous",
+          `${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", W3_INNER)};${callee("FKwbt", W3_INNER)}`,
+          /2 `function FKwbt\(` definitions/,
+        ],
+        ["arrow", `${helper("...FKwbt(A,t,{s:1})")};const FKwbt=(A,t,n)=>({${W3_INNER}})`, /0 `function FKwbt\(` definitions/],
+        ["two returns", `${helper("...FKwbt(A,t,{s:1})")};function FKwbt(A,t,n){if(!A)return{};return{${W3_INNER}}}`, /has 2 `return\{`/],
+        [
+          "nested call spread",
+          `${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", `...FKdeep(),${W3_INNER}`)};${callee("FKdeep", W3_INNER, "")}`,
+          /with a spread that is not a `…&&{…}` predicate/,
+        ],
+      ];
+      for (const [name, w3, re] of cases) {
+        const r = deriveSpawnEnv(withW3(w3), greenGates());
+        expect(r.env, name).toBeNull();
+        expect(real(r.flags).join("\n"), name).toMatch(re);
+      }
+    });
+
+    it("flags a pinned key whose value comes from a parameter of the callee", () => {
+      const r = deriveSpawnEnv(
+        withW3(`${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", `MCP_TOOL_TIMEOUT:String(n.timeout),${W3_INNER}`)}`),
+        greenGates(),
+      );
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/pinned key MCP_TOOL_TIMEOUT in W3\+FKwbt takes its value from a parameter/);
+    });
+
+    it("a W3 spread it cannot classify flags instead of hiding the callee's keys", () => {
+      const cases: [string, string][] = [
+        ["optional call", "...FKwbt?.(A,t,{s:1})"],
+        ["call with a fallback", "...FKwbt(A,t,{s:1})||{}"],
+        ["indirect call", "...(0,FKwbt)(A,t,{s:1})"],
+        ["call inside a predicate's object", "...A.on&&{...FKwbt(A,t,{s:1})}"],
+      ];
+      for (const [name, spread] of cases) {
+        const r = deriveSpawnEnv(withW3(`${helper(spread)};${callee("FKwbt", W3_INNER)}`), greenGates());
+        expect(r.env, name).toBeNull();
+        expect(real(r.flags).join("\n"), name).toMatch(/neither a value call nor|holds a call spread inside its object/);
+      }
+    });
+
+    it("an env-shaped key passed in the followed call's arguments flags", () => {
+      const r = deriveSpawnEnv(withW3(`${helper('...FKwbt(A,t,{NEW_SPAWN_KEY:"1"})')};${callee("FKwbt", W3_INNER)}`), greenGates());
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/passes an env-shaped key in its arguments/);
+    });
+
+    it("a parameter with a default value still counts as a parameter for the pinned-value guard", () => {
+      const r = deriveSpawnEnv(
+        withW3(`var QQ=5e3;${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", `MCP_TOOL_TIMEOUT:String(QQ),${W3_INNER}`, "A,t,n,QQ=1")}`),
+        greenGates(),
+      );
+      expect(real(r.flags).join("\n")).toMatch(/pinned key MCP_TOOL_TIMEOUT in W3\+FKwbt takes its value from a parameter/);
+    });
+
+    it("a callee object outside the length band flags", () => {
+      const r = deriveSpawnEnv(
+        withW3(`${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", 'CLAUDE_CODE_DISABLE_BUNDLED_SKILLS:"1"')}`),
+        greenGates(),
+      );
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/returns an object of length \d+, outside the 200–20000 sanity band/);
+    });
+
+    it("without a unique helper head W3 is read as before, and its call spreads are not followed", () => {
+      // No `return{DISABLE_AUTOUPDATER:"1",` head: the legacy first-anchor read, whose short window the band rejects.
+      const r = deriveSpawnEnv(
+        withW3(`function FKzrn(){return{X:A.x,DISABLE_AUTOUPDATER:"1",...FKwbt(A,t,{s:1})}};${callee("FKwbt", W3_INNER)}`),
+        greenGates(),
+      );
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/W3 \(Zrn shared-env helper\) window length \d+ is outside/);
+    });
+
+    it("two helper heads make W3 ambiguous instead of reading the first", () => {
+      const r = deriveSpawnEnv(split(`;function FKdup(){return{DISABLE_AUTOUPDATER:"1",X:1}}`), greenGates());
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/2 `return\{DISABLE_AUTOUPDATER:"1",` helper heads/);
+    });
+  });
+
   // 1.20186.0 build-shape fixture — guards the member-receiver (o.isFeatureEnabled / o.getMcpToolTimeout /
   // o.appendCoworkTelemetryHeaders / o.dropEmptyAuthEnvSentinels / o.buildSubagentEnvironmentPrompt) +
   // one-hop export-alias (TASK_TOOL_NAMES:uae, getMcpToolTimeout:f4, DEFAULT_MAX_THINKING_TOKENS:x7e)
