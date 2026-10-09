@@ -2787,6 +2787,8 @@ function artifactJsonChecks(
               const v = validateAgainstSchema(schema, val, ctx.secrets ?? []);
               if (v.ok) results.push(ok());
               else if ("problem" in v) results.push(fail(`artifact_json: the schema cannot be used: ${v.problem}`));
+              else if ("unchecked" in v)
+                results.push(fail(`artifact_json: ${where} could not be checked against the schema: ${v.unchecked}`));
               else
                 results.push(
                   fail(`artifact_json: ${where} does not match the schema: ${v.errors.join("; ")}${v.more ? ` (+${v.more} more)` : ""}`),

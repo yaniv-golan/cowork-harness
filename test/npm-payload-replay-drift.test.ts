@@ -145,7 +145,8 @@ describe("artifact_json.schema from an extracted npm tarball", () => {
   // ajv is a runtime dependency that loads lazily, on the first `schema:`. Only the declared runtime deps are linked
   // into the extract, so a schema check from the packed CLI proves ajv ships and resolves (`ajv/dist/2020.js`, with
   // the extension: ajv has no exports map, so the bare subpath fails under Node while tsc and vitest accept it).
-  it("lint refuses a `format` keyword through the packed CLI", () => {
+  // A schema only ajv can refuse (a typo'd type), so the refusal proves ajv loaded: `format` is refused before ajv.
+  it("lint refuses a schema ajv rejects, through the packed CLI", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-payload-schema-"));
     const p = join(dir, "s.yaml");
     writeFileSync(
@@ -155,12 +156,12 @@ describe("artifact_json.schema from an extracted npm tarball", () => {
         "fidelity: container",
         "prompt: hi",
         "assert:",
-        "  - artifact_json: {artifact: outputs/p.json, schema: {type: object, properties: {m: {type: string, format: email}}}}",
+        "  - artifact_json: {artifact: outputs/p.json, schema: {type: object, properties: {m: {type: strin}}}}",
       ].join("\n") + "\n",
     );
     const r = spawnSync(process.execPath, ["dist/cli.js", "lint", p], { cwd: pkg, encoding: "utf8" });
     rmSync(dir, { recursive: true, force: true });
-    expect(`${r.stdout}${r.stderr}`).toMatch(/`format` \("email"\)/);
+    expect(`${r.stdout}${r.stderr}`).toMatch(/must be equal to one of the allowed values/);
     expect(`${r.stdout}${r.stderr}`).not.toMatch(/Cannot find module|ERR_MODULE_NOT_FOUND/);
   });
 });

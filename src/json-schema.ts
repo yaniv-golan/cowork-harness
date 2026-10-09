@@ -57,6 +57,18 @@ const NON_VALIDATING = new Set([
 const MAX_DEPTH = 64;
 const escapePointer = (k: string) => k.replace(/~/g, "~0").replace(/\//g, "~1");
 
+/** "NaN" / "Infinity" when `v` holds a non-finite number anywhere, else undefined (cycles are the caller's problem:
+ *  `schemaProblem` catches a throw). */
+function nonFinite(v: unknown, depth = 0): string | undefined {
+  if (typeof v === "number") return Number.isFinite(v) ? undefined : String(v);
+  if (depth > MAX_DEPTH || v === null || typeof v !== "object") return undefined;
+  for (const x of Array.isArray(v) ? v : Object.values(v)) {
+    const bad = nonFinite(x, depth + 1);
+    if (bad) return bad;
+  }
+  return undefined;
+}
+
 /** A keyword the walk refuses, with where it is (a JSON pointer) — or undefined. `path` holds the objects on the
  *  way down: a YAML alias can make a schema contain itself, and walking it would never end. */
 function walkProblem(node: unknown, at: string, path: object[] = []): string | undefined {
@@ -67,7 +79,13 @@ function walkProblem(node: unknown, at: string, path: object[] = []): string | u
   const down = [...path, node];
   for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
     const here = `${at}/${escapePointer(k)}`;
-    if (DATA_KEYWORDS.has(k)) continue;
+    if (DATA_KEYWORDS.has(k)) {
+      // JSON (a cassette, result.json) cannot carry NaN or Infinity: live would check one value and replay another.
+      const bad = nonFinite(v);
+      if (bad) return `\`${k}\` at ${at} holds ${bad}, which JSON cannot carry (a recorded cassette would hold null instead)`;
+      continue;
+    }
+    if (k === "__proto__") return `a \`__proto__\` key at ${at} is not supported (it is dropped, so it would check nothing)`;
     // ajv's own refusal covers every REACHABLE position; this one also covers a `$defs` entry nothing references.
     if (k === "format")
       return `\`format\` (${JSON.stringify(v)}) at ${at} is not supported (no format is validated, so it would check nothing): drop it, or use \`pattern\``;
@@ -82,6 +100,8 @@ function walkProblem(node: unknown, at: string, path: object[] = []): string | u
     if (ANNOTATION_ONLY.has(k)) return `\`${k}\` at ${at} is not supported: it is an annotation in draft 2020-12 and validates nothing`;
     if (NAMED_SUBSCHEMAS.has(k) && v && typeof v === "object" && !Array.isArray(v)) {
       for (const [name, sub] of Object.entries(v as Record<string, unknown>)) {
+        if (name === "__proto__")
+          return `a property named \`__proto__\` at ${here} is not supported (the validator drops it, so it would check nothing)`;
         const p = walkProblem(sub, `${here}/${escapePointer(name)}`, down);
         if (p) return p;
       }
@@ -178,7 +198,15 @@ export function schemaProblem(schema: unknown): string | undefined {
     const walk = walkProblem(schema, "#");
     if (walk) return walk;
     const v = compile(schema);
-    return "error" in v ? v.error : undefined;
+    if ("error" in v) return v.error;
+    // A reference with nothing to stop it (`$ref: "#"` at the root, or under `allOf`) compiles, then recurses forever on
+    // every value. Validating three trivial values finds it here rather than in the run.
+    try {
+      for (const probe of [null, {}, []]) v(probe);
+    } catch {
+      return 'the schema refers to itself with nothing to stop the recursion (a `$ref: "#"` at the root or under `allOf`/`anyOf`): put the recursion under a property or `items`';
+    }
+    return undefined;
   } catch (e) {
     return `the schema cannot be checked: ${String((e as Error)?.message ?? e)}`;
   }
@@ -191,11 +219,19 @@ export function validateAgainstSchema(
   schema: object,
   value: unknown,
   secrets: string[] = [],
-): { ok: true } | { ok: false; errors: string[]; more: number } | { ok: false; problem: string } {
+): { ok: true } | { ok: false; errors: string[]; more: number } | { ok: false; problem: string } | { ok: false; unchecked: string } {
   const problem = schemaProblem(schema);
   if (problem) return { ok: false, problem };
   const v = compile(schema) as Validate;
-  if (v(value)) return { ok: true };
+  // A recursive schema over a value deep enough (an agent can write one) overflows the validator. evaluate() has no
+  // error boundary, so a throw here would cost the run its verdict: fail the assertion instead.
+  let valid: boolean;
+  try {
+    valid = v(value);
+  } catch (e) {
+    return { ok: false, unchecked: String((e as Error)?.message ?? e) };
+  }
+  if (valid) return { ok: true };
   const all = v.errors ?? [];
   const errors = all.slice(0, MAX_ERRORS).map((e) => {
     const params = Object.entries(e.params ?? {})

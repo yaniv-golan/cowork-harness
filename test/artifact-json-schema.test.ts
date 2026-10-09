@@ -429,3 +429,59 @@ describe("artifact_json.schema — the diff review's cases", () => {
     expect(load({ schema: { $schema: "https://json-schema.org/draft/2020-12/schema#", type: "object" } }).success).toBe(true);
   });
 });
+
+describe("artifact_json.schema — the final review's cases", () => {
+  const run = runTop;
+  it("a schema that recurses without bound is a load error (smoke-validated at load)", () => {
+    for (const schema of [{ $ref: "#" }, { type: "object", allOf: [{ $ref: "#" }] }]) {
+      const r = load({ schema });
+      expect(r.success, JSON.stringify(schema)).toBe(false);
+    }
+  });
+
+  it("a throw while validating fails the assertion instead of escaping evaluate()", () => {
+    const tree = { type: "object", properties: { children: { type: "array", items: { $ref: "#" } } } };
+    let deep: Record<string, unknown> = {};
+    for (let i = 0; i < 20_000; i++) deep = { children: [deep] };
+    const r = run(deep, { schema: tree });
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/could not be checked against the schema/);
+  });
+
+  it("NaN / Infinity in const or enum is refused (JSON cannot carry them, so live and replay would differ)", () => {
+    expect(load({ schema: { const: Number.NaN } }).success).toBe(false);
+    expect(load({ schema: { enum: [1, Number.POSITIVE_INFINITY] } }).success).toBe(false);
+  });
+
+  it("a `__proto__` keyword or property name is refused (ajv drops it silently)", () => {
+    const viaJson = (json: string) => load({ schema: JSON.parse(json) });
+    expect(viaJson('{"type":"object","required":["a"],"properties":{"__proto__":{"type":"string"}}}').success).toBe(false);
+  });
+
+  it("a circular structure under an unwalked key is a clean load error", () => {
+    const c: unknown[] = [1];
+    c.push(c);
+    const r = load({ schema: { const: c } });
+    expect(r.success).toBe(false);
+    expect(issues(r)).toMatch(/cannot be checked/);
+  });
+
+  it("lint inlines {file} too: a bad schema file is a lint finding", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-aj-schema-lintfile-"));
+    mkdirSync(join(dir, "schemas"));
+    writeFileSync(join(dir, "schemas", "bad.json"), JSON.stringify({ required: ["x"] }));
+    const p = join(dir, "s.yaml");
+    writeFileSync(
+      p,
+      [
+        "baseline: latest",
+        "fidelity: container",
+        "prompt: hi",
+        "assert:",
+        "  - artifact_json: {artifact: outputs/p.json, schema: {file: schemas/bad.json}}",
+      ].join("\n") + "\n",
+    );
+    const findings = loaderFindings([p], { loadBaseline: () => undefined as never });
+    expect(JSON.stringify(findings)).toMatch(/add `type: object`/);
+  });
+});

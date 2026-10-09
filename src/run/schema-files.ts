@@ -36,7 +36,12 @@ export function inlineSchemaFiles(scenario: Scenario, scenarioPath: string): Sce
     const abs = isAbsolute(ref) ? ref : resolve(dirname(resolve(scenarioPath)), ref);
     if (!existsSync(abs)) throw new UsageError(`${where}: no such file (${abs}); the path is relative to the scenario file`);
     tree ??= scenarioTree(scenarioPath);
-    const real = realpathSync.native(abs);
+    let real: string;
+    try {
+      real = realpathSync.native(abs);
+    } catch (e) {
+      throw new UsageError(`${where}: cannot be resolved (${(e as Error).message})`);
+    }
     const rel = relative(tree.root, real);
     if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel))
       throw new UsageError(
@@ -48,7 +53,8 @@ export function inlineSchemaFiles(scenario: Scenario, scenarioPath: string): Sce
     try {
       parsed = JSON.parse(readFileSync(real, "utf8"));
     } catch (e) {
-      throw new UsageError(`${where}: not valid JSON (${(e as Error).message})`);
+      // A read error (EACCES) and a parse error both name the assertion, as a usage error.
+      throw new UsageError(`${where}: ${e instanceof SyntaxError ? "not valid JSON" : "cannot be read"} (${(e as Error).message})`);
     }
     const problem = schemaProblem(parsed);
     if (problem) throw new UsageError(`${where}: ${problem}`);
