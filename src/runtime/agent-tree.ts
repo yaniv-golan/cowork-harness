@@ -111,7 +111,7 @@ function parseLstart(tokens: string[]): number | undefined {
   return new Date(Number(year), m, Number(day), Number(t[1]), Number(t[2]), Number(t[3])).getTime();
 }
 
-/** Parse `ps -A -o pid=,ppid=,pgid=,uid=,tty=,lstart=,comm=`. `lstart` is five tokens and `comm` may hold
+/** Parse `ps -A -o pid=,ppid=,pgid=,uid=,tty=,lstart=,comm=` (with `tdev=` for `tty=` on macOS; see {@link psArgs}). `lstart` is five tokens and `comm` may hold
  *  spaces, so `comm` is last and takes the rest of the line. Unparseable lines are dropped. */
 export function parsePsSnapshot(text: string): ProcRow[] {
   const rows: ProcRow[] = [];
@@ -163,7 +163,15 @@ export interface AgentTreeDeps {
   warn(msg: string): void;
 }
 
-const PS_ARGS = ["-A", "-o", "pid=,ppid=,pgid=,uid=,tty=,lstart=,comm="];
+/** The listing's arguments. The controlling terminal is asked for as `tdev=` on macOS: `tty=` makes `ps` turn each
+ *  terminal device into a name, and that lookup serializes across concurrent `ps` runs (one listing took ~4 s with 12
+ *  others running, against 0.05 s with `tdev=`), so every stop and run start waited on other processes' listings.
+ *  The walk and the sweep only ask whether a process has a terminal, which the device number answers (`??` is none,
+ *  as before). Linux procps has no `tdev`, and its `tty=` reads /proc without that cost: unchanged there. */
+export function psArgs(platform: NodeJS.Platform = process.platform): string[] {
+  return ["-A", "-o", `pid=,ppid=,pgid=,uid=,${platform === "darwin" ? "tdev" : "tty"}=,lstart=,comm=`];
+}
+const PS_ARGS = psArgs();
 const PS_ENV = () => ({ ...process.env, LC_ALL: "C" });
 const PS_MAX_BUFFER = 16 * 1024 * 1024;
 
