@@ -18,7 +18,7 @@ companion skill, CI). This page is the CLI one.
 **Install from npm:**
 
 ```bash
-npm install -g "cowork-harness@^4.6.0"    # puts the `cowork-harness` command on your PATH
+npm install -g "cowork-harness@^4.6.1"    # puts the `cowork-harness` command on your PATH
 ```
 
 **Or build from source:**
@@ -38,7 +38,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@^4.6.0"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@^4.6.1"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -48,7 +48,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^4.6.0"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^4.6.1"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -126,7 +126,7 @@ The parts people ask about. **`package.json`'s `files[]` is the exhaustive, mach
 this table is the readable summary of it, and deliberately omits the infrastructure that always ships
 (`baselines/`, `schema/`, `fixtures/`, `scripts/`, `docker/`).
 
-| What ships | npm global (`npm install -g "cowork-harness@^4.6.0"`) | Source checkout (`git clone` + `npm ci`) |
+| What ships | npm global (`npm install -g "cowork-harness@^4.6.1"`) | Source checkout (`git clone` + `npm ci`) |
 |---|---|---|
 | CLI, `scenario.py` + assertion keys (enough for `lint` in CI) | ✓ | ✓ |
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
@@ -141,7 +141,7 @@ since a global install puts nothing in your working directory. The matrix, answe
 examples are the only ones that still need a source checkout. The **marketplace skill install** is
 narrower again — it pulls only `.claude/skills/cowork-harness/` (SKILL.md + `references/` +
 `scenario.py`/assertion keys, per `.claude-plugin/marketplace.json`'s `source`); everything in the npm column
-arrives when the skill's first command self-bootstraps `npx "cowork-harness@^4.6.0"` — the last row stays
+arrives when the skill's first command self-bootstraps `npx "cowork-harness@^4.6.1"` — the last row stays
 ✗ either way, since `matrices/`, `answer-policies/` and `probes/` are not published at all. See
 [docs/companion-skill.md](./companion-skill.md) for that install path.
 
@@ -374,7 +374,9 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   an `--authored-total-bytes` override (`scope_changed`) does not skip the check of what the live judge read.
   `--allow-doc-drift` grades anyway, with a warning naming the files; the accepted drift is reported in
   `liveDocDrift` (`{liveAssertionIndex, sections: [{kind, path?, change}]}`, indexed by the live run's
-  `assertions[]`, in the file and on each `runs[]` entry) and makes the run's `docMatchesLive` `false`.
+  `assertions[]`, in the file and on each `runs[]` entry) and makes the run's `docMatchesLive` `false`. A kept
+  `lane: remote` run from before 4.6.1 with a judged assertion is refused this way: on that lane the judge now reads
+  the transcript and final answer only, where the live judge also read file bodies.
 - **Content the live judge never read is refused too.** Content that only a widened scope (`evidence_files`,
   `include_subagent_text`, `include_fork_results`) or a larger `--authored-total-bytes` brings in — a file the live
   cap left out, a larger part of one, a sub-agent's text, a `skill_result` section — cannot be compared with anything, and a secret in it that this process does
@@ -1021,7 +1023,7 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
   the default rather than silently sampling on the wrong cadence — see
   [docs/maintenance.md](./maintenance.md)).
 - `COWORK_HARNESS_NO_HYPERLINKS` — disable OSC-8 terminal hyperlinks in CLI output (auto-disabled outside a TTY, under CI, or with `--compact`/`--demo`).
-- `COWORK_HARNESS_NO_LANE_NOTICE=1` — silence the one-line `[lane]` notice on stderr. It says the run models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06, so path, mount, delivery and egress results do not carry over to the cloud lane. It prints at most once per process, and only for a live `lane: local` run with at least one environment-shaped assertion (`file_exists`, `file_absent`, `user_visible_artifact`, `artifact_text`/`artifact_json`, `present_files_called`, `computer_links_resolve*`, `no_scratchpad_leak`, `transcript_no_host_path`, `no_delete_in_*`, `input_unmodified`, `no_unexpected_files`, `egress_*` or `expect_denied`, and the host loop's path-boundary keys `path_denied`, `no_path_denied`, `vm_path_denied`, `no_vm_path_file_op`, `self_heal_ran`, and `no_lost_write_back`); `chat` prints it once at session start. It is already off under `CI` and with `--compact`/`--demo`.
+- `COWORK_HARNESS_NO_LANE_NOTICE=1` — silence the one-line `[lane]` notice on stderr. It says the run models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06, so path, mount, delivery and egress results do not carry over to the cloud lane. It prints at most once per process, and only for a live `lane: local` run with at least one environment-shaped assertion (`file_exists`, `file_absent`, `user_visible_artifact`, `artifact_text`/`artifact_json`, `present_files_called`, `computer_links_resolve*`, `no_scratchpad_leak`, `transcript_no_host_path`, `no_delete_in_*`, `input_unmodified`, `no_unexpected_files`, `egress_*` or `expect_denied`, `no_lost_write_back` (it reads the files the run authored), and the host loop's path-boundary keys `path_denied`, `no_path_denied`, `vm_path_denied`, `no_vm_path_file_op`, `self_heal_ran`); `chat` prints it once at session start. It is already off under `CI` and with `--compact`/`--demo`.
 
 ### Networking and loop
 

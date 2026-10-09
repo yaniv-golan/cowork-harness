@@ -1,6 +1,6 @@
 # Assertion catalog: gates, hooks, path denial, verdict modifiers, egress, judged keys
 
-Tracks `cowork-harness 4.6.0` (baseline `desktop-2.31226.0`). Part 3 of 3 of the per-key table. The conventions every key shares (an item with several
+Tracks `cowork-harness 4.6.1` (baseline `desktop-2.31226.0`). Part 3 of 3 of the per-key table. The conventions every key shares (an item with several
 keys is an AND; glob vs regex name matching) and the verdict-signal table are in
 [`assertion-catalog.md`](./assertion-catalog.md); the other parts are [`assertion-catalog-outcome-files-tools.md`](./assertion-catalog-outcome-files-tools.md), [`assertion-catalog-agents-skills-budgets.md`](./assertion-catalog-agents-skills-budgets.md).
 
