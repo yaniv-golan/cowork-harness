@@ -960,7 +960,7 @@ the sweep off. `container` and `microvm` are unaffected: their agent and its pro
 or the guest.
 
 Each stop acts on a fresh `ps` listing of the host's processes, taken before the grace period starts. A listing
-may take up to 10 s (a busy Mac with ~1,300 processes has been measured at up to 2.4 s); at the end of a run a
+may take up to 10 s (on macOS a listing takes about 0.1 s, even while other processes list); at the end of a run a
 listing that timed out is taken once more, and after Ctrl-C or SIGTERM it is not. If it fails, the harness
 prints `::warning:: [teardown] could not list processes (…)` and stops what an earlier listing showed, so a
 process the agent started after that listing can keep running. A second Ctrl-C does not list processes again;

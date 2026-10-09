@@ -116,9 +116,9 @@ const token = () => `r${randomBytes(6).toString("hex")}`;
 const WORK = "/private/tmp/run-x/work";
 
 // macOS `ps` turns each terminal device into a name for `tty=`, and that lookup serializes across concurrent listers:
-// one listing took ~4 s with 12 others running, against 0.05 s for every other column. `tdev=` gives the device
-// number instead (`??` for none, `16/0` for a terminal), which is all the walk and the sweep need: they only ask
-// whether a process has a controlling terminal. Linux procps has no `tdev` and its `tty=` reads /proc, so it keeps it.
+// one listing took ~4 s with 12 others running; the `tdev=` column alone takes 0.05 s, and a full listing ~0.1 s.
+// `tdev=` gives the device number (`??` for none, `16/0` for a terminal), which is all the walk and the sweep need:
+// they only ask whether a process has a controlling terminal. Linux keeps `tty=`: procps prints `-` for `tdev`.
 describe("psArgs: the controlling-terminal column", () => {
   it("is tdev= on macOS (no device-name lookup) and tty= elsewhere", () => {
     expect(psArgs("darwin")).toEqual(["-A", "-o", "pid=,ppid=,pgid=,uid=,tdev=,lstart=,comm="]);
@@ -655,8 +655,8 @@ describe("orphan sweep on Linux: the run's env tag, never the cwd", () => {
   });
 });
 
-// The synchronous listing the teardown and a first signal take. Under heavy load `ps -A` has been measured at
-// 1.4–2.4 s with ~1,300 processes, so the limit must sit well above that, and a timeout is tried once more
+// The synchronous listing the teardown and a first signal take. A listing takes ~0.1 s on macOS even under contention
+// (see psArgs); the limit sits far above any measured listing, and a timeout is tried once more
 // before the stop falls back to an earlier listing. The stubs are executable scripts standing in for `ps`;
 // `exec sleep` makes the sleep the process the timeout kills, so none is left behind.
 describe.skipIf(process.platform === "win32")("listProcessesSync — the teardown's process listing", () => {
