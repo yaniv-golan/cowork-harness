@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -252,6 +252,47 @@ describe("decide --decider-llm refuses at its own pre-check, not via the spawn-p
       const env = JSON.parse(r.stdout.trim().split("\n").pop()!) as { error: { category: string; message: string } };
       expect(env.error.category).toBe("usage");
       expect(env.error.message).toMatch(/does not accept --safe-mode/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+});
+
+// A terminal Ctrl-C signals the whole foreground group, so the `claude --help` probe can die of it before the CLI's
+// own handler runs. That is the operator's interrupt, never "this claude is too old".
+describe("a host claude probe a Ctrl-C killed exits as interrupted", () => {
+  const interruptedCliIn = (d: string): string => {
+    const bin = join(d, "claude-interrupted");
+    writeFileSync(bin, "#!/bin/sh\nexit 130\n");
+    chmodSync(bin, 0o755);
+    return bin;
+  };
+  const run = (argv: string[], d: string) =>
+    spawnSync("node", [resolve("dist/cli.js"), ...argv], {
+      encoding: "utf8",
+      cwd: d,
+      input: "",
+      env: { ...process.env, COWORK_HARNESS_FORBID_SPAWN: "0", COWORK_HARNESS_CLAUDE_BIN: interruptedCliIn(d) },
+    });
+
+  it("decide --decider-llm exits 130, not a usage refusal", () => {
+    const d = mkdtempSync(join(tmpdir(), "iso-intr-"));
+    try {
+      const r = run(["decide", "--decider-llm"], d);
+      expect(r.status, r.stderr).toBe(130);
+      expect(r.stderr).not.toMatch(/does not accept/);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("critique exits 1, its documented operator-interrupt code", () => {
+    const d = mkdtempSync(join(tmpdir(), "iso-intr-"));
+    try {
+      mkdirSync(join(d, "skill"));
+      writeFileSync(join(d, "skill", "SKILL.md"), "---\nname: demo\ndescription: A demo skill.\n---\n\n# Demo\n\nSay hi.\n");
+      const r = run(["critique", join(d, "skill"), "--prompt", "hi", "--model", "claude-sonnet-5"], d);
+      expect(r.status, r.stderr + r.stdout).toBe(1);
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

@@ -3207,6 +3207,7 @@ describe.runIf(POSIX)("hillclimb over a runs root that is not where its runs wer
 
 describe("an interrupt learned from a probe", () => {
   it("propagates out of regrade instead of becoming a refusal", async () => {
+    buildFlow(); // a flow that will judge, so the isolation probe runs
     const interrupted = () => {
       throw new InterruptedError("SIGINT", "claude --help");
     };

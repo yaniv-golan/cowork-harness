@@ -33,6 +33,12 @@ describe("childInterruptSignal", () => {
     expect(childInterruptSignal(Object.assign(timedOut, { status: null, signal: "SIGTERM" as const }))).toBeUndefined();
   });
 
+  it("a child Node killed for overflowing its output buffer (ENOBUFS) is not an interrupt either", () => {
+    const overflow = Object.assign(new Error("spawnSync git ENOBUFS"), { code: "ENOBUFS" });
+    expect(childInterruptSignal({ status: null, signal: "SIGTERM", error: overflow })).toBeUndefined();
+    expect(childInterruptSignal(Object.assign(overflow, { status: null, signal: "SIGTERM" as const }))).toBeUndefined();
+  });
+
   it("exit 129 is not read as SIGHUP: git exits 129 on a usage error, and a real SIGHUP kills by signal", () => {
     expect(childInterruptSignal({ status: 129, signal: null })).toBeUndefined();
   });
