@@ -449,7 +449,10 @@ async function run(
       clearInterval(tick);
     }
     // The operator's interrupt, learned from a probe inside a job: in-flight jobs have finished; exit as interrupted.
-    if (stopError instanceof InterruptedError) throw stopError;
+    if (stopError instanceof InterruptedError) {
+      progress();
+      throw stopError;
+    }
     if (stopError !== undefined) {
       progress();
       const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`;
