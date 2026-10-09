@@ -1,4 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
+import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
 import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
@@ -2523,7 +2524,7 @@ function fidelityMissingError(path: string, e: ZodError): FidelityMissingError {
  *  command still calls it; the two are the same function since the loader lost its one side effect (the
  *  defaulted-fidelity notice, retired when `fidelity:` became required). */
 export function parseScenarioFile(path: string): Scenario {
-  return loadScenarioPure(path);
+  return inlineSchemaFiles(loadScenarioPure(path), path);
 }
 
 /** Everything the loader checks about a scenario FILE, with no side effects: reads `path` and nothing else —

@@ -28,7 +28,7 @@
 
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, symlinkSync, rmSync, appendFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, rmSync, appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -138,5 +138,28 @@ describe("T-G2 · replay from an extracted npm tarball", () => {
     // ...and --strict fails, but on the boundary, never naming the tampering.
     expect(runs.rawDriftStrict.code).toBe(1);
     expect(runs.rawDriftStrict.classes).toEqual(["format"]);
+  });
+});
+
+describe("artifact_json.schema from an extracted npm tarball", () => {
+  // ajv is a runtime dependency that loads lazily, on the first `schema:`. Only the declared runtime deps are linked
+  // into the extract, so a schema check from the packed CLI proves ajv ships and resolves (`ajv/dist/2020.js`, with
+  // the extension: ajv has no exports map, so the bare subpath fails under Node while tsc and vitest accept it).
+  it("lint refuses a `format` keyword through the packed CLI", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-payload-schema-"));
+    const p = join(dir, "s.yaml");
+    writeFileSync(
+      p,
+      [
+        "baseline: latest",
+        "fidelity: container",
+        "prompt: hi",
+        "assert:",
+        "  - artifact_json: {artifact: outputs/p.json, schema: {type: object, properties: {m: {type: string, format: email}}}}",
+      ].join("\n") + "\n",
+    );
+    const r = spawnSync(process.execPath, ["dist/cli.js", "lint", p], { cwd: pkg, encoding: "utf8" });
+    expect(`${r.stdout}${r.stderr}`).toMatch(/`format` \("email"\)/);
+    expect(`${r.stdout}${r.stderr}`).not.toMatch(/Cannot find module|ERR_MODULE_NOT_FOUND/);
   });
 });

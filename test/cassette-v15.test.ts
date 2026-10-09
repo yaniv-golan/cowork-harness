@@ -15,6 +15,7 @@ const V15_SAMPLES: unknown[] = [
   { hook_decision: { event: "PreToolUse", decision: "deny" } },
   { gates_all_scripted: true },
   { artifact_json: { artifact: "outputs/artifacts/runs/*/run_status.json", match: "each", path: "status", equals: "complete" } },
+  { artifact_json: { artifact: "outputs/p.json", schema: { type: "object" } } },
 ];
 
 describe("cassette v15", () => {

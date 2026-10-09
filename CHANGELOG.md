@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **A cassette with an `artifact_json` `schema` is stamped v15 and needs this release to replay.** 4.6.0 also reads
+  v15, so it does not call such a cassette too new: it rejects the field as an unrecognized assertion and suggests
+  re-recording. Upgrade the harness instead.
+
 ### Added
 
 - **`record <dir/> --case <stem>`** records only the named scenarios of a directory (the file name without
@@ -36,6 +42,18 @@ All notable changes to this project are documented here. The format is based on
     `token`.
 - `fixture export --exclude <path>` (repeatable) leaves out a file, or everything under a directory. Excluded
   paths are listed in `skipped` with `why: "excluded"`. An `--exclude` that names nothing is refused.
+
+- **`artifact_json` checks a value's shape with a JSON Schema: `schema:`.** Write the schema inline, or as `schema:
+  {file: <path>}` for a JSON file next to the scenario, which is read at load and inlined so a recorded cassette
+  replays without it. The schema (draft 2020-12) applies to the value at `path`, or the whole document, and composes
+  with the other operators and with a glob `match`. A failure reports the first 5 errors with their JSON paths. The
+  common ways a schema checks nothing or reaches outside itself are load errors: `format` (no format is validated; use
+  `pattern`), a root with no validating keyword (only `title`, `$defs`, …), `nullable`, `$id`, a `$ref` that is not a
+  local `#…` reference, `$dynamicRef` / `$recursiveRef`, the annotation-only `content*` keywords, an unknown keyword,
+  a type-specific keyword (`required`, `properties`, `items`, `minLength`, `minimum`, …) with no `type` beside it, and
+  a `$schema` other than draft 2020-12. Validation uses ajv, which is now a runtime dependency (exact version 8.20.0);
+  it and its dependencies add about 2.7 MB to an install, and it is loaded only when a scenario uses `schema:`. Its
+  dependency `fast-uri` is locked at 3.1.8, past a moderate advisory in 3.1.7.
 
 ## [4.6.1] — 2026-10-09
 

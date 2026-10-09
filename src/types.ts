@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { KNOWN_HOOK_EVENTS } from "./agent/session.js";
 import { isArtifactGlob } from "./glob.js";
+import { schemaProblem } from "./json-schema.js";
 
 /** Cowork's `DEFAULT_MAX_THINKING_TOKENS` (the ELF's `hre`), binary-verified = 31999 — the ONE budget
  *  extended thinking ever runs at when it's ON (there is no arbitrary N; off is 0/disabled, never a
@@ -1240,7 +1241,29 @@ export const Assertion = z.strictObject({
       exists: z.boolean().optional().describe("the path resolves to a present (non-absent) value"),
       absent: z.boolean().optional().describe("the final key is absent from its (resolved) parent — the anti-hallucination negative"),
       is_null: z.boolean().optional().describe("the resolved value is JSON null (distinct from absent)"),
+      schema: z
+        .union([
+          z.strictObject({ file: z.string().min(1).describe("a JSON file holding the schema, relative to the scenario file") }),
+          z.record(z.string(), z.unknown()),
+        ])
+        .optional()
+        .describe(
+          "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file beside the scenario, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load: `format`, `$id`, a `$ref` that is not local (`#…`), `$dynamicRef`/`$recursiveRef` and the annotation-only `content*` keywords are refused, as are an unknown keyword and `required`/`properties` with no `type`. A failure reports the first 5 errors with their JSON paths",
+        ),
       authored: AuthoredFlag,
+    })
+    .superRefine((v, ctx) => {
+      if (v.schema === undefined) return;
+      if (v.absent === true || v.exists === false)
+        ctx.addIssue({
+          code: "custom",
+          path: ["schema"],
+          message: "`schema` checks a value, so it cannot be combined with `absent: true` or `exists: false`",
+        });
+      // A `{file}` schema is read and checked by the scenario loader, which inlines it.
+      if ("file" in v.schema && typeof v.schema.file === "string" && Object.keys(v.schema).length === 1) return;
+      const problem = schemaProblem(v.schema);
+      if (problem) ctx.addIssue({ code: "custom", path: ["schema"], message: `artifact_json.schema: ${problem}` });
     })
     .refine((v) => isArtifactGlob(v.artifact) === (v.match !== undefined), {
       message: "a glob `artifact` (one with `*` or `?`) needs `match: each | any`; a literal `artifact` takes no `match`",
@@ -1252,7 +1275,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Rejected at load on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
+      "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null|schema). Rejected at load on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
     ),
   semantic_matches: z
     .strictObject({

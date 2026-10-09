@@ -675,7 +675,7 @@ whether it **survives `replay`**. Both are in the key's row below, and the repla
 | `transcript_no_host_path: true` | no host path (a path under a host home or system root: `Users`, `home`, `root`, the Cowork install dir `opt/cowork`, and the macOS `private/var`, `private/tmp`, `var/folders` and `Volumes` roots, each written here without its leading slash — also inside a `file://` or `computer://` link) leaked into model-visible text (a path that came verbatim from the scenario's own input files, prompt, or declared plugins' or local skills' files is not a leak — see `host_path_leak` below) — **incompatible with `hostloop` AND `protocol`**: hostloop's native file tools legitimately expose real host paths (that's the tier's whole point), and protocol (L0) runs the agent's file tools on the real host cwd with no sealed filesystem, so this assertion fails BY DESIGN at both (the harness warns loud at run start if you assert it anyway); use `container`/`microvm` for this check |
 | `egress_denied: <host>` | the host was blocked by the egress proxy |
 | `egress_allowed: <host>` | the host was allowed through |
-| `artifact_json: {…}` | assert over a JSON artifact's contents — see below. `artifact` may be a glob with `match: each\|any` (one check over many files). Both `artifact_*` keys take `authored: true\|false` with the `file_exists` meaning. **Rejected at load on `lane: remote`**, in every form, as `artifact_text` is |
+| `artifact_json: {…}` | assert over a JSON artifact's contents — see below. `artifact` may be a glob with `match: each\|any` (one check over many files), and `schema` checks the value's shape against a JSON Schema (inline or `{file}`). Both `artifact_*` keys take `authored: true\|false` with the `file_exists` meaning. **Rejected at load on `lane: remote`**, in every form, as `artifact_text` is |
 | `computer_links_resolve: true` | every `computer://` link in the model-visible transcript resolves to an artifact that exists in the run's collected outputs/mounts (a dangling link fails, naming which target was checked — host path, work tree, or replay manifest); **requires ≥1 link** (zero links fails — use `computer_links_resolve_if_present` for the presence-free variant) — **only `true` is valid**, writing `false` is rejected by the schema **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so a `computer://` link that appeared only inside a tool call or its result is invisible to it. Rejected at load on `lane: remote` (see the lane table). |
 | `computer_links_resolve_if_present: true` | like `computer_links_resolve` but passes vacuously when the transcript has zero `computer://` links — the presence-free variant; **only `true` is valid** **Sees top-level `assistant_text` only — it excludes every `tool_use`/`tool_result`**, so a `computer://` link that appeared only inside a tool call or its result is invisible to it. Rejected at load on `lane: remote` (see the lane table). |
 
@@ -892,11 +892,45 @@ dotted `path` selects into the document; one operator decides the check:
 - artifact_json: { artifact: outputs/instruments.json, path: exclusivity_days, absent: true }   # anti-hallucination
 - artifact_json: { artifact: outputs/cap_state.json, path: stage, in: ["seed", "series-a"] }     # one of a stable set
 ```
-Operators: `equals` (deep-equal) · `in: [<set>]` (deep-equal one of) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>`. **Omit every operator** to assert only that the `path` resolves (a bare existence check).
+Operators: `equals` (deep-equal) · `in: [<set>]` (deep-equal one of) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>` · `schema` (a JSON Schema, below). **Omit every operator** to assert only that the `path` resolves (a bare existence check).
 The three states are **distinct**: `absent` (the final key is missing from a parent that resolved) vs
 `is_null` (present but JSON `null`) vs an **unresolved intermediate** segment (the artifact is malformed for
 that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
 dependency-free and side-effect-free.)
+
+**The shape of the whole value: `schema`.** A JSON Schema (draft 2020-12) the value at `path` — or the whole
+document, without `path` — must match. Write it inline, or name a JSON file next to the scenario:
+```yaml
+- artifact_json:
+    artifact: outputs/cap_state.json
+    schema:
+      type: object
+      required: [run_id, rounds]
+      properties:
+        run_id: { type: string, pattern: "^r[0-9]+$" }
+        rounds: { type: array, minItems: 1, items: { type: object, required: [amount] } }
+- artifact_json: { artifact: outputs/report.json, schema: { file: schemas/report.schema.json } }
+```
+- **A failure** names where and why: the first 5 errors, each with its JSON path (`/rounds/0 must have required
+  property 'amount'`), then how many more. An enum's allowed values are not echoed, each error is capped, and on a live
+  run the run's secret values are scrubbed out before it is shown.
+- **It composes**: with `equals`/`in`/`gt`/`exists`/`is_null` every check must hold, and with a glob `match` applies
+  to each matched file. `absent: true` or `exists: false` cannot go with it (there is no value to check), and with
+  a `path` that does not resolve the assertion fails rather than validating nothing.
+- **`{file: <path>}`** is read when the scenario is loaded and inlined, so a recorded cassette carries the schema
+  itself and replays without the file. A schema-file edit therefore behaves like an inline edit: `replay
+  --assert-from` and a re-record pick it up, a plain `replay` grades with the schema frozen at record. The path is
+  relative to the scenario file and must stay inside its git repository (or its directory outside one).
+- **Checked when the scenario loads**, so a mistake costs a config error, not a run. Refused: an unknown keyword
+  (a typo), `required`/`properties` with no `type` (they pass on a value of any other type: add `type: object`),
+  `format` (no format is validated, so it would check nothing: use `pattern`), `$id`, a `$ref` that is not a local
+  `#…` reference (nothing is fetched), `$dynamicRef`/`$recursiveRef`, the annotation-only `content*` keywords, a
+  `$schema` other than draft 2020-12, and an empty schema. A property *named* `format` or `$ref` is fine.
+- `pattern` uses JavaScript regex syntax with the `u` flag and is **case-sensitive**, unlike the harness's own
+  regex keys. On a value holding one of the run's secrets, replay sees the scrubbed body, so a `pattern`, `const`
+  or length check on it can grade differently there (as `equals` can).
+- A cassette with a `schema` is stamped v15. 4.6.0, which reads v15, refuses it as an unrecognized assertion and
+  suggests re-recording; upgrade the harness instead.
 
 **One check over many files: a glob `artifact`.** When the skill writes one JSON file per run or per item, put a
 glob in `artifact` and say how the matches combine with `match:`, which is required with a glob and refused
