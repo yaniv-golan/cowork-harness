@@ -929,6 +929,8 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
         });
       } catch (e) {
+        // The operator's interrupt, learned from a probe inside the run: it stops the eval, not this rep.
+        if (e instanceof InterruptedError) throw e;
         thrown = e;
         result = salvagedResult(expectedDir);
       }

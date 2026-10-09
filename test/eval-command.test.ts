@@ -9,6 +9,7 @@
 // A per-arm behaviour may flip individual assertion bits (to create a drop to detect); every such flip is
 // named in the test that does it.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { InterruptedError } from "../src/termination.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -1709,5 +1710,17 @@ describe("executeScenario's pre-assigned run id guards", () => {
     mkdirSync(runOutDir(s.name, "local_usedusedused1"), { recursive: true });
     await expect(executeScenario(s, { runId: "local_usedusedused1" })).rejects.toThrow(/never reused/);
     await expect(executeScenario(s, { runId: "local_freshfreshfr1" })).rejects.toThrow(/COWORK_HARNESS_FORBID_SPAWN/);
+  });
+});
+
+describe("eval: an interrupt learned from a probe inside a job", () => {
+  it("stops the eval as interrupted, not as one errored rep", async () => {
+    // makeEvalJobRunner passes a job's error through, so this loop's catch is where an interrupt raised by a run's own
+    // probe (the host claude's --permission-prompts check under answer_channel: none, say) would be recorded.
+    const { scen, a, b } = setup();
+    const runJob = async (): Promise<RunResult> => {
+      throw new InterruptedError("SIGINT", "claude --help");
+    };
+    await expect(runEval(args(scen, a, b, ["--concurrency", "1"]), deps(runJob))).rejects.toThrow(InterruptedError);
   });
 });
