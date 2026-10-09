@@ -5,6 +5,7 @@
 // assistant frame naming the excerpt's model. The scenario files hold the excerpt's own assertion list, so the
 // grades line up. The wiring through the real runOneScenario is covered by the CLI wiring tests, not this one.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { InterruptedError } from "../src/termination.js";
 import {
   existsSync,
   mkdirSync,
@@ -935,5 +936,15 @@ describe("requestedSummary: summary.json's requested and sent keys over the vari
     expect(
       requestedSummary([row({ effort: "medium", effort_selector: false }), row({ effort: "medium" })].join("\n")).effort_selector,
     ).toBe("mixed");
+  });
+});
+
+describe("an interrupt learned from a probe inside a job", () => {
+  it("stops the whole run as interrupted, not as one failed attempt", async () => {
+    await approved();
+    const runJob = async () => {
+      throw new InterruptedError("SIGINT", "git");
+    };
+    await expect(runHillclimb(args(), deps({ runJob }))).rejects.toThrow(InterruptedError);
   });
 });
