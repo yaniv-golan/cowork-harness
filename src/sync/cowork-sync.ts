@@ -3484,6 +3484,12 @@ const SPAWN_ENV_ALLOWLIST: Record<string, string> = {
   DISABLE_ERROR_REPORTING: "3p-provider-only branch; harness models 1p",
   CLAUDE_CODE_ENABLE_AUTO_MODE: "3p-provider-only branch; harness models 1p",
   CLAUDE_CODE_HOST_AUTH_ENV_VAR: "3p-provider-only branch; harness models 1p",
+  // Desktop 2.31226.0. Built by the shared-env helper's callee as `...<opts>.skillSwitches&&{…:"1"}`, OUTSIDE the
+  // `DISABLE_GROWTHBOOK:` branch, so the 3p classifier does not catch it by position. Its guard is the deployment's
+  // `usesLocalSkillStorage()`, which returns false on the first-party deployment class and true on the 3p one, so a
+  // 1p Cowork session never gets it. Allowlisted, not pinned: pinned, the generic pass would read it as an
+  // unconditional "1".
+  CLAUDE_CODE_DESKTOP_SKILL_SWITCHES: "3p-provider-only (local skill storage); harness models 1p",
   // Desktop 1.32352.0. Constructed in the SAME `...deploymentType==='3p' && {…}` literal as
   // DISABLE_GROWTHBOOK/DISABLE_TELEMETRY above (verified at its construction site: `let t=<deployment>(),
   // n=t.type==="3p"`), so it is never built on a first-party Cowork session. Allowlisted, not pinned —
@@ -3772,6 +3778,148 @@ function braceScanWindow(bundle: string, anchor: string): string | null {
   return null;
 }
 
+/** Index of the bracket closing the `(` or `{` at `open`, skipping quoted spans; -1 when unbalanced. */
+function closeBracket(text: string, open: number): number {
+  const [o, c0] = text[open] === "{" ? ["{", "}"] : ["(", ")"];
+  let depth = 0;
+  let q: string | null = null;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === "\\") i++;
+      else if (c === q) q = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") q = c;
+    else if (c === o) depth++;
+    else if (c === c0 && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** One `...<callee>(<args>)` spread at an object literal's top level that is a VALUE (followed by `,` or `}`), not a
+ *  predicate (`...f()&&{…}`, which the window's own handling reads). `start`/`end` bound the whole spread. */
+interface CallSpread {
+  start: number;
+  end: number;
+  ns?: string;
+  callee: string;
+}
+export function topLevelCallSpreads(obj: string): CallSpread[] {
+  const out: CallSpread[] = [];
+  let depth = 0;
+  let q: string | null = null;
+  for (let i = 0; i < obj.length; i++) {
+    const c = obj[i];
+    if (q) {
+      if (c === "\\") i++;
+      else if (c === q) q = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") q = c;
+    else if (c === "{" || c === "(" || c === "[") depth++;
+    else if (c === "}" || c === ")" || c === "]") depth--;
+    else if (depth === 1 && obj.startsWith("...", i)) {
+      const m = /^\.\.\.(?:([A-Za-z_$][\w$]*)\.)?([A-Za-z_$][\w$]*)\(/.exec(obj.slice(i));
+      if (!m) continue;
+      const close = closeBracket(obj, i + m[0].length - 1);
+      if (close < 0) continue;
+      if (obj[close + 1] === "," || obj[close + 1] === "}") out.push({ start: i, end: close + 1, ns: m[1], callee: m[2] });
+    }
+  }
+  return out;
+}
+
+/** A window the spawn env reads beyond W1–W3: the object a W3 call spread returns. */
+interface CalleeWindow {
+  name: string;
+  text: string;
+  chunk: string;
+  params: string[];
+}
+
+/**
+ * W3's VALUE call spreads, each followed to the object its function returns. Desktop 2.31226.0 moved the shared-env
+ * helper's object into a called function (`return{DISABLE_AUTOUPDATER:"1",...F(…)}`), so the helper's own text holds
+ * one key and every other key lives in `F`. Read as an opaque spread, the helper would hide them all.
+ *
+ * Followed only from a unique `return{DISABLE_AUTOUPDATER:"1",` helper head: older builds carried a second site with
+ * the anchor (`return{...process.env,...e.oB(),…,DISABLE_AUTOUPDATER:"1"}`) that only the length band rejected, and
+ * following its `...e.oB()` would let the wrong site pass. Every unclear shape is a flag, never an opaque spread:
+ * a callee in another chunk without a `require("./…")` binding, no or several `function F(` definitions in its chunk
+ * (an arrow or `var F=` form is not read), not exactly one `return{` in its body, a call spread inside it, or a body
+ * outside the length band. `stripped` is W3 with the followed spreads removed, so no argument text reaches the key pass.
+ */
+function followW3CallSpreads(
+  w3: string,
+  w3Chunk: string,
+  files: Map<string, string> | undefined,
+): { windows: CalleeWindow[]; stripped: string; flags: string[] } {
+  const flags: string[] = [];
+  const windows: CalleeWindow[] = [];
+  const spreads = topLevelCallSpreads(w3);
+  if (spreads.length === 0) return { windows, stripped: w3, flags };
+  let stripped = w3;
+  for (const s of [...spreads].reverse()) stripped = stripped.slice(0, s.start) + stripped.slice(s.end);
+  for (const s of spreads) {
+    const label = `W3 call spread \`...${s.ns ? `${s.ns}.` : ""}${s.callee}(…)\``;
+    let chunk = w3Chunk;
+    let local = s.callee;
+    if (s.ns) {
+      if (!files || !new RegExp(`(?<![\\w$])${reEsc(s.ns)}=require\\("\\./`).test(w3Chunk)) {
+        flags.push(`spawn.env: ${label} names a namespace that is not a require() binding in its chunk — re-derive; ${SPAWN_NO_BYPASS}`);
+        continue;
+      }
+      const r = resolveNamespaceRef(`${s.ns}.${s.callee}`, w3Chunk, files);
+      if (!r) {
+        flags.push(`spawn.env: ${label} could not be resolved to its module's export — re-derive; ${SPAWN_NO_BYPASS}`);
+        continue;
+      }
+      chunk = r.chunk;
+      local = r.local;
+    }
+    const heads = [...chunk.matchAll(new RegExp(`(?<![\\w$.])function ${reEsc(local)}\\(`, "g"))];
+    if (heads.length !== 1) {
+      flags.push(
+        `spawn.env: ${label} has ${heads.length} \`function ${local}(\` definitions in its chunk — ${heads.length ? "ambiguous" : "not a function declaration"}; its keys are invisible to this check; re-derive; ${SPAWN_NO_BYPASS}`,
+      );
+      continue;
+    }
+    const paramsOpen = heads[0].index! + heads[0][0].length - 1;
+    const paramsClose = closeBracket(chunk, paramsOpen);
+    const bodyOpen = paramsClose + 1;
+    const bodyClose = paramsClose > 0 && chunk[bodyOpen] === "{" ? closeBracket(chunk, bodyOpen) : -1;
+    const body = bodyClose > 0 ? chunk.slice(bodyOpen, bodyClose + 1) : null;
+    const returns = body === null ? 0 : (body.match(/return\{/g)?.length ?? 0);
+    if (body === null || returns !== 1) {
+      flags.push(`spawn.env: ${label}: its function body has ${returns} \`return{\` (exactly one is read) — re-derive; ${SPAWN_NO_BYPASS}`);
+      continue;
+    }
+    const obj = braceScanWindow(body, "return{");
+    if (obj === null) {
+      flags.push(`spawn.env: ${label}: its returned object could not be scanned — re-derive; ${SPAWN_NO_BYPASS}`);
+      continue;
+    }
+    if (topLevelCallSpreads(obj).length) {
+      flags.push(`spawn.env: ${label} returns an object that itself spreads a call — not followed further; re-derive; ${SPAWN_NO_BYPASS}`);
+      continue;
+    }
+    if (obj.length < 200 || obj.length > 20000) {
+      flags.push(
+        `spawn.env: ${label} returns an object of length ${obj.length}, outside the 200–20000 sanity band — re-derive; ${SPAWN_NO_BYPASS}`,
+      );
+      continue;
+    }
+    const params = chunk
+      .slice(paramsOpen + 1, paramsClose)
+      .split(",")
+      .map((p) => p.trim())
+      .filter((p) => /^[A-Za-z_$][\w$]*$/.test(p));
+    windows.push({ name: `W3+${local}`, text: obj, chunk, params });
+  }
+  return { windows, stripped, flags };
+}
+
 /**
  * The literal that marks the 3p-only deployment branch. Anchoring on CONTENT rather than on the
  * predicate identifier is deliberate: the branch reads `...n&&{…}` where `n=<deployment>().type==="3p"`
@@ -3887,25 +4035,50 @@ export function deriveSpawnEnv(
   const flags: string[] = [];
   // If the fcache is unreadable the caller already flags it; emit no spurious spawn flags, no partial env.
   if (!gates) return { env: null, flags: [], keys: [], spreadCount: 0 };
+  // The chunk a window's text came from — value expressions inside it must be resolved against that
+  // chunk's own bindings, not the joined bundle (see B11). Matched on a long prefix so the lookup is
+  // unambiguous; falls back to the joined bundle when the graph isn't available.
+  const chunkFor = (text: string): string | undefined =>
+    files ? [...files.values()].find((c) => c.includes(text.slice(0, 200))) : undefined;
 
   const w1 = twoAnchorWindow(bundle, "env:{CLAUDE_CONFIG_DIR", ",systemPrompt:");
   const w2 = twoAnchorWindow(bundle, "return{CLAUDE_CODE_ENTRYPOINT", ".sessionEnvVars()}");
-  const w3 = braceScanWindow(bundle, 'DISABLE_AUTOUPDATER:"1"');
-  const named: [string, string | null][] = [
-    ["W1 (spawn env literal)", w1],
-    ["W2 (OnA base-env helper)", w2],
-    ["W3 (Zrn shared-env helper)", w3],
+  // W3 is read from its helper head when the bundle has exactly one (`return{DISABLE_AUTOUPDATER:"1",`), and from the
+  // first anchor otherwise (older builds). Several heads are ambiguous. Only a head-anchored W3 has its call spreads
+  // followed (followW3CallSpreads).
+  const W3_HEAD = 'return{DISABLE_AUTOUPDATER:"1",';
+  const w3Heads = bundle.split(W3_HEAD).length - 1;
+  const w3 = braceScanWindow(bundle, w3Heads === 1 ? W3_HEAD : 'DISABLE_AUTOUPDATER:"1"');
+  if (w3Heads > 1) {
+    flags.push(
+      `spawn.env: ${w3Heads} \`${W3_HEAD}\` helper heads in the bundle — W3 is ambiguous; re-derive its anchor; ${SPAWN_NO_BYPASS}`,
+    );
+    return { env: null, flags, keys: [], spreadCount: 0 };
+  }
+  const w3Chunk = w3 === null ? undefined : chunkFor(w3);
+  const followed = w3 !== null && w3Heads === 1 ? followW3CallSpreads(w3, w3Chunk ?? bundle, files) : undefined;
+  const w3Text = followed?.stripped ?? w3;
+  const calleeWindows = followed?.windows ?? [];
+  const w3Length = w3 === null ? 0 : (w3Text as string).length + calleeWindows.reduce((n, c) => n + c.text.length, 0);
+  const named: [string, string | null, number][] = [
+    ["W1 (spawn env literal)", w1, w1?.length ?? 0],
+    ["W2 (OnA base-env helper)", w2, w2?.length ?? 0],
+    ["W3 (Zrn shared-env helper)", w3, w3Length],
   ];
   let degenerate = false;
-  for (const [name, w] of named) {
+  if (followed?.flags.length) {
+    flags.push(...followed.flags);
+    degenerate = true;
+  }
+  for (const [name, w, len] of named) {
     if (w == null) {
       flags.push(
         `spawn.env: ${name} window not found (start/end anchor missing or W3 brace/nested-template scan failed) — the env construction moved; re-derive its anchors; ${SPAWN_NO_BYPASS}`,
       );
       degenerate = true;
-    } else if (w.length < 200 || w.length > 20000) {
+    } else if (len < 200 || len > 20000) {
       flags.push(
-        `spawn.env: ${name} window length ${w.length} is outside the 200–20000 sanity band — likely a mis-anchored slice; re-derive; ${SPAWN_NO_BYPASS}`,
+        `spawn.env: ${name} window length ${len} is outside the 200–20000 sanity band — likely a mis-anchored slice; re-derive; ${SPAWN_NO_BYPASS}`,
       );
       degenerate = true;
     }
@@ -3941,11 +4114,6 @@ export function deriveSpawnEnv(
   // new, but its value must NOT be applied (an off-gate value must not override a W2 pin, e.g. off-gate
   // MCP_CONNECTION_NONBLOCKING:"0" must not clobber W2's "true"). A pinned key is still resolved so an
   // unresolvable value flags, but the resolved value is dropped when apply=false.
-  // The chunk a window's text came from — value expressions inside it must be resolved against that
-  // chunk's own bindings, not the joined bundle (see B11). Matched on a long prefix so the lookup is
-  // unambiguous; falls back to the joined bundle when the graph isn't available.
-  const chunkFor = (text: string): string | undefined =>
-    files ? [...files.values()].find((c) => c.includes(text.slice(0, 200))) : undefined;
 
   const resolveInto = (rawKey: string, expr: string, target: Record<string, string>, apply = true, scope?: string) => {
     if (SPAWN_ENV_ALLOWLIST[rawKey] !== undefined) return; // deliberately not pinned
@@ -3995,9 +4163,10 @@ export function deriveSpawnEnv(
   // (they must be resolved against gate STATE, not read as plain literals — an off-gate NONBLOCKING:"0"
   // must not override W2's "true"), then blanked so the generic pass never sees them. Helper name is
   // minifier-assigned (At/et/…); the leading `...` bounds the identifier start.
-  const applyWindow = (text: string, target: Record<string, string>, isW1: boolean) => {
+  const applyWindow = (text: string, target: Record<string, string>, isW1: boolean, callee?: CalleeWindow) => {
     let work = text;
-    const scope = chunkFor(text);
+    // A followed callee's object is read in the chunk its function was resolved in; a prefix lookup could pick another.
+    const scope = callee ? callee.chunk : chunkFor(text);
     // The 3p-only branch (W3 today; W2 would be handled the same way). Blanked BEFORE the generic pass so
     // it never reads the branch's inner keys as unconditional 1p literals.
     //
@@ -4116,13 +4285,30 @@ export function deriveSpawnEnv(
     }
     for (const k of enumSpawnKeys(work)) {
       enumerated.add(k.key);
-      resolveInto(k.key, sliceSpawnValue(work, k.valueStart), target, true, scope);
+      const expr = sliceSpawnValue(work, k.valueStart);
+      // In a followed callee, a value that reads one of the function's parameters comes from its CALLER, which this
+      // pass does not trace; resolving the name in the chunk would read some unrelated binding of the same name.
+      if (
+        callee &&
+        (SPAWN_PIN_KEYS as readonly string[]).includes(k.key) &&
+        SPAWN_ENV_ALLOWLIST[k.key] === undefined &&
+        [...expr.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)/g)].some((m) => callee.params.includes(m[1]))
+      ) {
+        flags.push(
+          `spawn.env: pinned key ${k.key} in ${callee.name} takes its value from a parameter of that function (\`${expr.slice(0, 60)}\`) — re-derive; ${SPAWN_NO_BYPASS}`,
+        );
+        hardFail = true;
+        continue;
+      }
+      resolveInto(k.key, expr, target, true, scope);
     }
   };
 
   // Construction order (later wins): W3 (Zrn, spread early by OnA) → W2 (OnA literals) → W1 (the inline
   // literals) so W1 overrides every key it sets — e.g. ENTRYPOINT W2 "claude-desktop" → W1 "local-agent".
-  applyWindow(w3 as string, env, false);
+  // W3's followed callees come after its own literals: they are spread after them in the helper's object.
+  applyWindow(w3Text as string, env, false);
+  for (const c of calleeWindows) applyWindow(c.text, env, false, c);
   applyWindow(w2 as string, env, false);
   applyWindow(w1 as string, env, true);
 
@@ -4158,7 +4344,11 @@ export function deriveSpawnEnv(
   // PARENTHESIZED expression (`...(p?.accountId)&&{…}`, the real minifier shape for a conditional opaque
   // spread). An identifier-only regex missed the parenthesized form — the exact opaque shape this guards.
   // `(?!\.)` excludes only a pathological `....` run (no valid spread is `...` followed by a 4th dot).
-  const spreadCount = [w1, w2, w3].reduce((n, w) => n + ((w as string).match(/\.\.\.(?!\.)/g)?.length ?? 0), 0);
+  // A followed W3 call spread is not counted (it is resolved, no longer opaque); the spreads inside its callee are.
+  const spreadCount = [w1, w2, w3Text, ...calleeWindows.map((c) => c.text)].reduce(
+    (n, w) => n + ((w as string).match(/\.\.\.(?!\.)/g)?.length ?? 0),
+    0,
+  );
   if (hardFail) return { env: null, flags, keys, spreadCount };
   return { env, flags, keys, spreadCount };
 }
