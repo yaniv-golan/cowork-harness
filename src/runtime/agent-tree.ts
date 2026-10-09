@@ -111,8 +111,9 @@ function parseLstart(tokens: string[]): number | undefined {
   return new Date(Number(year), m, Number(day), Number(t[1]), Number(t[2]), Number(t[3])).getTime();
 }
 
-/** Parse `ps -A -o pid=,ppid=,pgid=,uid=,tty=,lstart=,comm=` (with `tdev=` for `tty=` on macOS; see {@link psArgs}). `lstart` is five tokens and `comm` may hold
- *  spaces, so `comm` is last and takes the rest of the line. Unparseable lines are dropped. */
+/** Parse `ps -A -o pid=,ppid=,pgid=,uid=,tty=,lstart=,comm=` (with `tdev=` for `tty=` on macOS; see {@link psArgs}).
+ *  `lstart` is five tokens and `comm` may hold spaces, so `comm` is last and takes the rest of the line. Unparseable
+ *  lines are dropped. */
 export function parsePsSnapshot(text: string): ProcRow[] {
   const rows: ProcRow[] = [];
   for (const line of text.split("\n")) {

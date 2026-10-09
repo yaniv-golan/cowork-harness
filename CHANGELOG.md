@@ -83,12 +83,13 @@ All notable changes to this project are documented here. The format is based on
   Each now exits as the interrupt did (128 + the signal number; `critique` keeps its documented `1`), and nothing is
   cached. A helper that timed out or overflowed its output is still reported as failing, not as an interrupt.
 - **On macOS, stopping a run no longer stalls for seconds while other processes list processes.** The harness lists
-  processes to find everything an agent started: when it starts the agent, every few tool results, on the run's last
-  result, and when it stops it (on Ctrl-C and at the end of a run). It asked `ps` for each process's terminal by name, and macOS
-  serializes that name lookup across every `ps` running at the time. With a dozen running, one listing took about
-  4 s instead of 0.25 s, and a stop, which takes two listings, took about 8 s. A second Ctrl-C could not be handled
-  until the listing in progress returned. It now asks for the terminal's device number (`tdev`), which needs no
-  lookup: the same stop under the same load takes about 0.4 s. What is stopped is unchanged, and Linux is unchanged.
+  processes to find everything an agent started: when it starts the agent, at most every quarter second while tool
+  results arrive, on the run's last result, and when it stops it (on Ctrl-C and at the end of a run). It asked `ps`
+  for each process's terminal by name, and macOS serializes that name lookup across every `ps` running at the time.
+  With a dozen running, one listing took about 4 s instead of 0.25 s, and a stop, which takes two listings, took about
+  8 s. A second Ctrl-C could not be handled until the listing in progress returned. It now asks for the terminal's
+  device number (`tdev`), which needs no lookup: the same stop under the same load takes about 0.4 s. What is stopped
+  is unchanged, and Linux is unchanged.
 
 ### Documentation
 
