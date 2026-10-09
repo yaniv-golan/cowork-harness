@@ -544,7 +544,7 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     // Re-freeze the baseline reference by hand with different bytes, as an edited store would be.
     const refreeze = () => {
       const store = join(flow, "baseline", "ref");
-      const key = pairwiseComposeKey(sc.assert[1]!);
+      const key = pairwiseComposeKey(sc.assert[1]!, undefined);
       const doc = readRefDoc(store, "alpha", key);
       const entry = readRefEntry(store, "alpha");
       if (doc.status !== "ok" || entry.status !== "ok") throw new Error("no reference to re-freeze");
@@ -643,7 +643,7 @@ describe.runIf(POSIX)("regrade scrub coverage: the frozen reference", () => {
     const sc = parseScenarioFile(file);
     // A v1 reference whose bytes no live comparison of this run was sent (the stub's outputs are otherwise identical,
     // and a reference is proven by its bytes): written to the store as a freeze would.
-    const key = pairwiseComposeKey(sc.assert[1]!);
+    const key = pairwiseComposeKey(sc.assert[1]!, undefined);
     const doc = readRefDoc(join(flow, "baseline", "ref"), "alpha", key);
     const entry = readRefEntry(join(flow, "baseline", "ref"), "alpha");
     if (doc.status !== "ok" || entry.status !== "ok") throw new Error("no baseline reference");

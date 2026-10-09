@@ -12,6 +12,7 @@ import {
 } from "../hillclimb/usage.js";
 import { recordedFixtureRefusal, scanWorkspaceFixture } from "../fixture/workspace.js";
 import { answerChannelAssertRefusal } from "../answer-channel.js";
+import { laneRemoteLoadRefusal } from "./lane-notice.js";
 import { EVAL_BOOLEAN_FLAGS, EVAL_REPEATED_FLAGS, EVAL_USAGE, EVAL_VALUE_FLAGS } from "../eval/usage.js";
 import { z } from "zod";
 import { parkIfTerminating } from "../termination.js";
@@ -4377,6 +4378,9 @@ export function redactionPreflightMessage(items: Array<{ scenario: Scenario; pol
  *  "too large" problem. Paths are normalized through `resolve` so `./outputs/x.json` and `outputs/x.json`
  *  join cleanly against the manifest's walk paths. */
 export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: string, artifacts: ManifestEntry[]): string[] {
+  // `lane: remote`: these keys refuse whatever the cap (the body is not locally observable), so the cap advice
+  // would point at a lever that cannot help. The loader refuses such a scenario; this covers a path that skips it.
+  if (scenario.lane === "remote") return [];
   // Flag ONLY size-truncated entries (`truncationReason === "size"`) — the genuine green-record/red-replay
   // case whose remedy is "raise the cap". "readonly"/"unreadable" are excluded: raising the cap can't
   // capture them, and artifact_json against one already fails loud-and-symmetrically (evidence-unavailable,
@@ -4414,6 +4418,7 @@ export function artifactJsonTargetsTruncated(scenario: Scenario, workRoot: strin
  *  live glob reads an incomplete walk as evidence-unavailable, but `buildManifest` keeps only what it could see, so a
  *  replay of that cassette would walk a complete-looking tree and could pass. Returns what was missed, or undefined. */
 export function artifactJsonGlobWalkGap(scenario: Scenario, workRoot: string, roots: string[]): string | undefined {
+  if (scenario.lane === "remote") return undefined; // see artifactJsonTargetsTruncated
   if (!(scenario.assert ?? []).some((a) => a.artifact_json !== undefined && isArtifactGlob(a.artifact_json.artifact))) return undefined;
   const walk = collectArtifactPathsWithHealth(workRoot, roots);
   if (walk.complete && !walk.containmentSkips.length) return undefined;
@@ -5720,6 +5725,10 @@ export function preSpendVerdicts(
   },
 ): ({ kind: "warn"; message: string } | { kind: "refuse"; message: string })[] {
   const out: ({ kind: "warn"; message: string } | { kind: "refuse"; message: string })[] = [];
+  // The loader refuses these too; repeated here because `record --from-embedded` records a cassette's frozen
+  // scenario without going through the loader.
+  const laneRefusal = laneRemoteLoadRefusal(scenario);
+  if (laneRefusal) out.push({ kind: "refuse", message: `scenario "${scenario.name}": ${laneRefusal}` });
 
   const promptReject = promptPolicyRejection(scenario);
   if (promptReject) out.push({ kind: "refuse", message: promptReject });

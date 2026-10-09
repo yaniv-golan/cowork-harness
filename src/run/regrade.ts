@@ -852,8 +852,10 @@ function unprovenParts(o: {
   // an older run's invalid comparison) proves nothing.
   const unprovenRefs = new Set<string>();
   for (const a of pairwiseSent) {
-    const key = pairwiseComposeKey(a);
-    const live = recordedEntries.filter((e) => e.assertion.semantic_pairwise !== undefined && pairwiseComposeKey(e.assertion) === key);
+    const key = pairwiseComposeKey(a, o.result.lane);
+    const live = recordedEntries.filter(
+      (e) => e.assertion.semantic_pairwise !== undefined && pairwiseComposeKey(e.assertion, o.result.lane) === key,
+    );
     for (const ref of o.setup.refsFor(a)) {
       if (!judgedRefs(a).includes(ref.name)) continue;
       const got = readRefDoc(ref.store, o.setup.caseId, key);

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildManifest, artifactJsonTargetsTruncated } from "../src/run/cassette.js";
+import { buildManifest, artifactJsonTargetsTruncated, artifactJsonGlobWalkGap } from "../src/run/cassette.js";
 import type { Scenario } from "../src/types.js";
 
 /** The inline-body cap is configurable, and a `record` truncates a body over the cap to hash-only. */
@@ -53,6 +53,18 @@ describe("configurable artifact body cap + record-time truncation guard", () => 
     const manifest = buildManifest(root, 64);
     const hits = artifactJsonTargetsTruncated(scenarioAsserting("outputs/big.json"), root, manifest);
     expect(hits).toEqual(["outputs/big.json"]);
+  });
+
+  // On lane: remote the body is not locally observable at all, so "raise --max-artifact-bytes" is advice for a cap
+  // that cannot help (the key fails on that lane whatever the cap). No advice there.
+  it("gives no truncation advice on lane: remote", () => {
+    const root = workRootWith({ "outputs/big.json": JSON.stringify({ x: "y".repeat(200) }) });
+    const manifest = buildManifest(root, 64);
+    const remote = { ...scenarioAsserting("outputs/big.json"), lane: "remote" } as Scenario;
+    expect(artifactJsonTargetsTruncated(remote, root, manifest)).toEqual([]);
+    const glob = { ...remote, assert: [{ artifact_json: { artifact: "outputs/*.json", match: "any", path: "x" } }] } as unknown as Scenario;
+    expect(artifactJsonGlobWalkGap(glob, "/nonexistent-root", ["outputs"])).toBeUndefined();
+    expect(artifactJsonGlobWalkGap({ ...glob, lane: "local" } as Scenario, "/nonexistent-root", ["outputs"])).toBeDefined();
   });
 
   it("normalizes ./-prefixed assertion paths against the manifest walk paths", () => {

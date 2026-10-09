@@ -39,7 +39,7 @@
     },
     "lane": {
       "default": "local",
-      "description": "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md",
+      "description": "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md. On remote, every assertion that reads files inside the agent's container is rejected at load, and a semantic judge sees the transcript only",
       "type": "string",
       "enum": [
         "local",
@@ -192,7 +192,7 @@
                     "description": "the file's path under the work root (as in the string form)"
                   },
                   "authored": {
-                    "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+                    "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check. Undecidable on `lane: remote` (it compares the container's file with the pre-run manifest); `file_exists` with it is rejected at load there.",
                     "type": "boolean"
                   }
                 },
@@ -218,7 +218,7 @@
                     "description": "the file's path under the work root (as in the string form)"
                   },
                   "authored": {
-                    "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+                    "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check. Undecidable on `lane: remote` (it compares the container's file with the pre-run manifest); `file_exists` with it is rejected at load there.",
                     "type": "boolean"
                   }
                 },
@@ -1165,7 +1165,7 @@
             "const": true
           },
           "no_unexpected_files": {
-            "description": "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), and a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable",
+            "description": "fails if the run CREATED a file under a user-visible root whose workRoot-relative path (e.g. outputs/x.md) matches none of these globs (** = whole path segment for any depth, * within a segment, ? one char); [] = no new files allowed; new-files-only — overwriting a pre-existing file in place is invisible (use content-level producer stamping); needs a pre-run manifest (harness ≥0.24 recordings) — absence fails loud on live/verify-run; captured on every live sandbox tier including microvm (its outputs are snapshotted from the VM into the run dir), and a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable. Rejected at load on `lane: remote`, where the agent's container filesystem is not locally observable.",
             "type": "array",
             "items": {
               "type": "string",
@@ -1173,12 +1173,12 @@
             }
           },
           "file_absent": {
-            "description": "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Fails evidence-unavailable on `lane: remote` and on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
+            "description": "the named path does NOT exist under the work root after the run — the negative-existence check no other key expresses (no_unexpected_files is new-files-only and needs a pre-run manifest, so it cannot say 'X must not exist'). LIVE/verify-run only: absence is provable only where the walk was authoritative, and a cassette records no walk health. Rejected at load on `lane: remote`, and fails evidence-unavailable on a pre-run origin of `remote-unavailable` — a filesystem that is not locally observable makes a missing snapshot indistinguishable from absence",
             "type": "string",
             "minLength": 1
           },
           "artifact_text": {
-            "description": "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw. Fails on `lane: remote`: that lane's container filesystem is not locally observable, so there is no body to read",
+            "description": "assert over a delivered artifact's TEXT body — the companion to artifact_json for non-JSON deliverables, and the only way to check that an internal path/name did not leak into a file a user receives. At least one matcher is required. A body captured body-less (uploaded input, read-only folder input, over the size cap) or recorded as a symlink fails evidence-unavailable, and for the NEGATIVE matchers a body that is not lossless UTF-8 does too — a binary body read as text would 'pass' against bytes it never saw. Rejected at load on `lane: remote`: that lane's container filesystem is not locally observable, so there is no body to read",
             "type": "object",
             "properties": {
               "artifact": {
@@ -1215,7 +1215,7 @@
                 "minLength": 1
               },
               "authored": {
-                "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+                "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check. Undecidable on `lane: remote` (it compares the container's file with the pre-run manifest); `file_exists` with it is rejected at load there.",
                 "type": "boolean"
               }
             },
@@ -1225,7 +1225,7 @@
             "additionalProperties": false
           },
           "input_unmodified": {
-            "description": "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector)",
+            "description": "a single glob OR an array of globs; every pre-existing file whose workRoot-relative path matches has an unchanged content hash after the run (in-place mutation detector). On `lane: remote` it reads the local stand-in for the inputs, which in production live on the user's device (unconfirmed for the cloud lane).",
             "anyOf": [
               {
                 "type": "string",
@@ -1246,7 +1246,7 @@
             "type": "boolean"
           },
           "no_lost_write_back": {
-            "description": "fails if the run authored an interactive HTML artifact (or a .py/.js generator of one) whose relative Submit/POST write-back is lost under Cowork — runs the static Tier A analyzer over the files the run authored; a lost write-back on an ADDED agent-authored source fails, a pre-existing file the skill merely modified on a read-write mount is advisory; could-not-verify (fail-closed) on a --resume scratchpad or an unanalyzable candidate; runs on every live sandbox tier including microvm (outputs snapshotted from the VM); only `true` is valid (omit to skip). LIVE/verify-run only — skipped on replay",
+            "description": "fails if the run authored an interactive HTML artifact (or a .py/.js generator of one) whose relative Submit/POST write-back is lost under Cowork — runs the static Tier A analyzer over the files the run authored; a lost write-back on an ADDED agent-authored source fails, a pre-existing file the skill merely modified on a read-write mount is advisory; could-not-verify (fail-closed) on a --resume scratchpad or an unanalyzable candidate; runs on every live sandbox tier including microvm (outputs snapshotted from the VM); only `true` is valid (omit to skip). LIVE/verify-run only — skipped on replay. Rejected at load on `lane: remote`, where the agent's container filesystem is not locally observable.",
             "type": "boolean",
             "const": true
           },
@@ -1256,12 +1256,12 @@
             "const": true
           },
           "computer_links_resolve": {
-            "description": "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip). Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here",
+            "description": "fails if any computer:// link in the model-visible transcript does not resolve to an artifact that exists in the run's collected outputs/mounts — REQUIRES at least one link (zero links FAILS: use computer_links_resolve_if_present for the presence-free variant); only `true` is valid (writing `false` is a rejected footgun — omit to skip). Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here. Rejected at load on `lane: remote`, where the agent's container filesystem is not locally observable.",
             "type": "boolean",
             "const": true
           },
           "computer_links_resolve_if_present": {
-            "description": "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here",
+            "description": "like computer_links_resolve, but PASSES VACUOUSLY when the transcript has zero computer:// links — the lenient, presence-free variant; only `true` is valid. Sees top-level assistant_text ONLY — it excludes every tool_use/tool_result, so a computer:// link that appeared only inside a tool call or its result is invisible here. Rejected at load on `lane: remote`, where the agent's container filesystem is not locally observable.",
             "type": "boolean",
             "const": true
           },
@@ -1455,7 +1455,7 @@
             "type": "boolean"
           },
           "artifact_json": {
-            "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Fails on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
+            "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Rejected at load on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
             "type": "object",
             "properties": {
               "artifact": {
@@ -1501,7 +1501,7 @@
                 "type": "boolean"
               },
               "authored": {
-                "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check",
+                "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check. Undecidable on `lane: remote` (it compares the container's file with the pre-run manifest); `file_exists` with it is rejected at load there.",
                 "type": "boolean"
               }
             },
@@ -1542,7 +1542,7 @@
                 "type": "string"
               },
               "evidence_files": {
-                "description": "scope the AUTHORED-FILE evidence this judge grades to these globs, so an unrelated file dropped at the capture budget can no longer refuse the verdict. NOT an existence assertion (that is `file_exists`) — it selects which authored files reach the judge and which omissions are treated as fatal. Paths are `<user-visible root>/<rel>` (e.g. `outputs/report.md`, NOT a bare `report.md`), the same key `no_unexpected_files`/`no_lost_write_back` use; session-root deliverables carry the synthetic `scratchpad/` prefix. Glob syntax is `*`/`?`/`**` (NOT regex), matched over the FULL path. Globs matching NOTHING fail evidence-unavailable rather than grading a rubric against zero authored evidence — the failure message lists the paths the run actually authored. When set, the capture also spends its size budget on these files FIRST and exempts them from the per-file cap, and an in-scope file that is still omitted or truncated fails evidence-unavailable (raise `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES` when a large deliverable legitimately needs more). Omitted = every authored file is judged and any omission refuses the verdict (the default, unchanged)",
+                "description": "scope the AUTHORED-FILE evidence this judge grades to these globs, so an unrelated file dropped at the capture budget can no longer refuse the verdict. NOT an existence assertion (that is `file_exists`) — it selects which authored files reach the judge and which omissions are treated as fatal. Paths are `<user-visible root>/<rel>` (e.g. `outputs/report.md`, NOT a bare `report.md`), the same key `no_unexpected_files`/`no_lost_write_back` use; session-root deliverables carry the synthetic `scratchpad/` prefix. Glob syntax is `*`/`?`/`**` (NOT regex), matched over the FULL path. Globs matching NOTHING fail evidence-unavailable rather than grading a rubric against zero authored evidence — the failure message lists the paths the run actually authored. When set, the capture also spends its size budget on these files FIRST and exempts them from the per-file cap, and an in-scope file that is still omitted or truncated fails evidence-unavailable (raise `$COWORK_HARNESS_AUTHORED_TOTAL_BYTES` when a large deliverable legitimately needs more). Omitted = every authored file is judged and any omission refuses the verdict (the default, unchanged). Rejected at load on `lane: remote`, where the judge sees the transcript only",
                 "minItems": 1,
                 "type": "array",
                 "items": {
@@ -1608,7 +1608,7 @@
                 "type": "string"
               },
               "evidence_files": {
-                "description": "scope the run's AUTHORED-FILE evidence exactly as semantic_matches.evidence_files does; the frozen reference must have been composed with the same scope",
+                "description": "scope the run's AUTHORED-FILE evidence exactly as semantic_matches.evidence_files does; the frozen reference must have been composed with the same scope. Rejected at load on `lane: remote`, where the judge sees the transcript only.",
                 "minItems": 1,
                 "type": "array",
                 "items": {

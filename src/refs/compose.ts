@@ -29,7 +29,7 @@ function liveFingerprints(result: RunResult): Map<string, string> {
   for (const e of result.assertions ?? []) {
     if (e.source !== undefined || judgedOpts(e.assertion) === undefined) continue;
     const fp = e.judgedDoc ?? e.composedDoc;
-    if (fp !== undefined) out.set(pairwiseComposeKey(e.assertion), fp.sha256);
+    if (fp !== undefined) out.set(pairwiseComposeKey(e.assertion, result.lane), fp.sha256);
   }
   return out;
 }
@@ -111,7 +111,7 @@ export function composeFromRunDir(
   const docs: ComposedForFreeze["docs"] = [];
   const seen = new Set<string>();
   for (const a of pairwise) {
-    const key = pairwiseComposeKey(a);
+    const key = pairwiseComposeKey(a, ctx.lane);
     if (seen.has(key)) continue;
     seen.add(key);
     const doc = candidateDocument(ctx, a);

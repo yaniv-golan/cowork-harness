@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ENVIRONMENT_SHAPED_ASSERT_KEYS,
+  LANE_REMOTE_INCOMPATIBLE,
   LANE_NOTICE,
   LANE_NOTICE_ENV,
   laneNoticeApplies,
@@ -70,17 +71,53 @@ describe("once per process", () => {
 });
 
 describe("one list: every `lane: remote` degradation in assert.ts is an environment-shaped key", () => {
+  // A branch inside a helper (not directly under an `if (a.<key> !== undefined` guard) is attributed through this
+  // table. A helper missing from it fails the test, so a new site is classified rather than mis-attributed to
+  // whichever key's guard happens to sit above it.
+  const HELPERS: Record<string, string[]> = {
+    // authored: true — file_exists / artifact_text / artifact_json / user_visible_artifact all take it
+    authorshipOf: ["file_exists", "artifact_text", "artifact_json", "user_visible_artifact"],
+    evalComputerLinks: ["computer_links_resolve", "computer_links_resolve_if_present"],
+    // the judge's evidence: semantic keys are not environment-shaped (they load on remote), so they are checked
+    // against the documented exemption below instead
+    scopeAuthoredEvidence: [],
+    allAuthoredPaths: [],
+    semanticRefusal: [],
+    composeJudgedDocument: [],
+  };
   it('each key whose evaluator branches on lane === "remote" is in ENVIRONMENT_SHAPED_ASSERT_KEYS', () => {
     const src = readFileSync(join(import.meta.dirname, "..", "src", "assert.ts"), "utf8");
     const found = new Set<string>();
-    for (const m of src.matchAll(/ctx\.lane === "remote"/g)) {
-      // the evaluator a branch belongs to: the nearest `a.<key> !== undefined` guard above it
-      const before = src.slice(Math.max(0, m.index! - 4000), m.index!);
-      const guards = [...before.matchAll(/if \(a\.([a-z_]+) !== undefined/g)];
-      expect(guards.length, `no evaluator guard found above offset ${m.index}`).toBeGreaterThan(0);
-      found.add(guards.at(-1)![1]);
+    const helpersSeen = new Set<string>();
+    for (const m of src.matchAll(/ctx\.lane [!=]== "remote"/g)) {
+      const before = src.slice(0, m.index!);
+      const anchors = [
+        ...[...before.matchAll(/if \(a\.([a-z_]+) !== undefined/g)].map((g) => ({ at: g.index!, key: g[1]!, helper: false })),
+        // top-level functions only (column 0), plus the one closure that owns a branch inside evaluate()
+        ...[...before.matchAll(/^(?:export )?(?:async )?function ([A-Za-z]+)\(|const (evalComputerLinks) = \(/gm)].map((g) => ({
+          at: g.index!,
+          key: (g[1] ?? g[2])!,
+          helper: true,
+        })),
+      ].sort((x, y) => x.at - y.at);
+      const near = anchors.at(-1);
+      expect(near, `no evaluator guard or helper found above offset ${m.index}`).toBeDefined();
+      expect(!near!.helper || near!.key in HELPERS, `unclassified helper ${near!.key} at offset ${m.index}: add it to HELPERS`).toBe(true);
+      if (near!.helper) {
+        helpersSeen.add(near!.key);
+        for (const k of HELPERS[near!.key]!) found.add(k);
+      } else found.add(near!.key);
     }
     expect(found.size).toBeGreaterThan(0);
-    for (const k of found) expect(ENVIRONMENT_SHAPED_ASSERT_KEYS as readonly string[], k).toContain(k);
+    // The judged keys load on lane: remote and are judged on the transcript only; they are not environment-shaped
+    // (listing them would print the lane notice on every local semantic scenario).
+    const TRANSCRIPT_ONLY = new Set(["semantic_matches", "semantic_pairwise"]);
+    for (const k of found) if (!TRANSCRIPT_ONLY.has(k)) expect(ENVIRONMENT_SHAPED_ASSERT_KEYS as readonly string[], k).toContain(k);
+    // every helper in the table still has a branch (a stale entry would hide a removed refusal)
+    for (const h of Object.keys(HELPERS)) expect(helpersSeen, h).toContain(h);
+  });
+
+  it("every key refused at load on lane: remote is environment-shaped", () => {
+    for (const k of Object.keys(LANE_REMOTE_INCOMPATIBLE)) expect(ENVIRONMENT_SHAPED_ASSERT_KEYS as readonly string[], k).toContain(k);
   });
 });

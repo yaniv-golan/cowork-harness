@@ -75,6 +75,8 @@ export interface FreezeCaseInput {
   /** The case's scenario file (what the run answered). */
   scenarioFile: string;
   assertions: readonly Assertion[];
+  /** The scenario's lane: a `lane: remote` reference is stored under its own compose key (see `composeKey`). */
+  lane?: "local" | "remote";
   /** The scenario's prompt (the task the reference answers). */
   prompt: string;
   /** The variant's results.jsonl text. */
@@ -95,7 +97,7 @@ export type FreezeCaseOutcome =
  *  from the run it was frozen from — a store never mixes runs — and is refused when that run is gone. */
 export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
   const store = join(i.flowAbs, i.variant, "ref");
-  const keys = [...new Set(i.assertions.filter((a) => a.semantic_pairwise !== undefined).map(pairwiseComposeKey))];
+  const keys = [...new Set(i.assertions.filter((a) => a.semantic_pairwise !== undefined).map((a) => pairwiseComposeKey(a, i.lane)))];
   const existing = readRefEntry(store, i.caseId);
   if (existing.status === "integrity")
     return {
@@ -252,6 +254,7 @@ export function freezeRefCommand(i: {
         caseId: c.id,
         scenarioFile: c.file,
         assertions: c.scenario.assert,
+        lane: c.scenario.lane,
         prompt: c.scenario.prompt,
         results,
         secrets: i.secrets,

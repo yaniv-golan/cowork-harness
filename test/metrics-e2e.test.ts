@@ -172,24 +172,44 @@ describe.runIf(POSIX)("scenario metrics, through the real executeScenario (proto
     expect(r.metrics).toEqual([{ id: "words", unavailable: "remote" }]);
   }, 120_000);
 
-  // artifact_json reads the same file the metric does, and refuses on the same lane — live, and through the
-  // result.json lane that verify-run reads back. The lane: local twin passes both ways over the same file.
-  it("artifact_json on lane: remote fails live and on verify-run; the lane: local twin passes", async () => {
+  // artifact_json reads the same file the metric does. On lane: remote it can never pass, so the scenario is refused
+  // at LOAD, before any spend; the lane: local twin passes live and through verify-run's re-evaluation.
+  it("artifact_json on lane: remote is refused at load; the lane: local twin passes live and on verify-run", async () => {
     const aj = ["assert:", "  - artifact_json: {artifact: outputs/m.json, path: words, equals: 1200}"];
-    for (const lane of ["remote", "local"] as const) {
-      const sc = parseScenarioFile(scenario(`aj-${lane}`, "write", [`lane: ${lane}`, ...aj]));
-      const r = await executeScenario(sc, {});
-      const live = r.assertions.find((a) => "artifact_json" in a.assertion);
-      expect(persisted(`aj-${lane}`).lane ?? "local").toBe(lane);
-      const re = reevaluateRun(r.outDir!, sc);
-      expect(re.ok).toBe(true);
-      const verify = re.ok ? re.deterministic.find((a) => "artifact_json" in a.assertion) : undefined;
-      for (const a of [live, verify]) {
-        expect(a, lane).toBeDefined();
-        expect(a!.pass, lane).toBe(lane === "local");
-        if (lane === "remote") expect(a!.message).toMatch(/artifact_json cannot be evaluated on `lane: remote`/);
+    expect(() => parseScenarioFile(scenario("aj-remote", "write", ["lane: remote", ...aj]))).toThrow(
+      /`artifact_json` cannot pass on `lane: remote`/,
+    );
+    const sc = parseScenarioFile(scenario("aj-local", "write", ["lane: local", ...aj]));
+    const r = await executeScenario(sc, {});
+    const live = r.assertions.find((a) => "artifact_json" in a.assertion);
+    const re = reevaluateRun(r.outDir!, sc);
+    expect(re.ok).toBe(true);
+    const verify = re.ok ? re.deterministic.find((a) => "artifact_json" in a.assertion) : undefined;
+    for (const a of [live, verify]) expect(a?.pass).toBe(true);
+  }, 120_000);
+
+  // verify-run of a kept run reads the lane from result.json, not from the scenario it is handed: a run recorded on
+  // lane: remote (by an older release, or a scenario changed since) grades its file keys as lane refusals.
+  it("verify-run of a kept run whose result.json says lane: remote refuses the file keys", async () => {
+    const sc = parseScenarioFile(scenario("vr-remote", "write", ["assert:", "  - no_unexpected_files: [outputs/m.json]"]));
+    const r = await executeScenario(sc, {});
+    expect(r.assertions.find((a) => "no_unexpected_files" in a.assertion)?.pass).toBe(true);
+    const paths: string[] = [];
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const p = join(d, e.name);
+        if (e.isDirectory() && e.name !== "work") walk(p);
+        else if (e.name === "result.json") paths.push(p);
       }
-    }
+    };
+    walk(r.outDir!);
+    expect(paths.length).toBeGreaterThan(0);
+    for (const p of paths) writeFileSync(p, JSON.stringify({ ...JSON.parse(readFileSync(p, "utf8")), lane: "remote" }));
+    const re = reevaluateRun(r.outDir!, sc);
+    expect(re.ok).toBe(true);
+    const v = re.ok ? re.deterministic.find((a) => "no_unexpected_files" in a.assertion) : undefined;
+    expect(v?.pass).toBe(false);
+    expect(v?.message).toMatch(/lane: remote/);
   }, 120_000);
 
   it("absent when nothing is declared, and for an empty list", async () => {

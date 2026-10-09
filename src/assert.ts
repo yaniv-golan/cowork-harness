@@ -513,7 +513,8 @@ export interface AssertContext {
    *  run whose filesystem isn't locally observable: no_unexpected_files / input_unmodified must then fail
    *  evidence-unavailable — the same loud path taken when preRunPaths/preRunHashes are absent entirely —
    *  never a vacuous pass just because a (locally meaningless) preRunPaths/preRunHashes happens to be
-   *  present. undefined today on every real caller; only a hand-constructed ctx sets this. */
+   *  present. undefined today on every real caller; only a hand-constructed ctx sets this. `lane: remote` does NOT
+   *  set it (its baseline is walked locally); the keys that cannot hold there are guarded on `lane` instead. */
   preRunOrigin?: "local-walk" | "remote-unavailable" | "local-unreadable";
   /** True on a `--resume` turn. Such a turn captures no pre-run manifest of its own; the manifest it reads is the
    *  FIRST turn's. `authored: true` keys on this flag (and fails evidence-unavailable), never on the manifest being
@@ -979,6 +980,15 @@ export function semanticRefusal(
   const fromRecord = forkRecordRefusal(a, ctx);
   if (fromRecord) return fromRecord;
   const scope = o.evidenceFiles;
+  // `lane: remote`: an assert that names files to grade can never see them (they live in a remote container), so it
+  // is evidence-unavailable — before the scope branches below, which would blame the glob.
+  if (ctx.lane === "remote" && scope !== undefined && scope.length > 0)
+    return {
+      semanticEvidence: { reason: "lane_remote_evidence_files" },
+      message:
+        `evidence unavailable: ${o.key}.evidence_files names files to grade, but on \`lane: remote\` the files the run wrote live in a remote container whose filesystem is not locally observable, ` +
+        `so the judge sees the transcript only. Drop evidence_files and write the rubric about what the agent SAID, or use \`lane: local\``,
+    };
   const sc = scopeAuthoredEvidence(ctx, scope);
   const scoped = scope !== undefined && scope.length > 0;
   let semanticEvidence: SemanticEvidence;
@@ -1006,7 +1016,9 @@ export function semanticRefusal(
       return "unset/invalid";
     }
   };
-  if (ctx.authoredFilesHealth?.noPreRunManifest) {
+  // Not on `lane: remote`: there the authored set is not evidence at all (see scopeAuthoredEvidence), so a missing
+  // baseline for it changes nothing the judge sees.
+  if (ctx.lane !== "remote" && ctx.authoredFilesHealth?.noPreRunManifest) {
     // BEFORE the scope branches. With no baseline the authored set is empty for a reason that has nothing
     // to do with the scope, so `scope_matched_nothing` would be a lie that sends the author to fix a glob
     // that is already correct — and for an UNSCOPED assert the alternative was worse still: zero authored
@@ -1300,6 +1312,9 @@ export function scopeAuthoredEvidence(
   ctx: AssertContext,
   globs: string[] | undefined,
 ): { files: import("./run/artifacts.js").AuthoredFile[]; omitted: string[]; unreadable: string[]; matchedAny: boolean } {
+  // `lane: remote`: the files the run authored live in a remote container whose filesystem is not locally
+  // observable, so the local capture is not evidence — no file, and no path from its health, reaches the judge.
+  if (ctx.lane === "remote") return { files: [], omitted: [], unreadable: [], matchedAny: true };
   const all = ctx.authoredFiles ?? [];
   const h = ctx.authoredFilesHealth;
   if (!globs || globs.length === 0)
@@ -1316,6 +1331,7 @@ export function scopeAuthoredEvidence(
  *  so an author or agent writing a glob has no other way to learn the `<root>/<rel>` key shape. Printing
  *  the list, not a count, is what makes the mistake self-correcting from the failure alone. */
 export function allAuthoredPaths(ctx: AssertContext): string[] {
+  if (ctx.lane === "remote") return []; // see scopeAuthoredEvidence
   const h = ctx.authoredFilesHealth;
   return [
     ...new Set([...(ctx.authoredFiles ?? []).map((f) => f.path), ...(h?.omittedPaths ?? []), ...(h?.readErrors ?? []).map((e) => e.path)]),
@@ -1419,6 +1435,16 @@ export function composeJudgedDocument(
     parts.push(text);
     kinds.push(path !== undefined ? { kind, path } : { kind });
   };
+  // `lane: remote`: tell the judge what it is NOT seeing, so a missing file section is not read as "nothing was
+  // written". FIRST, so the aggregate cap (which cuts from the end) can never drop it. Kind "health": not graded
+  // evidence.
+  if (ctx.lane === "remote")
+    push(
+      "health",
+      `## Evidence scope (transcript only)\nThis run models a remote container whose files are not observable from outside it, so ` +
+        `NO authored file${includeSubagentText ? " and no sub-agent output" : ""} is shown. Grade only what the transcript and final answer ` +
+        `show the agent said and did; do NOT infer that a file was or was not written from the absence of file sections.`,
+    );
   if (ctx.finalMessage) push("final", `## Final answer\n${capForJudge(s(ctx.finalMessage), JUDGE_FINAL_CAP)}`);
   push("transcript", `## Transcript\n${capForJudge(s(ctx.transcript ?? ""), JUDGE_TRANSCRIPT_CAP)}`);
   // OPT-IN sub-agent text. `ctx.transcript` carries top-level assistant_text ONLY (run.ts drops any
@@ -1431,7 +1457,9 @@ export function composeJudgedDocument(
   //     silent grade change across an upgrade is exactly the kind of drift a gate must not have.
   // `reasoning` is undefined on replay (child transcripts exist only where the real agent ran); the
   // section is then simply absent, which is honest — semantic_matches is live-only anyway.
-  if (includeSubagentText) {
+  // Not on `lane: remote`: sub-agent text is read from the child transcripts on disk, which in a real cloud run are
+  // inside the container. The transcript-only note at the end tells the judge.
+  if (includeSubagentText && ctx.lane !== "remote") {
     for (const [i, sa] of (ctx.subagents ?? []).entries()) {
       const text = (sa.reasoning ?? [])
         .filter((t) => t.kind === "text" && t.text)
@@ -1507,7 +1535,8 @@ export function composeJudgedDocument(
   // Surface authored-file incompleteness to the judge so it never reads an omitted/unreadable file's
   // ABSENCE as evidence the skill didn't produce it (#14/#16). The verdict is separately forced to
   // evidence-unavailable in the semantic_matches check; this note keeps a still-produced grade honest.
-  const h = ctx.authoredFilesHealth;
+  // On `lane: remote` the capture health describes the local stand-in, and carries its paths: not sent.
+  const h = ctx.lane === "remote" ? undefined : ctx.authoredFilesHealth;
   // Truncation is an evidence gap the health object does not carry (it lives on the AuthoredFile), so it
   // has to be derived here from the graded set. Without this the judge saw a bare " (truncated)" suffix in
   // a heading and no statement of what that implies — while an omitted file got a full "do not infer
@@ -2446,7 +2475,7 @@ export type Authorship =
 /** The fields `authorshipOf` reads. */
 export type AuthorshipContext = Pick<
   AssertContext,
-  "workRoot" | "userVisiblePrefixes" | "preRunHashes" | "preRunPaths" | "preRunOrigin" | "postRunHashes" | "linkPaths" | "resume"
+  "workRoot" | "userVisiblePrefixes" | "preRunHashes" | "preRunPaths" | "preRunOrigin" | "postRunHashes" | "linkPaths" | "resume" | "lane"
 >;
 
 const LINK_WHY = "it is a symlink — a link is never authored evidence (the pre-run manifest never hashes one)";
@@ -2454,6 +2483,10 @@ const LINK_WHY = "it is a symlink — a link is never authored evidence (the pre
 export function authorshipOf(ctx: AuthorshipContext, p: string, opts: { postHash?: string } = {}): Authorship {
   const undecidable = (why: string, evidence = false): Authorship => ({ state: "undecidable", why, evidence });
   if (ctx.preRunOrigin === "remote-unavailable") return undecidable("the pre-run manifest is not locally observable (remote)", true);
+  // Authorship compares the post-run body with the pre-run manifest: a read of a file inside the container on
+  // `lane: remote`, whose filesystem is not locally observable. (Plain `file_exists` stays the remote-lane proxy.)
+  if (ctx.lane === "remote")
+    return undecidable("on `lane: remote` the file lives in a remote container whose filesystem is not locally observable", true);
   // Authorship is decided per invocation. A --resume turn captures no pre-run manifest of its own: the one on disk
   // is the FIRST turn's (taken before turn 1), so diffing against it would credit this turn with everything earlier
   // turns wrote. Never read that as authored — keyed on the resume flag, not on the manifest being absent, because
@@ -3058,6 +3091,7 @@ function check(
       semanticEvidence = { reason: "graded", paths: gradedPaths };
       const skillJoin = a.semantic_matches.include_fork_results === true ? joinSkillResults(ctx) : undefined;
       const over =
+        (ctx.lane === "remote" ? "; judged on the transcript only (lane: remote)" : "") +
         (scoped ? `; graded authored files: ${gradedPaths.length ? gradedPaths.join(", ") : "(none)"}` : "") +
         // Name what the opt-in added, so a green over ZERO skill results is visible as such (no Skill call ran).
         (skillJoin
@@ -3122,7 +3156,10 @@ function check(
         )
         .join("; ");
       semanticEvidence = { reason: "graded", paths: scopeAuthoredEvidence(ctx, p.evidence_files).files.map((f) => f.path) };
-      results.push(gated.every(passes) ? ok(`pairwise (${passIf}): ${summary}`) : fail(`pairwise (${passIf}): ${summary}`));
+      const laneNote = ctx.lane === "remote" ? "; judged on the transcript only (lane: remote)" : "";
+      results.push(
+        gated.every(passes) ? ok(`pairwise (${passIf}): ${summary}${laneNote}`) : fail(`pairwise (${passIf}): ${summary}${laneNote}`),
+      );
     }
   }
   if (a.tool_result_contains !== undefined) {
@@ -3287,7 +3324,7 @@ function check(
     if (ctx.lane === "remote") {
       results.push(
         fail(
-          `file_absent cannot be verified on \`lane: remote\` — a remote container's filesystem is not locally observable, so "not found here" is not evidence the run did not create it. Assert on the delivered artifact instead, or use \`lane: local\``,
+          `file_absent cannot be verified on \`lane: remote\` — a remote container's filesystem is not locally observable, so "not found here" is not evidence the run did not create it. Assert the agent's own statement that it did not write it (\`transcript_not_matches\`), or use \`lane: local\``,
         ),
       );
     } else if (ctx.preRunOrigin === "remote-unavailable") {
@@ -3376,7 +3413,13 @@ function check(
   if (a.no_lost_write_back !== undefined) {
     // Static Tier A analyzer over the files this run authored — see checkNoLostWriteBack. Live/verify-run
     // only (LIVE_ONLY_KEYS: stripped on replay, so it never reaches here on the replay lane).
-    results.push(checkNoLostWriteBack(ctx));
+    if (ctx.lane === "remote")
+      results.push(
+        fail(
+          "no_lost_write_back cannot be verified on `lane: remote` — it analyses the files the run authored, which live inside a remote container whose filesystem is not locally observable. Use `lane: local`",
+        ),
+      );
+    else results.push(checkNoLostWriteBack(ctx));
   }
   // The object form with nothing but `tool` (and the default scope) is routed to the STRING evaluator, so
   // `{tool: X}` ≡ `"X"` on every lane — including a verify-run over a result.json that predates
@@ -4051,7 +4094,15 @@ function check(
     );
   }
   if (a.no_unexpected_files !== undefined) {
-    if (ctx.preRunOrigin === "remote-unavailable" || ctx.preRunOrigin === "local-unreadable") {
+    // LANE FIRST, as file_absent: an exhaustive absence proof over a tree a remote container holds. A clean walk of
+    // the local stand-in is not evidence the run created nothing there.
+    if (ctx.lane === "remote") {
+      results.push(
+        fail(
+          "no_unexpected_files cannot be verified on `lane: remote` — a remote container's filesystem is not locally observable, so a clean walk here is not evidence the run created nothing there. Assert the agent's own statement with `transcript_not_matches`, or use `lane: local`",
+        ),
+      );
+    } else if (ctx.preRunOrigin === "remote-unavailable" || ctx.preRunOrigin === "local-unreadable") {
       results.push(
         fail(
           `evidence unavailable: pre-run manifest origin is ${ctx.preRunOrigin} (${ctx.preRunOrigin === "remote-unavailable" ? "a cloud run's filesystem is not locally observable" : "a connected-folder source was unreadable, so the baseline is incomplete"}) — cannot compute created files`,
@@ -4109,6 +4160,8 @@ function check(
     }
   }
   if (a.input_unmodified !== undefined) {
+    // `lane: remote` deliberately NOT guarded: the inputs live on the user's device, so the local stand-in is read.
+    // UNCONFIRMED whether an in-container edit of a staged copy reaches the device; confirm on a real cloud capture.
     if (ctx.preRunOrigin === "remote-unavailable" || ctx.preRunOrigin === "local-unreadable") {
       results.push(
         fail(
@@ -4244,6 +4297,12 @@ function check(
           : fail(`host path leaked into model-visible text: ${ctx.hostPathLeaked}`),
     );
   const evalComputerLinks = (key: string, requirePresence: boolean) => {
+    // A `computer://` link is the local lane's delivery convention, resolved against the session's mounts; the
+    // user_visible_artifact class. Refused whole on remote, the zero-link `_if_present` pass included.
+    if (ctx.lane === "remote")
+      return fail(
+        `${key} cannot be verified on \`lane: remote\` — a \`computer://\` link is the local lane's delivery convention, and a remote container's filesystem is not locally observable, so there is nothing to resolve a link against. Tool-level delivery is NOT YET ASSERTABLE on this lane (no remote delivery tool is modeled): assert the written path plus the agent's own statement of it (\`file_exists\` + \`transcript_matches\`)${requirePresence ? "" : ', or that no link was given (`transcript_not_matches: "computer://"`)'}, or use \`lane: local\``,
+      );
     if (ctx.transcriptMissing) return fail(`evidence unavailable: transcript sidecar (run.jsonl) absent — cannot evaluate ${key}`);
     const links = extractComputerLinks(ctx.transcript);
     if (links.length === 0)
@@ -4592,7 +4651,9 @@ function check(
   }
   if (a.artifact_text !== undefined) {
     const at = a.artifact_text;
-    if (at.authored === true) results.push(authorshipCheck(ctx, at.artifact, "artifact_text"));
+    // Not on `lane: remote`: authorship is itself a read of the container's file there, so the lane refusal below
+    // says it once.
+    if (at.authored === true && ctx.lane !== "remote") results.push(authorshipCheck(ctx, at.artifact, "artifact_text"));
     const wantsAny = at.contains ?? at.not_contains ?? at.matches ?? at.not_matches;
     const file = containedPath(ctx.workRoot, at.artifact);
     if (wantsAny === undefined) {
@@ -4699,10 +4760,9 @@ function check(
   }
   if (a.artifact_json !== undefined) {
     const aj = a.artifact_json;
-    // Same order as artifact_text: a literal `authored: true` is reported first, then the lane. The glob form folds
-    // authorship per matched file, and on this lane there is no file set to fold over.
+    // LANE FIRST, as artifact_text: on `lane: remote` the body, and the authorship of it, are both reads of a file
+    // inside the container, so one refusal covers every form and `authored`.
     if (ctx.lane === "remote") {
-      if (aj.authored === true && !isArtifactGlob(aj.artifact)) results.push(authorshipCheck(ctx, aj.artifact, "artifact_json"));
       results.push(fail(remoteLaneBodyRefusal("artifact_json", "parse")));
     } else if (isArtifactGlob(aj.artifact)) results.push(globArtifactJson(ctx, aj));
     else results.push(...artifactJsonChecks(ctx, aj, aj.artifact));

@@ -6,12 +6,54 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **`lane: remote` now refuses, at load, every assertion that reads files inside the agent's container.** A
+  `lane: remote` scenario still runs locally, so these keys read the local copy and could pass where the cloud
+  lane's filesystem is not observable. A scenario on `lane: remote` that uses `artifact_text`, `artifact_json`,
+  `file_absent`, `no_unexpected_files`, `computer_links_resolve`, `computer_links_resolve_if_present`,
+  `no_lost_write_back`, or `semantic_matches` / `semantic_pairwise` with `evidence_files` no longer loads: `run`,
+  `record`, `lint`, `verify-run` and `regrade` refuse it with the key and a remedy, and `verify-cassettes` reports
+  its cassette unverifiable (exit 3) when it reads the scenario from the source the cassette records. So does
+  `file_exists` with `authored: true`. Assert the written path with plain `file_exists` and what the agent said
+  with `transcript_matches` / `transcript_not_matches`, or set `lane: local`. Plain `replay` of an older cassette
+  on `lane: remote` now fails a `no_unexpected_files`, `computer_links_resolve(_if_present)` or
+  `file_exists` with `authored: true` assertion
+  (`artifact_text` / `artifact_json` already failed there in 4.6.0; `file_absent`, `no_lost_write_back` and the
+  `semantic_*` keys are live-only, so replay skips them as before).
+- **`lint` exits 1 on those scenarios.** 4.6.0 reported `artifact_json`, `artifact_text` and `file_absent` on
+  `lane: remote` as the WARN `lane-remote-unobservable-key`; that rule is retired, and the keys are now the ERROR
+  `lane-remote-incompatible-key` with the others above.
+- **`semantic_matches` / `semantic_pairwise` on `lane: remote` are judged on the transcript and final answer only.**
+  No authored file, capture-health path or sub-agent text reaches the judge, so a rubric about a file's content
+  grades differently, and `regrade` of a kept 4.6.0 `lane: remote` run with a judged assertion refuses with
+  `doc_drift` (exit 2) unless `--allow-doc-drift`, since the judged document now differs. A
+  `semantic_pairwise` reference is stored per lane: a reference frozen from a `lane: remote` run before this release
+  reads as missing. Re-run the reference's variant and freeze from that run; a run kept from an earlier release cannot
+  be re-frozen, since its judged document included file bodies.
+- **The `[lane]` notice now also fires for `no_lost_write_back`** on a `lane: local` run, since it reads the files
+  the run authored.
+
 ### Added
 
 - **Two Desktop form replies in `examples/data/form-replies/`**, for testing a skill that parses one. Each keeps the
   shape of a real Cowork reply, with every title, label and value replaced: a date, a multi-select, quoted and
   ` / `-flattened values, and values over 200 characters folded under `--- Full content ---`. A test pins both to
   Desktop's reply format byte for byte.
+
+### Fixed
+
+- **`lane: remote` no longer passes on the local copy of the container's files.** The keys listed above are refused
+  at load and, for a run or cassette that reaches the evaluator another way, fail when graded with the same
+  reason. `authored: true` is undecidable on that lane (it compares the container's file with the pre-run
+  manifest); plain `file_exists` is still the documented proxy for a written path. A judged assertion with
+  `evidence_files` reports `semanticEvidence.reason: "lane_remote_evidence_files"`; one without it reports
+  `"graded"` with no paths and says "judged on the transcript only (lane: remote)". `record` refuses these scenarios
+  on `--rerecord-stale --from-embedded` too, which skipped the load check, and no longer gives
+  `--max-artifact-bytes` advice for them. `file_absent`'s refusal names `transcript_not_matches` or `lane: local`
+  instead of a delivered artifact. `input_unmodified` is unchanged: it reads the local stand-in for the inputs,
+  which in production live on the user's device; whether a cloud run's edit of a staged copy reaches the device is
+  unconfirmed.
 
 ### Documentation
 
