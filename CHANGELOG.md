@@ -48,7 +48,10 @@ All notable changes to this project are documented here. The format is based on
   one new spawn-env key, `CLAUDE_CODE_DESKTOP_SKILL_SWITCHES`, which Desktop sets only for third-party deployments, and
   the reworded `device_bash` descriptions of the cloud tool surface.
   - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.26454.2 → 2.31226.0 since
-    record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it.
+    record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it. The
+    bundled cassettes are re-stamped to `2.31226.0`.
+  - **`provenance.spawnEnvSpreadCount` moves 35 → 38** with no change to the spawn contract: the spreads inside the
+    called function are now counted, and the call itself is not.
 
 ### Fixed
 

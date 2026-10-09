@@ -3339,7 +3339,8 @@ export function checkSubagentPromptFacts(
 // Spawn-contract verification + spawn.env generation.
 //
 // The Desktop→agent spawn env is constructed in the asar across THREE windows (W1 the inline spawn
-// literal, W2 the OnA base-env helper, W3 the Zrn shared-env helper OnA spreads). Every ALL-CAPS key
+// literal, W2 the OnA base-env helper, W3 the Zrn shared-env helper OnA spreads, with the objects of the functions
+// W3 spreads as values since Desktop 2.31226.0). Every ALL-CAPS key
 // those windows construct must be classifiable as a PINNED value we generate, or an ALLOWLISTED key we
 // deliberately don't pin (host-derived / session-conditional / settings- or 3p-conditional / deleted).
 // An unclassifiable key, an unknown gate id, a missing REQUIRED key, a degenerate window, or an
@@ -3745,8 +3746,8 @@ function twoAnchorWindow(bundle: string, startAnchor: string, endAnchor: string)
 }
 
 /**
- * W3 (the Zrn helper body): open at the `return{` before the DISABLE_AUTOUPDATER anchor, close on the
- * balanced `}` via a string-aware brace scanner (skips "…"/'…'/`…` spans). A nested template `${…}` inside
+ * Open at the last `return{` at or before `anchor` (W3: the DISABLE_AUTOUPDATER anchor or its `return{` head; a
+ * followed W3 callee: its body's `return{`), close on the balanced `}` via a string-aware brace scanner (skips "…"/'…'/`…` spans). A nested template `${…}` inside
  * the object → return null (flagged, never guessed — none today).
  */
 function braceScanWindow(bundle: string, anchor: string): string | null {
