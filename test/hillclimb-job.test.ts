@@ -3,6 +3,7 @@
 // run and returns a result whose run dir holds real frames (the public csv-metrics example's init/result pair,
 // test/fixtures/hillclimb-runs/README.md). The real runner through the stub agent is the CLI wiring test.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { InterruptedError } from "../src/termination.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -245,5 +246,22 @@ describe("the agent's own session transcript", () => {
     );
     const report = await run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false });
     expect(report.transcript).toEqual([mine]);
+  });
+});
+
+describe("an interrupt learned from a probe inside the scenario run", () => {
+  it("propagates out of the job instead of becoming this attempt's error row", async () => {
+    // The production runner: executeScenario's own probes (the host claude's --permission-prompts check under
+    // answer_channel: none, say) can raise it inside the job, after the command's pre-checks passed.
+    const run = makeHillclimbJobRunner(
+      deps({
+        runScenario: async () => {
+          throw new InterruptedError("SIGINT", "claude --help");
+        },
+      }),
+    );
+    await expect(run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false })).rejects.toThrow(
+      InterruptedError,
+    );
   });
 });
