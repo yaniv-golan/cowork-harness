@@ -732,3 +732,33 @@ describe("the signal path lists with one attempt; the normal teardown with the r
     expect(h.warnings.join("")).toMatch(/could not list processes \(ps failed or was interrupted\)/);
   });
 });
+
+// What a stop costs, in process listings. On macOS concurrent `ps -A` calls serialize, so under a parallel load each
+// synchronous listing can take seconds, and a stop waits for every one it takes (a second Ctrl-C included: it cannot
+// be handled while a listing runs). These pin the count, deterministically, so a stop never quietly grows another.
+// The live test (agent-tree-live) proves everything still dies; this proves what the stop paid for it.
+const MAX_LISTINGS_PER_STOP = 2;
+
+describe("process listings per stop", () => {
+  const orphanRows = () => [...base(), row(300, AGENT, 300), row(400, 1, 400, { comm: "sleep" })];
+
+  it(`a signalled stop (terminate, then the grace period's forceKill) takes at most ${MAX_LISTINGS_PER_STOP} listings and one lsof`, () => {
+    const h = harness({ rows: orphanRows() });
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, workDir: WORK }, h.deps);
+    const afterConstruction = h.snapshots;
+    a.terminate();
+    a.forceKill();
+    expect(h.snapshots - afterConstruction).toBeLessThanOrEqual(MAX_LISTINGS_PER_STOP);
+    expect(h.lsofCalls.length).toBeLessThanOrEqual(1);
+  });
+
+  it("the second signal's forceKill takes no listing and no lsof", () => {
+    const h = harness({ rows: orphanRows() });
+    const a = agentTreeAgent(h.child, { runTag: token(), runStartMs: T0, workDir: WORK }, h.deps);
+    a.terminate();
+    const before = h.snapshots;
+    a.forceKill({ fast: true });
+    expect(h.snapshots - before).toBe(0);
+    expect(h.lsofCalls).toEqual([]);
+  });
+});

@@ -47,6 +47,14 @@ createInterface({ input: process.stdin }).on("line", (l) => { if (l === "exit") 
 setInterval(() => {}, 1000);
 `;
 
+/** EOF on fd 3 is the oracle: every process the stub started holds the pipe, so it closes only once all of them
+ *  are gone. How long a stop takes is not: on macOS each process listing it takes can last seconds while other
+ *  processes list too (concurrent `ps -A` calls serialize), so a fixed short deadline failed whenever the suite ran
+ *  in parallel. The listing count is pinned deterministically in agent-tree.test.ts ("process listings per stop");
+ *  here the wait runs up to the test's own timeout. */
+const LIVE_TIMEOUT_MS = 60_000;
+const EOF_WAIT_MS = LIVE_TIMEOUT_MS - 5_000;
+
 const live = new Set<number>(); // pids a fixture reported, so a red test never leaks a process
 
 afterEach(() => {
@@ -147,39 +155,49 @@ const SPAWN_AND_REGISTER = `
 `;
 
 describe.runIf(POSIX)("stopping a run stops everything the agent started (live process tree)", () => {
-  it("SIGINT through the termination handler kills the detached tree, the SIGTERM-ignoring child and the orphan", async () => {
-    const f = start(`
+  it(
+    "SIGINT through the termination handler kills the detached tree, the SIGTERM-ignoring child and the orphan",
+    async () => {
+      const f = start(`
       ${SPAWN_AND_REGISTER}
       installTerminationHandler();
       registerAgent(() => agent);
       process.stdin.on("data", () => process.kill(process.pid, "SIGINT"));
       setInterval(() => {}, 1000);
     `);
-    await f.ready(["ready-a", "ready-b", "ready-c"]);
-    f.proc.stdin!.write("go\n");
-    expect(await f.eof(8000), f.stderr()).toBe(true);
-    expect(await f.exit()).toBe(130);
-  }, 30_000);
+      await f.ready(["ready-a", "ready-b", "ready-c"]);
+      f.proc.stdin!.write("go\n");
+      expect(await f.eof(EOF_WAIT_MS), f.stderr()).toBe(true);
+      expect(await f.exit()).toBe(130);
+    },
+    LIVE_TIMEOUT_MS,
+  );
 
-  it("the leader exits on SIGTERM while a child ignores it, and a child started after the last snapshot: all still die", async () => {
-    const f = start(
-      `
+  it(
+    "the leader exits on SIGTERM while a child ignores it, and a child started after the last snapshot: all still die",
+    async () => {
+      const f = start(
+        `
       ${SPAWN_AND_REGISTER}
       installTerminationHandler();
       registerAgent(() => agent);
       process.stdin.on("data", () => process.kill(process.pid, "SIGINT"));
       setInterval(() => {}, 1000);
     `,
-      "late-child",
-    );
-    await f.ready(["ready-a", "ready-b", "ready-c"]);
-    f.proc.stdin!.write("go\n");
-    expect(await f.eof(8000), f.stderr()).toBe(true);
-    expect(await f.exit()).toBe(130);
-  }, 30_000);
+        "late-child",
+      );
+      await f.ready(["ready-a", "ready-b", "ready-c"]);
+      f.proc.stdin!.write("go\n");
+      expect(await f.eof(EOF_WAIT_MS), f.stderr()).toBe(true);
+      expect(await f.exit()).toBe(130);
+    },
+    LIVE_TIMEOUT_MS,
+  );
 
-  it("the normal-path teardown after the leader already exited reaps from the tracked set and the sweep", async () => {
-    const f = start(`
+  it(
+    "the normal-path teardown after the leader already exited reaps from the tracked set and the sweep",
+    async () => {
+      const f = start(`
       ${SPAWN_AND_REGISTER}
       import { reapAgentOnTeardown } from ${EXECUTE};
       installTerminationHandler();
@@ -193,9 +211,11 @@ describe.runIf(POSIX)("stopping a run stops everything the agent started (live p
       });
       setInterval(() => {}, 1000);
     `);
-    await f.ready(["ready-a", "ready-b", "ready-c"]);
-    f.proc.stdin!.write("go\n");
-    expect(await f.eof(8000), f.stderr()).toBe(true);
-    expect(await f.exit()).toBe(0);
-  }, 30_000);
+      await f.ready(["ready-a", "ready-b", "ready-c"]);
+      f.proc.stdin!.write("go\n");
+      expect(await f.eof(EOF_WAIT_MS), f.stderr()).toBe(true);
+      expect(await f.exit()).toBe(0);
+    },
+    LIVE_TIMEOUT_MS,
+  );
 });
