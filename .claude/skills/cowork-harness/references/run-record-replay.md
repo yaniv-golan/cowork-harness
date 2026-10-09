@@ -141,7 +141,9 @@ launched from a repo root never drops sensitive skill inputs/outputs into it. Pa
 collect the runs. The runs dir is also where `--max-budget-usd` reads its cost history: pointed at a fresh or
 per-job directory it finds no priced run for the scenario, warns `no priced run history … proceeding
 UNCAPPED`, and runs with no cap (a batch's estimate becomes a lower bound; only the `--concurrency 1`
-running total still stops it). To keep the cap, leave `--run-dir` at the default, or reuse the same
+running total still stops it). To re-record a few scenarios of a large directory without pricing the rest,
+name them: `record scenarios/ --case <stem> [--case …] --max-budget-usd <x>` (the file name without its
+extension) prices, checks and records only those. To keep the cap, leave `--run-dir` at the default, or reuse the same
 directory across invocations (a CI cache, say) so it holds at least one priced run of that scenario.
 Under `--output-format json` this is machine-readable: the envelope's top-level `budget` object reports
 `enforced: false` (single run: at least one scenario ran with no cap) or `"lower_bound"` (a `record`

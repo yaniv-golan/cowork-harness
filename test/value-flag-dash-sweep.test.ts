@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { SKILL_FLAG_SURFACE } from "../src/run/skill-flag-surface.js";
-import { RECORD_VALUE_FLAGS } from "../src/run/cassette.js";
+import { RECORD_VALUE_FLAGS, RECORD_REPEATED_FLAGS } from "../src/run/cassette.js";
 import { LINT_VALUE_FLAGS } from "../src/run/lint-load.js";
 import { EVAL_VALUE_FLAGS, EVAL_REPEATED_FLAGS } from "../src/eval/usage.js";
 import { HILLCLIMB_RUN_REPEATED_FLAGS, HILLCLIMB_RUN_VALUE_FLAGS } from "../src/hillclimb/usage.js";
@@ -60,7 +60,7 @@ function cli(args: string[], cwd: string) {
 const CASES: Array<[string, string[], string[]]> = [
   ["run", ["run", "s.yaml"], RUN_VALUE_FLAGS],
   ["skill", ["skill", "./plugin", "hi", "--dry-run"], SKILL_VALUE_FLAGS],
-  ["record", ["record", "s.yaml", "--dry-run"], [...RECORD_VALUE_FLAGS]],
+  ["record", ["record", "s.yaml", "--dry-run"], [...RECORD_VALUE_FLAGS, ...RECORD_REPEATED_FLAGS]],
   ["lint", ["lint", "s.yaml"], [...LINT_VALUE_FLAGS]],
   ["chat", ["chat", "./plugin"], CHAT_VALUE_FLAGS],
   ["probe-dispatch", ["probe-dispatch", "./plugin", "hi"], PROBE_VALUE_FLAGS],

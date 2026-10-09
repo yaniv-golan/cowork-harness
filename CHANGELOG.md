@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`record <dir/> --case <stem>`** records only the named scenarios of a directory (the file name without
+  `.yaml`/`.yml`, or the path-safe id the error lists; repeat the flag for more). Every pre-spend check, the
+  `--dry-run` preview and the `--max-budget-usd` pre-flight cover the named scenarios only, so re-recording one
+  scenario of a large corpus is priced as that scenario instead of the whole directory. A stem that names no scenario
+  is a usage error (exit 2) that names it and lists the ids it can select. The JSON payload carries `cases`.
+  `--case` is refused with a single scenario file or `--rerecord-stale`.
+
 ## [4.6.1] — 2026-10-09
 
 ### Upgrade notes

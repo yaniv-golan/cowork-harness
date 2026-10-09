@@ -178,6 +178,8 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     any failure) — a failing scenario does NOT abort the batch. So a single `cowork-harness record cassettes/
     --rerecord-stale` surfaces ALL stale anchors in one pass (add `--concurrency <N>` to parallelize); a shell
     wrapper that loops one cassette at a time with `set -e` defeats this and rediscovers stale anchors serially.
+    To re-record only a few scenarios of a directory, name them with `--case <stem>` (repeatable): the checks
+    and the `--max-budget-usd` pre-flight then price only those.
     Two durability properties make the batch safe to trust: each cassette is written **atomically** (a
     same-directory temp file + rename), so an interrupted or OOM-killed batch never leaves a partial/corrupt
     cassette — a failed scenario simply produces none; and under `--concurrency <N>` each scenario runs **fully

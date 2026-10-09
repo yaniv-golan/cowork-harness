@@ -24,7 +24,7 @@ export interface HillclimbCase {
   scenario: Scenario;
 }
 
-const stemOf = (file: string): string => basename(file).replace(/\.ya?ml$/i, "");
+export const stemOf = (file: string): string => basename(file).replace(/\.ya?ml$/i, "");
 
 /** Whether a YAML file is a scenario as a directory load decides it (eval's rule): a mapping with a `prompt:`. An
  *  unparseable file counts, so the scenario loader reports it; a session file, an upload or a fixture does not. */
@@ -78,18 +78,19 @@ export function loadCases(target: string): { cases: HillclimbCase[]; skipped: st
   return { cases, skipped };
 }
 
-/** Apply `--case` selectors. Each selector matches a case's file stem, its id, or its scenario name; a
- *  selector that matches nothing, or matches two different cases, is refused with the full id list. */
-export function selectCases(cases: readonly HillclimbCase[], selectors: readonly string[]): HillclimbCase[] {
+/** Apply `--case` selectors. Each selector matches a case's file stem, its id, or its scenario name (when the case
+ *  carries one: `record --case` passes stem and id only); a selector that matches nothing, or matches two different
+ *  cases, is refused with the full id list. */
+export function selectCases<T extends { id: string; stem: string; name?: string }>(cases: readonly T[], selectors: readonly string[]): T[] {
   if (selectors.length === 0) return [...cases];
-  const listing = cases.map((c) => `${c.id} (${c.name})`).join(", ");
-  const chosen = new Set<HillclimbCase>();
+  const listing = cases.map((c) => (c.name === undefined ? c.id : `${c.id} (${c.name})`)).join(", ");
+  const chosen = new Set<T>();
   for (const sel of selectors) {
-    const hits = cases.filter((c) => c.stem === sel || c.id === sel || c.name === sel);
+    const hits = cases.filter((c) => c.stem === sel || c.id === sel || (c.name !== undefined && c.name === sel));
     if (hits.length === 0) throw new UsageError(`--case: no case matches "${sel}". Cases: ${listing}`);
     if (hits.length > 1)
       throw new UsageError(
-        `--case "${sel}" is ambiguous: it matches ${hits.map((c) => `${c.id} (${c.name})`).join(" and ")} — use the file stem`,
+        `--case "${sel}" is ambiguous: it matches ${hits.map((c) => (c.name === undefined ? c.id : `${c.id} (${c.name})`)).join(" and ")} — use the file stem`,
       );
     chosen.add(hits[0]);
   }
