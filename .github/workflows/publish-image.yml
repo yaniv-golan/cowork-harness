@@ -155,6 +155,13 @@ jobs:
           echo "::notice::dry_run — CI gate and collision guard passed; no image was built or pushed."
           exit 0
 
+      # Docker Hub rate-limits anonymous pulls per IP; the builds below resolve their base through mirror.gcr.io
+      # (falls back to Docker Hub). The base is digest-pinned, so the image built is the same either way. The GHCR
+      # login above is client-side and survives the dockerd restart this does.
+      - name: Resolve Docker Hub build bases through mirror.gcr.io
+        if: ${{ !inputs.dry_run }}
+        uses: ./.github/actions/docker-hub-mirror
+
       - name: Build + push cowork-agent-base (lean/core image — the default COWORK_AGENT_IMAGE)
         if: ${{ !inputs.dry_run }}
         env:
