@@ -364,3 +364,67 @@ describe("artifact_json.schema — recursion", () => {
     expect(bad.message).toContain("/children/0/children");
   });
 });
+
+const runTop = (body: unknown, o: object) => evaluate([aj(o)], ctx(tree({ "outputs/p.json": JSON.stringify(body) })))[0]!;
+
+describe("artifact_json.schema — the diff review's cases", () => {
+  const run = runTop;
+  it("a schema whose root has no validating keyword is refused (only annotations, or only $defs)", () => {
+    for (const schema of [
+      { title: "x" },
+      { description: "d", $comment: "c" },
+      { $schema: "https://json-schema.org/draft/2020-12/schema" },
+      { $defs: { item: { type: "object" } } },
+    ]) {
+      const r = load({ schema });
+      expect(r.success, JSON.stringify(schema)).toBe(false);
+      expect(issues(r), JSON.stringify(schema)).toMatch(/checks nothing/);
+    }
+    // an annotation beside a validating keyword is fine
+    expect(load({ schema: { title: "x", type: "object" } }).success).toBe(true);
+  });
+
+  it("a cyclic YAML alias is a clean load error, not a stack overflow", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-aj-schema-cyc-"));
+    const p = join(dir, "s.yaml");
+    writeFileSync(
+      p,
+      [
+        "baseline: latest",
+        "fidelity: container",
+        "prompt: hi",
+        "assert:",
+        "  - artifact_json: {artifact: outputs/p.json, schema: &s {type: object, properties: {child: *s}}}",
+      ].join("\n") + "\n",
+    );
+    let err: unknown;
+    try {
+      parseScenarioFile(p);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(UsageError);
+    expect(String((err as Error).message)).not.toMatch(/Maximum call stack/);
+  });
+
+  it("a very deep schema is a clean load error, and safeParse never throws", () => {
+    let schema: Record<string, unknown> = { type: "string" };
+    for (let i = 0; i < 3000; i++) schema = { not: schema };
+    const r = load({ schema });
+    expect(r.success).toBe(false);
+    expect(issues(r)).toMatch(/deeper than/);
+  });
+
+  it("union types load (the missing-type guard stays)", () => {
+    expect(load({ schema: { type: ["string", "number"] } }).success).toBe(true);
+    expect(run("x", { schema: { type: ["string", "number"] } }).pass).toBe(true);
+    expect(run(true, { schema: { type: ["string", "number"] } }).pass).toBe(false);
+  });
+
+  it("`nullable` (not JSON Schema) is refused; a $schema with a trailing # is accepted", () => {
+    const r = load({ schema: { type: "string", nullable: true } });
+    expect(r.success).toBe(false);
+    expect(issues(r)).toMatch(/nullable/);
+    expect(load({ schema: { $schema: "https://json-schema.org/draft/2020-12/schema#", type: "object" } }).success).toBe(true);
+  });
+});

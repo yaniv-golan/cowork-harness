@@ -925,7 +925,10 @@ document, without `path` — must match. Write it inline, or name a JSON file ne
   (a typo), a type-specific keyword with no `type` beside it (`required`, `properties`, `items`, `minLength`, `minimum`, …; it passes on a value of any other type: add `type: object` or the intended type),
   `format` (no format is validated, so it would check nothing: use `pattern`), `$id`, a `$ref` that is not a local
   `#…` reference (nothing is fetched), `$dynamicRef`/`$recursiveRef`, the annotation-only `content*` keywords, a
-  `$schema` other than draft 2020-12, and an empty schema. A property *named* `format` or `$ref` is fine.
+  `$schema` other than draft 2020-12, `nullable` (use `type: [<type>, "null"]`), a schema that contains itself or is
+  more than 64 levels deep, and an empty schema or one whose root has no validating keyword (only `title`,
+  `description`, `$defs`, …). A property *named* `format` or `$ref` is fine, and so is a union `type: [string, number]`.
+  A subschema that allows anything (`properties: {a: true}`) is not refused: only the root is checked for that.
 - `pattern` uses JavaScript regex syntax with the `u` flag and is **case-sensitive**, unlike the harness's own
   regex keys. On a value holding one of the run's secrets, replay sees the scrubbed body, so a `pattern`, `const`
   or length check on it can grade differently there (as `equals` can).

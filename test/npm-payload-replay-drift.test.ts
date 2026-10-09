@@ -159,6 +159,7 @@ describe("artifact_json.schema from an extracted npm tarball", () => {
       ].join("\n") + "\n",
     );
     const r = spawnSync(process.execPath, ["dist/cli.js", "lint", p], { cwd: pkg, encoding: "utf8" });
+    rmSync(dir, { recursive: true, force: true });
     expect(`${r.stdout}${r.stderr}`).toMatch(/`format` \("email"\)/);
     expect(`${r.stdout}${r.stderr}`).not.toMatch(/Cannot find module|ERR_MODULE_NOT_FOUND/);
   });

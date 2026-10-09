@@ -38,18 +38,43 @@ const DYNAMIC = new Set(["$dynamicRef", "$dynamicAnchor", "$recursiveRef", "$rec
 // Annotation-only in 2020-12: they validate nothing, and an author would assume they do.
 const ANNOTATION_ONLY = new Set(["contentSchema", "contentMediaType", "contentEncoding"]);
 
-/** A keyword the walk refuses, with where it is (a JSON pointer) — or undefined. */
-function walkProblem(node: unknown, at: string): string | undefined {
+// Keywords that describe, never constrain: a root made only of these (and of `$defs`) checks nothing.
+const NON_VALIDATING = new Set([
+  "title",
+  "description",
+  "$comment",
+  "$schema",
+  "default",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+  "$defs",
+  "definitions",
+  "$vocabulary",
+]);
+/** Deeper than this is refused before ajv sees it: ajv's compile recurses per level. */
+const MAX_DEPTH = 64;
+const escapePointer = (k: string) => k.replace(/~/g, "~0").replace(/\//g, "~1");
+
+/** A keyword the walk refuses, with where it is (a JSON pointer) — or undefined. `path` holds the objects on the
+ *  way down: a YAML alias can make a schema contain itself, and walking it would never end. */
+function walkProblem(node: unknown, at: string, path: object[] = []): string | undefined {
   if (node === null || typeof node !== "object" || Array.isArray(node)) return undefined;
+  if (path.includes(node))
+    return `the schema contains itself at ${at} (a YAML alias loop): use \`$ref\` to a \`$defs\` entry for a recursive shape`;
+  if (path.length >= MAX_DEPTH) return `the schema is deeper than ${MAX_DEPTH} levels at ${at}`;
+  const down = [...path, node];
   for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-    const here = `${at}/${k.replace(/~/g, "~0").replace(/\//g, "~1")}`;
+    const here = `${at}/${escapePointer(k)}`;
     if (DATA_KEYWORDS.has(k)) continue;
     // ajv's own refusal covers every REACHABLE position; this one also covers a `$defs` entry nothing references.
     if (k === "format")
-      return `\`format\` at ${at} is not supported (no format is validated, so it would check nothing): drop it, or use \`pattern\``;
+      return `\`format\` (${JSON.stringify(v)}) at ${at} is not supported (no format is validated, so it would check nothing): drop it, or use \`pattern\``;
     if (k === "$id")
       return `\`$id\` at ${at} is not supported: a schema here is self-contained (use local \`$defs\` and \`#/$defs/…\` refs)`;
-    if (k === "$schema" && v !== SCHEMA_DIALECT)
+    if (k === "nullable") return `\`nullable\` at ${at} is not JSON Schema (it is OpenAPI's): use \`type: [<type>, "null"]\``;
+    if (k === "$schema" && v !== SCHEMA_DIALECT && v !== `${SCHEMA_DIALECT}#`)
       return `\`$schema\` at ${at} must be ${SCHEMA_DIALECT} (draft 2020-12, the only dialect validated), or be left out`;
     if (k === "$ref" && !(typeof v === "string" && v.startsWith("#")))
       return `\`$ref\` ${JSON.stringify(v)} at ${at} is not a local reference: only \`#…\` refs into this schema are resolved (nothing is fetched)`;
@@ -57,28 +82,30 @@ function walkProblem(node: unknown, at: string): string | undefined {
     if (ANNOTATION_ONLY.has(k)) return `\`${k}\` at ${at} is not supported: it is an annotation in draft 2020-12 and validates nothing`;
     if (NAMED_SUBSCHEMAS.has(k) && v && typeof v === "object" && !Array.isArray(v)) {
       for (const [name, sub] of Object.entries(v as Record<string, unknown>)) {
-        const p = walkProblem(sub, `${here}/${name.replace(/~/g, "~0").replace(/\//g, "~1")}`);
+        const p = walkProblem(sub, `${here}/${escapePointer(name)}`, down);
         if (p) return p;
       }
     } else if (k === "dependencies" && v && typeof v === "object" && !Array.isArray(v)) {
       // draft-07 shape: a name maps to a subschema (an object) or a list of names (data)
       for (const [name, sub] of Object.entries(v as Record<string, unknown>)) {
-        const p = walkProblem(sub, `${here}/${name}`);
+        const p = walkProblem(sub, `${here}/${escapePointer(name)}`, down);
         if (p) return p;
       }
     } else if (SUBSCHEMA_ARRAYS.has(k) && Array.isArray(v)) {
       for (const [i, sub] of v.entries()) {
-        const p = walkProblem(sub, `${here}/${i}`);
+        const p = walkProblem(sub, `${here}/${i}`, down);
         if (p) return p;
       }
     } else if (SUBSCHEMA_ONE.has(k)) {
-      const p = walkProblem(v, here);
+      const p = walkProblem(v, here, down);
       if (p) return p;
     }
   }
   return undefined;
 }
 
+// ajv is pinned to an exact version: a frozen cassette's schema is re-checked under these rules when it is read, so a
+// bump that tightens strict mode could refuse committed cassettes. Treat an ajv bump as cassette-affecting.
 type Validate = ((data: unknown) => boolean) & {
   errors?: Array<{ instancePath: string; message?: string; keyword: string; params: Record<string, unknown> }> | null;
 };
@@ -101,6 +128,8 @@ function ajv() {
     // These reject ordinary schemas without guarding a verdict.
     strictRequired: false,
     strictTuples: false,
+    // `type: [string, number]`: a union still names its types, so the missing-type guard above keeps its point.
+    allowUnionTypes: true,
     logger: false,
   });
 }
@@ -141,10 +170,18 @@ function compile(schema: object): Validate | { error: string } {
 export function schemaProblem(schema: unknown): string | undefined {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return "the schema must be a JSON object";
   if (Object.keys(schema).length === 0) return "an empty schema matches anything, so it checks nothing";
-  const walk = walkProblem(schema, "#");
-  if (walk) return walk;
-  const v = compile(schema);
-  return "error" in v ? v.error : undefined;
+  // Root-level only: a subschema of `true` or `{}` (a property allowed with any value) is ordinary.
+  if (Object.keys(schema).every((k) => NON_VALIDATING.has(k)))
+    return `the schema's root has no validating keyword (only ${Object.keys(schema).join(", ")}), so it checks nothing: add one, e.g. \`type\`, or \`$ref: "#/$defs/<name>"\``;
+  // Never throws: a load-time check that throws escapes the schema parse as an internal error.
+  try {
+    const walk = walkProblem(schema, "#");
+    if (walk) return walk;
+    const v = compile(schema);
+    return "error" in v ? v.error : undefined;
+  } catch (e) {
+    return `the schema cannot be checked: ${String((e as Error)?.message ?? e)}`;
+  }
 }
 
 /** Validate `value` against an already-checked `schema`. The errors are scrubbed before they are cut, so a secret
