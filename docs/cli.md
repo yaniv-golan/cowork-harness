@@ -374,7 +374,9 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   an `--authored-total-bytes` override (`scope_changed`) does not skip the check of what the live judge read.
   `--allow-doc-drift` grades anyway, with a warning naming the files; the accepted drift is reported in
   `liveDocDrift` (`{liveAssertionIndex, sections: [{kind, path?, change}]}`, indexed by the live run's
-  `assertions[]`, in the file and on each `runs[]` entry) and makes the run's `docMatchesLive` `false`.
+  `assertions[]`, in the file and on each `runs[]` entry) and makes the run's `docMatchesLive` `false`. A kept
+  `lane: remote` run from before 4.6.1 with a judged assertion is refused this way: on that lane the judge now reads
+  the transcript and final answer only, where the live judge also read file bodies.
 - **Content the live judge never read is refused too.** Content that only a widened scope (`evidence_files`,
   `include_subagent_text`, `include_fork_results`) or a larger `--authored-total-bytes` brings in — a file the live
   cap left out, a larger part of one, a sub-agent's text, a `skill_result` section — cannot be compared with anything, and a secret in it that this process does
@@ -1021,7 +1023,7 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
   the default rather than silently sampling on the wrong cadence — see
   [docs/maintenance.md](./maintenance.md)).
 - `COWORK_HARNESS_NO_HYPERLINKS` — disable OSC-8 terminal hyperlinks in CLI output (auto-disabled outside a TTY, under CI, or with `--compact`/`--demo`).
-- `COWORK_HARNESS_NO_LANE_NOTICE=1` — silence the one-line `[lane]` notice on stderr. It says the run models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06, so path, mount, delivery and egress results do not carry over to the cloud lane. It prints at most once per process, and only for a live `lane: local` run with at least one environment-shaped assertion (`file_exists`, `file_absent`, `user_visible_artifact`, `artifact_text`/`artifact_json`, `present_files_called`, `computer_links_resolve*`, `no_scratchpad_leak`, `transcript_no_host_path`, `no_delete_in_*`, `input_unmodified`, `no_unexpected_files`, `egress_*` or `expect_denied`, and the host loop's path-boundary keys `path_denied`, `no_path_denied`, `vm_path_denied`, `no_vm_path_file_op`, `self_heal_ran`, and `no_lost_write_back`); `chat` prints it once at session start. It is already off under `CI` and with `--compact`/`--demo`.
+- `COWORK_HARNESS_NO_LANE_NOTICE=1` — silence the one-line `[lane]` notice on stderr. It says the run models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06, so path, mount, delivery and egress results do not carry over to the cloud lane. It prints at most once per process, and only for a live `lane: local` run with at least one environment-shaped assertion (`file_exists`, `file_absent`, `user_visible_artifact`, `artifact_text`/`artifact_json`, `present_files_called`, `computer_links_resolve*`, `no_scratchpad_leak`, `transcript_no_host_path`, `no_delete_in_*`, `input_unmodified`, `no_unexpected_files`, `egress_*` or `expect_denied`, `no_lost_write_back` (it reads the files the run authored), and the host loop's path-boundary keys `path_denied`, `no_path_denied`, `vm_path_denied`, `no_vm_path_file_op`, `self_heal_ran`); `chat` prints it once at session start. It is already off under `CI` and with `--compact`/`--demo`.
 
 ### Networking and loop
 

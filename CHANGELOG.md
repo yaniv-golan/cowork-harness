@@ -14,10 +14,10 @@ All notable changes to this project are documented here. The format is based on
   `lane: remote` scenario still runs locally, so these keys read the local copy and could pass where the cloud
   lane's filesystem is not observable. A scenario on `lane: remote` that uses `artifact_text`, `artifact_json`,
   `file_absent`, `no_unexpected_files`, `computer_links_resolve`, `computer_links_resolve_if_present`,
-  `no_lost_write_back`, or `semantic_matches` / `semantic_pairwise` with `evidence_files` no longer loads: `run`,
-  `record`, `lint`, `verify-run` and `regrade` refuse it with the key and a remedy, and `verify-cassettes` reports
-  its cassette unverifiable (exit 3) when it reads the scenario from the source the cassette records. So does
-  `file_exists` with `authored: true`. Assert the written path with plain `file_exists` and what the agent said
+  `no_lost_write_back`, `file_exists` with `authored: true`, or `semantic_matches` / `semantic_pairwise` with
+  `evidence_files` no longer loads: `run`, `record`, `eval`, `hillclimb`, `lint`, `verify-run` and `regrade` refuse it
+  with the key and a remedy, and `verify-cassettes` reports its cassette unverifiable (exit 3) when it reads the
+  scenario from the source the cassette records. Assert the written path with plain `file_exists` and what the agent said
   with `transcript_matches` / `transcript_not_matches`, or set `lane: local`. Plain `replay` of an older cassette
   on `lane: remote` now fails a `no_unexpected_files`, `computer_links_resolve(_if_present)` or
   `file_exists` with `authored: true` assertion
@@ -55,17 +55,20 @@ All notable changes to this project are documented here. The format is based on
   `sync` derived no spawn env and refused the baseline (`W3 … window length 198 is outside the 200–20000 sanity
   band`). It now follows the call to the object the function returns, and flags any call it cannot follow instead of
   reading it as opaque. The spawn env it derives for every earlier Desktop baseline is unchanged.
-- **`lane: remote` no longer passes on the local copy of the container's files.** The keys listed above are refused
-  at load and, for a run or cassette that reaches the evaluator another way, fail when graded with the same
-  reason. `authored: true` is undecidable on that lane (it compares the container's file with the pre-run
-  manifest); plain `file_exists` is still the documented proxy for a written path. A judged assertion with
-  `evidence_files` reports `semanticEvidence.reason: "lane_remote_evidence_files"`; one without it reports
-  `"graded"` with no paths and says "judged on the transcript only (lane: remote)". `record` refuses these scenarios
+- **`lane: remote` no longer passes on the local copy of the container's files** (the keys and remedies are in the
+  upgrade notes above). A run or cassette that reaches the evaluator without the load check fails those keys when
+  graded, with the same reason. A judged assertion with `evidence_files` reports
+  `semanticEvidence.reason: "lane_remote_evidence_files"`; one without it reports `"graded"` with no paths and says
+  "judged on the transcript only (lane: remote)". `record` refuses these scenarios
   on `--rerecord-stale --from-embedded` too, which skipped the load check, and no longer gives
   `--max-artifact-bytes` advice for them. `file_absent`'s refusal names `transcript_not_matches` or `lane: local`
   instead of a delivered artifact. `input_unmodified` is unchanged: it reads the local stand-in for the inputs,
   which in production live on the user's device; whether a cloud run's edit of a staged copy reaches the device is
   unconfirmed.
+- **A source checkout's `npm ci` on Linux installs only the native test-tool bindings for the machine's C library
+  again.** The 4.6.0 lockfile had lost the `libc` field of the `glibc` / `musl` variants of those packages, so `npm ci`
+  fetched both. The version bump no longer regenerates the lockfile, which is what dropped them; it now changes only
+  the lockfile's two root `version` fields.
 - **A Ctrl-C that reaches a helper the harness is waiting on exits as interrupted (130), not with a misleading
   error.** A terminal Ctrl-C signals the whole foreground process group, so a `git` or `claude` the harness had just
   started could die of it before the harness's own handler ran, and its empty answer was read as a verdict:
@@ -92,8 +95,9 @@ All notable changes to this project are documented here. The format is based on
 
 - **Two Desktop form replies in `examples/data/form-replies/`**, for testing a skill that parses one. Each keeps the
   shape of a real Cowork reply, with every title, label and value replaced: a date, a multi-select, quoted and
-  ` / `-flattened values, and values over 200 characters folded under `--- Full content ---`. A test pins both to
-  Desktop's reply format byte for byte.
+  ` / `-flattened values, and values over 200 characters folded under `--- Full content ---`. A test pins both, byte
+  for byte, to a re-implementation of Desktop's form serializer, read from Desktop 2.26454.2 and checked unchanged in
+  2.31226.0.
 - **The form-reply format is described as Desktop builds it.** A reply with a value over 200 characters is not one
   line: each folded value follows a blank line and a `--- Full content ---` line, under a `[Label]` line. The title
   is the form's own header (usually `<Topic> details`), a form with no header has no title prefix, an empty answer is
@@ -102,6 +106,9 @@ All notable changes to this project are documented here. The format is based on
   `<name> (attached)` while the file itself is attached to the message. The recipe now sends the reply with
   `--prompt-file`, so the shell cannot expand a `$` in it. Fixed in the task recipe, `docs/scenario.md` and
   `docs/fidelity-gaps.md`.
+- **The `hook-decision-probe` example denies only the calls its prompt asks for:** its Bash hook denies a command
+  containing `hookprobe-ready`, its Write hook a write to `hookprobe-note.txt`, and both allow every other call. A tool
+  call the model adds on its own is no longer a second denial, so the probe's exact counts hold.
 - **Correction to the 4.6.0 upgrade note on re-stamped cassettes.** It said a re-stamped `container`, `microvm` or
   `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on 2.1.293. The note appears only when
   the agent that recorded the cassette differs from the one the re-stamped baseline pins: a cassette recorded on an

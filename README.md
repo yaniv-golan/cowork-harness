@@ -59,8 +59,9 @@ full support for the loop ([docs/hillclimb.md](./docs/hillclimb.md)); try it on 
 
 **In short:** three ways in (the table above). Five `fidelity:` tiers — `protocol`, `container`, `microvm`, `hostloop`,
 `cowork` ([Fidelity tiers](#fidelity-tiers-pick-per-scenario--per-ci-job)); a scenario must name one (`fidelity:` is
-required since 4.0.0; `container` was the default before). Every run executes locally: `lane: remote` changes only the
-delivery contract a run is graded against, never where it runs.
+required since 4.0.0; `container` was the default before). Every run executes locally: `lane: remote` changes what a
+run is graded against (nothing is delivered by location, a key that reads files inside the agent's container is
+refused at load, and a semantic judge sees the transcript only), never where it runs.
 
 Not sure a harness is what you need? The next two sections are the argument.
 

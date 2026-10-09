@@ -381,6 +381,13 @@ cowork-harness hillclimb state-template evals/ --flow ~/hc/my-skill   # then mer
 
 Only the baseline's reference decides `pass`; a later reference is a metric.
 
+References are stored per lane. A `lane: remote` case is judged on the transcript and final answer only, so its
+reference is kept apart from a `lane: local` one, and a remote candidate is never judged against a local reference
+or the reverse. A reference frozen from a `lane: remote` run before 4.6.1 (when the judged document still carried
+file bodies) reads as missing: re-run that variant and freeze from the new run, since a run kept from before 4.6.1
+cannot be re-frozen. Re-grading such a kept run with a judged assertion meets the same document-drift check as
+`regrade`'s `doc_drift`, because the document the judge would read now differs from the one it read live.
+
 ## Cost and spend
 
 Copy the cost numbers; never derive them. The loop's guide prices a run as `model` × `usage`, but `usage` (and
