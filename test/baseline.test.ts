@@ -1288,6 +1288,21 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       );
     });
 
+    it("resolves the callee's values in the chunk its function lives in, not a chunk that shares its text", () => {
+      const body = `MCP_TOOL_TIMEOUT:String(FKz9),${W3_INNER}`;
+      const a = `var ns=require("./index.chunk-ENV.js");${helper("...ns.wbt(A,t,{s:1})")};${W2};${W1}${STIER};${MODELCFG}TAIL`;
+      const env = `var FKz9=7e4;Object.defineProperty(exports,"wbt",{enumerable:!0,get:function(){return FKwbt}});${callee("FKwbt", body, "A,t")}`;
+      // An earlier chunk holding the same object text without the binding: a prefix lookup would read values there.
+      const decoy = `/* copy */ function FKcopy(){return{${body}}}`;
+      const files = new Map([
+        ["index.chunk-DECOY.js", decoy],
+        ["index.chunk-MAIN.js", `HEADER;${a}`],
+        ["index.chunk-ENV.js", env],
+      ]);
+      const r = deriveSpawnEnv([...files.values()].join(""), greenGates(), files);
+      expect(real(r.flags)).toEqual([]);
+    });
+
     it("flags a callee it cannot read: missing, ambiguous, an arrow function, two returns, or a nested call spread", () => {
       const cases: [string, string, RegExp][] = [
         ["missing", `${helper("...FKwbt(A,t,{s:1})")}`, /0 `function FKwbt\(` definitions/],
