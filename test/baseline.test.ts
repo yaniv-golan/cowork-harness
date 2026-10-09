@@ -1316,7 +1316,7 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
         [
           "nested call spread",
           `${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", `...FKdeep(),${W3_INNER}`)};${callee("FKdeep", W3_INNER, "")}`,
-          /itself spreads a call/,
+          /with a spread that is not a `…&&{…}` predicate/,
         ],
       ];
       for (const [name, w3, re] of cases) {
@@ -1333,6 +1333,53 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       );
       expect(r.env).toBeNull();
       expect(real(r.flags).join("\n")).toMatch(/pinned key MCP_TOOL_TIMEOUT in W3\+FKwbt takes its value from a parameter/);
+    });
+
+    it("a W3 spread it cannot classify flags instead of hiding the callee's keys", () => {
+      const cases: [string, string][] = [
+        ["optional call", "...FKwbt?.(A,t,{s:1})"],
+        ["call with a fallback", "...FKwbt(A,t,{s:1})||{}"],
+        ["indirect call", "...(0,FKwbt)(A,t,{s:1})"],
+        ["call inside a predicate's object", "...A.on&&{...FKwbt(A,t,{s:1})}"],
+      ];
+      for (const [name, spread] of cases) {
+        const r = deriveSpawnEnv(withW3(`${helper(spread)};${callee("FKwbt", W3_INNER)}`), greenGates());
+        expect(r.env, name).toBeNull();
+        expect(real(r.flags).join("\n"), name).toMatch(/neither a value call nor|holds a call spread inside its object/);
+      }
+    });
+
+    it("an env-shaped key passed in the followed call's arguments flags", () => {
+      const r = deriveSpawnEnv(withW3(`${helper('...FKwbt(A,t,{NEW_SPAWN_KEY:"1"})')};${callee("FKwbt", W3_INNER)}`), greenGates());
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/passes an env-shaped key in its arguments/);
+    });
+
+    it("a parameter with a default value still counts as a parameter for the pinned-value guard", () => {
+      const r = deriveSpawnEnv(
+        withW3(`var QQ=5e3;${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", `MCP_TOOL_TIMEOUT:String(QQ),${W3_INNER}`, "A,t,n,QQ=1")}`),
+        greenGates(),
+      );
+      expect(real(r.flags).join("\n")).toMatch(/pinned key MCP_TOOL_TIMEOUT in W3\+FKwbt takes its value from a parameter/);
+    });
+
+    it("a callee object outside the length band flags", () => {
+      const r = deriveSpawnEnv(
+        withW3(`${helper("...FKwbt(A,t,{s:1})")};${callee("FKwbt", 'CLAUDE_CODE_DISABLE_BUNDLED_SKILLS:"1"')}`),
+        greenGates(),
+      );
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/returns an object of length \d+, outside the 200–20000 sanity band/);
+    });
+
+    it("without a unique helper head W3 is read as before, and its call spreads are not followed", () => {
+      // No `return{DISABLE_AUTOUPDATER:"1",` head: the legacy first-anchor read, whose short window the band rejects.
+      const r = deriveSpawnEnv(
+        withW3(`function FKzrn(){return{X:A.x,DISABLE_AUTOUPDATER:"1",...FKwbt(A,t,{s:1})}};${callee("FKwbt", W3_INNER)}`),
+        greenGates(),
+      );
+      expect(r.env).toBeNull();
+      expect(real(r.flags).join("\n")).toMatch(/W3 \(Zrn shared-env helper\) window length \d+ is outside/);
     });
 
     it("two helper heads make W3 ambiguous instead of reading the first", () => {

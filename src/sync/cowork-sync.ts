@@ -3797,16 +3797,20 @@ function closeBracket(text: string, open: number): number {
   return -1;
 }
 
-/** One `...<callee>(<args>)` spread at an object literal's top level that is a VALUE (followed by `,` or `}`), not a
- *  predicate (`...f()&&{…}`, which the window's own handling reads). `start`/`end` bound the whole spread. */
-interface CallSpread {
+/** One `...` element at an object literal's top level. `call` is a VALUE call (`...f(args)` / `...ns.f(args)`, the
+ *  whole element); `predicate` is `...<cond>&&{…}`; anything else is `other` (`...f?.()`, `...f()||{}`, `...(0,f)()`,
+ *  `...a.b.c()`, `...x`). `start`/`end` bound the element, `inner` is a predicate's object. */
+interface TopSpread {
   start: number;
   end: number;
+  kind: "call" | "predicate" | "other";
   ns?: string;
-  callee: string;
+  callee?: string;
+  args?: string;
+  inner?: string;
 }
-export function topLevelCallSpreads(obj: string): CallSpread[] {
-  const out: CallSpread[] = [];
+export function topLevelSpreads(obj: string): TopSpread[] {
+  const out: TopSpread[] = [];
   let depth = 0;
   let q: string | null = null;
   for (let i = 0; i < obj.length; i++) {
@@ -3820,14 +3824,70 @@ export function topLevelCallSpreads(obj: string): CallSpread[] {
     else if (c === "{" || c === "(" || c === "[") depth++;
     else if (c === "}" || c === ")" || c === "]") depth--;
     else if (depth === 1 && obj.startsWith("...", i)) {
-      const m = /^\.\.\.(?:([A-Za-z_$][\w$]*)\.)?([A-Za-z_$][\w$]*)\(/.exec(obj.slice(i));
-      if (!m) continue;
-      const close = closeBracket(obj, i + m[0].length - 1);
-      if (close < 0) continue;
-      if (obj[close + 1] === "," || obj[close + 1] === "}") out.push({ start: i, end: close + 1, ns: m[1], callee: m[2] });
+      const end = elementEnd(obj, i);
+      if (end < 0) continue;
+      const el = obj.slice(i, end);
+      const m = /^\.\.\.(?:([A-Za-z_$][\w$]*)\.)?([A-Za-z_$][\w$]*)\(/.exec(el);
+      const close = m ? closeBracket(obj, i + m[0].length - 1) : -1;
+      const and = lastTopLevelAnd(el);
+      if (m && close === end - 1)
+        out.push({ start: i, end, kind: "call", ns: m[1], callee: m[2], args: obj.slice(i + m[0].length, close) });
+      else if (and >= 0 && el[and + 2] === "{" && closeBracket(el, and + 2) === el.length - 1)
+        out.push({ start: i, end, kind: "predicate", inner: el.slice(and + 2) });
+      else out.push({ start: i, end, kind: "other" });
+      i = end - 1;
     }
   }
   return out;
+}
+
+/** End (exclusive) of the object element starting at `from`: the next `,` or the object's closing `}` at the
+ *  element's own depth, skipping quoted spans; -1 when the object never closes. */
+function elementEnd(obj: string, from: number): number {
+  let depth = 0;
+  let q: string | null = null;
+  for (let i = from; i < obj.length; i++) {
+    const c = obj[i];
+    if (q) {
+      if (c === "\\") i++;
+      else if (c === q) q = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") q = c;
+    else if (c === "{" || c === "(" || c === "[") depth++;
+    else if (c === "}" || c === ")" || c === "]") {
+      if (depth === 0) return i;
+      depth--;
+    } else if (c === "," && depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Index of the last `&&` at the element's own depth, or -1. */
+function lastTopLevelAnd(el: string): number {
+  let depth = 0;
+  let q: string | null = null;
+  let at = -1;
+  for (let i = 0; i < el.length; i++) {
+    const c = el[i];
+    if (q) {
+      if (c === "\\") i++;
+      else if (c === q) q = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") q = c;
+    else if (c === "{" || c === "(" || c === "[") depth++;
+    else if (c === "}" || c === ")" || c === "]") depth--;
+    else if (depth === 0 && c === "&" && el[i + 1] === "&") at = i++;
+  }
+  return at;
+}
+
+/** The value calls inside a predicate's object, at any predicate depth: a `...f()` there would hide its keys the same way. */
+function nestedCallSpreads(obj: string): TopSpread[] {
+  return topLevelSpreads(obj).flatMap((s) =>
+    s.kind === "call" ? [s] : s.kind === "predicate" && s.inner ? nestedCallSpreads(s.inner) : [],
+  );
 }
 
 /** A window the spawn env reads beyond W1–W3: the object a W3 call spread returns. */
@@ -3848,7 +3908,11 @@ interface CalleeWindow {
  * following its `...e.oB()` would let the wrong site pass. Every unclear shape is a flag, never an opaque spread:
  * a callee in another chunk without a `require("./…")` binding, no or several `function F(` definitions in its chunk
  * (an arrow or `var F=` form is not read), not exactly one `return{` in its body, a call spread inside it, or a body
- * outside the length band. `stripped` is W3 with the followed spreads removed, so no argument text reaches the key pass.
+ * outside the length band. Every other top-level spread must be a `...<cond>&&{…}` predicate: any other shape
+ * (`...f?.()`, `...f()||{}`, `...(0,f)()`) or a value call inside a predicate's object is a flag, since reading it as
+ * opaque would drop the callee's keys with nothing said. A followed call whose arguments carry an env-shaped key is a
+ * flag too: the key would reach the env through the callee without being enumerated. `stripped` is W3 with the
+ * followed spreads removed.
  */
 function followW3CallSpreads(
   w3: string,
@@ -3857,20 +3921,36 @@ function followW3CallSpreads(
 ): { windows: CalleeWindow[]; stripped: string; flags: string[] } {
   const flags: string[] = [];
   const windows: CalleeWindow[] = [];
-  const spreads = topLevelCallSpreads(w3);
+  const all = topLevelSpreads(w3);
+  for (const s of all) {
+    const el = w3.slice(s.start, s.end);
+    if (s.kind === "other")
+      flags.push(
+        `spawn.env: W3 spread \`${el.slice(0, 60)}\` is neither a value call nor a \`…&&{…}\` predicate — its keys would be invisible; re-derive; ${SPAWN_NO_BYPASS}`,
+      );
+    else if (s.kind === "predicate" && nestedCallSpreads(s.inner ?? "").length)
+      flags.push(
+        `spawn.env: W3 spread \`${el.slice(0, 60)}\` holds a call spread inside its object — not followed; re-derive; ${SPAWN_NO_BYPASS}`,
+      );
+    else if (s.kind === "call" && /[A-Z][A-Z0-9_]{2,}["']?\s*:/.test(s.args ?? ""))
+      flags.push(
+        `spawn.env: W3 call spread \`${el.slice(0, 60)}\` passes an env-shaped key in its arguments — re-derive; ${SPAWN_NO_BYPASS}`,
+      );
+  }
+  const spreads = all.filter((s) => s.kind === "call");
   if (spreads.length === 0) return { windows, stripped: w3, flags };
   let stripped = w3;
   for (const s of [...spreads].reverse()) stripped = stripped.slice(0, s.start) + stripped.slice(s.end);
   for (const s of spreads) {
     const label = `W3 call spread \`...${s.ns ? `${s.ns}.` : ""}${s.callee}(…)\``;
     let chunk = w3Chunk;
-    let local = s.callee;
+    let local = s.callee as string;
     if (s.ns) {
       if (!files || !new RegExp(`(?<![\\w$])${reEsc(s.ns)}=require\\("\\./`).test(w3Chunk)) {
         flags.push(`spawn.env: ${label} names a namespace that is not a require() binding in its chunk — re-derive; ${SPAWN_NO_BYPASS}`);
         continue;
       }
-      const r = resolveNamespaceRef(`${s.ns}.${s.callee}`, w3Chunk, files);
+      const r = resolveNamespaceRef(`${s.ns}.${s.callee as string}`, w3Chunk, files);
       if (!r) {
         flags.push(`spawn.env: ${label} could not be resolved to its module's export — re-derive; ${SPAWN_NO_BYPASS}`);
         continue;
@@ -3900,8 +3980,10 @@ function followW3CallSpreads(
       flags.push(`spawn.env: ${label}: its returned object could not be scanned — re-derive; ${SPAWN_NO_BYPASS}`);
       continue;
     }
-    if (topLevelCallSpreads(obj).length) {
-      flags.push(`spawn.env: ${label} returns an object that itself spreads a call — not followed further; re-derive; ${SPAWN_NO_BYPASS}`);
+    if (topLevelSpreads(obj).some((x) => x.kind !== "predicate") || nestedCallSpreads(obj).length) {
+      flags.push(
+        `spawn.env: ${label} returns an object with a spread that is not a \`…&&{…}\` predicate — not followed further; re-derive; ${SPAWN_NO_BYPASS}`,
+      );
       continue;
     }
     if (obj.length < 200 || obj.length > 20000) {
@@ -3910,11 +3992,9 @@ function followW3CallSpreads(
       );
       continue;
     }
-    const params = chunk
-      .slice(paramsOpen + 1, paramsClose)
-      .split(",")
-      .map((p) => p.trim())
-      .filter((p) => /^[A-Za-z_$][\w$]*$/.test(p));
+    // Every name in the parameter list, so defaults (`a=1`), destructuring (`{k:a}`) and rest (`...r`) are covered; a
+    // property key or default expression caught along with them only makes the guard stricter.
+    const params = [...chunk.slice(paramsOpen + 1, paramsClose).matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)/g)].map((m) => m[1]);
     windows.push({ name: `W3+${local}`, text: obj, chunk, params });
   }
   return { windows, stripped, flags };
@@ -4076,7 +4156,7 @@ export function deriveSpawnEnv(
         `spawn.env: ${name} window not found (start/end anchor missing or W3 brace/nested-template scan failed) — the env construction moved; re-derive its anchors; ${SPAWN_NO_BYPASS}`,
       );
       degenerate = true;
-    } else if (len < 200 || len > 20000) {
+    } else if (!(followed?.flags.length && name.startsWith("W3")) && (len < 200 || len > 20000)) {
       flags.push(
         `spawn.env: ${name} window length ${len} is outside the 200–20000 sanity band — likely a mis-anchored slice; re-derive; ${SPAWN_NO_BYPASS}`,
       );
@@ -4292,7 +4372,9 @@ export function deriveSpawnEnv(
         callee &&
         (SPAWN_PIN_KEYS as readonly string[]).includes(k.key) &&
         SPAWN_ENV_ALLOWLIST[k.key] === undefined &&
-        [...expr.matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)/g)].some((m) => callee.params.includes(m[1]))
+        [...expr.replace(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'/g, "").matchAll(/(?<![\w$.])([A-Za-z_$][\w$]*)/g)].some((m) =>
+          callee.params.includes(m[1]),
+        )
       ) {
         flags.push(
           `spawn.env: pinned key ${k.key} in ${callee.name} takes its value from a parameter of that function (\`${expr.slice(0, 60)}\`) — re-derive; ${SPAWN_NO_BYPASS}`,
