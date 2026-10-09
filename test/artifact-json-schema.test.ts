@@ -441,9 +441,13 @@ describe("artifact_json.schema — the final review's cases", () => {
 
   it("a throw while validating fails the assertion instead of escaping evaluate()", () => {
     const tree = { type: "object", properties: { children: { type: "array", items: { $ref: "#" } } } };
-    let deep: Record<string, unknown> = {};
-    for (let i = 0; i < 20_000; i++) deep = { children: [deep] };
-    const r = run(deep, { schema: tree });
+    // The body is written as text: building it as an object and serializing it would itself recurse 20,000 deep,
+    // which overflows a worker thread's smaller stack on Linux before the code under test runs.
+    const depth = 20_000;
+    const root = mkdtempSync(join(tmpdir(), "cwh-aj-schema-deep-"));
+    mkdirSync(join(root, "outputs"));
+    writeFileSync(join(root, "outputs/p.json"), '{"children":['.repeat(depth) + "{}" + "]}".repeat(depth));
+    const r = evaluate([aj({ schema: tree })], ctx(root))[0]!;
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/could not be checked against the schema/);
   });
