@@ -1,6 +1,6 @@
 # Assertion catalog: outcome, transcript, files and artifacts, tools, tool results
 
-Tracks `cowork-harness 4.6.0` (baseline `desktop-2.26454.2`). Part 1 of 3 of the per-key table. The conventions every key shares (an item with several
+Tracks `cowork-harness 4.6.0` (baseline `desktop-2.31226.0`). Part 1 of 3 of the per-key table. The conventions every key shares (an item with several
 keys is an AND; glob vs regex name matching) and the verdict-signal table are in
 [`assertion-catalog.md`](./assertion-catalog.md); the other parts are [`assertion-catalog-agents-skills-budgets.md`](./assertion-catalog-agents-skills-budgets.md), [`assertion-catalog-gates-hooks-modifiers.md`](./assertion-catalog-gates-hooks-modifiers.md).
 
