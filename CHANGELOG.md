@@ -50,8 +50,9 @@ All notable changes to this project are documented here. The format is based on
   - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.26454.2 → 2.31226.0 since
     record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it. The
     bundled cassettes are re-stamped to `2.31226.0`.
-  - **`provenance.spawnEnvSpreadCount` moves 35 → 38** with no change to the spawn contract: the spreads inside the
-    called function are now counted, and the call itself is not.
+  - **`provenance.spawnEnvSpreadCount` moves 35 → 38:** Desktop added three conditional spreads, all on third-party
+    paths (the new key, and two existing third-party keys now behind their own conditions). Reading the called
+    function counts the same as the old inline helper: the call itself is not counted, the spreads inside it are.
 
 ### Fixed
 
