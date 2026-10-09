@@ -1501,7 +1501,7 @@
                 "type": "boolean"
               },
               "schema": {
-                "description": "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file beside the scenario, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load: `format`, `$id`, a `$ref` that is not local (`#…`), `$dynamicRef`/`$recursiveRef` and the annotation-only `content*` keywords are refused, as are an unknown keyword and `required`/`properties` with no `type`. A failure reports the first 5 errors with their JSON paths",
+                "description": "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file beside the scenario, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load: `format`, `$id`, a `$ref` that is not local (`#…`), `$dynamicRef`/`$recursiveRef` and the annotation-only `content*` keywords are refused, as are an unknown keyword and a type-specific keyword (`required`, `properties`, `items`, `minimum`, …) with no `type`. A failure reports the first 5 errors with their JSON paths",
                 "anyOf": [
                   {
                     "type": "object",

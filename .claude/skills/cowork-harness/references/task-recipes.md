@@ -61,7 +61,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v15.json`](htt
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 15 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 unless a key lifts it: 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, 14 for a v14 key such as `include_fork_results` on `semantic_matches`, 15 for a v15 one such as `gates_all_scripted`, a glob `artifact_json`, any `artifact_json` on `lane: remote`, or a recording under `answer_channel: none`; the full list is in the cassette docs' version table) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 15 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 unless a key lifts it: 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, 14 for a v14 key such as `include_fork_results` on `semantic_matches`, 15 for a v15 one such as `gates_all_scripted`, a glob `artifact_json`, an `artifact_json` carrying `schema`, any `artifact_json` on `lane: remote`, or a recording under `answer_channel: none`; the full list is in the cassette docs' version table) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
@@ -435,19 +435,24 @@ assert:
 
 ### Schema-check a written file
 
-In the Python lane, pass a `jsonschema` check as the predicate:
+In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a file next to the scenario:
+
+```yaml
+- artifact_json: { artifact: outputs/cap.json, schema: { file: schemas/cap.schema.json } }
+- artifact_json: { artifact: outputs/runs/*/status.json, match: each, schema: { file: schemas/status.schema.json } }
+```
+
+Name the exact paths, or cover a set with a glob `artifact` and `match: each`, and add `no_unexpected_files` so no
+other file slips in. The schema is checked at load: `format` is refused (use `pattern`), and so is a type-specific
+keyword with no `type` beside it. For a check a schema cannot express, pass a predicate in the Python lane:
 
 ```python
-import jsonschema
 def valid(doc):
-    jsonschema.validate(doc, SCHEMA)   # raises with the failing path
-    return True
+    return sum(r["amount"] for r in doc["rounds"]) == doc["total"]
 result.assert_artifact_json("outputs/cap.json", valid)
 ```
 
-In a scenario, name the exact paths (`artifact_json` per file), or cover a set with a glob `artifact` and
-`match: each`, and add `no_unexpected_files` so no other file slips in. `artifact_json` checks fields one dotted path
-at a time, not a whole schema. *Does not prove:* anything about a file no path or glob you listed reaches.
+*Does not prove:* anything about a file no path or glob you listed reaches.
 
 ### Hold a skill to an unattended host
 

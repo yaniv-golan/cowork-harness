@@ -97,6 +97,29 @@ describe("artifact_json.schema — load-time refusals", () => {
     expect(issues(r)).toMatch(/2020-12/);
   });
 
+  it('a recursive schema (`$ref: "#"`) loads and validates nested values', () => {
+    const tree = { type: "object", properties: { children: { type: "array", items: { $ref: "#" } } } };
+    expect(load({ schema: tree }).success).toBe(true);
+  });
+
+  it("`format` is refused anywhere, an unreferenced `$defs` entry included", () => {
+    const r = load({ schema: { type: "object", $defs: { u: { type: "string", format: "email" } } } });
+    expect(r.success).toBe(false);
+    expect(issues(r)).toMatch(/`format`/);
+  });
+
+  it("the draft-07 array form of `items` gets a message naming `prefixItems`", () => {
+    const r = load({ schema: { type: "array", items: [{ type: "string" }] } });
+    expect(r.success).toBe(false);
+    expect(issues(r)).toMatch(/prefixItems/);
+  });
+
+  it("names the type with the right article, and the message is not prefixed twice", () => {
+    const r = load({ schema: { items: { type: "string" } } });
+    expect(issues(r)).toMatch(/applies only to an array/);
+    expect(issues(r)).not.toMatch(/artifact_json\.schema: artifact_json\.schema/);
+  });
+
   it("$dynamicRef / $recursiveRef (which crash ajv's compile) are refused cleanly", () => {
     for (const k of ["$dynamicRef", "$recursiveRef", "$dynamicAnchor", "$recursiveAnchor"]) {
       const r = load({ schema: { type: "object", [k]: "#" } });
@@ -274,6 +297,24 @@ describe("artifact_json.schema — {file:} is inlined at load", () => {
     expect(a.message).toContain("/age");
   });
 
+  it("replay of the same cassette passes a matching body (the pass twin)", async () => {
+    const { p } = repo(JSON.stringify(PERSON));
+    const sc = parseScenarioFile(p);
+    const body = JSON.stringify({ name: "a", age: 1 });
+    const cassette = {
+      scenario: { ...sc, session: "(inline)" },
+      events: [
+        JSON.stringify({ type: "system", subtype: "init", tools: ["Write"] }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+      ],
+      artifacts: [
+        { path: "outputs/p.json", bytes: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex"), body },
+      ],
+    } as any;
+    const r = await replayCassette(cassette);
+    expect(r.assertions.find((x) => "artifact_json" in x.assertion)!.pass).toBe(true);
+  });
+
   it("a malformed schema FILE is a load error, as an inline one is", () => {
     const { p } = repo(JSON.stringify({ type: "object", properties: { m: { type: "string", format: "email" } } }));
     expect(() => parseScenarioFile(p)).toThrow(/format/);
@@ -305,5 +346,21 @@ describe("artifact_json.schema — {file:} is inlined at load", () => {
 describe("artifact_json.schema — cassette stamp", () => {
   it("a schema entry stamps v15, so a 4.5 reader refuses it as too new", () => {
     expect(requiredVersionFor({ prompt: "x", assert: [aj({ schema: PERSON })] })).toBe(15);
+  });
+});
+
+describe("artifact_json.schema — recursion", () => {
+  it("a tree schema passes a nested tree and fails on a bad leaf", () => {
+    const tree = { type: "object", properties: { children: { type: "array", items: { $ref: "#" } } } };
+    const root = mkdtempSync(join(tmpdir(), "cwh-aj-schema-tree-"));
+    mkdirSync(join(root, "outputs"));
+    const at = (body: unknown) => {
+      writeFileSync(join(root, "outputs/p.json"), JSON.stringify(body));
+      return evaluate([aj({ schema: tree })], ctx(root))[0]!;
+    };
+    expect(at({ children: [{ children: [] }] }).pass).toBe(true);
+    const bad = at({ children: [{ children: 5 }] });
+    expect(bad.pass).toBe(false);
+    expect(bad.message).toContain("/children/0/children");
   });
 });

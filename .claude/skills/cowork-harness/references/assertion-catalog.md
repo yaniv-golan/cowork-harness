@@ -35,8 +35,8 @@ case-insensitive; **single-quote** the regex in YAML (double-quoted YAML eats ba
 breaks — use `'\d'`); the transcript is one concatenated string, so use `[\s\S]`, not `.`, to span
 turns. Use `transcript_matches` only for **stable lexical markers**, not semantic content the model
 paraphrases (that re-records red). Structured JSON → assert it in YAML with **`artifact_json`** (dotted
-`path` + operator); use the pytest lane (`assert_artifact_json`) only for predicates too complex for a
-dotted path.
+`path` + operator, or `schema:` for a whole value's shape); use the pytest lane (`assert_artifact_json`) only for
+predicates neither can express.
 
 **VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; eleven
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays

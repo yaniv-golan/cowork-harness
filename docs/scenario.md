@@ -895,8 +895,8 @@ dotted `path` selects into the document; one operator decides the check:
 Operators: `equals` (deep-equal) · `in: [<set>]` (deep-equal one of) · `gt` (number) · `exists: <bool>` · `absent: <bool>` · `is_null: <bool>` · `schema` (a JSON Schema, below). **Omit every operator** to assert only that the `path` resolves (a bare existence check).
 The three states are **distinct**: `absent` (the final key is missing from a parent that resolved) vs
 `is_null` (present but JSON `null`) vs an **unresolved intermediate** segment (the artifact is malformed for
-that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq — a dotted path keeps it
-dependency-free and side-effect-free.)
+that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq: a dotted path needs no query engine and has
+no side effects.)
 
 **The shape of the whole value: `schema`.** A JSON Schema (draft 2020-12) the value at `path` — or the whole
 document, without `path` — must match. Write it inline, or name a JSON file next to the scenario:
@@ -922,7 +922,7 @@ document, without `path` — must match. Write it inline, or name a JSON file ne
   --assert-from` and a re-record pick it up, a plain `replay` grades with the schema frozen at record. The path is
   relative to the scenario file and must stay inside its git repository (or its directory outside one).
 - **Checked when the scenario loads**, so a mistake costs a config error, not a run. Refused: an unknown keyword
-  (a typo), `required`/`properties` with no `type` (they pass on a value of any other type: add `type: object`),
+  (a typo), a type-specific keyword with no `type` beside it (`required`, `properties`, `items`, `minLength`, `minimum`, …; it passes on a value of any other type: add `type: object` or the intended type),
   `format` (no format is validated, so it would check nothing: use `pattern`), `$id`, a `$ref` that is not a local
   `#…` reference (nothing is fetched), `$dynamicRef`/`$recursiveRef`, the annotation-only `content*` keywords, a
   `$schema` other than draft 2020-12, and an empty schema. A property *named* `format` or `$ref` is fine.
@@ -1748,19 +1748,24 @@ assert:
 
 #### Schema-check a written file
 
-In the Python lane, pass a `jsonschema` check as the predicate:
+In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a file next to the scenario:
+
+```yaml
+- artifact_json: { artifact: outputs/cap.json, schema: { file: schemas/cap.schema.json } }
+- artifact_json: { artifact: outputs/runs/*/status.json, match: each, schema: { file: schemas/status.schema.json } }
+```
+
+Name the exact paths, or cover a set with a glob `artifact` and `match: each`, and add `no_unexpected_files` so no
+other file slips in. The schema is checked at load: `format` is refused (use `pattern`), and so is a type-specific
+keyword with no `type` beside it. For a check a schema cannot express, pass a predicate in the Python lane:
 
 ```python
-import jsonschema
 def valid(doc):
-    jsonschema.validate(doc, SCHEMA)   # raises with the failing path
-    return True
+    return sum(r["amount"] for r in doc["rounds"]) == doc["total"]
 result.assert_artifact_json("outputs/cap.json", valid)
 ```
 
-In a scenario, name the exact paths (`artifact_json` per file), or cover a set with a glob `artifact` and
-`match: each`, and add `no_unexpected_files` so no other file slips in. `artifact_json` checks fields one dotted path
-at a time, not a whole schema. *Does not prove:* anything about a file no path or glob you listed reaches.
+*Does not prove:* anything about a file no path or glob you listed reaches.
 
 #### Hold a skill to an unattended host
 

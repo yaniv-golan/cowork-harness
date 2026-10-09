@@ -1,7 +1,7 @@
 // `artifact_json.schema`: validate a JSON value against a JSON Schema (draft 2020-12) with ajv.
 //
-// Hermetic by construction. No `loadSchema` (nothing is fetched), no shared registry (a fresh ajv per compile, with
-// `addUsedSchema: false`, so a schema's `$id` can never be resolved from another scenario or cassette), no format
+// Hermetic by construction. No `loadSchema` (nothing is fetched), no shared registry (a fresh ajv per compile, and
+// `$id` refused, so one schema can never be resolved from another scenario or cassette), no format
 // validators (`format` is refused rather than silently ignored), and a keyword walk that refuses everything ajv would
 // either resolve outside the schema, crash on, or accept without validating anything.
 import { createRequire } from "node:module";
@@ -44,6 +44,9 @@ function walkProblem(node: unknown, at: string): string | undefined {
   for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
     const here = `${at}/${k.replace(/~/g, "~0").replace(/\//g, "~1")}`;
     if (DATA_KEYWORDS.has(k)) continue;
+    // ajv's own refusal covers every REACHABLE position; this one also covers a `$defs` entry nothing references.
+    if (k === "format")
+      return `\`format\` at ${at} is not supported (no format is validated, so it would check nothing): drop it, or use \`pattern\``;
     if (k === "$id")
       return `\`$id\` at ${at} is not supported: a schema here is self-contained (use local \`$defs\` and \`#/$defs/…\` refs)`;
     if (k === "$schema" && v !== SCHEMA_DIALECT)
@@ -99,7 +102,6 @@ function ajv() {
     strictRequired: false,
     strictTuples: false,
     logger: false,
-    addUsedSchema: false,
   });
 }
 
@@ -110,8 +112,12 @@ function compileMessage(e: unknown): string {
   if (fmt)
     return `\`format\` ("${fmt[1]}") at ${fmt[2]} is not supported (no format is validated, so it would check nothing): drop it, or use \`pattern\``;
   const types = /missing type "([^"]*)" for keyword "([^"]*)" at "([^"]*)"/.exec(m);
-  if (types)
-    return `\`${types[2]}\` at ${types[3]} applies only to a ${types[1]}, and passes on anything else: add \`type: ${types[1]}\` (or the intended type) at ${types[3]}`;
+  if (types) {
+    const article = /^[aeiou]/.test(types[1]!) ? "an" : "a";
+    return `\`${types[2]}\` at ${types[3]} applies only to ${article} ${types[1]}, and passes on anything else: add \`type: ${types[1]}\` (or the intended type) at ${types[3]}`;
+  }
+  if (/data\/items must be object,boolean/.test(m))
+    return "`items` takes one schema in draft 2020-12 (the list form is draft-07): use `prefixItems` for a tuple";
   return m.replace(/^strict mode: /, "");
 }
 

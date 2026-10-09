@@ -1248,7 +1248,7 @@ export const Assertion = z.strictObject({
         ])
         .optional()
         .describe(
-          "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file beside the scenario, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load: `format`, `$id`, a `$ref` that is not local (`#…`), `$dynamicRef`/`$recursiveRef` and the annotation-only `content*` keywords are refused, as are an unknown keyword and `required`/`properties` with no `type`. A failure reports the first 5 errors with their JSON paths",
+          "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file beside the scenario, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load: `format`, `$id`, a `$ref` that is not local (`#…`), `$dynamicRef`/`$recursiveRef` and the annotation-only `content*` keywords are refused, as are an unknown keyword and a type-specific keyword (`required`, `properties`, `items`, `minimum`, …) with no `type`. A failure reports the first 5 errors with their JSON paths",
         ),
       authored: AuthoredFlag,
     })
@@ -1263,7 +1263,7 @@ export const Assertion = z.strictObject({
       // A `{file}` schema is read and checked by the scenario loader, which inlines it.
       if ("file" in v.schema && typeof v.schema.file === "string" && Object.keys(v.schema).length === 1) return;
       const problem = schemaProblem(v.schema);
-      if (problem) ctx.addIssue({ code: "custom", path: ["schema"], message: `artifact_json.schema: ${problem}` });
+      if (problem) ctx.addIssue({ code: "custom", path: ["schema"], message: problem });
     })
     .refine((v) => isArtifactGlob(v.artifact) === (v.match !== undefined), {
       message: "a glob `artifact` (one with `*` or `?`) needs `match: each | any`; a literal `artifact` takes no `match`",
