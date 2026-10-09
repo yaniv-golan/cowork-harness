@@ -12,6 +12,7 @@ import {
   listProcessesSync,
   parseLsofCwd,
   parsePsSnapshot,
+  psArgs,
   RUN_TAG_ENV,
   type AgentTreeDeps,
   type ProcRow,
@@ -113,6 +114,29 @@ function harness(opts: { rows?: ProcRow[]; platform?: NodeJS.Platform; detach?: 
 
 const token = () => `r${randomBytes(6).toString("hex")}`;
 const WORK = "/private/tmp/run-x/work";
+
+// macOS `ps` turns each terminal device into a name for `tty=`, and that lookup serializes across concurrent listers:
+// one listing took ~4 s with 12 others running, against 0.05 s for every other column. `tdev=` gives the device
+// number instead (`??` for none, `16/0` for a terminal), which is all the walk and the sweep need: they only ask
+// whether a process has a controlling terminal. Linux procps has no `tdev` and its `tty=` reads /proc, so it keeps it.
+describe("psArgs: the controlling-terminal column", () => {
+  it("is tdev= on macOS (no device-name lookup) and tty= elsewhere", () => {
+    expect(psArgs("darwin")).toEqual(["-A", "-o", "pid=,ppid=,pgid=,uid=,tdev=,lstart=,comm="]);
+    expect(psArgs("linux")).toEqual(["-A", "-o", "pid=,ppid=,pgid=,uid=,tty=,lstart=,comm="]);
+    expect(psArgs("darwin").join(" ")).not.toMatch(/\btty=/);
+  });
+
+  it("parses macOS tdev values: ?? is no terminal, a major/minor pair is one", () => {
+    const text = [
+      "  501     1   501   501 ??       Wed Sep 30 12:53:45 2026     sleep",
+      "  503   501   501   501 16/0     Wed Sep 30 12:53:46 2026     zsh",
+      "  504   501   501   501 16/83    Wed Sep 30 12:53:47 2026     node",
+    ].join("\n");
+    const rows = parsePsSnapshot(text);
+    expect(rows.map((r) => r.tty)).toEqual([undefined, "16/0", "16/83"]);
+    expect(rows.map((r) => r.comm)).toEqual(["sleep", "zsh", "node"]);
+  });
+});
 
 describe("parsePsSnapshot", () => {
   it("reads macOS and procps rows, tty-less spellings, lstart as local time, and a comm with spaces", () => {
