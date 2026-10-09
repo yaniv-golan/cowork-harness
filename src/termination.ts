@@ -101,13 +101,27 @@ export function terminationRequested(): NodeJS.Signals | undefined {
 }
 
 const INTERRUPTS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+/** Exit statuses a shell gives a child an interrupt killed. Not 129 (SIGHUP): git exits 129 on a usage error, and a
+ *  hang-up kills a process by signal, which the signal check above already reads. */
+const INTERRUPT_STATUSES: ReadonlyMap<number, NodeJS.Signals> = new Map([
+  [130, "SIGINT"],
+  [143, "SIGTERM"],
+]);
 
-/** The interrupt a synchronous child died of: killed by SIGINT, SIGTERM or SIGHUP, or exiting with the shell's
- *  128 + signo for one. A terminal Ctrl-C signals the whole foreground group, so a child the harness is blocked on
- *  can die of it before the harness's own handler has run: its failure is that interrupt, not an error of its own. */
-export function childInterruptSignal(r: { status: number | null; signal: NodeJS.Signals | null }): NodeJS.Signals | undefined {
+/** The interrupt a synchronous child died of: killed by SIGINT, SIGTERM or SIGHUP, or exiting 130 or 143 (a shell's
+ *  128 + signo). A terminal Ctrl-C signals the whole foreground group, so a child the harness is blocked on can die of
+ *  it before the harness's own handler has run: its failure is that interrupt, not an error of its own. A child its
+ *  own `timeout` killed (spawnSync sends SIGTERM and sets ETIMEDOUT) timed out: that is not an interrupt. */
+export function childInterruptSignal(r: {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error?: unknown;
+  code?: unknown;
+}): NodeJS.Signals | undefined {
+  const timedOut = r.code === "ETIMEDOUT" || (r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+  if (timedOut) return undefined;
   if (r.signal && INTERRUPTS.includes(r.signal)) return r.signal;
-  return INTERRUPTS.find((s) => r.status === 128 + (constants.signals[s] ?? 0));
+  return r.status === null ? undefined : INTERRUPT_STATUSES.get(r.status);
 }
 
 /** A step stopped because a child it waited on died of an interrupt (see {@link childInterruptSignal}). The CLI's

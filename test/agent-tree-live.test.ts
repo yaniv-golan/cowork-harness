@@ -52,8 +52,9 @@ setInterval(() => {}, 1000);
  *  processes list too (concurrent `ps -A` calls serialize), so a fixed short deadline failed whenever the suite ran
  *  in parallel. The listing count is pinned deterministically in agent-tree.test.ts ("process listings per stop");
  *  here the wait runs up to the test's own timeout. */
-const LIVE_TIMEOUT_MS = 60_000;
-const EOF_WAIT_MS = LIVE_TIMEOUT_MS - 5_000;
+const READY_WAIT_MS = 15_000; // `ready()`'s own bound, spent before the EOF wait starts
+const EOF_WAIT_MS = 55_000;
+const LIVE_TIMEOUT_MS = READY_WAIT_MS + EOF_WAIT_MS + 5_000;
 
 const live = new Set<number>(); // pids a fixture reported, so a red test never leaks a process
 
@@ -121,7 +122,7 @@ function start(harnessBody: string, mode = ""): Fixture {
     proc,
     ready: (names) =>
       new Promise<void>((res, rej) => {
-        const t = setTimeout(() => rej(new Error(`not ready: saw ${[...seen.keys()]} — ${err}`)), 15_000);
+        const t = setTimeout(() => rej(new Error(`not ready: saw ${[...seen.keys()]} — ${err}`)), READY_WAIT_MS);
         const check = () => {
           if (names.every((n) => seen.has(n))) {
             clearTimeout(t);

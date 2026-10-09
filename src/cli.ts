@@ -1564,6 +1564,8 @@ async function runRepeatBatch(opts: {
     try {
       r = await opts.runOnce(opts.makeLabel(n));
     } catch (e) {
+      // The operator's interrupt, learned from a child: the whole batch stops as interrupted, not as a run error.
+      if (e instanceof InterruptedError) throw e;
       if (e instanceof UnansweredError) {
         stoppedEarly = "unanswered";
         log(
@@ -5368,7 +5370,10 @@ main().catch((e) => {
   const command = process.argv[2] ?? "";
   const json = isJsonOutput(process.argv.slice(2));
   // A child died of the operator's interrupt before this process's own handler ran: handle it as that interrupt.
-  if (e instanceof InterruptedError) return interrupt(e.signal);
+  if (e instanceof InterruptedError) {
+    log(`::warning:: [interrupt] ${e.message} — stopping`);
+    return interrupt(e.signal);
+  }
   if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
   if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
   if (e instanceof UsageError) fail(command, "usage", e.message, (e as UsageError).hint, json);
