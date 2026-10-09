@@ -7,6 +7,7 @@ import { InterruptedError } from "../src/termination.js";
 import { hostCliSupportsPermissionPrompts, resetHostCliProbeCache } from "../src/runtime/host-cli-probe.js";
 import { assertIsolationSupported, resetIsolationPreflight } from "../src/decide/llm-transport.js";
 import { snapshotGitArm } from "../src/eval/snapshot.js";
+import { variantSnapshot } from "../src/hillclimb/snapshot.js";
 
 // A synchronous probe the operator's Ctrl-C killed (it signals the whole foreground group, so the probe can die
 // before the harness's own handler runs) answered nothing. Each of these must report that as the interrupt, never as
@@ -42,6 +43,16 @@ describe.runIf(POSIX)("probes a Ctrl-C killed report the interrupt", () => {
   it("the judge's isolation probe throws InterruptedError, not 'too old to run isolated'", () => {
     const dir = interruptedBin("claude");
     expect(() => assertIsolationSupported(join(dir, "claude"))).toThrow(InterruptedError);
+  });
+
+  it("hillclimb's variant snapshot whose git a Ctrl-C killed throws InterruptedError, not a usage error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "interrupt-git-"));
+    writeFileSync(join(dir, "git"), "#!/bin/sh\nexit 130\n");
+    chmodSync(join(dir, "git"), 0o755);
+    process.env.PATH = `${dir}:${savedPath}`;
+    const live = mkdtempSync(join(tmpdir(), "interrupt-live-"));
+    const root = mkdtempSync(join(tmpdir(), "interrupt-snaproot-"));
+    expect(() => variantSnapshot(live, { snapshotRoot: root, flowHash: "f", variant: "v" })).toThrow(InterruptedError);
   });
 
   it("a git arm snapshot whose git a Ctrl-C killed throws InterruptedError, not 'snapshot failed'", () => {

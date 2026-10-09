@@ -16,7 +16,6 @@ describe("childInterruptSignal", () => {
     expect(childInterruptSignal({ status: null, signal: "SIGHUP" })).toBe("SIGHUP");
     expect(childInterruptSignal({ status: 130, signal: null })).toBe("SIGINT");
     expect(childInterruptSignal({ status: 143, signal: null })).toBe("SIGTERM");
-    expect(childInterruptSignal({ status: 129, signal: null })).toBe("SIGHUP");
   });
 
   it("is undefined for an ordinary failure, a success, or a signal that is not an interrupt", () => {
@@ -25,6 +24,17 @@ describe("childInterruptSignal", () => {
     expect(childInterruptSignal({ status: 128, signal: null })).toBeUndefined();
     expect(childInterruptSignal({ status: null, signal: "SIGKILL" })).toBeUndefined();
     expect(childInterruptSignal({ status: null, signal: "SIGSEGV" })).toBeUndefined();
+  });
+
+  it("a child killed by its own timeout is not an interrupt (spawnSync kills it with SIGTERM and sets ETIMEDOUT)", () => {
+    const timedOut = Object.assign(new Error("spawnSync claude ETIMEDOUT"), { code: "ETIMEDOUT" });
+    expect(childInterruptSignal({ status: null, signal: "SIGTERM", error: timedOut })).toBeUndefined();
+    // execFileSync throws that error itself, with the status and signal on it.
+    expect(childInterruptSignal(Object.assign(timedOut, { status: null, signal: "SIGTERM" as const }))).toBeUndefined();
+  });
+
+  it("exit 129 is not read as SIGHUP: git exits 129 on a usage error, and a real SIGHUP kills by signal", () => {
+    expect(childInterruptSignal({ status: 129, signal: null })).toBeUndefined();
   });
 
   it("InterruptedError carries the signal", () => {
