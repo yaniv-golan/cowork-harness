@@ -10,6 +10,7 @@
 // from a kept run dir; tests pass recorded excerpts.
 
 import { basename, dirname, join, resolve } from "node:path";
+import { InterruptedError } from "../termination.js";
 import { createHash } from "node:crypto";
 import { UsageError } from "../errors.js";
 import { pMapBounded } from "../async-pool.js";
@@ -151,6 +152,7 @@ export async function runHillclimb(args: HillclimbRunArgs, deps: RunnerDeps): Pr
       started = true;
     });
   } catch (e) {
+    if (e instanceof InterruptedError) throw e; // the operator's interrupt, learned from a probe: exit as interrupted
     // runner-scaffold.mjs l.591-602: before the workers start, anything thrown is a refusal (exit 2); after, a mid-run stop.
     if (started) {
       const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(e)}`;
@@ -446,6 +448,11 @@ async function run(
     } finally {
       clearInterval(tick);
     }
+    // The operator's interrupt, learned from a probe inside a job: in-flight jobs have finished; exit as interrupted.
+    if (stopError instanceof InterruptedError) {
+      progress();
+      throw stopError;
+    }
     if (stopError !== undefined) {
       progress();
       const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`;
@@ -458,6 +465,8 @@ async function run(
       try {
         report = await deps.runJob({ c, rep, variant: v, runLabel, timeoutS: args.timeoutS, ablate: args.ablate });
       } catch (e) {
+        // An interrupt stops the whole run; it is not this attempt's failure.
+        if (e instanceof InterruptedError) throw e;
         report = { thrown: e, events: [], children: [], attemptS: (now() - tStart) / 1000, runnerTimeout: false };
       }
       const ctx: AttemptContext = {

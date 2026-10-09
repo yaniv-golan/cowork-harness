@@ -15,6 +15,7 @@
 // A cross-tier resume is blocked fail-loud by the session-manifest fidelity stamp (src/run/execute.ts),
 // and at hostloop a writable connected folder requires --allow-host-writes (forwarded to both turns).
 import { isolationRefusal, transportIdentity } from "../decide/llm-transport.js";
+import { InterruptedError } from "../termination.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
@@ -2285,7 +2286,15 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     return refuse("usage", `critique: ${unresolvedModelRefusal("this critique's task and reflection turns")}`);
   // The evaluator runs the host `claude` isolated and tool-less, which needs a CLI that accepts the isolation flags.
   // Checked here, before the task and reflection turns spend, not at the evaluator's first call after them.
-  const iso = isolationRefusal();
+  let iso: string | undefined;
+  try {
+    iso = isolationRefusal();
+  } catch (e) {
+    // The operator's interrupt, learned from the probe it killed: critique's interrupt exit (1), as its own handler
+    // gives a signal that arrives after this point.
+    if (!(e instanceof InterruptedError)) throw e;
+    process.exit(1);
+  }
   if (iso) return refuse("usage", `critique: ${iso}`);
   // Past this point a turn WILL run. parseArgs guarantees a probe on every non-corpus-only line; the
   // narrowing is for the type, not a second validation.

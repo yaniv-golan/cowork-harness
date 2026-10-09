@@ -9,6 +9,7 @@
 // so the snapshot — which lives outside any work tree by refusal — is delivered and hashed by the raw walk
 // over exactly the files the stager would have delivered from the source.
 import { execFileSync, spawnSync } from "node:child_process";
+import { InterruptedError, childInterruptSignal } from "../termination.js";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -105,6 +106,9 @@ export function isInsideGitWorkTree(p: string): boolean {
   }
   if (!statSync(dir).isDirectory()) dir = dirname(dir);
   const r = spawnSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", env: gitEnvWithoutAmbientRepo() });
+  // A git the operator's Ctrl-C killed answered nothing: that is the interrupt, not a refusal about the path.
+  const intr = childInterruptSignal(r);
+  if (intr) throw new InterruptedError(intr, "git");
   if (r.status === null || r.error) return true;
   if (r.status === 0) return r.stdout.trim() === "true";
   // Only git's own "not a repository" answer clears the path. Any other failure (a repository git refuses
@@ -143,20 +147,34 @@ function countFiles(dir: string): number {
   return n;
 }
 
+/** execFileSync, with a git the operator's interrupt killed rethrown as that interrupt rather than as git failing. */
+function gitExec<T extends string | Buffer>(run: () => T): T {
+  try {
+    return run();
+  } catch (e) {
+    const intr = childInterruptSignal(e as { status: number | null; signal: NodeJS.Signals | null });
+    if (intr) throw new InterruptedError(intr, "git");
+    throw e;
+  }
+}
+
 function gitOut(args: string[], cwd: string): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: gitEnvWithoutAmbientRepo(),
-    stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: 256 * 1024 * 1024,
-  });
+  return gitExec(() =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: gitEnvWithoutAmbientRepo(),
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 256 * 1024 * 1024,
+    }),
+  );
 }
 
 function gitTry(args: string[], cwd: string): string | undefined {
   try {
     return gitOut(args, cwd);
-  } catch {
+  } catch (e) {
+    if (e instanceof InterruptedError) throw e;
     return undefined;
   }
 }
@@ -238,12 +256,14 @@ export function snapshotGitArm(source: { ref: string; path: string }, dest: stri
     if (!resolve(target).startsWith(resolve(dest) + sep))
       throw new UsageError(`--arm ${raw}: refusing a path that escapes the snapshot: ${file}`);
     mkdirSync(dirname(target), { recursive: true });
-    const content = execFileSync("git", ["show", `${commit}:${file}`], {
-      cwd: top,
-      env: gitEnvWithoutAmbientRepo(),
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 256 * 1024 * 1024,
-    });
+    const content = gitExec(() =>
+      execFileSync("git", ["show", `${commit}:${file}`], {
+        cwd: top,
+        env: gitEnvWithoutAmbientRepo(),
+        stdio: ["ignore", "pipe", "pipe"],
+        maxBuffer: 256 * 1024 * 1024,
+      }),
+    );
     if (mode === "120000") symlinkSync(content.toString("utf8"), target);
     else {
       writeFileSync(target, content);

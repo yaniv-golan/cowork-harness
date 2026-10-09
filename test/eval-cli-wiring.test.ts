@@ -464,6 +464,25 @@ describe.runIf(can)("eval --dry-run through the real CLI (stub agent never start
     }
   }, 180_000);
 
+  it("a git the dry run is waiting on that a Ctrl-C killed exits 130 even before the harness sees its own signal", async () => {
+    const f = fixture();
+    try {
+      // The ordering the test above leaves to the scheduler, made deterministic: git dies of the interrupt (exit 130)
+      // and the harness's own SIGINT has not arrived yet. A git killed by an interrupt is an interruption, never a
+      // staging error.
+      const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+      writeFileSync(join(f.root, "bin", "git"), `#!/bin/sh\ncase "$*" in *cwh-eval-plan-*) exit 130;; esac\nexec ${realGit} "$@"\n`);
+      chmodSync(join(f.root, "bin", "git"), 0o755);
+      const r = await dryRun(f, ["--dry-run", "--output-format", "json"]);
+      expect(r.signal, r.stderr).toBeNull();
+      expect(r.code, r.stderr + r.stdout).toBe(130);
+      expect(r.stdout + r.stderr).not.toMatch(/could not tell whether the temp dir/);
+      neverStarted(f);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
+
   it("a host claude too old to run the judge isolated refuses the dry run (exit 2, dryRun + plan), as it refuses the eval", async () => {
     const f = fixture();
     try {

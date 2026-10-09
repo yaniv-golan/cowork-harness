@@ -100,6 +100,48 @@ export function terminationRequested(): NodeJS.Signals | undefined {
   return terminating;
 }
 
+const INTERRUPTS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+/** Exit statuses a shell gives a child an interrupt killed. Not 129 (SIGHUP): git exits 129 on a usage error, and a
+ *  hang-up kills a process by signal, which the signal check above already reads. */
+const INTERRUPT_STATUSES: ReadonlyMap<number, NodeJS.Signals> = new Map([
+  [130, "SIGINT"],
+  [143, "SIGTERM"],
+]);
+
+/** The interrupt a synchronous child died of: killed by SIGINT, SIGTERM or SIGHUP, or exiting 130 or 143 (a shell's
+ *  128 + signo). A terminal Ctrl-C signals the whole foreground group, so a child the harness is blocked on can die of
+ *  it before the harness's own handler has run: its failure is that interrupt, not an error of its own. A child Node
+ *  killed itself (its `timeout` or `maxBuffer`: SIGTERM, with ETIMEDOUT or ENOBUFS set) is not an interrupt. */
+export function childInterruptSignal(r: {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error?: unknown;
+  code?: unknown;
+}): NodeJS.Signals | undefined {
+  // Node set an error code: it ended the child itself (ETIMEDOUT, ENOBUFS) or could not run it. Not an interrupt.
+  if (r.code !== undefined || r.error !== undefined) return undefined;
+  if (r.signal && INTERRUPTS.includes(r.signal)) return r.signal;
+  return r.status === null ? undefined : INTERRUPT_STATUSES.get(r.status);
+}
+
+/** A step stopped because a child it waited on died of an interrupt (see {@link childInterruptSignal}). The CLI's
+ *  top level turns it into {@link interrupt}, never an error exit. */
+export class InterruptedError extends Error {
+  constructor(
+    readonly signal: NodeJS.Signals,
+    what: string,
+  ) {
+    super(`${what} was interrupted (${signal})`);
+    this.name = "InterruptedError";
+  }
+}
+
+/** Handle `sig` as if it had arrived: the same stop-and-exit sequence, exit status 128 + signo. For a caller that
+ *  learned of the interrupt from a child before the process's own signal was handled. */
+export function interrupt(sig: NodeJS.Signals): void {
+  onSignal(sig);
+}
+
 /** Called by a caller about to start new work (the next scenario, a cassette write) once the process is
  *  being terminated: never returns, because the handler owns the exit and fires within the grace period.
  *  Parking instead of throwing keeps a Ctrl-C from surfacing as a stack trace / `internal` error. */

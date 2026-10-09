@@ -51,6 +51,9 @@ function scenarioYaml(name: string): string {
 /** Spawn the CLI against an explicit runs root (`COWORK_HARNESS_RUNS_DIR`), or — with `root: null` — the
  *  DEFAULT runs root under a throwaway HOME, so the developer's real `~/.cowork-harness/runs` is never read
  *  or written. */
+/** Under vitest's 30 s test timeout, so a CLI that hangs fails here, with its pid and stderr, instead. */
+const CLI_TIMEOUT_MS = 20_000;
+
 function cli(args: string[], root: string | null, extraEnv: Record<string, string> = {}) {
   // FORBID_SPAWN is set explicitly rather than inherited from the unit-lane setup file, so this file stays
   // spawn-safe however it is run.
@@ -59,7 +62,13 @@ function cli(args: string[], root: string | null, extraEnv: Record<string, strin
   delete env.COWORK_HARNESS_OUTPUT_FORMAT;
   if (root === null) env.HOME = tmp("budget-home-");
   else env.COWORK_HARNESS_RUNS_DIR = root;
-  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", env, input: "" });
+  const r = spawnSync("node", [CLI, ...args], { encoding: "utf8", env, input: "", timeout: CLI_TIMEOUT_MS, killSignal: "SIGKILL" });
+  // spawnSync blocks the worker, so vitest's own test timeout cannot end a CLI that never exits: without this the
+  // file hung for over an hour once (a Node exit-time deadlock). Fail with what the next occurrence needs.
+  if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT")
+    throw new Error(
+      `cowork-harness ${args.join(" ")} did not exit within ${CLI_TIMEOUT_MS} ms (pid ${r.pid}, killed)\n--- stderr ---\n${r.stderr}`,
+    );
   let json: Record<string, any> | undefined;
   try {
     json = JSON.parse(r.stdout.trim().split("\n").pop() ?? "");

@@ -54,6 +54,17 @@ All notable changes to this project are documented here. The format is based on
   instead of a delivered artifact. `input_unmodified` is unchanged: it reads the local stand-in for the inputs,
   which in production live on the user's device; whether a cloud run's edit of a staged copy reaches the device is
   unconfirmed.
+- **A Ctrl-C that reaches a helper the harness is waiting on exits as interrupted (130), not with a misleading
+  error.** A terminal Ctrl-C signals the whole foreground process group, so a `git` or `claude` the harness had just
+  started could die of it before the harness's own handler ran, and its empty answer was read as a verdict:
+  - `eval --dry-run` reported "could not tell whether the temp dir is inside a git work tree" and exited 3;
+  - an `eval` git-arm snapshot reported "snapshot failed";
+  - the judge's isolation check reported that the host `claude` was too old;
+  - the `answer_channel: none` check reported that the host `claude` does not accept `--permission-prompts none`,
+    and remembered that for the rest of the process.
+
+  Each now exits as the interrupt did (128 + the signal number; `critique` keeps its documented `1`), and nothing is
+  cached. A helper that timed out or overflowed its output is still reported as failing, not as an interrupt.
 
 ### Documentation
 

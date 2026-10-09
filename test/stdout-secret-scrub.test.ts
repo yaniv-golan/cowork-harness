@@ -23,6 +23,9 @@ const SECRET = "SEKRETplanted7Qx9";
 // `record` and `eval` refuse to start without a credential; a made-up one is supplied. It is itself a
 // scrubbed value (a KNOWN_SECRET_KEYS variable), so the same assertions cover it.
 const FAKE_TOKEN = "stub-placeholder-tok-5Zr2";
+/** An eval case runs four agent runs through the CLI, which `cli(…)` gives this long; the test itself gets the same,
+ *  not vitest's 30 s default, so a slow machine fails the CLI's own budget rather than an unrelated one. */
+const CLI_BUDGET_MS = 120_000;
 
 const say = (text: string, isError = false) =>
   [
@@ -181,67 +184,71 @@ describe.runIf(can)("stdout/stderr are scrubbed with the same secret set as resu
     }
   });
 
-  it("eval: stdout, runs.jsonl and the report files carry no secret", async () => {
-    // The agent turn ends in error so runs.jsonl keeps its (capped) finalMessage. (The rubric does NOT carry
-    // the literal: the manifest freezes the authored scenario verbatim, as a cassette does.) The finalMessage is cut at 300 chars, so a secret straddling the cut would evade a
-    // scrub applied after the slice — the padding puts a second copy straddling exactly there.
-    const pad = "x".repeat(300 - SECRET.length - 1 - 6);
-    const errStub = [
-      `case " $* " in *" --output-format json "*)`,
-      `  printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\\"results\\":[{\\"index\\":0,\\"pass\\":true}]}","total_cost_usd":0.001,"modelUsage":{"claude-judge-stub-1":{"inputTokens":1,"outputTokens":1,"costUSD":0.001}}}'`,
-      `  exit 0;;`,
-      `esac`,
-      say(`${SECRET} ${pad}${SECRET} tail`, true),
-      "cat >/dev/null",
-    ].join("\n");
-    const f = makeStubFixture(errStub, { COWORK_HARNESS_SCRUB_VALUES: SECRET, CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN });
-    try {
-      for (const d of ["declared", "a", "b"]) writePlugin(join(f.cwd, d, "demo"));
-      writeFileSync(join(f.cwd, "session.yaml"), "model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ./declared/demo\n");
-      writeFileSync(
-        join(f.cwd, "q.yaml"),
-        `baseline: latest\nsession: ./session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - semantic_matches:\n      rubric:\n        - "mentions the key"\n`,
-      );
-      const out = join(f.root, "eval");
-      const r = await cli(
-        f,
-        [
-          "eval",
-          "q.yaml",
-          "--arm",
-          "a=./a/demo",
-          "--arm",
-          "b=./b/demo",
-          "--reps",
-          "2",
-          "--allow-underpowered",
-          "--allow-identical-arms",
-          "--judge-model",
-          "claude-judge-stub-1",
-          "--out",
-          out,
-          "--output-format",
-          "json",
-        ],
-        120_000,
-      );
-      expect(existsSync(join(out, "runs.jsonl")), r.stdout + r.stderr).toBe(true);
-      expect(r.stdout.includes(SECRET), "eval stdout").toBe(false);
-      expect(r.stderr.includes(SECRET), "eval stderr").toBe(false);
-      JSON.parse(r.stdout);
-      const files = filesUnder(out);
-      expect(files.map((p) => relative(out, p))).toEqual(expect.arrayContaining(["runs.jsonl", "report.json", "report.md"]));
-      for (const p of files) {
-        const body = readFileSync(p, "utf8");
-        expect(body.includes(SECRET), `${relative(out, p)} carries the secret`).toBe(false);
-        // The 300-char cap must not leave a secret PREFIX behind either.
-        expect(body.includes(SECRET.slice(0, 6)), `${relative(out, p)} carries a truncated secret`).toBe(false);
+  it(
+    "eval: stdout, runs.jsonl and the report files carry no secret",
+    async () => {
+      // The agent turn ends in error so runs.jsonl keeps its (capped) finalMessage. (The rubric does NOT carry
+      // the literal: the manifest freezes the authored scenario verbatim, as a cassette does.) The finalMessage is cut at 300 chars, so a secret straddling the cut would evade a
+      // scrub applied after the slice — the padding puts a second copy straddling exactly there.
+      const pad = "x".repeat(300 - SECRET.length - 1 - 6);
+      const errStub = [
+        `case " $* " in *" --output-format json "*)`,
+        `  printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"result":"{\\"results\\":[{\\"index\\":0,\\"pass\\":true}]}","total_cost_usd":0.001,"modelUsage":{"claude-judge-stub-1":{"inputTokens":1,"outputTokens":1,"costUSD":0.001}}}'`,
+        `  exit 0;;`,
+        `esac`,
+        say(`${SECRET} ${pad}${SECRET} tail`, true),
+        "cat >/dev/null",
+      ].join("\n");
+      const f = makeStubFixture(errStub, { COWORK_HARNESS_SCRUB_VALUES: SECRET, CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN });
+      try {
+        for (const d of ["declared", "a", "b"]) writePlugin(join(f.cwd, d, "demo"));
+        writeFileSync(join(f.cwd, "session.yaml"), "model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ./declared/demo\n");
+        writeFileSync(
+          join(f.cwd, "q.yaml"),
+          `baseline: latest\nsession: ./session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - semantic_matches:\n      rubric:\n        - "mentions the key"\n`,
+        );
+        const out = join(f.root, "eval");
+        const r = await cli(
+          f,
+          [
+            "eval",
+            "q.yaml",
+            "--arm",
+            "a=./a/demo",
+            "--arm",
+            "b=./b/demo",
+            "--reps",
+            "2",
+            "--allow-underpowered",
+            "--allow-identical-arms",
+            "--judge-model",
+            "claude-judge-stub-1",
+            "--out",
+            out,
+            "--output-format",
+            "json",
+          ],
+          CLI_BUDGET_MS,
+        );
+        expect(existsSync(join(out, "runs.jsonl")), r.stdout + r.stderr).toBe(true);
+        expect(r.stdout.includes(SECRET), "eval stdout").toBe(false);
+        expect(r.stderr.includes(SECRET), "eval stderr").toBe(false);
+        JSON.parse(r.stdout);
+        const files = filesUnder(out);
+        expect(files.map((p) => relative(out, p))).toEqual(expect.arrayContaining(["runs.jsonl", "report.json", "report.md"]));
+        for (const p of files) {
+          const body = readFileSync(p, "utf8");
+          expect(body.includes(SECRET), `${relative(out, p)} carries the secret`).toBe(false);
+          // The 300-char cap must not leave a secret PREFIX behind either.
+          expect(body.includes(SECRET.slice(0, 6)), `${relative(out, p)} carries a truncated secret`).toBe(false);
+        }
+        scrubbed(readFileSync(join(out, "runs.jsonl"), "utf8"), "runs.jsonl");
+      } finally {
+        f.cleanup();
       }
-      scrubbed(readFileSync(join(out, "runs.jsonl"), "utf8"), "runs.jsonl");
-    } finally {
-      f.cleanup();
-    }
-  });
+    },
+    CLI_BUDGET_MS,
+  );
 });
 
 // The fix scrubs at the two seams every terminal printer goes through: `writeAllSync` for fd 1/2
@@ -407,48 +414,52 @@ describe("scrub ordering and eval runs.jsonl validity", () => {
 // authored assertions verbatim — a scrubbed literal made the row `grade_misaligned`, dropped it, and failed
 // the eval after every rep was paid for.
 describe.runIf(can)("eval keeps authored assertions as written", () => {
-  it("a scrubbed canary asserted by transcript_not_contains stays a graded row (value 1)", async () => {
-    const CANARY = "CANARY-7f3a9c";
-    const f = makeStubFixture(STUB, { COWORK_HARNESS_SCRUB_VALUES: CANARY, CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN });
-    try {
-      for (const d of ["declared", "a", "b"]) writePlugin(join(f.cwd, d, "demo"));
-      writeFileSync(join(f.cwd, "session.yaml"), "model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ./declared/demo\n");
-      writeFileSync(
-        join(f.cwd, "q.yaml"),
-        `baseline: latest\nsession: ./session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - transcript_not_contains: "${CANARY}"\n`,
-      );
-      const out = join(f.root, "eval");
-      const r = await cli(
-        f,
-        [
-          "eval",
-          "q.yaml",
-          "--arm",
-          "a=./a/demo",
-          "--arm",
-          "b=./b/demo",
-          "--reps",
-          "2",
-          "--allow-underpowered",
-          "--allow-identical-arms",
-          "--out",
-          out,
-          "--output-format",
-          "json",
-        ],
-        120_000,
-      );
-      const report = readFileSync(join(out, "report.json"), "utf8");
-      expect(report.includes("grade_misaligned"), report).toBe(false);
-      expect(r.code, r.stdout + r.stderr).toBe(0);
-      const env = JSON.parse(r.stdout);
-      const row = env.sections.tuned.rows.find((x: { kind: string }) => x.kind === "assertion");
-      // Every rep of both arms graded as passing: value 1, none excluded.
-      expect({ k1: row.k1, n1: row.n1, k2: row.k2, n2: row.n2 }).toEqual({ k1: 2, n1: 2, k2: 2, n2: 2 });
-      // The authored literal is kept as written (the manifest's frozen scenario is not scrubbed either).
-      expect(readFileSync(join(out, "runs.jsonl"), "utf8")).toContain(`"transcript_not_contains":"${CANARY}"`);
-    } finally {
-      f.cleanup();
-    }
-  });
+  it(
+    "a scrubbed canary asserted by transcript_not_contains stays a graded row (value 1)",
+    async () => {
+      const CANARY = "CANARY-7f3a9c";
+      const f = makeStubFixture(STUB, { COWORK_HARNESS_SCRUB_VALUES: CANARY, CLAUDE_CODE_OAUTH_TOKEN: FAKE_TOKEN });
+      try {
+        for (const d of ["declared", "a", "b"]) writePlugin(join(f.cwd, d, "demo"));
+        writeFileSync(join(f.cwd, "session.yaml"), "model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ./declared/demo\n");
+        writeFileSync(
+          join(f.cwd, "q.yaml"),
+          `baseline: latest\nsession: ./session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - transcript_not_contains: "${CANARY}"\n`,
+        );
+        const out = join(f.root, "eval");
+        const r = await cli(
+          f,
+          [
+            "eval",
+            "q.yaml",
+            "--arm",
+            "a=./a/demo",
+            "--arm",
+            "b=./b/demo",
+            "--reps",
+            "2",
+            "--allow-underpowered",
+            "--allow-identical-arms",
+            "--out",
+            out,
+            "--output-format",
+            "json",
+          ],
+          CLI_BUDGET_MS,
+        );
+        const report = readFileSync(join(out, "report.json"), "utf8");
+        expect(report.includes("grade_misaligned"), report).toBe(false);
+        expect(r.code, r.stdout + r.stderr).toBe(0);
+        const env = JSON.parse(r.stdout);
+        const row = env.sections.tuned.rows.find((x: { kind: string }) => x.kind === "assertion");
+        // Every rep of both arms graded as passing: value 1, none excluded.
+        expect({ k1: row.k1, n1: row.n1, k2: row.k2, n2: row.n2 }).toEqual({ k1: 2, n1: 2, k2: 2, n2: 2 });
+        // The authored literal is kept as written (the manifest's frozen scenario is not scrubbed either).
+        expect(readFileSync(join(out, "runs.jsonl"), "utf8")).toContain(`"transcript_not_contains":"${CANARY}"`);
+      } finally {
+        f.cleanup();
+      }
+    },
+    CLI_BUDGET_MS,
+  );
 });

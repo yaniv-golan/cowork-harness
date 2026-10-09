@@ -9,6 +9,7 @@
 // (a scored row). A tie goes to the runner.
 
 import { createHash, randomBytes } from "node:crypto";
+import { InterruptedError } from "../termination.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { RunResult, Scenario } from "../types.js";
@@ -93,6 +94,8 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
         rethrowUnanswered: true,
       });
     } catch (e) {
+      // The operator's interrupt, learned from a probe inside the run: it stops the whole pass, not this attempt.
+      if (e instanceof InterruptedError) throw e;
       thrown = e;
       result = salvagedResult(expectedDir);
     }

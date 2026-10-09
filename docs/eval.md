@@ -295,7 +295,7 @@ A refused eval leaves nothing in its eval dir.
 
 Under `--dry-run`: `0` the plan was printed; `2` any refusal the real eval would make before its first run;
 `3` as above, or the dry run's temp dir is inside a git work tree, or git cannot tell whether it is (set
-TMPDIR). Every dry-run refusal's JSON
+TMPDIR); a git the operator's Ctrl-C killed exits `130` instead. Every dry-run refusal's JSON
 error envelope carries `dryRun: true`, and `plan` when the refusal came after the plan was computed.
 
 ### When every rep errored

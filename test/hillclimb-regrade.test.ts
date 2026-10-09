@@ -1,6 +1,7 @@
 // `hillclimb regrade` in-process over a flow the REAL CLI built (stub agent, a fake host-`claude` judge replaying a
 // captured envelope): the seams a CLI run cannot reach — the core re-grade, the metrics merge — are injected here.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { InterruptedError } from "../src/termination.js";
 import {
   existsSync,
   mkdirSync,
@@ -3202,4 +3203,14 @@ describe.runIf(POSIX)("hillclimb over a runs root that is not where its runs wer
     expect(r.stderr).not.toMatch(/copied from|refused/);
     expect(r.stderr).toMatch(/not there any more\); reading its evidence from /);
   }, 120_000);
+});
+
+describe("an interrupt learned from a probe", () => {
+  it("propagates out of regrade instead of becoming a refusal", async () => {
+    buildFlow(); // a flow that will judge, so the isolation probe runs
+    const interrupted = () => {
+      throw new InterruptedError("SIGINT", "claude --help");
+    };
+    await expect(regradeFlow(ARGS({ rejudge: true }), DEPS({ isolationCheck: interrupted }))).rejects.toThrow(InterruptedError);
+  });
 });

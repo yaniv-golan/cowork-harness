@@ -23,7 +23,7 @@ import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
 import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
 import { tildeify } from "../io.js";
-import { installTerminationHandler, parkIfTerminating, registerTerminationStep } from "../termination.js";
+import { installTerminationHandler, parkIfTerminating, registerTerminationStep, InterruptedError } from "../termination.js";
 import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsRoot } from "../run/trace-view.js";
 import { checkBatchBudget, noHistoryCauseText, runsDirInfo } from "../run/budget.js";
@@ -499,6 +499,7 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
       // A refusal about the source is usage; anything else (an unreadable file, a full disk, a git that
       // failed mid-extraction, a tracked set that cannot be listed) is the eval's own staging failing.
       if (e instanceof UsageError) throw e;
+      if (e instanceof InterruptedError) throw e;
       throw new EvalStagingError(`arm ${spec.label}: snapshot failed: ${(e as Error).message}`);
     }
   });
@@ -795,6 +796,7 @@ export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ 
     try {
       inside = isInsideGitWorkTree(snapRoot);
     } catch (e) {
+      if (e instanceof InterruptedError) throw e;
       throw new EvalStagingError(
         `could not tell whether the temp dir ${tildeify(snapRoot)} is inside a git work tree (${(e as Error).message.replace(/^could not tell whether .*? is inside a git work tree \((.*?)\);.*$/s, "$1")}): set TMPDIR to a directory git can answer for, outside any work tree`,
       );
@@ -927,6 +929,8 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
         });
       } catch (e) {
+        // The operator's interrupt, learned from a probe inside the run: it stops the eval, not this rep.
+        if (e instanceof InterruptedError) throw e;
         thrown = e;
         result = salvagedResult(expectedDir);
       }

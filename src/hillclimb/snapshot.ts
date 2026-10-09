@@ -7,6 +7,7 @@
 // dir, renamed into place and then marked complete, so an interrupted copy is never used.
 
 import { randomBytes, createHash } from "node:crypto";
+import { InterruptedError } from "../termination.js";
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { UsageError } from "../errors.js";
@@ -69,6 +70,7 @@ export function variantSnapshot(
   try {
     inGit = isInsideGitWorkTree(opts.snapshotRoot);
   } catch (e) {
+    if (e instanceof InterruptedError) throw e;
     // eval's message names eval's --out; here the root comes from the environment.
     throw new UsageError(
       `${(e as Error).message.replace(/; pass --out <dir> .*$/, "")}; set ${SNAPSHOT_ROOT_ENV} to an absolute directory git can answer for`,

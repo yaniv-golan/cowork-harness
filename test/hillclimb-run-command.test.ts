@@ -3,6 +3,7 @@
 // records what it was asked to run and returns a committed real excerpt (test/fixtures/eval-classify/
 // success-semantic.json) with the public csv-metrics run's init/result frames. Nothing spawns.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { InterruptedError } from "../src/termination.js";
 import {
   existsSync,
   mkdirSync,
@@ -2101,5 +2102,14 @@ describe("the billing basis follows the env the case's tier spawns the agent wit
 
   it("protocol over an operator env that carries a precedence key: ambiguous", async () => {
     expect(await protocolBasis({ CLAUDE_CODE_REMOTE: "1" })).toBe("ambiguous");
+  });
+});
+
+describe("an interrupt learned from a probe", () => {
+  it("propagates out of the run command instead of becoming a refusal", async () => {
+    const interrupted = () => {
+      throw new InterruptedError("SIGINT", "claude --help");
+    };
+    await expect(runHillclimbCommand(args(), deps({ isolationCheck: interrupted }))).rejects.toThrow(InterruptedError);
   });
 });
