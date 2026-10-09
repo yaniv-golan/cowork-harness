@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import json\nprint(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', 'permissionDecisionReason': 'HOOKPROBE-DENY: shell commands are blocked by the probe'}}))\""
+            "command": "python3 -c \"import json,sys\np=json.load(sys.stdin)\nif 'hookprobe-ready' not in str((p.get('tool_input') or {}).get('command', '')): sys.exit(0)\nprint(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', 'permissionDecisionReason': 'HOOKPROBE-DENY: shell commands are blocked by the probe'}}))\""
           }
         ]
       },
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import sys\nsys.stderr.write('HOOKPROBE-EXIT2: file writes are blocked by the probe')\nsys.exit(2)\""
+            "command": "python3 -c \"import json,sys\np=json.load(sys.stdin)\nif not str((p.get('tool_input') or {}).get('file_path', '')).endswith('hookprobe-note.txt'): sys.exit(0)\nsys.stderr.write('HOOKPROBE-EXIT2: file writes are blocked by the probe')\nsys.exit(2)\""
           }
         ]
       }

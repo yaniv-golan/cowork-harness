@@ -2,6 +2,9 @@
 # Live acceptance probe: the three ways a command hook decides reach the stream as `hook_response` frames.
 #   - PreToolUse on Bash prints a `permissionDecision: deny` JSON on stdout and exits 0;
 #   - PreToolUse on Write writes a reason to stderr and exits 2;
+#   Each PreToolUse hook denies only the call the prompt asks for (a command containing `hookprobe-ready`, a write
+#   to `hookprobe-note.txt`) and allows every other, so a tool call the model adds on its own is not a second deny
+#   and the exact counts below stay meaningful;
 #   - Stop prints a top-level `decision: block` JSON once, then lets the agent stop.
 # The frames it records show which field carries the JSON and what an exit-2 PreToolUse frame looks like; the
 # copies in test/fixtures/hook-frames/ are what `hook_decision` is tested against.
@@ -15,8 +18,8 @@ fidelity: container
 # A hard wall-clock budget (the recorded run took 13 s) and, below, a cost ceiling the run is graded against.
 timeout_ms: 180000
 prompt: |
-  Check the shell works by running `echo ready` with the Bash tool, then save a note saying "ready" to a file
-  named note.txt in the outputs folder with the Write tool. If a step is blocked, don't ask me what to do: go on
+  Check the shell works by running `echo hookprobe-ready` with the Bash tool, then save a note saying "ready" to a
+  file named hookprobe-note.txt in the outputs folder with the Write tool. If a step is blocked, don't ask me what to do: go on
   to the next step. Tell me briefly what happened with each step.
 assert:
   - hook_event_fired: PreToolUse
