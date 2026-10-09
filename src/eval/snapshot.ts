@@ -147,20 +147,34 @@ function countFiles(dir: string): number {
   return n;
 }
 
+/** execFileSync, with a git the operator's interrupt killed rethrown as that interrupt rather than as git failing. */
+function gitExec<T extends string | Buffer>(run: () => T): T {
+  try {
+    return run();
+  } catch (e) {
+    const intr = childInterruptSignal(e as { status: number | null; signal: NodeJS.Signals | null });
+    if (intr) throw new InterruptedError(intr, "git");
+    throw e;
+  }
+}
+
 function gitOut(args: string[], cwd: string): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    env: gitEnvWithoutAmbientRepo(),
-    stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: 256 * 1024 * 1024,
-  });
+  return gitExec(() =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: gitEnvWithoutAmbientRepo(),
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 256 * 1024 * 1024,
+    }),
+  );
 }
 
 function gitTry(args: string[], cwd: string): string | undefined {
   try {
     return gitOut(args, cwd);
-  } catch {
+  } catch (e) {
+    if (e instanceof InterruptedError) throw e;
     return undefined;
   }
 }
@@ -242,12 +256,14 @@ export function snapshotGitArm(source: { ref: string; path: string }, dest: stri
     if (!resolve(target).startsWith(resolve(dest) + sep))
       throw new UsageError(`--arm ${raw}: refusing a path that escapes the snapshot: ${file}`);
     mkdirSync(dirname(target), { recursive: true });
-    const content = execFileSync("git", ["show", `${commit}:${file}`], {
-      cwd: top,
-      env: gitEnvWithoutAmbientRepo(),
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 256 * 1024 * 1024,
-    });
+    const content = gitExec(() =>
+      execFileSync("git", ["show", `${commit}:${file}`], {
+        cwd: top,
+        env: gitEnvWithoutAmbientRepo(),
+        stdio: ["ignore", "pipe", "pipe"],
+        maxBuffer: 256 * 1024 * 1024,
+      }),
+    );
     if (mode === "120000") symlinkSync(content.toString("utf8"), target);
     else {
       writeFileSync(target, content);

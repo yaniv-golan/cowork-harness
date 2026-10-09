@@ -499,6 +499,7 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
       // A refusal about the source is usage; anything else (an unreadable file, a full disk, a git that
       // failed mid-extraction, a tracked set that cannot be listed) is the eval's own staging failing.
       if (e instanceof UsageError) throw e;
+      if (e instanceof InterruptedError) throw e;
       throw new EvalStagingError(`arm ${spec.label}: snapshot failed: ${(e as Error).message}`);
     }
   });

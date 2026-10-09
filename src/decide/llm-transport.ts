@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { InterruptedError, childInterruptSignal } from "../termination.js";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -242,6 +243,9 @@ export function assertIsolationSupported(bin: string): void {
       `LLM decider transport (${bin} -p) failed to spawn: ${help.error.message} — ensure 'claude' is installed and on PATH, or set COWORK_HARNESS_CLAUDE_BIN to its path`,
     );
   }
+  // Killed by the operator's interrupt: that is the interrupt, never a verdict about the version (and not cached).
+  const intr = childInterruptSignal(help);
+  if (intr) throw new InterruptedError(intr, "claude --help");
   const text = `${help.stdout ?? ""}\n${help.stderr ?? ""}`;
   // A `--help` that crashed or was killed and printed nothing says nothing about the version: refuse, uncached.
   if ((help.status !== 0 || help.signal) && !text.trim())
@@ -285,6 +289,7 @@ export function isolationRefusal(): string | undefined {
     assertIsolationSupported(process.env.COWORK_HARNESS_CLAUDE_BIN || "claude");
     return undefined;
   } catch (e) {
+    if (e instanceof InterruptedError) throw e;
     return (e as Error).message;
   }
 }

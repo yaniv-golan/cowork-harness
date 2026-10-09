@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { InterruptedError, childInterruptSignal } from "../termination.js";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
@@ -23,6 +24,9 @@ export function hostCliSupportsPermissionPrompts(env: NodeJS.ProcessEnv): { supp
   const hit = cache.get(key);
   if (hit !== undefined) return { supported: hit, path };
   const r = spawnSync(path, ["--help"], { env, encoding: "utf8", timeout: 15_000, stdio: ["ignore", "pipe", "pipe"] });
+  // Killed by the operator's interrupt it answered nothing: the interrupt, not "unsupported", and nothing cached.
+  const intr = childInterruptSignal(r);
+  if (intr) throw new InterruptedError(intr, "claude --help");
   const help = `${r.stdout ?? ""}${r.stderr ?? ""}`;
   // The option's own entry, and `"none"` among its values. Commander wraps long help onto indented continuation lines,
   // so the entry runs until the next option line (exactly two spaces, then `-`); a `"none"` elsewhere in the help says nothing about it.
