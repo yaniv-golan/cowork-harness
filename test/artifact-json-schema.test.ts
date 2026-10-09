@@ -405,6 +405,7 @@ describe("artifact_json.schema — the diff review's cases", () => {
     }
     expect(err).toBeInstanceOf(UsageError);
     expect(String((err as Error).message)).not.toMatch(/Maximum call stack/);
+    expect(String((err as Error).message)).toMatch(/contains itself/);
   });
 
   it("a very deep schema is a clean load error, and safeParse never throws", () => {
