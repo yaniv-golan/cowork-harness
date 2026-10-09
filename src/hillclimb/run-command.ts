@@ -6,6 +6,7 @@
 // --dry-run takes no snapshot: it checks the live plugin the pass would snapshot.
 
 import { realpathSync } from "node:fs";
+import { InterruptedError } from "../termination.js";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { UsageError } from "../errors.js";
@@ -123,7 +124,8 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   try {
     ({ runner, price, skill } = prepare(args, deps, say));
   } catch (e) {
-    if (!(e instanceof Error)) throw e;
+    // The operator's interrupt, learned from a probe it killed: the CLI exits as interrupted, never as a refusal.
+    if (!(e instanceof Error) || e instanceof InterruptedError) throw e;
     const m = message(e);
     const line = m.startsWith("refusing") ? m : `refusing to run: ${m}`;
     say(line);

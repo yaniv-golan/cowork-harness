@@ -17,6 +17,7 @@
 // the gate, the locks, and each batch's evidence preflight.
 
 import { existsSync, realpathSync } from "node:fs";
+import { InterruptedError } from "../termination.js";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
@@ -1072,6 +1073,7 @@ export async function regradeFlow(args: HillclimbRegradeArgs, deps: RegradeFlowD
   try {
     return await regradeFlowInner(args, deps, say, refuse, progress);
   } catch (e) {
+    if (e instanceof InterruptedError) throw e; // the operator's interrupt, learned from a probe: exit as interrupted
     // Before the first judge call every failure is a refusal (nothing spent, nothing written). After it, the judge
     // spend is real and some variants may already be rewritten: a runtime failure that says which.
     if (!progress.spent) return refuse(message(e));

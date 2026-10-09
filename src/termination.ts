@@ -110,16 +110,16 @@ const INTERRUPT_STATUSES: ReadonlyMap<number, NodeJS.Signals> = new Map([
 
 /** The interrupt a synchronous child died of: killed by SIGINT, SIGTERM or SIGHUP, or exiting 130 or 143 (a shell's
  *  128 + signo). A terminal Ctrl-C signals the whole foreground group, so a child the harness is blocked on can die of
- *  it before the harness's own handler has run: its failure is that interrupt, not an error of its own. A child its
- *  own `timeout` killed (spawnSync sends SIGTERM and sets ETIMEDOUT) timed out: that is not an interrupt. */
+ *  it before the harness's own handler has run: its failure is that interrupt, not an error of its own. A child Node
+ *  killed itself (its `timeout` or `maxBuffer`: SIGTERM, with ETIMEDOUT or ENOBUFS set) is not an interrupt. */
 export function childInterruptSignal(r: {
   status: number | null;
   signal: NodeJS.Signals | null;
   error?: unknown;
   code?: unknown;
 }): NodeJS.Signals | undefined {
-  const timedOut = r.code === "ETIMEDOUT" || (r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
-  if (timedOut) return undefined;
+  // Node set an error code: it ended the child itself (ETIMEDOUT, ENOBUFS) or could not run it. Not an interrupt.
+  if (r.code !== undefined || r.error !== undefined) return undefined;
   if (r.signal && INTERRUPTS.includes(r.signal)) return r.signal;
   return r.status === null ? undefined : INTERRUPT_STATUSES.get(r.status);
 }

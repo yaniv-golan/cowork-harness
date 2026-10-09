@@ -15,7 +15,7 @@ import {
   type RunStatus,
   type PlatformBaseline,
 } from "./types.js";
-import { writeAllSync, tildeify, installTerminalScrub } from "./io.js";
+import { writeAllSync, tildeify, installTerminalScrub, warn } from "./io.js";
 import { SECRET_ENV_KEYS } from "./runtime/host-env.js";
 import {
   loadBaseline,
@@ -5371,7 +5371,8 @@ main().catch((e) => {
   const json = isJsonOutput(process.argv.slice(2));
   // A child died of the operator's interrupt before this process's own handler ran: handle it as that interrupt.
   if (e instanceof InterruptedError) {
-    log(`::warning:: [interrupt] ${e.message} — stopping`);
+    // warn(), not log(): on a hang-up the terminal is gone and a raw fd write would throw before interrupt() runs.
+    warn(`::warning:: [interrupt] ${e.message} — stopping\n`);
     return interrupt(e.signal);
   }
   if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);

@@ -63,7 +63,8 @@ All notable changes to this project are documented here. The format is based on
   - the `answer_channel: none` check reported that the host `claude` does not accept `--permission-prompts none`,
     and remembered that for the rest of the process.
 
-  Each now exits as the interrupt did (128 + the signal number), and nothing is cached.
+  Each now exits as the interrupt did (128 + the signal number; `critique` keeps its documented `1`), and nothing is
+  cached. A helper that timed out or overflowed its output is still reported as failing, not as an interrupt.
 
 ### Documentation
 
