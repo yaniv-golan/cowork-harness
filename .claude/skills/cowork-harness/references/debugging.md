@@ -1,6 +1,6 @@
 # Debugging a run
 
-Tracks `cowork-harness 4.6.0` (baseline `desktop-2.31226.0`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
+Tracks `cowork-harness 4.6.1` (baseline `desktop-2.31226.0`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
 
 ## Part III — Debug
 
@@ -103,7 +103,8 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   session end), `present_files` is NOT served, and `user_visible_artifact` /
   `present_files_called` / `no_scratchpad_leak` are rejected at LOAD time as unable to pass, and so is every
   other key that reads files inside the agent's container (`artifact_text`/`artifact_json`, `file_absent`/
-  `no_unexpected_files`, `computer_links_resolve*`, `no_lost_write_back`, `semantic_*` with `evidence_files`);
+  `no_unexpected_files`, `computer_links_resolve*`, `no_lost_write_back`, `file_exists` with `authored: true`,
+  `semantic_*` with `evidence_files`);
   `semantic_*` without it is judged on the transcript only. Reach for it
   to check a skill's delivery survives the cloud lane, where new Pro and Max tasks run from 2026-10-06. Orthogonal to `fidelity` — a `lane: remote`
   scenario still runs locally.

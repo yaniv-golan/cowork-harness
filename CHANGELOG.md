@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.6.1] — 2026-10-09
+
 ### Upgrade notes
 
 - **`lane: remote` now refuses, at load, every assertion that reads files inside the agent's container.** A
@@ -33,13 +35,6 @@ All notable changes to this project are documented here. The format is based on
   be re-frozen, since its judged document included file bodies.
 - **The `[lane]` notice now also fires for `no_lost_write_back`** on a `lane: local` run, since it reads the files
   the run authored.
-
-### Added
-
-- **Two Desktop form replies in `examples/data/form-replies/`**, for testing a skill that parses one. Each keeps the
-  shape of a real Cowork reply, with every title, label and value replaced: a date, a multi-select, quoted and
-  ` / `-flattened values, and values over 200 characters folded under `--- Full content ---`. A test pins both to
-  Desktop's reply format byte for byte.
 
 ### Changed
 
@@ -78,7 +73,9 @@ All notable changes to this project are documented here. The format is based on
   - an `eval` git-arm snapshot reported "snapshot failed";
   - the judge's isolation check reported that the host `claude` was too old;
   - the `answer_channel: none` check reported that the host `claude` does not accept `--permission-prompts none`,
-    and remembered that for the rest of the process.
+    and remembered that for the rest of the process;
+  - inside `eval`, `hillclimb` and `run --repeat`, the rep whose probe died was recorded as errored and the loop
+    went on to the next one (`run --repeat` stopped the batch as errored).
 
   Each now exits as the interrupt did (128 + the signal number; `critique` keeps its documented `1`), and nothing is
   cached. A helper that timed out or overflowed its output is still reported as failing, not as an interrupt.
@@ -93,6 +90,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **Two Desktop form replies in `examples/data/form-replies/`**, for testing a skill that parses one. Each keeps the
+  shape of a real Cowork reply, with every title, label and value replaced: a date, a multi-select, quoted and
+  ` / `-flattened values, and values over 200 characters folded under `--- Full content ---`. A test pins both to
+  Desktop's reply format byte for byte.
 - **The form-reply format is described as Desktop builds it.** A reply with a value over 200 characters is not one
   line: each folded value follows a blank line and a `--- Full content ---` line, under a `[Label]` line. The title
   is the form's own header (usually `<Topic> details`), a form with no header has no title prefix, an empty answer is
