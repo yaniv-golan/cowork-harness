@@ -20,7 +20,7 @@ const V15_SAMPLES: unknown[] = [
 
 describe("cassette v15", () => {
   it("this build writes and reads v15, and ships its schema", () => {
-    expect(CASSETTE_VERSION).toBe(15);
+    expect(CASSETTE_VERSION).toBeGreaterThanOrEqual(15);
     expect(cassetteSchemaUrl(15)).toMatch(/schema\/cassette\.v15\.json$/);
     const schema = JSON.parse(readFileSync(join(process.cwd(), "schema", "cassette.v15.json"), "utf8"));
     expect(schema.$id).toBe(cassetteSchemaUrl(15));

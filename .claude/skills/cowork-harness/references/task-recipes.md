@@ -57,11 +57,11 @@ what production would do. Two layers of defense:
 
 ### Cassette anatomy (what you're looking at when you open one)
 
-Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v15.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v15.json)):
+Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v16.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v16.json)):
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 15 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 unless a key lifts it: 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, 14 for a v14 key such as `include_fork_results` on `semantic_matches`, 15 for a v15 one such as `gates_all_scripted`, a glob `artifact_json`, an `artifact_json` carrying `schema`, any `artifact_json` on `lane: remote`, or a recording under `answer_channel: none`; the full list is in the cassette docs' version table) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 16 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 unless a key lifts it: 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, 14 for a v14 key such as `include_fork_results` on `semantic_matches`, 15 for a v15 one such as `gates_all_scripted`, a glob `artifact_json`, an `artifact_json` carrying `schema`, any `artifact_json` on `lane: remote`, or a recording under `answer_channel: none`, 16 for a recording whose `hookFailureBlocks` lists an event or is unknown; the full list is in the cassette docs' version table) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
@@ -75,6 +75,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v15.json`](htt
 | `scenarioSource` | Relative path to the authored YAML this was recorded from |
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |
 | `answerChannel` | `"none"` when the recording ran under `answer_channel: none` (absent otherwise). Replay re-drives with the channel still absent; such a recording stamps v15 |
+| `hookFailureBlocks` | `{events}`: the events the run may have a hook on that sets `onFailure: "block"` (agent 2.1.295+); or `{unknown, why}` when a hook source could not be read or parsed (`why` says how many). Replay reads a failed or timed-out hook frame of such an event as unreadable, since the agent blocks on it after emitting the frame. A non-empty one stamps v16. Absent on an older recording: an agent at or below 2.1.293 has none, any other is unknown |
 | `sessionFingerprint` | Optional even on v9+ (the minimum readable version): hash of the session's content-relevant SHAPE (model/folders/plugins/skills/mcp/egress/web_fetch, plus projects, agent_env, answer_channel and agent_env.artifacts_root when set). Checked ONLY by `verify-cassettes`, never the default replay verdict; absent → not checked |
 | `folderPrefixMap` | Optional even on v9+: the record-time connected-folder host-path → mount-name map. Replay's `computer_links_resolve` uses THIS (never the current session file); absent → the link is treated as evidence-unavailable, never reconstructed from the current session |
 | `timeline`, `timelineHeader` | The recorded per-event timeline (harness-observation timestamps for tool_use/tool_result/subagent_dispatch/thinking/decision/result, in total order) plus its header (`startedAtWall`/`startedAtMono` anchors); informational only — never affects the replay verdict. Absent on a cassette recorded before this field existed |

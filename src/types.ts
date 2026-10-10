@@ -2898,6 +2898,13 @@ export interface RunResult {
   /** `system` stream messages the harness doesn't special-case — e.g. `compact_boundary`. In the
    *  stdout stream, so reproduced on replay. Powers `compaction_occurred`. */
   contextEvents?: Array<{ subtype: string; ts?: number; data?: Record<string, unknown> }>;
+  /** The events this run may have a hook on that BLOCKS when it fails (`onFailure: "block"`, agent 2.1.295+), read
+   *  after the run from every hook source the agent could load (staged plugins, its config dir, the host's managed
+   *  settings at hostloop/protocol): `{events}` (sorted; often empty), or `{unknown, why}` when a source exists but
+   *  could not be read or parsed. The agent turns such a hook's failure or timeout into a block after emitting its
+   *  `hook_response` frame, so the hook keys read a failed frame of a listed event as unreadable. Event names and a
+   *  count only — no path, server name or command. Absent on a result.json from an older build. */
+  hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
   /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
    *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */

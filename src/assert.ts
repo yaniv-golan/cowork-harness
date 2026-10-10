@@ -43,6 +43,7 @@ import { analyzeArtifacts } from "./run/analyze-artifact.js";
 import { anyGlobMatches, artifactGlobSegments, globCouldMatchBelow, globToRegExp, isArtifactGlob } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
 import { isVmSessionsPath } from "./vm-paths.js";
+import { FRAMELESS_HOOK_EVENTS, mayBlockOnFailure, type HookFailureBlocks } from "./run/hook-failure-blocks.js";
 
 /** Bytes cap for re-hashing a matched input file on the live / verify-run lane (`input_unmodified`).
  *  Mirrors the pre-run manifest's 50 MiB default and the same env override so the post-run re-hash is
@@ -754,6 +755,11 @@ export interface AssertContext {
    *  evidence-unavailable signal for compaction_occurred; an empty `[]` is a valid "captured, saw
    *  nothing uncaught" state and is NOT the same as undefined. */
   contextEvents?: RunResult["contextEvents"];
+  /** The events the run may have a hook on that blocks when it FAILS (`onFailure: "block"`, agent 2.1.295+), or
+   *  unknown — RunResult.hookFailureBlocks, resolved for a recording made before it existed
+   *  (src/run/hook-failure-blocks.ts). A failed or timed-out frame of such an event is unreadable, since the agent
+   *  converts it to a block after emitting it. Undefined: no such hook. */
+  hookFailureBlocks?: HookFailureBlocks;
   /** RunResult.mcpErrors — MCP round-trips the harness answered with a JSON-RPC error. Undefined means
    *  no mcp-error telemetry was recorded for this run (live-only — replay never reproduces it) — the
    *  evidence-unavailable signal for no_mcp_error; an empty `[]` is a valid "no MCP errors" state and
@@ -1697,11 +1703,13 @@ type HookFrame = {
   json: HookDecision | undefined;
   token?: string;
   decision: HookDecision | undefined;
+  /** A failed or timed-out frame of an event with an `onFailure: "block"` hook: the agent may have blocked it. */
+  failureMayBlock?: true;
 };
 
 /** The agent's rules the hook keys reproduce, each with a string that marks it in the agent binary, so a new agent
  *  build can be re-checked rule by rule: find the anchor, read the code around it. Minified names change every build,
- *  so every anchor is a literal. Read from agents 2.1.289 and 2.1.293. `test/hook-decision-elf-anchors.test.ts` fails
+ *  so every anchor is a literal. Read from agents 2.1.289, 2.1.293 and 2.1.295. `test/hook-decision-elf-anchors.test.ts` fails
  *  when an anchor is missing from the staged agent, and skips when none is staged. Two rules have no literal of their
  *  own, so re-check them by reading the code: the agent parses a command hook's stdout and applies its JSON before it
  *  looks at the exit code (after the "does not start with {" anchor), so a frame it marks `outcome: "success"` carries
@@ -1732,10 +1740,28 @@ export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }
   { rule: "a partial JSON capture is refused (and can block)", anchor: "hook output opens a JSON payload that never completed" },
   { rule: "an Elicitation or ElicitationResult hook that declines blocks", anchor: '.action==="decline")' },
   {
-    rule: "a hook the agent cancelled (timed out or aborted) decides nothing; the agent stops before it reads stdout",
+    rule: 'a hook the agent cancelled (timed out or aborted) decides nothing by its output (the agent stops before it reads stdout) — but an onFailure: "block" hook\'s timeout blocks (below)',
     anchor: 'type:"hook_cancelled"',
   },
   { rule: "an MCP tool hook whose tool reports an error decides nothing (the frame exits 1)", anchor: "MCP tool returned an error" },
+  // onFailure: "block" (2.1.295). The conversion runs AFTER the frame is emitted, so the frame keeps its raw outcome.
+  {
+    rule: 'a command hook (not async / asyncRewake) or an http hook with onFailure: "block" is eligible',
+    anchor: 'asyncRewake!==!0;case"http":return',
+  },
+  {
+    rule: "an eligible hook's failure (non-blocking error) or timeout (cancelled, not user-aborted) becomes a block",
+    anchor: 'aborted!==!0?"timed out":',
+  },
+  {
+    rule: "the block's stderr wording, for a failure and a timeout",
+    anchor: '?"timed out":"failed"}; blocking because onFailure is "block"',
+  },
+  {
+    rule: "Stop, SubagentStop, TaskCompleted and TeammateIdle are exempt: the agent logs the failure and does not block",
+    anchor: '"Stop","SubagentStop","TaskCompleted","TeammateIdle"',
+  },
+  { rule: "the exempt-event log line", anchor: '; not blocking (onFailure: "block" is ignored on ' },
 ];
 
 /** The events whose hook can decide by `hookSpecificOutput.permissionDecision`. The agent ignores the field on every other
@@ -1814,8 +1840,10 @@ const AGENT_REJECTED_RE =
 
 /** The JSON decision a `hook_response` frame's data carries, by the rules in `HOOK_DECISION_RULES`: `undefined` when it
  *  cannot be read. Shared by the hook keys and record's redaction warning, so both read a frame the same way. Not
- *  modelled: in 2.1.293, a plugin hook the host runs through its own hook runner (`ranElsewhere`) has its JSON rewritten
- *  before the agent applies it, while the frame keeps the raw stdout; no current tier runs hooks that way. */
+ *  modelled: a plugin hook the host runs through its own hook runner (`ranElsewhere` in the tool runner, `answerHeld` in
+ *  the 2.1.295 non-tool runner) has its JSON rewritten before the agent applies it, while the frame keeps the raw
+ *  stdout; no current tier runs hooks that way. Nor is `onFailure: "block"` (2.1.295): the agent turns an eligible
+ *  hook's failure into a block AFTER this frame is emitted — `hookFrames` applies it, from the run's inventory. */
 export function frameJsonDecision(d: Record<string, unknown> | undefined): { json: HookDecision | undefined; token?: string } {
   const exitCode = typeof d?.exit_code === "number" ? d.exit_code : undefined;
   if (exitCode === undefined) return { json: undefined };
@@ -1841,10 +1869,18 @@ export function frameJsonDecision(d: Record<string, unknown> | undefined): { jso
  *  tool that fired, not the configured matcher), plus the hooks in the same scope that started and never answered.
  *  `untooled` is set when `tool` was asked for and the event's frames carry no tool name at all (`Stop` is named
  *  `Stop`), so no frame could ever match it. Each frame's JSON decision is read by `frameJsonDecision`. */
+/** A frame the agent converts to a block when its hook sets `onFailure: "block"`: a timeout (`cancelled`) or a failure
+ *  (`error` with an exit other than 0 and 2; an HTTP hook's frame carries its status there). */
+function isFailedFrame(d: Record<string, unknown> | undefined): boolean {
+  if (d?.outcome === "cancelled") return true;
+  return d?.outcome === "error" && typeof d.exit_code === "number" && d.exit_code !== 0 && d.exit_code !== 2;
+}
+
 function hookFrames(
   events: NonNullable<AssertContext["contextEvents"]>,
   event: string | undefined,
   tool?: string,
+  blocks?: HookFailureBlocks,
 ): { frames: HookFrame[]; pending: number; events: Set<string>; untooled: boolean } {
   const ofEvent = (e: (typeof events)[number]) => event === undefined || e.data?.hook_event === event;
   const inScope = (e: (typeof events)[number]) => ofEvent(e) && (tool === undefined || e.data?.hook_name === `${event}:${tool}`);
@@ -1858,14 +1894,19 @@ function hookFrames(
     const exitCode = typeof e.data?.exit_code === "number" ? e.data.exit_code : undefined;
     const { json, token } = frameJsonDecision(e.data);
     const exit2 = exitCode === undefined ? undefined : exitCode === 2;
+    const frameEvent = typeof e.data?.hook_event === "string" ? e.data.hook_event : (event ?? "");
+    // The agent blocks on this failure if the hook that failed sets onFailure: "block"; the frame cannot say which hook
+    // it was, so any eligible hook on the event makes the frame's outcome unreadable.
+    const failureMayBlock = isFailedFrame(e.data) && mayBlockOnFailure(blocks, frameEvent);
     return {
       name: typeof e.data?.hook_name === "string" ? e.data.hook_name : String(e.data?.hook_event ?? event),
       exitCode,
       outcome: typeof e.data?.outcome === "string" ? e.data.outcome : "unknown",
       exit2,
-      json,
-      token,
-      decision: exit2 === true ? "deny" : json,
+      json: failureMayBlock ? undefined : json,
+      token: failureMayBlock ? undefined : token,
+      decision: exit2 === true ? "deny" : failureMayBlock ? undefined : json,
+      ...(failureMayBlock ? { failureMayBlock: true as const } : {}),
     };
   });
   const seen = new Set(raw.map((e) => e.data?.hook_event).filter((v): v is string => typeof v === "string"));
@@ -1876,8 +1917,16 @@ function hookFrames(
 const hookExitCode = (f: { exitCode?: number; outcome: string }) =>
   f.exitCode === undefined ? `${f.outcome} (no exit code)` : String(f.exitCode);
 /** The exit code, plus the JSON decision the hook printed with it: `0, JSON deny`. */
-const describeHookFrame = (f: { exitCode?: number; outcome: string; token?: string; json?: HookDecision }) =>
-  `${hookExitCode(f)}${f.token !== undefined ? `, JSON ${f.token}` : f.exitCode !== undefined && f.json === undefined ? ", decision unreadable" : ""}`;
+const describeHookFrame = (f: { exitCode?: number; outcome: string; token?: string; json?: HookDecision; failureMayBlock?: true }) =>
+  `${hookExitCode(f)}${
+    f.failureMayBlock
+      ? `, ${f.outcome === "cancelled" ? "timed out" : "failed"} — a hook on this event sets onFailure: "block", which blocks on that`
+      : f.token !== undefined
+        ? `, JSON ${f.token}`
+        : f.exitCode !== undefined && f.json === undefined
+          ? ", decision unreadable"
+          : ""
+  }`;
 
 /** A count with `unknown` frames of unreadable outcome lies in [known, known + unknown]. The verdict stands when that
  *  range lies wholly inside [min, max] (pass) or wholly outside it (fail); otherwise it is unknowable. */
@@ -1909,13 +1958,14 @@ function checkHookCount(
   matches: (f: HookFrame) => boolean | undefined,
   phrase: (n: number, scope: string) => string,
   onNone?: (frames: HookFrame[]) => string | undefined,
+  blocks?: HookFailureBlocks,
 ): KeyResult {
   const fail = (message: string): KeyResult => ({ pass: false, message });
   const bound = hookCountBoundError(key, o);
   if (bound !== undefined) return fail(bound);
   const min = o.min ?? (o.max === undefined ? 1 : 0);
   const max = o.max ?? Infinity;
-  const { frames, pending, untooled } = hookFrames(events, o.event, o.tool);
+  const { frames, pending, untooled } = hookFrames(events, o.event, o.tool, blocks);
   const scope = hookScope(o.event, o.tool);
   if (untooled && o.tool !== undefined) return fail(untooledMessage(key, o.event, o.tool));
   if (frames.length === 0)
@@ -1950,6 +2000,7 @@ function checkHookCount(
 function checkHookEventBlocked(
   spec: string | { event: string; tool?: string; via?: HookChannel; min?: number; max?: number },
   events: NonNullable<AssertContext["contextEvents"]>,
+  blocks?: HookFailureBlocks,
 ): KeyResult {
   const o = typeof spec === "string" ? { event: spec } : spec;
   const via: HookChannel = typeof spec === "string" ? BARE_HOOK_EVENT_BLOCKED_VIA : (spec.via ?? OBJECT_HOOK_EVENT_BLOCKED_VIA);
@@ -1968,10 +2019,11 @@ function checkHookEventBlocked(
     (f) => blocksVia(f, via),
     (n, scope) => `${n} blocking ${scope} hook frame(s)`,
     uncountedJson,
+    blocks,
   );
   // The bare form keeps its own wording for a hook that fired and never blocked.
   if (typeof spec === "string" && !r.pass && /^hook_event_blocked: 0 blocking /.test(r.message ?? "")) {
-    const { frames } = hookFrames(events, spec);
+    const { frames } = hookFrames(events, spec, undefined, blocks);
     return {
       pass: false,
       message: `hook_event_blocked: ${hookScope(spec)} fired ${frames.length}× but never blocked (exit codes seen: ${frames.map(hookExitCode).join(", ")})${uncountedJson(frames) ?? ""}`,
@@ -1985,6 +2037,7 @@ function checkHookEventBlocked(
 function checkHookDecision(
   spec: { event: string; decision: (typeof HOOK_DECISIONS)[number]; tool?: string; min?: number; max?: number },
   events: NonNullable<AssertContext["contextEvents"]>,
+  blocks?: HookFailureBlocks,
 ): KeyResult {
   const want: HookDecision = spec.decision === "block" ? "deny" : spec.decision === "approve" ? "allow" : spec.decision;
   return checkHookCount(
@@ -1993,6 +2046,8 @@ function checkHookDecision(
     events,
     (f) => (f.decision === undefined ? undefined : f.decision === want),
     (n, scope) => `${n} ${scope} hook frame(s) decided ${want}`,
+    undefined,
+    blocks,
   );
 }
 
@@ -2004,10 +2059,11 @@ const HOOK_EVENTS_STREAMED_UNREQUESTED = new Set(["SessionStart", "Setup"]);
 function checkNoHookEventBlocked(
   spec: true | { event: string; tool?: string },
   events: NonNullable<AssertContext["contextEvents"]>,
+  blocks?: HookFailureBlocks,
 ): KeyResult {
   const fail = (message: string): KeyResult => ({ pass: false, message });
   const o = spec === true ? { event: undefined, tool: undefined } : spec;
-  const { frames, pending, events: seen, untooled } = hookFrames(events, o.event, o.tool);
+  const { frames, pending, events: seen, untooled } = hookFrames(events, o.event, o.tool, blocks);
   if (untooled && o.event !== undefined && o.tool !== undefined) return fail(untooledMessage("no_hook_event_blocked", o.event, o.tool));
   const scope = o.event === undefined ? "hook" : `${hookScope(o.event, o.tool)} hook`;
   const blocked = frames.filter((f) => blocksVia(f, "any") === true);
@@ -2036,6 +2092,18 @@ function checkNoHookEventBlocked(
     return fail(
       `evidence unavailable: no_hook_event_blocked: only ${[...seen].join("/")} frames were recorded, and those stream even without --include-hook-events — nothing shows the run's other hooks were reported. Scope it with \`{event: …}\` to check those events alone`,
     );
+  // Some events' hooks stream no frame at all; one there that blocks when it fails could have blocked unseen.
+  if (o.event === undefined && blocks !== undefined) {
+    const unseen = "unknown" in blocks ? undefined : blocks.events.filter((e) => FRAMELESS_HOOK_EVENTS.has(e));
+    if (unseen === undefined || unseen.length > 0)
+      return fail(
+        `evidence unavailable: no_hook_event_blocked: ${
+          unseen === undefined
+            ? `the run's hook sources could not all be read (${(blocks as { why: string }).why}), so a hook that blocks when it fails may sit on an event`
+            : `a hook on ${unseen.join(", ")} sets onFailure: "block", and that event`
+        } whose hooks stream no frame — a block there would not show. Scope it with \`{event: …}\` to check the events that stream`,
+      );
+  }
   return { pass: true, evidence: `${frames.length} ${scope} frame(s), none blocked` };
 }
 
@@ -3803,17 +3871,17 @@ function check(
   if (a.hook_event_blocked !== undefined) {
     if (ctx.contextEvents === undefined)
       results.push(fail(`hook_event_blocked: no context events captured (older run / lane without context events) — cannot verify`));
-    else results.push(checkHookEventBlocked(a.hook_event_blocked, ctx.contextEvents));
+    else results.push(checkHookEventBlocked(a.hook_event_blocked, ctx.contextEvents, ctx.hookFailureBlocks));
   }
   if (a.no_hook_event_blocked !== undefined) {
     if (ctx.contextEvents === undefined)
       results.push(fail(`no_hook_event_blocked: no context events captured (older run / lane without context events) — cannot verify`));
-    else results.push(checkNoHookEventBlocked(a.no_hook_event_blocked, ctx.contextEvents));
+    else results.push(checkNoHookEventBlocked(a.no_hook_event_blocked, ctx.contextEvents, ctx.hookFailureBlocks));
   }
   if (a.hook_decision !== undefined) {
     if (ctx.contextEvents === undefined)
       results.push(fail(`hook_decision: no context events captured (older run / lane without context events) — cannot verify`));
-    else results.push(checkHookDecision(a.hook_decision, ctx.contextEvents));
+    else results.push(checkHookDecision(a.hook_decision, ctx.contextEvents, ctx.hookFailureBlocks));
   }
   for (const [key, spec, negative] of [
     ["hook_output_contains", a.hook_output_contains, false],

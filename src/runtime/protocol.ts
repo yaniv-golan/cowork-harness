@@ -105,6 +105,11 @@ export function protocolConfigDirs(
   return { agentConfigDir, operatorConfigDir, readsOperatorConfig: agentConfigDir === operatorConfigDir };
 }
 
+/** The config dir an L0 agent spawned from this plan reads (the operator's real one unless managed config is on). */
+export function protocolAgentConfigDir(plan: LaunchPlan): string {
+  return protocolConfigDirs(plan.configDir, managedConfigMode(protocolOperatorEnv(plan))).agentConfigDir;
+}
+
 /** Does an L0 agent spawned from this plan read the operator's real config dir? Pre-spawn form of the check
  *  spawnProtocol makes (same operator and credential env layers, same comparison). Throws as managedConfigMode does on a bad
  *  COWORK_MANAGED_CONFIG. */

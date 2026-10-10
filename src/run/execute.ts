@@ -57,7 +57,8 @@ import {
   strippedEnv,
   type LaunchPlan,
 } from "../session.js";
-import { spawnProtocol, protocolReadsOperatorConfig } from "../runtime/protocol.js";
+import { spawnProtocol, protocolAgentConfigDir, protocolReadsOperatorConfig } from "../runtime/protocol.js";
+import { hostManagedSettingsDirs, scanHookFailureBlocks, type HookFailureBlocks } from "./hook-failure-blocks.js";
 import { spawnContainer } from "../runtime/container.js";
 import { hostLoopSessionRoots, spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
@@ -698,6 +699,24 @@ export function scenarioArmsPreRunManifest(scenario: Scenario, isRecording = fal
 /** Does this assertion state `authored: true` on any of the four presence/body keys? */
 function assertsAuthored(a: Assertion): boolean {
   return PRESENCE_KEYS.some((k) => assertedAuthored((a as Record<string, unknown>)[k]) === true);
+}
+
+/** The run's `onFailure: "block"` inventory (src/run/hook-failure-blocks.ts), read after the run from every hook source
+ *  the agent could load: the staged plugins, the config dir it ran with (its settings, skills, agents and the plugins
+ *  it installed) and, where it runs natively on this host, the host's managed settings. Over-including a source only
+ *  marks more failed frames unreadable; leaving one out could pass a run whose hook blocked. */
+export function runHookFailureBlocks(plan: LaunchPlan, tier: string, workRoot: string): HookFailureBlocks {
+  const hostNative = tier === "hostloop" || tier === "protocol";
+  const configDirs = [plan.configDir, join(workRoot, ".claude"), ...(tier === "protocol" ? [protocolAgentConfigDir(plan)] : [])];
+  return scanHookFailureBlocks({
+    pluginRoots: plan.mounts
+      .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")
+      .map((m) => m.hostPath),
+    configDirs: [...new Set(configDirs)],
+    managedSettingsDirs: hostNative ? hostManagedSettingsDirs() : [],
+    // Host-native tiers inherit the operator's env; the sandboxed ones get an allowlist drawn from baseEnv.
+    spawnEnv: hostNative ? { ...process.env, ...plan.baseEnv } : plan.baseEnv,
+  });
 }
 
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
@@ -1736,6 +1755,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (unansweredErr) {
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
+        hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot),
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         outputsMountMode,
         turn,
@@ -1889,6 +1909,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       authoredCaptureOpts({ workRoot, runDir: outDir, resume: plan.resume, priorityGlobs, totalBytes: authoredTotalBytes() }),
     );
 
+    const hookFailureBlocks = runHookFailureBlocks(plan, effectiveFidelity, workRoot);
     const assertCtx: AssertContext = {
       transcript: record.transcript,
       finalMessage: record.resultText,
@@ -1951,6 +1972,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       mcpServers: record.context?.mcpServers as AssertContext["mcpServers"],
       availableTools: record.context?.tools,
       contextEvents: record.contextEvents,
+      hookFailureBlocks,
       // Always defined live — an empty array is a real "no MCP errors" signal, distinct from replay's
       // undefined (mcp round-trips are harness-computed, not in the cassette's frozen stdout stream).
       mcpErrors: record.mcpErrors,
@@ -2301,6 +2323,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       workspaceFixture: workspaceFixtureAsWritten(scenario),
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
+      hookFailureBlocks, // the onFailure: "block" inventory the hook keys read failed frames by
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
       fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
@@ -3102,6 +3125,8 @@ export async function reapAgentOnTeardown(p: {
 export function buildPartialResult(args: {
   /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
   turn?: number;
+  /** The run's `onFailure: "block"` inventory (`runHookFailureBlocks`). */
+  hookFailureBlocks?: HookFailureBlocks;
   /** True when this partial run was ablated (--ablate-skill). */
   ablated?: boolean;
   scenarioName: string;
@@ -3301,6 +3326,7 @@ export function buildPartialResult(args: {
     workspaceFixture: args.workspaceFixture,
     workspaceFiles, // Working folder panel's canonical file model
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
+    hookFailureBlocks: args.hookFailureBlocks,
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
     hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
     fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above

@@ -125,7 +125,7 @@ describe("checkFingerprintFieldClaims", () => {
       '  "b": { "description": "unrelated: web_fetch and agent_env and projects appear here" }',
       "}",
     ].join("\n");
-    const errs = checkFingerprintFieldClaims({ keys: KEYS, corpus: [{ path: "schema/cassette.v15.json", text: json }] });
+    const errs = checkFingerprintFieldClaims({ keys: KEYS, corpus: [{ path: "schema/cassette.v16.json", text: json }] });
     expect(errs).toHaveLength(1);
     expect(errs[0]).toMatch(/omits `agent_env`, `model`, `projects`, `web_fetch`/);
   });
@@ -137,8 +137,8 @@ describe("checkFingerprintFieldClaims", () => {
       '  "description": "SHAPE hash of connected folders only" }',
       "}",
     ].join("\n");
-    // A non-frozen schema: v9-v14 are in the default allowlist, which would (correctly) skip them.
-    const errs = checkFingerprintFieldClaims({ keys: KEYS, corpus: [{ path: "schema/cassette.v15.json", text: json }] });
+    // A non-frozen schema: v9-v15 are in the default allowlist, which would (correctly) skip them.
+    const errs = checkFingerprintFieldClaims({ keys: KEYS, corpus: [{ path: "schema/cassette.v16.json", text: json }] });
     expect(errs).toHaveLength(1);
   });
 
