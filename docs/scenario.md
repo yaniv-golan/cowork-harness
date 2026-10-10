@@ -1080,7 +1080,7 @@ Two consequences for CI:
 
 
 **A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
-`baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
+`baseline`, `fidelity`, `execution`, `lane`, `device_bridge`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
 `assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks`, `workspace_fixture` and `metrics` — every field the schema defines — are
 all captured at `record` time, and a plain `replay` evaluates **every one
 of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.

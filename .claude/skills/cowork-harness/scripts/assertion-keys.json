@@ -97,6 +97,7 @@
     "answers",
     "assert",
     "baseline",
+    "device_bridge",
     "execution",
     "expect_denied",
     "fidelity",

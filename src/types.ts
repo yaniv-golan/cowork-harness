@@ -1586,8 +1586,17 @@ export const ScenarioObject = z.strictObject({
       "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): " +
         "local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | " +
         "remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. " +
-        "Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md. " +
+        "The remote device bridge is modeled only when `device_bridge: true` is also set (see that key and docs/fidelity-gaps.md). " +
         "On remote, every assertion that reads files inside the agent's container is rejected at load, and a semantic judge sees the transcript only",
+    ),
+  device_bridge: z
+    .literal(true)
+    .optional()
+    .describe(
+      "serve the remote lane's device tools (device_bash, get_device_info) the way a cloud task reaches the user's computer: " +
+        "the commands run in a second container that holds the connected folders, and the agent's own container gets none. " +
+        "Valid only with `lane: remote` and `fidelity: container` (refused at load otherwise). Only `true` is valid; omit to leave the bridge unmodeled. " +
+        "A recording that uses it stamps cassette v17. See docs/fidelity-gaps.md for what it does not model",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z
@@ -1696,6 +1705,14 @@ export const ScenarioObject = z.strictObject({
  *  into the generated JSON Schema by hand (see scripts/gen-schema.ts) or editors/CI validating against the
  *  published schema will accept what the loader rejects. */
 export const Scenario = ScenarioObject.superRefine((s, ctx) => {
+  // The device bridge is a remote-lane tool set served beside a VM-loop container; no other pairing has a place to
+  // run it (hostloop and cowork would put the device on the host, which is what the bridge exists to keep out).
+  if (s.device_bridge === true && !(s.lane === "remote" && s.fidelity === "container"))
+    ctx.addIssue({
+      code: "custom",
+      path: ["device_bridge"],
+      message: `device_bridge requires lane: remote and fidelity: container (this scenario has lane: ${s.lane}, fidelity: ${s.fidelity}).`,
+    });
   // Asserting "no delete happened" AND "a delete is acceptable" is a contradiction, and silently
   // letting one win would make the scenario's intent unreadable. Must be checked across the WHOLE
   // `assert:` array — the two keys can sit in separate entries, which an Assertion-level refinement

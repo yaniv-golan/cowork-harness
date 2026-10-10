@@ -7,7 +7,7 @@ import { CASSETTE_VERSION, cassetteSchemaUrl, requiredVersionFor } from "../src/
 
 describe("cassette v16", () => {
   it("this build writes and reads v16, and ships its schema next to v15's", () => {
-    expect(CASSETTE_VERSION).toBe(16);
+    expect(CASSETTE_VERSION).toBeGreaterThanOrEqual(16);
     const schema = JSON.parse(readFileSync(join(process.cwd(), "schema", "cassette.v16.json"), "utf8"));
     expect(schema.$id).toBe(cassetteSchemaUrl(16));
     expect(schema.title).toBe("cowork-harness cassette v16");

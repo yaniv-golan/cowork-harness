@@ -828,7 +828,7 @@ def test_unreadable_cassette_is_visible_and_keeps_advice_with_healthy_sibling(tm
         ("[]", "top level is not a JSON object"),
         ('{"cassetteVersion": 13}', "missing or empty scenarioSource"),
         ('{"cassetteVersion": 13, "scenarioSource": "/tmp/authored.yaml"}', "scenarioSource is absolute"),
-        ('{"cassetteVersion": 17, "scenarioSource": "../scenarios/authored.yaml"}', "outside the supported range"),
+        ('{"cassetteVersion": 18, "scenarioSource": "../scenarios/authored.yaml"}', "outside the supported range"),
     ],
 )
 def test_skipped_cassette_names_why_and_never_suppresses(tmp_path, cassette_body, reason):
@@ -1233,6 +1233,28 @@ def test_fidelity_missing_fails_lint_without_strict(tmp_path):
     f.write_text("name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\nassert:\n  - result: success\n", encoding="utf-8")
     code, _out = _lint_cmd([f], json_out=False)
     assert code == 1
+
+
+# --- device-bridge-misplaced -------------------------------------------------
+# `device_bridge: true` is valid only with `lane: remote` and `fidelity: container`; the loader refuses any other
+# pairing. On a direct `scenario.py lint` this ERROR is the only coverage.
+
+_DB_HEAD = "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\ndevice_bridge: true\n"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    ["fidelity: container\n", "fidelity: container\nlane: local\n", "fidelity: hostloop\nlane: remote\n", "fidelity: cowork\nlane: remote\n"],
+)
+def test_device_bridge_outside_remote_container_is_an_error(tmp_path, extra):
+    found = _mk(tmp_path, _DB_HEAD + extra, rule="device-bridge-misplaced")
+    assert len(found) == 1
+    assert found[0].severity == "ERROR"
+
+
+def test_device_bridge_on_remote_container_is_clean(tmp_path):
+    assert _mk(tmp_path, _DB_HEAD + "fidelity: container\nlane: remote\n", rule="device-bridge-misplaced") == []
+    assert _mk(tmp_path, _DB_HEAD + "fidelity: container\nlane: remote\n", rule="unknown-top-key") == []
 
 
 # Only a SCENARIO needs a tier. A session or matrix YAML has no `prompt:` and no `fidelity:` by design;

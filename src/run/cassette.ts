@@ -514,7 +514,9 @@ export interface Cassette {
 //  with an `artifact_json` entry, a pair no per-key entry sees (see requiredVersionFor). The stamp stays requirement-based: a cassette that uses no v15
 //  feature stamps exactly what it did, so the bump alone changes no existing cassette or verify-cassettes result.
 //  No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 16;
+// v17: a frozen scenario with `device_bridge: true` (the remote lane's device tools). Stamped per cassette only
+//  then. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
+export const CASSETTE_VERSION = 17;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -554,7 +556,7 @@ export function cassetteSchemaUrl(version: number): string {
  *  every cassette, exactly the unconditional bump this mechanism exists to avoid (the falsified v1
  *  design). Returning 0 means "any supported reader interprets this value the same way" — the BASE=10
  *  floor in requiredVersionFor still applies via Math.max, so 0 is not "no version".
- *  MUST carry one entry per ScenarioObject.shape key (18 today) — enforced by a coverage test in
+ *  MUST carry one entry per ScenarioObject.shape key (19 today) — enforced by a coverage test in
  *  test/cassette-version-stamp.test.ts. Adding a scenario key without deciding its cassette-version
  *  impact must red CI, not silently default to 0. */
 export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
@@ -567,6 +569,8 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // served) — a pre-lane reader doesn't know that and would misread it. `lane: "local"` (the default, and
   // the only behavior a pre-lane reader has ever had) needs no bump.
   lane: (v) => (v === "remote" ? 11 : 0),
+  // A v16 reader's strict scenario schema rejects the key as unrecognized ("re-record"); v17 makes it "too new".
+  device_bridge: (v) => (v === true ? 17 : 0),
   prompt: () => 0,
   timeout_ms: () => 0,
   answers: () => 0,

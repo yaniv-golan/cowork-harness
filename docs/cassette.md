@@ -82,7 +82,7 @@ hard-fails on staleness, while `replay` warns on the content-drift classes — s
 skill that moved. Run both; the drift note in the "Filesystem assertions" section below has the detail.
 
 **The cassette freezes the WHOLE SCENARIO, not just your assertions.** `name`, `prompt`, `session`,
-`baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
+`baseline`, `fidelity`, `execution`, `lane`, `device_bridge`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
 `assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks`, `workspace_fixture` and `metrics` — every field the schema defines — are
 all captured at record time, and a plain `replay` evaluates every one of them from that
 frozen copy — nothing in the working tree can change its verdict. Editing `scenarios/<name>.yaml` does not
@@ -135,7 +135,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 ```jsonc
 {
   "generator": "cowork-harness",          // provenance: the tool that produced this file
-  "cassetteVersion": 12,                  // the MINIMUM format a reader needs for this cassette (see Cassette versioning below) — floored at the hash-format epoch, so cassettes stamp 12 (13–16 when a key or the run lifts it, see the table below; e.g. 13 when `assert:` uses the object form of tool_called/tool_not_called; a 3.10.0 `replay` crashes on those, so upgrade first). ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
+  "cassetteVersion": 12,                  // the MINIMUM format a reader needs for this cassette (see Cassette versioning below) — floored at the hash-format epoch, so cassettes stamp 12 (13–17 when a key or the run lifts it, see the table below; e.g. 13 when `assert:` uses the object form of tool_called/tool_not_called; a 3.10.0 `replay` crashes on those, so upgrade first). ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
   "scenarioSource": "scenarios/my-test.yaml", // the authored scenario SOURCE file this was recorded from, relative to the cassette dir (absent for an inline/in-memory scenario)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
@@ -188,6 +188,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 | **v14** | declares `workspace_fixture` (an older reader would replay it without the fixture staleness check), or has an `assert:` entry using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry | v13: refuses as too new — upgrade the harness, don't re-record |
 | **v15** | has a `gates_all_scripted` entry (either form), a `no_hook_event_blocked` or `hook_decision` entry, a `hook_event_blocked` entry in its object form (`{event, …}`; the bare event name stays v14-readable), or an `artifact_json` entry whose `artifact` is a glob or that carries `match` (a v14 reader would grade the glob as a literal path), or any `artifact_json` entry in a `lane: remote` scenario (a v14 reader grades the local file, where v15 fails it), or an `artifact_json` entry carrying `schema` (4.6.0, which reads v15, rejects that field as an unrecognized assertion and suggests re-recording: upgrade instead). Also a recording made under `answer_channel: none`, whose `answerChannel` is frozen beside the scenario: a v14 reader ignores that field and would grade a run that parked at a question as `stalled` | v14: refuses as too new — upgrade the harness, don't re-record |
 | **v16** | a recording whose top-level `hookFailureBlocks` lists an event or is unknown: the run may have had an `onFailure: "block"` hook (agent 2.1.295+), so a failed or timed-out hook frame is unreadable. A v15 reader ignores the field and would read that frame as "no decision". An empty `{"events": []}` stamps what the cassette needs otherwise | v15: refuses as too new — upgrade the harness, don't re-record |
+| **v17** | a scenario with `device_bridge: true` (the remote lane's device tools, served from a second container). A v16 reader rejects the key as unrecognized | v16: refuses as too new — upgrade the harness, don't re-record |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes

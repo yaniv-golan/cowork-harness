@@ -380,6 +380,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "fidelity",
     "execution",  # execution-location axis, orthogonal to fidelity; "cloud-describe" is reserved (load-time error)
     "lane",  # Cowork product-lane axis: which delivery contract the run is held to (local | remote)
+    "device_bridge",  # remote-lane device tools from a second container; lane: remote + fidelity: container only
     "on_unanswered",
     "prompt",
     "timeout_ms",  # wall-clock budget → kill + errorSource:timeout on expiry
@@ -655,7 +656,7 @@ _MISSING = object()
 
 # Keep these values in sync with src/run/cassette.ts. The sync test below makes a format-range change
 # fail loudly instead of allowing lint to suppress an advisory from a cassette replay would refuse.
-CASSETTE_VERSION = 16
+CASSETTE_VERSION = 17
 MIN_SUPPORTED_CASSETTE_VERSION = 9
 
 
@@ -1524,6 +1525,21 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 "scenario uses `assertions:` — the real key is `assert:`. The harness ignores "
                 "`assertions:`, so NONE of these checks run (a guaranteed silent false-green).",
                 "Rename the block to `assert:` and use flat keys (e.g. `- file_exists: outputs/x.md`).",
+                path,
+            )
+        )
+
+    # E: `device_bridge: true` outside `lane: remote` + `fidelity: container` — the loader refuses it.
+    if "prompt" in doc and doc.get("device_bridge") is not None and not (
+        doc.get("device_bridge") is True and lane == "remote" and doc.get("fidelity") == "container"
+    ):
+        findings.append(
+            Finding(
+                "ERROR",
+                "device-bridge-misplaced",
+                f"`device_bridge: {doc.get('device_bridge')}` with lane: {lane}, fidelity: {doc.get('fidelity')} — "
+                "the key is valid only as `true` with `lane: remote` and `fidelity: container`; the loader refuses this scenario.",
+                "Set `lane: remote` and `fidelity: container`, or drop `device_bridge`.",
                 path,
             )
         )
@@ -2502,6 +2518,7 @@ LINT_RULES = {
     "capabilities-on-protocol": "ERROR",
     "cassette-evidence-skipped": "INFO",
     "container-only-key-off-container": "ERROR",
+    "device-bridge-misplaced": "ERROR",
     "egress-on-protocol": "ERROR",
     "enum-value-invalid": "ERROR",
     "artifact-json-match": "ERROR",

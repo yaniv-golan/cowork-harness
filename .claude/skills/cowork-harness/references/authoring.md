@@ -258,6 +258,7 @@ cowork-harness lint scenarios/*.yaml
 | `host-path-assert-cowork` | WARN | `transcript_no_host_path` on `cowork` — it fails by design if the tier resolves to hostloop |
 | `host-path-assert-tier` | ERROR | `transcript_no_host_path` on `hostloop` / `protocol`, where it fails by design |
 | `lane-remote-incompatible-key` | ERROR | a key that can never pass on `lane: remote`, which the runtime refuses at load: `present_files_called` / `no_scratchpad_leak` / `user_visible_artifact` (delivery), `artifact_text` / `artifact_json` (file bodies), `file_absent` / `no_unexpected_files` (absence), `computer_links_resolve(_if_present)`, `no_lost_write_back`, `file_exists` with `authored: true`, and `semantic_matches` / `semantic_pairwise` with `evidence_files`. Tier rules are suppressed there |
+| `device-bridge-misplaced` | ERROR | `device_bridge` set anywhere but `true` with `lane: remote` and `fidelity: container`; the loader refuses it |
 | `linter-extra-findings-invalid` | ERROR | the loader findings `cowork-harness lint` hands the linter could not be read |
 | `linter-unclassified-key` | ERROR | a valid assertion key this linter cannot classify (the linter is out of date) |
 | `manifest-needs-snapshot` | INFO | manifest-backed keys, which evaluate on replay only when the cassette carries an `artifacts` manifest (not reported on `lane: remote` for `user_visible_artifact` / `artifact_json` / `artifact_text`, which cannot pass there) |

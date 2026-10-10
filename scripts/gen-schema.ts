@@ -217,10 +217,23 @@ function addScenarioCrossKeyRules(json: Record<string, unknown>): void {
       },
     },
   };
+  // Third rule, mirroring the loader's device_bridge check: the key is set while lane/fidelity are anything but
+  // remote/container. `lane` defaults to local, so a document without it is the refused case too.
+  const deviceBridgeMisplaced = {
+    type: "object",
+    required: ["device_bridge"],
+    properties: { device_bridge: { const: true } },
+    not: {
+      type: "object",
+      required: ["lane", "fidelity"],
+      properties: { lane: { const: "remote" }, fidelity: { const: "container" } },
+    },
+  };
   json.not = {
     anyOf: [
       { allOf: [someEntryHas("no_delete_in_outputs"), someEntryHas("allow_outputs_delete")] },
       { allOf: [someEntryHas("no_delete_in_outputs"), someEntryWaivesOutputs] },
+      deviceBridgeMisplaced,
     ],
   };
   addMetricRules(json);
