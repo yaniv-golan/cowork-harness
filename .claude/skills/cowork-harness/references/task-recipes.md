@@ -442,7 +442,7 @@ the observable. This path has not been recorded end to end.
 
 ### Schema-check a written file
 
-In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a file next to the scenario:
+In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a JSON file in the scenario's repository:
 
 ```yaml
 - artifact_json: { artifact: outputs/cap.json, schema: { file: schemas/cap.schema.json } }

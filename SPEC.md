@@ -1227,7 +1227,7 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   is a glob or that carries `match` stamps **v15**, so a v14 reader refuses it as too new instead of misreading it (it
   would grade the glob as a literal path), and so does any `artifact_json` entry in a `lane: remote` scenario (a v14
   reader grades the local file there; v15 fails it), and so does an `artifact_json` entry carrying `schema` (a v14
-  reader rejects the field; a 4.6.0 reader, which reads v15, rejects it as an unrecognized assertion — upgrade, don't
+  reader rejects the field; a 4.6.x reader, which reads v15, rejects it as an unrecognized assertion — upgrade, don't
   re-record). So does a recording whose top-level `answerChannel` is `"none"`: a v14
   reader ignores the field and would grade a run that parked at a question as `stalled`. A recording whose
   top-level `hookFailureBlocks` lists an event or is unknown stamps **v16**. That field is the run's

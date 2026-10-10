@@ -9,7 +9,8 @@
 // Event-level only. A frame's `hook_name` is `<event>:<tool>`, which names no hook, and matchers / `if` conditions are
 // not modelled, so one eligible hook on an event taints every failed frame of that event.
 //
-// Privacy: the result carries event names and counts, never a path, a server name or a hook command.
+// Privacy: the result carries event names (and, when unknown, a count of unreadable sources), never a path, a server
+// name or a hook command.
 
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";

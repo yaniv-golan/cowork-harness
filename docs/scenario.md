@@ -899,7 +899,7 @@ that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq: a do
 no side effects.)
 
 **The shape of the whole value: `schema`.** A JSON Schema (draft 2020-12) the value at `path` — or the whole
-document, without `path` — must match. Write it inline, or name a JSON file next to the scenario:
+document, without `path` — must match. Write it inline, or name a JSON file in the scenario's repository:
 ```yaml
 - artifact_json:
     artifact: outputs/cap_state.json
@@ -920,7 +920,8 @@ document, without `path` — must match. Write it inline, or name a JSON file ne
 - **`{file: <path>}`** is read when the scenario is loaded and inlined, so a recorded cassette carries the schema
   itself and replays without the file. A schema-file edit therefore behaves like an inline edit: `replay
   --assert-from` and a re-record pick it up, a plain `replay` grades with the schema frozen at record. The path is
-  relative to the scenario file and must stay inside its git repository (or its directory outside one).
+  relative to the scenario file and must stay inside its git repository (or its directory outside one); the file is
+  at most 1 MiB.
 - **Checked when the scenario loads**, so a mistake costs a config error, not a run. Refused: an unknown keyword
   (a typo), a type-specific keyword with no `type` beside it (`required`, `properties`, `items`, `minLength`, `minimum`, …; it passes on a value of any other type: add `type: object` or the intended type),
   `format` (no format is validated, so it would check nothing: use `pattern`), `$id`, a `$ref` that is not a local
@@ -932,7 +933,7 @@ document, without `path` — must match. Write it inline, or name a JSON file ne
 - `pattern` uses JavaScript regex syntax with the `u` flag and is **case-sensitive**, unlike the harness's own
   regex keys. On a value holding one of the run's secrets, replay sees the scrubbed body, so a `pattern`, `const`
   or length check on it can grade differently there (as `equals` can).
-- A cassette with a `schema` is stamped v15. 4.6.0, which reads v15, refuses it as an unrecognized assertion and
+- A cassette with a `schema` is stamped v15. 4.6.x, which reads v15, refuses it as an unrecognized assertion and
   suggests re-recording; upgrade the harness instead.
 
 **One check over many files: a glob `artifact`.** When the skill writes one JSON file per run or per item, put a
@@ -1751,7 +1752,7 @@ assert:
 
 #### Schema-check a written file
 
-In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a file next to the scenario:
+In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a JSON file in the scenario's repository:
 
 ```yaml
 - artifact_json: { artifact: outputs/cap.json, schema: { file: schemas/cap.schema.json } }
