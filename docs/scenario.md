@@ -275,6 +275,9 @@ harness serves that tool from a second container:
 - The device container reaches the network through the run's egress proxy, so the session's allowlist applies.
 - The tools are pre-approved. Assert on them with `tool_called` / `tool_not_called` (both forms), for example
   `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`.
+- File assertions read the agent's container, which has no folder, so `file_exists` and `input_unmodified` on a
+  connected folder's path are refused before the run. `no_delete_in_mounts` does cover the folders: it reads
+  `device_bash` commands and compares the device copy before and after the run.
 
 Valid only with `lane: remote` and `fidelity: container`; the loader refuses any other pairing (and `lint` reports
 `device-bridge-misplaced`). Only `true` is valid. A recording that uses it stamps cassette v17, and its result

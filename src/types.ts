@@ -1977,9 +1977,6 @@ export interface JudgedDocFingerprint {
   }>;
 }
 
-/** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
- *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
- *  differently instead of collapsing both into one fatal class. */
 /** See `RunResult.deviceBridge`. */
 export interface DeviceBridgeRecord {
   /** The device tools the harness served, by their bare names. */
@@ -1996,10 +1993,14 @@ export interface DeviceBridgeRecord {
    *  run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
    *  description paraphrases one production branch), `device-paths-tilde` (get_device_info spells folders
    *  `~/<name>`, not their paths on the Mac), `device-tools-unserved` (device_list_dir, the stage/commit pair and
-   *  the folder and delete requests are not served). */
+   *  the folder and delete requests are not served), `shell-user` (commands run as the image's user, not a per-task
+   *  `rcw-<id>` user). */
   divergences: string[];
 }
 
+/** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
+ *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
+ *  differently instead of collapsing both into one fatal class. */
 export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar" | "device-container" | "device-exec";
 
 /** See `RunResult.fsDiff`. `findings` are `[fs-diff] output file removed post-run: <path>` strings. */

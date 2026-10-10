@@ -365,6 +365,22 @@ describe("execute — scanEvents host-path leak detection", () => {
     ]);
     expect(scanEvents(f, ["proj"]).mountDeletes).toEqual([{ mount: "proj", command: expect.stringContaining("rm") }]);
   });
+
+  it("does not read device_bash as touching outputs: the device has no outputs folder", () => {
+    const f = writeEvents([
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", name: "mcp__remote-devices__device_bash", input: { command: "rm -rf $HOME/mnt/proj/outputs/old" } },
+          ],
+        },
+      },
+    ]);
+    const scan = scanEvents(f, ["proj"]);
+    expect(scan.outputsDeletes).toEqual([]);
+    expect(scan.mountDeletes.map((d) => d.mount)).toEqual(["proj"]);
+  });
 });
 
 // outputs-delete detector: mv-direction + target-based rm parsing (default) + safe-prefix suppression

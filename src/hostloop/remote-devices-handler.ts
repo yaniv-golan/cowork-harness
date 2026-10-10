@@ -3,7 +3,7 @@ import type { McpHandler, McpResult } from "./workspace-handler.js";
 /**
  * The `remote-devices` sdk-MCP server, driver-side, served only under `device_bridge: true` (lane: remote,
  * fidelity: container). A cloud Cowork task reaches the user's computer through this server; the harness serves
- * the two tools a 1a run needs:
+ * two of its tools:
  *
  * - `device_bash`: production runs the command in the Mac's Cowork VM as a per-task user, with the connected
  *   folders at `$HOME/mnt/<folder-name>`. The harness runs it in a second container holding COPIES of the folders

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { SCHEMA_DIR } from "../scripts/gen-schema.js";
 import { Scenario } from "../src/types.js";
 import { requiredVersionFor } from "../src/run/cassette.js";
+import { deviceBridgeFolderAssertRefusal } from "../src/runtime/device-container.js";
 
 const ajv = new Ajv({ strict: true });
 const validateScenario = ajv.compile(JSON.parse(readFileSync(join(SCHEMA_DIR, "scenario.schema.json"), "utf8")));
@@ -55,5 +56,28 @@ describe("device_bridge cassette stamp", () => {
     expect(requiredVersionFor({ prompt: "x", lane: "remote" })).toBe(
       requiredVersionFor({ prompt: "x", lane: "remote", device_bridge: undefined }),
     );
+  });
+});
+
+// Under the bridge the folders live in the device container, and grading reads the agent's tree, which holds none of
+// them. A file assertion on a folder path would grade the wrong tree (fail on a file device_bash wrote, or pass on
+// one the agent made in its own container), so it is refused before the run.
+describe("deviceBridgeFolderAssertRefusal", () => {
+  const sc = (assert: unknown[]) => ({ device_bridge: true as const, assert }) as never;
+  it("refuses file_exists and input_unmodified on a connected folder's path, in either form", () => {
+    for (const a of [
+      { file_exists: "proj/report.md" },
+      { file_exists: { path: "proj/report.md", authored: true } },
+      { input_unmodified: "proj/**" },
+      { input_unmodified: ["outputs/x", "proj/a.txt"] },
+      { input_unmodified: "pr*/a.txt" },
+    ])
+      expect(deviceBridgeFolderAssertRefusal(sc([a]), ["proj"]), JSON.stringify(a)).toMatch(/device_bridge.*proj/);
+  });
+  it("leaves outputs paths, other folders' names and a scenario without the bridge alone", () => {
+    expect(
+      deviceBridgeFolderAssertRefusal(sc([{ file_exists: "outputs/r.md" }, { input_unmodified: "notes/**" }]), ["proj"]),
+    ).toBeUndefined();
+    expect(deviceBridgeFolderAssertRefusal({ assert: [{ file_exists: "proj/r.md" }] } as never, ["proj"])).toBeUndefined();
   });
 });

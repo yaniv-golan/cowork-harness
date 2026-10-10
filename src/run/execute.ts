@@ -23,7 +23,13 @@ import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
 import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline, DeviceBridgeRecord } from "../types.js";
-import { deviceBridgeRecord } from "../runtime/device-container.js";
+import {
+  deviceBridgeFolderAssertRefusal,
+  deviceBridgeRecord,
+  deviceFolders,
+  deviceTreeDeletes,
+  type startDeviceBridge,
+} from "../runtime/device-container.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
 import {
   deriveModelProvenance,
@@ -1075,6 +1081,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const turnNumber = beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane, launchSources);
+  // device_bridge: a file assertion on a connected folder's path would grade the agent's tree, which holds no folder.
+  const bridgeFolderRefusal = deviceBridgeFolderAssertRefusal(
+    scenario,
+    deviceFolders(plan.mounts).map((f) => f.name),
+  );
+  if (bridgeFolderRefusal) throw new UsageError(bridgeFolderRefusal);
   // Same layer, protocol's own hazard: this tier passes --plugin-dir, so a staged plugin's hooks execute
   // as native host processes. Gate only when a plugin actually declares runnable hooks.
   if (effectiveFidelity === "protocol") {
@@ -1224,7 +1236,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
   let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
-  let deviceBridge: ReturnType<typeof spawnContainer>["device"]; // device_bridge's second container: removed after the agent's, before the network
+  let deviceBridge: ReturnType<typeof startDeviceBridge> | undefined; // device_bridge's second container: removed after the agent's, before the network
   let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
   let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
   // Where the protocol agent's child transcripts land — the managed config dir, or undefined when it read the
@@ -1468,12 +1480,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           provenanceRef,
           dedup,
           onEgress: (e) => containerWebFetchEgress.push(e),
+          onDeviceStarted: (d) => (deviceBridge = d), // known to the teardown even if the spawn throws after it
         });
         child = ct.child;
         containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
         sdkMcp = ct.sdkMcp; // cowork/present_files + the skills/plugins discovery servers (combineSdkMcp)
         spawnedSessionRoot = ct.sessionRoot; // VM path (`/sessions/<id>`) — what the agent inside reports
-        deviceBridge = ct.device;
       } else if (effectiveFidelity === "microvm") {
         const vm = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
@@ -1707,6 +1719,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // prompt) are not a leak when the agent quotes them back verbatim.
     const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity);
     const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus);
+    // device_bridge: a delete on the device copy by any means (`find -delete`, a glob, a script), read off the
+    // device tree before and after the run, since the command text alone cannot see every one.
+    if (scenario.device_bridge === true) scan.mountDeletes.push(...deviceTreeDeletes(outDir));
     // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
     // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
     const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
@@ -4517,7 +4532,9 @@ export function scanEvents(
         const cmd = String(block.input?.command ?? "");
         // One detection pass over every writable mount; `outputsDeletes` is then the `outputs` slice of
         // it, so the two can never disagree about outputs the way two separate passes could.
-        const hits = detectMountDeletes(cmd, mounts);
+        // The device holds only the connected folders, so a device_bash command never touches `outputs`.
+        const scope = block.name === "mcp__remote-devices__device_bash" ? mounts.filter((m) => m !== "outputs") : mounts;
+        const hits = detectMountDeletes(cmd, scope);
         for (const m of hits) out.mountDeletes.push({ mount: m, command: outputsDeleteSnippet(cmd, m) });
         // `outputsDeletes` is the `outputs` slice of THIS command's hits — one detection pass feeds both,
         // so they cannot disagree about outputs the way two separate passes could.

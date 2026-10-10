@@ -75,6 +75,8 @@ export function spawnContainer(
     provenanceRef?: { current?: WebFetchProvenance };
     dedup?: WebFetchDedupCache;
     onEgress?: (entry: EgressEntry) => void;
+    /** Called as soon as the device_bridge container starts, before anything else here can throw. */
+    onDeviceStarted?: (device: ReturnType<typeof startDeviceBridge>) => void;
   } = {},
 ) {
   // device_bridge (lane: remote): the connected folders live on the "device", a second container. Every agent-side
@@ -103,9 +105,6 @@ export function spawnContainer(
   const { mcpStaged } = stageWorkspace(plan, mntHost, { sessionRoot, vmSessionRoot: sessionRoot });
   // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
   capturePreRunManifest(plan, mntHost, outDir, "container");
-  // Host-path tokens in the user's staged inputs, so the post-run host_path_leak scan can tell a path the
-  // user supplied from one the sandbox leaked. First turn only (a no-op on resume).
-  captureInputHostPathCorpus(plan, mntHost, outDir);
   const mcpGuest = mcpStaged ? `${configGuest}/mcp.json` : undefined;
 
   const agentHost = resolveAgentBinary(baseline);
@@ -138,6 +137,12 @@ export function spawnContainer(
         resume: !!plan.resume,
       })
     : undefined;
+  // Handed to the caller at once, so its teardown removes the container even if something below throws.
+  if (device) opts.onDeviceStarted?.(device);
+  // Host-path tokens in the user's staged inputs, so the post-run host_path_leak scan can tell a path the
+  // user supplied from one the sandbox leaked. First turn only (a no-op on resume). Under device_bridge the
+  // folders' copies are in the device tree, so they are visited there.
+  captureInputHostPathCorpus(plan, mntHost, outDir, device?.inputRoots);
 
   // NOTE: local marketplaces are resolved to --plugin-dir in buildLaunchPlan (the in-VM
   // agent loads via --plugin-dir; the `claude plugin marketplace add` registry is inert

@@ -1252,6 +1252,11 @@ def test_device_bridge_outside_remote_container_is_an_error(tmp_path, extra):
     assert found[0].severity == "ERROR"
 
 
+def test_device_bridge_null_is_an_error_like_the_loader(tmp_path):
+    body = "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\ndevice_bridge:\nfidelity: container\nlane: remote\n"
+    assert len(_mk(tmp_path, body, rule="device-bridge-misplaced")) == 1
+
+
 def test_device_bridge_on_remote_container_is_clean(tmp_path):
     assert _mk(tmp_path, _DB_HEAD + "fidelity: container\nlane: remote\n", rule="device-bridge-misplaced") == []
     assert _mk(tmp_path, _DB_HEAD + "fidelity: container\nlane: remote\n", rule="unknown-top-key") == []

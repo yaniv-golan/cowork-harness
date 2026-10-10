@@ -649,7 +649,14 @@ export interface SidecarWatchTarget {
  * the de-register for the normal path, which must call it only AFTER its own `rm -f` of the container has
  * succeeded (`removeContainerThenRelease`): until then a signal, or the process exit, must still find it.
  */
-export function startHostLoopSidecar(p: { runner: string; argv: string[]; containerName: string; logInfra: (message: string) => void }): {
+export function startHostLoopSidecar(p: {
+  runner: string;
+  argv: string[];
+  containerName: string;
+  logInfra: (message: string) => void;
+  /** What an infra message calls the container; the host-loop sidecar's wording by default. */
+  label?: string;
+}): {
   child: ReturnType<typeof spawn>;
   markTearingDown: () => void;
   deregister: () => void;
@@ -657,7 +664,7 @@ export function startHostLoopSidecar(p: { runner: string; argv: string[]; contai
   reapNow: () => boolean;
 } {
   const child = spawn(p.runner, p.argv, { stdio: ["ignore", "ignore", "pipe"] });
-  const { markTearingDown } = watchHostLoopSidecar(child, p.logInfra);
+  const { markTearingDown } = watchHostLoopSidecar(child, p.logInfra, p.label);
   let removed = false;
   const reap = makeHostLoopSidecarReap({
     markTearingDown,
@@ -721,6 +728,8 @@ export function makeHostLoopSidecarReap(p: {
 export function watchHostLoopSidecar(
   sidecarChild: SidecarWatchTarget,
   logInfra: (message: string) => void,
+  /** What the infra message calls the container (the device_bridge container reuses this watcher). */
+  label = "hostloop VM sidecar",
 ): { markTearingDown: () => void } {
   let tearingDown = false;
   let stderrTail = "";
@@ -728,11 +737,11 @@ export function watchHostLoopSidecar(
     stderrTail = (stderrTail + d.toString()).slice(-4000);
   });
   sidecarChild.on("error", (e) => {
-    if (!tearingDown) logInfra(`hostloop VM sidecar failed to spawn: ${String(e)}`);
+    if (!tearingDown) logInfra(`${label} failed to spawn: ${String(e)}`);
   });
   sidecarChild.on("exit", (code, signal) => {
     if (tearingDown) return;
-    logInfra(`hostloop VM sidecar exited unexpectedly (code=${code} signal=${signal}): ${stderrTail}`);
+    logInfra(`${label} exited unexpectedly (code=${code} signal=${signal}): ${stderrTail}`);
   });
   return { markTearingDown: () => (tearingDown = true) };
 }

@@ -86,7 +86,9 @@ All notable changes to this project are documented here. The format is based on
   `device-bridge-misplaced`.
 - **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
   (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,
-  `device-tools-unserved`). The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".
+  `device-tools-unserved`, `shell-user`). The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".
+- Under `device_bridge`, `file_exists` and `input_unmodified` on a connected folder's path are refused before the
+  run: they would grade the agent's container, which holds no folder.
 - **Two infra-error sources**, `device-container` (the device container died: the run fails) and `device-exec` (one
   `device_bash` exec failed: a warning).
 
@@ -108,9 +110,9 @@ All notable changes to this project are documented here. The format is based on
   cited by unrelated findings.
 - **Cassette format v17.** A scenario with `device_bridge: true` stamps v17, so an older reader refuses it as too
   new. Every other cassette stamps what it did.
-- **The post-run delete scan reads `device_bash` commands**, so `no_delete_in_mounts` sees a delete in a connected
-  folder made through the bridge. Production refuses such a delete until the user allows it; the device copy does
-  not.
+- **The post-run delete scan reads `device_bash` commands, and compares the device copy before and after the run**,
+  so `no_delete_in_mounts` sees a delete in a connected folder made through the bridge by any means. Production
+  refuses such a delete until the user allows it; the device copy does not.
 
 ## [4.7.1] — 2026-10-10
 

@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
 import { gitCpFilter, gitModeEnabled } from "../run/skill-files.js";
 import type { LaunchPlan, Mount } from "../session.js";
-import { isExecInfraError } from "../hostloop/workspace-handler.js";
+import { formatExecDuration, isExecInfraError } from "../hostloop/workspace-handler.js";
 import { makeRemoteDevicesHandler, type DeviceExec } from "../hostloop/remote-devices-handler.js";
 import type { McpHandler } from "../hostloop/workspace-handler.js";
 import type { DeviceBridgeRecord, InfraErrorSource } from "../types.js";
@@ -19,7 +19,8 @@ import { HARDENING, proxyEnvVars } from "./argv.js";
  * container on the run's egress network, whose home is a tree under the run's own work directory holding COPIES
  * of the folders. Nothing it binds is a folder's host path, so device_bash never touches the user's real files.
  * That also means a delete inside the container succeeds where production refuses it until the user allows
- * deletion; the harness detects deletes after the run, as on every tier.
+ * deletion; the harness reports it after the run, from the command text and from a before/after walk of the
+ * device tree (deviceTreeDeletes).
  */
 
 const pexec = promisify(execFile);
@@ -63,8 +64,11 @@ export function stageDeviceFolders(folders: ReadonlyArray<DeviceFolder>, deviceH
     const dest = join(mntHost, f.name);
     if (!containedRealPath(mntHostReal, dirname(dest)))
       throw new BoundaryError(`cowork-harness: device folder "${f.name}" resolves outside the device tree (symlink escape)`);
-    const src = f.source.hostPath;
-    if (!existsSync(src)) throw new Error(`cowork-harness: mount source vanished after plan validation: ${src} -> ${f.name}`);
+    if (!existsSync(f.source.hostPath))
+      throw new Error(`cowork-harness: mount source vanished after plan validation: ${f.source.hostPath} -> ${f.name}`);
+    // The folder itself, not a link to it: a symlinked source copied as-is would leave a link to the user's real
+    // folder in the device tree, and a read-only folder's nested bind would then mount the real folder.
+    const src = realpathSync(f.source.hostPath);
     const filter = f.source.stageFilter ?? (gitModeEnabled() ? gitCpFilter(src) : null);
     cpSync(src, dest, { recursive: true, dereference: false, ...(filter ? { filter } : {}) });
   }
@@ -126,25 +130,87 @@ export function deviceContainerArgv(i: {
  *  failure comes back as `infraError`, never as the command's exit. */
 export function makeDeviceExec(runner: string, containerName: string, home: string): DeviceExec {
   return async (command, timeoutMs) => {
+    const startedAt = Date.now();
+    // `timeout` runs INSIDE the container, so a command that outlives its limit is stopped there, as production stops
+    // it in the VM; killing only the `docker exec` client would leave it running. Node's own timeout is a backstop.
+    const argv = ["exec", "-w", home, containerName, "timeout", "-k", "2", String(timeoutMs / 1000), "bash", "-c", command];
+    const timedOutNotice = (out: string) =>
+      `${out}${out && !out.endsWith("\n") ? "\n" : ""}Command timed out after ${formatExecDuration(timeoutMs)}`;
     try {
-      const { stdout, stderr } = await pexec(runner, ["exec", "-w", home, containerName, "bash", "-c", command], {
-        encoding: "utf8",
-        timeout: timeoutMs,
-        maxBuffer: 8 * 1024 * 1024,
-      });
+      const { stdout, stderr } = await pexec(runner, argv, { encoding: "utf8", timeout: timeoutMs + 5000, maxBuffer: READ_BUFFER });
       return { exitCode: 0, output: (stdout ?? "") + (stderr ?? "") };
     } catch (e: any) {
-      // Node reports its own timeout kill as `killed` with no exit code; every other kill carries a string code.
-      const timedOut = e?.killed === true && e?.code == null;
-      if (timedOut) return { exitCode: 124, output: `${e.stdout ?? ""}${e.stderr ?? ""}Command timed out after ${timeoutMs / 1000}s` };
+      const out = (e?.stdout ?? "") + (e?.stderr ?? "");
+      // More output than the read buffer: the handler cuts it at production's cap anyway. Node stops the command
+      // here, so its exit is not known; it reads as a success whose output was cut.
+      if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { exitCode: 0, output: out };
+      // `timeout`'s own exit (124, or 137 once -k had to kill), once the limit has passed; or Node's backstop.
+      const limitPassed = Date.now() - startedAt >= timeoutMs * 0.95;
+      if ((limitPassed && (e?.code === 124 || e?.code === 137)) || (e?.killed === true && e?.code == null))
+        return { exitCode: 124, output: timedOutNotice(out) };
       if (isExecInfraError(e)) return { infraError: [e.message, (e.stderr ?? "").trim()].filter(Boolean).join(": ") || String(e) };
-      return { exitCode: typeof e?.code === "number" ? e.code : 1, output: (e.stdout ?? "") + (e.stderr ?? "") };
+      return { exitCode: typeof e?.code === "number" ? e.code : 1, output: out };
     }
   };
 }
 
+/** Comfortably past production's 262,144-character cap, which the handler applies. */
+const READ_BUFFER = 8 * 1024 * 1024;
+
+const DEVICE_TREE_FILE = "device-tree-pre-run.json";
+
+/** Every file and link under the device tree's folders, as `<folder>/<path>` with its inode. */
+function deviceTreeListing(deviceHost: string): Record<string, number> {
+  const mnt = join(deviceHost, "mnt");
+  const out: Record<string, number> = {};
+  const visit = (p: string): void => {
+    let st;
+    try {
+      st = lstatSync(p);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) {
+      let names: string[] = [];
+      try {
+        names = readdirSync(p);
+      } catch {
+        return;
+      }
+      for (const n of names) visit(join(p, n));
+      return;
+    }
+    out[relative(mnt, p).split(sep).join("/")] = st.ino;
+  };
+  if (existsSync(mnt)) for (const n of readdirSync(mnt)) visit(join(mnt, n));
+  return out;
+}
+
+/** Record the device tree as staged, before the run, for deviceTreeDeletes. */
+export function recordDeviceTree(outDir: string): void {
+  writeFileSync(join(outDir, DEVICE_TREE_FILE), JSON.stringify(deviceTreeListing(join(resolve(outDir), "work", "device"))));
+}
+
+/** Files the run removed from a folder copy, by any means (`rm`, `find -delete`, a script): in the staged listing,
+ *  gone afterwards, and not renamed within the tree (a rename keeps its inode). Production refuses each of these
+ *  until the user allows deletion. Nothing without a recorded listing: no evidence, no claim. */
+export function deviceTreeDeletes(outDir: string): { mount: string; command: string }[] {
+  let before: Record<string, number>;
+  try {
+    before = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
+  } catch {
+    return [];
+  }
+  const after = deviceTreeListing(join(resolve(outDir), "work", "device"));
+  const inodesAfter = new Set(Object.values(after));
+  return Object.keys(before)
+    .filter((path) => !(path in after) && !inodesAfter.has(before[path]))
+    .sort()
+    .map((path) => ({ mount: path.split("/")[0], command: `(removed from the device copy) ${path}` }));
+}
+
 /** The model-visible names of the tools the bridge serves, advertised and pre-approved (production pre-approves
- *  them: run S showed no permission card for a device_bash call). */
+ *  them: a captured cloud task showed no permission card for a device_bash call). */
 export const DEVICE_BRIDGE_TOOLS = ["mcp__remote-devices__device_bash", "mcp__remote-devices__get_device_info"];
 
 /**
@@ -169,6 +235,8 @@ export function startDeviceBridge(p: {
   containerName: string;
   bundle: { servers: string[]; handle: McpHandler };
   tools: string[];
+  /** The folder copies, for the input host-path corpus: they are the user's input, as the agent's staged mounts are. */
+  inputRoots: string[];
   infraErrors: { source: InfraErrorSource; message: string }[];
   markTearingDown: () => void;
   deregister: () => void;
@@ -176,8 +244,10 @@ export function startDeviceBridge(p: {
 } {
   const deviceHost = join(resolve(p.outDir), "work", "device");
   const folders = deviceFolders(p.mounts);
-  if (!p.resume) stageDeviceFolders(folders, deviceHost);
-  else mkdirSync(join(deviceHost, "mnt"), { recursive: true });
+  if (!p.resume) {
+    stageDeviceFolders(folders, deviceHost);
+    recordDeviceTree(p.outDir);
+  } else mkdirSync(join(deviceHost, "mnt"), { recursive: true });
   const containerName = `cowork-dev-${p.runToken ?? p.sessionId}`;
   const infraErrors: { source: InfraErrorSource; message: string }[] = [];
   const { logSidecarInfra, logExecInfra } = makeInfraEmitters(p.outDir, infraErrors, { sidecar: "device-container", exec: "device-exec" });
@@ -190,7 +260,13 @@ export function startDeviceBridge(p: {
     sessionId: p.sessionId,
     folders,
   });
-  const started = startHostLoopSidecar({ runner: p.runner, argv, containerName, logInfra: logSidecarInfra });
+  const started = startHostLoopSidecar({
+    runner: p.runner,
+    argv,
+    containerName,
+    logInfra: logSidecarInfra,
+    label: "device_bridge container",
+  });
   const handle = makeRemoteDevicesHandler({
     folderNames: folders.map((f) => f.name),
     appVersion: p.appVersion,
@@ -201,6 +277,7 @@ export function startDeviceBridge(p: {
     containerName,
     bundle: { servers: ["remote-devices"], handle },
     tools: DEVICE_BRIDGE_TOOLS,
+    inputRoots: folders.map((f) => join(deviceHost, "mnt", f.name)),
     infraErrors,
     markTearingDown: started.markTearingDown,
     deregister: started.deregister,
@@ -217,6 +294,57 @@ export function deviceBridgeRecord(mounts: ReadonlyArray<Mount>): DeviceBridgeRe
     measuredOn: "2.31226.1",
     egress: "allowlist",
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
-    divergences: ["delete-not-refused", "egress-allowlist", "description-paraphrase", "device-paths-tilde", "device-tools-unserved"],
+    divergences: [
+      "delete-not-refused",
+      "egress-allowlist",
+      "description-paraphrase",
+      "device-paths-tilde",
+      "device-tools-unserved",
+      "shell-user",
+    ],
   };
+}
+
+/** A segment that may hold `*` / `?`, as a whole-segment regex. */
+function segmentMatches(pattern: string, name: string): boolean {
+  const re = new RegExp(
+    `^${pattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, ".*")
+      .replace(/\?/g, ".")}$`,
+  );
+  return re.test(name);
+}
+
+/** Under `device_bridge` the folders live in the device container and grading reads the agent's tree, which holds
+ *  none of them: `file_exists` would fail on a file device_bash wrote and pass on one the agent made in its own
+ *  container, and `input_unmodified` would cover nothing. Refused before the run; the message says what to use. */
+export function deviceBridgeFolderAssertRefusal(
+  scenario: { device_bridge?: true; assert?: ReadonlyArray<Record<string, unknown>> },
+  folderNames: ReadonlyArray<string>,
+): string | undefined {
+  if (scenario.device_bridge !== true || folderNames.length === 0) return undefined;
+  const hits: string[] = [];
+  for (const a of scenario.assert ?? []) {
+    const fe = a.file_exists;
+    const paths: Array<[string, string]> = [];
+    if (typeof fe === "string") paths.push(["file_exists", fe]);
+    else if (fe && typeof fe === "object" && typeof (fe as { path?: unknown }).path === "string")
+      paths.push(["file_exists", (fe as { path: string }).path]);
+    const iu = a.input_unmodified;
+    for (const p of typeof iu === "string" ? [iu] : Array.isArray(iu) ? iu : [])
+      if (typeof p === "string") paths.push(["input_unmodified", p]);
+    for (const [key, p] of paths) {
+      const first = p.replace(/^\.\//, "").split("/")[0];
+      const folder = folderNames.find((n) => segmentMatches(first, n));
+      if (folder !== undefined) hits.push(`${key}: ${p} (connected folder "${folder}")`);
+    }
+  }
+  if (!hits.length) return undefined;
+  return (
+    `device_bridge: the connected folders live in the device container, and file assertions read the agent's own ` +
+    `container, which holds none of them, so these would grade the wrong tree: ${hits.join("; ")}. Assert on the ` +
+    `device_bash call instead (tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: …}}), or on ` +
+    `the transcript.`
+  );
 }

@@ -121,6 +121,8 @@ export function captureInputHostPathCorpus(
   plan: Pick<LaunchPlan, "mounts" | "resume" | "workspaceFixture" | "stagedSkills">,
   mntHost: string,
   outDir: string,
+  /** More input trees, visited as the mounts are: device_bridge's folder copies, which live outside `mntHost`. */
+  extraInputRoots: ReadonlyArray<string> = [],
 ): void {
   if (plan.resume) return;
   const tokens = new Set<string>();
@@ -165,6 +167,7 @@ export function captureInputHostPathCorpus(
   };
 
   for (const m of plan.mounts) if (INPUT_KINDS.has(m.kind)) visit(join(mntHost, m.mountPath));
+  for (const r of extraInputRoots) visit(r);
   // workspace_fixture files are user-supplied input too: staged into outputs/ just before this runs, so the
   // files there now are exactly the fixture's (visited by name — never the whole outputs dir).
   for (const f of plan.workspaceFixture?.files ?? []) visit(join(mntHost, "outputs", ...f.path.split("/")));

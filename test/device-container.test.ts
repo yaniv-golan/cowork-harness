@@ -1,7 +1,7 @@
 // The device container behind `device_bridge: true`: a keep-alive container on the run's egress network that
 // holds COPIES of the connected folders at $HOME/mnt/<folder-name>, where device_bash runs. The one invariant that
 // keeps device_bash off the user's real files is that nothing the container binds is a mount's host path.
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,7 +11,9 @@ import {
   deviceFolders,
   deviceVmUser,
   agentPlanFor,
+  deviceTreeDeletes,
   makeDeviceExec,
+  recordDeviceTree,
   stageDeviceFolders,
   startDeviceBridge,
 } from "../src/runtime/device-container.js";
@@ -115,16 +117,49 @@ describe("deviceContainerArgv", () => {
   });
 });
 
-describe("makeDeviceExec", () => {
-  // A stand-in for the container runtime: `<runner> exec -w <home> <name> bash -c <command>` runs the command
-  // locally, and a container name of `gone` answers the way the Docker daemon does for a missing container.
-  const root = scratch();
-  const runner = join(root, "fake-runner.sh");
+// A stand-in for the container runtime, shaped like real Docker: `<runner> exec -w <home> <name> timeout -k 2 <secs>
+// bash -c <command>` runs the command locally (in `cwd`, standing in for $HOME), with `timeout`'s own exit 124 when it
+// outlives its limit; a missing container answers as the daemon does (exit 1). `run` stays alive like the keep-alive
+// container and `rm` records the name it removed.
+function standInRunner(root: string, cwd = "/"): string {
+  const runner = join(root, "runner.sh");
   writeFileSync(
     runner,
-    '#!/bin/bash\n[ "$4" = gone ] && { echo "Error response from daemon: No such container: gone" >&2; exit 125; }\nshift 4\nexec "$@"\n',
+    [
+      "#!/bin/bash",
+      'case "$1" in',
+      "  run) exec sleep 30;;",
+      `  rm) echo "$3" >> "${root}/removed"; exit 0;;`,
+      "esac",
+      '[ "$4" = gone ] && { echo "Error response from daemon: No such container: gone" >&2; exit 1; }',
+      "shift 4",
+      `cd "${cwd}" || exit 1`,
+      'if [ "$1" = timeout ]; then',
+      "  shift 3; secs=$1; shift",
+      '  "$@" & p=$!',
+      '  ( sleep "$secs"; kill -9 $p 2>/dev/null ) >/dev/null 2>&1 & k=$!',
+      "  wait $p 2>/dev/null; rc=$?; kill $k 2>/dev/null",
+      "  [ $rc -eq 137 ] && exit 124; exit $rc",
+      "fi",
+      'exec "$@"',
+      "",
+    ].join("\n"),
     { mode: 0o755 },
   );
+  return runner;
+}
+
+describe("makeDeviceExec", () => {
+  const root = scratch();
+  const runner = standInRunner(root);
+
+  it("runs the command under an in-container timeout, so a timed-out command is stopped inside the container", async () => {
+    const calls = join(root, "argv");
+    const spy = join(root, "spy.sh");
+    writeFileSync(spy, `#!/bin/bash\necho "$@" > "${calls}"\n`, { mode: 0o755 });
+    await makeDeviceExec(spy, "ct", "/h")("echo hi", 45000);
+    expect(readFileSync(calls, "utf8").trim()).toBe("exec -w /h ct timeout -k 2 45 bash -c echo hi");
+  });
 
   it("returns the command's output and exit code, stdout then stderr", async () => {
     const exec = makeDeviceExec(runner, "ct", "/");
@@ -138,27 +173,24 @@ describe("makeDeviceExec", () => {
     expect((r as { infraError: string }).infraError).toContain("No such container");
   });
 
-  it("a command that outlives its timeout reports the timeout, not an infra error", async () => {
-    const r = await makeDeviceExec(runner, "ct", "/")("sleep 5", 300);
-    expect(r).toMatchObject({ exitCode: 124 });
-    expect((r as { output: string }).output).toContain("timed out");
+  it("a command that outlives its timeout reports the timeout on its own line", async () => {
+    const r = await makeDeviceExec(runner, "ct", "/")("echo started; sleep 5", 1000);
+    expect(r).toEqual({ exitCode: 124, output: "started\nCommand timed out after 1s" });
+  });
+
+  it("output past the read buffer comes back cut, as output, never as an infra error", async () => {
+    const r = await makeDeviceExec(runner, "ct", "/")("head -c 9000000 /dev/zero | tr '\\0' a", 20000);
+    expect(r).not.toHaveProperty("infraError");
+    expect((r as { output: string }).output.length).toBeGreaterThan(262_144);
   });
 });
 
 describe("startDeviceBridge", () => {
-  // The stand-in runner plays both halves: `run …` stays alive like the keep-alive container, and `exec -w <home>
-  // <name> bash -c <cmd>` runs the command in the staged device tree (standing in for $HOME).
   it("stages the copies, starts the container, and serves device_bash against them; teardown removes it", async () => {
     const root = scratch();
     const f = folder(root, "proj");
     const outDir = join(root, "out");
-    const runner = join(root, "runner.sh");
-    const deviceHost = join(outDir, "work", "device");
-    writeFileSync(
-      runner,
-      `#!/bin/bash\ncase "$1" in run) exec sleep 30;; rm) echo "$3" >> "${root}/removed"; exit 0;; exec) shift 4; cd "${deviceHost}" && exec "$@";; esac\n`,
-      { mode: 0o755 },
-    );
+    const runner = standInRunner(root, join(outDir, "work", "device"));
     const bridge = startDeviceBridge({
       runner,
       image: "img",
@@ -174,6 +206,7 @@ describe("startDeviceBridge", () => {
     try {
       expect(bridge.containerName).toBe("cowork-dev-tok");
       expect(bridge.tools).toEqual(["mcp__remote-devices__device_bash", "mcp__remote-devices__get_device_info"]);
+      expect(bridge.inputRoots).toEqual([join(outDir, "work", "device", "mnt", "proj")]);
       const r = (await bridge.bundle.handle("remote-devices", {
         method: "tools/call",
         params: { name: "device_bash", arguments: { command: "cat mnt/proj/a.txt; echo x > mnt/proj/a.txt" } },
@@ -186,6 +219,49 @@ describe("startDeviceBridge", () => {
     }
     expect(readFileSync(join(root, "removed"), "utf8")).toBe("cowork-dev-tok\n");
     expect(bridge.infraErrors).toEqual([]);
+  });
+});
+
+describe("stageDeviceFolders: a symlinked folder source", () => {
+  it("copies the folder it points at, so the device tree holds no link back to the user's files", () => {
+    const root = scratch();
+    const real = folder(root, "real");
+    const link = join(root, "user", "linked");
+    symlinkSync(real.hostPath, link);
+    const deviceHost = join(root, "out", "work", "device");
+    stageDeviceFolders(deviceFolders([{ hostPath: link, mountPath: "linked", mode: "r", kind: "folder" }]), deviceHost);
+    const copy = join(deviceHost, "mnt", "linked");
+    expect(lstatSync(copy).isSymbolicLink()).toBe(false);
+    expect(readFileSync(join(copy, "a.txt"), "utf8")).toBe("alpha\n");
+  });
+});
+
+describe("deviceTreeDeletes", () => {
+  // The text scan cannot see every way a command deletes (`find -delete`, a glob, a script), so the device tree is
+  // compared before and after the run. A rename inside the tree keeps its inode and is not a delete.
+  function staged() {
+    const root = scratch();
+    const f = folder(root, "proj");
+    writeFileSync(join(f.hostPath, "b.txt"), "beta\n");
+    const outDir = join(root, "out");
+    const deviceHost = join(outDir, "work", "device");
+    stageDeviceFolders(deviceFolders([f]), deviceHost);
+    recordDeviceTree(outDir);
+    return { outDir, copy: join(deviceHost, "mnt", "proj") };
+  }
+  it("reports a file removed from a folder copy by any means", () => {
+    const { outDir, copy } = staged();
+    rmSync(join(copy, "a.txt"));
+    expect(deviceTreeDeletes(outDir)).toEqual([{ mount: "proj", command: "(removed from the device copy) proj/a.txt" }]);
+  });
+  it("a rename is not a delete; an untouched tree reports nothing", () => {
+    const { outDir, copy } = staged();
+    expect(deviceTreeDeletes(outDir)).toEqual([]);
+    renameSync(join(copy, "a.txt"), join(copy, "moved.txt"));
+    expect(deviceTreeDeletes(outDir)).toEqual([]);
+  });
+  it("without a recorded listing it reports nothing (no evidence, no claim)", () => {
+    expect(deviceTreeDeletes(scratch())).toEqual([]);
   });
 });
 
@@ -237,6 +313,21 @@ describe("wiring: execute.ts tears the device container down and keeps its infra
   });
   it("folds the device container's infra errors into the record", () => {
     expect(s).toMatch(/if \(deviceBridge\?\.infraErrors\.length\) record\.infraErrors\.push\(\.\.\.deviceBridge\.infraErrors\);/);
-    expect(s).toMatch(/deviceBridge = ct\.device;/);
+    expect(s).toMatch(/onDeviceStarted: \(d\) => \(deviceBridge = d\)/);
+  });
+});
+
+describe("wiring: the review fixes reach the run", () => {
+  const read = (p: string) => readFileSync(join(import.meta.dirname, "..", "src", p), "utf8");
+  it("container.ts hands the device over at once and feeds its folder copies to the input corpus", () => {
+    const s = read("runtime/container.ts");
+    expect(s).toMatch(
+      /if \(device\) opts\.onDeviceStarted\?\.\(device\);\s*\n(\s*\/\/[^\n]*\n)*\s*captureInputHostPathCorpus\(plan, mntHost, outDir, device\?\.inputRoots\);/,
+    );
+  });
+  it("execute.ts adds device-tree deletes to the scan and refuses folder-path file assertions", () => {
+    const s = read("run/execute.ts");
+    expect(s).toMatch(/if \(scenario\.device_bridge === true\) scan\.mountDeletes\.push\(\.\.\.deviceTreeDeletes\(outDir\)\);/);
+    expect(s).toMatch(/deviceBridgeFolderAssertRefusal\(\s*scenario,\s*deviceFolders\(plan\.mounts\)/);
   });
 });

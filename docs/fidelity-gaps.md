@@ -1848,8 +1848,10 @@ a simulated session.
 
 - **`delete-not-refused`.** Production refuses `rm`, `rmdir` and `unlink` in a connected folder until the user
   allows deletion, and that request is not served here. On the device copy a delete succeeds. The harness reports it
-  after the run instead: `no_delete_in_mounts` reads `device_bash` commands. A skill that deletes passes the
-  command in the harness where production would have stopped it, so assert `no_delete_in_mounts` when that matters.
+  after the run instead, two ways: from the text of each `device_bash` command, and by comparing the device copy
+  before and after the run, which catches a delete by any means (`find -delete`, a glob, a script). A rename within
+  a folder is not a delete. A skill that deletes passes the command in the harness where production would have
+  stopped it, so assert `no_delete_in_mounts` when that matters.
 - **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
   applies. Production's device shell follows the account's egress policy, which can pass all traffic through. A
   fetch the allowlist blocks fails here and may succeed in production.
@@ -1861,6 +1863,15 @@ a simulated session.
 - **`device-tools-unserved`.** `device_list_dir`, `device_stage_files`, `device_commit_files`, and the folder-access
   and delete-permission requests are not served. A skill that tells the agent to call one gets an unknown-tool error
   here.
+- **`shell-user`.** Commands run as the image's own user. Production runs them as a per-task user named
+  `rcw-<id>`; `$HOME` matches it (`/sessions/rcw-<id>`).
+
+Two more limits, not differences in what the agent sees. A command that outlives its limit is stopped inside the
+device container, and the result ends `Command timed out after <n>s`; production's exact wording there is not
+measured. Output past 8 MiB stops the command, and what was read is returned cut at the usual 262,144 characters.
+
+File assertions grade the agent's own container, which holds no connected folder under the bridge. So `file_exists`
+or `input_unmodified` on a folder's path is refused before the run; assert on the `device_bash` call instead.
 
 The note in the agent's prompt is the harness's, and production's own cloud prompt is not reproduced. Whether that
 prompt names the device tools is not yet measured, so the note names none.

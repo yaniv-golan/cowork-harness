@@ -1,5 +1,5 @@
 // RunResult.deviceBridge: what a device_bridge run modeled, frozen into its cassette so a later build that models the
-// bridge differently cannot re-describe an old recording. It names its own divergences from production, so a 1a
+// bridge differently cannot re-describe an old recording. It names its own divergences from production, so a bridge
 // run never reads as faithful where it is not (a delete the device copy allows, an allowlist where production may
 // pass everything through).
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -40,6 +40,7 @@ describe("deviceBridgeRecord", () => {
       "description-paraphrase",
       "device-paths-tilde",
       "device-tools-unserved",
+      "shell-user",
     ]);
   });
 });

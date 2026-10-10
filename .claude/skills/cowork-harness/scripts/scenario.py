@@ -1530,7 +1530,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
         )
 
     # E: `device_bridge: true` outside `lane: remote` + `fidelity: container` — the loader refuses it.
-    if "prompt" in doc and doc.get("device_bridge") is not None and not (
+    if "prompt" in doc and "device_bridge" in doc and not (
         doc.get("device_bridge") is True and lane == "remote" and doc.get("fidelity") == "container"
     ):
         findings.append(
