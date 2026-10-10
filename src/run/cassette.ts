@@ -1,6 +1,6 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { hasHookFailureBlocks, resolveHookFailureBlocks, type HookFailureBlocks } from "./hook-failure-blocks.js";
-import { initAgentVersion } from "./recorded-agent-version.js";
+import { initAgentVersion, initAgentVersions } from "./recorded-agent-version.js";
 import { measureMetrics, type MetricsContext } from "../metrics.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
@@ -8841,9 +8841,9 @@ export async function replayCassette(
     rec = minimalRec();
   }
 
-  // The onFailure: "block" inventory the recording froze. A cassette from before it existed is decided by the agent
-  // its own init frame says ran (an agent too old to have the field cannot have such a hook; any other is unknown).
-  const replayHookFailureBlocks = resolveHookFailureBlocks(cassette.hookFailureBlocks, initAgentVersion(cassette.events));
+  // The onFailure: "block" inventory the recording froze. A cassette from before it existed is decided by the agents its
+  // own init frames say ran (agents too old to have the field cannot have such a hook; any newer one, or none, is unknown).
+  const replayHookFailureBlocks = resolveHookFailureBlocks(cassette.hookFailureBlocks, initAgentVersions(cassette.events));
   // Reconstruct hook fire/block events from the recorded stream + control-out. A hook_callback is a
   // control_request in the stream; the harness's reply (built-in or custom) is the matching
   // control_response in controlOut. Both are already recorded — no cassette field needed. Only when

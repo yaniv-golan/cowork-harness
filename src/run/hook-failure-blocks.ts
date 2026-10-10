@@ -362,28 +362,31 @@ function compareVersions(a: string, b: string): number | undefined {
   return 0;
 }
 
-/** A run's inventory, gated by the agent that ran it (its init frame's version): an agent at or below the last one
- *  without `onFailure` cannot turn a failure into a block, so it has nothing to taint and nothing to stamp, whatever
- *  its hook sources say — and they are not read. Any newer agent, or a run whose stream reports no version (one that
- *  crashed before init), keeps the scan: a missing version is never read as an old one. */
-export function hookFailureBlocksForAgent(
-  agentVersion: string | undefined | ReadonlyArray<string | undefined>,
-  scan: () => HookFailureBlocks,
-): HookFailureBlocks {
-  // Every agent that ran must be old (a turn can hold more than one init frame); none reported, or one unparseable or
-  // missing, keeps the scan.
+/** Did every agent that ran predate `onFailure` (at or below the last one without it)? A turn can hold more than one
+ *  init frame, so every one must be old; none reported, or one unparseable or missing, is not old — a missing version
+ *  is never read as an old one. */
+export function allAgentsPredateOnFailure(agentVersion: string | undefined | ReadonlyArray<string | undefined>): boolean {
   const versions = typeof agentVersion === "string" || agentVersion === undefined ? [agentVersion] : agentVersion;
-  const allOld =
+  return (
     versions.length > 0 &&
     versions.every((v) => {
       const cmp = v === undefined ? undefined : compareVersions(v, LAST_AGENT_WITHOUT_ONFAILURE);
       return cmp !== undefined && cmp <= 0;
-    });
-  return allOld ? { events: [] } : scan();
+    })
+  );
 }
 
-/** The inventory a recording carries, or — for one made before it was recorded — what can be said: an agent at or
- *  below the last one without `onFailure` cannot have such a hook; any other (or an unknown agent) is unknown. */
+/** A run's inventory, gated by the agent that ran it (its init frames' versions): an agent at or below the last one
+ *  without `onFailure` cannot turn a failure into a block, so it has nothing to taint and nothing to stamp, whatever
+ *  its hook sources say — and they are not read. Any newer agent, or a run whose stream reports no version (one that
+ *  crashed before init), keeps the scan. */
+export function hookFailureBlocksForAgent(
+  agentVersion: string | undefined | ReadonlyArray<string | undefined>,
+  scan: () => HookFailureBlocks,
+): HookFailureBlocks {
+  return allAgentsPredateOnFailure(agentVersion) ? { events: [] } : scan();
+}
+
 /** Is `v` a well-formed inventory? A recording is a plain file anyone can edit. */
 export function isHookFailureBlocks(v: unknown): v is HookFailureBlocks {
   if (!v || typeof v !== "object" || Array.isArray(v)) return false;
@@ -392,12 +395,15 @@ export function isHookFailureBlocks(v: unknown): v is HookFailureBlocks {
   return Array.isArray(o.events) && o.events.every((e) => typeof e === "string");
 }
 
-export function resolveHookFailureBlocks(recorded: unknown, agentVersion: string | undefined): HookFailureBlocks {
+/** The inventory a recording carries, or — for one made before it was recorded — what can be said: if every agent its
+ *  stream reports is at or below the last one without `onFailure`, none can have such a hook; otherwise (a newer agent,
+ *  or none reported) it is unknown. `agentVersions`: every init frame's version in the recording, in order. */
+export function resolveHookFailureBlocks(recorded: unknown, agentVersions: ReadonlyArray<string | undefined>): HookFailureBlocks {
   if (recorded !== undefined)
     return isHookFailureBlocks(recorded) ? recorded : { unknown: true, why: "the recorded inventory is malformed" };
-  const cmp = agentVersion === undefined ? undefined : compareVersions(agentVersion, LAST_AGENT_WITHOUT_ONFAILURE);
-  if (cmp !== undefined && cmp <= 0) return { events: [] };
-  return { unknown: true, why: `recorded before the inventory existed, by agent ${agentVersion ?? "(unknown)"}` };
+  if (allAgentsPredateOnFailure(agentVersions)) return { events: [] };
+  const named = agentVersions.length ? agentVersions.map((v) => v ?? "(unknown)").join(", ") : "(unknown)";
+  return { unknown: true, why: `recorded before the inventory existed, by agent ${named}` };
 }
 
 /** May a failed frame of `event` be a block the frame does not show? */
