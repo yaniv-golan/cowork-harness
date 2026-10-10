@@ -75,6 +75,26 @@ export function stageDeviceFolders(folders: ReadonlyArray<DeviceFolder>, deviceH
   }
 }
 
+/** Docker resolves a bind source on the HOST. Before a start (a resumed turn above all, which reuses the tree a
+ *  previous turn's commands could change), every bind source must be a real directory inside the device tree: `mnt`
+ *  and each read-only folder's copy. A symlink there would bind its target, any host path. */
+export function assertDeviceBindSources(deviceHost: string, folders: ReadonlyArray<DeviceFolder>): void {
+  const root = realpathSync(deviceHost);
+  const check = (rel: string): void => {
+    const p = join(deviceHost, rel);
+    let real: string | undefined;
+    try {
+      real = lstatSync(p).isDirectory() ? realpathSync(p) : undefined;
+    } catch {
+      real = undefined;
+    }
+    if (real !== join(root, rel))
+      throw new BoundaryError(`cowork-harness: device_bridge: ${rel} is not a directory inside the device tree; refusing to bind it`);
+  };
+  check("mnt");
+  for (const f of folders) if (f.mode === "r") check(join("mnt", f.name));
+}
+
 /** The device user's home, as the container sees it. */
 export function deviceHome(sessionId: string): string {
   return `/sessions/${deviceVmUser(sessionId)}`;
@@ -120,6 +140,10 @@ export function deviceContainerArgv(i: {
     ...Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
     "-v",
     `${i.deviceHost}:${home}`,
+    // mnt as a mount point of its own: a command cannot rename or replace it, so a read-only folder's bind source
+    // below stays the directory staging wrote.
+    "-v",
+    `${i.deviceHost}/mnt:${home}/mnt`,
     ...i.folders.filter((f) => f.mode === "r").flatMap((f) => ["-v", `${i.deviceHost}/mnt/${f.name}:${home}/mnt/${f.name}:ro`]),
     i.image,
     "sleep",
@@ -291,6 +315,7 @@ export function startDeviceBridge(p: {
     sessionId: p.sessionId,
     folders,
   });
+  assertDeviceBindSources(deviceHost, folders);
   // A container left under this name (a teardown that ran before a slow create finished) would make the start fail.
   removeContainer(p.runner, containerName);
   const started = startHostLoopSidecar({

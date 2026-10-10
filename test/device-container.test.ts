@@ -101,7 +101,13 @@ describe("deviceContainerArgv", () => {
   });
 
   it("mounts the device tree as $HOME and each folder at $HOME/mnt/<name>, read-only folders :ro", () => {
-    expect(binds(argv)).toEqual([`${deviceHost}:/sessions/rcw-t1`, `${deviceHost}/mnt/ref:/sessions/rcw-t1/mnt/ref:ro`]);
+    // mnt is a mount point of its own, so a command cannot rename or replace it (and with it a read-only folder's
+    // bind source) for a later turn to bind.
+    expect(binds(argv)).toEqual([
+      `${deviceHost}:/sessions/rcw-t1`,
+      `${deviceHost}/mnt:/sessions/rcw-t1/mnt`,
+      `${deviceHost}/mnt/ref:/sessions/rcw-t1/mnt/ref:ro`,
+    ]);
     expect(argv[argv.indexOf("-w") + 1]).toBe("/sessions/rcw-t1");
   });
 
@@ -302,6 +308,67 @@ describe("stageDeviceFolders: a symlinked folder source", () => {
     const copy = join(deviceHost, "mnt", "linked");
     expect(lstatSync(copy).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(copy, "a.txt"), "utf8")).toBe("alpha\n");
+  });
+});
+
+describe("startDeviceBridge: a resumed turn never binds what a command left behind", () => {
+  // Docker resolves a bind source on the HOST. A read-only folder is bound by its path in the device tree, so if a
+  // previous turn's command had replaced that copy with a symlink, the next turn would bind the link's target, any
+  // host path. Every bind source is checked to be a real directory inside the device tree before the start.
+  it("refuses to start when a read-only folder's copy is a symlink, and binds nothing", () => {
+    const root = scratch();
+    const ref = folder(root, "ref", "r");
+    const outDir = join(root, "out");
+    const runner = standInRunner(root, join(outDir, "work", "device"));
+    const start = (resume: boolean) =>
+      startDeviceBridge({
+        runner,
+        image: "img",
+        network: "net",
+        egressProxy: "http://p:1",
+        outDir,
+        sessionId: "s",
+        runToken: `r${resume}`,
+        mounts: [ref],
+        appVersion: "2.31226.1",
+        resume,
+      });
+    const t1 = start(false);
+    t1.markTearingDown();
+    t1.reapNow();
+    const copy = join(outDir, "work", "device", "mnt", "ref");
+    rmSync(copy, { recursive: true });
+    mkdirSync(join(root, "secret"));
+    symlinkSync(join(root, "secret"), copy);
+    expect(() => start(true)).toThrow(/device_bridge.*ref.*not a directory inside the device tree/);
+    // nothing was started: no `run` reached the runtime after the refusal
+    expect(readFileSync(join(root, "removed"), "utf8").trim().split("\n")).toHaveLength(2);
+  });
+  it("refuses when mnt itself was replaced by a link", () => {
+    const root = scratch();
+    const ref = folder(root, "ref", "r");
+    const outDir = join(root, "out");
+    const runner = standInRunner(root, join(outDir, "work", "device"));
+    const start = (resume: boolean) =>
+      startDeviceBridge({
+        runner,
+        image: "img",
+        network: "net",
+        egressProxy: "http://p:1",
+        outDir,
+        sessionId: "s",
+        runToken: `m${resume}`,
+        mounts: [ref],
+        appVersion: "2.31226.1",
+        resume,
+      });
+    const t1 = start(false);
+    t1.markTearingDown();
+    t1.reapNow();
+    const mnt = join(outDir, "work", "device", "mnt");
+    renameSync(mnt, `${mnt}.old`);
+    symlinkSync(`${mnt}.old`, mnt);
+    expect(() => start(true)).toThrow(/device_bridge.*not a directory inside the device tree/);
   });
 });
 
