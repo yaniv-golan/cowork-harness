@@ -49,11 +49,16 @@ describe.skipIf(!existsSync(CLI))("a YAML syntax error in a CLI input file is on
 });
 
 describe.skipIf(!existsSync(CLI))("`--session=~/…` expands to the home directory", () => {
+  // The session file does not parse, so the command stops at the parse, naming the path it expanded, before it stands
+  // up the Docker boundary (a sidecar and a run per check). Running that boundary only to read this path made the test
+  // time out under Docker contention in a full suite; the boundary itself is covered by the boundary CI job.
   it("boundary-check", () => {
     const d = work();
-    writeFileSync(join(d, "s.yaml"), "egress:\n  extra_allow: [example.com]\n");
-    const r = cli(["boundary-check", "--session=~/s.yaml", "--output-format", "json"], d, { HOME: d });
-    expect(r.all).not.toMatch(/--session file not found/);
+    writeFileSync(join(d, "s.yaml"), "egress: [\n");
+    // Run from another directory, so a `~/` that resolved against the cwd instead of HOME cannot find the file.
+    const r = cli(["boundary-check", "--session=~/s.yaml", "--output-format", "json"], work(), { HOME: d });
+    expect(r.code, r.all).toBe(2);
+    expect(errMsg(r.stdout)).toContain(`cannot parse --session ${join(d, "s.yaml")}:`);
   });
 
   it("verify-cassettes", () => {
