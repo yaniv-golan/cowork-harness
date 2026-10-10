@@ -346,7 +346,7 @@ It does **not** record their contents — see Known limitations.
 |---|---|
 | `0` | The critique ran. **Any** findings, of any classification — including a task run that itself errored, which is a legitimate finding about the skill — except one that hit the account's usage limit (exit `2`). |
 | `1` | **Operator interrupt only** (SIGINT/SIGTERM — e.g. Ctrl-C). Not part of the findings taxonomy, but reachable: a sweep wrapper treating `1` as impossible will misread a cancelled run as a crash. |
-| `2` | Usage error, **or an instrument failure** — the turn was killed, the reflection protocol broke, the task turn hit the account's usage limit, or the evaluator was never invoked *or threw*. No critique was produced. A broken instrument is not a discovery outcome. |
+| `2` | Usage error, a task turn that hit the account's usage limit (an ordinary `RUN FAILED`, not a broken instrument), **or an instrument failure** — the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw*. No critique was produced. A broken instrument is not a discovery outcome. |
 
 Never gate CI on findings; that is the whole design.
 

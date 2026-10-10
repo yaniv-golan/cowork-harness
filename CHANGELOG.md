@@ -48,8 +48,8 @@ All notable changes to this project are documented here. The format is based on
 - **A background sub-agent that fails after the main loop's final result** may not be seen before the run ends.
 - **A run that stops at an unanswered question or a decider timeout** after a sub-agent's limit is reported by
   that stop, not as a usage limit.
-- **Run dirs written before 4.7.1** keep their recorded result under `verify-run`, which reads the stored
-  `result.json`; re-run or replay to apply the new reading.
+- **Run dirs written before 4.7.1** keep their recorded result under `verify-run` and `regrade`, which read the
+  stored `result.json`; re-run or replay to apply the new reading.
 
 ### Documentation
 

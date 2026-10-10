@@ -250,3 +250,15 @@ describe("the raw stream frame reaches the detector", () => {
     expect([rec.result, rec.resultErrorKind, rec.errorSource]).toEqual(["error", "usage_limit", "agent"]);
   });
 });
+
+describe("critique's exit-code contract names the usage-limit task turn everywhere it is stated", () => {
+  it("--help, SPEC.md and docs/critique.md put a usage-limit task turn under exit 2", async () => {
+    const { readFileSync } = await import("node:fs");
+    const help = readFileSync("src/critique/command.ts", "utf8").match(/EXIT CODES:[\s\S]*?Findings NEVER gate/)?.[0] ?? "";
+    expect(help).toMatch(/2 = no\s+critique was produced:[\s\S]*usage limit/);
+    expect(readFileSync("SPEC.md", "utf8")).toMatch(
+      /exits `2` only when no critique was produced: a usage error, a task turn that hit the account's usage limit/,
+    );
+    expect(readFileSync("docs/critique.md", "utf8")).toMatch(/\| `2` \| Usage error, a task turn that hit the account's usage limit/);
+  });
+});

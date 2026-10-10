@@ -54,7 +54,7 @@ carry that; read all three before touching anything.
 **Do NOT read "has a kind" as "the instrument is fine".** The CLI's top-level catch turns every
 unexpected throw into category **`internal`** — Docker down, container start failure, missing staged
 agent, harness bug — and `runtime` carries a refused run dir. Only **`unanswered`, `usage`, `boundary`**
-and, from the result-row taxonomy, **`usage_limit`** (quota exhausted — retry after reset) and
+and, from the result-row taxonomy, **`usage_limit`** (the account's quota — the main loop's or a sub-agent's; on the task turn critique exits 2 with `RUN FAILED (task turn, usage_limit)` and spawns no reflection) and
 **`transport`** (a tail-end drop) are the caller's problem. `agent` is not: for critique's own protocol
 turn that IS the instrument breaking. The header encodes exactly that split and fails closed (an
 unrecognized kind renders as infrastructure):

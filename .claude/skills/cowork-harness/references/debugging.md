@@ -148,8 +148,12 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   **`stderrLogPath`** (the captured agent stderr) — read those and `trace <run-dir>` *before* re-running;
   a re-record rarely tells you more than the captured stderr already does. Also check
   **`resultErrorKind`** (`"transport" | "agent" | "usage_limit"`) before spending another paid run: a
-  `"usage_limit"` failure is a quota exhaustion, not a skill bug — retry after the limit resets rather
-  than debugging; `"transport"`/`"agent"` means something actually broke, worth localizing before
+  `"usage_limit"` failure is the account's quota, not a skill bug — don't debug the skill. It is also set
+  when a **sub-agent** hit the limit and the main loop ended `success` (then `errorSource: "agent"`): the
+  `usage_limit` verdict message names that sub-agent (dispatch id, type, limit text), and `decisions[]`
+  carries a `name: "subagent_usage_limit"` row (`detail: {toolUseId?, subagentType?, taskId?, error,
+  prior?}`). Retry once the quota allows; for a sub-agent's limit also check the model it is pinned to and
+  the account's plan — a model-scoped or credits limit does not reset on a timer; `"transport"`/`"agent"` means something actually broke, worth localizing before
   re-running.
 - **Attributing cost to sub-agent work.** `subagents[]` gives the dispatch tree — each sub-agent's
   `dispatchModel`/`resolvedModel`, `toolsUsed`, `prompt`/`output`, and `attributedSkillId` — but **not** its own token/cost;

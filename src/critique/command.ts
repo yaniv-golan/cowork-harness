@@ -5,8 +5,9 @@
 //                                 [--fidelity container|hostloop] [--evaluator-model <id>] [--output-format json|text]
 //
 // This is a DISCOVERY instrument, not a gate: it never fails CI and it never edits the skill. FINDINGS never gate — any classification exits 0, including when the graded task
-// run itself errored (that is a finding about the skill). Exit 2 means NO CRITIQUE WAS PRODUCED: a usage
-// error, or an instrument failure (turn killed, reflection protocol broke, evaluator never invoked or threw) .
+// run itself errored (that is a finding about the skill) — unless it hit the account's usage limit. Exit 2 means NO
+// CRITIQUE WAS PRODUCED: a usage error, a task turn that hit the account's usage limit, or an instrument failure
+// (turn killed, reflection protocol broke, evaluator never invoked or threw).
 // Container OR hostloop tier: the reflection turn RESUMES the task turn's mounted skill + conversation, and
 // that resume-continuity is proven for BOTH — container (Linux ELF) and hostloop (native binary; see
 // test/live-contract.test.ts). `--fidelity cowork` is accepted too, but is not a third environment: it
@@ -217,9 +218,10 @@ RUN-DIR ARTIFACTS (written best-effort alongside turns/):
   critique-salvage.json          on exit 2 only: self-report + each pass's RAW reply, pre-parse
 
 EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself errored — that is a
-  finding about the skill, not a broken instrument). 2 = usage error, or an instrument failure (turn
-  killed, reflection protocol broke, evaluator never invoked or threw) — no critique was produced. Findings
-  NEVER gate. --corpus-only: 0 = measured (even over the ceiling — it is a measurement, not a gate; gate on
+  finding about the skill, not a broken instrument — unless it hit the account's usage limit). 2 = no
+  critique was produced: a usage error, a task turn that hit the account's usage limit (its own result or a
+  sub-agent's; RUN FAILED (task turn, usage_limit)), or an instrument failure (turn killed, reflection
+  protocol broke, evaluator never invoked or threw). Findings NEVER gate. --corpus-only: 0 = measured (even over the ceiling — it is a measurement, not a gate; gate on
   corpusBytes <= corpusCeiling yourself), 2 = usage error, unresolvable target, or 0 git-tracked files.
 
 ${renderKnownLimitations()}

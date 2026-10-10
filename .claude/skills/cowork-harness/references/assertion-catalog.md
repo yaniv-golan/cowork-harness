@@ -47,7 +47,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 |---|---|---|
 | `assertion` | fail | An authored `assert:` item failed |
 | `result_error` | fail | The run's SDK result was `"error"` |
-| `usage_limit` | fail | Usage/quota limit hit (not a skill failure) — retry after the limit resets. Emitted when `RunResult.resultErrorKind === "usage_limit"` — including when a sub-agent hit the limit and the main loop ended `success` (the message names the sub-agent) |
+| `usage_limit` | fail | Usage/quota limit hit (not a skill failure) — retry after the limit resets. Emitted when `RunResult.resultErrorKind === "usage_limit"` — including when a sub-agent hit the limit and the main loop ended `success`, where the message names the sub-agent and says to check its model and the account's plan instead of promising a reset (`decisions[]` row `subagent_usage_limit`) |
 | `transport_error` | fail | The connection dropped mid/after-run |
 | `permissive_auto_allow` | fail | A cowork-parity auto-allow real Cowork would block (opt out: `allow_permissive_auto_allow`) |
 | `outputs_delete` | fail | An unauthorized delete touched `mnt/outputs` on a baseline that records outputs `rw` (not raised on `rwd`, Desktop 2.16120.0+, unless `no_delete_in_outputs` or `no_delete_in_mounts` (outputs not waived) is authored — with `no_delete_in_outputs` that assertion fails instead; with `no_delete_in_mounts` this signal itself fires, and its message names that key), confirmed: the per-turn filesystem diff proves it, a delete in command/call position has an `outputs/` path as its own operand, or the diff could not verify the turn. Authoring `no_delete_in_outputs` moves it into that assertion; `allow_outputs_delete` waives it |

@@ -48,7 +48,9 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
 | `insufficient` | too few valid reps in an arm (4 of 5 needed by default) |
 
 A drop is a signal to investigate, not proof: open the run dirs the report links for that row. In order,
-first match wins: an infrastructure failure is excluded and reported — including a rep where no model
+first match wins: an infrastructure failure is excluded and reported — including a usage limit the run lane
+named (the main loop's or a sub-agent's, rule `kind_usage_limit`, even on a rep that otherwise timed out or hit
+`error_max_turns`), and a rep where no model
 answered (the agent's `Not logged in` / `Authentication required` reply, rule `auth`; a usage or
 spend limit as its final message, even on a nonzero exit after spend, rule `usage_limit`; or only
 `<synthetic>` models at $0, rule `no_model_answered`). An agent-caused failure (timeout, max turns,
