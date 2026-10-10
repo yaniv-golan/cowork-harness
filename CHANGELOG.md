@@ -77,6 +77,18 @@ All notable changes to this project are documented here. The format is based on
   shape, permission mode), with names outside the product's vocabulary fingerprinted and every length bucketed, and
   `verify.py`, which checks a downloaded capture's integrity, redaction and that it can answer its probe. No harness
   behaviour changes.
+- **`device_bridge: true` serves the remote lane's shell on the user's computer.** On `lane: remote` with
+  `fidelity: container`, the harness serves `mcp__remote-devices__device_bash` and `get_device_info` from a second
+  container that holds copies of the connected folders at `$HOME/mnt/<folder-name>`, and the agent's own container
+  gets no folder, as a cloud task's has none. Commands run on the copies, never on your files, through the run's
+  egress proxy. The prompt's claims that a folder is mounted in the agent's tree give way to a short note. Assert
+  with `tool_called`. The loader refuses the key with any other lane or tier, and `lint` reports
+  `device-bridge-misplaced`.
+- **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
+  (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,
+  `device-tools-unserved`). The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".
+- **Two infra-error sources**, `device-container` (the device container died: the run fails) and `device-exec` (one
+  `device_bash` exec failed: a warning).
 
 ### Fixed
 
@@ -94,6 +106,11 @@ All notable changes to this project are documented here. The format is based on
   on model-written wording, and across repeats of the same probe it often never recurs. The docs and the skill
   now say to read repeats side by side, aligned by classification, and that a shared evidence excerpt is often
   cited by unrelated findings.
+- **Cassette format v17.** A scenario with `device_bridge: true` stamps v17, so an older reader refuses it as too
+  new. Every other cassette stamps what it did.
+- **The post-run delete scan reads `device_bash` commands**, so `no_delete_in_mounts` sees a delete in a connected
+  folder made through the bridge. Production refuses such a delete until the user allows it; the device copy does
+  not.
 
 ## [4.7.1] — 2026-10-10
 

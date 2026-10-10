@@ -267,7 +267,9 @@ tool can stand up. What it does instead is refuse to fake it. Declare `lane: rem
 the assertions that depend on files inside the agent's container degrade honestly — the keys that can never
 pass there (file bodies, absence, links, delivery by location) are refused before the run starts, a semantic judge
 sees the transcript only, and delivery is reported as unobservable — so a green never
-means more than it should.
+means more than it should. Add `device_bridge: true` (with `fidelity: container`) to serve `device_bash`, the
+remote lane's shell on the user's computer, from a second container that holds copies of the connected folders
+([docs/scenario.md](./docs/scenario.md#device_bridge-true--the-cloud-tasks-way-to-the-users-computer)).
 
 **What this means for you.** Behaviour-shaped conclusions travel between lanes: whether your skill
 triggers, how it sequences tools, which questions it asks, whether it respects a permission gate.
@@ -352,7 +354,7 @@ See [DESIGN.md](./DESIGN.md) for the full parity matrix, the known deltas vs. re
 
 ## Limitations
 
-- **The local lane only.** Every tier models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06. The remote (cloud) lane runs server-side with a different filesystem, shell tool, delivery mechanism and a server-authored prompt; no tier reproduces it, and `lane: remote` exists to make the resulting blind spots refuse to grade rather than pass. See [Which Cowork lane this models](#which-cowork-lane-this-models--read-this-before-trusting-an-environment-assertion).
+- **The local lane only.** Every tier models Cowork's local lane, which new Pro and Max tasks do not use from 2026-10-06. The remote (cloud) lane runs server-side with a different filesystem, shell tool, delivery mechanism and a server-authored prompt; no tier reproduces it, and `lane: remote` exists to make the resulting blind spots refuse to grade rather than pass. `device_bridge: true` serves the remote lane's `device_bash` over copies of the folders, with the differences listed in [docs/fidelity-gaps.md](./docs/fidelity-gaps.md#remote-device-bridge--mcp__remote-devices__-modeled-in-part-by-device_bridge). See [Which Cowork lane this models](#which-cowork-lane-this-models--read-this-before-trusting-an-environment-assertion).
 - **Not the full Desktop network transport.** L1 is a container, not a VM; L2 *is* a real Apple-VZ microVM but still does not reproduce Cowork's gVisor netstack — its egress is the same allowlist proxy as L1 (with a guest iptables firewall in front). If your skill depends on VM-kernel specifics, validate at L2; if it depends on packet-level gVisor behavior, no tier reproduces it.
 - **Cowork in-guest context is partial.** Desktop supplies host-loop staging, runtime `mountPath` RPC, and the bridge. We reproduce the *filesystem and cowork mode*, not those host-side services. Skills that call Desktop-only host RPCs won't run here (they wouldn't be portable anyway).
 - **The agent binary is the staged ELF** (`claude-code-vm/<ver>/claude`), **bind-mounted** from your own Claude Desktop install — nothing Anthropic-owned is bundled or installed. There is **no npm path**; override the path with `COWORK_AGENT_BINARY`. Check licensing/ToS for your use.

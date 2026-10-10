@@ -1808,9 +1808,10 @@ is a false red. It has no file or network effect, so file, artifact and egress a
 of its enabled-model condition, never the model list itself. A model added to or removed from the set, or the tool
 enabled for every model, therefore changes the digest and shows up as a `sync --diff` line.
 
-### Remote device bridge — `mcp__remote-devices__*`, deliberately unmodeled
+### Remote device bridge — `mcp__remote-devices__*`, modeled in part by `device_bridge`
 
-The remote lane also has an internal MCP server the harness does not model at all. The agent calls its
+The remote lane also has an internal MCP server, which the harness serves only in part, and only when a scenario
+sets `device_bridge: true` (see below). The agent calls its
 tools as `mcp__remote-devices__<tool>`, and a host-side MCP server that Desktop bridges into the session
 nests one level deeper, as `mcp__remote-devices__<server>__<tool>`. Agent-facing tools include
 `device_bash`, `device_list_dir`, `device_stage_files`, `device_commit_files`,
@@ -1835,10 +1836,37 @@ calls `session_type: "cowork-remote"`. None of these tools is in the local spawn
 it from the container that hosts the ordinary `Bash` tool. So a remote session reaches back into a
 local VM (process namespace `rcw-<session>`, which the disk janitor's orphan cleanup deliberately skips).
 
-**Deliberately unmodeled.** Emulating it faithfully would mean real command execution and real writes on
-the operator's machine on behalf of a simulated remote session. The exact inventory is also
-feature-gated, so it varies by account. Recorded here so a remote-lane probe diffed against this harness
-is not misfiled as a harness bug — triage the lane first ([how](#which-lane-a-session-actually-ran-on)).
+**What `device_bridge: true` models.** `device_bash` and `get_device_info`, served from a second container that
+holds copies of the connected folders at `$HOME/mnt/<folder-name>`. The agent's own container gets no folder, as a
+cloud task's has none. `device_bash` takes `command` and an optional `timeout_ms` capped at 45 s, and returns one
+text item: the output, cut at 262,144 characters, or `Exit code N` and the output when the command fails.
+`device_bash` loads without ToolSearch and `get_device_info` does not, as Desktop 2.31226.1 registers them. Running
+on copies is deliberate: a faithful bridge would run commands and write files on the operator's machine on behalf of
+a simulated session.
+
+**Where it differs from production.** A run's `deviceBridge` record lists these by id:
+
+- **`delete-not-refused`.** Production refuses `rm`, `rmdir` and `unlink` in a connected folder until the user
+  allows deletion, and that request is not served here. On the device copy a delete succeeds. The harness reports it
+  after the run instead: `no_delete_in_mounts` reads `device_bash` commands. A skill that deletes passes the
+  command in the harness where production would have stopped it, so assert `no_delete_in_mounts` when that matters.
+- **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
+  applies. Production's device shell follows the account's egress policy, which can pass all traffic through. A
+  fetch the allowlist blocks fails here and may succeed in production.
+- **`description-paraphrase`.** The tool description paraphrases one production branch (45 s limit, no
+  folder-request tool) and names no tool the harness does not serve. A test fails when the newest baseline no
+  longer carries that branch.
+- **`device-paths-tilde`.** `get_device_info` spells each folder `~/<folder-name>`; production gives its path on
+  the Mac.
+- **`device-tools-unserved`.** `device_list_dir`, `device_stage_files`, `device_commit_files`, and the folder-access
+  and delete-permission requests are not served. A skill that tells the agent to call one gets an unknown-tool error
+  here.
+
+The note in the agent's prompt is the harness's, and production's own cloud prompt is not reproduced. Whether that
+prompt names the device tools is not yet measured, so the note names none.
+
+The exact inventory is also feature-gated, so it varies by account. Recorded here so a remote-lane probe diffed
+against this harness is not misfiled as a harness bug — triage the lane first ([how](#which-lane-a-session-actually-ran-on)).
 
 ### Where it bites — it looks like a harness bug
 

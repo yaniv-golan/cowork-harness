@@ -257,10 +257,29 @@ against. `local` is this harness's default because `local` is the lane every tie
 (where the run happens). A `lane: remote` scenario still executes locally, in whichever tier you chose —
 what changes is the contract its assertions are held to.
 
-**Scoped to delivery semantics.** The remote lane's device bridge (`device_bash`, `device_commit_files`,
-and the rest of the `mcp__remote-devices__*` tools) is deliberately not modeled: emulating it faithfully would
-mean real command execution and real writes on the operator's machine on behalf of a simulated session.
-See [fidelity-gaps.md](./fidelity-gaps.md).
+**Scoped to delivery semantics, unless `device_bridge` is set.** By default the remote lane's device bridge (the
+`mcp__remote-devices__*` tools a cloud task uses to reach the user's computer) is not served. Add
+`device_bridge: true` to serve part of it, as below.
+
+### `device_bridge: true` — the cloud task's way to the user's computer
+
+A cloud task's own container holds none of the user's folders. It reaches them through `device_bash`, a shell that
+runs on the user's computer with the connected folders at `$HOME/mnt/<folder-name>`. With `device_bridge: true` the
+harness serves that tool from a second container:
+
+- The agent's container gets no connected folder, and the prompt's claims that a folder is mounted there give way to
+  a short note that the folders are on the user's computer. The note names no tool.
+- `mcp__remote-devices__device_bash` runs each command as a fresh `bash -c` in the device container, starting in
+  `$HOME`. The device container holds **copies** of the connected folders, so a command never touches your real
+  files. `mcp__remote-devices__get_device_info` is served too, with the folders spelled `~/<folder-name>`.
+- The device container reaches the network through the run's egress proxy, so the session's allowlist applies.
+- The tools are pre-approved. Assert on them with `tool_called` / `tool_not_called` (both forms), for example
+  `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`.
+
+Valid only with `lane: remote` and `fidelity: container`; the loader refuses any other pairing (and `lint` reports
+`device-bridge-misplaced`). Only `true` is valid. A recording that uses it stamps cassette v17, and its result
+carries `deviceBridge`: what was served and every known difference from production. The differences, and what is
+not served, are in [fidelity-gaps.md](./fidelity-gaps.md#remote-device-bridge--mcp__remote-devices__-modeled-in-part-by-device_bridge).
 
 **When to reach for it.** `lane: remote` is the contract to hold a skill to when it will run on new Pro and Max
 tasks, which run in the cloud from 2026-10-06: it checks whether the skill's delivery survives the cloud lane. A
