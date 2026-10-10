@@ -59,8 +59,9 @@ Anthropic's; standing up a local imitation would be authoring an environment rat
 one, with no production to verify it against. What exists instead is `lane: remote` on a scenario,
 which makes the affected assertions **refuse to grade** rather than pass — the keys that read files inside the
 agent's container are refused at load, a semantic judge sees the transcript only, and delivery is reported
-unobservable. `input_unmodified` still reads the local stand-in for the user's inputs; whether a cloud run's edit
-of a staged copy reaches the device is unconfirmed.
+unobservable. `input_unmodified` still reads the local stand-in for the user's inputs, which is right on that lane:
+in a real cloud session, an edit to a staged copy inside the container did not reach the device; only an explicit
+commit of the file wrote it back.
 
 **Practical consequence.** Behaviour-shaped conclusions travel between lanes: whether a skill
 triggers, how it sequences tools, which questions it asks, whether it honours a permission gate.

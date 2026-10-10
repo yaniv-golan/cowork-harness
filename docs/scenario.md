@@ -241,7 +241,7 @@ against. `local` is this harness's default because `local` is the lane every tie
 | File reads: `artifact_text` / `artifact_json` (file bodies), `file_absent` / `no_unexpected_files` (absence), `computer_links_resolve(_if_present)` (links), `no_lost_write_back` (authored sources) | as documented | rejected at scenario-LOAD time — each reads files inside the agent's container. The run executes locally, so a local file is on disk, but the lane's container filesystem is not observable from outside it, so none of these can pass there. A written path is assertable (with `file_exists`); its content or absence is not: assert the agent's own statement of it (`transcript_matches` / `transcript_not_matches`), or set `lane: local` |
 | Authorship: `authored: true` (on `file_exists`, `artifact_text`, `artifact_json`) | decided from the pre-run manifest | `file_exists` with it is rejected at scenario-LOAD time (the other two are refused whole): it compares the container's file with the pre-run manifest, so it is undecidable there. Plain `file_exists` stays: a written path is the documented proxy on this lane |
 | Judged keys (`semantic_matches` / `semantic_pairwise`) | graded on the transcript, final answer and authored files | graded on the **transcript and final answer only**: no authored file, capture-health path or sub-agent text reaches the judge, and the judge is told so. `semanticEvidence` is `{reason: "graded", paths: []}`, and the assertion's evidence says "judged on the transcript only (lane: remote)". With `evidence_files` it is rejected at scenario-LOAD time (`lane_remote_evidence_files` if it reaches the evaluator another way). A pairwise reference is stored per lane, so a remote document is never compared with one frozen from a local run |
-| Input integrity (`input_unmodified`) | compares the inputs' hashes | **unchanged**: reads the local stand-in for the inputs, which in production live on the user's device. Whether an in-container edit of a staged copy reaches the device is **unconfirmed**; this may change when it is measured |
+| Input integrity (`input_unmodified`) | compares the inputs' hashes | **unchanged**: reads the local stand-in for the inputs, which in production live on the user's device. In a real cloud session an in-container edit of a staged copy did **not** reach the device; only an explicit commit of the file wrote it back |
 
 > **`lane:` needs cowork-harness ≥ 1.14.0.** On an older CLI a scenario carrying it does **not** load —
 > `Unrecognized key: "lane"`, exit 2 — rather than falling back to `lane: local`. So adopting the key means
@@ -899,7 +899,7 @@ that path) — which **fails loud**, never a vacuous pass. (No JSONPath/jq: a do
 no side effects.)
 
 **The shape of the whole value: `schema`.** A JSON Schema (draft 2020-12) the value at `path` — or the whole
-document, without `path` — must match. Write it inline, or name a JSON file next to the scenario:
+document, without `path` — must match. Write it inline, or name a JSON file in the scenario's repository:
 ```yaml
 - artifact_json:
     artifact: outputs/cap_state.json
@@ -920,19 +920,23 @@ document, without `path` — must match. Write it inline, or name a JSON file ne
 - **`{file: <path>}`** is read when the scenario is loaded and inlined, so a recorded cassette carries the schema
   itself and replays without the file. A schema-file edit therefore behaves like an inline edit: `replay
   --assert-from` and a re-record pick it up, a plain `replay` grades with the schema frozen at record. The path is
-  relative to the scenario file and must stay inside its git repository (or its directory outside one).
+  relative to the scenario file and must stay inside its git repository (or its directory outside one); the file is
+  at most 1 MiB.
 - **Checked when the scenario loads**, so a mistake costs a config error, not a run. Refused: an unknown keyword
   (a typo), a type-specific keyword with no `type` beside it (`required`, `properties`, `items`, `minLength`, `minimum`, …; it passes on a value of any other type: add `type: object` or the intended type),
   `format` (no format is validated, so it would check nothing: use `pattern`), `$id`, a `$ref` that is not a local
-  `#…` reference (nothing is fetched), `$dynamicRef`/`$recursiveRef`, the annotation-only `content*` keywords, a
-  `$schema` other than draft 2020-12, `nullable` (use `type: [<type>, "null"]`), a schema that contains itself or is
-  more than 64 levels deep, and an empty schema or one whose root has no validating keyword (only `title`,
-  `description`, `$defs`, …). A property *named* `format` or `$ref` is fine, and so is a union `type: [string, number]`.
+  `#…` reference (nothing is fetched), `$dynamicRef`, `$dynamicAnchor`, `$recursiveRef` and `$recursiveAnchor`, the
+  annotation-only `content*` keywords, a `$schema` other than draft 2020-12, `nullable` (use `type: [<type>, "null"]`),
+  the draft-07 list form of `items` (use `prefixItems` for a tuple), a `__proto__` key or property name (the validator
+  drops it), NaN or Infinity anywhere in `enum`, `const`, `default` or `examples` (JSON cannot carry them, so a
+  cassette would hold `null`), a `$ref` back to the root at the root or under `allOf`/`anyOf` with nothing to stop the
+  recursion (put it under a property or `items`), a schema that contains itself or is more than 64 levels deep, and
+  an empty schema or one whose root has no validating keyword (only `title`, `description`, `$defs`, …). A property *named* `format` or `$ref` is fine, and so is a union `type: [string, number]`.
   A subschema that allows anything (`properties: {a: true}`) is not refused: only the root is checked for that.
 - `pattern` uses JavaScript regex syntax with the `u` flag and is **case-sensitive**, unlike the harness's own
   regex keys. On a value holding one of the run's secrets, replay sees the scrubbed body, so a `pattern`, `const`
   or length check on it can grade differently there (as `equals` can).
-- A cassette with a `schema` is stamped v15. 4.6.0, which reads v15, refuses it as an unrecognized assertion and
+- A cassette with a `schema` is stamped v15. 4.6.x, which reads v15, refuses it as an unrecognized assertion and
   suggests re-recording; upgrade the harness instead.
 
 **One check over many files: a glob `artifact`.** When the skill writes one JSON file per run or per item, put a
@@ -1751,7 +1755,7 @@ assert:
 
 #### Schema-check a written file
 
-In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a file next to the scenario:
+In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a JSON file in the scenario's repository:
 
 ```yaml
 - artifact_json: { artifact: outputs/cap.json, schema: { file: schemas/cap.schema.json } }

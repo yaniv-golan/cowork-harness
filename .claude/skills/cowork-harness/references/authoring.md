@@ -1,6 +1,6 @@
 # Authoring a scenario
 
-Tracks `cowork-harness 4.6.1` (baseline `desktop-2.31226.1`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
+Tracks `cowork-harness 4.7.0` (baseline `desktop-2.31226.1`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
 
 ## Part I — AUTHOR a scenario
 
@@ -69,7 +69,8 @@ rather than passing. A check that depends on files inside the agent's container 
 rejected at LOAD time (`lane-remote-incompatible-key` in lint): delivery by location, file bodies
 (`artifact_text`/`artifact_json`), absence (`file_absent`/`no_unexpected_files`), `computer://` links,
 `no_lost_write_back`, `file_exists` with `authored: true`, and `semantic_*` with `evidence_files`. `semantic_*` without it is judged on the transcript
-only. `input_unmodified` still reads the local stand-in for the user's inputs (unconfirmed for the cloud lane), and
+only. `input_unmodified` still reads the local stand-in for the user's inputs (a cloud run's edit of a staged copy does not
+reach the device), and
 plain `file_exists` is the proxy for a written path. Delivery itself is the `delivery_unobservable` WARN (see
 `run-record-replay.md`).
 

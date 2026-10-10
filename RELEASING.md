@@ -290,7 +290,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - [ ] **Live gate: the companion skill sends an agent to the right reference.** Three prompts, each run through
       the skill on `container` with an LLM decider for any question it asks (billed, three short runs):
       ```
-      for p in "author a scenario that checks my skill writes a report file" \
+      for p in "author a scenario that checks my skill at ./my-skill writes its report to outputs/report.md" \
                "my cowork-harness run failed with a verdict I don't understand, help me debug it" \
                "measure how long each tool call takes in my run"; do
         node dist/cli.js skill .claude/skills/cowork-harness "$p" --fidelity container --model claude-sonnet-5 --decider-llm
@@ -301,7 +301,10 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       prompt **passes** when the agent reads its intended reference (supporting references the skill's table points
       to are fine), or reads none and still answers correctly. It **fails** when the agent reads a wrong reference, or
       gives a wrong answer whatever it read: for the first prompt, run `cowork-harness lint` on the scenario it wrote,
-      and any ERROR is a wrong answer.
+      and any ERROR is a wrong answer. The first prompt names the skill folder and the report path so the agent has
+      nothing it must ask: the LLM decider answers AskUserQuestion, not a question asked in prose, and a run that ends
+      on one is graded `stalled` and writes nothing. Without the path, the prompt stalled that way in two releases.
+      A stalled run is not a pass; fix the prompt, then re-run.
 - [ ] `npm pack --dry-run` — confirm the tarball contains `dist/`, `baselines/`, `docker/`, the companion
       skill (`SKILL.md`, `references/`, the bundled `scenario.py` + `assertion-keys.json`), and no internal
       planning notes. The skill ships on BOTH channels: npm carries it alongside everything else, while a

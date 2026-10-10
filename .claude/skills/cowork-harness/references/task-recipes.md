@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 4.6.1` (baseline `desktop-2.31226.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 4.7.0` (baseline `desktop-2.31226.1`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -438,11 +438,12 @@ A hook that blocks by FAILING (`onFailure: "block"`, agent 2.1.295+) cannot be a
 converts the failure after it emits the frame, so `hook_decision` / `hook_event_blocked` on that frame are
 evidence-unavailable. The block's message is the agent's own (`…: failed; blocking because onFailure is "block"`, or
 `timed out`); on PreToolUse it is the deny reason the tool call gets back, so `tool_result_contains` on that wording is
-the observable. This path has not been recorded end to end.
+the observable. A run with such a hook has been recorded and replayed, with the hook keys reading evidence-unavailable
+as above; a `tool_result_contains` assert on the block message has not been recorded end to end.
 
 ### Schema-check a written file
 
-In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a file next to the scenario:
+In a scenario, give `artifact_json` a `schema:` (draft 2020-12), inline or as a JSON file in the scenario's repository:
 
 ```yaml
 - artifact_json: { artifact: outputs/cap.json, schema: { file: schemas/cap.schema.json } }

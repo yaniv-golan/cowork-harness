@@ -1248,7 +1248,7 @@ export const Assertion = z.strictObject({
         ])
         .optional()
         .describe(
-          "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file beside the scenario, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load; the full list of refusals is in docs/scenario.md (among them `format`, `$id`, a `$ref` that is not local, an unknown keyword, a type-specific keyword with no `type`, `nullable`, and a root with no validating keyword). A failure reports the first 5 errors with their JSON paths",
+          "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file, its path relative to the scenario file, inside the scenario's git repository (or its directory outside one), at most 1 MiB, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load; the full list of refusals is in docs/scenario.md (among them `format`, `$id`, a `$ref` that is not local, an unknown keyword, a type-specific keyword with no `type`, `nullable`, and a root with no validating keyword). A failure reports the first 5 errors with their JSON paths",
         ),
       authored: AuthoredFlag,
     })
@@ -2902,8 +2902,10 @@ export interface RunResult {
    *  after the run from every hook source the agent could load (staged plugins, its config dir, the host's managed
    *  settings at hostloop/protocol): `{events}` (sorted; often empty), or `{unknown, why}` when a source exists but
    *  could not be read or parsed. The agent turns such a hook's failure or timeout into a block after emitting its
-   *  `hook_response` frame, so the hook keys read a failed frame of a listed event as unreadable. Event names and a
-   *  count only — no path, server name or command. Absent on a result.json from an older build. */
+   *  `hook_response` frame, so the hook keys read a failed frame of a listed event as unreadable. A run whose agents
+   *  are all 2.1.293 or older (no `onFailure`) gets `{events: []}` without a scan. Event names only (an unknown
+   *  inventory's `why` gives a count of the sources it could not read) — no path, server name or command. Absent on a
+   *  result.json from an older build. */
   hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
   /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on

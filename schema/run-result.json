@@ -67,7 +67,7 @@
       "description": "Context lifecycle events incl. compaction boundaries ({subtype, ts?, data?})."
     },
     "hookFailureBlocks": {
-      "description": "The events this run may have a hook on that BLOCKS when it fails (`onFailure: \"block\"`, agent 2.1.295+), read after the run from every hook source the agent could load: `{events}` (sorted; often empty), or `{unknown: true, why}` when a source exists but could not be read or parsed. A failed or timed-out hook frame of a listed event is unreadable to the hook keys. Event names and a count only. Absent on a result.json from an older build.",
+      "description": "The events this run may have a hook on that BLOCKS when it fails (`onFailure: \"block\"`, agent 2.1.295+), read after the run from every hook source the agent could load: `{events}` (sorted; often empty), or `{unknown: true, why}` when a source exists but could not be read or parsed. A failed or timed-out hook frame of a listed event is unreadable to the hook keys. A run whose agents are all 2.1.293 or older (no `onFailure`) gets `{events: []}` without a scan. Event names only (an unknown inventory's `why` gives a count of the sources it could not read). Absent on a result.json from an older build.",
       "oneOf": [
         { "type": "object", "required": ["events"], "properties": { "events": { "type": "array", "items": { "type": "string" } } }, "additionalProperties": false },
         { "type": "object", "required": ["unknown", "why"], "properties": { "unknown": { "const": true }, "why": { "type": "string" } }, "additionalProperties": false }
