@@ -1,10 +1,10 @@
 // `onFailure: "block"` (agent 2.1.295+): a failed or timed-out eligible hook is turned into a block AFTER the agent
 // emits its `hook_response` frame, so the frame still says `error` / `cancelled`. The frame shapes below are the ones
 // the agent's runner emits for each case (read from the 2.1.295 binary; no kept run holds one).
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync as readFile, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import { parseMessage } from "../src/agent/session.js";
 import {
@@ -14,7 +14,11 @@ import {
   scanHookFailureBlocks,
   type HookFailureBlocks,
 } from "../src/run/hook-failure-blocks.js";
-import { Assertion } from "../src/types.js";
+import { CASSETTE_VERSION, freezeRecordedRun, replayCassette, type Cassette } from "../src/run/cassette.js";
+import { loadBaseline } from "../src/baseline.js";
+import { assertContextFromRunDir } from "../src/run/verify-context.js";
+import { runHookFailureBlocks } from "../src/run/execute.js";
+import { Assertion, ScenarioObject, type RunResult, type Scenario } from "../src/types.js";
 
 type Frame = Record<string, unknown>;
 let n = 0;
@@ -231,5 +235,186 @@ describe("scanHookFailureBlocks: what the agent could read", () => {
   it("nothing staged, nothing found", () => {
     expect(scanHookFailureBlocks({})).toEqual({ events: [] });
     expect(scanHookFailureBlocks({ pluginRoots: [join(root, "missing")], configDirs: [join(root, "nope")] })).toEqual({ events: [] });
+  });
+});
+
+// Through the real record and replay paths.
+
+const LIVE = loadBaseline("latest").appVersion; // its agent is 2.1.293 or older on this branch's base
+const line = (o: unknown) => JSON.stringify(o);
+const NO_BLOCK = { no_hook_event_blocked: { event: "PreToolUse" } };
+function cassetteOf(frames: Frame[], extra: Partial<Cassette> = {}, baseline = LIVE): Cassette {
+  return {
+    scenario: {
+      name: "onfail",
+      baseline: "latest",
+      session: "(inline)",
+      fidelity: "container",
+      prompt: "hi",
+      answers: [],
+      expect_denied: [],
+      assert: [NO_BLOCK],
+    } as unknown as Scenario,
+    events: [
+      line({ type: "system", subtype: "init", tools: [], skills: [] }),
+      ...frames.map(line),
+      line({ type: "result", subtype: "success", is_error: false }),
+    ],
+    controlOut: [],
+    cassetteVersion: CASSETTE_VERSION,
+    userVisibleRoots: ["outputs"],
+    fingerprint: { baseline },
+    ...extra,
+  } as unknown as Cassette;
+}
+const replayedNoBlock = async (c: Cassette) =>
+  (await replayCassette(c, [])).assertions.find((a) => "no_hook_event_blocked" in a.assertion)!;
+
+describe("replay reads the frozen inventory", () => {
+  it("a frozen eligible event makes the failed frame unreadable; an empty one keeps the pass", async () => {
+    const frames = hook("PreToolUse", "Bash", exit1);
+    expect((await replayedNoBlock(cassetteOf(frames, { hookFailureBlocks: { events: ["PreToolUse"] } } as Partial<Cassette>))).pass).toBe(
+      false,
+    );
+    expect((await replayedNoBlock(cassetteOf(frames, { hookFailureBlocks: { events: [] } } as Partial<Cassette>))).pass).toBe(true);
+  });
+  it("an older cassette without it: its recorded agent decides (≤ 2.1.293 has no onFailure; an unknown baseline is unknown)", async () => {
+    const frames = hook("PreToolUse", "Bash", exit1);
+    expect((await replayedNoBlock(cassetteOf(frames))).pass).toBe(true);
+    const r = await replayedNoBlock(cassetteOf(frames, {}, "9.99999.9"));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(UNAVAILABLE);
+  });
+  it("an older cassette with no failed frame is unchanged, whatever its agent", async () => {
+    expect((await replayedNoBlock(cassetteOf(hook("PreToolUse", "Bash", ok), {}, "9.99999.9"))).pass).toBe(true);
+  });
+});
+
+describe("record freezes the inventory and stamps v16 only when it is non-empty", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "onfail-rec-")));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  async function freeze(hookFailureBlocks: HookFailureBlocks | undefined) {
+    const outDir = join(dir, `run-${++n}`);
+    mkdirSync(outDir, { recursive: true });
+    writeFileSync(
+      join(outDir, "events.jsonl"),
+      [
+        line({ type: "system", subtype: "init", tools: [], skills: [] }),
+        line({ type: "result", subtype: "success", is_error: false }),
+      ].join("\n"),
+    );
+    writeFileSync(join(outDir, "control-out.jsonl"), "");
+    const scenario = ScenarioObject.parse({
+      name: "onfail-freeze",
+      fidelity: "container",
+      prompt: "hi",
+      assert: [{ result: "success" }],
+    }) as unknown as Scenario;
+    const result = {
+      mode: "run",
+      command: "record",
+      scenario: scenario.name,
+      prompt: scenario.prompt,
+      fidelity: "container",
+      effectiveFidelity: "container",
+      result: "success",
+      baseline: LIVE,
+      outDir,
+      userVisibleRoots: ["outputs"],
+      fingerprint: { baseline: LIVE, hashFormat: "jcs1" },
+      assertions: [],
+      egress: [],
+      ...(hookFailureBlocks ? { hookFailureBlocks } : {}),
+    } as unknown as RunResult;
+    const errSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const cassettePath = join(outDir, "c.cassette.json");
+      await freezeRecordedRun(scenario, { noRedact: true, allowFailing: true, cassettePath }, [], result);
+      return JSON.parse(readFile(cassettePath, "utf8")) as Record<string, unknown>;
+    } finally {
+      errSpy.mockRestore();
+    }
+  }
+  it("empty: frozen as is, the stamp unchanged", async () => {
+    const base = await freeze(undefined);
+    const empty = await freeze({ events: [] });
+    expect(empty.hookFailureBlocks).toEqual({ events: [] });
+    expect(empty.cassetteVersion).toBe(base.cassetteVersion);
+    expect(base.hookFailureBlocks).toBeUndefined();
+  });
+  it("non-empty: frozen and stamped v16, and the cassette reads back", async () => {
+    const c = await freeze({ events: ["PreToolUse"] });
+    expect(c.hookFailureBlocks).toEqual({ events: ["PreToolUse"] });
+    expect(c.cassetteVersion).toBe(16);
+    expect(String(c.$schema)).toMatch(/cassette\.v16\.json$/);
+  });
+});
+
+describe("verify-run reads the kept run's inventory", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "onfail-verify-")));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const kept = (result: Record<string, unknown>) => {
+    const runDir = join(dir, `run-${++n}`);
+    mkdirSync(join(runDir, "turns", "1"), { recursive: true });
+    writeFileSync(join(runDir, "turns", "1", "result.json"), JSON.stringify(result));
+    return runDir;
+  };
+  const scenario = ScenarioObject.parse({
+    name: "onfail-verify",
+    fidelity: "container",
+    prompt: "hi",
+    assert: [NO_BLOCK],
+  }) as unknown as Scenario;
+  const base = { result: "success", command: "run", contextEvents: toEvents(hook("PreToolUse", "Bash", exit1)) };
+  const blocks = (r: Record<string, unknown>) => {
+    const v = assertContextFromRunDir(kept(r), scenario);
+    if (!v.ok) throw new Error(JSON.stringify(v));
+    return v.ctx.hookFailureBlocks;
+  };
+  it("reads a recorded inventory as is", () => {
+    expect(blocks({ ...base, baseline: LIVE, hookFailureBlocks: { events: ["PreToolUse"] } })).toEqual({ events: ["PreToolUse"] });
+  });
+  it("resolves a result.json without it by the run's agent", () => {
+    expect(blocks({ ...base, baseline: LIVE })).toEqual({ events: [] });
+    expect("unknown" in blocks({ ...base, baseline: "9.99999.9" })!).toBe(true);
+  });
+});
+
+describe("runHookFailureBlocks reads the plan's sources", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "onfail-plan-")));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  it("a staged plugin, the config dir and the work root's .claude; nothing else", () => {
+    const plugin = join(dir, "plugin");
+    mkdirSync(join(plugin, "hooks"), { recursive: true });
+    const hooks = (event: string) =>
+      JSON.stringify({ hooks: { [event]: [{ hooks: [{ type: "command", command: "x", onFailure: "block" }] }] } });
+    writeFileSync(join(plugin, "hooks", "hooks.json"), hooks("PreToolUse"));
+    mkdirSync(join(dir, "cfg"), { recursive: true });
+    writeFileSync(join(dir, "cfg", "settings.json"), hooks("PostToolUse"));
+    mkdirSync(join(dir, "work", ".claude"), { recursive: true });
+    writeFileSync(join(dir, "work", ".claude", "settings.json"), hooks("UserPromptSubmit"));
+    const folder = join(dir, "folder");
+    mkdirSync(join(folder, "hooks"), { recursive: true });
+    writeFileSync(join(folder, "hooks", "hooks.json"), hooks("Stop")); // a connected folder: the agent loads no hooks from it
+    const plan = {
+      configDir: join(dir, "cfg"),
+      baseEnv: {},
+      mounts: [
+        { kind: "local-plugin", hostPath: plugin, mountPath: ".local-plugins/p" },
+        { kind: "folder", hostPath: folder, mountPath: "folder" },
+      ],
+    } as unknown as Parameters<typeof runHookFailureBlocks>[0];
+    expect(runHookFailureBlocks(plan, "container", join(dir, "work"))).toEqual({
+      events: ["PostToolUse", "PreToolUse", "UserPromptSubmit"],
+    });
   });
 });
