@@ -49,7 +49,7 @@ carry that; read all three before touching anything.
 | `infraFailure` | the reason |
 | `infraFailurePhase` | `task turn` (the graded run) or `reflection turn` (critique's own protocol turn) |
 | `infraFailureKind` | why it failed — a harness `ErrCategory` (error envelope, exit 2/3) **or** a `resultErrorKind` (`usage_limit`/`transport`/`agent`) from a turn that RAN and errored (exit 1, top-level `error: null`). **Absent** = killed, or no envelope |
-| `gradedErrorReason` | on a `taskResult: "error"` run (still gradeable, exit 0): why the GRADED turn errored, so a quota exhaustion is not read as a skill defect |
+| `gradedErrorReason` | on a `taskResult: "error"` run (still gradeable, exit 0): why the GRADED turn errored, so a dropped connection is not read as a skill defect. A task turn that hit the usage limit (its own result, or a sub-agent's) is not graded: `infraFailurePhase: "task turn"`, `infraFailureKind: "usage_limit"`, exit 2 |
 
 **Do NOT read "has a kind" as "the instrument is fine".** The CLI's top-level catch turns every
 unexpected throw into category **`internal`** — Docker down, container start failure, missing staged

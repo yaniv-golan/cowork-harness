@@ -228,7 +228,7 @@ it landed in.
 | Rep | Counted as |
 |---|---|
 | ran to completion | valid |
-| infrastructure: a spawn or protocol failure, a transport error, a usage limit, a decider timeout | excluded, reported |
+| infrastructure: a spawn or protocol failure, a transport error, a usage limit (the main loop's, or a sub-agent's — even on a rep that otherwise timed out or hit `error_max_turns`), a decider timeout | excluded, reported |
 | the agent could not authenticate: its reply is `Not logged in · Please run /login` or `Authentication required · Sign in again to continue` | excluded as infrastructure, reported (rule `auth`) |
 | a usage or spend limit reported as the agent's final message (`You've hit your … limit`, out of usage credits, …) — including on a nonzero exit, and after a model has already spent | excluded as infrastructure, reported (rule `usage_limit`) |
 | no model answered: every model the run reported is the agent's own `<synthetic>` marker and it cost $0 | excluded as infrastructure, reported (rule `no_model_answered`) |

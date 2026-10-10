@@ -445,7 +445,8 @@ export interface RunRecord {
   // decider channel did not answer a gate within its backstop. Undefined when no error fired; a
   // recovered non-fatal agent error that later succeeds keeps its first source. Optional ⇒ no literal churn.
   // "answer_channel_violation": the session declared `answer_channel: none` and a question or prompt reached the
-  // harness anyway (see Run.disableAnswerChannel).
+  // harness anyway (see Run.disableAnswerChannel). "agent" is also what a run whose main loop ended success gets
+  // when a sub-agent failed on a terminal usage limit (see applySubagentUsageLimits).
   errorSource?:
     "spawn" | "protocol" | "exit" | "agent" | "result" | "no_result" | "timeout" | "decider_timeout" | "answer_channel_violation";
   // Under `answer_channel: none`, each control request that reached the harness anyway (a CLI that ignored the
