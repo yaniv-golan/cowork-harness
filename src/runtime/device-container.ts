@@ -300,6 +300,12 @@ export function startDeviceBridge(p: {
   markTearingDown: () => void;
   deregister: () => void;
   reapNow: () => boolean;
+  /** The run's teardown: mark, remove, stop the `docker run` client, then remove again (a create still in flight
+   *  when the first removal ran finishes after it). True when the container is gone; only then is the signal-time
+   *  reap released. */
+  teardown: () => boolean;
+  /** Whether the `docker run` client has been stopped (for tests). */
+  clientExited: () => boolean;
 } {
   const deviceHost = join(resolve(p.outDir), "work", "device");
   const folders = deviceFolders(p.mounts);
@@ -345,6 +351,14 @@ export function startDeviceBridge(p: {
     markTearingDown: started.markTearingDown,
     deregister: started.deregister,
     reapNow: started.reapNow,
+    teardown: () => {
+      started.markTearingDown();
+      started.reapNow();
+      const gone = removeContainer(p.runner, containerName);
+      if (gone) started.deregister();
+      return gone;
+    },
+    clientExited: () => started.child.killed || started.child.exitCode !== null || started.child.signalCode !== null,
   };
 }
 

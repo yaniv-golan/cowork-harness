@@ -243,6 +243,34 @@ describe("startDeviceBridge", () => {
   });
 });
 
+describe("startDeviceBridge: teardown", () => {
+  // A teardown can run before `docker run` has created the container: an `rm -f` then finds nothing, and the create
+  // finishes after it. So teardown stops the `docker run` client too, and removes again once it is gone.
+  it("marks, removes, stops the docker run client, then removes again, and reports the container gone", async () => {
+    const root = scratch();
+    const f = folder(root, "proj");
+    const outDir = join(root, "out");
+    const runner = standInRunner(root, join(outDir, "work", "device"));
+    const b = startDeviceBridge({
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://p:1",
+      outDir,
+      sessionId: "s",
+      runToken: "td",
+      mounts: [f],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    expect(b.teardown()).toBe(true);
+    // once before the start, twice at teardown
+    expect(readFileSync(join(root, "removed"), "utf8")).toBe("cowork-dev-td\ncowork-dev-td\ncowork-dev-td\n");
+    expect(b.clientExited()).toBe(true);
+    expect(b.infraErrors).toEqual([]);
+  });
+});
+
 describe("startDeviceBridge: a container that is slow to come up", () => {
   // Under load `docker run` can take seconds to create the container. The first device_bash must wait for it rather
   // than fail as "No such container", and a leftover container of the same name is cleared before the start.
@@ -529,17 +557,15 @@ describe("wiring: spawnContainer", () => {
 
 describe("wiring: execute.ts tears the device container down and keeps its infra errors", () => {
   const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
-  it("marks, then removes it after the agent's container and before the egress network goes", () => {
+  it("tears it down (mark, remove, stop the client, remove again) after the agent's container and before the network", () => {
     const agentRm = s.indexOf(
       "removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);",
     );
-    const mark = s.indexOf("deviceBridge.markTearingDown();");
-    const rm = s.indexOf("removeContainerThenRelease(runner, deviceBridge.containerName, [deviceBridge.deregister]);");
+    const teardown = s.indexOf("!deviceBridge.teardown()");
     const network = s.indexOf("sidecar.teardown();");
     expect(agentRm).toBeGreaterThan(-1);
-    expect(mark).toBeGreaterThan(agentRm);
-    expect(rm).toBeGreaterThan(mark);
-    expect(network).toBeGreaterThan(rm);
+    expect(teardown).toBeGreaterThan(agentRm);
+    expect(network).toBeGreaterThan(teardown);
   });
   it("folds the device container's infra errors into the record", () => {
     expect(s).toMatch(/if \(deviceBridge\?\.infraErrors\.length\) record\.infraErrors\.push\(\.\.\.deviceBridge\.infraErrors\);/);

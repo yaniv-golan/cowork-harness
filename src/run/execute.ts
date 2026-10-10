@@ -1629,11 +1629,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Drops the signal-time thunks only once the container is gone; a failed `rm -f` keeps them for a signal
       // or the process exit.
       removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);
-      // The device container (device_bridge) the same way: marked first, so its forced exit is not a crash.
-      if (deviceBridge) {
-        deviceBridge.markTearingDown();
-        removeContainerThenRelease(runner, deviceBridge.containerName, [deviceBridge.deregister]);
-      }
+      // The device container (device_bridge): marked first, so its forced exit is not a crash, then removed, its
+      // `docker run` client stopped, and removed again, since a create still in flight can finish after a removal.
+      if (deviceBridge && !deviceBridge.teardown())
+        warn(
+          `::warning:: [cleanup] could not remove container ${deviceBridge.containerName} — it stays registered and is removed on a signal or at exit\n`,
+        );
       if (sidecar) {
         const eg = sidecar.collect();
         egress = eg.entries;
