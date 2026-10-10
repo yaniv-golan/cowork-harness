@@ -1337,7 +1337,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   surface — a documented subset of `evidenceBudget`, same field names and meaning — and may change while
   it stabilizes too, as are `critique --compare`'s payload and the `--summary-out` file. The summary has its
   own descriptive schema, `schema/critique-summary.json`, and names its version in its `schema` field
-  (`critique-summary/1`) because it is meant to be committed and read later.
+  (`critique-summary/1`) because it is meant to be committed and read later; compare's payload is described
+  by `schema/critique-compare.json`.
 - **The `eval` report** — `report.json` (`schemaVersion: 0`), `report.md`, `manifest.json`, `runs.jsonl` and the
   `arms`/`pins`/`sections`/`summary`/`cost` payload of its JSON envelope — plus its row labels and the defaults of
   its statistical flags (`--reps`, `--alpha`, `--correction`, `--concurrency`, and the `insufficient` threshold) —

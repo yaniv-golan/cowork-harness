@@ -1,7 +1,8 @@
 // `critique --compare`: real reports and summaries, written by the real writers (`writeOutFile`,
 // `writeSummaryIfAsked`), compared through the CLI and through `compareMembers`. No verdicts; k/N everywhere.
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import Ajv from "ajv";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -171,6 +172,19 @@ describe("critique --compare", () => {
     expect((out.groups as Array<{ sharedExcerpt: unknown[] }>)[0]!.sharedExcerpt).toEqual([]);
   });
 
+  it("two groups whose corpusHash is unknown (withheld in a summary) are NOT a noise-floor control", () => {
+    const d = dir();
+    const noHash = (label: string) => {
+      const p = join(d, `${label}.json`);
+      writeSummary(d, `${label}.json`, reportState([A], { label }));
+      const j = JSON.parse(readFileSync(p, "utf8"));
+      j.corpusHash = null;
+      writeFileSync(p, JSON.stringify(j));
+      return p;
+    };
+    expect(cmp([noHash("before"), noHash("after")]).noiseFloorControl).toBe(false);
+  });
+
   it("the same output whatever order the files are given in", () => {
     const d = dir();
     const files = [
@@ -270,6 +284,15 @@ describe.skipIf(!existsSync(CLI))("critique --compare (CLI)", () => {
     });
     expect(bad.status).toBe(2);
     expect(JSON.parse(bad.stdout).error.message).toMatch(/--prompt is not accepted with --compare/);
+    const schema = JSON.parse(readFileSync(resolve("schema/critique-compare.json"), "utf8"));
+    const { tool: _t, version: _v, command: _c, ok: _o, error: _e, ...payload } = env;
+    const validate = new Ajv({ allErrors: true, strict: false }).compile(schema);
+    expect(validate(payload), JSON.stringify(validate.errors)).toBe(true);
+    const outFile = join(d, "cmp.json");
+    const withOut = spawnSync("node", [CLI, "critique", "--compare", ...files, "--output-format", "json", "--out", outFile], {
+      encoding: "utf8",
+    });
+    expect(readFileSync(outFile, "utf8")).toBe(withOut.stdout);
     const text = spawnSync("node", [CLI, "critique", "--compare", ...files], { encoding: "utf8" });
     expect(text.status).toBe(0);
     expect(text.stdout).toMatch(/no verdicts/);

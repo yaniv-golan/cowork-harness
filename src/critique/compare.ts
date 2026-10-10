@@ -367,7 +367,7 @@ export function compareMembers(input: CompareMember[], opts: { strict?: boolean 
     mode: "compare",
     publicSafe: false,
     note: "No verdicts. sameWording is a LOWER bound (reworded repeats do not match); sharedExcerpt is the same cited passage, not proven the same finding; read the findings side by side, aligned by classification.",
-    noiseFloorControl: groups.length === 2 && groupOut[0]!.corpusHash === groupOut[1]!.corpusHash,
+    noiseFloorControl: groups.length === 2 && groupOut[0]!.corpusHash !== null && groupOut[0]!.corpusHash === groupOut[1]!.corpusHash,
     groups: groupOut,
     fingerprints,
     possibleRewordings: fullReports

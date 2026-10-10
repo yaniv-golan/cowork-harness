@@ -1676,6 +1676,18 @@ export function buildTextReport(state: ReportState): string {
   if (state.gradedSkill)
     out.push(`  graded skill: ${state.gradedSkill} (pair by skillHash + this name — skillHash keys the whole mounted plugin)`);
   if (gradedSkillHash) out.push(`  graded skillHash: ${gradedSkillHash.slice(0, 12)}`);
+  if (state.corpus) {
+    out.push(
+      `  skillTreeHash: ${state.corpus.skillTreeHash.slice(0, 19)}…  corpusHash: ${state.corpus.corpusHash.slice(0, 19)}…  (${state.corpus.hashBasis})`,
+    );
+    if (state.corpus.corpusDrift)
+      out.push(
+        `  WARNING: the skill changed DURING this critique — ${state.corpus.corpusDrift.changed.join(", ") || "(files outside the manifest)"}. ` +
+          `The evaluator graded the later files; the agent may have run on the earlier ones. Critique a commit (git:<ref>:<path>) to rule this out.`,
+      );
+    if (state.corpus.skillTreeUntrackedCount)
+      out.push(`  not delivered (untracked), not graded, not hashed: ${state.corpus.skillTreeUntrackedCount} file(s) under the skill`);
+  }
   // The GRADED turn's model, beside the evaluator's — never one without the other. Naming only the
   // evaluator invited exactly the wrong reading: that the critique was produced under the model the
   // caller had in mind, when the turns are a subprocess that inherits no model from their caller.
@@ -2145,8 +2157,14 @@ export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): st
  *  drift: they only exist in `post`. */
 export function corpusReportFields(pre: CorpusDigest, post?: CorpusDigest) {
   const cur = post ?? pre;
+  // Static corpus rows AND the skill tree's own files: a script edit moves skillTreeHash only, and must be named too.
   const staticRows = (d: CorpusDigest) =>
-    new Map(d.corpusManifest.filter((e) => e.origin !== "root_ref_read").map((e) => [e.key, `${e.status}:${e.sha256 ?? ""}`]));
+    new Map<string, string>([
+      ...d.corpusManifest
+        .filter((e) => e.origin !== "root_ref_read")
+        .map((e) => [e.key, `${e.status}:${e.sha256 ?? ""}`] as [string, string]),
+      ...d.skillTreeFiles.map((f) => [f.key, `${f.status}:${f.sha256 ?? ""}`] as [string, string]),
+    ]);
   let corpusDrift: { preflightCorpusHash: string; preflightSkillTreeHash: string; changed: string[] } | undefined;
   if (post && (post.corpusHash !== pre.corpusHash || post.skillTreeHash !== pre.skillTreeHash)) {
     const a = staticRows(pre);
@@ -2162,6 +2180,7 @@ export function corpusReportFields(pre: CorpusDigest, post?: CorpusDigest) {
     skillTreeHash: cur.skillTreeHash,
     corpusManifest: cur.corpusManifest as CorpusManifestEntry[],
     skillTreeUntracked: cur.skillTreeUntracked,
+    skillTreeUntrackedCount: cur.skillTreeUntrackedCount,
     ...(corpusDrift ? { corpusDrift } : {}),
   };
 }
@@ -2254,7 +2273,9 @@ function runCorpusPreview(
           : []),
         `  ${note}`,
       ].join("\n") + "\n";
-    fileContent = critiqueFileText({ text: content });
+    // Scrubbed on stdout too: the untracked-file line names files, and a name can carry a configured secret.
+    content = critiqueFileText({ text: content });
+    fileContent = content;
   }
   writeAllSync(1, content);
   if (opts.out) {
@@ -2405,7 +2426,13 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   // infra/protocol failure is not a discovery outcome — exiting 0 there made a broken run look like a
   // clean one. `json` is read from argv until the parse succeeds, then from the parsed options.
   let json = isJsonOutput(argv);
-  const refuse = (category: ErrCategory, message: string): never => fail("critique", category, message, undefined, json);
+  // A `git:` snapshot made for this invocation is removed by any refusal before the graded run starts: nothing will
+  // ever need it. Once the task turn spawns, the run's mount depends on it and it is kept.
+  let onRefuse = (): void => {};
+  const refuse = (category: ErrCategory, message: string): never => {
+    onRefuse();
+    return fail("critique", category, message, undefined, json);
+  };
   // `--compare` is its own mode: its positionals are report files, it runs nothing, and it takes no run flag.
   if (argv.includes("--compare")) {
     let strict = false;
@@ -2439,7 +2466,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     writeAllSync(1, content);
     if (out !== undefined)
       try {
-        writeFileSync(out, json ? JSON.stringify(result, null, 2) + "\n" : content);
+        writeFileSync(out, content);
       } catch (e) {
         process.stderr.write(`critique: --out ${tildeify(out)} could not be written: ${String(e)}\n`);
       }
@@ -2476,6 +2503,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       opts = { ...opts, skillFolder: staged.skillFolder, skillSelector: staged.skillSelector };
       targetSource = staged.source;
       removeSnapshot = staged.cleanup;
+      onRefuse = staged.discard;
     } catch (e) {
       return refuse("usage", (e as Error).message);
     }
@@ -2511,6 +2539,15 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (!preflight.ok) {
     removeSnapshot();
     return refuse("usage", `critique${opts.corpusOnly ? " --corpus-only" : ""}: ${preflight.message}`);
+  }
+  // Files under the skill that staging will not deliver are neither graded nor hashed: say so before spending, once.
+  {
+    const d = preflight.pkg.corpusDigest;
+    if (d.skillTreeUntrackedCount > 0 && !opts.corpusOnly)
+      warn(
+        `::warning:: [critique] ${d.skillTreeUntrackedCount} file(s) under the skill are untracked or ignored — not mounted, not graded, not hashed ` +
+          `(${d.skillTreeUntracked.slice(0, 5).join(", ")}${d.skillTreeUntrackedCount > 5 ? ", …" : ""}). git add them to test them.\n`,
+      );
   }
 
   // --corpus-only stops HERE: after target resolution and the pre-spend check, and before a session id is
@@ -2553,6 +2590,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // Stretch critique's own kill-switch past a forwarded --timeout: otherwise a longer budget would be
     // killed by the INSTRUMENT and misreported as an infra failure rather than a gradeable timeout. The
     // +60s covers staging and container start — not principled, and a cold image pull can exceed it.
+    onRefuse = () => {}; // the graded run mounts the snapshot from here on
     progress(1, "task turn (running the skill under test — this is the graded run)");
     const task = await runSkillTurn(
       buildTaskTurnArgs(opts, sessionId),

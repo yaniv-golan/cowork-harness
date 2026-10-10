@@ -8,9 +8,9 @@
 // skill as `critique <plugin> --skill <name>`. Snapshotting the skill folder alone would lose the plugin's agents and
 // shared references, and grade a different thing from the folder form of the same commit.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readlinkSync, lstatSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, lstatSync, rmSync, realpathSync, existsSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve, dirname, basename, sep, posix } from "node:path";
+import { join, resolve, basename, sep, posix, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseSource, snapshotGitArm, isInsideGitWorkTree } from "../eval/snapshot.js";
 import { gitEnvWithoutAmbientRepo } from "../run/skill-files.js";
@@ -32,6 +32,9 @@ export interface StagedGitTarget {
   source: GitTargetSource;
   /** Removes a throwaway snapshot (`--corpus-only`); a no-op for a kept one. */
   cleanup: () => void;
+  /** Removes the snapshot whatever `keep` says: for a refusal before the graded run starts, which leaves nothing that
+   *  needs the snapshot. */
+  discard: () => void;
 }
 
 const FLAG = "critique";
@@ -41,9 +44,12 @@ function git(args: string[], cwd: string): { ok: boolean; out: string } {
   return { ok: r.status === 0, out: r.stdout ?? "" };
 }
 
-/** Where kept snapshots live: beside the runs root, never inside it, so `prune` and the runs walk never read a
- *  snapshot as a run. */
+/** Where kept snapshots live: `~/.cowork-harness/critique-snapshots`, or `COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR`.
+ *  Never under the runs root, so `prune` and the runs walk never read a snapshot as a run. Nothing removes a kept
+ *  snapshot: delete one once the runs that mounted it are gone. */
 export function critiqueSnapshotsRoot(): string {
+  const env = process.env.COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR;
+  if (env !== undefined && env !== "") return resolve(env);
   return join(homedir(), ".cowork-harness", "critique-snapshots");
 }
 
@@ -67,7 +73,27 @@ function enclosingPluginInCommit(commit: string, path: string, top: string): str
  *  filter (Git LFS and similar) stores a pointer in the commit and the real content only after a smudge, which a
  *  snapshot does not run — the agent would be handed pointer files. */
 function refuseFilteredContent(commit: string, path: string, top: string, raw: string): void {
-  const listing = git(["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit], top).out.split("\0").filter(Boolean);
+  // A `filter=` on a line that is not a comment. An attribute line is `<pattern> <attr>…`; `-filter` / `!filter`
+  // unset it and do not count.
+  const setsFilter = (body: string): boolean => body.split("\n").some((l) => !/^\s*#/.test(l) && /(^|\s)filter=/.test(l));
+  const refuse = (where: string) => {
+    throw new Error(
+      `${FLAG} ${raw}: ${where} sets a git filter (e.g. LFS); a snapshot holds the stored content, not what a checkout would give the agent. Critique the working tree instead.`,
+    );
+  };
+  // Attributes outside the commit apply too: the repository's own info/attributes and the user's core.attributesFile.
+  const gitDir = git(["rev-parse", "--absolute-git-dir"], top).out.trim();
+  const local = gitDir ? join(gitDir, "info", "attributes") : "";
+  if (local && existsSync(local) && setsFilter(readFileSync(local, "utf8"))) refuse(".git/info/attributes");
+  const cfg = git(["config", "--get", "core.attributesFile"], top).out.trim();
+  if (cfg) {
+    const f = cfg.startsWith("~/") ? join(homedir(), cfg.slice(2)) : isAbsolute(cfg) ? cfg : join(top, cfg);
+    if (existsSync(f) && setsFilter(readFileSync(f, "utf8"))) refuse(`core.attributesFile (${cfg})`);
+  }
+  const ls = git(["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit], top);
+  // Fail closed: a listing we could not read is not evidence that no filter applies.
+  if (!ls.ok) throw new Error(`${FLAG} ${raw}: could not list ${commit.slice(0, 12)} to check its .gitattributes`);
+  const listing = ls.out.split("\0").filter(Boolean);
   // An attributes file applies to its own directory and below: in scope when it sits under `path`, or in `path`
   // itself or any directory above it.
   const inScope = (f: string): boolean => {
@@ -75,28 +101,31 @@ function refuseFilteredContent(commit: string, path: string, top: string, raw: s
     return path === "." || d === "." || f.startsWith(`${path}/`) || path === d || path.startsWith(`${d}/`);
   };
   for (const f of listing.filter((x) => posix.basename(x) === ".gitattributes" && inScope(x))) {
-    const body = git(["show", `${commit}:${f}`], top).out;
-    if (/(^|\s)filter=/m.test(body))
-      throw new Error(
-        `${FLAG} ${raw}: ${f} at ${commit.slice(0, 12)} sets a git filter (e.g. LFS); a snapshot holds the stored pointer, not the content the agent would get. Critique the working tree instead.`,
-      );
+    const body = git(["show", `${commit}:${f}`], top);
+    if (!body.ok) throw new Error(`${FLAG} ${raw}: could not read ${f} at ${commit.slice(0, 12)}`);
+    if (setsFilter(body.out)) refuse(`${f} at ${commit.slice(0, 12)}`);
   }
 }
 
-/** Refuse a committed symlink that points outside the snapshot: it would hand the agent whatever is at that path on
- *  this machine, or nothing. */
+/** Refuse a committed symlink whose REAL path (every link in the chain followed) is outside the snapshot, or that
+ *  points at nothing: it would hand the agent whatever is at that path on this machine, or a broken link. A lexical
+ *  check is not enough — `a -> b/../..` through another link can climb out while reading as inside. */
 function refuseEscapingSymlinks(root: string, raw: string): void {
-  const rootAbs = resolve(root);
+  const rootReal = realpathSync(root);
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name);
       const st = lstatSync(p);
       if (st.isSymbolicLink()) {
-        const target = resolve(dirname(p), readlinkSync(p));
-        if (target !== rootAbs && !target.startsWith(rootAbs + sep))
-          throw new Error(
-            `${FLAG} ${raw}: ${p.slice(rootAbs.length + 1)} is a symlink that points outside ${posix.basename(rootAbs)} at this commit`,
-          );
+        const rel = p.slice(resolve(root).length + 1);
+        let real: string;
+        try {
+          real = realpathSync(p);
+        } catch {
+          throw new Error(`${FLAG} ${raw}: ${rel} is a symlink that points at nothing at this commit`);
+        }
+        if (real !== rootReal && !real.startsWith(rootReal + sep))
+          throw new Error(`${FLAG} ${raw}: ${rel} is a symlink that points outside ${posix.basename(root)} at this commit`);
       } else if (st.isDirectory()) walk(p);
     }
   };
@@ -136,17 +165,21 @@ export function stageGitTarget(arg: string, skillSelector: string | undefined, o
   const name = snapPath === "." ? basename(top) : posix.basename(snapPath);
   const parent = opts.keep ? join(critiqueSnapshotsRoot(), `crit-snap-${randomUUID()}`) : mkdtempSync(join(tmpdir(), "cwh-critique-snap-"));
   const dest = join(parent, name);
-  if (opts.keep) {
-    mkdirSync(parent, { recursive: true });
-    // The stager resolves the tracked set by walking up from a mount, so a snapshot inside ANY work tree would be
-    // delivered as that tree's tracked subset: nothing.
-    if (isInsideGitWorkTree(parent)) {
-      rmSync(parent, { recursive: true, force: true });
-      throw new Error(`${FLAG} ${arg}: the snapshot directory ${parent} is inside a git work tree; move HOME's .cowork-harness out of it`);
-    }
+  if (opts.keep) mkdirSync(parent, { recursive: true });
+  // The stager resolves the tracked set by walking up from a mount, so a snapshot inside ANY work tree would be
+  // delivered as that tree's tracked subset: nothing.
+  if (isInsideGitWorkTree(parent)) {
+    rmSync(parent, { recursive: true, force: true });
+    throw new Error(
+      `${FLAG} ${arg}: the snapshot directory ${parent} is inside a git work tree; ` +
+        (opts.keep
+          ? "set COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR to a directory outside any repository"
+          : "set TMPDIR to a directory outside any repository"),
+    );
   }
+  const discard = () => rmSync(parent, { recursive: true, force: true });
   const cleanup = () => {
-    if (!opts.keep) rmSync(parent, { recursive: true, force: true });
+    if (!opts.keep) discard();
   };
   try {
     const info = snapshotGitArm({ ref: commit, path: snapPath }, dest, top, arg, FLAG);
@@ -156,6 +189,7 @@ export function stageGitTarget(arg: string, skillSelector: string | undefined, o
       ...(selector !== undefined ? { skillSelector: selector } : {}),
       source: { kind: "git", ref: src.ref, path: snapPath, commit: info.commit! },
       cleanup,
+      discard,
     };
   } catch (e) {
     rmSync(parent, { recursive: true, force: true });

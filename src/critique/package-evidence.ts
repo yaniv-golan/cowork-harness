@@ -342,6 +342,9 @@ export const ROOT_REFERENCE_SECTION_PREFIX = "plugin-root references/ content";
 export const AGENT_SECTION_PREFIX = "agents markdown";
 
 export const SKILL_CORPUS_CEILING = 512 * 1024;
+/** How many untracked skill files `skillTreeUntracked` names; `skillTreeUntrackedCount` always has the total (an
+ *  ignored `node_modules/` would otherwise put thousands of names in every report). */
+export const SKILL_TREE_UNTRACKED_LIST_CAP = 50;
 /** Minimum bytes any single corpus file keeps when the ceiling forces a cut. Below this a slice is not
  *  worth packaging (it would be a heading and an intro), so such a file is marked omitted instead — a
  *  DISTINCT fact from "budget exhausted", because it tells the author to split that file rather than that
@@ -522,10 +525,16 @@ export function packageEvidence(
   // ceiling's cut ledger, which is keyed by the same internal tag `applyCorpus` uses.
   const manifest: CorpusManifestEntry[] = [];
   const tagEntry = new Map<string, CorpusManifestEntry>();
-  const record = (tag: string | undefined, origin: CorpusOrigin, key: string, read: { sha256: string; bytes: number } | null): void => {
+  const record = (
+    tag: string | undefined,
+    origin: CorpusOrigin,
+    key: string,
+    read: { sha256: string; bytes: number } | null,
+    absent: "unreadable" | "missing" = "unreadable",
+  ): void => {
     const e: CorpusManifestEntry = read
       ? { origin, key, status: "ok", sha256: read.sha256, bytes: read.bytes }
-      : { origin, key, status: "unreadable" };
+      : { origin, key, status: absent };
     manifest.push(e);
     if (tag !== undefined) tagEntry.set(tag, e);
   };
@@ -739,7 +748,7 @@ export function packageEvidence(
       if (!existsSync(agent.absPath)) {
         body = `(no file found at ${agent.absPath})`;
         isPlaceholder = true;
-        record(agentTag, "agent", agentKey, null);
+        record(agentTag, "agent", agentKey, null, "missing");
       } else {
         try {
           const r = readHashed(agent.absPath);
@@ -1051,8 +1060,12 @@ export function packageEvidence(
   // The skill folder as staging delivers it: every file (scripts/, assets/ … not only the corpus), through the
   // same contained walk and the same tracked-set filter. A file it does not deliver is listed, never hashed — the
   // agent never had it.
-  const allSkillFiles = listSkillFilesRecursive(skillDir);
+  // `.git` is never part of the hash: under git mode it is never delivered, and where staging does copy it (git mode
+  // off at a repo root) it would move the hash on every commit, fetch or checkout without the skill changing.
+  const allSkillFiles = listSkillFilesRecursive(skillDir).filter((rel) => rel !== ".git" && !rel.startsWith(".git/"));
   const deliveredSkillFiles = accept ? allSkillFiles.filter((rel) => accept(rel)) : allSkillFiles;
+  const delivered = new Set(deliveredSkillFiles);
+  const untracked = allSkillFiles.filter((rel) => !delivered.has(rel));
   const skillTreeFiles = deliveredSkillFiles.map((rel) => {
     try {
       return { key: `${skillPrefix}${rel}`, sha256: sha256Hex(readFileSync(join(skillDir, rel))), status: "ok" as const };
@@ -1067,7 +1080,9 @@ export function packageEvidence(
     packagedCorpusHash: packagedCorpusHashOf(manifest),
     skillTreeHash: skillTreeHashOf(skillTreeFiles, manifest),
     corpusManifest: manifest,
-    skillTreeUntracked: allSkillFiles.filter((rel) => !deliveredSkillFiles.includes(rel)),
+    skillTreeUntracked: untracked.slice(0, SKILL_TREE_UNTRACKED_LIST_CAP),
+    skillTreeUntrackedCount: untracked.length,
+    skillTreeFiles,
   };
   return {
     corpusDigest,

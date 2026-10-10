@@ -117,22 +117,62 @@ describe.skipIf(!existsSync(CLI))("critique git:<ref>:<path>", () => {
     execFileSync("git", ["commit", "-qm", "link"], { cwd: root });
     const b = corpusOnly(root, "git:HEAD:plugins/plug/skills/ms");
     expect(b.code).toBe(2);
-    expect(b.body.error?.message).toMatch(/symlink that points outside/);
+    expect(b.body.error?.message).toMatch(/symlink that points (outside|at nothing)/);
   });
 
-  it("a kept snapshot lives beside the runs root, never inside it", async () => {
-    const { critiqueSnapshotsRoot, stageGitTarget } = await import("../src/critique/git-target.js");
+  it("a symlink chain that climbs out through another link is refused (real path, not lexical)", () => {
     const root = repo();
-    const home = mkdtempSync(join(tmpdir(), "cwh-crit-git-home-"));
-    const prev = process.env.HOME;
-    process.env.HOME = home;
-    try {
-      const staged = stageGitTarget("git:HEAD:plugins/plug/skills/ms", undefined, { keep: true, cwd: root });
-      expect(staged.skillFolder.startsWith(critiqueSnapshotsRoot())).toBe(true);
-      expect(staged.skillSelector).toBe("ms");
-      expect(readdirSync(critiqueSnapshotsRoot())[0]).toMatch(/^crit-snap-/);
-    } finally {
-      process.env.HOME = prev;
-    }
+    const sub = join(root, "plugins/plug/skills/ms/references/sub/s2");
+    mkdirSync(sub, { recursive: true });
+    symlinkSync("../..", join(sub, "b"));
+    symlinkSync("b/../../../../../../escaped.md", join(sub, "a"));
+    execFileSync("git", ["add", "-A"], { cwd: root });
+    execFileSync("git", ["commit", "-qm", "chain"], { cwd: root });
+    const r = corpusOnly(root, "git:HEAD:plugins/plug/skills/ms");
+    expect(r.code).toBe(2);
+    expect(r.body.error?.message).toMatch(/symlink that points (outside|at nothing)/);
+  });
+
+  it("a commented-out filter line is not refused; one in .git/info/attributes is", () => {
+    const commented = repo({ "plugins/plug/.gitattributes": "# *.bin filter=lfs diff=lfs merge=lfs -text\n*.md text\n" });
+    expect(corpusOnly(commented, "git:HEAD:plugins/plug/skills/ms").code).toBe(0);
+    const local = repo();
+    writeFileSync(join(local, ".git/info/attributes"), "*.bin filter=lfs\n");
+    const r = corpusOnly(local, "git:HEAD:plugins/plug/skills/ms");
+    expect(r.code).toBe(2);
+    expect(r.body.error?.message).toMatch(/\.git\/info\/attributes sets a git filter/);
+  });
+
+  it("--corpus-only refuses a TMPDIR inside a git work tree, naming TMPDIR", () => {
+    const root = repo();
+    const inRepo = join(root, "tmp-inside");
+    mkdirSync(inRepo);
+    const r = spawnSync("node", [CLI, "critique", "git:HEAD:plugins/plug/skills/ms", "--corpus-only", "--output-format", "json"], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, TMPDIR: inRepo },
+    });
+    expect(r.status).toBe(2);
+    expect(JSON.parse(r.stdout).error.message).toMatch(/inside a git work tree; set TMPDIR/);
+  });
+
+  it("a kept snapshot goes to COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR, and a refusal before the graded run removes it", () => {
+    const root = repo();
+    const snaps = mkdtempSync(join(tmpdir(), "cwh-crit-snaps-"));
+    const env = {
+      ...process.env,
+      COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR: snaps,
+      COWORK_HARNESS_MODEL: "",
+      HOME: mkdtempSync(join(tmpdir(), "cwh-crit-git-home-")),
+    };
+    // No model is resolvable, so critique refuses before its task turn — after staging the snapshot.
+    const r = spawnSync("node", [CLI, "critique", "git:HEAD:plugins/plug/skills/ms", "--prompt", "p", "--output-format", "json"], {
+      cwd: root,
+      encoding: "utf8",
+      env,
+    });
+    expect(r.status, r.stderr).toBe(2);
+    expect(r.stderr).toContain(snaps.split("/").pop()!); // the notice named a snapshot under the override
+    expect(readdirSync(snaps)).toEqual([]);
   });
 });

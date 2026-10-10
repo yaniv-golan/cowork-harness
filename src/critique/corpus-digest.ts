@@ -30,9 +30,9 @@ export interface CorpusManifestEntry {
   origin: CorpusOrigin;
   /** Mount-relative, forward-slash path. */
   key: string;
-  /** `unreadable`: the file is in the delivered set but could not be read; it still counts, so a file turning
-   *  unreadable changes the hash. */
-  status: "ok" | "unreadable";
+  /** `unreadable`: the file is in the delivered set but could not be read; `missing`: a resolved agent whose file
+   *  does not exist. Both still count, so a file turning unreadable or disappearing changes the hash. */
+  status: "ok" | "unreadable" | "missing";
   sha256?: string;
   bytes?: number;
   /** Set only when the ceiling cut this file: the bytes the evaluator was shown (0 = omitted). */
@@ -80,11 +80,11 @@ export function packagedCorpusHashOf(manifest: CorpusManifestEntry[]): string {
 /** Every delivered file of the skill, plus the static corpus files outside the skill folder (agents, linked root
  *  references). `files` are the skill folder's delivered files, already mount-relative. */
 export function skillTreeHashOf(
-  files: Array<{ key: string; sha256?: string; status: "ok" | "unreadable" }>,
+  files: Array<{ key: string; sha256?: string; status: CorpusManifestEntry["status"] }>,
   manifest: CorpusManifestEntry[],
 ): string {
   const outside = manifest.filter((e) => e.origin === "agent" || e.origin === "root_ref_linked");
-  const rows = new Map<string, { key: string; sha256?: string; status: "ok" | "unreadable" }>();
+  const rows = new Map<string, { key: string; sha256?: string; status: CorpusManifestEntry["status"] }>();
   for (const f of [...files, ...outside]) rows.set(f.key, { key: f.key, sha256: f.sha256, status: f.status });
   return digest(
     [...rows.values()]
@@ -100,7 +100,12 @@ export interface CorpusDigest {
   packagedCorpusHash: string;
   skillTreeHash: string;
   corpusManifest: CorpusManifestEntry[];
-  /** Files under the skill folder that staging does NOT deliver (untracked or ignored, in git mode), skill-relative.
-   *  They are neither mounted nor hashed. Empty outside git mode. */
+  /** Files under the skill folder that staging does NOT deliver (untracked or ignored, in git mode), skill-relative,
+   *  capped at the first 50 names. They are neither mounted nor hashed. Empty outside git mode. */
   skillTreeUntracked: string[];
+  /** How many such files there are in total. */
+  skillTreeUntrackedCount: number;
+  /** The skill folder's delivered files and their hashes — internal: compared between the two packagings to name
+   *  the files behind `corpusDrift`; not emitted. */
+  skillTreeFiles: Array<{ key: string; sha256?: string; status: "ok" | "unreadable" }>;
 }

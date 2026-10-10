@@ -30,16 +30,19 @@ All notable changes to this project are documented here. The format is based on
   - `corpusHash` and `skillTreeHash` are the same in `--corpus-only` and a graded run on the same files.
   - `corpusManifest` lists the files behind the hashes, a delivered file that cannot be read included;
     `hashBasis` says how the delivered set was decided; `skillTreeUntracked` lists files under the skill that
-    staging does not deliver (untracked or ignored), which are neither mounted nor hashed; `corpusHashScheme`
-    versions the rules.
+    staging does not deliver (untracked or ignored; the first 50, with `skillTreeUntrackedCount`), which are
+    neither mounted nor hashed, and a paid critique warns about them; `.git` is never hashed;
+    `corpusHashScheme` versions the rules.
   - A graded critique packages the corpus before it spends and after both turns. When a file changed in between,
-    the report carries `corpusDrift` with the files that changed.
+    the report carries `corpusDrift` with the files that changed, and the text report warns.
 - **`critique git:<ref>:<path>` grades a commit.** The commit's files are written to a snapshot and critique runs
   on it, so an edit or a moved HEAD during the run changes nothing. A path at `<plugin>/skills/<name>` is resolved
   in the commit's tree to that skill of the plugin, the same mount as `<plugin> --skill <name>`. The report and
   `--corpus-only` record `source: {kind, ref, path, commit}`. Refused before any spend: a git filter such as LFS
-  in scope, a committed symlink out of the snapshot, a submodule, a ref that is not a commit. Snapshots are kept
-  under `~/.cowork-harness/critique-snapshots/`; `--corpus-only` removes its own.
+  (from the commit's `.gitattributes`, `.git/info/attributes` or `core.attributesFile`), a committed symlink whose
+  real path leaves the snapshot or that points at nothing, a submodule, a ref that is not a commit. Snapshots are
+  kept under `~/.cowork-harness/critique-snapshots/` (or the new `COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR`); a
+  refusal before the graded run removes its snapshot, `--corpus-only` removes its own, and nothing else does.
 - **`critique --summary-out <file>` writes a summary safe for a public repository.** It holds identifiers, hashes,
   enums and counts, and per finding only `findingFingerprint`, `classification`, `source` and `adjudicable`: no
   finding text, prompt, host path or git ref. Built by allowlist, every value shape-checked (a failure is written
@@ -57,7 +60,8 @@ All notable changes to this project are documented here. The format is based on
   - a critique with no result, a failed evaluator canary or corpus drift is excluded from N and listed;
   - a mix of skills, hash or fingerprint schemes, harness majors, or `corpusHash` within a group is refused; mixed
     evaluator models, hash bases or probes are marked, and refused under `--strict`;
-  - exits 0 when compared, 2 on a refusal. Its output carries finding text and says it is not public-safe.
+  - exits 0 when compared, 2 on a refusal. Its output carries finding text and says it is not public-safe; its
+    payload is described by the new `schema/critique-compare.json`.
 - **The critique report records `harnessVersion`, `label`, `source`, `gradedSkillIdentity` and
   `fingerprintScheme`.** `gradedSkillIdentity` names a plain skill folder (by its SKILL.md frontmatter) where
   `gradedSkill` is absent.

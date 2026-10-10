@@ -161,6 +161,58 @@ describe("corpus hashes", () => {
     }
   });
 
+  it("corpusDrift names a SCRIPT edited during the run (it moves skillTreeHash only)", () => {
+    const root = tree(PLUGIN);
+    const pre = preview(root);
+    writeFileSync(join(root, "skills/ms/scripts/run.py"), "print('edited mid-run')\n");
+    const fields = corpusReportFields(pre, graded(root));
+    expect(fields.corpusDrift?.changed).toEqual(["skills/ms/scripts/run.py"]);
+  });
+
+  it("at a repo root, .git is neither listed nor hashed, and the untracked list is capped with a count", () => {
+    const base = mkdtempSync(join(tmpdir(), "cwh-corpushash-root-"));
+    writeFileSync(join(base, "SKILL.md"), "---\nname: solo\n---\n# solo\n");
+    execFileSync("git", ["init", "-q"], { cwd: base });
+    execFileSync("git", ["add", "SKILL.md"], { cwd: base });
+    mkdirSync(join(base, "node_modules"), { recursive: true });
+    for (let i = 0; i < 60; i++) writeFileSync(join(base, "node_modules", `f${String(i).padStart(2, "0")}.js`), "x");
+    const r = preflightCritique(resolveCritiquedSkillDir(base, undefined), "preview");
+    if (!r.ok) throw new Error(r.message);
+    const d = r.pkg.corpusDigest;
+    expect(d.skillTreeUntrackedCount).toBe(60);
+    expect(d.skillTreeUntracked).toHaveLength(50);
+    expect(d.skillTreeUntracked.some((f) => f.startsWith(".git"))).toBe(false);
+    const before = d.skillTreeHash;
+    execFileSync("git", ["-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "c"], { cwd: base });
+    const after = preflightCritique(resolveCritiquedSkillDir(base, undefined), "preview");
+    if (!after.ok) throw new Error(after.message);
+    expect(after.pkg.corpusDigest.skillTreeHash).toBe(before); // a commit changes .git, not the skill
+  });
+
+  it("a resolved agent with no file is status missing, not unreadable", () => {
+    // Outside git mode: in git mode an agent file that does not exist is also untracked, and is excluded before it
+    // is read.
+    const root = tree({ ...PLUGIN, "skills/ms/SKILL.md": '# ms\nDispatch subagent_type: "plug:ghost".\n' }, { git: false });
+    const r = resolveCritiquedSkillDir(root, "ms");
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-corpushash-out-"));
+    const pkg = packageEvidence(outDir, snapshotTurnBoundary(outDir), r.skillDir, false, {
+      agents: [{ name: "ghost", rel: "agents/ghost.md", absPath: join(root, "agents/ghost.md"), via: "SKILL.md:2" } as never],
+      pluginRoot: r.pluginRoot,
+      mountRoot: r.mountRoot,
+    });
+    expect(pkg.corpusDigest.corpusManifest.find((e) => e.key === "agents/ghost.md")?.status).toBe("missing");
+  });
+
+  it("a file the corpus ceiling cuts carries keptBytes in the manifest, and the cut moves packagedCorpusHash only", () => {
+    const big = "x".repeat(600 * 1024) + "\n";
+    const root = tree({ ...PLUGIN, "skills/ms/references/big.md": big });
+    const g = graded(root);
+    const row = g.corpusManifest.find((e) => e.key === "skills/ms/references/big.md");
+    expect(row?.bytes).toBe(Buffer.byteLength(big));
+    expect(typeof row?.keptBytes).toBe("number");
+    expect(row!.keptBytes!).toBeLessThan(row!.bytes!);
+  });
+
   it("corpusDrift names the file that changed between the pre-spend check and the packaging", () => {
     const root = tree(PLUGIN);
     const pre = preview(root);

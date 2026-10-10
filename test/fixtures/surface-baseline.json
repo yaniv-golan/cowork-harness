@@ -2065,6 +2065,176 @@
         "type": "string"
       }
     },
+    "critique-compare.json": {
+      "": {
+        "type": "object",
+        "closed": true
+      },
+      ".excluded": {
+        "type": "array",
+        "required": true
+      },
+      ".excluded[]": {
+        "type": "object"
+      },
+      ".excluded[].file": {
+        "type": "string",
+        "required": true
+      },
+      ".excluded[].reason": {
+        "type": "string",
+        "required": true
+      },
+      ".fingerprints": {
+        "type": "array",
+        "required": true
+      },
+      ".fingerprints[]": {
+        "type": "object"
+      },
+      ".fingerprints[].classification": {
+        "type": "string",
+        "required": true
+      },
+      ".fingerprints[].findingFingerprint": {
+        "type": "string",
+        "required": true
+      },
+      ".fingerprints[].groups": {
+        "type": "array",
+        "required": true
+      },
+      ".fingerprints[].groups[]": {
+        "type": "object"
+      },
+      ".fingerprints[].groups[].N": {
+        "type": "integer",
+        "required": true
+      },
+      ".fingerprints[].groups[].k": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".groups[].N": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].byClassification": {
+        "type": "object",
+        "required": true
+      },
+      ".groups[].corpusHash": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".groups[].label": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".groups[].marks": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].marks[]": {
+        "enum": ["mixedEvaluator", "mixedBasis", "mixedPackagedCorpus", "mixedProbe", "probeUnverified", "pass1Only"]
+      },
+      ".groups[].reports": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].reports[]": {
+        "type": "object"
+      },
+      ".groups[].sameWording": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].sameWording[]": {
+        "type": "object"
+      },
+      ".groups[].sameWording[].N": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sameWording[].classification": {
+        "type": "string",
+        "required": true
+      },
+      ".groups[].sameWording[].findingFingerprint": {
+        "type": "string",
+        "required": true
+      },
+      ".groups[].sameWording[].k": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sharedExcerpt": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[]": {
+        "type": "object"
+      },
+      ".groups[].sharedExcerpt[].N": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[].anchor": {
+        "type": "string",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[].distinctActions": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[].distinctIdeas": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[].k": {
+        "type": "integer",
+        "required": true
+      },
+      ".mode": {
+        "const": "compare",
+        "required": true
+      },
+      ".noiseFloorControl": {
+        "type": "boolean",
+        "required": true
+      },
+      ".note": {
+        "type": "string",
+        "required": true
+      },
+      ".possibleRewordings": {
+        "type": "object",
+        "required": true
+      },
+      ".possibleRewordings.basis": {
+        "type": "string",
+        "required": true
+      },
+      ".possibleRewordings.pairs": {
+        "type": "array",
+        "required": true
+      },
+      ".possibleRewordings.pairs[]": {
+        "type": "object"
+      },
+      ".publicSafe": {
+        "const": false,
+        "required": true
+      }
+    },
     "critique-report.json": {
       "": {
         "type": "object",
@@ -2123,7 +2293,7 @@
         "type": "string"
       },
       ".corpusManifest[].status": {
-        "enum": ["ok", "unreadable"],
+        "enum": ["ok", "unreadable", "missing"],
         "required": true
       },
       ".costUsd": {
@@ -2487,6 +2657,9 @@
       },
       ".skillTreeUntracked": {
         "type": "array"
+      },
+      ".skillTreeUntrackedCount": {
+        "type": "integer"
       },
       ".skillTreeUntracked[]": {
         "type": "string"
@@ -6700,6 +6873,7 @@
       "COWORK_HARNESS_ALLOW_MISSING_PROMPT",
       "COWORK_HARNESS_AUTHORED_TOTAL_BYTES",
       "COWORK_HARNESS_CLAUDE_BIN",
+      "COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR",
       "COWORK_HARNESS_DEBUG",
       "COWORK_HARNESS_DEBUG_SKILLHASH",
       "COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS",

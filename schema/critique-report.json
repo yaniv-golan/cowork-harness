@@ -69,7 +69,7 @@
         "properties": {
           "origin": { "enum": ["skill_md", "reference", "agent", "root_ref_linked", "root_ref_read"] },
           "key": { "type": "string", "description": "mount-relative path" },
-          "status": { "enum": ["ok", "unreadable"] },
+          "status": { "enum": ["ok", "unreadable", "missing"], "description": "unreadable: delivered but could not be read; missing: a resolved agent whose file does not exist. Both still count in the hash" },
           "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "bytes": { "type": "integer" },
           "keptBytes": { "type": "integer", "description": "set only when the corpus ceiling cut this file: the bytes the evaluator was shown (0 = omitted)" }
@@ -81,7 +81,11 @@
     "skillTreeUntracked": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "files under the skill folder that staging did not deliver (untracked or ignored, in git mode), skill-relative; neither mounted nor hashed — git add them to test them"
+      "description": "files under the skill folder that staging did not deliver (untracked or ignored, in git mode), skill-relative, at most the first 50 (see skillTreeUntrackedCount); neither mounted nor hashed — git add them to test them. .git itself is never listed or hashed"
+    },
+    "skillTreeUntrackedCount": {
+      "type": "integer",
+      "description": "how many files under the skill folder staging did not deliver; skillTreeUntracked names at most the first 50"
     },
     "corpusDrift": {
       "type": "object",

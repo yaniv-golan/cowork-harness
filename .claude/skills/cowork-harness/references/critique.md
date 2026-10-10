@@ -185,15 +185,17 @@ two clones of one commit hash alike):
 
 `corpusManifest` lists the files (diff two to see which one moved a hash); `hashBasis` is `git-tracked`
 (working-tree bytes of tracked files), `worktree-all` or `git-commit`; untracked files under the skill are listed
-in `skillTreeUntracked`, never hashed. `corpusDrift` means a file changed during the run — critique a commit
+in `skillTreeUntracked` (first 50; `skillTreeUntrackedCount` = total), never hashed; `.git` is never hashed. `corpusDrift` means a file changed during the run — critique a commit
 instead.
 
 ## Critique a commit — `git:<ref>:<path>`
 
 `critique git:<ref>:<path> …` grades a snapshot of the commit, so a moved HEAD or an edit mid-run changes nothing;
 `source.commit` records the resolved id. A path at `<plugin>/skills/<name>` grades that skill of the plugin (same
-as `<plugin> --skill <name>`). Refused before spend: a git filter such as LFS in scope, a symlink out of the
-snapshot, a submodule. Works with `--corpus-only` ($0).
+as `<plugin> --skill <name>`). Refused before spend: a git filter such as LFS (`.gitattributes`,
+`.git/info/attributes`, `core.attributesFile`), a symlink whose real path leaves the snapshot, a submodule. Works
+with `--corpus-only` ($0). Kept snapshots: `~/.cowork-harness/critique-snapshots/` (or
+`COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR`); nothing prunes them.
 
 ## A public ledger line — `--summary-out`
 

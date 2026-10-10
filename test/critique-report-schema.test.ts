@@ -41,8 +41,10 @@ const FULL_STATE = {
         keptBytes: 5,
       },
       { origin: "reference" as const, key: "skills/x/references/r.md", status: "unreadable" as const },
+      { origin: "agent" as const, key: "agents/gone.md", status: "missing" as const },
     ],
     skillTreeUntracked: ["scripts/scratch.py"],
+    skillTreeUntrackedCount: 1,
     corpusDrift: {
       preflightCorpusHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       preflightSkillTreeHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

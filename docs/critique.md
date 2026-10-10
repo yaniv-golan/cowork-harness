@@ -502,16 +502,20 @@ directory is called:
   corpus are not in it. `packagedCorpusHash` is evidence of what was graded, not a "changed" key.
 - **Which files.** `corpusManifest` lists one row per corpus file (`origin`, `key`, `status`, `sha256`, and
   `keptBytes` when the ceiling cut it); diff two manifests to see which file made two hashes differ. A file
-  that is delivered but cannot be read is a row with `status: "unreadable"`, so it moves the hash too.
+  that is delivered but cannot be read is a row with `status: "unreadable"` (`missing` for a resolved agent
+  whose file does not exist), so it moves the hash too.
 - **What was delivered.** `hashBasis` says how the delivered set was decided: `git-tracked` (a folder in a
   git work tree — its tracked files, hashed from their working-tree bytes, so a local edit to a tracked file
   changes the hash), `worktree-all` (no work tree, or `COWORK_HARNESS_GITSET=0`: every file), or
   `git-commit` (a `git:` target, below). In git mode a file under the skill that staging does not deliver —
-  untracked or ignored — is not mounted and not hashed; it is listed in `skillTreeUntracked`, so a script
-  you changed but never added is visible instead of reading as "unchanged".
+  untracked or ignored — is not mounted and not hashed; it is listed in `skillTreeUntracked` (the first 50
+  names; `skillTreeUntrackedCount` has the total) and warned about before a paid critique, so a script you
+  changed but never added is visible instead of reading as "unchanged". `.git` itself is never listed or
+  hashed.
 - **An edit during the run.** A graded critique packages the corpus twice: before it spends, and after both
   turns. If a corpus or skill-tree file changed in between, the report carries `corpusDrift` (the earlier
-  hashes and the files that changed), and its hashes describe the later state. Critique a commit
+  hashes and the files that changed, scripts included), the text report warns, and its hashes describe the
+  later state. Critique a commit
   (`git:<ref>:<path>`) to rule this out.
 - `corpusHashScheme` versions the rules; hashes compare only within one scheme. `gradedSkillHash` is
   unchanged and still keys the whole mounted plugin.
@@ -656,7 +660,7 @@ No spend and no model: it reads `--output-format json` reports (or `--out` files
 - **`sharedExcerpt`**: the same cited passage under the same classification in k of N reports, with how many
   distinct ideas and actions cite it — a cue to read those items together, not a match. Not-adjudicable
   items and excerpts under 12 characters are left out. Full reports only.
-- **`fingerprints`**: with two groups, every exact fingerprint with its k/N in each group.
+- **`fingerprints`**: every exact fingerprint with its k/N in each group (one entry per group).
 - **`possibleRewordings`**: pairs of items in different reports, same classification, whose ideas share most
   of their words — a lexical judgement, labelled as one. Full reports only (a summary has no text).
 - **`noiseFloorControl: true`** when both groups have the same `corpusHash`: same corpus, so any difference is
@@ -669,7 +673,8 @@ a `--corpus-only` envelope; any run flag. A critique that produced no result, wh
 failed, or that drifted during its run is **excluded from N** and listed in `excluded`. A group that mixes
 evaluator models, hash bases or probes (`promptSha256`), or holds a pass-1-only critique, is **marked**
 (`marks`); `--strict` refuses it instead. Its output carries finding text (`"publicSafe": false`): keep it
-out of a public repository — that is what `--summary-out` is for.
+out of a public repository — that is what `--summary-out` is for. `--out` writes the same bytes as stdout.
+The JSON payload is described by [`schema/critique-compare.json`](../schema/critique-compare.json).
 
 > **Why one critique is a SAMPLE, measured.** Two runs of the same skill over the same document
 > produced 78 vs 50 extracted figures, and 12 vs **0** first-pass errors from the same producer bug.
@@ -693,10 +698,14 @@ during the run changes nothing, and two critiques of one commit grade the same f
   the same mount, corpus and graded skill as `critique <plugin> --skill <name>`. Any other path inside a
   plugin is refused with that spelling.
 - Refused before any spend (exit 2): a ref that is not a commit, a path that is not a directory at it, a
-  submodule, a path with `..` or a leading `-`, a `.gitattributes` filter in scope (Git LFS and similar — the
-  commit holds pointers, not content), and a committed symlink that points outside the snapshot.
-- The snapshot is kept under `~/.cowork-harness/critique-snapshots/` (beside the runs directory, never in it),
-  so the run's mount still resolves later. `--corpus-only` uses a temporary one and removes it.
+  submodule, a path with `..` or a leading `-`, a git filter (Git LFS and similar — the commit holds pointers,
+  not content) set by a `.gitattributes` in scope, by `.git/info/attributes` or by `core.attributesFile`, and a
+  committed symlink whose real path is outside the snapshot or that points at nothing.
+- The snapshot is kept under `~/.cowork-harness/critique-snapshots/` (or `COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR`),
+  never under the runs directory, so the run's mount still resolves later. A refusal before the graded run
+  starts removes it. Nothing else does: delete a snapshot once the runs that mounted it are gone.
+  `--corpus-only` uses a temporary one (under `TMPDIR`) and removes it. Neither location may be inside a git
+  work tree.
 - Under `git-tracked`, a dir target's bytes are the working tree's; under `git-commit` they are the commit's.
   A smudge filter, `core.autocrlf` or `ident` can make the two differ for the same commit.
 

@@ -206,6 +206,23 @@ describe("--summary-out", () => {
 
 const CLI = resolve("dist/cli.js");
 describe.skipIf(!existsSync(CLI))("--summary-out with --corpus-only (CLI)", () => {
+  it("--corpus-only text stdout is secret-scrubbed (an untracked file name carrying a scrub value)", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-summary-cli-"));
+    const skill = join(root, "s");
+    mkdirSync(skill, { recursive: true });
+    writeFileSync(join(skill, "SKILL.md"), "---\nname: s\n---\n# s\n");
+    execFileSync("git", ["init", "-q"], { cwd: skill });
+    execFileSync("git", ["add", "-A"], { cwd: skill });
+    writeFileSync(join(skill, "notes-SEKRITVALUE42.txt"), "x");
+    const r = spawnSync("node", [CLI, "critique", skill, "--corpus-only"], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_SCRUB_VALUES: "SEKRITVALUE42" },
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/not delivered \(untracked\)/);
+    expect(r.stdout).not.toContain("SEKRITVALUE42");
+  });
+
   it("writes a corpus_only summary for a plain skill folder, named by its frontmatter", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-summary-cli-"));
     const skill = join(root, "my-skill");
