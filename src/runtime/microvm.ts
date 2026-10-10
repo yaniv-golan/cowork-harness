@@ -118,7 +118,8 @@ export function spawnMicroVm(
   // re-copy also avoids reverting in-session edits to a rw / .projects mount (see stage.ts).
   const sessionHost = join(VM_WORK_HOST, sessionId);
   const mntHost = join(sessionHost, "mnt");
-  const { mcpStaged } = stageWorkspace(plan, mntHost);
+  // The agent runs inside the VM: both fixture tokens get the guest session root.
+  const { mcpStaged } = stageWorkspace(plan, mntHost, { sessionRoot: sessionVm, vmSessionRoot: sessionVm });
   // #52: capture the pre-run manifest against the staged mnt tree (same as container/hostloop). The
   // post-run walk reads execute.ts's SESSION-ROOT snapshot (snapshotMicroVmWorkspace), which preserves
   // relative structure, so the pre (walked at mntHost) and post (walked at outDir/work/session) path

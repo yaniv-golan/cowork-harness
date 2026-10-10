@@ -66,7 +66,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v15.json`](htt
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
 | `effectiveFidelity` | The tier the live record actually resolved to (the drift-audit key above) |
-| `artifacts` | Output-file manifest (paths + hashes + small inlined bodies) — unlocks `file_exists`/`artifact_json` on replay. Each entry carries `truncationReason` (`"size"`\|`"readonly"`\|`"unreadable"`\|`"input"`\|`"fixture"`, v8+; `"fixture"` v14 — an untouched binary `workspace_fixture` file, recorded hash-only) naming WHY a body is absent, and — v10+ — `linkKind` (`"symlink"`\|`"hardlink"`) for a body-less link entry, never dereferenced. |
+| `artifacts` | Output-file manifest (paths + hashes + small inlined bodies) — unlocks `file_exists`/`artifact_json` on replay. Each entry carries `truncationReason` (`"size"`\|`"readonly"`\|`"unreadable"`\|`"input"`\|`"fixture"`, v8+; `"fixture"` v14 — an untouched binary `workspace_fixture` file, or an untouched one staging wrote session paths into, recorded hash-only) naming WHY a body is absent, and — v10+ — `linkKind` (`"symlink"`\|`"hardlink"`) for a body-less link entry, never dereferenced. |
 | `fingerprint` | Skill/baseline staleness tripwire |
 | `userVisibleRoots` | The user-visible mount roots captured at record time |
 | `preRunPaths` | Pre-run file-path baseline for `no_unexpected_files` (workRoot-relative; co-present with `userVisibleRoots`) |
@@ -409,6 +409,10 @@ assert:
 ```
 
 Record step 2 with `--out` inside the same tree as the fixture: `record` refuses a fixture outside the cassette's git repository (outside git, outside the cassette's directory).
+If the export refuses files as `run_path` because step 1 wrote its own session paths into them (a probe, an
+output path it reads back), re-run it with `--session-paths`: staging writes step 2's session paths in their
+place. Export from a run at the tier step 2 uses: a fixture from a container run staged on hostloop gets a
+warning, since there the file tools cannot open a `/sessions/` path.
 *Does not prove:* how Cowork treats a new task over the same folder on either lane (not verified); the second
 conversation starts with no memory of the first.
 

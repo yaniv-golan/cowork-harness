@@ -413,6 +413,8 @@ than a stuck `"running"`.)
 - `ref freeze --case-id <id>` overrides the store entry's name (default: the scenario's name).
 - `fixture export <run-dir> --out <dir>` refuses a file holding a secret, and a text file or file name holding a host
   path unless `--allow-host-paths` (a path into a run dir or a guest session is refused regardless).
+  `--session-paths` tokenises this run's own session roots instead of refusing them, and staging writes the new
+  run's roots in (hostloop, container, microvm); `--exclude <path>` drops a file.
 - `prune [--keep-last <n>] [--pinned-older-than <N>d]` removes old run dirs (default `--keep-last 5`);
   `--dry-run` previews it.
 

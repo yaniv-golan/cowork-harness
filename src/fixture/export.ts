@@ -1,6 +1,8 @@
 // `fixture export`: copy a kept run's outputs tree into a directory a scenario can stage as its starting
-// workspace. The fixture is test input that gets committed, so the export never alters a byte — a file that would
-// leak a secret or tie the fixture to one machine is REFUSED by name, and the author fixes the source run instead.
+// workspace. The fixture is test input that gets committed, so a file that would leak a secret or tie the fixture
+// to one machine is REFUSED by name, and the author fixes the source run instead. The bytes are copied verbatim,
+// with one opt-in exception: `--session-paths` rewrites THIS run's session roots to tokens (session-tokens.ts),
+// which staging replaces with the new session's roots. `--exclude` drops named files instead.
 //
 // What it reads: the run's latest turn `result.json` → `outputsDir` (the session's outputs, cumulative across
 // turns — there is no per-turn snapshot). Scratchpad deliverables at the session root are not exported.
@@ -13,16 +15,20 @@ import { tildeify } from "../io.js";
 import { hostPathTokens } from "../run/host-path-tokens.js";
 import { requireTurns, turnArtifactPath } from "../run/turn-layout.js";
 import { runsWriteRoot } from "../run/trace-view.js";
-import { VM_WORK_HOST } from "../runtime/lima.js";
+import { VM_GUEST_SESSIONS_ROOT, VM_WORK_HOST } from "../runtime/lima.js";
 import { scanText } from "../scan.js";
 import type { RunResult } from "../types.js";
+import { asText, containsSessionToken, SESSION_ROOT_TOKEN, tokenizeSessionPaths, VM_SESSION_ROOT_TOKEN } from "./session-tokens.js";
 
 export interface ExportFinding {
   file: string;
   /** `secret`: a value from the secret set (never printed), in the file's bytes or its relative path. `host_path`:
    *  a host path. `run_path`: a path into a harness run dir, the runs root, the VM work dir or a guest session
-   *  (`/sessions/<id>/mnt/…` or `/sessions/<id>/.claude/…`) — refused even with --allow-host-paths. */
-  kind: "secret" | "host_path" | "run_path";
+   *  (`/sessions/<id>/mnt/…` or `/sessions/<id>/.claude/…`) — refused even with --allow-host-paths; with
+   *  --session-paths, only what is left after this run's own session roots were tokenised. `token`: the file
+   *  already holds a session-path token (the substitution would be ambiguous), or tokenising made it read as
+   *  binary (staging would then refuse it). */
+  kind: "secret" | "host_path" | "run_path" | "token";
 }
 
 export interface ExportNote {
@@ -36,7 +42,7 @@ export interface ExportNote {
 
 export interface ExportSkip {
   file: string;
-  why: "symlink" | "hard link" | "not a regular file" | "unreadable";
+  why: "symlink" | "hard link" | "not a regular file" | "unreadable" | "excluded";
   /** For `unreadable`: the error or refusal that stopped the read. */
   reason?: string;
 }
@@ -56,6 +62,8 @@ export interface ExportOutcome {
   partial?: boolean;
   /** The source run's final result, when the run's result.json was read; a result.json with none reads as `error`. */
   result?: "success" | "error";
+  /** With --session-paths: each file whose session paths were tokenised, and how many. */
+  substituted?: Array<{ file: string; count: number }>;
 }
 
 /** The scanner classes reported as notes. `path` gates the export (its findings are unioned with the host-path
@@ -69,14 +77,6 @@ const refuse = (message: string, extra: Partial<ExportOutcome> = {}): ExportOutc
   refused: [],
   ...extra,
 });
-
-/** Text when it holds no NUL in its first 8 KiB. Decoded as UTF-8 when that is lossless, else as Latin-1 (a
- *  legacy-encoded CSV is still text, and every path root is ASCII). */
-function asText(buf: Buffer): string | null {
-  if (buf.subarray(0, 8192).includes(0)) return null;
-  const utf8 = buf.toString("utf8");
-  return Buffer.from(utf8, "utf8").equals(buf) ? utf8 : buf.toString("latin1");
-}
 
 /** Every host path in `text`: the union of the host-path tokens and the scanner's `path` class, which each see
  *  delimiters and roots the other does not (`,/Users/…`, `|/home/…`, `/System/Volumes/…`). `/opt/cowork/` is a
@@ -150,7 +150,34 @@ const OUTPUTS_TAILS: readonly string[][] = [
   ["work", "outputs"],
 ];
 
-export function exportFixture(opts: { runDir: string; out: string; allowHostPaths: boolean; secrets: readonly string[] }): ExportOutcome {
+/** A session id as the harness writes one into a path segment. */
+const SESSION_ID = /^[A-Za-z0-9._~-]+$/;
+
+/** The run's session id, from the run dir's `mounts.json` (written for every tier) or its `status.json`.
+ *  Undefined when neither records a well-formed one. */
+function recordedSessionId(runDir: string): string | undefined {
+  const root = NoFollowRoot.existing(runDir);
+  for (const f of ["mounts.json", "status.json"]) {
+    try {
+      const id = (JSON.parse(root.readFile(join(root.root, f))) as { sessionId?: unknown }).sessionId;
+      if (typeof id === "string" && SESSION_ID.test(id) && id !== "." && id !== "..") return id;
+    } catch {
+      /* absent or unreadable: try the next */
+    }
+  }
+  return undefined;
+}
+
+export function exportFixture(opts: {
+  runDir: string;
+  out: string;
+  allowHostPaths: boolean;
+  secrets: readonly string[];
+  /** Rewrite this run's session roots to session-path tokens (see session-tokens.ts). */
+  sessionPaths?: boolean;
+  /** Outputs-relative paths to leave out; a directory drops everything under it. */
+  exclude?: readonly string[];
+}): ExportOutcome {
   const cmd = "fixture export";
   let turns: number[];
   try {
@@ -204,6 +231,50 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
       ...source,
     });
 
+  // --session-paths: the roots to tokenise. Only a run with a session layout has them (protocol keeps its
+  // outputs at work/outputs, with no mnt/ and no /sessions/<id>, so there is nothing a token could stand for).
+  let sessionRoots: Array<{ from: string; token: string }> = [];
+  if (opts.sessionPaths) {
+    if (tailIdx !== 0)
+      return refuse(
+        `${cmd}: --session-paths: ${opts.runDir} is a protocol run (outputs at work/outputs) — it has no session layout to tokenise; export a hostloop, container or microvm run`,
+        { outputsDir, ...source },
+      );
+    const sid = recordedSessionId(opts.runDir);
+    if (sid === undefined)
+      return refuse(
+        `${cmd}: --session-paths: ${opts.runDir} records no session id (mounts.json or status.json) — cannot tell which /sessions/<id> is this run's`,
+        { outputsDir, ...source },
+      );
+    // The host session dir, in every spelling the agent may have written: the one the run RECORDED as its outputs
+    // dir (the string the agent was handed, even if the run dir has moved since) and this run dir's own spellings.
+    const recordedRoot = resolve(recorded).split("/").slice(0, -2).join("/");
+    const hostRoots = [...new Set([recordedRoot, ...spellings(join(opts.runDir, "work", "session"))])].filter((r) =>
+      r.endsWith("/work/session"),
+    );
+    sessionRoots = [
+      ...hostRoots.map((from) => ({ from, token: SESSION_ROOT_TOKEN })),
+      { from: `${VM_GUEST_SESSIONS_ROOT}/${sid}`, token: VM_SESSION_ROOT_TOKEN },
+    ];
+  }
+
+  // --exclude: outputs-relative, compared on path segments. One that names nothing is refused — a typo would
+  // otherwise silently keep the file it meant to drop.
+  const excludes = (opts.exclude ?? []).map((e) =>
+    e
+      .split("\\")
+      .join("/")
+      .replace(/\/{2,}/g, "/")
+      .replace(/^\.\//, "")
+      .replace(/\/+$/, ""),
+  );
+  const excludeHits = new Set<string>();
+  // Excluding an entry credits every --exclude at or under it: an excluded directory is not walked, so a file
+  // also named inside it would otherwise never be reached and read as a typo.
+  const excludedBy = (rel: string): string[] =>
+    excludes.filter((e) => e !== "" && (rel === e || rel.startsWith(`${e}/`) || e.startsWith(`${rel}/`)));
+  const isExcluded = (rel: string): boolean => excludes.some((e) => e !== "" && (rel === e || rel.startsWith(`${e}/`)));
+
   const src = NoFollowRoot.existing(outputsDir);
   const files: Array<{ rel: string; data: Buffer; mode: number }> = [];
   const skipped: ExportSkip[] = [];
@@ -222,6 +293,11 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
     for (const d of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const abs = join(dir, d.name);
       const rel = relative(src.root, abs);
+      if (isExcluded(rel)) {
+        for (const e of excludedBy(rel)) excludeHits.add(e);
+        skipped.push({ file: rel, why: "excluded" });
+        continue;
+      }
       if (d.isSymbolicLink()) skipped.push({ file: rel, why: "symlink" });
       else if (d.isDirectory()) walk(abs);
       else if (!d.isFile()) skipped.push({ file: rel, why: "not a regular file" });
@@ -239,6 +315,12 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
     }
   };
   walk(src.root);
+  const unmatched = excludes.filter((e) => e === "" || !excludeHits.has(e));
+  if (unmatched.length)
+    return refuse(`${cmd}: --exclude ${unmatched.map((e) => JSON.stringify(e)).join(", ")} names no file or directory in ${outputsDir}`, {
+      outputsDir,
+      ...source,
+    });
   if (files.length === 0)
     return refuse(`${cmd}: ${outputsDir} holds no regular files — nothing for a later step to resume from`, {
       outputsDir,
@@ -266,12 +348,33 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
   const underRunRoot = (t: string): boolean => runRoots.some((r) => t === r || t.startsWith(`${r}/`));
   const refused: ExportFinding[] = [];
   const notes: ExportNote[] = [];
+  const substituted: Array<{ file: string; count: number }> = [];
   for (const f of files) {
     // Every file's raw bytes and its name, before any text/binary split: a secret is a secret in any encoding
     // that carries it verbatim. Compressed formats (xlsx, docx, pdf, images) hide it and are not inspected.
     if (secrets.some(({ s, forms }) => f.rel.includes(s) || forms.some((b) => f.data.includes(b)))) {
       refused.push({ file: f.rel, kind: "secret" });
       continue;
+    }
+    // A token already in the bytes (text or binary) could not be told apart from one this export writes.
+    if (containsSessionToken(f.data)) {
+      refused.push({ file: f.rel, kind: "token" });
+      continue;
+    }
+    // --session-paths: text files only, at byte level. Everything below scans the REWRITTEN bytes, so a path
+    // the substitution did not cover (another session, a host path outside the session) is refused as before.
+    if (sessionRoots.length && asText(f.data) !== null) {
+      const t = tokenizeSessionPaths(f.data, sessionRoots);
+      if (t.count > 0) {
+        // Shrinking a root to a token can pull a NUL from past the sniff window into it: the file would then read
+        // as binary at staging, which refuses a binary file holding a token.
+        if (asText(t.data) === null) {
+          refused.push({ file: f.rel, kind: "token" });
+          continue;
+        }
+        f.data = t.data;
+        substituted.push({ file: f.rel, count: t.count });
+      }
     }
     const text = asText(f.data);
     const scanned = text === null ? f.rel : `${f.rel}\n${text}`;
@@ -287,14 +390,22 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
       if (NOTE_CLASSES.has(s.cls)) notes.push({ file: f.rel, kind: "pii", cls: s.cls, sample: s.sample });
   }
   const bytes = files.reduce((n, f) => n + f.data.length, 0);
-  const scannedPayload = { outputsDir, written: [], skipped, notes, bytes, ...source };
-  if (refused.length)
+  const scannedPayload = { outputsDir, written: [], skipped, notes, bytes, ...source, ...(opts.sessionPaths ? { substituted } : {}) };
+  if (refused.length) {
+    const remedies = [
+      ...(refused.some((r) => r.kind === "host_path") ? ["pass --allow-host-paths"] : []),
+      ...(!opts.sessionPaths && refused.some((r) => r.kind === "run_path")
+        ? ["pass --session-paths if the skill reads this session's paths back (they are rewritten per run at staging)"]
+        : []),
+      ...(refused.length ? ["--exclude a file the step can do without"] : []),
+    ];
     return refuse(
-      `${cmd}: refused — ${refused.length} file(s) would carry a secret or a machine-specific path into a committed fixture: ` +
+      `${cmd}: refused — ${refused.length} file(s) would carry a secret, a machine-specific path or a session-path token into a committed fixture: ` +
         refused.map((r) => `${r.file} (${r.kind})`).join(", ") +
-        `. The export never alters bytes; fix the source run${refused.some((r) => r.kind === "host_path") ? " or pass --allow-host-paths" : ""}.`,
+        `. Bytes are copied verbatim${opts.sessionPaths ? " apart from this run's session roots" : ""}; fix the source run, or ${remedies.join(", or ")}.`,
       { ...scannedPayload, refused },
     );
+  }
 
   // --out: absent, or an existing EMPTY plain directory. Never merges.
   const outSt = lstatOrNull(opts.out);
@@ -343,5 +454,6 @@ export function exportFixture(opts: { runDir: string; out: string; allowHostPath
     notes,
     bytes,
     ...source,
+    ...(opts.sessionPaths ? { substituted } : {}),
   };
 }

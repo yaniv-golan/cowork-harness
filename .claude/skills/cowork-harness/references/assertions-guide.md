@@ -83,7 +83,11 @@ Start the run from the state the earlier steps leave behind instead:
 
 1. Run the pipeline once to the point you want (or stop it there) with `--keep`, then
    `cowork-harness fixture export <run-dir> --out fixtures/after-scoring` — it copies the run's `outputs/`
-   byte-for-byte and refuses (writing nothing) a file that carries a secret or a host path. Commit the directory.
+   byte-for-byte (apart from `--session-paths`, below) and refuses (writing nothing) a file that carries a secret or a host path. Commit the directory.
+   If the skill records its own paths and reads them back (an outputs-dir probe, a sub-agent's output path, a
+   deliverable path it compares as a string), the export refuses those files as `run_path`: add
+   `--session-paths` and staging writes the new run's session paths into them (not at `fidelity: protocol`).
+   `--exclude <path>` drops a file the step can re-create instead.
 2. Point the scenario at it and ask for the late step only:
 
    ```yaml
@@ -99,7 +103,8 @@ Start the run from the state the earlier steps leave behind instead:
    `semantic_matches` does not grade it (a rewritten one is graded). A `file_exists`/`user_visible_artifact`/
    `artifact_text`/`artifact_json` on a fixture path is refused at load unless it says `authored: true`
    (the step must write it) or `authored: false` (inheriting it is fine) — otherwise it would pass on the
-   fixture alone.
+   fixture alone. On replay, a body assertion (`artifact_text`/`artifact_json`) on an untouched binary fixture
+   file, or one staging wrote session paths into, is evidence-unavailable: the cassette records those hash-only.
 
 What it models: re-invoking the skill in the same Cowork session after it stopped mid-work or finished — the
 files persist in `outputs/` and the skill resumes from them. The only difference is that the prior conversation

@@ -250,11 +250,11 @@ describe("staging — copied into outputs/ on a fresh run, never on resume", () 
   it("container/microvm stageWorkspace: stages on a fresh run, and NOT on resume", () => {
     const dir = makeFixture();
     const mnt = join(tmp("wsfx-ct-"), "mnt");
-    stageWorkspace(planFor(dir), mnt);
+    stageWorkspace(planFor(dir), mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     expect(readFileSync(join(mnt, "outputs", "report.md"), "utf8")).toContain("Step 1");
     // turn 2: the skill rewrote the report in turn 1; a resume must leave it alone
     writeFileSync(join(mnt, "outputs", "report.md"), "rewritten by turn 1");
-    stageWorkspace(planFor(dir, { resume: true }), mnt);
+    stageWorkspace(planFor(dir, { resume: true }), mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     expect(readFileSync(join(mnt, "outputs", "report.md"), "utf8")).toBe("rewritten by turn 1");
   });
 
@@ -263,16 +263,16 @@ describe("staging — copied into outputs/ on a fresh run, never on resume", () 
     const mnt = join(tmp("wsfx-ct-"), "mnt");
     mkdirSync(join(mnt, "outputs"), { recursive: true });
     writeFileSync(join(mnt, "outputs", "stale.md"), "from a previous run");
-    expect(() => stageWorkspace(planFor(dir), mnt)).toThrow(/is not empty/);
+    expect(() => stageWorkspace(planFor(dir), mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })).toThrow(/is not empty/);
   });
 
   it("hostloop stageHostLoopWorkspace: stages on a fresh run, and NOT on resume", () => {
     const dir = makeFixture();
     const mnt = join(tmp("wsfx-hl-"), "mnt");
-    stageHostLoopWorkspace(planFor(dir), mnt);
+    stageHostLoopWorkspace(planFor(dir), mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     expect(readFileSync(join(mnt, "outputs", "scores", "deck.json"), "utf8")).toBe('{"score":7}\n');
     writeFileSync(join(mnt, "outputs", "scores", "deck.json"), '{"score":9}');
-    stageHostLoopWorkspace(planFor(dir, { resume: true }), mnt);
+    stageHostLoopWorkspace(planFor(dir, { resume: true }), mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     expect(readFileSync(join(mnt, "outputs", "scores", "deck.json"), "utf8")).toBe('{"score":9}');
   });
 
@@ -360,7 +360,7 @@ describe("authorship — an untouched fixture file is pre-run, a rewritten one i
     const dir = makeFixture();
     const mnt = join(tmp("wsfx-live-"), "mnt");
     const plan = planFor(dir);
-    stageWorkspace(plan, mnt);
+    stageWorkspace(plan, mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     const preRunHashes: Record<string, string | null> = {};
     for (const f of plan.workspaceFixture!.files) preRunHashes[`outputs/${f.path}`] = f.sha256;
     writeFileSync(join(mnt, "outputs", "report.md"), "# Step 2 report\n");
@@ -572,7 +572,7 @@ describe("host-path corpus: a fixture is user-supplied input", () => {
     writeFileSync(join(dir, "notes.md"), "source: /Users/alice/decks/acme.pdf\n");
     const mnt = join(tmp("wsfx-hp-mnt-"), "mnt");
     const plan = planFor(dir);
-    stageWorkspace(plan, mnt);
+    stageWorkspace(plan, mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     writeFileSync(join(mnt, "outputs", "agent-wrote.md"), "/Users/alice/secret/elsewhere\n"); // not a fixture file
     const outDir = tmp("wsfx-hp-out-");
     captureInputHostPathCorpus(plan, mnt, outDir);

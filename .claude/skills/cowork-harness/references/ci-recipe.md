@@ -563,7 +563,7 @@ moved — and `unverifiable-fixture`, a `workspace_fixture` whose signature cann
 | `unverifiable-tier` | tier check couldn't run for a `fidelity: cowork` cassette (no recorded `effectiveFidelity`, or its pinned baseline failed to load) | couldn't verify the tier — re-record |
 | `prompt-assets` | the baseline's committed prompt assets changed since record under the same appVersion | re-record (warns; `--strict` fails) |
 | `unverifiable-prompt-assets` | a recorded prompt-asset hash exists but the live baseline's assets can't be hashed | couldn't verify the prompt |
-| `fixture` | the scenario's `workspace_fixture` content changed since record (names the files) | **high** (the step now starts from different files) — re-record; `--fail-on-skill-drift` fails it |
+| `fixture` | the scenario's `workspace_fixture` content (or a tokenised file's substitution scheme) changed since record (names the files) | **high** (the step now starts from different files) — re-record; `--fail-on-skill-drift` fails it |
 | `unverifiable-fixture` | a `workspace_fixture` signature can't be checked: none recorded, no cassette dir, the dir is gone, or the scan refuses it | couldn't verify the fixture. **Fails a bare `replay`** |
 
 (A pre-`effectiveFidelity` cassette with an **explicit** tier is statically knowable — it passes the tier

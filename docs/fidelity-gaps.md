@@ -334,7 +334,10 @@ or a plan the agent stated but never wrote down) cannot resume from a fixture th
 session — the fixture tests only the state the skill persisted to `outputs/`. Deleting a fixture file is an
 outputs delete: it passes by default on a baseline that records `outputs` as `rwd` (Desktop 2.16120.0 and
 later, matching production, which lets a skill delete there without asking), and fails by default on an
-older `rw` baseline (`allow_outputs_delete: true` opts out there).
+older `rw` baseline (`allow_outputs_delete: true` opts out there). A path a skill recorded into its outputs
+names the session it ran in; in Cowork a re-invocation runs in that same session, so the path still resolves. A
+fixture exported with `fixture export --session-paths` gets this run's session roots written in at staging, so
+the path resolves here too. Without it, such a file is refused at export.
 
 ## Deletes in `outputs/` follow the baseline's recorded mount mode
 

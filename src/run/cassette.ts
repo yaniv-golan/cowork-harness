@@ -1,7 +1,7 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { measureMetrics, type MetricsContext } from "../metrics.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
-import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
+import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
 import {
   HILLCLIMB_RUN_BOOLEAN_FLAGS,
@@ -10,7 +10,7 @@ import {
   HILLCLIMB_RUN_VALUE_FLAGS,
   HILLCLIMB_USAGE,
 } from "../hillclimb/usage.js";
-import { recordedFixtureRefusal, scanWorkspaceFixture } from "../fixture/workspace.js";
+import { isTokenisedFileSig, recordedFixtureRefusal, scanWorkspaceFixture } from "../fixture/workspace.js";
 import { answerChannelAssertRefusal } from "../answer-channel.js";
 import { laneRemoteLoadRefusal } from "./lane-notice.js";
 import { selectCases, stemOf } from "../hillclimb/cases.js";
@@ -5750,17 +5750,21 @@ export function nullOutScrubbedPreRunHashes(
 /** Record-time: an UNTOUCHED binary workspace_fixture file (its sha256 still equals its pre-run hash) is recorded
  *  HASH-ONLY with `truncationReason: "fixture"`. A base64 body is never redacted (redaction would corrupt the bytes)
  *  and the privacy scan flags every one, so committing an inherited binary the step never touched buys nothing:
- *  existence is still proven by path + sha256, and replay knows it was pre-run. Text fixture files stay inline
- *  (redacted with the rest of the cassette); a fixture file the step REWROTE is a deliverable like any other.
- *  `fixtureFiles` are fixture-relative paths (staged at `outputs/<path>`). Pure. */
+ *  existence is still proven by path + sha256, and replay knows it was pre-run. So is an untouched file staging
+ *  wrote session paths into (`tokenisedFiles`): its staged bytes name the RECORD run's session — on hostloop a
+ *  host path under the runs dir — and the committed fixture already holds its portable form. Other text fixture
+ *  files stay inline (redacted with the rest of the cassette); a fixture file the step REWROTE is a deliverable
+ *  like any other. Paths are fixture-relative (staged at `outputs/<path>`). Pure. */
 export function fixtureBinariesHashOnly(
   artifacts: ManifestEntry[],
   fixtureFiles: ReadonlyArray<string>,
   preRunHashes: Record<string, string | null> | undefined,
+  tokenisedFiles: ReadonlyArray<string> = [],
 ): ManifestEntry[] {
   const staged = new Set(fixtureFiles.map((p) => `outputs/${p}`));
+  const tokenised = new Set(tokenisedFiles.map((p) => `outputs/${p}`));
   return artifacts.map((a) => {
-    if (a.encoding !== "base64" || a.body === undefined || !staged.has(a.path)) return a;
+    if (a.body === undefined || !staged.has(a.path) || (a.encoding !== "base64" && !tokenised.has(a.path))) return a;
     const pre = preRunHashes?.[a.path];
     if (typeof pre !== "string" || pre !== a.sha256) return a;
     const { body: _body, encoding: _enc, ...rest } = a;
@@ -6025,6 +6029,7 @@ export async function freezeRecordedRun(
     result.workDir ? buildManifest(result.workDir, opts.maxArtifactBytes, recordRoots, result.readonlyFolderRoots ?? []) : [],
     fixtureFiles,
     result.preRunHashes,
+    (result.fingerprint?.workspaceFixtureFileSigs ?? []).filter(([, sig]) => isTokenisedFileSig(sig)).map(([p]) => p),
   );
   if (fixtureFiles.length) {
     const staged = new Set(fixtureFiles.map((p) => `outputs/${p}`));
@@ -6033,7 +6038,7 @@ export async function freezeRecordedRun(
     const hashOnly = rawManifest.filter((a) => a.truncationReason === "fixture").length;
     warn(
       `::notice:: record: workspace_fixture — ${inline.length} untouched fixture file(s) (${inline.reduce((n, a) => n + a.bytes, 0)} bytes) are inlined ` +
-        `in the cassette (text, redacted with the rest of it)${hashOnly ? `; ${hashOnly} untouched binary file(s) recorded hash-only` : ""}\n`,
+        `in the cassette (text, redacted with the rest of it)${hashOnly ? `; ${hashOnly} untouched binary or session-path file(s) recorded hash-only` : ""}\n`,
     );
   }
   const artifacts = rawManifest.map((a) => {
@@ -7616,7 +7621,7 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     command: "fixture",
     booleanFlags: FIXTURE_BOOLEAN_FLAGS,
     valueFlags: FIXTURE_VALUE_FLAGS,
-    repeatedFlags: [],
+    repeatedFlags: FIXTURE_REPEATED_FLAGS,
     aliases: {},
     usage: FIXTURE_USAGE,
     allowlist: [],

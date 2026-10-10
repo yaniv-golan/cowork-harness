@@ -419,7 +419,7 @@ describe("a plugin script staged for hostloop keeps its exec bit", () => {
     const p = buildLaunchPlan(loadSession({ plugins: { remote_plugins: [src] } }), latest, out);
     const mntHost = join(out, "work", "session", "mnt");
     mkdirSync(mntHost, { recursive: true });
-    stageHostLoopWorkspace(p, mntHost);
+    stageHostLoopWorkspace(p, mntHost, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     return { p, mntHost, staged: join(mntHost, p.pluginDirs[0]!) };
   }
 

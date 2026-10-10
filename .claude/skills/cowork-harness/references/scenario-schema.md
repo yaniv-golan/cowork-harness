@@ -127,7 +127,10 @@ workspace_fixture: fixtures/step1   # OPTIONAL — a directory (relative to this
                                     # (fresh runs only; never re-staged on --resume). Regular files only:
                                     # symlinks, hard links, .claude/.git/.mcp.json/CLAUDE.md and (git mode)
                                     # untracked files are refused at load, as is a presence/body assertion
-                                    # on a fixture file that does not state `authored: true|false`.
+                                    # on a fixture file that does not state `authored: true|false`,
+                                    # a binary file holding a session-path token, and a fixture with
+                                    # tokens at fidelity: protocol. Text files with tokens
+                                    # (fixture export --session-paths) get this run's session roots.
                                     # 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Stamps v14.
 
 metrics:                            # OPTIONAL — numbers read from JSON files the run wrote, reported in

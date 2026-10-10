@@ -140,7 +140,7 @@ describe("replay of a hash-only fixture entry", () => {
     const [exists, text] = await results(c);
     expect(exists!.pass).toBe(true);
     expect(text!.pass).toBe(false);
-    expect(text!.message).toMatch(/untouched binary workspace_fixture file/);
+    expect(text!.message).toMatch(/untouched binary or session-path workspace_fixture file/);
   });
 });
 

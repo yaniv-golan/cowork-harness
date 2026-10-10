@@ -22,6 +22,17 @@ import { preRunHashCap } from "../run/pre-run-manifest.js";
 import { listTurns, turnArtifactPath } from "../run/turn-layout.js";
 import type { Assertion, Fingerprint, Scenario } from "../types.js";
 import { artifactGlobSegments, globToRegExp, isArtifactGlob } from "../glob.js";
+import {
+  asText,
+  containsSessionToken,
+  SESSION_ROOT_TOKEN,
+  SESSION_TOKEN_SCHEME,
+  fileEncodingProblem,
+  sessionRootsProblem,
+  substituteSessionTokens,
+  VM_SESSION_ROOT_TOKEN,
+  type SessionRoots,
+} from "./session-tokens.js";
 
 /** The env var overriding the fixture size cap (bytes, a whole number >= 1). */
 export const WORKSPACE_FIXTURE_MAX_BYTES_ENV = "COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES";
@@ -37,6 +48,9 @@ export interface WorkspaceFixtureFile {
   /** Permission bits (`mode & 0o777`) the staged copy is created with. */
   mode: number;
   bytes: number;
+  /** A text file holding a session-path token (`fixture export --session-paths`): staging writes the new
+   *  session's roots in its place, and its signature carries the substitution scheme. */
+  tokens: boolean;
 }
 
 export interface ScannedWorkspaceFixture {
@@ -77,20 +91,29 @@ function controlPathReason(rel: string): string | undefined {
   return undefined;
 }
 
-/** The per-file signature value: the content digest, plus `+x` when the owner-executable bit is set. */
-function fileSig(f: Pick<WorkspaceFixtureFile, "sha256" | "exec">): string {
-  return f.exec ? `${f.sha256}+x` : f.sha256;
+/** The per-file signature value: the content digest, plus `+x` when the owner-executable bit is set, plus
+ *  `+<scheme>` (`+t1`) when staging substitutes session-path tokens into it — so a change to what the agent is
+ *  handed for the same committed bytes reads as drift. A file without tokens keeps the bare form. */
+function fileSig(f: Pick<WorkspaceFixtureFile, "sha256" | "exec"> & { tokens?: boolean }): string {
+  return `${f.sha256}${f.exec ? "+x" : ""}${f.tokens ? `+${SESSION_TOKEN_SCHEME}` : ""}`;
+}
+
+/** Does a recorded per-file signature mark a file staging writes session paths into (any scheme)? */
+export function isTokenisedFileSig(sig: string): boolean {
+  return /\+t\d+$/.test(sig);
 }
 
 /** The aggregate signature over a file list, independent of the list's order. NUL-framed so `a` + `b\0c` cannot
  *  collide with `a\0b` + `c`. */
-export function workspaceFixtureSig(files: ReadonlyArray<Pick<WorkspaceFixtureFile, "path" | "sha256" | "exec">>): string {
+export function workspaceFixtureSig(
+  files: ReadonlyArray<Pick<WorkspaceFixtureFile, "path" | "sha256" | "exec"> & { tokens?: boolean }>,
+): string {
   const h = createHash("sha256");
   // Paths enter in NFC: the same fixture checked out on a filesystem that stores the other Unicode form (macOS
   // HFS/APFS vs Linux) must not read as drift.
   const nfc = (p: string) => p.normalize("NFC");
   for (const f of [...files].sort((a, b) => (nfc(a.path) < nfc(b.path) ? -1 : nfc(a.path) > nfc(b.path) ? 1 : 0)))
-    h.update(`F:${nfc(f.path)}\0${f.sha256}\0${f.exec ? "x" : "-"}\0`);
+    h.update(`F:${nfc(f.path)}\0${f.sha256}\0${f.exec ? "x" : "-"}\0${f.tokens ? `${SESSION_TOKEN_SCHEME}\0` : ""}`);
   return h.digest("hex");
 }
 
@@ -105,6 +128,8 @@ const describe = (rel: string) => JSON.stringify(rel);
  *  - an agent/configuration path (`.claude/`, `.git/`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md`);
  *  - in git mode (the default; `COWORK_HARNESS_GITSET=0` opts out), a file git does not track — the same boundary
  *    a skill source is staged and hashed under, so what the cassette's signature covers is what is committed;
+ *  - a binary file holding a session-path token (staging rewrites text files only, so the agent would get the
+ *    raw token);
  *  - a total size over the cap (`COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES`, default 64 MiB), checked as the walk
  *    goes, so a mis-pointed fixture (a home directory) fails fast.
  * OS metadata files (`.DS_Store`, `Thumbs.db`, …) are skipped, never staged or hashed.
@@ -217,14 +242,24 @@ export function scanWorkspaceFixture(dir: string): ScannedWorkspaceFixture {
         throw new UsageError(`${what}: ${describe(f.rel)} cannot be read (${(e as Error).message})`);
       throw e;
     }
+    const hasToken = containsSessionToken(bytes);
+    if (hasToken && asText(bytes) === null) {
+      problems.push(
+        `${describe(f.rel)} is binary and holds a session-path token — staging substitutes tokens in text files only, so the agent would read the raw token`,
+      );
+      continue;
+    }
     files.push({
       path: f.rel,
       sha256: createHash("sha256").update(bytes).digest("hex"),
       exec: (f.st.mode & 0o100) !== 0,
       mode: f.st.mode & 0o777,
       bytes: bytes.length,
+      tokens: hasToken,
     });
   }
+  if (problems.length)
+    throw new UsageError(`${what}: refused — ${problems.length} problem(s): ${problems.join("; ")}`, problems.join("\n"));
   return {
     dir: root.root,
     files,
@@ -236,14 +271,19 @@ export function scanWorkspaceFixture(dir: string): ScannedWorkspaceFixture {
 
 /** The fixture a scenario declares, scanned — or `null` when it declares none. `workspace_fixture` is the
  *  absolute directory a loaded scenario carries (the loader resolves it against the scenario file). This is the
- *  listing a harness-gate digest reads: `files` is exactly what a run stages into `outputs/`, and `sig` is the
- *  value recorded as `Fingerprint.workspaceFixtureSig`. Throws the same `UsageError` the run would refuse with. */
+ *  listing a harness-gate digest reads: `files` is the set a run stages into `outputs/` (a `tokens` file's
+ *  committed bytes, which staging rewrites with that session's roots), and `sig` is the value recorded as
+ *  `Fingerprint.workspaceFixtureSig`. Throws the same `UsageError` the run would refuse with. */
 export function scenarioWorkspaceFixture(
   scenario: Pick<Scenario, "workspace_fixture">,
-): { dir: string; files: Array<{ path: string; sha256: string; exec: boolean; bytes: number }>; sig: string } | null {
+): { dir: string; files: Array<{ path: string; sha256: string; exec: boolean; bytes: number; tokens: boolean }>; sig: string } | null {
   if (scenario.workspace_fixture === undefined) return null;
   const s = scanWorkspaceFixture(scenario.workspace_fixture);
-  return { dir: s.dir, files: s.files.map(({ path, sha256, exec, bytes }) => ({ path, sha256, exec, bytes })), sig: s.sig };
+  return {
+    dir: s.dir,
+    files: s.files.map(({ path, sha256, exec, bytes, tokens }) => ({ path, sha256, exec, bytes, tokens })),
+    sig: s.sig,
+  };
 }
 
 /**
@@ -251,8 +291,24 @@ export function scenarioWorkspaceFixture(
  * mtimes, never overwriting. Refuses an outputs dir that already holds anything (a stale tree the fixture would
  * merge over), and re-verifies each file's digest against the scan, so what is staged is exactly what the
  * signature describes — a fixture edited between load and staging is refused, not half-staged.
+ *
+ * A `tokens` file is written with `roots` in place of its session-path tokens: the session root as this tier's
+ * agent sees it from its file tools and from its bash. A caller with no session layout passes no `roots`, and a
+ * fixture with tokens is then refused rather than staged with the raw tokens in it.
  */
-export function stageWorkspaceFixture(scan: ScannedWorkspaceFixture, outputsDir: string): void {
+export function stageWorkspaceFixture(
+  scan: ScannedWorkspaceFixture,
+  outputsDir: string,
+  roots?: SessionRoots,
+): { sessionRootTokens: number; vmSessionRootTokens: number } {
+  const tokenised = scan.files.some((f) => f.tokens);
+  // Before anything is written: a root that cannot be inserted refuses the whole fixture, never half of it.
+  const rootsProblem = tokenised && roots !== undefined ? sessionRootsProblem(roots) : undefined;
+  if (rootsProblem) throw new UsageError(`workspace_fixture ${scan.dir}: ${rootsProblem}`);
+  if (roots === undefined && tokenised)
+    throw new UsageError(
+      `workspace_fixture ${scan.dir}: holds session-path tokens (fixture export --session-paths), but this tier has no session layout to substitute — run it at a tier with one (hostloop, container, microvm)`,
+    );
   const present = readdirSync(outputsDir);
   if (present.length > 0)
     throw new Error(
@@ -261,6 +317,13 @@ export function stageWorkspaceFixture(scan: ScannedWorkspaceFixture, outputsDir:
     );
   const src = NoFollowRoot.existing(scan.dir);
   const dst = NoFollowRoot.existing(outputsDir);
+  // Every tokenised file's encoding too, before anything is written (the loop re-reads and re-verifies each one).
+  if (roots !== undefined)
+    for (const f of scan.files.filter((x) => x.tokens)) {
+      const problem = fileEncodingProblem(src.readBytes(join(src.root, ...f.path.split("/"))), roots);
+      if (problem) throw new UsageError(`workspace_fixture ${scan.dir}: ${describe(f.path)}: ${problem}`);
+    }
+  const counts = { sessionRootTokens: 0, vmSessionRootTokens: 0 };
   for (const f of scan.files) {
     const bytes = src.readBytes(join(src.root, ...f.path.split("/")));
     const got = createHash("sha256").update(bytes).digest("hex");
@@ -270,8 +333,37 @@ export function stageWorkspaceFixture(scan: ScannedWorkspaceFixture, outputsDir:
       );
     const target = join(dst.root, ...f.path.split("/"));
     dst.mkdir(dirname(target));
-    dst.createFile(target, bytes, f.mode);
+    if (f.tokens) {
+      counts.sessionRootTokens += countOf(bytes, SESSION_ROOT_TOKEN);
+      counts.vmSessionRootTokens += countOf(bytes, VM_SESSION_ROOT_TOKEN);
+    }
+    dst.createFile(target, f.tokens ? substituteSessionTokens(bytes, roots!) : bytes, f.mode);
   }
+  return counts;
+}
+
+function countOf(buf: Buffer, token: string): number {
+  let n = 0;
+  for (let i = buf.indexOf(token); i !== -1; i = buf.indexOf(token, i + token.length)) n++;
+  return n;
+}
+
+/** The hostloop staging notice for a fixture whose paths all came from one shared view: on container and microvm
+ *  the file tools and bash see the same `/sessions/<id>` root, so an export from such a run can only tokenise it
+ *  as the bash root. Staged on hostloop, where the file tools run on the host, those paths name the VM tree, which
+ *  the native file tools cannot open. Undefined when the fixture carries a file-tools token or no token at all. */
+export function crossTierFixtureWarning(
+  scan: ScannedWorkspaceFixture,
+  counts: { sessionRootTokens: number; vmSessionRootTokens: number },
+): string | undefined {
+  if (counts.vmSessionRootTokens === 0 || counts.sessionRootTokens > 0) return undefined;
+  return (
+    `::warning:: workspace_fixture ${scan.dir}: its session paths were all recorded as the VM path (${VM_SESSION_ROOT_TOKEN}). ` +
+    `If it was exported from a container or microvm run, that is all such an export can produce — there one path serves both the ` +
+    `file tools and bash, so the export cannot tell which root a skill meant. On hostloop the file tools run on the host and cannot ` +
+    `open a /sessions/ path, so a skill that reads one of these paths back through its file tools will fail; re-export the fixture ` +
+    `from a hostloop run. (A hostloop export whose skill recorded only bash paths is fine.)\n`
+  );
 }
 
 /** The path a presence/body assertion names, whichever form it was authored in: the string form, `{path}` for

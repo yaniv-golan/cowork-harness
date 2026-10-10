@@ -76,7 +76,7 @@
           "truncationReason": {
             "type": "string",
             "enum": ["size", "readonly", "unreadable", "input", "fixture"],
-            "description": "v8+: WHY the body is absent, so replay gives the precise artifact_json remedy. `size` = over the body cap (raise --max-artifact-bytes); `readonly` = a mode:r connected-folder input (assert on a deliverable); `unreadable` = a record-time read/containment failure (sha256 is \"\"); `input` = an UPLOADED file, captured hash-only so a replay can verify it was unmodified (these sit under an input root, not under userVisibleRoots); `fixture` (v14) = an UNTOUCHED binary `workspace_fixture` file (its sha256 equals its pre-run hash), recorded hash-only — text fixture files stay inline. ABSENT on pre-v8 entries."
+            "description": "v8+: WHY the body is absent, so replay gives the precise artifact_json remedy. `size` = over the body cap (raise --max-artifact-bytes); `readonly` = a mode:r connected-folder input (assert on a deliverable); `unreadable` = a record-time read/containment failure (sha256 is \"\"); `input` = an UPLOADED file, captured hash-only so a replay can verify it was unmodified (these sit under an input root, not under userVisibleRoots); `fixture` (v14) = an UNTOUCHED binary `workspace_fixture` file, or an untouched one staging wrote session paths into (its sha256 equals its pre-run hash), recorded hash-only — other text fixture files stay inline. ABSENT on pre-v8 entries."
           },
           "linkKind": {
             "type": "string",
@@ -191,7 +191,7 @@
             "minItems": 2,
             "maxItems": 2
           },
-          "description": "v14: per-file `[path, sig]` behind `workspaceFixtureSig` (fixture-relative paths, redacted like `fileSigs`; the sig is the content sha256, suffixed `+x` for an executable file), so a `fixture` finding names the changed files."
+          "description": "v14: per-file `[path, sig]` behind `workspaceFixtureSig` (fixture-relative paths, redacted like `fileSigs`; the sig is the content sha256, suffixed `+x` for an executable file and `+t1` for a file staging writes the session's paths into), so a `fixture` finding names the changed files."
         },
         "promptAssetsHash": {
           "type": "string",

@@ -95,7 +95,8 @@ export function spawnContainer(
   const sessionHost = join(resolve(outDir), "work", "session");
   const mntHost = join(sessionHost, "mnt");
   const outputsHostDir = join(mntHost, "outputs");
-  const { mcpStaged } = stageWorkspace(plan, mntHost);
+  // One guest tree serves the file tools and bash alike: both fixture tokens get the bind target.
+  const { mcpStaged } = stageWorkspace(plan, mntHost, { sessionRoot, vmSessionRoot: sessionRoot });
   // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
   capturePreRunManifest(plan, mntHost, outDir, "container");
   // Host-path tokens in the user's staged inputs, so the post-run host_path_leak scan can tell a path the

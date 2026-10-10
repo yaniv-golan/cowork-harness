@@ -89,7 +89,7 @@ function run(extra: Record<string, string> = {}, act?: (outputs: string) => void
   const outDir = join(base, "out");
   mkdirSync(outDir);
   const plan = planFor(makeFixture(extra));
-  stageWorkspace(plan, mnt);
+  stageWorkspace(plan, mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
   capturePreRunManifest(plan, mnt, outDir, "container");
   act?.(join(mnt, "outputs"));
   return {
@@ -148,13 +148,13 @@ describe("a --resume turn: authorship is decided per invocation", () => {
     const outDir = join(base, "out");
     mkdirSync(outDir);
     const plan = planFor(fixture);
-    stageWorkspace(plan, mnt);
+    stageWorkspace(plan, mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     capturePreRunManifest(plan, mnt, outDir, "container");
     writeFileSync(join(mnt, "outputs", "memo.md"), "turn 1 memo\n");
     writeFileSync(join(mnt, "outputs", "report.md"), "turn 1 rewrote\n");
     // turn 2 resumes the session and does nothing; it captures no manifest of its own
     const plan2 = { ...plan, resume: true } as LaunchPlan;
-    stageWorkspace(plan2, mnt);
+    stageWorkspace(plan2, mnt, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
     capturePreRunManifest(plan2, mnt, outDir, "container");
     const preRunHashes = readPreRunManifestHashes(outDir);
     expect(preRunHashes).toBeDefined(); // turn 1's manifest is what a resume turn reads — not "no manifest"

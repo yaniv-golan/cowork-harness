@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { registerCleanup, removeContainer } from "../egress/sidecar.js";
 import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, join } from "node:path";
+import type { SessionRoots } from "../fixture/session-tokens.js";
 import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario, InfraErrorSource } from "../types.js";
 import type { LaunchPlan } from "../session.js";
@@ -103,6 +104,14 @@ export function buildHostLoopNativeEnv(
  *  (/tmp→/private/tmp, /var→/private/var on macOS) makes the agent's realpath'd wire cwd differ from the
  *  un-canonicalized spawner cwd even for the SAME directory — a false alarm this collapses. The gate
  *  decision is unaffected (it realpaths candidate and roots itself); this only governs the diagnostic. */
+/** The two session roots a hostloop agent sees: `sessionRoot`, the HOST session dir its native file tools work
+ *  under (the run dir's `work/session`, unresolved — the same string the agent is handed), and `vmSessionRoot`,
+ *  where the bash sidecar binds that dir (`/sessions/<id>`). spawnHostLoop takes both from here, and so does a
+ *  workspace_fixture's token substitution, so the two cannot disagree. */
+export function hostLoopSessionRoots(baseline: PlatformBaseline, sessionId: string, outDir: string): SessionRoots {
+  return { sessionRoot: join(resolve(outDir), "work", "session"), vmSessionRoot: resolveMounts(baseline, sessionId, "proj1").cwd };
+}
+
 /** The host-loop cwd SPLIT, in one place because the two halves are only correct TOGETHER.
  *
  *  Production keeps them deliberately different. Measured on Cowork's local lane 2026-08-27 (before
@@ -296,7 +305,7 @@ function spawnHostLoopTracked(
   trackOnThrow: (s: HostLoopSidecarHandle) => void,
 ) {
   const m = resolveMounts(baseline, sessionId, "proj1");
-  const sessionRoot = m.cwd;
+  const { vmSessionRoot: sessionRoot, sessionRoot: sessionHost } = hostLoopSessionRoots(baseline, sessionId, outDir);
   const mntRoot = m.mntRoot;
   // Name by the per-invocation runToken (NOT sessionId) so a --resume after a failed run doesn't collide
   // on a leftover same-named container. cwd/work dir stay keyed by sessionId (stable for resume).
@@ -307,9 +316,8 @@ function spawnHostLoopTracked(
   // Stage the writable session tree: NO folder copies (bind-mounted real paths instead), uploads/
   // plugins still staged (copies — same fidelity boundary as before), mcp.json staged into the CONFIG
   // dir (a host path the native argv can reference directly).
-  const sessionHost = join(resolve(outDir), "work", "session");
   const mntHost = join(sessionHost, "mnt");
-  const { mcpHostPath } = stageHostLoopWorkspace(plan, mntHost);
+  const { mcpHostPath } = stageHostLoopWorkspace(plan, mntHost, { sessionRoot: sessionHost, vmSessionRoot: sessionRoot });
   // no_unexpected_files baseline: staged outputs + each bind-mounted folder SOURCE (never staged
   // at this tier) walked at its mountPath — the path space snapshotHostLoopWorkspace produces post-run.
   capturePreRunManifest(plan, mntHost, outDir, "hostloop");

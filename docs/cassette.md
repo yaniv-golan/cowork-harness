@@ -630,7 +630,8 @@ bloats the cassette or trips the `binary` privacy finding. `truncationReason` is
 values: `"size"` (over the inline cap), `"readonly"` (a `mode: r` connected-folder input), `"unreadable"`
 (the file existed but couldn't be read), `"input"` (an `inputRoots` upload), or `"fixture"` (v14 — an
 untouched BINARY `workspace_fixture` file: its sha256 still equals its pre-run hash, so it is test input
-the step never touched, recorded hash-only; text fixture files stay inline and go through the record
+the step never touched, recorded hash-only; so is an untouched file staging wrote session paths into, whose
+staged bytes name the recording session; other text fixture files stay inline and go through the record
 redaction policy, and a fixture file the step rewrote is a deliverable like any other).
 
 A green replay re-confirms *record-time* artifacts, **not** that the current
@@ -936,7 +937,9 @@ for the `cowork` → `hostloop`/`container` resolution.
 - **`workspace_fixture <dir> changed since record …`** (class `fixture`) — the scenario's
   [`workspace_fixture`](./scenario.md#starting-from-a-saved-workspace-workspace_fixture) no longer matches
   `fingerprint.workspaceFixtureSig`, the signature recorded from the files actually staged (each file's
-  sha256 and owner-executable bit; other permission bits do not count, so a umask difference is not drift).
+  sha256 and owner-executable bit; other permission bits do not count, so a umask difference is not drift;
+  a file with session-path tokens also carries the substitution scheme, `+t1`, and its sha256 is over the
+  committed tokenised bytes, so a different session id is not drift).
   The message names the changed, added and removed files. The step under test now starts from different
   files: re-record. Warns on the default replay gate; `--strict`, `--fail-on-skill-drift` and an explicit
   `--session` fail it (the fixture is test input the skill reads, like the skill source itself).

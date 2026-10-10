@@ -636,7 +636,7 @@ describe("wiring", () => {
   for (const tier of ["runtime/container.ts", "runtime/microvm.ts"])
     it(`${tier} captures the corpus right after staging`, () => {
       const s = src(tier);
-      const staged = s.indexOf("stageWorkspace(plan, mntHost)");
+      const staged = s.indexOf("stageWorkspace(plan, mntHost, ");
       const captured = s.indexOf("captureInputHostPathCorpus(plan, mntHost, outDir)");
       expect(staged).toBeGreaterThan(-1);
       expect(captured).toBeGreaterThan(staged);

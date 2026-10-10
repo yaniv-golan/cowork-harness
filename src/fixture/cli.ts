@@ -6,7 +6,7 @@ import { applyParsedCommandGlobals, withCommandGlobals } from "../run/command-gl
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "../run/envelope.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { exportFixture, type ExportOutcome } from "./export.js";
-import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "./usage.js";
+import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "./usage.js";
 
 const CMD = "fixture";
 
@@ -15,6 +15,8 @@ function textReport(o: ExportOutcome): string[] {
   if (o.exitCode === 0 && (o.partial || o.result === "error"))
     lines.push("  exported from an incomplete/failed run — files may be truncated");
   for (const s of o.skipped ?? []) lines.push(`  skipped ${s.file} (${s.why}${s.reason ? `: ${s.reason}` : ""})`);
+  for (const s of o.substituted ?? [])
+    lines.push(`  session paths tokenised in ${s.file} (${s.count}) — staging writes the new session's roots in their place`);
   for (const n of o.notes ?? [])
     lines.push(
       n.kind === "binary"
@@ -33,6 +35,7 @@ export async function cmdFixture(args: string[]): Promise<never> {
       withCommandGlobals({
         booleans: [...FIXTURE_BOOLEAN_FLAGS],
         values: [...FIXTURE_VALUE_FLAGS],
+        repeated: [...FIXTURE_REPEATED_FLAGS],
         enums: { "--output-format": ["text", "json"] },
         noDashValue: ["--out"],
       }),
@@ -45,7 +48,14 @@ export async function cmdFixture(args: string[]): Promise<never> {
   const [sub, runDir, ...extra] = p.positionals;
   const out = p.options["--out"];
   if (sub !== "export" || !runDir || extra.length || !out) return fail(CMD, "usage", FIXTURE_USAGE, undefined, json);
-  const o = exportFixture({ runDir, out, allowHostPaths: p.flags["--allow-host-paths"] === true, secrets });
+  const o = exportFixture({
+    runDir,
+    out,
+    allowHostPaths: p.flags["--allow-host-paths"] === true,
+    sessionPaths: p.flags["--session-paths"] === true,
+    exclude: p.repeated["--exclude"] ?? [],
+    secrets,
+  });
   // A secret can sit in a file NAME, which `refused[]` carries. Every stdout/stderr write goes through
   // writeAllSync, which scrubs it with the secret set's raw and JSON-escaped forms, so it never reaches the terminal.
   const { exitCode, message, ...payload } = o;
