@@ -103,9 +103,10 @@ Each `items[]` entry's prose fields are **`idea`** and **`recommendedAction`** �
 and no `summary` field. A consumer that parses for either gets silently blank output instead of an error.
 Full required set: `source` (`evaluator`|`self-report`), `idea`, `classification`, `evidence` (the cited
 excerpt, verbatim-checked against the evidence package), `recommendedAction`. The optional
-`findingFingerprint` hashes `idea`+`classification`+`recommendedAction` — high-precision, low-recall: a
-match proves the same finding recurred; a mismatch does NOT prove it didn't (the same finding reworded
-fingerprints differently).
+`findingFingerprint` hashes `idea`+`classification`+`recommendedAction` — exact-match on model wording, so a
+LOWER bound: a match shows the same wording came back; across repeats of the same probe it often never recurs,
+and no match shows nothing. Read repeat reports side by side, aligned by `classification`; a shared `evidence`
+excerpt is a cue to compare two items, not a match (unrelated findings often cite the same passage).
 
 ## What the evaluator was actually shown — `evidenceBudget`
 

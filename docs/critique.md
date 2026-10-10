@@ -25,7 +25,7 @@ critique refuses before its task turn. The examples below assume the variable is
 - [Cost and prerequisites](#cost-and-prerequisites)
 - [Exit codes](#exit-codes)
 - [Reading the report](#reading-the-report)
-- [Reproduction — the ≥2-run discipline](#reproduction--the-2-run-discipline)
+- [Reading several critiques of the same skill](#reading-several-critiques-of-the-same-skill)
 - [Running it on a skill you did not write](#running-it-on-a-skill-you-did-not-write)
 - [Known limitations](#known-limitations)
 
@@ -567,33 +567,28 @@ The report's field names and shapes are authoritatively described by
 actual builder, unlike the §12-frozen `doctor.json`), so automation consumers — budget pacers gating on
 `costUsd.complete`, harvesters pairing on `gradedSkill` — parse against a schema, not prose.
 
-## Reproduction — the ≥2-run discipline
+## Reading several critiques of the same skill
 
-`critique --repeat` is refused (fixed two-turn protocol). The supported N-run reproduction recipe:
+`critique --repeat` is refused (fixed two-turn protocol). To see how stable a critique is, run it more than
+once with the same probe and read the reports together:
 
 ```bash
 for i in 1 2 3; do
   cowork-harness critique ./my-plugin --skill my-skill --prompt "<same probe>" \
-    --label gen1 --output-format json --out "runs/critique-$i.json"
+    --output-format json --out "runs/critique-$i.json"
 done
 ```
 
-Then pair/cluster across the reports:
-
-- **Same skill generation?** group by `gradedSkillHash` (content-exact — an edited skill changes it).
-- **Same finding across runs/inputs?** cluster by each item's **`findingFingerprint`** (sha over the
-  normalized, secret-scrubbed idea + classification + recommendedAction, deliberately excluding the input-specific
-  `evidence` excerpt — so the same finding matches across different decks/transcripts).
-- **The fingerprint is high-precision, LOW-RECALL — read the direction correctly.** `idea` is
-  model-authored free text, so the same underlying finding *reworded* across runs fingerprints
-  differently. A **match proves** reproduction; a **mismatch does NOT prove** non-reproduction — before
-  concluding "didn't reproduce", skim the unmatched items for rewordings of the same substance.
-- A finding that recurs across ≥2 runs with the same `findingFingerprint` meets the reproduction bar;
-  a fingerprint one-off is a lead — possibly a real one-off, possibly a reworded repeat.
-- **Multi-skill plugins: never pair by `gradedSkillHash` alone.** The hash keys the whole mounted
-  plugin, so it cross-pairs critiques of *different* skills in the same plugin — pair by
-  **(`gradedSkillHash`, `gradedSkill`)**; `gradedSkill` is the report's resolved `skills/<name>` (or the
-  registered name of a skill folder that cannot be promoted to its plugin).
+- **Same skill generation?** pair by (`gradedSkillHash`, `gradedSkill`). `gradedSkillHash` keys the whole mounted
+  plugin, so on a multi-skill plugin it alone cross-pairs critiques of *different* skills; `gradedSkill` is the
+  report's resolved `skills/<name>` (or the registered name of a skill folder that cannot be promoted to its plugin).
+- **Same finding?** Read the reports side by side, finding by finding, aligned by `classification`. No key in the
+  report proves two findings are the same:
+  - **`findingFingerprint`** hashes the model-written `idea`, the `classification` and the `recommendedAction`. It
+    matches only when the wording repeats exactly, and across repeats of the same probe it often never recurs. A
+    match is a LOWER bound — it shows the same wording came back; no match shows nothing.
+  - **The cited `evidence` excerpt** is shared by unrelated findings as often as by the same one: a short passage of
+    the skill gets cited for different ideas. Two items quoting the same excerpt are a cue to read both, not a match.
 - To make the graded runs deterministic across repeats, copy the report's echoed `--answer` lines
   (the graded run's resolved gate answers) into the next invocation.
 
@@ -601,7 +596,7 @@ Then pair/cluster across the reports:
 > produced 78 vs 50 extracted figures, and 12 vs **0** first-pass errors from the same producer bug.
 > The bug was real and reproducible in isolation; the second run simply never generated an input shape
 > that tripped it. For any defect gated on *what the model happens to produce*, a clean report is not
-> evidence of absence — which is the whole reason this recipe exists rather than a `--repeat` flag.
+> evidence of absence — which is why it is worth running more than once.
 
 ## Running it on a skill you did not write
 
