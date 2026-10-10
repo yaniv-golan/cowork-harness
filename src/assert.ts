@@ -1855,6 +1855,7 @@ export function frameJsonDecision(d: Record<string, unknown> | undefined): { jso
   if (exitCode === 2) return { json: "none" };
   if (AGENT_REJECTED_RE.test(stderr)) return { json: undefined };
   // A hook the agent cancelled (it timed out, or was aborted) decided nothing: the agent stops before it reads stdout.
+  // (An onFailure: "block" hook's timeout blocks after this frame; hookFrames applies that from the run's inventory.)
   if (d?.outcome === "cancelled") return { json: "none" };
   const read = stdout === undefined ? { json: undefined } : readJsonDecision(stdout, d?.hook_event);
   // On `outcome: "success"` (exit 0, or an HTTP hook's 2xx) the JSON decides.

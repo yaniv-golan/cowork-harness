@@ -15,9 +15,10 @@ All notable changes to this project are documented here. The format is based on
   freezes the run's hook inventory and is stamped v16, so 4.6.x refuses it as too new rather than read a failed hook
   frame as "no decision". Every other cassette stamps exactly as before, so no existing cassette or `verify-cassettes`
   result changes. `schema/cassette.v16.json` is added; v15's is kept.
-- **No existing verdict changes.** Measured over 1129 kept runs and the committed cassettes, nothing flips: every
-  recording made by an agent at or below 2.1.293 has no `onFailure` hook to read, and no kept hook-key run has a failed
-  or timed-out hook frame.
+- **No existing verdict changes.** Measured over 1129 kept runs and the committed cassettes, nothing flips. Most were
+  recorded by agents at or below 2.1.293, which have no `onFailure`. The rest (newer agents, or no agent version
+  recorded) read as unknown, but no kept hook-key run has a failed or timed-out hook frame, and none asserts unscoped
+  `no_hook_event_blocked: true`.
 
 ### Added
 
@@ -93,13 +94,18 @@ All notable changes to this project are documented here. The format is based on
     InstructionsLoaded, Notification, SessionEnd, StopFailure, WorktreeCreate, WorktreeRemove, CwdChanged and
     FileChanged stream no frame at all. So unscoped `no_hook_event_blocked: true` is evidence-unavailable when one of
     those events has such a hook, or when the inventory is unknown.
-  - Replay and `verify-run` read the recorded inventory. A recording made before it existed is read by its agent:
-    2.1.293 and earlier have no `onFailure`; any other agent counts as unknown.
+  - Replay and `verify-run` read the recorded inventory. A recording made before it existed is read by the agent its
+    own init frame reports, not the baseline it names (a hostloop run can substitute a newer native binary, and
+    protocol runs the host's `claude`): 2.1.293 and earlier have no `onFailure`; any other agent, or none reported,
+    counts as unknown.
   - Not covered:
     - a hook that replies `{"async": true}` at run time, whose failure is read as a possible block although the agent
       does not block on it;
     - managed settings an organization delivers from its server;
-    - a hook the agent blocks on before it starts it, which leaves no frame.
+    - a hook the agent blocks on before it starts it, which leaves no frame;
+    - a hook declared only in settings or in skill or agent frontmatter: the run asks for hook frames only when a staged
+      plugin declares hooks, so such a hook's frames do not stream and the keys report "never fired" or
+      evidence-unavailable for its event.
 
 ## [4.6.1] — 2026-10-09
 

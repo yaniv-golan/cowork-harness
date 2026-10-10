@@ -75,7 +75,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v16.json`](htt
 | `scenarioSource` | Relative path to the authored YAML this was recorded from |
 | `authoring` | Present iff a live decider answered ≥1 gate during recording (`nonDeterministic: true`) |
 | `answerChannel` | `"none"` when the recording ran under `answer_channel: none` (absent otherwise). Replay re-drives with the channel still absent; such a recording stamps v15 |
-| `hookFailureBlocks` | `{events}`: the events the run may have a hook on that sets `onFailure: "block"` (agent 2.1.295+); or `{unknown, why}` when a hook source could not be read or parsed (`why` says how many). Replay reads a failed or timed-out hook frame of such an event as unreadable, since the agent blocks on it after emitting the frame. A non-empty one stamps v16. Absent on an older recording: an agent at or below 2.1.293 has none, any other is unknown |
+| `hookFailureBlocks` | `{events}`: the events the run may have a hook on that sets `onFailure: "block"` (agent 2.1.295+); or `{unknown, why}` when a hook source could not be read or parsed (`why` says how many). Replay reads a failed or timed-out hook frame of such an event as unreadable, since the agent blocks on it after emitting the frame. A non-empty one stamps v16. Absent on an older recording: read by the agent its init frame reports (2.1.293 or earlier has none; any other, or none reported, is unknown) |
 | `sessionFingerprint` | Optional even on v9+ (the minimum readable version): hash of the session's content-relevant SHAPE (model/folders/plugins/skills/mcp/egress/web_fetch, plus projects, agent_env, answer_channel and agent_env.artifacts_root when set). Checked ONLY by `verify-cassettes`, never the default replay verdict; absent → not checked |
 | `folderPrefixMap` | Optional even on v9+: the record-time connected-folder host-path → mount-name map. Replay's `computer_links_resolve` uses THIS (never the current session file); absent → the link is treated as evidence-unavailable, never reconstructed from the current session |
 | `timeline`, `timelineHeader` | The recorded per-event timeline (harness-observation timestamps for tool_use/tool_result/subagent_dispatch/thinking/decision/result, in total order) plus its header (`startedAtWall`/`startedAtMono` anchors); informational only — never affects the replay verdict. Absent on a cassette recorded before this field existed |
@@ -433,6 +433,12 @@ assert:
 ```
 
 *Does not prove:* that the model read the reason, or which plugin's hook decided (frames carry no plugin id).
+
+A hook that blocks by FAILING (`onFailure: "block"`, agent 2.1.295+) cannot be asserted this way: the agent
+converts the failure after it emits the frame, so `hook_decision` / `hook_event_blocked` on that frame are
+evidence-unavailable. The block's message is the agent's own (`…: failed; blocking because onFailure is "block"`, or
+`timed out`); on PreToolUse it is the deny reason the tool call gets back, so `tool_result_contains` on that wording is
+the observable. This path has not been recorded end to end.
 
 ### Schema-check a written file
 
