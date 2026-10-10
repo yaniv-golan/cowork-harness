@@ -1248,7 +1248,7 @@ export const Assertion = z.strictObject({
         ])
         .optional()
         .describe(
-          "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file beside the scenario, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load; the full list of refusals is in docs/scenario.md (among them `format`, `$id`, a `$ref` that is not local, an unknown keyword, a type-specific keyword with no `type`, `nullable`, and a root with no validating keyword). A failure reports the first 5 errors with their JSON paths",
+          "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file, its path relative to the scenario file, inside the scenario's git repository (or its directory outside one), at most 1 MiB, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load; the full list of refusals is in docs/scenario.md (among them `format`, `$id`, a `$ref` that is not local, an unknown keyword, a type-specific keyword with no `type`, `nullable`, and a root with no validating keyword). A failure reports the first 5 errors with their JSON paths",
         ),
       authored: AuthoredFlag,
     })
