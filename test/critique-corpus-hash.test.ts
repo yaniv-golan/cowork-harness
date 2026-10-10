@@ -97,6 +97,19 @@ describe("corpus hashes", () => {
     expect(ref.skillTreeHash).not.toBe(script.skillTreeHash);
   });
 
+  it("editing a resolved agent, or a linked plugin-root reference, moves corpusHash and skillTreeHash", () => {
+    const root = tree(PLUGIN);
+    const before = preview(root);
+    writeFileSync(join(root, "agents/helper.md"), "---\nname: helper\n---\nHELPER BODY, edited\n");
+    const agent = preview(root);
+    expect(agent.corpusHash).not.toBe(before.corpusHash);
+    expect(agent.skillTreeHash).not.toBe(before.skillTreeHash);
+    writeFileSync(join(root, "references/shared.md"), "SHARED-ROOT-BODY, edited\n");
+    const shared = preview(root);
+    expect(shared.corpusHash).not.toBe(agent.corpusHash);
+    expect(shared.skillTreeHash).not.toBe(agent.skillTreeHash);
+  });
+
   it("an untracked file under the skill is listed, not hashed, and moves nothing", () => {
     const root = tree(PLUGIN);
     const before = preview(root);
