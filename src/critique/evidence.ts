@@ -249,6 +249,10 @@ export interface CritiqueItem {
   findingFingerprint?: string;
 }
 
+/** Bump when what `findingFingerprint` hashes changes; a summary records it so a consumer never compares two
+ *  schemes. */
+export const FINGERPRINT_SCHEME = 1;
+
 /** See `CritiqueItem.findingFingerprint`. Exported for harvest tooling and the unit test.
  *
  *  Hashed over the SECRET-SCRUBBED idea and action — the text the report files hold — never the raw text.

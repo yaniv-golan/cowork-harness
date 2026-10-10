@@ -72,9 +72,12 @@ const REPORT_PATHS = [
 ];
 
 /** Which critique JSON a value is, so the allowlist is applied at the right root. */
-export type CritiqueJsonShape = "report" | "salvage" | "corpus-only";
+export type CritiqueJsonShape = "report" | "salvage" | "corpus-only" | "summary";
 
 const KEEP: Record<CritiqueJsonShape, Set<string>> = {
+  // The --summary-out file keeps NOTHING unscrubbed: every value is already shape-checked, so any change the scrub
+  // makes means a secret matched, and the writer withholds the file rather than publish it.
+  summary: new Set(),
   report: new Set(REPORT_PATHS),
   // the salvage file's own top-level enums, plus the full report under `reportState`
   salvage: new Set(["infraFailurePhase", "infraFailureKind", ...REPORT_PATHS.map((p) => `reportState.${p}`)]),
