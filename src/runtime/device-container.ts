@@ -12,6 +12,7 @@ import type { McpHandler } from "../hostloop/workspace-handler.js";
 import type { DeviceBridgeRecord, InfraErrorSource } from "../types.js";
 import { makeInfraEmitters, startHostLoopSidecar } from "./hostloop.js";
 import { HARDENING, proxyEnvVars } from "./argv.js";
+import { removeContainer } from "../egress/sidecar.js";
 
 /**
  * The device container behind `device_bridge: true`. Production runs device_bash in the Mac's Cowork VM as a
@@ -128,8 +129,9 @@ export function deviceContainerArgv(i: {
 
 /** device_bash's runner: a fresh `bash -c` in the device container, starting in $HOME. A Docker or container
  *  failure comes back as `infraError`, never as the command's exit. */
-export function makeDeviceExec(runner: string, containerName: string, home: string): DeviceExec {
+export function makeDeviceExec(runner: string, containerName: string, home: string, ready?: () => Promise<void>): DeviceExec {
   return async (command, timeoutMs) => {
+    await ready?.();
     const startedAt = Date.now();
     // `timeout` runs INSIDE the container, so a command that outlives its limit is stopped there, as production stops
     // it in the VM; killing only the `docker exec` client would leave it running. Node's own timeout is a backstop.
@@ -158,6 +160,21 @@ export function makeDeviceExec(runner: string, containerName: string, home: stri
 const READ_BUFFER = 8 * 1024 * 1024;
 
 const DEVICE_TREE_FILE = "device-tree-pre-run.json";
+
+/** Resolves once the container runs, or after `limitMs` (an exec then reports what is wrong). Under load `docker
+ *  run` can take seconds to create it, and a command sent before then fails as "No such container". */
+async function waitRunning(runner: string, containerName: string, limitMs = 60_000): Promise<void> {
+  const until = Date.now() + limitMs;
+  while (Date.now() < until) {
+    try {
+      const { stdout } = await pexec(runner, ["inspect", "-f", "{{.State.Running}}", containerName], { encoding: "utf8" });
+      if (stdout.trim() === "true") return;
+    } catch {
+      /* not created yet */
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
 
 /** Every file and link under the device tree's folders, as `<folder>/<path>` with its inode. */
 function deviceTreeListing(deviceHost: string): Record<string, number> {
@@ -260,6 +277,8 @@ export function startDeviceBridge(p: {
     sessionId: p.sessionId,
     folders,
   });
+  // A container left under this name (a teardown that ran before a slow create finished) would make the start fail.
+  removeContainer(p.runner, containerName);
   const started = startHostLoopSidecar({
     runner: p.runner,
     argv,
@@ -267,10 +286,11 @@ export function startDeviceBridge(p: {
     logInfra: logSidecarInfra,
     label: "device_bridge container",
   });
+  let running: Promise<void> | undefined;
   const handle = makeRemoteDevicesHandler({
     folderNames: folders.map((f) => f.name),
     appVersion: p.appVersion,
-    exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId)),
+    exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId), () => (running ??= waitRunning(p.runner, containerName))),
     onInfraError: logExecInfra,
   });
   return {

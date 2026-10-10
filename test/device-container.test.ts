@@ -130,6 +130,7 @@ function standInRunner(root: string, cwd = "/"): string {
       'case "$1" in',
       "  run) exec sleep 30;;",
       `  rm) echo "$3" >> "${root}/removed"; exit 0;;`,
+      "  inspect) echo true; exit 0;;",
       "esac",
       '[ "$4" = gone ] && { echo "Error response from daemon: No such container: gone" >&2; exit 1; }',
       "shift 4",
@@ -217,8 +218,63 @@ describe("startDeviceBridge", () => {
       bridge.markTearingDown();
       expect(bridge.reapNow()).toBe(true);
     }
-    expect(readFileSync(join(root, "removed"), "utf8")).toBe("cowork-dev-tok\n");
+    // Once before the start (a stale container of that name), once at teardown.
+    expect(readFileSync(join(root, "removed"), "utf8")).toBe("cowork-dev-tok\ncowork-dev-tok\n");
     expect(bridge.infraErrors).toEqual([]);
+  });
+});
+
+describe("startDeviceBridge: a container that is slow to come up", () => {
+  // Under load `docker run` can take seconds to create the container. The first device_bash must wait for it rather
+  // than fail as "No such container", and a leftover container of the same name is cleared before the start.
+  it("waits until the container runs before the first command, and clears a stale one first", async () => {
+    const root = scratch();
+    const f = folder(root, "proj");
+    const outDir = join(root, "out");
+    const deviceHost = join(outDir, "work", "device");
+    const log = join(root, "log");
+    const runner = join(root, "runner.sh");
+    // `inspect` reports not-running for the first three polls; `exec` fails as the daemon does until then.
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        `echo "$1" >> "${log}"`,
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        `  inspect) n=$(grep -c '^inspect$' "${log}"); [ "$n" -gt 3 ] && echo true || echo false; exit 0;;`,
+        "esac",
+        `n=$(grep -c '^inspect$' "${log}"); [ "$n" -le 3 ] && { echo "Error response from daemon: No such container: x" >&2; exit 1; }`,
+        `shift 4; cd "${deviceHost}"; shift 3; shift; exec "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const bridge = startDeviceBridge({
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir,
+      sessionId: "s",
+      runToken: "slow",
+      mounts: [f],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    try {
+      const r = (await bridge.bundle.handle("remote-devices", {
+        method: "tools/call",
+        params: { name: "device_bash", arguments: { command: "cat mnt/proj/a.txt" } },
+      })) as any;
+      expect(r.result.content[0].text).toBe("alpha\n");
+      expect(bridge.infraErrors).toEqual([]);
+      expect(readFileSync(log, "utf8").split("\n")[0]).toBe("rm");
+    } finally {
+      bridge.markTearingDown();
+      bridge.reapNow();
+    }
   });
 });
 
