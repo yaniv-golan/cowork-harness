@@ -1,4 +1,4 @@
-// The agent version a recording actually ran: the `claude_code_version` its own init frame reports. Not the baseline
+// The agent versions a recording actually ran: the `claude_code_version` its own init frames report. Not the baseline
 // the recording names — a hostloop run may substitute a patch-bumped native binary, protocol runs whatever `claude` is
 // on PATH, and a fingerprint baseline can be re-stamped by hand — so only the stream says which agent ran.
 

@@ -187,6 +187,10 @@ describe("resolveHookFailureBlocks: a recording without the inventory", () => {
   });
   it("every agent the recording reports must be old", () => {
     expect(resolveHookFailureBlocks(undefined, ["2.1.293", "2.1.286"])).toEqual({ events: [] });
+    expect(resolveHookFailureBlocks(undefined, ["2.1.293", "2.1.295"])).toEqual({
+      unknown: true,
+      why: "recorded before the inventory existed, by agent 2.1.293, 2.1.295",
+    });
     for (const vs of [
       ["2.1.293", "2.1.295"],
       ["2.1.295", "2.1.293"],
