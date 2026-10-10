@@ -549,6 +549,12 @@ describe("a run's own agent gates its inventory (the same rule as an older recor
     // an unknown scan result is gated too: an old agent cannot block on a failure, whatever its sources say
     expect(hookFailureBlocksForAgent("2.1.293", () => ({ unknown: true, why: "x" }))).toEqual({ events: [] });
   });
+  it("several agents in one turn: empty only when every one is old", () => {
+    expect(hookFailureBlocksForAgent(["2.1.293", "2.1.286"], () => eligible)).toEqual({ events: [] });
+    expect(hookFailureBlocksForAgent(["2.1.293", "2.1.295"], () => eligible)).toEqual(eligible);
+    expect(hookFailureBlocksForAgent(["2.1.293", undefined], () => eligible)).toEqual(eligible);
+    expect(hookFailureBlocksForAgent([], () => eligible)).toEqual(eligible);
+  });
   it("a newer agent, or a run whose stream reports no version, keeps the scan", () => {
     for (const v of ["2.1.294", "2.1.295", "2.1.1000", undefined, "garbage"])
       expect(
@@ -582,6 +588,16 @@ describe("a run's own agent gates its inventory (the same rule as an older recor
       expect(withAgent("2.1.293")).toEqual({ events: [] });
       expect(withAgent("2.1.295")).toEqual({ events: ["PreToolUse"] });
       expect(withAgent()).toEqual({ events: ["PreToolUse"] }); // no init frame: stays on the scan
+      // a resumed turn is gated by ITS agent, not turn 1's (events.jsonl is append-only across turns)
+      const init = (v: string) => JSON.stringify({ type: "system", subtype: "init", claude_code_version: v });
+      const marker = JSON.stringify({ _emu: "turn_start" });
+      writeFileSync(join(outDir, "events.jsonl"), [init("2.1.293"), marker, init("2.1.295")].join("\n") + "\n");
+      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir)).toEqual({ events: ["PreToolUse"] });
+      writeFileSync(join(outDir, "events.jsonl"), [init("2.1.295"), marker, init("2.1.293")].join("\n") + "\n");
+      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir)).toEqual({ events: [] });
+      // no turn marker: every init counts, so an old first turn cannot gate a newer one
+      writeFileSync(join(outDir, "events.jsonl"), [init("2.1.293"), init("2.1.295")].join("\n") + "\n");
+      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir)).toEqual({ events: ["PreToolUse"] });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

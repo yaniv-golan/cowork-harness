@@ -64,7 +64,7 @@ import {
   scanHookFailureBlocks,
   type HookFailureBlocks,
 } from "./hook-failure-blocks.js";
-import { runDirAgentVersion } from "./recorded-agent-version.js";
+import { currentTurnAgentVersions } from "./recorded-agent-version.js";
 import { spawnContainer } from "../runtime/container.js";
 import { hostLoopSessionRoots, spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
@@ -711,7 +711,7 @@ function assertsAuthored(a: Assertion): boolean {
  *  the agent could load: the staged plugins, the config dir it ran with (its settings, skills, agents and the plugins
  *  it installed) and, where it runs natively on this host, the host's managed settings. Over-including a source only
  *  marks more failed frames unreadable; leaving one out could pass a run whose hook blocked. */
-/** `outDir` holds the run's `events.jsonl`, whose init frame names the agent that ran (see hookFailureBlocksForAgent). */
+/** `outDir` holds the run's `events.jsonl`; this turn's init frames name the agent(s) that ran (see hookFailureBlocksForAgent). */
 export function runHookFailureBlocks(
   plan: LaunchPlan,
   tier: string,
@@ -719,7 +719,7 @@ export function runHookFailureBlocks(
   sessionId: string,
   outDir: string,
 ): HookFailureBlocks {
-  return hookFailureBlocksForAgent(runDirAgentVersion(outDir), () => scanRunHookSources(plan, tier, workRoot, sessionId));
+  return hookFailureBlocksForAgent(currentTurnAgentVersions(outDir), () => scanRunHookSources(plan, tier, workRoot, sessionId));
 }
 
 function scanRunHookSources(plan: LaunchPlan, tier: string, workRoot: string, sessionId: string): HookFailureBlocks {

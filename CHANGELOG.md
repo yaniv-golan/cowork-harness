@@ -23,15 +23,17 @@ All notable changes to this project are documented here. The format is based on
 
   Re-record with this release to fix it. Recordings by 2.1.293 and earlier are unaffected, and so are new runs on those
   agents: they have no `onFailure`, so their inventory is empty and they stamp as before. Measured on 1129 kept runs
-  and the committed cassettes, no verdict changed.
+  and the committed cassettes, no verdict changed. A resumed turn is judged by the agent that ran that turn, not by the
+  agent of turn 1.
 - **When the inventory reads as unknown.** A run on agent 2.1.294 or later gets an unknown inventory when a hook source
-  exists but cannot be read. That makes unscoped `no_hook_event_blocked: true`, and every failed or timed-out hook frame,
+  exists but cannot be read, or when there is too much to walk. That makes unscoped `no_hook_event_blocked: true`, and every failed or timed-out hook frame,
   evidence-unavailable, and stamps the cassette v16. The likeliest cause is one installed plugin with a broken manifest
   or `hooks.json`. Rarer causes:
   - a settings file that does not parse;
-  - a skill or agent whose frontmatter declares `hooks:` and does not parse;
-  - more than 50,000 files to walk, which needs a very large skills tree or a plugins dir with no
-    `installed_plugins.json`.
+  - a skill, command or agent whose frontmatter declares `hooks:` and does not parse;
+  - more than 50,000 entries walked in all, across the staged plugins and the config dir's skills, commands, agents and
+    plugins. That needs a very large tree, or a plugins dir whose `installed_plugins.json` is missing or does not parse,
+    so every plugin dir is walked.
 
   Fix the source to clear it.
 

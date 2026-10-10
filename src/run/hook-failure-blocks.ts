@@ -366,9 +366,20 @@ function compareVersions(a: string, b: string): number | undefined {
  *  without `onFailure` cannot turn a failure into a block, so it has nothing to taint and nothing to stamp, whatever
  *  its hook sources say — and they are not read. Any newer agent, or a run whose stream reports no version (one that
  *  crashed before init), keeps the scan: a missing version is never read as an old one. */
-export function hookFailureBlocksForAgent(agentVersion: string | undefined, scan: () => HookFailureBlocks): HookFailureBlocks {
-  const cmp = agentVersion === undefined ? undefined : compareVersions(agentVersion, LAST_AGENT_WITHOUT_ONFAILURE);
-  return cmp !== undefined && cmp <= 0 ? { events: [] } : scan();
+export function hookFailureBlocksForAgent(
+  agentVersion: string | undefined | ReadonlyArray<string | undefined>,
+  scan: () => HookFailureBlocks,
+): HookFailureBlocks {
+  // Every agent that ran must be old (a turn can hold more than one init frame); none reported, or one unparseable or
+  // missing, keeps the scan.
+  const versions = typeof agentVersion === "string" || agentVersion === undefined ? [agentVersion] : agentVersion;
+  const allOld =
+    versions.length > 0 &&
+    versions.every((v) => {
+      const cmp = v === undefined ? undefined : compareVersions(v, LAST_AGENT_WITHOUT_ONFAILURE);
+      return cmp !== undefined && cmp <= 0;
+    });
+  return allOld ? { events: [] } : scan();
 }
 
 /** The inventory a recording carries, or — for one made before it was recorded — what can be said: an agent at or
