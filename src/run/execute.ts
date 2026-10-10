@@ -1223,6 +1223,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
   let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
+  let deviceBridge: ReturnType<typeof spawnContainer>["device"]; // device_bridge's second container: removed after the agent's, before the network
   let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
   let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
   // Where the protocol agent's child transcripts land — the managed config dir, or undefined when it read the
@@ -1396,7 +1397,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
               };
             })()
           : { effectiveFidelity };
-      const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
+      const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, {
+        ...hostLoopOpts,
+        deviceBridge: scenario.device_bridge === true,
+      });
       promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
       let sdkMcp: SdkMcp | undefined;
       // The session root as reported BY THE SPAWN that just happened — the dir whose `mnt/` is the
@@ -1468,6 +1472,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
         sdkMcp = ct.sdkMcp; // cowork/present_files + the skills/plugins discovery servers (combineSdkMcp)
         spawnedSessionRoot = ct.sessionRoot; // VM path (`/sessions/<id>`) — what the agent inside reports
+        deviceBridge = ct.device;
       } else if (effectiveFidelity === "microvm") {
         const vm = spawnMicroVm(scenario, baseline, plan, outDir, sessionId, {
           systemPromptAppend: prompts.systemPromptAppend,
@@ -1610,6 +1615,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Drops the signal-time thunks only once the container is gone; a failed `rm -f` keeps them for a signal
       // or the process exit.
       removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);
+      // The device container (device_bridge) the same way: marked first, so its forced exit is not a crash.
+      if (deviceBridge) {
+        deviceBridge.markTearingDown();
+        removeContainerThenRelease(runner, deviceBridge.containerName, [deviceBridge.deregister]);
+      }
       if (sidecar) {
         const eg = sidecar.collect();
         egress = eg.entries;
@@ -1636,6 +1646,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // out-of-band row spawnHostLoop appends to events.jsonl. Without this fold, a live sidecar crash
     // would reach the raw log but never `result.json`'s infraErrors, leaving the verdict green.
     if (hostloopInfraErrors?.length) record.infraErrors.push(...hostloopInfraErrors);
+    // The device container's crash and failed device_bash execs, from its own live sink, for the same reason.
+    if (deviceBridge?.infraErrors.length) record.infraErrors.push(...deviceBridge.infraErrors);
 
     // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
     // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
@@ -1816,7 +1828,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         durationMs: Date.now() - startedAt - agentStopMs,
         unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
         fingerprint: withWorkspaceFixtureSig(
-          buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
+          buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession, undefined, {
+            deviceBridge: scenario.device_bridge === true,
+          }),
           plan.workspaceFixture,
         ),
         onUnanswered,
@@ -2406,7 +2420,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
       // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
       fingerprint: withWorkspaceFixtureSig(
-        buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
+        buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession, undefined, {
+          deviceBridge: scenario.device_bridge === true,
+        }),
         plan.workspaceFixture,
       ),
       resources, // same single fold as the evaluate() ctx above — not re-read

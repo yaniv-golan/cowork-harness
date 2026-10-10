@@ -437,6 +437,16 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     expect(soft.signals.find((s) => s.code === "infra_error")).toBeUndefined();
   });
 
+  it("treats the device container like the host-loop sidecar: its death fails, one failed exec warns", () => {
+    const fatal = computeVerdict(rr({ infraErrors: [{ source: "device-container", message: "died" }] }), "live");
+    expect(fatal.pass).toBe(false);
+    expect(fatal.signals.find((s) => s.code === "infra_error")?.severity).toBe("fail");
+    const soft = computeVerdict(rr({ infraErrors: [{ source: "device-exec", message: "exec failed" }] }), "live");
+    expect(soft.pass).toBe(true);
+    expect(soft.signals.find((s) => s.code === "exec_infra_error")?.severity).toBe("warn");
+    expect(soft.signals.find((s) => s.code === "infra_error")).toBeUndefined();
+  });
+
   it("still hard-fails when a sidecar death accompanies a failed exec", () => {
     const v = computeVerdict(
       rr({

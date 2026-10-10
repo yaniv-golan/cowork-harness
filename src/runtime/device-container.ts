@@ -1,13 +1,16 @@
 import { execFile } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, realpathSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
 import { gitCpFilter, gitModeEnabled } from "../run/skill-files.js";
-import type { Mount } from "../session.js";
+import type { LaunchPlan, Mount } from "../session.js";
 import { isExecInfraError } from "../hostloop/workspace-handler.js";
-import type { DeviceExec } from "../hostloop/remote-devices-handler.js";
+import { makeRemoteDevicesHandler, type DeviceExec } from "../hostloop/remote-devices-handler.js";
+import type { McpHandler } from "../hostloop/workspace-handler.js";
+import type { InfraErrorSource } from "../types.js";
+import { makeInfraEmitters, startHostLoopSidecar } from "./hostloop.js";
 import { HARDENING, proxyEnvVars } from "./argv.js";
 
 /**
@@ -20,6 +23,12 @@ import { HARDENING, proxyEnvVars } from "./argv.js";
  */
 
 const pexec = promisify(execFile);
+
+/** The plan the AGENT's container is built from: under `device_bridge` the connected folders belong to the
+ *  device container, and the agent's own container gets none of them, as a cloud task's container has none. */
+export function agentPlanFor(scenario: { device_bridge?: true }, plan: LaunchPlan): LaunchPlan {
+  return scenario.device_bridge === true ? { ...plan, mounts: plan.mounts.filter((mt) => mt.kind !== "folder") } : plan;
+}
 
 /** One connected folder as the device container holds it. */
 export interface DeviceFolder {
@@ -131,5 +140,70 @@ export function makeDeviceExec(runner: string, containerName: string, home: stri
       if (isExecInfraError(e)) return { infraError: [e.message, (e.stderr ?? "").trim()].filter(Boolean).join(": ") || String(e) };
       return { exitCode: typeof e?.code === "number" ? e.code : 1, output: (e.stdout ?? "") + (e.stderr ?? "") };
     }
+  };
+}
+
+/** The model-visible names of the tools the bridge serves, advertised and pre-approved (production pre-approves
+ *  them: run S showed no permission card for a device_bash call). */
+export const DEVICE_BRIDGE_TOOLS = ["mcp__remote-devices__device_bash", "mcp__remote-devices__get_device_info"];
+
+/**
+ * Stage the device tree, start the device container, and build the `remote-devices` bundle that serves against
+ * it. The container is registered for signal-time removal the moment it starts (the same registry phase as the
+ * host-loop sidecar, before the egress network is removed). The caller tears it down after the agent:
+ * `markTearingDown()` first, so the forced exit does not read as a crash, then removal.
+ */
+export function startDeviceBridge(p: {
+  runner: string;
+  image: string;
+  network: string;
+  egressProxy: string;
+  outDir: string;
+  sessionId: string;
+  runToken?: string;
+  mounts: ReadonlyArray<Mount>;
+  appVersion: string;
+  /** A resumed turn reuses the device tree as the first turn left it, as the agent's own tree is reused. */
+  resume: boolean;
+}): {
+  containerName: string;
+  bundle: { servers: string[]; handle: McpHandler };
+  tools: string[];
+  infraErrors: { source: InfraErrorSource; message: string }[];
+  markTearingDown: () => void;
+  deregister: () => void;
+  reapNow: () => boolean;
+} {
+  const deviceHost = join(resolve(p.outDir), "work", "device");
+  const folders = deviceFolders(p.mounts);
+  if (!p.resume) stageDeviceFolders(folders, deviceHost);
+  else mkdirSync(join(deviceHost, "mnt"), { recursive: true });
+  const containerName = `cowork-dev-${p.runToken ?? p.sessionId}`;
+  const infraErrors: { source: InfraErrorSource; message: string }[] = [];
+  const { logSidecarInfra, logExecInfra } = makeInfraEmitters(p.outDir, infraErrors, { sidecar: "device-container", exec: "device-exec" });
+  const argv = deviceContainerArgv({
+    name: containerName,
+    image: p.image,
+    network: p.network,
+    egressProxy: p.egressProxy,
+    deviceHost,
+    sessionId: p.sessionId,
+    folders,
+  });
+  const started = startHostLoopSidecar({ runner: p.runner, argv, containerName, logInfra: logSidecarInfra });
+  const handle = makeRemoteDevicesHandler({
+    folderNames: folders.map((f) => f.name),
+    appVersion: p.appVersion,
+    exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId)),
+    onInfraError: logExecInfra,
+  });
+  return {
+    containerName,
+    bundle: { servers: ["remote-devices"], handle },
+    tools: DEVICE_BRIDGE_TOOLS,
+    infraErrors,
+    markTearingDown: started.markTearingDown,
+    deregister: started.deregister,
+    reapNow: started.reapNow,
   };
 }

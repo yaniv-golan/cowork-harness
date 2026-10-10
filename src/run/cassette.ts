@@ -88,7 +88,7 @@ import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, expandHome, type SessionConfig } from "../session.js";
 import { loadBaseline, pinnedNativeAgentVersion, BASELINES_DIR } from "../baseline.js";
-import { stripComments } from "../prompt.js";
+import { deviceBridgePromptText, stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
 import {
   Run,
@@ -1155,7 +1155,7 @@ export function skillCommit(sessionPath: string, inlineSession?: SessionConfig):
 // substitution), so a comment-only edit doesn't produce false staleness; {{tokens}} are left intact
 // (they're deterministic pre-substitution).
 type PromptAssetKey = "promptTemplate" | "subagentAppend" | "subagentAppendHostLoop";
-export function hashBaselinePromptAssets(baseline: PlatformBaseline): string | undefined {
+export function hashBaselinePromptAssets(baseline: PlatformBaseline, opts: { deviceBridge?: boolean } = {}): string | undefined {
   const spawn = (baseline.spawn ?? {}) as Record<string, unknown>;
   const entries = (["promptTemplate", "subagentAppend", "subagentAppendHostLoop"] as const satisfies readonly PromptAssetKey[])
     .map((k) => [k, spawn[k]] as const)
@@ -1169,6 +1169,9 @@ export function hashBaselinePromptAssets(baseline: PlatformBaseline): string | u
   // the model and is hashed by nothing. The generator's OUTPUT varies with live mounts, so what is mixed
   // in is its constant templates with every interpolation blanked.
   h.update("subagentGenerated").update("\0").update(subagentGeneratedPromptText()).update("\0");
+  // device_bridge replaces the folder text with harness notes; a bridge run's prompt carries them, so its hash
+  // does. Every other run hashes exactly what it did.
+  if (opts.deviceBridge) h.update("deviceBridge").update("\0").update(deviceBridgePromptText()).update("\0");
   for (const [key, rel] of entries) {
     const p = join(BASELINES_DIR, rel);
     if (!existsSync(p)) return undefined; // a dangling pointer already fails test/prompt-assets.test.ts
@@ -1485,8 +1488,9 @@ export function buildFingerprint(
   baseline?: PlatformBaseline,
   inlineSession?: SessionConfig,
   sessionOverride?: string,
+  promptOpts: { deviceBridge?: boolean } = {},
 ): Fingerprint {
-  const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline) : undefined;
+  const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline, promptOpts) : undefined;
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession, sessionOverride);
   // `hashFormat` is stamped on EVERY return path, including the two early ones. A v12 fingerprint that
   // omits it violates the load-time invariant and would fail its own validation — so a baseline-only or
@@ -2436,13 +2440,14 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
 export function promptAssetStaleness(
   fp: Fingerprint,
   liveBaselineObj: PlatformBaseline | undefined,
+  promptOpts: { deviceBridge?: boolean } = {},
 ): StalenessFinding | { note: string } | null {
   if (fp.promptAssetsHash === undefined)
     return {
       note: "prompt-assets: cassette predates prompt-asset fingerprinting — a prompt-asset edit since record would be invisible; re-record to adopt the guard",
     };
   if (liveBaselineObj === undefined || liveBaselineObj.appVersion !== fp.baseline) return null; // baseline finding handles the version mismatch
-  const liveAssets = hashBaselinePromptAssets(liveBaselineObj);
+  const liveAssets = hashBaselinePromptAssets(liveBaselineObj, promptOpts);
   if (liveAssets === undefined)
     return {
       class: "unverifiable-prompt-assets",
@@ -2672,7 +2677,7 @@ export function computeStaleness(
     });
   else if (liveBaseline !== fp.baseline)
     findings.push({ class: "baseline", message: `baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record` });
-  const pa = promptAssetStaleness(fp, liveBaselineObj);
+  const pa = promptAssetStaleness(fp, liveBaselineObj, { deviceBridge: cassette.scenario.device_bridge === true });
   if (pa) {
     if ("note" in pa) notes.push(pa.note);
     else findings.push(pa);

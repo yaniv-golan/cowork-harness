@@ -37,7 +37,57 @@ export interface RenderedPrompts {
  * tier keeps today's VM-path tokens byte-identical. All fields are HOST paths (hostloop is the one
  * tier where the model already speaks host paths, matching what production substitutes there).
  */
+/** The note that replaces the local lane's folder claims under `device_bridge: true`, where the agent's container
+ *  holds no connected folder. It names no device tool and no device path: whether production's own cloud prompt
+ *  names them is not yet measured, and a note that did would teach the model what production may not. */
+export const DEVICE_BRIDGE_PROMPT_NOTE =
+  "The folders the user connected to this task are on the user's own computer, not in this environment: nothing " +
+  "of theirs is under {{cwd}}/mnt. Reach them through the tools for the user's computer, and keep files for the user " +
+  "beside their sources there.";
+/** The VM sub-agent append's counterpart of {@link DEVICE_BRIDGE_PROMPT_NOTE}. */
+export const DEVICE_BRIDGE_SUBAGENT_NOTE =
+  "User-attached folders are on the user's own computer, not in this sandbox; reach them through the tools for the user's computer.";
+
+/** The template text each note replaces, matched before token substitution. A template that no longer carries
+ *  one of them is a hard error on a bridge run, never a silent no-op that leaves the false claim in place. */
+const BRIDGE_REPLACEMENTS: ReadonlyArray<{ anchor: string; note: string; where: "main" | "subagent" }> = [
+  {
+    anchor:
+      "The user connects folders to the session; a connected work folder is mounted under {{workspaceFolder}} and is where " +
+      "user-visible deliverables belong. When no folder is connected, Claude works in the scratchpad and tells the user a " +
+      "folder is needed to persist results.",
+    note: DEVICE_BRIDGE_PROMPT_NOTE,
+    where: "main",
+  },
+  {
+    anchor:
+      " If the user selected (mounted) a folder from their computer, this folder IS that folder, and Claude can both read from and write to it.",
+    note: "",
+    where: "main",
+  },
+  { anchor: "User-attached folders are mounted under {{cwd}}/mnt/.", note: DEVICE_BRIDGE_SUBAGENT_NOTE, where: "subagent" },
+];
+
+/** Every constant the bridge puts into a prompt, for the prompt-asset fingerprint. */
+export function deviceBridgePromptText(): string {
+  return BRIDGE_REPLACEMENTS.map((r) => `${r.anchor}\0${r.note}`).join("\0");
+}
+
+function applyBridgeNotes(template: string, where: "main" | "subagent", rel: string): string {
+  let out = template;
+  for (const r of BRIDGE_REPLACEMENTS.filter((x) => x.where === where)) {
+    if (!out.includes(r.anchor))
+      throw new Error(
+        `cowork-harness: device_bridge: prompt asset ${rel} no longer carries the folder text the bridge replaces: "${r.anchor.slice(0, 60)}…"`,
+      );
+    out = out.split(r.anchor).join(r.note);
+  }
+  return out;
+}
+
 export interface RenderPromptOpts {
+  /** `device_bridge: true`: the agent's container holds no connected folder (see {@link DEVICE_BRIDGE_PROMPT_NOTE}). */
+  deviceBridge?: boolean;
   /** The effective tier — ALSO the sub-agent-append branch selector, REQUIRED on every call
    *  (hostloop -> subagent_env_hl asset; container/microvm -> subagent_env_vm asset;
    *  protocol -> no append, a decided divergence — see docs/fidelity-gaps.md). */
@@ -106,7 +156,8 @@ export function renderPrompts(
   // files are, so it must name the same tree the runtimes stage and bind. A private derivation here was a
   // fourth copy of this rule, and a fourth place for it to drift.
   const { sessionRoot, mntRoot } = resolveMounts(baseline, sessionId);
-  const workspaceFolder = firstFolderMountPath ? `${mntRoot}/${firstFolderMountPath}` : `${mntRoot}/outputs`;
+  // Under the bridge the folder is not in the agent's tree, so its workspace is outputs, as with no folder.
+  const workspaceFolder = firstFolderMountPath && !opts.deviceBridge ? `${mntRoot}/${firstFolderMountPath}` : `${mntRoot}/outputs`;
   // {{currentDateTime}}/{{currentTimezone}} are deliberately render-time-impure (wall clock, host
   // TZ) — that's what the real Desktop builder substitutes, and the rendered append never enters a
   // cassette (fingerprint hashes baseline+skillHash only), so replay determinism is unaffected. Do
@@ -141,7 +192,7 @@ export function renderPrompts(
   tokens["{{accountName}}"] = session.account_name ?? "User";
   const subst = (s: string) => Object.entries(tokens).reduce((acc, [k, v]) => acc.split(k).join(v), s);
   const fidelityWarnings: string[] = [];
-  const read = (rel?: string) => {
+  const read = (rel?: string, where?: "main" | "subagent") => {
     if (!rel) return undefined; // no asset configured — not a drift, just absent
     const p = join(BASELINES_DIR, rel);
     if (!existsSync(p)) {
@@ -156,7 +207,8 @@ export function renderPrompts(
       }
       throw new Error(`cowork-harness: missing prompt asset: ${p}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
     }
-    return subst(stripComments(readFileSync(p, "utf8"))).trim();
+    const template = stripComments(readFileSync(p, "utf8"));
+    return subst(opts.deviceBridge && where ? applyBridgeNotes(template, where, rel) : template).trim();
   };
   const isProtocol = opts.effectiveFidelity === "protocol";
   /** Mirrors production's composition (Desktop >=1.46388.3):
@@ -179,7 +231,7 @@ export function renderPrompts(
   };
   const readSubagentAppend = (): string | undefined => {
     if (isProtocol) return undefined; // decided divergence: neither branch text is true on protocol topology
-    if (!isHostLoop) return composeSubagentAppend(read(spawn.subagentAppend));
+    if (!isHostLoop) return composeSubagentAppend(read(spawn.subagentAppend, "subagent"));
     if (!spawn.subagentAppendHostLoop) {
       // A hostloop run must NEVER silently fall back to the VM branch text — that is exactly the
       // factually-inverted append this selection exists to fix. Same escape hatch as read().
@@ -196,7 +248,7 @@ export function renderPrompts(
     return composeSubagentAppend(read(spawn.subagentAppendHostLoop));
   };
   return {
-    systemPromptAppend: read(spawn.promptTemplate),
+    systemPromptAppend: read(spawn.promptTemplate, "main"),
     subagentAppend: readSubagentAppend(),
     fidelityWarnings: fidelityWarnings.length ? fidelityWarnings : undefined,
   };

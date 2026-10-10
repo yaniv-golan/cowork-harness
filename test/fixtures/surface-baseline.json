@@ -4667,7 +4667,7 @@
       },
       ".infraErrors[].source": {
         "type": "string",
-        "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar"],
+        "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-exec"],
         "required": true
       },
       ".l0HostConfigContamination": {

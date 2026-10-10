@@ -616,7 +616,11 @@ function spawnHostLoopTracked(
 /** The two infra-error emitters a host-loop run needs, sharing one sink and one events.jsonl writer.
  *  Every row carries its `source` so the verdict can tell a dead supervisor apart from a failed command,
  *  and so the replay re-drive can reconstruct the same distinction from the frozen events. */
-export function makeInfraEmitters(outDir: string, sink: Array<{ source: InfraErrorSource; message: string }>) {
+export function makeInfraEmitters(
+  outDir: string,
+  sink: Array<{ source: InfraErrorSource; message: string }>,
+  sources: { sidecar: InfraErrorSource; exec: InfraErrorSource } = { sidecar: "hostloop-sidecar", exec: "hostloop-exec" },
+) {
   const emit = (source: InfraErrorSource) => (message: string) => {
     try {
       appendFileSync(
@@ -626,7 +630,7 @@ export function makeInfraEmitters(outDir: string, sink: Array<{ source: InfraErr
     } catch {}
     sink.push({ source, message });
   };
-  return { logSidecarInfra: emit("hostloop-sidecar"), logExecInfra: emit("hostloop-exec") };
+  return { logSidecarInfra: emit(sources.sidecar), logExecInfra: emit(sources.exec) };
 }
 
 /** Minimal child-process shape {@link watchHostLoopSidecar} needs (a subset of node:child_process's

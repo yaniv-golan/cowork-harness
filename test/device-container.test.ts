@@ -5,8 +5,16 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Mount } from "../src/session.js";
-import { deviceContainerArgv, deviceFolders, deviceVmUser, makeDeviceExec, stageDeviceFolders } from "../src/runtime/device-container.js";
+import type { LaunchPlan, Mount } from "../src/session.js";
+import {
+  deviceContainerArgv,
+  deviceFolders,
+  deviceVmUser,
+  agentPlanFor,
+  makeDeviceExec,
+  stageDeviceFolders,
+  startDeviceBridge,
+} from "../src/runtime/device-container.js";
 
 const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), "device-ct-")));
 function folder(root: string, name: string, mode: Mount["mode"] = "rw"): Mount {
@@ -134,5 +142,101 @@ describe("makeDeviceExec", () => {
     const r = await makeDeviceExec(runner, "ct", "/")("sleep 5", 300);
     expect(r).toMatchObject({ exitCode: 124 });
     expect((r as { output: string }).output).toContain("timed out");
+  });
+});
+
+describe("startDeviceBridge", () => {
+  // The stand-in runner plays both halves: `run …` stays alive like the keep-alive container, and `exec -w <home>
+  // <name> bash -c <cmd>` runs the command in the staged device tree (standing in for $HOME).
+  it("stages the copies, starts the container, and serves device_bash against them; teardown removes it", async () => {
+    const root = scratch();
+    const f = folder(root, "proj");
+    const outDir = join(root, "out");
+    const runner = join(root, "runner.sh");
+    const deviceHost = join(outDir, "work", "device");
+    writeFileSync(
+      runner,
+      `#!/bin/bash\ncase "$1" in run) exec sleep 30;; rm) echo "$3" >> "${root}/removed"; exit 0;; exec) shift 4; cd "${deviceHost}" && exec "$@";; esac\n`,
+      { mode: 0o755 },
+    );
+    const bridge = startDeviceBridge({
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir,
+      sessionId: "session_t2",
+      runToken: "tok",
+      mounts: [f],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    try {
+      expect(bridge.containerName).toBe("cowork-dev-tok");
+      expect(bridge.tools).toEqual(["mcp__remote-devices__device_bash", "mcp__remote-devices__get_device_info"]);
+      const r = (await bridge.bundle.handle("remote-devices", {
+        method: "tools/call",
+        params: { name: "device_bash", arguments: { command: "cat mnt/proj/a.txt; echo x > mnt/proj/a.txt" } },
+      })) as any;
+      expect(r.result.content[0].text).toBe("alpha\n");
+      expect(readFileSync(join(f.hostPath, "a.txt"), "utf8")).toBe("alpha\n");
+    } finally {
+      bridge.markTearingDown();
+      expect(bridge.reapNow()).toBe(true);
+    }
+    expect(readFileSync(join(root, "removed"), "utf8")).toBe("cowork-dev-tok\n");
+    expect(bridge.infraErrors).toEqual([]);
+  });
+});
+
+describe("agentPlanFor", () => {
+  const plan = {
+    mounts: [
+      { hostPath: "/x/p", mountPath: "proj", mode: "rw", kind: "folder" },
+      { hostPath: "/x/u", mountPath: "uploads/u.txt", mode: "r", kind: "upload" },
+    ],
+  } as unknown as LaunchPlan;
+  it("under device_bridge the agent's plan has no connected folder; every other mount stays", () => {
+    expect(agentPlanFor({ device_bridge: true }, plan).mounts.map((m) => m.kind)).toEqual(["upload"]);
+  });
+  it("without it the plan is the same object", () => {
+    expect(agentPlanFor({}, plan)).toBe(plan);
+  });
+});
+
+// spawnContainer needs Docker and the staged agent binary, so its hand-off is pinned on the source: the agent's
+// staging, binds and handlers read the filtered plan, and only the device bridge sees the launch plan's folders.
+describe("wiring: spawnContainer", () => {
+  const s = readFileSync(join(import.meta.dirname, "..", "src", "runtime", "container.ts"), "utf8");
+  it("derives the agent plan through agentPlanFor and gives the launch plan's mounts only to the bridge", () => {
+    expect(s).toMatch(/const plan: LaunchPlan = agentPlanFor\(scenario, launchPlan\);/);
+    expect(s.match(/launchPlan\.mounts/g)).toEqual(["launchPlan.mounts"]);
+    expect(s).toMatch(/startDeviceBridge\(\{[\s\S]{0,400}mounts: launchPlan\.mounts,/);
+    expect(s).toMatch(/stageWorkspace\(plan, mntHost, /);
+  });
+  it("advertises, pre-approves and serves the bridge's tools", () => {
+    expect(s).toMatch(/extraTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\)\]/);
+    expect(s).toMatch(/extraAllowedTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\)\]/);
+    expect(s).toMatch(/\.\.\.\(device \? \[device\.bundle\] : \[\]\)/);
+  });
+});
+
+describe("wiring: execute.ts tears the device container down and keeps its infra errors", () => {
+  const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
+  it("marks, then removes it after the agent's container and before the egress network goes", () => {
+    const agentRm = s.indexOf(
+      "removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);",
+    );
+    const mark = s.indexOf("deviceBridge.markTearingDown();");
+    const rm = s.indexOf("removeContainerThenRelease(runner, deviceBridge.containerName, [deviceBridge.deregister]);");
+    const network = s.indexOf("sidecar.teardown();");
+    expect(agentRm).toBeGreaterThan(-1);
+    expect(mark).toBeGreaterThan(agentRm);
+    expect(rm).toBeGreaterThan(mark);
+    expect(network).toBeGreaterThan(rm);
+  });
+  it("folds the device container's infra errors into the record", () => {
+    expect(s).toMatch(/if \(deviceBridge\?\.infraErrors\.length\) record\.infraErrors\.push\(\.\.\.deviceBridge\.infraErrors\);/);
+    expect(s).toMatch(/deviceBridge = ct\.device;/);
   });
 });
