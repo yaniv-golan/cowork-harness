@@ -712,7 +712,8 @@ export function runHookFailureBlocks(plan: LaunchPlan, tier: string, workRoot: s
   // dir's for microvm, which is never copied back), and protocol's (the operator's real one off managed config).
   const configDirs =
     tier === "protocol"
-      ? [plan.configDir, protocolAgentConfigDir(plan)]
+      ? // its work dir's .claude is a project dir there, read here for its frontmatter too (over-including is safe)
+        [plan.configDir, protocolAgentConfigDir(plan), join(workRoot, ".claude")]
       : [plan.configDir, join(workRoot, ".claude"), ...(tier === "microvm" ? [join(VM_WORK_HOST, sessionId, "mnt", ".claude")] : [])];
   const plugins = plan.mounts.filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin");
   return scanHookFailureBlocks({

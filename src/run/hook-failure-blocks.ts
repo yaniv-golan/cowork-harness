@@ -162,7 +162,9 @@ function addFrontmatter(file: string, s: Scan, personal: boolean): void {
   try {
     fm = parseYaml(m[1]!);
   } catch {
-    if (/hooks/i.test(m[1]!)) throw new Unreadable("frontmatter does not parse");
+    // Only a frontmatter that declares a `hooks:` key could carry one; a description that merely mentions hooks (a
+    // common YAML colon slip the agent's own loader tolerates) does not make the inventory unknown.
+    if (/^\s*hooks\s*:/m.test(m[1]!)) throw new Unreadable("frontmatter does not parse");
     return;
   }
   if (fm && typeof fm === "object" && !Array.isArray(fm) && "hooks" in fm) addEventsMap((fm as Record<string, unknown>).hooks, s, personal);
@@ -362,8 +364,17 @@ function compareVersions(a: string, b: string): number | undefined {
 
 /** The inventory a recording carries, or — for one made before it was recorded — what can be said: an agent at or
  *  below the last one without `onFailure` cannot have such a hook; any other (or an unknown agent) is unknown. */
-export function resolveHookFailureBlocks(recorded: HookFailureBlocks | undefined, agentVersion: string | undefined): HookFailureBlocks {
-  if (recorded !== undefined) return recorded;
+/** Is `v` a well-formed inventory? A recording is a plain file anyone can edit. */
+export function isHookFailureBlocks(v: unknown): v is HookFailureBlocks {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  if ("unknown" in o) return o.unknown === true && typeof o.why === "string";
+  return Array.isArray(o.events) && o.events.every((e) => typeof e === "string");
+}
+
+export function resolveHookFailureBlocks(recorded: unknown, agentVersion: string | undefined): HookFailureBlocks {
+  if (recorded !== undefined)
+    return isHookFailureBlocks(recorded) ? recorded : { unknown: true, why: "the recorded inventory is malformed" };
   const cmp = agentVersion === undefined ? undefined : compareVersions(agentVersion, LAST_AGENT_WITHOUT_ONFAILURE);
   if (cmp !== undefined && cmp <= 0) return { events: [] };
   return { unknown: true, why: `recorded before the inventory existed, by agent ${agentVersion ?? "(unknown)"}` };
@@ -376,6 +387,8 @@ export function mayBlockOnFailure(blocks: HookFailureBlocks | undefined, event: 
 }
 
 /** Is the inventory non-empty (an event listed, or unknown)? */
-export function hasHookFailureBlocks(blocks: HookFailureBlocks | undefined): boolean {
-  return blocks !== undefined && ("unknown" in blocks || blocks.events.length > 0);
+export function hasHookFailureBlocks(blocks: unknown): boolean {
+  if (blocks === undefined) return false;
+  // A malformed value is treated as unknown, which needs a v16 reader too.
+  return !isHookFailureBlocks(blocks) || "unknown" in blocks || blocks.events.length > 0;
 }

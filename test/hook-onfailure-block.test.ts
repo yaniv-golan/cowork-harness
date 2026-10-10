@@ -14,7 +14,14 @@ import {
   scanHookFailureBlocks,
   type HookFailureBlocks,
 } from "../src/run/hook-failure-blocks.js";
-import { CASSETTE_VERSION, freezeRecordedRun, replayCassette, type Cassette } from "../src/run/cassette.js";
+import {
+  CASSETTE_VERSION,
+  freezeRecordedRun,
+  readCassette,
+  replayCassette,
+  requiredVersionFor,
+  type Cassette,
+} from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
 import { assertContextFromRunDir } from "../src/run/verify-context.js";
 import { runHookFailureBlocks } from "../src/run/execute.js";
@@ -139,6 +146,31 @@ describe("events whose hooks stream no frame at all (the agent's outside-REPL ru
   });
 });
 
+describe("resolveHookFailureBlocks: a malformed recorded inventory", () => {
+  it("reads as unknown, never crashes, and still needs a v16 reader", () => {
+    for (const bad of [null, {}, { events: "PreToolUse" }, { unknown: true }, [], "x"])
+      expect("unknown" in resolveHookFailureBlocks(bad, "2.1.293"), JSON.stringify(bad)).toBe(true);
+    expect(requiredVersionFor({ prompt: "x" }, { hookFailureBlocks: null })).toBe(16);
+  });
+  it("a cassette file carrying one is refused cleanly on read; an in-memory one replays as unknown, without a crash", async () => {
+    const c = cassetteOf(hook("PreToolUse", "Bash", exit1), {
+      hookFailureBlocks: { events: "PreToolUse" },
+    } as unknown as Partial<Cassette>);
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "onfail-bad-")));
+    try {
+      const f = join(dir, "bad.cassette.json");
+      writeFileSync(f, JSON.stringify(c));
+      const read = readCassette(f);
+      expect("error" in read && read.error).toMatch(/hookFailureBlocks/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    const r = await replayedNoBlock(c);
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(UNAVAILABLE);
+  });
+});
+
 describe("resolveHookFailureBlocks: a recording without the inventory", () => {
   it("keeps a recorded inventory as is", () => {
     expect(resolveHookFailureBlocks(PRE, "2.1.293")).toEqual(PRE);
@@ -258,6 +290,12 @@ describe("scanHookFailureBlocks: what the agent could read", () => {
     mkdirSync(join(root, "cfg", "plugins"), { recursive: true });
     for (const n of ["a", "b", "c", "d"]) symlinkSync(join(root, "cfg", "plugins"), join(root, "cfg", "plugins", n));
     expect(scanHookFailureBlocks({ configDirs: [join(root, "cfg")] })).toEqual({ events: ["PreToolUse"] });
+  });
+  it("a skill description that only mentions hooks does not make an unparseable frontmatter unknown", () => {
+    put("p/skills/s/SKILL.md", `---\nname: s\ndescription: Use for git hooks: pre-commit setup\n---\n`);
+    expect(scanHookFailureBlocks({ pluginRoots: [join(root, "p")] })).toEqual({ events: [] });
+    put("q/skills/s/SKILL.md", `---\nname: s\ndescription: a: b: c\nhooks:\n  PreToolUse: [\n---\n`);
+    expect("unknown" in scanHookFailureBlocks({ pluginRoots: [join(root, "q")] })).toBe(true);
   });
   it("keeps only event names the agent knows; any other key is skipped, never recorded", () => {
     put("cfg/settings.json", {

@@ -15,10 +15,14 @@ All notable changes to this project are documented here. The format is based on
   freezes the run's hook inventory and is stamped v16, so 4.6.x refuses it as too new rather than read a failed hook
   frame as "no decision". Every other cassette stamps exactly as before, so no existing cassette or `verify-cassettes`
   result changes. `schema/cassette.v16.json` is added; v15's is kept.
-- **No existing verdict changes.** Measured over 1129 kept runs and the committed cassettes, nothing flips. Most were
-  recorded by agents at or below 2.1.293, which have no `onFailure`. The rest (newer agents, or no agent version
-  recorded) read as unknown, but no kept hook-key run has a failed or timed-out hook frame, and none asserts unscoped
-  `no_hook_event_blocked: true`.
+- **A recording made before this release by agent 2.1.294 or later can change verdict.** Such a recording (or one
+  whose stream reports no agent version) has no hook inventory, so its inventory reads as unknown. Two kinds of
+  assertion it holds become evidence-unavailable:
+  - unscoped `no_hook_event_blocked: true`;
+  - a hook key over a failed or timed-out hook frame.
+
+  Re-record with this release to fix it. Recordings by 2.1.293 and earlier are unaffected. Measured on 1129 kept runs
+  and the committed cassettes, no verdict changed.
 
 ### Added
 

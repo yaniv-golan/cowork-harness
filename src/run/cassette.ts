@@ -683,7 +683,7 @@ export function requiredVersionFor(scenario: unknown, frozen?: { answerChannel?:
   // would replay a run that parked at a question as the `stalled` fail. Every write site passes the cassette's value.
   const channel = frozen?.answerChannel === "none" ? 15 : 0;
   // A non-empty onFailure inventory: a v15 reader ignores the key and would read a failed hook frame as "no decision".
-  const failureBlocks = hasHookFailureBlocks(frozen?.hookFailureBlocks as HookFailureBlocks | undefined) ? 16 : 0;
+  const failureBlocks = hasHookFailureBlocks(frozen?.hookFailureBlocks) ? 16 : 0;
   // Two keys together, so neither per-key entry can see it: on `lane: remote` a v15 reader refuses `artifact_json`
   // (that lane's container filesystem is not locally observable), while a v14 reader grades the local work-root file
   // and can pass. `artifact_text` refused there from the start, so it needs nothing.
@@ -3814,6 +3814,10 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["
  *  strict authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
 const CassetteShape = z.looseObject({
   events: z.array(z.string()),
+  // The onFailure inventory replay reads failed hook frames by: a malformed one is a clean refusal, not a crash.
+  hookFailureBlocks: z
+    .union([z.strictObject({ events: z.array(z.string()) }), z.strictObject({ unknown: z.literal(true), why: z.string() })])
+    .optional(),
   // The fingerprint was previously unvalidated — it arrived through the loose passthrough as untyped data,
   // so nothing at the READ boundary enforced the version/format invariant. `looseObject` keeps unknown
   // members, so this validates the two fields the epoch depends on without freezing the rest.
