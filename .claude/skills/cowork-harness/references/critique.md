@@ -172,6 +172,47 @@ from `dist/` source:
 | `trimRecord` | which section the transcript trim shaved, and by how much |
 | `packageTruncated` | `true` if ANY section was cut — check this, not `corpusCuts`, for "was anything trimmed": a transcript-only cut leaves `corpusCuts` empty and would otherwise read as "nothing cut" |
 
+## Has the skill changed? — the three hashes
+
+Every report and every `--corpus-only` payload carries three `sha256:` hashes, keyed by path inside the mount (so
+two clones of one commit hash alike):
+
+| Hash | Covers | Use it for |
+|---|---|---|
+| `skillTreeHash` | every file staging delivered for the skill (`scripts/` included) + resolved agents + linked plugin-root references | "did ANYTHING change since the last critique?" — equal in `--corpus-only` and a graded run |
+| `corpusHash` | the evaluator's static corpus (`SKILL.md`, `references/**`, agents, linked root refs) | a FLOOR: unchanged ≠ unchanged behaviour, since `scripts/` is not in it |
+| `packagedCorpusHash` | exactly what the evaluator was handed, incl. root files the agent READ and the ceiling's cuts | evidence of what was graded — moves with the agent's reading, never a "changed" key |
+
+`corpusManifest` lists the files (diff two to see which one moved a hash); `hashBasis` is `git-tracked`
+(working-tree bytes of tracked files), `worktree-all` or `git-commit`; untracked files under the skill are listed
+in `skillTreeUntracked`, never hashed. `corpusDrift` means a file changed during the run — critique a commit
+instead.
+
+## Critique a commit — `git:<ref>:<path>`
+
+`critique git:<ref>:<path> …` grades a snapshot of the commit, so a moved HEAD or an edit mid-run changes nothing;
+`source.commit` records the resolved id. A path at `<plugin>/skills/<name>` grades that skill of the plugin (same
+as `<plugin> --skill <name>`). Refused before spend: a git filter such as LFS in scope, a symlink out of the
+snapshot, a submodule. Works with `--corpus-only` ($0).
+
+## A public ledger line — `--summary-out`
+
+`--summary-out <file>` writes a summary safe for a PUBLIC repo: ids, hashes, enums, and per finding only
+`findingFingerprint` / `classification` / `source` / `adjudicable` — no finding text, prompt, host path or git
+ref. Values are shape-checked (a failure is `null` + named in `withheld`); a summary a configured secret would
+alter is NOT written (warning, exit unchanged). Cost and the probe hash are opt-in
+(`--summary-include-cost`, `--summary-include-prompt-hash`). Schema: [`schema/critique-summary.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/critique-summary.json).
+
+## Several critiques side by side — `critique --compare`
+
+`critique --compare <report.json | summary.json …>` ($0, no model) groups by `--label` (one group, or two for
+before/after) and lists every finding per report, aligned by classification. It gives **no verdict**: an exact
+`findingFingerprint` match is `sameWording` k/N — a LOWER bound (it often never recurs across repeats); a
+`sharedExcerpt` is the same cited passage, NOT proven the same finding. Equal `corpusHash` in both groups =
+`noiseFloorControl`. Refused: mixed skills / schemes / harness majors, mixed `corpusHash` within a group, the
+same critique twice, a pre-4.8 report. Mixed evaluator models / bases / probes are marked (`--strict` refuses).
+Its output carries finding text — not public-safe. Details: [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only).
+
 ## An untracked skill file is not graded
 
 Staging delivers **git-tracked files only** (same rule as a marketplace plugin install) — an untracked

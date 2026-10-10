@@ -203,7 +203,7 @@ cassette — has its own recipe:
    `--label <tag>`); an un-split window spanning more than one generation now warns.
    **Multi-skill plugin caveat (post-1.7.0 CLIs with `--skill`):**
    skillHash keys the whole MOUNTED plugin, so on a multi-skill plugin the hash alone cross-pairs
-   critiques of DIFFERENT skills — pair by the report's `(gradedSkillHash, gradedSkill)` pair. **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
+   critiques of DIFFERENT skills — pair critiques by the report's per-skill `skillTreeHash` / `corpusHash` (4.8.0+), or by `(gradedSkillHash, gradedSkill)`. **On a pre-1.5.0 CLI the `skill` lane emits no `fingerprint.skillHash` at all**, so a
    pairing step there silently groups on an absent key instead of erroring — check the field is present, or
    require ≥ 1.5.0. See [`docs/debugging.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/debugging.md)
    (repo-only) for the full loop.

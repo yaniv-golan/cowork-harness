@@ -6,6 +6,70 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **The critique report gains fields, and its schema still forbids unknown ones.** `schema/critique-report.json`
+  keeps `additionalProperties: false`, so a validator pinned to the 4.7 schema rejects a 4.8 report. The report is
+  EXPERIMENTAL (SPEC §12); validate against the schema shipped with the harness that wrote it.
+- **`critique --corpus-only` stdout is now secret-scrubbed**, like its `--out` file always was. A configured scrub
+  value that appears in a file name or path in that output now prints as `[REDACTED]`.
+- **Which equal-sized corpus file the ceiling cuts first can change.** The tiebreak between files of the same size
+  is now code-point order instead of the machine's collation, so the cut no longer depends on the machine. Only a
+  skill over the corpus ceiling with two equal-sized files is affected.
+
+### Added
+
+- **`critique` reports whether the skill changed: `corpusHash`, `skillTreeHash`, `packagedCorpusHash`.** Every
+  report and every `--corpus-only` payload carries three `sha256:` hashes, keyed by path inside the mounted folder,
+  so two clones of one commit hash alike:
+  - `skillTreeHash` covers every file staging delivered for the skill (its whole folder, `scripts/` included) plus
+    the resolved agents and linked plugin-root references: the "anything changed" key.
+  - `corpusHash` covers the evaluator's static corpus. It is a floor: `scripts/` is not in it.
+  - `packagedCorpusHash` covers exactly what the evaluator was handed, including plugin-root files the graded
+    agent read and the ceiling's cuts; it moves with the agent's reading.
+  - `corpusHash` and `skillTreeHash` are the same in `--corpus-only` and a graded run on the same files.
+  - `corpusManifest` lists the files behind the hashes, a delivered file that cannot be read included;
+    `hashBasis` says how the delivered set was decided; `skillTreeUntracked` lists files under the skill that
+    staging does not deliver (untracked or ignored), which are neither mounted nor hashed; `corpusHashScheme`
+    versions the rules.
+  - A graded critique packages the corpus before it spends and after both turns. When a file changed in between,
+    the report carries `corpusDrift` with the files that changed.
+- **`critique git:<ref>:<path>` grades a commit.** The commit's files are written to a snapshot and critique runs
+  on it, so an edit or a moved HEAD during the run changes nothing. A path at `<plugin>/skills/<name>` is resolved
+  in the commit's tree to that skill of the plugin, the same mount as `<plugin> --skill <name>`. The report and
+  `--corpus-only` record `source: {kind, ref, path, commit}`. Refused before any spend: a git filter such as LFS
+  in scope, a committed symlink out of the snapshot, a submodule, a ref that is not a commit. Snapshots are kept
+  under `~/.cowork-harness/critique-snapshots/`; `--corpus-only` removes its own.
+- **`critique --summary-out <file>` writes a summary safe for a public repository.** It holds identifiers, hashes,
+  enums and counts, and per finding only `findingFingerprint`, `classification`, `source` and `adjudicable`: no
+  finding text, prompt, host path or git ref. Built by allowlist, every value shape-checked (a failure is written
+  `null` and named in `withheld`); a summary that a configured secret would alter is not written, with a warning,
+  and the exit code never changes. Cost and the probe's hash are opt-in (`--summary-include-cost`,
+  `--summary-include-prompt-hash`). Written on every outcome that writes a report, and by `--corpus-only`. Its
+  shape is the new `schema/critique-summary.json`.
+- **`critique --compare <report.json | summary.json …>` lays several critiques of one skill side by side.** No
+  spend, no model, and no verdict:
+  - findings are listed per report and aligned by classification, in one group or two `--label` groups;
+  - an exact `findingFingerprint` match is shown as `sameWording` with k/N, a lower bound;
+  - a passage cited under the same classification in several reports is shown as `sharedExcerpt`, with its
+    distinct ideas and actions — a cue to read those items together, not a match;
+  - two groups with an equal `corpusHash` are labelled a noise-floor control;
+  - a critique with no result, a failed evaluator canary or corpus drift is excluded from N and listed;
+  - a mix of skills, hash or fingerprint schemes, harness majors, or `corpusHash` within a group is refused; mixed
+    evaluator models, hash bases or probes are marked, and refused under `--strict`;
+  - exits 0 when compared, 2 on a refusal. Its output carries finding text and says it is not public-safe.
+- **The critique report records `harnessVersion`, `label`, `source`, `gradedSkillIdentity` and
+  `fingerprintScheme`.** `gradedSkillIdentity` names a plain skill folder (by its SKILL.md frontmatter) where
+  `gradedSkill` is absent.
+
+### Changed
+
+- **Reading several critiques: a fingerprint is a lower bound.** The reproduction recipe said a finding recurring
+  with the same `findingFingerprint` across two runs meets the reproduction bar. The fingerprint is exact-match
+  on model-written wording, and across repeats of the same probe it often never recurs. The docs and the skill
+  now say to read repeats side by side, aligned by classification, and that a shared evidence excerpt is often
+  cited by unrelated findings.
+
 ## [4.7.1] — 2026-10-10
 
 ### Upgrade notes
