@@ -1997,7 +1997,9 @@ export interface DeviceBridgeRecord {
    *  description paraphrases one production branch), `device-paths-tilde` (get_device_info spells folders
    *  `~/<name>`, not their paths on the Mac), `device-tools-unserved` (device_list_dir, the stage/commit pair and
    *  the folder and delete requests are not served), `shell-user` (commands run as the image's user, not a per-task
-   *  `rcw-<id>` user). */
+   *  `rcw-<id>` user), `device-network-shared` (the device container shares the run's internal network with the agent's
+   *  container, so a service device_bash starts is reachable from the agent's own shell; a cloud container has no
+   *  route to the user's machine). */
   divergences: string[];
 }
 

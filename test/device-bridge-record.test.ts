@@ -45,6 +45,7 @@ describe("deviceBridgeRecord", () => {
       "device-paths-tilde",
       "device-tools-unserved",
       "shell-user",
+      "device-network-shared",
     ]);
   });
 });

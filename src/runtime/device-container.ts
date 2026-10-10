@@ -167,8 +167,9 @@ export function makeDeviceExec(runner: string, containerName: string, home: stri
       return { exitCode: 0, output: (stdout ?? "") + (stderr ?? "") };
     } catch (e: any) {
       const out = (e?.stdout ?? "") + (e?.stderr ?? "");
-      // More output than the read buffer: the handler cuts it at production's cap anyway. Node stops the command
-      // here, so its exit is not known; it reads as a success whose output was cut.
+      // More output than the read buffer: the handler cuts it at production's cap anyway. Node stops reading and the
+      // `docker exec` client, but the command itself runs on in the container until its time limit, so its exit is
+      // not known; it reads as a success whose output was cut.
       if (e?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return { exitCode: 0, output: out };
       // `timeout`'s own exit (124, or 137 once -k had to kill), once the limit has passed; or Node's backstop.
       const limitPassed = Date.now() - startedAt >= timeoutMs * 0.95;
@@ -379,6 +380,7 @@ export function deviceBridgeRecord(mounts: ReadonlyArray<Mount>): DeviceBridgeRe
       "device-paths-tilde",
       "device-tools-unserved",
       "shell-user",
+      "device-network-shared",
     ],
   };
 }

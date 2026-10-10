@@ -1872,10 +1872,14 @@ a simulated session.
   here.
 - **`shell-user`.** Commands run as the image's own user. Production runs them as a per-task user named
   `rcw-<id>`; `$HOME` matches it (`/sessions/rcw-<id>`).
+- **`device-network-shared`.** The device container and the agent's own container share the run's internal network,
+  so a service started through `device_bash` is reachable from the agent's own shell. A cloud container has no route
+  to the user's machine.
 
 Two more limits, not differences in what the agent sees. A command that outlives its limit is stopped inside the
 device container, and the result ends `Command timed out after <n>s`; production's exact wording there is not
-measured. Output past 8 MiB stops the command, and what was read is returned cut at the usual 262,144 characters. A FIFO or socket in a connected folder is not copied to the device, so a command that would block
+measured. Output past 8 MiB is no longer read: what was read is returned cut at the usual 262,144 characters, and the
+command runs on in the device container until its time limit. A FIFO or socket in a connected folder is not copied to the device, so a command that would block
 reading one on the Mac finds no such file here.
 
 File assertions grade the agent's own container, which holds no connected folder under the bridge. So `file_exists`
