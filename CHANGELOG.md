@@ -11,6 +11,13 @@ All notable changes to this project are documented here. The format is based on
 - **A cassette with an `artifact_json` `schema` is stamped v15 and needs this release to replay.** 4.6.0 also reads
   v15, so it does not call such a cassette too new: it rejects the field as an unrecognized assertion and suggests
   re-recording. Upgrade the harness instead.
+- **Cassette format v16.** A recording whose run may have had an `onFailure: "block"` hook (agent 2.1.295 and later)
+  freezes the run's hook inventory and is stamped v16, so 4.6.x refuses it as too new rather than read a failed hook
+  frame as "no decision". Every other cassette stamps exactly as before, so no existing cassette or `verify-cassettes`
+  result changes. `schema/cassette.v16.json` is added; v15's is kept.
+- **No existing verdict changes.** Measured over 1129 kept runs and the committed cassettes, nothing flips: every
+  recording made by an agent at or below 2.1.293 has no `onFailure` hook to read, and no kept hook-key run has a failed
+  or timed-out hook frame.
 
 ### Added
 
@@ -65,6 +72,34 @@ All notable changes to this project are documented here. The format is based on
     record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it; a
     re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on
     2.1.295. The bundled cassettes are re-stamped to `2.31226.1`.
+
+### Fixed
+
+- **A hook with `onFailure: "block"` that fails or times out no longer reads as "no decision".** Agent 2.1.295 adds
+  the field, for command hooks that are not `async` or `asyncRewake` and for http hooks. When such a hook fails or
+  times out, the agent blocks, after it emits the hook's `hook_response` frame, so the frame still says `error` or
+  `cancelled`. A failure is any exit but 0 and 2, or an HTTP status outside 2xx. `no_hook_event_blocked`,
+  `hook_decision` and the object form of `hook_event_blocked` read that frame as "no decision" and could pass while the
+  agent blocked.
+  - Each run now records `RunResult.hookFailureBlocks`: the events it may have such a hook on. It is read after the run
+    from every hook source the agent could load:
+    - staged plugins' `hooks/hooks.json`, manifest hooks, and skill, command and agent frontmatter;
+    - the agent's config dir: its settings, skills, agents and the plugins it installed;
+    - the host's managed settings, at `hostloop` and `protocol`.
+  - It holds event names and a count only. It is "unknown" when a source exists but cannot be read or parsed.
+  - The hook keys read a failed or timed-out frame of such an event as evidence-unavailable. Stop, SubagentStop,
+    TaskCompleted and TeammateIdle keep their reading, since the agent does not block there.
+  - Hooks on PreCompact, PostCompact, ConfigChange, DirectoryAdded, Elicitation, ElicitationResult,
+    InstructionsLoaded, Notification, SessionEnd, StopFailure, WorktreeCreate, WorktreeRemove, CwdChanged and
+    FileChanged stream no frame at all. So unscoped `no_hook_event_blocked: true` is evidence-unavailable when one of
+    those events has such a hook, or when the inventory is unknown.
+  - Replay and `verify-run` read the recorded inventory. A recording made before it existed is read by its agent:
+    2.1.293 and earlier have no `onFailure`; any other agent counts as unknown.
+  - Not covered:
+    - a hook that replies `{"async": true}` at run time, whose failure is read as a possible block although the agent
+      does not block on it;
+    - managed settings an organization delivers from its server;
+    - a hook the agent blocks on before it starts it, which leaves no frame.
 
 ## [4.6.1] — 2026-10-09
 

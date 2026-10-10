@@ -1765,8 +1765,8 @@ export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }
 ];
 
 /** The events whose hook can decide by `hookSpecificOutput.permissionDecision`. The agent ignores the field on every other
- *  event, where only the top-level `decision` counts. Read from the agent's hook-output handler in 2.1.289 and 2.1.293,
- *  which apply the same rule. */
+ *  event, where only the top-level `decision` counts. Read from the agent's hook-output handler in 2.1.289, 2.1.293 and
+ *  2.1.295, which apply the same rule. */
 const PERMISSION_DECISION_EVENTS: ReadonlySet<unknown> = new Set(["PreToolUse", "PreModelSwitch"]);
 
 /** The JSON decision on a frame's stdout. Only stdout that parses WHOLE as a JSON object decides: stdout is the
@@ -1834,7 +1834,8 @@ export const OBJECT_HOOK_EVENT_BLOCKED_VIA: HookChannel = "any";
 /** What the agent puts at the start of a frame's stderr when it did not read the hook's output as a clean verdict: its
  *  refusal of a capture whose stdio went quiet early, its rejection of the JSON (a command hook's or an HTTP hook's), or
  *  a hook it failed to run. The first and last can block on PreToolUse and PermissionRequest whatever the exit code, so
- *  such a frame's decision cannot be read. Wording from agents 2.1.289 and 2.1.293. */
+ *  such a frame's decision cannot be read. Wording from agents 2.1.289, 2.1.293 and 2.1.295 (each a HOOK_DECISION_RULES
+ *  anchor). */
 const AGENT_REJECTED_RE =
   /^(?:hook (?:stdio closed before end-of-stream|output parsed as a document that grants|output opens a JSON payload that never completed)|Hook JSON output validation failed|HTTP hook must return|Failed to run: )/;
 
