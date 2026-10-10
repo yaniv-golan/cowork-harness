@@ -21,6 +21,10 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { describeSubagentUsageLimit } from "../usage-limit.js";
+import type { CorpusDigest, CorpusManifestEntry, HashBasis } from "./corpus-digest.js";
+import { isGitTarget, stageGitTarget, type GitTargetSource } from "./git-target.js";
+import { buildCritiqueSummary, writeSummaryFile, type SummaryContext } from "./summary.js";
+import { CompareRefusal, compareMembers, loadMember, renderCompareText } from "./compare.js";
 import { applyCommandGlobal } from "../run/command-globals.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
@@ -32,7 +36,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
-import { jsonPayloadEnvelope, envOutputFormat, fail, isJsonOutput, type ErrCategory } from "../run/envelope.js";
+import { jsonPayloadEnvelope, envOutputFormat, fail, isJsonOutput, pkgVersion, type ErrCategory } from "../run/envelope.js";
 import { checkMountDelivers } from "./mount-check.js";
 import { binaryPluginIdentity } from "../session.js";
 import { sanitizeSkillName } from "../skill-id.js";
@@ -43,7 +47,7 @@ import type { SkillMdStatus } from "./package-evidence.js";
 import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
 import { findEnclosingPluginDir } from "../run/analyze-skill.js";
 import { safePathSegment } from "../staging/resolve.js";
-import { snapshotTurnBoundary, readTurn1Result, readTurn1Slice, type TurnBoundary } from "./evidence.js";
+import { snapshotTurnBoundary, readTurn1Result, readTurn1Slice, FINGERPRINT_SCHEME, type TurnBoundary } from "./evidence.js";
 import { runCritique, defaultEvaluatorModel } from "./evaluator.js";
 import { loadBaseline } from "../baseline.js";
 import type { PlatformBaseline } from "../types.js";
@@ -87,6 +91,9 @@ Answer plainly, in prose. Do not restate the task's final answer.`;
 
 export interface ParsedArgs {
   skillFolder: string;
+  /** `--label`, as given. Forwarded to the task turn as before; also kept here so the report and the summary can
+   *  record it without depending on the graded turn having written a result. */
+  label?: string;
   /** The probe. Present on every spending invocation — parseArgs enforces it — and absent ONLY under
    *  `--corpus-only`, where no turn runs and a prompt would be a value with nothing to consume it. */
   prompt?: string;
@@ -111,6 +118,13 @@ export interface ParsedArgs {
   outputFormat: "json" | "text";
   /** ALSO write the selected-format report to this file (stdout unchanged). */
   out?: string;
+  /** `--summary-out`: write a public-safe summary (no finding text) to this file. */
+  summaryOut?: string;
+  /** `--summary-include-cost`: put the critique's cost in the summary (left out by default). */
+  summaryIncludeCost?: boolean;
+  /** `--summary-include-prompt-hash`: put the probe's sha256 in the summary (left out by default: it confirms a
+   *  guessed probe). */
+  summaryIncludePromptHash?: boolean;
   /** For a MULTI-SKILL PLUGIN target: which `skills/<name>` the packager should grade. Selection only —
    *  the positional folder is still what both turns mount (session identity must not change). */
   skillSelector?: string;
@@ -128,6 +142,19 @@ function usage(): string {
   EXPERIMENTAL. Runs the skill, asks the agent what confused it, then does NOT believe the answer:
   a blinded evaluator grades the self-report against a frozen record of what actually happened, and
   drops any claim whose citation is not verbatim in that evidence. Discovery instrument, not a gate.
+
+  <skill-folder> may be git:<ref>:<path> (repo-relative, from the current repository): critique the
+  skill as it is at that commit, from a snapshot, so an edit or a moved HEAD during the run changes
+  nothing. A path at <plugin>/skills/<name> grades that skill of the plugin, as <plugin> --skill
+  <name> does; the report records the resolved commit in source.commit.
+
+  critique --compare <report.json | summary.json …> [--strict] [--out <path>] [--output-format json]
+  lines up several critiques of one skill side by side (no spend, no model): one group, or two by
+  --label (before/after). No verdicts — exact fingerprints are a lower-bound "same wording" aid, a shared
+  cited passage a "read these together" aid. A group mixing evaluator models, hash bases, skill trees or
+  probes, or holding a pass-1-only critique, is marked and --strict refuses it; a group with no probe
+  hash, or whose packaged corpus varies, is only marked. Its output carries finding text: not for a
+  public repository.
 
 Probe (one required):
   --prompt "<probe>"        the task to run the skill against
@@ -152,6 +179,13 @@ Critique's own:
   --evaluator-model <id>    the grading model (env: COWORK_HARNESS_EVALUATOR_MODEL)
   --output-format json|text critique's REPORT format (inner turns always speak json internally)
   --out <path>              ALSO write the selected-format report to this file (stdout unchanged)
+  --summary-out <path>      ALSO write a public-safe summary: identifiers, hashes, enums and per-finding
+                            fingerprint / classification / source — no finding text, prompt, host path or
+                            git ref. Each value is shape-checked (a failure is written null and named in
+                            withheld); a summary a configured secret would alter is not written at all
+  --summary-include-cost    put the critique's cost in the summary (left out by default)
+  --summary-include-prompt-hash   put the probe's sha256 in the summary (left out by default: it confirms
+                            a guessed probe)
   --skill <name>            multi-skill PLUGIN target: grade skills/<name>/SKILL.md (+ every agents/**.md it dispatches,
                             + the plugin-root references/ files it points at)
                             instead of a missing plugin-root SKILL.md. Selection only — with a plugin-root
@@ -168,9 +202,12 @@ Critique's own:
   --corpus-only             NO SPEND: package the skill corpus with the packager a critique uses (same
                             code, same git-tracked filter, same ceiling) over an EMPTY run and print the six
                             corpus fields — corpusBytes / corpusCeiling / corpusCuts / corpusExcluded /
-                            corpusPackaged / corpusOmitted — then exit. --prompt becomes optional. The number
-                            is a FLOOR: plugin-root references the agent READS during the graded turn are
-                            added at critique time, so a paid run's corpusBytes is >= this. Every other flag
+                            corpusPackaged / corpusOmitted — plus corpusHash, skillTreeHash, packagedCorpusHash,
+                            hashBasis, source and the per-file corpusManifest, then exit (with --summary-out it
+                            writes a corpus_only summary; the include flags do not apply). --prompt becomes optional. corpusHash and skillTreeHash
+                            equal a graded run's on the same files; the byte count is a FLOOR: plugin-root
+                            references the agent READS during the graded turn are added at critique time,
+                            so a paid run's corpusBytes (and packagedCorpusHash) can differ. Every other flag
                             is still parsed and type-checked as a critique line, but a run-shaping one is not
                             acted on and is named in ignoredFlags — a PATH value (--upload, --folder,
                             --plugin) is only checked when a turn stages, so a missing one does not fail here. Applies staging's git rules: a work
@@ -183,7 +220,7 @@ Critique's own:
 
 Not accepted (each errors with its reason rather than being silently ignored):
   --session-id / --resume   critique mints and manages its own session internally
-  --repeat + companions     fixed two-turn protocol — loop critique itself; pair by fingerprint.skillHash
+  --repeat + companions     fixed two-turn protocol — loop critique itself; read the reports side by side with critique --compare
   --ablate-skill            grading a skill you removed is incoherent
   --quiet/--verbose/--compact/--demo/--dry-run   inner-turn rendering or preview — no effect on the report
                                                  (which already collapses host paths to ~)
@@ -223,6 +260,8 @@ EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself
   sub-agent's; RUN FAILED (task turn, usage_limit)), or an instrument failure (turn killed, reflection
   protocol broke, evaluator never invoked or threw). Findings NEVER gate. --corpus-only: 0 = measured (even over the ceiling — it is a measurement, not a gate; gate on
   corpusBytes <= corpusCeiling yourself), 2 = usage error, unresolvable target, or 0 git-tracked files.
+  --compare: 0 = compared, 2 = a refusal or usage error. A --summary-out file that cannot be written or is
+  withheld never changes the exit code.
 
 ${renderKnownLimitations()}
 
@@ -327,6 +366,10 @@ function parseArgs(
   let promptFile: string | undefined;
   let taskTimeoutMs: number | undefined;
   let corpusOnly = false;
+  let label: string | undefined;
+  let summaryOut: string | undefined;
+  let summaryIncludeCost = false;
+  let summaryIncludePromptHash = false;
   const forwardBoth: string[] = [];
   const forwardTask: string[] = [];
   const seen = new Set<string>();
@@ -394,6 +437,17 @@ function parseArgs(
       const { value: v, adv } = flagVal(argv, i, "--out");
       out = v;
       i += adv;
+    } else if (a === "--summary-out" || a.startsWith("--summary-out=")) {
+      once("--summary-out");
+      const { value: v, adv } = flagVal(argv, i, "--summary-out");
+      summaryOut = v;
+      i += adv;
+    } else if (a === "--summary-include-cost" || a.startsWith("--summary-include-cost=")) {
+      if (a.includes("=")) throw new Error(`--summary-include-cost takes no value (got "${a}")\n${usage()}`);
+      summaryIncludeCost = true;
+    } else if (a === "--summary-include-prompt-hash" || a.startsWith("--summary-include-prompt-hash=")) {
+      if (a.includes("=")) throw new Error(`--summary-include-prompt-hash takes no value (got "${a}")\n${usage()}`);
+      summaryIncludePromptHash = true;
     } else if (a === "--skill" || a.startsWith("--skill=")) {
       once("--skill");
       const { value: v, adv } = flagVal(argv, i, "--skill");
@@ -437,6 +491,7 @@ function parseArgs(
         throw new Error(
           `--on-unanswered must be "fail" or "first" for critique (got "${value}") — there is no TTY inside the spawned turn\n${usage()}`,
         );
+      if (name === "--label") label = value;
       if (name === "--timeout") {
         const n = Number(value);
         if (!Number.isInteger(n) || n <= 0) throw new Error(`--timeout requires a positive integer (ms), got "${value}"`);
@@ -456,6 +511,15 @@ function parseArgs(
     } else positional.push(a);
   }
   if (positional.length !== 1) throw new Error(usage());
+  if (summaryOut !== undefined && out !== undefined && resolve(summaryOut) === resolve(out))
+    throw new Error(`--summary-out and --out name the same file (${summaryOut}); the summary would overwrite the report\n${usage()}`);
+  // A label the public summary cannot carry would be withheld there, and compare could not group by it: refuse it now.
+  if (summaryOut !== undefined && label !== undefined && !/^[A-Za-z0-9._:+-]{1,64}$/.test(label))
+    throw new Error(
+      `--label "${label}" cannot go in a --summary-out file (letters, digits and . _ : + - only, at most 64), so the summary could not be grouped by it; use e.g. ${label.replace(/[^A-Za-z0-9._:+-]+/g, "-").slice(0, 64)}\n${usage()}`,
+    );
+  if ((summaryIncludeCost || summaryIncludePromptHash) && summaryOut === undefined)
+    throw new Error(`--summary-include-cost / --summary-include-prompt-hash need --summary-out\n${usage()}`);
   if (prompt !== undefined && promptFile !== undefined) throw new Error(`--prompt and --prompt-file are mutually exclusive\n${usage()}`);
   if (promptFile !== undefined) {
     if (!existsSync(promptFile)) throw new Error(`--prompt-file not found: ${promptFile}`);
@@ -520,6 +584,7 @@ function parseArgs(
     skillFolder: positional[0],
     prompt,
     corpusOnly,
+    ...(label !== undefined ? { label } : {}),
     ignoredFlags: corpusOnly ? runShaping : [],
     dotenv,
     runDir,
@@ -528,6 +593,9 @@ function parseArgs(
     evaluatorModel,
     outputFormat,
     out,
+    ...(summaryOut !== undefined ? { summaryOut } : {}),
+    ...(summaryIncludeCost ? { summaryIncludeCost } : {}),
+    ...(summaryIncludePromptHash ? { summaryIncludePromptHash } : {}),
     skillSelector,
     forwardBoth,
     forwardTask,
@@ -636,6 +704,7 @@ export function preflightCritique(
       pluginRoot: resolved.pluginRoot,
       mountRoot: resolved.mountRoot,
       mode,
+      hashBasis: resolved.hashBasis,
     });
   } finally {
     rmSync(runDir, { recursive: true, force: true });
@@ -683,6 +752,8 @@ export interface ResolvedCritiqueTarget {
   autoSelectedSkill?: string;
   /** The skill whose invocation the advisory checks, or undefined for a plain skill folder. */
   gradedSkillName?: string;
+  /** `git-commit` when the target is a `git:<ref>:<path>` snapshot; otherwise the packager decides. */
+  hashBasis?: HashBasis;
 }
 
 export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: string | undefined): ResolvedCritiqueTarget {
@@ -1331,6 +1402,16 @@ export function sumCostUsd(modelUsage: unknown): number | undefined {
 
 interface ReportState {
   skillFolder: string;
+  /** See `corpusReportFields`. */
+  corpus?: ReturnType<typeof corpusReportFields>;
+  /** Where the graded files came from: a folder, or a `git:<ref>:<path>` snapshot with its resolved commit. */
+  source?: GitTargetSource | { kind: "dir" };
+  /** The graded skill's identity for `--summary-out` (a plain folder has no `gradedSkill`). Not in the report. */
+  summaryIdentity?: SummaryContext["identity"];
+  /** The harness version that produced the report, so reports from different releases can be told apart. */
+  harnessVersion?: string;
+  /** `--label`, when given. */
+  label?: string;
   prompt: string;
   sessionId: string;
   outDir: string;
@@ -1439,6 +1520,8 @@ interface ReportState {
    *  `parseCritiqueItems`). Surfaced in BOTH output formats whenever non-zero — a dropped finding the
    *  report never mentions would be a silent recall loss, the exact shape this tool exists to kill. */
   droppedEvaluatorItems?: { pass1: number; pass2?: number };
+  /** Evaluator replies that were missing only their final closing brace, which was appended. */
+  evaluatorRepair?: Array<{ pass: 1 | 2; appended: string }>;
   /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
    *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`
    *  when packaging never ran (an infra failure short-circuited before it). */
@@ -1603,8 +1686,22 @@ export function buildTextReport(state: ReportState): string {
   // reflection turn's result.json for them).
   if (gradedOutcome) out.push(`  graded outcome: ${gradedOutcome}`);
   if (state.gradedSkill)
-    out.push(`  graded skill: ${state.gradedSkill} (pair by skillHash + this name — skillHash keys the whole mounted plugin)`);
+    out.push(
+      `  graded skill: ${state.gradedSkill} (skillTreeHash below is the per-skill change key; skillHash keys the whole mounted plugin)`,
+    );
   if (gradedSkillHash) out.push(`  graded skillHash: ${gradedSkillHash.slice(0, 12)}`);
+  if (state.corpus) {
+    out.push(
+      `  skillTreeHash: ${state.corpus.skillTreeHash.slice(0, 19)}…  corpusHash: ${state.corpus.corpusHash.slice(0, 19)}…  (${state.corpus.hashBasis})`,
+    );
+    if (state.corpus.corpusDrift)
+      out.push(
+        `  WARNING: the skill changed DURING this critique — ${state.corpus.corpusDrift.changed.join(", ") || "(files outside the manifest)"}. ` +
+          `The evaluator graded the later files; the agent may have run on the earlier ones. Critique a commit (git:<ref>:<path>) to rule this out.`,
+      );
+    if (state.corpus.skillTreeUntrackedCount)
+      out.push(`  not delivered (untracked), not graded, not hashed: ${state.corpus.skillTreeUntrackedCount} file(s) under the skill`);
+  }
   // The GRADED turn's model, beside the evaluator's — never one without the other. Naming only the
   // evaluator invited exactly the wrong reading: that the critique was produced under the model the
   // caller had in mind, when the turns are a subprocess that inherits no model from their caller.
@@ -1723,6 +1820,10 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
 
+  for (const r of state.evaluatorRepair ?? [])
+    out.push(
+      `  NOTE: evaluator pass ${r.pass}'s reply was missing its final closing ${JSON.stringify(r.appended)}; it was appended and the reply then parsed and validated as usual.`,
+    );
   const dropped = state.droppedEvaluatorItems;
   const droppedTotal = dropped ? dropped.pass1 + (dropped.pass2 ?? 0) : 0;
   if (droppedTotal > 0)
@@ -1853,10 +1954,18 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
   // evaluatorIntegrity rides on EVERY branch: a silenced pass is exactly the case where the other fields
   // look clean, so omitting it from the infra/error branches would hide it when it matters most.
   const base = {
+    harnessVersion: state.harnessVersion,
+    label: state.label,
     skillFolder,
     prompt,
     sessionId,
     outDir,
+    ...state.corpus,
+    source: state.source,
+    // The graded skill's identity, as `--summary-out` and `--compare` key on it: a plain skill folder has no
+    // `gradedSkill`, so this names it by its SKILL.md frontmatter (else its folder).
+    gradedSkillIdentity: state.summaryIdentity,
+    fingerprintScheme: FINGERPRINT_SCHEME,
     fidelity: state.fidelity,
     requestedFidelity: state.requestedFidelity,
     gradedEffectiveFidelity: state.gradedEffectiveFidelity,
@@ -1878,6 +1987,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     // On `base` for the same reason as evaluatorIntegrity: a reply with dropped items is exactly where
     // the surviving findings under-represent the full reply — every branch must carry the count.
     droppedEvaluatorItems: state.droppedEvaluatorItems,
+    evaluatorRepair: state.evaluatorRepair,
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
@@ -1975,6 +2085,19 @@ export function persistCritiqueArtifacts(
     });
 }
 
+/** `--summary-out`: the public-safe summary of this report (see summary.ts). Like `--out`, never changes the exit
+ *  code. */
+export function writeSummaryIfAsked(opts: ParsedArgs, state: ReportState): void {
+  if (opts.summaryOut === undefined || state.summaryIdentity === undefined) return;
+  const summary = buildCritiqueSummary(buildJsonReport(state), {
+    identity: state.summaryIdentity,
+    prompt: state.prompt,
+    includeCost: opts.summaryIncludeCost === true,
+    includePromptHash: opts.summaryIncludePromptHash === true,
+  });
+  writeSummaryFile(opts.summaryOut, summary, (m) => process.stderr.write(m));
+}
+
 /** `--out`: ALSO write the selected-format report to an explicit file. Loud on failure (the user asked
  *  for this file by name) but never changes the exit taxonomy — the stdout report already shipped. */
 export function writeOutFile(outPath: string, state: ReportState, outputFormat: "json" | "text"): void {
@@ -2046,6 +2169,41 @@ export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): st
   ];
 }
 
+/** The corpus hashes a report carries. `pre` is the pre-spend packaging (preflight), `post` the real packaging
+ *  after the turns, absent when the critique stopped before it. The hashes come from `post` when it exists —
+ *  that is what the evaluator graded — and `corpusDrift` says when the static corpus or the skill tree changed
+ *  between the two (an edit during the run), naming the files. Plugin-root files the agent merely READ are not
+ *  drift: they only exist in `post`. */
+export function corpusReportFields(pre: CorpusDigest, post?: CorpusDigest) {
+  const cur = post ?? pre;
+  // Static corpus rows AND the skill tree's own files: a script edit moves skillTreeHash only, and must be named too.
+  const staticRows = (d: CorpusDigest) =>
+    new Map<string, string>([
+      ...d.corpusManifest
+        .filter((e) => e.origin !== "root_ref_read")
+        .map((e) => [e.key, `${e.status}:${e.sha256 ?? ""}`] as [string, string]),
+      ...d.skillTreeFiles.map((f) => [f.key, `${f.status}:${f.sha256 ?? ""}`] as [string, string]),
+    ]);
+  let corpusDrift: { preflightCorpusHash: string; preflightSkillTreeHash: string; changed: string[] } | undefined;
+  if (post && (post.corpusHash !== pre.corpusHash || post.skillTreeHash !== pre.skillTreeHash)) {
+    const a = staticRows(pre);
+    const b = staticRows(post);
+    const changed = [...new Set([...a.keys(), ...b.keys()])].filter((k) => a.get(k) !== b.get(k)).sort();
+    corpusDrift = { preflightCorpusHash: pre.corpusHash, preflightSkillTreeHash: pre.skillTreeHash, changed };
+  }
+  return {
+    corpusHashScheme: cur.corpusHashScheme,
+    hashBasis: cur.hashBasis,
+    corpusHash: cur.corpusHash,
+    ...(post ? { packagedCorpusHash: post.packagedCorpusHash } : {}),
+    skillTreeHash: cur.skillTreeHash,
+    corpusManifest: cur.corpusManifest as CorpusManifestEntry[],
+    skillTreeUntracked: cur.skillTreeUntracked,
+    skillTreeUntrackedCount: cur.skillTreeUntrackedCount,
+    ...(corpusDrift ? { corpusDrift } : {}),
+  };
+}
+
 /** `critique --corpus-only`: the packager's answer for a skill, with no run behind it.
  *
  *  WHY THE REAL PACKAGER AND NOT A STATIC COUNT. `lint-skill`'s corpus check is a static approximation that
@@ -2066,7 +2224,13 @@ export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): st
  *  pre-spend check, every target staging would not deliver or that has no readable SKILL.md, so a preview
  *  that prints a number is a promise the paid run will not die on the target. This renders that check's
  *  packaged result. */
-function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pkg: ReturnType<typeof packageEvidence>): number {
+function runCorpusPreview(
+  opts: ParsedArgs,
+  resolved: ResolvedCritiqueTarget,
+  pkg: ReturnType<typeof packageEvidence>,
+  source: GitTargetSource | { kind: "dir" } = { kind: "dir" },
+  identity?: SummaryContext["identity"],
+): number {
   const corpus: CorpusFields = {
     corpusBytes: pkg.corpusBytes,
     corpusCeiling: pkg.corpusCeiling,
@@ -2099,11 +2263,18 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
       skillDir: resolved.skillDir,
       skill,
       corpus,
+      // The pre-run packaging's hashes. `packagedCorpusHash` here is the FLOOR's packaging (no plugin-root
+      // reads); `corpusHash` and `skillTreeHash` equal a graded run's unless a file changes in between.
+      ...corpusReportFields(pkg.corpusDigest),
+      packagedCorpusHash: pkg.corpusDigest.packagedCorpusHash,
+      source,
       ignoredFlags: opts.ignoredFlags,
       note,
     };
-    content = jsonPayloadEnvelope("critique", true, payload) + "\n";
-    fileContent = jsonPayloadEnvelope("critique", true, scrubCritiqueJson(payload, "corpus-only")) + "\n";
+    // stdout is scrubbed like the file: the manifest names files, and a name is as able to carry a secret as a
+    // body is.
+    content = jsonPayloadEnvelope("critique", true, scrubCritiqueJson(payload, "corpus-only")) + "\n";
+    fileContent = content;
   } else {
     const pct = ((corpus.corpusBytes * 100) / corpus.corpusCeiling).toFixed(1);
     content =
@@ -2114,9 +2285,16 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
           `  evidence corpus (pre-run FLOOR): ${corpus.corpusBytes.toLocaleString()} B = ${pct}% of the ${corpus.corpusCeiling.toLocaleString()} B ceiling`,
         ),
         `  packaged: ${corpus.corpusPackaged?.length ?? 0} file(s)`,
+        `  corpusHash ${pkg.corpusDigest.corpusHash}  (${pkg.corpusDigest.hashBasis})`,
+        `  skillTreeHash ${pkg.corpusDigest.skillTreeHash}`,
+        ...(pkg.corpusDigest.skillTreeUntracked.length
+          ? [`  not delivered (untracked), not hashed: ${pkg.corpusDigest.skillTreeUntracked.join(", ")}`]
+          : []),
         `  ${note}`,
       ].join("\n") + "\n";
-    fileContent = critiqueFileText({ text: content });
+    // Scrubbed on stdout too: the untracked-file line names files, and a name can carry a configured secret.
+    content = critiqueFileText({ text: content });
+    fileContent = content;
   }
   writeAllSync(1, content);
   if (opts.out) {
@@ -2125,6 +2303,21 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
     } catch (e) {
       process.stderr.write(`critique: --out ${tildeify(opts.out)} could not be written: ${String(e)}\n`);
     }
+  }
+  if (opts.summaryOut !== undefined && identity !== undefined) {
+    const summary = buildCritiqueSummary(
+      {
+        harnessVersion: pkgVersion(),
+        label: opts.label,
+        ...corpusReportFields(pkg.corpusDigest),
+        packagedCorpusHash: pkg.corpusDigest.packagedCorpusHash,
+        source,
+        corpus,
+      },
+      { identity, includeCost: false, includePromptHash: false },
+      true,
+    );
+    writeSummaryFile(opts.summaryOut, summary, (m) => process.stderr.write(m));
   }
   return 0;
 }
@@ -2252,7 +2445,57 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   // infra/protocol failure is not a discovery outcome — exiting 0 there made a broken run look like a
   // clean one. `json` is read from argv until the parse succeeds, then from the parsed options.
   let json = isJsonOutput(argv);
-  const refuse = (category: ErrCategory, message: string): never => fail("critique", category, message, undefined, json);
+  // A `git:` snapshot made for this invocation is removed by any refusal before the graded run starts: nothing will
+  // ever need it. Once the task turn spawns, the run's mount depends on it and it is kept.
+  let onRefuse = (): void => {};
+  const refuse = (category: ErrCategory, message: string): never => {
+    onRefuse();
+    return fail("critique", category, message, undefined, json);
+  };
+  // `--compare` is its own mode: its positionals are report files, it runs nothing, and it takes no run flag.
+  if (argv.includes("--compare")) {
+    let strict = false;
+    let out: string | undefined;
+    const files: string[] = [];
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i]!;
+      if (a === "--compare") continue;
+      else if (a === "--strict") strict = true;
+      else if (a === "--output-format" || a === "--out") {
+        const v = argv[i + 1];
+        if (v === undefined || v.startsWith("-")) return refuse("usage", `${a} requires a value`);
+        if (a === "--out") out = v;
+        else if (v !== "json" && v !== "text") return refuse("usage", `--output-format must be json or text (got "${v}")`);
+        i++;
+      } else if (a.startsWith("--output-format=")) {
+        if (!["json", "text"].includes(a.slice("--output-format=".length))) return refuse("usage", `--output-format must be json or text`);
+      } else if (a.startsWith("--out=")) out = a.slice("--out=".length);
+      else if (a.startsWith("-"))
+        return refuse("usage", `${a} is not accepted with --compare (it takes report files, --strict, --out and --output-format)`);
+      else files.push(a);
+    }
+    let result: Record<string, unknown>;
+    try {
+      result = compareMembers(files.map(loadMember), { strict });
+    } catch (e) {
+      if (e instanceof CompareRefusal) return refuse("usage", `critique --compare: ${e.message}`);
+      throw e;
+    }
+    // Scrubbed like every other critique output: report paths and labels are argv and report text, and either can
+    // carry a configured secret.
+    const content = json
+      ? jsonPayloadEnvelope("critique", true, scrubCritiqueJson(result, "compare")) + "\n"
+      : critiqueFileText({ text: renderCompareText(result) });
+    writeAllSync(1, content);
+    if (out !== undefined)
+      try {
+        writeFileSync(out, content);
+      } catch (e) {
+        process.stderr.write(`critique: --out ${tildeify(out)} could not be written: ${String(e)}\n`);
+      }
+    process.exit(0);
+    return;
+  }
   let opts: ParsedArgs;
   try {
     opts = prepareCritique(argv);
@@ -2270,6 +2513,24 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
 
   // A skill inside a plugin is critiqued the way Cowork runs it: as part of its plugin. Reassigns `opts`
   // itself — every consumer below reads this one binding.
+  // A `git:<ref>:<path>` target is snapshotted first, and critique then runs on the snapshot exactly as on a
+  // folder; the snapshot already resolved the plugin in the commit's tree, so promotion has nothing left to do.
+  let targetSource: GitTargetSource | { kind: "dir" } = { kind: "dir" };
+  let removeSnapshot = (): void => {};
+  if (isGitTarget(opts.skillFolder)) {
+    try {
+      const staged = stageGitTarget(opts.skillFolder, opts.skillSelector, { keep: !opts.corpusOnly });
+      process.stderr.write(
+        `::notice:: [critique] ${opts.skillFolder} → commit ${staged.source.commit.slice(0, 12)}, snapshot ${tildeify(staged.skillFolder)}${staged.skillSelector ? `, grading skill '${staged.skillSelector}'` : ""}\n`,
+      );
+      opts = { ...opts, skillFolder: staged.skillFolder, skillSelector: staged.skillSelector };
+      targetSource = staged.source;
+      removeSnapshot = staged.cleanup;
+      onRefuse = staged.discard;
+    } catch (e) {
+      return refuse("usage", (e as Error).message);
+    }
+  }
   opts = applyTargetPromotion(opts);
 
   // Resolve which folder the PACKAGER grades — fail-fast (usage error, exit 2) BEFORE any model spend:
@@ -2278,7 +2539,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   let resolvedSkill: ReturnType<typeof resolveCritiquedSkillDir>;
   try {
     resolvedSkill = resolveCritiquedSkillDir(opts.skillFolder, opts.skillSelector);
+    if (targetSource.kind === "git") resolvedSkill = { ...resolvedSkill, hashBasis: "git-commit" };
   } catch (e) {
+    removeSnapshot();
     return refuse("usage", (e as Error).message);
   }
   if (resolvedSkill.autoSelectedSkill)
@@ -2290,12 +2553,32 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   // same check for the preview and a paid run, so `--corpus-only` greening a target means a critique of it
   // will not die on it after paying for two turns.
   const preflight = preflightCritique(resolvedSkill, opts.corpusOnly ? "preview" : "preflight");
-  if (!preflight.ok) return refuse("usage", `critique${opts.corpusOnly ? " --corpus-only" : ""}: ${preflight.message}`);
+  // `--summary-out`'s name for the graded skill. A plugin skill is its registered name; a plain skill folder (which
+  // the report leaves without `gradedSkill`) is named by its SKILL.md frontmatter, else its folder.
+  const pluginSkill = gradedSkillNameFor(opts.skillSelector, resolvedSkill);
+  const summaryIdentity: SummaryContext["identity"] = pluginSkill
+    ? { name: pluginSkill, kind: "plugin_skill" }
+    : { name: readSkillFrontmatterName(join(resolvedSkill.skillDir, "SKILL.md")) ?? basename(resolvedSkill.skillDir), kind: "folder" };
+  if (!preflight.ok) {
+    removeSnapshot();
+    return refuse("usage", `critique${opts.corpusOnly ? " --corpus-only" : ""}: ${preflight.message}`);
+  }
+  // Files under the skill that staging will not deliver are neither graded nor hashed: say so before spending, once.
+  {
+    const d = preflight.pkg.corpusDigest;
+    if (d.skillTreeUntrackedCount > 0 && !opts.corpusOnly)
+      warn(
+        `::warning:: [critique] ${d.skillTreeUntrackedCount} file(s) under the skill are untracked or ignored — not mounted, not graded, not hashed ` +
+          `(${d.skillTreeUntracked.slice(0, 5).join(", ")}${d.skillTreeUntrackedCount > 5 ? ", …" : ""}). git add them to test them.\n`,
+      );
+  }
 
   // --corpus-only stops HERE: after target resolution and the pre-spend check, and before a session id is
   // minted — nothing under --run-dir, no index row, no spawn.
   if (opts.corpusOnly) {
-    process.exit(runCorpusPreview(opts, resolvedSkill, preflight.pkg));
+    const code = runCorpusPreview(opts, resolvedSkill, preflight.pkg, targetSource, summaryIdentity);
+    removeSnapshot();
+    process.exit(code);
     return;
   }
   // Both turns run the `skill` lane, which refuses a run that resolves no model. Check it HERE, before the
@@ -2330,6 +2613,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // Stretch critique's own kill-switch past a forwarded --timeout: otherwise a longer budget would be
     // killed by the INSTRUMENT and misreported as an infra failure rather than a gradeable timeout. The
     // +60s covers staging and container start — not principled, and a cold image pull can exceed it.
+    onRefuse = () => {}; // the graded run mounts the snapshot from here on
     progress(1, "task turn (running the skill under test — this is the graded run)");
     const task = await runSkillTurn(
       buildTaskTurnArgs(opts, sessionId),
@@ -2363,6 +2647,11 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const infraRow = taskInfra?.kind === "usage_limit" ? parseEnvelope(task.stdout)?.results?.[0] : undefined;
     if (taskInfra) {
       const state: ReportState = {
+        harnessVersion: pkgVersion(),
+        label: opts.label,
+        corpus: corpusReportFields(preflight.pkg.corpusDigest),
+        source: targetSource,
+        summaryIdentity,
         skillFolder: opts.skillFolder,
         prompt,
         sessionId,
@@ -2385,6 +2674,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       // Salvage what exists even for a killed task turn: the report itself, structurally on disk.
       persistCritiqueArtifacts(outDir, state, undefined, { rawEvaluatorReplies: [] });
       if (opts.out) writeOutFile(opts.out, state, opts.outputFormat);
+      writeSummaryIfAsked(opts, state);
       // The INSTRUMENT failed at the TASK turn (killed by the timeout or the byte cap) — no critique was
       // produced. Findings never gate, but this is not a finding. The other instrument causes exit
       // elsewhere: a reflection-protocol break or an evaluator throw routes through the report path below.
@@ -2472,6 +2762,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let items: CritiqueItem[] = [];
     let evaluatorIntegrity: { pass1Canary: boolean; pass2Canary?: boolean } | undefined;
     let droppedEvaluatorItems: { pass1: number; pass2?: number } | undefined;
+    const evaluatorRepair: Array<{ pass: 1 | 2; appended: string }> = [];
     let evaluatorError: string | undefined;
     let infraFailure: string | undefined;
     let infraFailurePhase: "task turn" | "reflection turn" | undefined;
@@ -2482,6 +2773,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let turn1SliceDegraded: boolean | undefined;
     let skillMdStatus: SkillMdStatus | undefined;
     let evidenceBudget: ReportState["evidenceBudget"];
+    let finalCorpusDigest: CorpusDigest | undefined;
     let noSkillFilesRead: boolean | undefined;
     let referenceAccessUnobservable: boolean | undefined;
     // Salvage/cost/evidence capture — populated by the evaluator's callbacks (raw replies land here
@@ -2537,11 +2829,14 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         packageTruncated: pt,
         noSkillFilesRead: nofr,
         referenceAccessUnobservable: rau,
+        corpusDigest: cdg,
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
         agents: resolvedSkill.agents,
         pluginRoot: resolvedSkill.pluginRoot,
         mountRoot: resolvedSkill.mountRoot,
+        hashBasis: resolvedSkill.hashBasis,
       });
+      finalCorpusDigest = cdg;
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
@@ -2569,6 +2864,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         items = await runCritique(sections, selfReport, {
           onEvaluatorIntegrity: (i) => {
             evaluatorIntegrity = i;
+          },
+          onRepair: (r) => {
+            evaluatorRepair.push(r);
           },
           onDroppedItems: (d) => {
             droppedEvaluatorItems = d;
@@ -2650,6 +2948,11 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       );
     }
     const state: ReportState = {
+      harnessVersion: pkgVersion(),
+      label: opts.label,
+      corpus: corpusReportFields(preflight.pkg.corpusDigest, finalCorpusDigest),
+      source: targetSource,
+      summaryIdentity,
       skillFolder: opts.skillFolder,
       prompt,
       sessionId,
@@ -2681,6 +2984,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       infraFailureKind,
       evaluatorIntegrity,
       droppedEvaluatorItems,
+      evaluatorRepair: evaluatorRepair.length ? evaluatorRepair : undefined,
       turn1ResultDegraded,
       turn1SliceDegraded,
       skillMdStatus,
@@ -2698,6 +3002,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // salvage on instrument failure), plus the explicit --out copy when requested.
     persistCritiqueArtifacts(outDir, state, evidenceText, { selfReport: salvageSelfReport, rawEvaluatorReplies });
     if (opts.out) writeOutFile(opts.out, state, opts.outputFormat);
+    writeSummaryIfAsked(opts, state);
     // A reflection-protocol break or an evaluator failure reaches HERE, not the early returns above —
     // the report is still printed (it carries the diagnosis), but no critique was produced, so this is an
     // instrument failure, not a finding. Missing this path is what made the documented exit contract

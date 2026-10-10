@@ -380,7 +380,9 @@ A typical skill repo runs four stages, fastest/cheapest first:
    ```
 
    The `jq -e` IS the gate — `--corpus-only` exits 0 on a measurement even over the ceiling. Same
-   packager, same git filter as the paid run; the number is a floor (a run-time read can only add).
+   packager, same git filter as the paid run; the number is a floor (a run-time read can only add). The same
+   payload's `skillTreeHash` (every delivered file of the skill) tells a job whether the skill changed since
+   its last critique, at no cost.
 3. **Scenarios (replay)** — `cowork-harness replay cassettes/` on every PR (the committed `*.cassette.json`).
    Token-free; content + structure + gate delivery.
 4. **Parity / live (nightly, self-hosted)** — `cowork-harness run scenarios/` with a token + Docker +

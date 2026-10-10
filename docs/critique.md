@@ -25,7 +25,9 @@ critique refuses before its task turn. The examples below assume the variable is
 - [Cost and prerequisites](#cost-and-prerequisites)
 - [Exit codes](#exit-codes)
 - [Reading the report](#reading-the-report)
-- [Reproduction — the ≥2-run discipline](#reproduction--the-2-run-discipline)
+- [Reading several critiques of the same skill](#reading-several-critiques-of-the-same-skill) — and `critique --compare`
+- [Critiquing a commit — `git:<ref>:<path>`](#critiquing-a-commit--gitrefpath)
+- [A public summary — `--summary-out`](#a-public-summary----summary-out)
 - [Running it on a skill you did not write](#running-it-on-a-skill-you-did-not-write)
 - [Known limitations](#known-limitations)
 
@@ -157,7 +159,7 @@ ignored.
 | Flag | |
 |---|---|
 | `--timeout <ms>` | wall-clock budget for the task turn (default **30 min**; critique's own kill-switch stretches to fit). The turn is killed *after* its model spend, so too-short costs the money **and** the result — the default errs long deliberately |
-| `--label <tag>` | generation tag in the run index, for pairing critiques across fixes |
+| `--label <tag>` | generation tag in the run index and the report, for pairing critiques across fixes; `--compare` groups by it |
 | `--allow-stall` | don't fail the task turn when it ends on a question or, after an `AskUserQuestion` gate, a request for input (the `stalled` signal) — the CLI equivalent of `allow_stall: true` |
 | `--answer "<q-regex>=<choice>"`, `--answer-policy <yaml>` | pre-answer the skill's gates — **this is what makes gated skills critiquable at all** |
 | `--on-unanswered fail\|first` | unscripted-gate policy (`prompt` is refused — there is no TTY inside) |
@@ -170,6 +172,8 @@ ignored.
 | `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--out <path>` | **also** write the selected-format report to this file (stdout unchanged). The format comes from `--output-format`, which defaults to **text** — so `--out report.json` writes TEXT unless you also pass `--output-format json`, and a downstream `json.load()` then fails with `Expecting value: line 1 column 1`, which reads as a corrupt report rather than a format mismatch. A mismatch between the extension and the format warns at argument-parse time, before the run spawns |
+| `--summary-out <path>` | **also** write a public-safe summary — no finding text — to this file; see [A public summary](#a-public-summary----summary-out). `--summary-include-cost` / `--summary-include-prompt-hash` add what it leaves out by default |
+| `--compare <report.json…>` | a separate mode: lay several critique reports or summaries side by side, no spend — see [`critique --compare`](#critique---compare--the-reports-side-by-side). Takes only `--strict`, `--out` and `--output-format` |
 | `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ every `agents/**.md` it can dispatch, + any plugin-root `references/` file the skill actually links) instead of a missing plugin-root SKILL.md — see below |
 | `--fidelity container\|hostloop\|cowork` | container (default) or hostloop; `cowork` resolves via the baseline's loop gate to one of those two and pins BOTH turns to it. `microvm`/`protocol` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
@@ -181,7 +185,7 @@ ignored.
 | Flag | Reason |
 |---|---|
 | `--session-id` / `--resume` | critique mints and manages its own session — the reflection turn *is* a resume of it |
-| `--repeat` + companions | fixed two-turn protocol; loop `critique` itself and pair by `fingerprint.skillHash` |
+| `--repeat` + companions | fixed two-turn protocol; loop `critique` itself and compare the reports with `critique --compare` |
 | `--ablate-skill` | grading a skill you removed is incoherent |
 | `--quiet`/`-q` / `--verbose` / `--compact` / `--demo` / `--dry-run` | inner-turn rendering or preview — no effect on the report (which already collapses host paths to `~`) |
 
@@ -218,8 +222,9 @@ adjudicable". So:
   (session identity is unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the
   *mounted plugin* (for a promoted `<plugin>/skills/<name>` spelling too), so it pairs generations
   per-plugin, not per-skill. **Workflow implication: pairing critiques of a
-  multi-skill plugin by skillHash alone CROSS-PAIRS different skills** — pair by
-  **(`gradedSkillHash`, `gradedSkill`)**; the report's `gradedSkill` field carries the resolved
+  multi-skill plugin by skillHash alone CROSS-PAIRS different skills** — pair by the per-skill
+  **`corpusHash` / `skillTreeHash`** ([Has the skill changed?](#has-the-skill-changed--corpushash-skilltreehash-packagedcorpushash)),
+  or by **(`gradedSkillHash`, `gradedSkill`)**; the report's `gradedSkill` field carries the resolved
   `skills/<name>` (`--skill` or the auto-selection), or, for a skill folder that cannot be promoted to its
   plugin, the name the agent registers it under. `--label` remains available for coarser
   generation tags.
@@ -281,8 +286,9 @@ It does **not** record their contents — see Known limitations.
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
 - **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
   cost is roughly **fixed** (bounded by the evidence package: corpus + transcript caps); the graded task
-  turn is **unbounded**. On a trivial probe the two evaluator passes (steps 4-5) are ~3/4 of the total; on a real
-  document-analysis run the ratio **inverts** (measured on one: task turn ~61%, evaluator ~30%). The
+  turn is **unbounded**. On a trivial probe, or a small skill, the two evaluator passes (steps 4-5) are ~3/4 of
+  the total, pass 2 the larger (measured: a one-script example skill at the default evaluator, about $1.4–1.6 a
+  critique); on a real document-analysis run the ratio **inverts** (measured on one: task turn ~61%, evaluator ~30%). The
   report's `cost:` line prints the four-way split and the evaluator's share of the total, and `costUsd`
   carries the same numbers — use those. A cheaper `--evaluator-model` can only ever buy you the
   evaluator's share, so when the task turn dominates the levers are `--model`, `--timeout` and probe
@@ -348,6 +354,10 @@ It does **not** record their contents — see Known limitations.
 | `1` | **Operator interrupt only** (SIGINT/SIGTERM — e.g. Ctrl-C). Not part of the findings taxonomy, but reachable: a sweep wrapper treating `1` as impossible will misread a cancelled run as a crash. |
 | `2` | Usage error, a task turn that hit the account's usage limit (an ordinary `RUN FAILED`, not a broken instrument), **or an instrument failure** — the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw*. No critique was produced. A broken instrument is not a discovery outcome. |
 
+`critique --compare` exits `0` when it compared and `2` for a refusal or usage error; `--corpus-only` exits `0`
+on a measurement and `2` for a refusal. A `--summary-out` file that cannot be written, or is withheld by the
+secret scrub, never changes the exit code.
+
 Never gate CI on findings; that is the whole design.
 
 ### Reading an exit-2 report: which turn, and why
@@ -407,7 +417,13 @@ workloads — the two graded turns *and* the two evaluator passes — marked `IN
 workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFidelity` / `gradedBaseline`
 / `costUsd` — plus `requestedFidelity`, present only when `--fidelity cowork` was passed and naming what
 it resolved to — and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
-malformed evaluator items (the surviving findings are then not necessarily the complete reply). An
+malformed evaluator items (the surviving findings are then not necessarily the complete reply).
+**`evaluatorRepair`** (`[{pass, appended}]`) appears when an evaluator reply's `{"items":[...]}` document was
+complete except for its final closing brace: that one `}` was appended, and the reply then parsed and validated as
+usual; the text report notes it, and a `--summary-out` file carries `evaluatorRepaired`. Nothing else is repaired:
+a reply that would also need a `]` (the findings list left open, which is what a cut-off reply looks like), one cut
+mid-item or mid-string, a repair that leaves no findings, a missing inner comma, a mismatched closer, or a document
+nested in another unclosed one fails as before — re-run the critique. An
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
 (total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + the skill's
 own references + every packaged agent md + every packaged plugin-root reference), `corpusPackaged`
@@ -453,6 +469,8 @@ critique makes, over an empty run dir, and stops. The text report is one block:
 critique --corpus-only  .claude/skills/cowork-harness
   evidence corpus (pre-run FLOOR): 281,029 B = 53.6% of the 524,288 B ceiling
   packaged: 6 file(s)
+  corpusHash sha256:…  (git-tracked)
+  skillTreeHash sha256:…
   lower bound — plugin-root references the agent READS during the graded turn are added at critique time, so a paid run's corpusBytes is >= this
 ```
 
@@ -462,7 +480,7 @@ critique --corpus-only  .claude/skills/cowork-harness
 are the discriminator; a critique **report** carries neither) with a `corpus` object holding the same six
 fields as `evidenceBudget` above (`trimRecord`/`packageTruncated` are absent — they describe a package a
 graded run produced) plus `ignoredFlags` (every run-shaping flag you passed that this mode parsed but
-did not act on) and the same `note`.
+did not act on), the same `note`, and the corpus hashes below with their `corpusManifest` and `source`.
 
 **The number is a FLOOR, always.** A plugin-root reference the agent READS during the graded turn (not
 just linked from authored text) is added to the corpus at critique time — no static instrument can see
@@ -473,6 +491,41 @@ ceiling — it is a measurement, not a gate; gate yourself with `jq -e
 readable `SKILL.md`, or a git work tree with 0 tracked files (mirrored from staging's own refusal; a
 folder that is not a work tree is measured raw, as staging copies it) — staging's git rules, which
 `lint-skill`'s static count never applied.
+
+### Has the skill changed? — `corpusHash`, `skillTreeHash`, `packagedCorpusHash`
+
+Every report, and every `--corpus-only` payload, carries three content hashes (`sha256:…`), each over files
+keyed by their path inside the mounted folder, so two clones of the same commit hash alike whatever their
+directory is called:
+
+| Hash | Covers | Equal between `--corpus-only` and a graded run? |
+|---|---|---|
+| `corpusHash` | the evaluator's static corpus: `SKILL.md`, the skill's `references/**`, the resolved agents, and the plugin-root references they link to | yes, unless one of those files changed in between |
+| `skillTreeHash` | every file staging delivered for the skill — its whole folder, `scripts/` included — plus the resolved agents and linked plugin-root references | yes, unless one of those files changed in between |
+| `packagedCorpusHash` | what the packager put in the evaluator's corpus: the static corpus plus plugin-root files the graded agent READ, and how much of each file the ceiling kept | no: it moves whenever the agent's reading differs, or that reading pushes the corpus over the ceiling |
+
+- **Which to key on.** `skillTreeHash` is the "anything changed" key. `corpusHash` is a FLOOR for it: an
+  unchanged `corpusHash` does not mean unchanged behaviour, because `scripts/` and other files outside the
+  corpus are not in it. `packagedCorpusHash` is evidence of what was graded, not a "changed" key.
+- **Which files.** `corpusManifest` lists one row per corpus file (`origin`, `key`, `status`, `sha256`, and
+  `keptBytes` when the ceiling cut it); diff two manifests to see which file made two hashes differ. A file
+  that is delivered but cannot be read is a row with `status: "unreadable"` (`missing` for a resolved agent
+  whose file does not exist), so it moves the hash too.
+- **What was delivered.** `hashBasis` says how the delivered set was decided: `git-tracked` (a folder in a
+  git work tree — its tracked files, hashed from their working-tree bytes, so a local edit to a tracked file
+  changes the hash), `worktree-all` (no work tree, or `COWORK_HARNESS_GITSET=0`: every file), or
+  `git-commit` (a `git:` target, below). In git mode a file under the skill that staging does not deliver —
+  untracked or ignored — is not mounted and not hashed; it is listed in `skillTreeUntracked` (the first 50
+  names; `skillTreeUntrackedCount` has the total) and warned about before a paid critique, so a script you
+  changed but never added is visible instead of reading as "unchanged". `.git` itself is never listed or
+  hashed.
+- **An edit during the run.** A graded critique packages the corpus twice: before it spends, and after both
+  turns. If a corpus or skill-tree file changed in between, the report carries `corpusDrift` (the earlier
+  hashes and the files that changed, scripts included), the text report warns, and its hashes describe the
+  later state. Critique a commit
+  (`git:<ref>:<path>`) to rule this out.
+- `corpusHashScheme` versions the rules; hashes compare only within one scheme. `gradedSkillHash` is
+  unchanged and still keys the whole mounted plugin.
 
 **Why not just `lint-skill --strict`?** It's free and needs no git, but it diverges from what a critique
 actually packages on four measured axes: it counts (1) an untracked file staging would drop and (3) a
@@ -546,10 +599,14 @@ kept as written, because they are join keys or closed enums:
   `skillDir`, `gradedSkill`, `gradedSkillHash`, `gradedModels`, `evaluatorModel`, `requestedModel`,
   `fidelity`, `requestedFidelity`, `gradedEffectiveFidelity`, `gradedBaseline`, `taskResult`,
   `gradedOutcome`, `selfReportStatus`, `skillMdStatus`, `infraFailurePhase`, `infraFailureKind`,
-  `verdictProvenance`;
+  `verdictProvenance`, `harnessVersion`, `corpusHash`, `packagedCorpusHash`, `skillTreeHash`, `hashBasis`,
+  `source.kind`, `source.commit`, `corpusManifest[].origin`, `corpusManifest[].status`, `corpusManifest[].sha256`,
+  and `corpusDrift`'s two hashes (a manifest `key` is a file name, and is scrubbed);
 - `items[].source`, `items[].classification`, `items[].findingFingerprint`, `gateAnswers[].answeredBy`,
+  `evaluatorRepair[].appended`,
   `evidenceBudget.corpusOmitted[].reason`;
-- in the `--corpus-only` payload: `mode`, `skillFolder`, `skillDir`, `skill`, `corpus.corpusOmitted[].reason`.
+- in the `--corpus-only` payload: `mode`, `skillFolder`, `skillDir`, `skill`, `corpus.corpusOmitted[].reason`,
+  and the same hash, basis, source and manifest fields. Its stdout is scrubbed the same way as its file.
 
 A field with the same name anywhere else is scrubbed. Two consequences:
 
@@ -567,41 +624,131 @@ The report's field names and shapes are authoritatively described by
 actual builder, unlike the §12-frozen `doctor.json`), so automation consumers — budget pacers gating on
 `costUsd.complete`, harvesters pairing on `gradedSkill` — parse against a schema, not prose.
 
-## Reproduction — the ≥2-run discipline
+## Reading several critiques of the same skill
 
-`critique --repeat` is refused (fixed two-turn protocol). The supported N-run reproduction recipe:
+`critique --repeat` is refused (fixed two-turn protocol). To see how stable a critique is, run it more than
+once with the same probe and read the reports together:
 
 ```bash
 for i in 1 2 3; do
   cowork-harness critique ./my-plugin --skill my-skill --prompt "<same probe>" \
-    --label gen1 --output-format json --out "runs/critique-$i.json"
+    --output-format json --out "runs/critique-$i.json"
 done
 ```
 
-Then pair/cluster across the reports:
-
-- **Same skill generation?** group by `gradedSkillHash` (content-exact — an edited skill changes it).
-- **Same finding across runs/inputs?** cluster by each item's **`findingFingerprint`** (sha over the
-  normalized, secret-scrubbed idea + classification + recommendedAction, deliberately excluding the input-specific
-  `evidence` excerpt — so the same finding matches across different decks/transcripts).
-- **The fingerprint is high-precision, LOW-RECALL — read the direction correctly.** `idea` is
-  model-authored free text, so the same underlying finding *reworded* across runs fingerprints
-  differently. A **match proves** reproduction; a **mismatch does NOT prove** non-reproduction — before
-  concluding "didn't reproduce", skim the unmatched items for rewordings of the same substance.
-- A finding that recurs across ≥2 runs with the same `findingFingerprint` meets the reproduction bar;
-  a fingerprint one-off is a lead — possibly a real one-off, possibly a reworded repeat.
-- **Multi-skill plugins: never pair by `gradedSkillHash` alone.** The hash keys the whole mounted
-  plugin, so it cross-pairs critiques of *different* skills in the same plugin — pair by
-  **(`gradedSkillHash`, `gradedSkill`)**; `gradedSkill` is the report's resolved `skills/<name>` (or the
-  registered name of a skill folder that cannot be promoted to its plugin).
+- **Same skill generation?** pair by `skillTreeHash` (every delivered file of the skill; `corpusHash` is a floor —
+  see [Has the skill changed?](#has-the-skill-changed--corpushash-skilltreehash-packagedcorpushash)).
+  (`gradedSkillHash`, `gradedSkill`) is coarser: `gradedSkillHash` keys the whole mounted plugin, so an edit to a
+  sibling skill moves it; `gradedSkill` is the report's resolved `skills/<name>` (or the registered name of a skill
+  folder that cannot be promoted to its plugin).
+- **Same finding?** Read the reports side by side, finding by finding, aligned by `classification`. No key in the
+  report proves two findings are the same:
+  - **`findingFingerprint`** hashes the model-written `idea`, the `classification` and the `recommendedAction`. It
+    matches only when the wording repeats exactly, and across repeats of the same probe it often never recurs. A
+    match is a LOWER bound — it shows the same wording came back; no match shows nothing.
+  - **The cited `evidence` excerpt** is shared by unrelated findings as often as by the same one: a short passage of
+    the skill gets cited for different ideas. Two items quoting the same excerpt are a cue to read both, not a match.
 - To make the graded runs deterministic across repeats, copy the report's echoed `--answer` lines
   (the graded run's resolved gate answers) into the next invocation.
+
+### `critique --compare` — the reports side by side
+
+```bash
+cowork-harness critique --compare runs/critique-*.json
+cowork-harness critique --compare before/*.json after/*.json --output-format json   # two --label groups
+```
+
+No spend and no model: it reads `--output-format json` reports (or `--out` files written as json) and
+`--summary-out` files, and lays them out for a person to read. It renders **no verdict** — no "reproduced",
+"one-off", "gone" or "new" — because no key in a report can prove two findings are the same finding:
+
+- **Groups** are by `--label`: one group, or two (before/after). Label every critique or none. More than two
+  groups is refused.
+- **`byClassification`** lists every finding per report, aligned by classification.
+- **`sameWording`**: an exact `findingFingerprint` seen in k of N reports — the same wording came back. A
+  LOWER bound: reworded repeats do not match.
+- **`sharedExcerpt`**: the same cited passage under the same classification in k of N reports, with how many
+  distinct ideas and actions cite it — a cue to read those items together, not a match. Not-adjudicable
+  items and excerpts under 12 characters are left out. Full reports only.
+- **`fingerprints`**: every exact fingerprint with its k/N in each group (one entry per group).
+- **`possibleRewordings`**: pairs of items in different reports, same classification, whose ideas share most
+  of their words — a lexical judgement, labelled as one. Full reports only (a summary has no text).
+- **`noiseFloorControl: true`** when both groups have the same `corpusHash` and one, shared `skillTreeHash`: the
+  same skill in both, so any difference is run-to-run variation. A `scripts/` edit moves `skillTreeHash` only, so
+  it is never a noise-floor control.
+
+It refuses (exit 2): a mix of graded skills, of `corpusHashScheme` or `fingerprintScheme`, or of harness
+major versions; a mix of `corpusHash` within one group (give the other corpus its own `--label`); the same
+critique given twice (a summary and its own report count as the same critique); a summary that withheld a
+field compare groups or matches on (its label, session id, skill, hashes, basis, evaluator model or items);
+a report from before 4.8.0;
+a `--corpus-only` envelope; any run flag. A critique that produced no result, whose evaluator canary
+failed, or that drifted during its run is **excluded from N** and listed in `excluded`. A group that mixes
+evaluator models (`mixedEvaluator`), hash bases (`mixedBasis`), skill trees (`mixedSkillTree` — a `scripts/` edit
+inside the group) or probes (`mixedProbe`), or that holds a pass-1-only critique (`pass1Only`), is **marked**,
+and `--strict` refuses it. Two marks are recorded but never refused: `mixedPackagedCorpus` (it moves with what
+the agent happened to read) and `probeUnverified` (a member has no probe hash — the default for a summary
+written without `--summary-include-prompt-hash` — so a same-probe group cannot be confirmed). Its output carries finding text (`"publicSafe": false`): keep it
+out of a public repository — that is what `--summary-out` is for. `--out` writes the same bytes as stdout.
+The JSON payload is described by [`schema/critique-compare.json`](../schema/critique-compare.json).
 
 > **Why one critique is a SAMPLE, measured.** Two runs of the same skill over the same document
 > produced 78 vs 50 extracted figures, and 12 vs **0** first-pass errors from the same producer bug.
 > The bug was real and reproducible in isolation; the second run simply never generated an input shape
 > that tripped it. For any defect gated on *what the model happens to produce*, a clean report is not
-> evidence of absence — which is the whole reason this recipe exists rather than a `--repeat` flag.
+> evidence of absence — which is why it is worth running more than once.
+
+## Critiquing a commit — `git:<ref>:<path>`
+
+```bash
+cowork-harness critique git:HEAD:plugins/my-plugin --skill my-skill --prompt "<probe>"
+cowork-harness critique git:v1.4.0:plugins/my-plugin/skills/my-skill --corpus-only
+```
+
+The skill folder may be `git:<ref>:<path>`, relative to the repository the current directory is in. The
+commit's files are written to a snapshot and critique runs on it, so an edit, a `git add` or a moved HEAD
+during the run changes nothing, and two critiques of one commit grade the same files. The report records
+`source: {kind: "git", ref, path, commit}` (the resolved commit id), and the hashes use basis `git-commit`.
+
+- A path at `<plugin>/skills/<name>` is resolved in the **commit's** tree to skill `<name>` of the plugin —
+  the same mount, corpus and graded skill as `critique <plugin> --skill <name>`. Any other path inside a
+  plugin is refused with that spelling.
+- Refused before any spend (exit 2): a ref that is not a commit, a path that is not a directory at it, a
+  submodule, a path with `..` or a leading `-`, a git filter (Git LFS and similar — the commit holds pointers,
+  not content) set by a `.gitattributes` in scope, by `.git/info/attributes` or by `core.attributesFile`, and a
+  committed symlink whose real path is outside the snapshot or that points at nothing.
+- The snapshot is kept under `~/.cowork-harness/critique-snapshots/` (or `COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR`),
+  never under the runs directory, so the run's mount still resolves later. A refusal before the graded run
+  starts removes it. Nothing else does: delete a snapshot once the runs that mounted it are gone.
+  `--corpus-only` uses a temporary one (under `TMPDIR`) and removes it. Neither location may be inside a git
+  work tree.
+- Under `git-tracked`, a dir target's bytes are the working tree's; under `git-commit` they are the commit's.
+  A smudge filter, `core.autocrlf` or `ident` can make the two differ for the same commit.
+- For a `git:` target the report's `skillFolder` is the snapshot directory (under `--corpus-only`, a temporary
+  one that is already gone); the argument as given is in `source.ref` and `source.path`.
+
+## A public summary — `--summary-out`
+
+`--summary-out <file>` writes a second, small JSON file meant to be committed to a **public** repository — a
+ledger line per critique. It is built by allowlist from the report: identifiers (`sessionId`, `gradedSkill`,
+`label`, `source.commit`), the hashes, enums and counts, and per finding only `findingFingerprint`,
+`classification`, `source` and `adjudicable`. No idea, evidence or action text, no prompt, no host path, no
+git ref or path. Its shape is [`schema/critique-summary.json`](../schema/critique-summary.json).
+
+- Every value is checked against the shape its field must have (a model id must read `claude-…`, a label
+  `[A-Za-z0-9._:+-]`, a hash `sha256:<64 hex>`). A value that fails is written `null` and named in `withheld`.
+  A `--label` outside that shape is refused up front when `--summary-out` is given, since `--compare` could not
+  group the summary by it.
+- The finished summary goes through the secret scrub. If the scrub would change anything, the file is **not
+  written**, a warning says so, and the exit code is unchanged.
+- Cost (`--summary-include-cost`) and the probe's sha256 (`--summary-include-prompt-hash`, which confirms a
+  guessed probe) are left out unless asked for.
+- A dropped item (its citation is not verbatim in the evidence) is left out. A not-adjudicable item is kept,
+  with `adjudicable: false`.
+- It is written on every outcome that writes a report, with `status` (`critiqued`, `task_turn_failed`,
+  `reflection_turn_failed`, `evaluator_failed`), and by `--corpus-only` (`status: "corpus_only"`, no items).
+- A plain skill folder, which the report leaves without `gradedSkill`, is named by its `SKILL.md`
+  frontmatter, else its folder (`gradedSkillKind: "folder"`).
 
 ## Running it on a skill you did not write
 

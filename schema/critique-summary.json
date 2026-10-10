@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "critique-summary.json",
+  "title": "cowork-harness critique --summary-out",
+  "description": "A one-object summary of a critique, meant to be committed to a PUBLIC repository: identifiers, hashes, enums and counts only — no finding text, prompt, host path or git ref. Built by allowlist; every string is shape-checked, and a value that fails is written null and named in `withheld`. A summary that a configured secret would alter is not written at all. `schema` versions this shape.",
+  "type": "object",
+  "properties": {
+    "schema": { "const": "critique-summary/1" },
+    "harnessVersion": { "type": ["string", "null"] },
+    "timestamp": { "type": "string", "description": "when the summary was written (ISO 8601, UTC)" },
+    "sessionId": {
+      "type": ["string", "null"],
+      "description": "the critique's random session id — the de-duplication key; null for --corpus-only"
+    },
+    "gradedSkill": { "type": ["string", "null"] },
+    "gradedSkillKind": {
+      "enum": ["plugin_skill", "folder"],
+      "description": "plugin_skill: a skills/<name> of a plugin, named as the agent registers it; folder: a plain skill folder, named by its SKILL.md frontmatter, else its folder"
+    },
+    "corpusHashScheme": { "type": ["integer", "null"] },
+    "fingerprintScheme": {
+      "type": "integer",
+      "description": "the version of the findingFingerprint rules; fingerprints are comparable only within one scheme"
+    },
+    "hashBasis": { "enum": ["git-tracked", "worktree-all", "git-commit", null] },
+    "corpusHash": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] },
+    "packagedCorpusHash": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] },
+    "skillTreeHash": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] },
+    "source": {
+      "type": "object",
+      "properties": { "kind": { "enum": ["dir", "git"] }, "commit": { "anyOf": [{ "type": "string", "pattern": "^[0-9a-f]{40,64}$" }, { "type": "null" }] } },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
+    "label": { "anyOf": [{ "type": "string", "pattern": "^[A-Za-z0-9._:+-]{1,64}$" }, { "type": "null" }] },
+    "fidelity": { "type": ["string", "null"] },
+    "gradedBaseline": { "type": ["string", "null"] },
+    "evaluatorModel": { "anyOf": [{ "type": "string", "pattern": "^claude-[a-z0-9.-]{1,64}$" }, { "type": "null" }] },
+    "gradedModels": { "type": "array", "items": { "type": "string", "pattern": "^claude-[a-z0-9.-]{1,64}$" } },
+    "status": { "enum": ["critiqued", "task_turn_failed", "reflection_turn_failed", "evaluator_failed", "corpus_only"] },
+    "selfReportStatus": { "enum": ["captured", "unavailable", null] },
+    "evaluatorIntegrity": {
+      "type": ["object", "null"],
+      "properties": { "pass1Canary": { "type": ["boolean", "null"] }, "pass2Canary": { "type": ["boolean", "null"] } },
+      "required": ["pass1Canary", "pass2Canary"],
+      "additionalProperties": false
+    },
+    "droppedEvaluatorItems": {
+      "type": ["object", "null"],
+      "properties": { "pass1": { "type": "number" }, "pass2": { "type": "number" } },
+      "required": ["pass1", "pass2"],
+      "additionalProperties": false
+    },
+    "corpusCuts": { "type": ["integer", "null"], "description": "how many corpus files the ceiling cut" },
+    "corpusDrift": { "type": "boolean", "description": "a corpus or skill-tree file changed during the run" },
+    "evaluatorRepaired": { "type": "boolean", "description": "an evaluator reply was missing only its final closing brace, which was appended (see the report's evaluatorRepair)" },
+    "costUsd": {
+      "type": "object",
+      "description": "only with --summary-include-cost",
+      "properties": { "totalUsd": { "type": ["number", "null"] }, "complete": { "type": "boolean" } },
+      "required": ["totalUsd", "complete"],
+      "additionalProperties": false
+    },
+    "promptSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "only with --summary-include-prompt-hash; it confirms a guessed probe"
+    },
+    "items": {
+      "type": "array",
+      "description": "the critique's findings, without text; a dropped item (citation not verbatim in the evidence) is left out",
+      "items": {
+        "type": "object",
+        "properties": {
+          "findingFingerprint": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+          "classification": {
+            "enum": ["grounded-and-actionable", "grounded-but-not-worth-it", "confabulated", "already-covered", "not-adjudicable"]
+          },
+          "source": { "enum": ["evaluator", "self-report"] },
+          "adjudicable": { "type": "boolean", "description": "false for not-adjudicable: a finding with no deciding evidence" }
+        },
+        "required": ["findingFingerprint", "classification", "source", "adjudicable"],
+        "additionalProperties": false
+      }
+    },
+    "withheld": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "fields whose value failed its shape check and were written null (or dropped, for a list)"
+    }
+  },
+  "required": [
+    "schema",
+    "harnessVersion",
+    "timestamp",
+    "sessionId",
+    "gradedSkill",
+    "gradedSkillKind",
+    "corpusHashScheme",
+    "fingerprintScheme",
+    "hashBasis",
+    "corpusHash",
+    "packagedCorpusHash",
+    "skillTreeHash",
+    "source",
+    "label",
+    "fidelity",
+    "gradedBaseline",
+    "evaluatorModel",
+    "gradedModels",
+    "status",
+    "selfReportStatus",
+    "evaluatorIntegrity",
+    "droppedEvaluatorItems",
+    "corpusCuts",
+    "corpusDrift",
+    "evaluatorRepaired",
+    "items",
+    "withheld"
+  ],
+  "additionalProperties": false
+}

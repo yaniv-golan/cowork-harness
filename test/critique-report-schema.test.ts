@@ -21,6 +21,37 @@ const validate = ajv.compile(schema);
 
 /** Every optional field populated, so a schema that under-declares any of them fails loud. */
 const FULL_STATE = {
+  harnessVersion: "4.8.0",
+  evaluatorRepair: [{ pass: 2 as const, appended: "}" }],
+  summaryIdentity: { name: "demo-analyze", kind: "plugin_skill" as const },
+  label: "v1.2.3-rc1",
+  source: { kind: "git" as const, ref: "main", path: "plugins/p", commit: "cccccccccccccccccccccccccccccccccccccccc" },
+  corpus: {
+    corpusHashScheme: 1,
+    hashBasis: "git-tracked" as const,
+    corpusHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    packagedCorpusHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    skillTreeHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    corpusManifest: [
+      {
+        origin: "skill_md" as const,
+        key: "skills/x/SKILL.md",
+        status: "ok" as const,
+        sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        bytes: 10,
+        keptBytes: 5,
+      },
+      { origin: "reference" as const, key: "skills/x/references/r.md", status: "unreadable" as const },
+      { origin: "agent" as const, key: "agents/gone.md", status: "missing" as const },
+    ],
+    skillTreeUntracked: ["scripts/scratch.py"],
+    skillTreeUntrackedCount: 1,
+    corpusDrift: {
+      preflightCorpusHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      preflightSkillTreeHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changed: ["skills/x/SKILL.md"],
+    },
+  },
   skillFolder: "./plugin",
   prompt: "probe",
   sessionId: "crit-x",

@@ -90,7 +90,9 @@ CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that
   `report.costUsd.totalUsd`. Reach for it when you want **findings**. **For "what does this skill
   **DO**" — routing, artifact location, narration — use `skill` instead**: no evaluator, a fraction of
   the cost, and it answers that question directly. Report and evidence-package shapes:
-  `references/critique.md`.
+  `references/critique.md` — which also covers grading a commit (`git:<ref>:<path>`), the
+  "has the skill changed?" hashes, the public `--summary-out` file, and `critique --compare` for
+  reading several critiques side by side.
 - **Multi-turn / interactive reproduction** → `cowork-harness chat` (interactive; gates answered at the
   TTY, **not** an asserted test — see *Debugging with `chat`* in `references/debugging.md`).
   **"Interactive" splits two ways — don't take the wrong branch.** Want to answer gates yourself *and*

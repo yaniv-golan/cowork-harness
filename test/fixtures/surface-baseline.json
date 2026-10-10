@@ -2065,6 +2065,183 @@
         "type": "string"
       }
     },
+    "critique-compare.json": {
+      "": {
+        "type": "object",
+        "closed": true
+      },
+      ".excluded": {
+        "type": "array",
+        "required": true
+      },
+      ".excluded[]": {
+        "type": "object"
+      },
+      ".excluded[].file": {
+        "type": "string",
+        "required": true
+      },
+      ".excluded[].reason": {
+        "type": "string",
+        "required": true
+      },
+      ".fingerprints": {
+        "type": "array",
+        "required": true
+      },
+      ".fingerprints[]": {
+        "type": "object"
+      },
+      ".fingerprints[].classification": {
+        "type": "string",
+        "required": true
+      },
+      ".fingerprints[].findingFingerprint": {
+        "type": "string",
+        "required": true
+      },
+      ".fingerprints[].groups": {
+        "type": "array",
+        "required": true
+      },
+      ".fingerprints[].groups[]": {
+        "type": "object"
+      },
+      ".fingerprints[].groups[].N": {
+        "type": "integer",
+        "required": true
+      },
+      ".fingerprints[].groups[].k": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".groups[].N": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].byClassification": {
+        "type": "object",
+        "required": true
+      },
+      ".groups[].corpusHash": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".groups[].label": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".groups[].marks": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].marks[]": {
+        "enum": ["mixedEvaluator", "mixedBasis", "mixedSkillTree", "mixedPackagedCorpus", "mixedProbe", "probeUnverified", "pass1Only"]
+      },
+      ".groups[].reports": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].reports[]": {
+        "type": "object"
+      },
+      ".groups[].sameWording": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].sameWording[]": {
+        "type": "object"
+      },
+      ".groups[].sameWording[].N": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sameWording[].classification": {
+        "type": "string",
+        "required": true
+      },
+      ".groups[].sameWording[].findingFingerprint": {
+        "type": "string",
+        "required": true
+      },
+      ".groups[].sameWording[].k": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sharedExcerpt": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[]": {
+        "type": "object"
+      },
+      ".groups[].sharedExcerpt[].N": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[].anchor": {
+        "type": "string",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[].distinctActions": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[].distinctIdeas": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].sharedExcerpt[].k": {
+        "type": "integer",
+        "required": true
+      },
+      ".groups[].skillTreeHashes": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].skillTreeHashes[]": {
+        "type": "string"
+      },
+      ".mode": {
+        "const": "compare",
+        "required": true
+      },
+      ".noiseFloorControl": {
+        "type": "boolean",
+        "required": true
+      },
+      ".note": {
+        "type": "string",
+        "required": true
+      },
+      ".possibleRewordings": {
+        "type": "object",
+        "required": true
+      },
+      ".possibleRewordings.basis": {
+        "type": "string",
+        "required": true
+      },
+      ".possibleRewordings.pairs": {
+        "type": "array",
+        "required": true
+      },
+      ".possibleRewordings.pairs[]": {
+        "type": "object"
+      },
+      ".publicSafe": {
+        "const": false,
+        "required": true
+      }
+    },
     "critique-report.json": {
       "": {
         "type": "object",
@@ -2072,6 +2249,59 @@
       },
       ".commandShadowsSkill": {
         "type": "boolean"
+      },
+      ".corpusDrift": {
+        "type": "object",
+        "closed": true
+      },
+      ".corpusDrift.changed": {
+        "type": "array",
+        "required": true
+      },
+      ".corpusDrift.changed[]": {
+        "type": "string"
+      },
+      ".corpusDrift.preflightCorpusHash": {
+        "type": "string",
+        "required": true
+      },
+      ".corpusDrift.preflightSkillTreeHash": {
+        "type": "string",
+        "required": true
+      },
+      ".corpusHash": {
+        "type": "string"
+      },
+      ".corpusHashScheme": {
+        "type": "integer"
+      },
+      ".corpusManifest": {
+        "type": "array"
+      },
+      ".corpusManifest[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".corpusManifest[].bytes": {
+        "type": "integer"
+      },
+      ".corpusManifest[].keptBytes": {
+        "type": "integer"
+      },
+      ".corpusManifest[].key": {
+        "type": "string",
+        "required": true
+      },
+      ".corpusManifest[].origin": {
+        "enum": ["skill_md", "reference", "agent", "root_ref_linked", "root_ref_read"],
+        "required": true
+      },
+      ".corpusManifest[].sha256": {
+        "type": "string"
+      },
+      ".corpusManifest[].status": {
+        "enum": ["ok", "unreadable", "missing"],
+        "required": true
       },
       ".costUsd": {
         "type": "object",
@@ -2156,6 +2386,21 @@
       },
       ".evaluatorModel": {
         "type": "string"
+      },
+      ".evaluatorRepair": {
+        "type": "array"
+      },
+      ".evaluatorRepair[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".evaluatorRepair[].appended": {
+        "const": "}",
+        "required": true
+      },
+      ".evaluatorRepair[].pass": {
+        "enum": [1, 2],
+        "required": true
       },
       ".evaluatorTransport": {
         "type": "object"
@@ -2275,6 +2520,9 @@
         "enum": ["container", "hostloop"],
         "required": true
       },
+      ".fingerprintScheme": {
+        "type": "integer"
+      },
       ".gateAnswers": {
         "type": "array"
       },
@@ -2317,6 +2565,24 @@
       },
       ".gradedSkillHash": {
         "type": "string"
+      },
+      ".gradedSkillIdentity": {
+        "type": "object",
+        "closed": true
+      },
+      ".gradedSkillIdentity.kind": {
+        "enum": ["plugin_skill", "folder"],
+        "required": true
+      },
+      ".gradedSkillIdentity.name": {
+        "type": "string",
+        "required": true
+      },
+      ".harnessVersion": {
+        "type": "string"
+      },
+      ".hashBasis": {
+        "enum": ["git-tracked", "worktree-all", "git-commit"]
       },
       ".infraFailure": {
         "type": "string"
@@ -2364,12 +2630,18 @@
         "enum": ["evaluator", "self-report"],
         "required": true
       },
+      ".label": {
+        "type": "string"
+      },
       ".noSkillFilesRead": {
         "type": "boolean"
       },
       ".outDir": {
         "type": "string",
         "required": true
+      },
+      ".packagedCorpusHash": {
+        "type": "string"
       },
       ".prompt": {
         "type": "string",
@@ -2402,6 +2674,35 @@
         "type": "string",
         "enum": ["readable", "missing", "unreadable", "untracked"]
       },
+      ".skillTreeHash": {
+        "type": "string"
+      },
+      ".skillTreeUntracked": {
+        "type": "array"
+      },
+      ".skillTreeUntrackedCount": {
+        "type": "integer"
+      },
+      ".skillTreeUntracked[]": {
+        "type": "string"
+      },
+      ".source": {
+        "type": "object",
+        "closed": true
+      },
+      ".source.commit": {
+        "type": "string"
+      },
+      ".source.kind": {
+        "enum": ["dir", "git"],
+        "required": true
+      },
+      ".source.path": {
+        "type": "string"
+      },
+      ".source.ref": {
+        "type": "string"
+      },
       ".taskResult": {
         "type": "string",
         "enum": ["success", "error"]
@@ -2429,6 +2730,215 @@
         "type": "string",
         "enum": ["self-run"],
         "required": true
+      }
+    },
+    "critique-summary.json": {
+      "": {
+        "type": "object",
+        "closed": true
+      },
+      ".corpusCuts": {
+        "type": ["integer", "null"],
+        "required": true
+      },
+      ".corpusDrift": {
+        "type": "boolean",
+        "required": true
+      },
+      ".corpusHash": {
+        "required": true
+      },
+      ".corpusHash<anyOf:0>": {
+        "type": "string"
+      },
+      ".corpusHash<anyOf:1>": {
+        "type": "null"
+      },
+      ".corpusHashScheme": {
+        "type": ["integer", "null"],
+        "required": true
+      },
+      ".costUsd": {
+        "type": "object",
+        "closed": true
+      },
+      ".costUsd.complete": {
+        "type": "boolean",
+        "required": true
+      },
+      ".costUsd.totalUsd": {
+        "type": ["number", "null"],
+        "required": true
+      },
+      ".droppedEvaluatorItems": {
+        "type": ["object", "null"],
+        "closed": true,
+        "required": true
+      },
+      ".droppedEvaluatorItems.pass1": {
+        "type": "number",
+        "required": true
+      },
+      ".droppedEvaluatorItems.pass2": {
+        "type": "number",
+        "required": true
+      },
+      ".evaluatorIntegrity": {
+        "type": ["object", "null"],
+        "closed": true,
+        "required": true
+      },
+      ".evaluatorIntegrity.pass1Canary": {
+        "type": ["boolean", "null"],
+        "required": true
+      },
+      ".evaluatorIntegrity.pass2Canary": {
+        "type": ["boolean", "null"],
+        "required": true
+      },
+      ".evaluatorModel": {
+        "required": true
+      },
+      ".evaluatorModel<anyOf:0>": {
+        "type": "string"
+      },
+      ".evaluatorModel<anyOf:1>": {
+        "type": "null"
+      },
+      ".evaluatorRepaired": {
+        "type": "boolean",
+        "required": true
+      },
+      ".fidelity": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".fingerprintScheme": {
+        "type": "integer",
+        "required": true
+      },
+      ".gradedBaseline": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".gradedModels": {
+        "type": "array",
+        "required": true
+      },
+      ".gradedModels[]": {
+        "type": "string"
+      },
+      ".gradedSkill": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".gradedSkillKind": {
+        "enum": ["plugin_skill", "folder"],
+        "required": true
+      },
+      ".harnessVersion": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".hashBasis": {
+        "enum": ["git-tracked", "worktree-all", "git-commit", null],
+        "required": true
+      },
+      ".items": {
+        "type": "array",
+        "required": true
+      },
+      ".items[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".items[].adjudicable": {
+        "type": "boolean",
+        "required": true
+      },
+      ".items[].classification": {
+        "enum": ["grounded-and-actionable", "grounded-but-not-worth-it", "confabulated", "already-covered", "not-adjudicable"],
+        "required": true
+      },
+      ".items[].findingFingerprint": {
+        "type": "string",
+        "required": true
+      },
+      ".items[].source": {
+        "enum": ["evaluator", "self-report"],
+        "required": true
+      },
+      ".label": {
+        "required": true
+      },
+      ".label<anyOf:0>": {
+        "type": "string"
+      },
+      ".label<anyOf:1>": {
+        "type": "null"
+      },
+      ".packagedCorpusHash": {
+        "required": true
+      },
+      ".packagedCorpusHash<anyOf:0>": {
+        "type": "string"
+      },
+      ".packagedCorpusHash<anyOf:1>": {
+        "type": "null"
+      },
+      ".promptSha256": {
+        "type": "string"
+      },
+      ".schema": {
+        "const": "critique-summary/1",
+        "required": true
+      },
+      ".selfReportStatus": {
+        "enum": ["captured", "unavailable", null],
+        "required": true
+      },
+      ".sessionId": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".skillTreeHash": {
+        "required": true
+      },
+      ".skillTreeHash<anyOf:0>": {
+        "type": "string"
+      },
+      ".skillTreeHash<anyOf:1>": {
+        "type": "null"
+      },
+      ".source": {
+        "type": "object",
+        "closed": true,
+        "required": true
+      },
+      ".source.commit<anyOf:0>": {
+        "type": "string"
+      },
+      ".source.commit<anyOf:1>": {
+        "type": "null"
+      },
+      ".source.kind": {
+        "enum": ["dir", "git"],
+        "required": true
+      },
+      ".status": {
+        "enum": ["critiqued", "task_turn_failed", "reflection_turn_failed", "evaluator_failed", "corpus_only"],
+        "required": true
+      },
+      ".timestamp": {
+        "type": "string",
+        "required": true
+      },
+      ".withheld": {
+        "type": "array",
+        "required": true
+      },
+      ".withheld[]": {
+        "type": "string"
       }
     },
     "doctor.json": {
@@ -6417,6 +6927,7 @@
       "COWORK_HARNESS_ALLOW_MISSING_PROMPT",
       "COWORK_HARNESS_AUTHORED_TOTAL_BYTES",
       "COWORK_HARNESS_CLAUDE_BIN",
+      "COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR",
       "COWORK_HARNESS_DEBUG",
       "COWORK_HARNESS_DEBUG_SKILLHASH",
       "COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS",

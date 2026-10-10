@@ -7,6 +7,107 @@
   "required": ["skillFolder", "prompt", "sessionId", "outDir", "fidelity", "selfReportStatus", "verdictProvenance", "items"],
   "additionalProperties": false,
   "properties": {
+    "harnessVersion": {
+      "type": "string",
+      "description": "the cowork-harness version that produced this report. Absent on a report written before 4.8.0"
+    },
+    "label": {
+      "type": "string",
+      "description": "the --label value, as given (single line); absent when none was passed"
+    },
+    "source": {
+      "type": "object",
+      "description": "where the graded files came from: {kind:'dir'} for a folder, or {kind:'git', ref, path, commit} for a `critique git:<ref>:<path>` target — `commit` is the resolved commit id, `path` the repo-relative directory snapshotted (the plugin root when the argument named a skill inside it). Absent on a report written before 4.8.0",
+      "properties": {
+        "kind": { "enum": ["dir", "git"] },
+        "ref": { "type": "string" },
+        "path": { "type": "string" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
+    "gradedSkillIdentity": {
+      "type": "object",
+      "description": "the graded skill's identity as --summary-out and --compare key on it: kind plugin_skill (name = the registered skills/<name>) or folder (a plain skill folder, named by its SKILL.md frontmatter, else its folder — the case where gradedSkill is absent)",
+      "properties": { "name": { "type": "string" }, "kind": { "enum": ["plugin_skill", "folder"] } },
+      "required": ["name", "kind"],
+      "additionalProperties": false
+    },
+    "fingerprintScheme": {
+      "type": "integer",
+      "description": "the version of the rules items[].findingFingerprint is computed under; fingerprints are comparable only within one scheme"
+    },
+    "evaluatorRepair": {
+      "type": "array",
+      "description": "evaluator replies whose {\"items\":[...]} document was complete except for its final closing brace: that one } was appended, and the reply then parsed and validated as usual. A reply needing anything else (a ], an inner fix) is refused, as before. Absent when no repair was made",
+      "items": {
+        "type": "object",
+        "properties": { "pass": { "enum": [1, 2] }, "appended": { "const": "}" } },
+        "required": ["pass", "appended"],
+        "additionalProperties": false
+      }
+    },
+    "corpusHashScheme": {
+      "type": "integer",
+      "description": "the version of the rules corpusHash, packagedCorpusHash and skillTreeHash are computed under; hashes are comparable only within one scheme. Absent on a report written before 4.8.0"
+    },
+    "hashBasis": {
+      "enum": ["git-tracked", "worktree-all", "git-commit"],
+      "description": "how the delivered set behind the hashes was decided: git-tracked (a target inside a git work tree: its tracked files, hashed from their working-tree bytes), worktree-all (no work tree, or git mode off: every file staging copies), git-commit (a git:<ref>:<path> target: the commit's files)"
+    },
+    "corpusHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "hash of the STATIC evaluator corpus: SKILL.md, the skill's references/, the resolved agents and the plugin-root references they link to, by content and mount-relative path. Equal to `critique --corpus-only` on the same files. A FLOOR for 'did the skill change': scripts/ and other files outside the corpus are not in it (see skillTreeHash)"
+    },
+    "packagedCorpusHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "hash of what the packager put in the evaluator's corpus: the static corpus plus plugin-root files the graded agent READ, and how much of each file the corpus ceiling kept. Moves when the agent's reading varies. Absent when the critique stopped before packaging"
+    },
+    "skillTreeHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "hash of every file staging delivered for the skill (its whole folder, scripts/ included) plus the resolved agents and the linked plugin-root references — the 'anything changed' key"
+    },
+    "corpusManifest": {
+      "type": "array",
+      "description": "the files behind corpusHash and packagedCorpusHash, one row each; diff two manifests to see which file made two hashes differ",
+      "items": {
+        "type": "object",
+        "properties": {
+          "origin": { "enum": ["skill_md", "reference", "agent", "root_ref_linked", "root_ref_read"] },
+          "key": { "type": "string", "description": "mount-relative path" },
+          "status": { "enum": ["ok", "unreadable", "missing"], "description": "unreadable: delivered but could not be read; missing: a resolved agent whose file does not exist. Both still count in the hash" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "bytes": { "type": "integer" },
+          "keptBytes": { "type": "integer", "description": "set only when the corpus ceiling cut this file: the bytes the evaluator was shown (0 = omitted)" }
+        },
+        "required": ["origin", "key", "status"],
+        "additionalProperties": false
+      }
+    },
+    "skillTreeUntracked": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "files under the skill folder that staging did not deliver (untracked or ignored, in git mode), skill-relative, at most the first 50 (see skillTreeUntrackedCount); neither mounted nor hashed — git add them to test them. .git itself is never listed or hashed"
+    },
+    "skillTreeUntrackedCount": {
+      "type": "integer",
+      "description": "how many files under the skill folder staging did not deliver; skillTreeUntracked names at most the first 50"
+    },
+    "corpusDrift": {
+      "type": "object",
+      "description": "present when the static corpus or the skill tree changed between the pre-spend check and the packaging after the turns (an edit during the run): the hashes in this report describe the later state, and `changed` names the files",
+      "properties": {
+        "preflightCorpusHash": { "type": "string" },
+        "preflightSkillTreeHash": { "type": "string" },
+        "changed": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["preflightCorpusHash", "preflightSkillTreeHash", "changed"],
+      "additionalProperties": false
+    },
     "skillFolder": {
       "type": "string",
       "description": "the positional folder BOTH turns mounted (a plain skill, or a plugin root)"
@@ -146,7 +247,7 @@
     },
     "gradedSkillHash": {
       "type": "string",
-      "description": "content-exact hash of the MOUNTED folder — the cross-FIX pairing key (per-plugin under --skill)"
+      "description": "content-exact hash of the MOUNTED folder — the cross-FIX pairing key (per-plugin under --skill); it keys the whole mounted plugin — for per-skill change detection use skillTreeHash (corpusHash is a floor)"
     },
     "selfReportStatus": {
       "type": "string",
@@ -358,7 +459,7 @@
           },
           "findingFingerprint": {
             "type": "string",
-            "description": "sha256/16 over normalized, secret-scrubbed idea+classification+recommendedAction (evidence excluded). Cross-INPUT clustering key — HIGH-PRECISION, LOW-RECALL: idea is model-authored free text, so a MATCH proves the same finding recurred; a MISMATCH does NOT prove non-reproduction (the same finding reworded fingerprints differently)"
+            "description": "sha256/16 over the scrubbed, whitespace-normalised idea + classification + recommendedAction (the evidence excerpt is excluded). Exact match on model-written wording — a LOWER bound: a match shows the same wording came back; across repeats of the same probe it often never recurs, and no match shows nothing"
           }
         }
       }

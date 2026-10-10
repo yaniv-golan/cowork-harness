@@ -77,7 +77,8 @@ existence check; use `verify-cassettes` to check freshness and drift.
 no-spend mode is a plain CLI step on any runner — `npx cowork-harness@^4 critique <folder> [--skill <name>]
 --corpus-only --output-format json | jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'` — and that
 `jq -e` IS the gate: the flag itself exits 0 on a measurement even over the ceiling. The number is a
-floor (see [docs/critique.md](./critique.md#knowing-before-you-pay)).
+floor (see [docs/critique.md](./critique.md#knowing-before-you-pay)). The same payload's `skillTreeHash` (every
+delivered file of the skill) tells a job whether the skill changed since its last critique, at no cost.
 
 **A live pre-merge comparison.** [`eval`](./eval.md) runs your scenarios against the version on the base
 branch and the one in the PR, interleaved, on the same self-hosted runner the live lane needs. No drop

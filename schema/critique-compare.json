@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "critique-compare.json",
+  "title": "cowork-harness critique --compare payload",
+  "description": "EXPERIMENTAL, descriptive: the payload of `critique --compare --output-format json`, inside the standard envelope ({tool, version, command, ok, ...}). Several critiques of one skill side by side, with NO verdict. Carries finding text (publicSafe is always false).",
+  "type": "object",
+  "properties": {
+    "mode": { "const": "compare" },
+    "publicSafe": { "const": false },
+    "note": { "type": "string" },
+    "noiseFloorControl": { "type": "boolean", "description": "two groups with the same (non-null) corpusHash and the same single skillTreeHash: any difference is run-to-run variation" },
+    "groups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "label": { "type": ["string", "null"] },
+          "N": { "type": "integer" },
+          "reports": { "type": "array", "items": { "type": "object" } },
+          "corpusHash": { "type": ["string", "null"] },
+          "skillTreeHashes": { "type": "array", "items": { "type": "string" }, "description": "the distinct skillTreeHash values in the group" },
+          "marks": { "type": "array", "description": "--strict refuses mixedEvaluator, mixedBasis, mixedSkillTree, mixedProbe and pass1Only; mixedPackagedCorpus and probeUnverified are only marked", "items": { "enum": ["mixedEvaluator", "mixedBasis", "mixedSkillTree", "mixedPackagedCorpus", "mixedProbe", "probeUnverified", "pass1Only"] } },
+          "byClassification": { "type": "object", "description": "classification -> every finding of that classification, per report" },
+          "sameWording": {
+            "type": "array",
+            "description": "an exact findingFingerprint in k of N reports — a LOWER bound",
+            "items": {
+              "type": "object",
+              "properties": { "findingFingerprint": { "type": "string" }, "classification": { "type": "string" }, "k": { "type": "integer" }, "N": { "type": "integer" } },
+              "required": ["findingFingerprint", "classification", "k", "N"]
+            }
+          },
+          "sharedExcerpt": {
+            "type": "array",
+            "description": "the same cited passage under the same classification in k of N reports — a cue to read them together, not a match",
+            "items": {
+              "type": "object",
+              "properties": {
+                "anchor": { "type": "string" },
+                "k": { "type": "integer" },
+                "N": { "type": "integer" },
+                "distinctIdeas": { "type": "integer" },
+                "distinctActions": { "type": "integer" }
+              },
+              "required": ["anchor", "k", "N", "distinctIdeas", "distinctActions"]
+            }
+          }
+        },
+        "required": ["label", "N", "reports", "corpusHash", "skillTreeHashes", "marks", "byClassification", "sameWording", "sharedExcerpt"],
+        "additionalProperties": false
+      }
+    },
+    "fingerprints": {
+      "type": "array",
+      "description": "every exact findingFingerprint with its k/N in each group",
+      "items": {
+        "type": "object",
+        "properties": {
+          "findingFingerprint": { "type": "string" },
+          "classification": { "type": "string" },
+          "groups": { "type": "array", "items": { "type": "object", "properties": { "k": { "type": "integer" }, "N": { "type": "integer" } }, "required": ["k", "N"] } }
+        },
+        "required": ["findingFingerprint", "classification", "groups"]
+      }
+    },
+    "possibleRewordings": {
+      "type": "object",
+      "properties": { "basis": { "type": "string" }, "pairs": { "type": "array", "items": { "type": "object" } } },
+      "required": ["basis", "pairs"]
+    },
+    "excluded": {
+      "type": "array",
+      "items": { "type": "object", "properties": { "file": { "type": "string" }, "reason": { "type": "string" } }, "required": ["file", "reason"] }
+    }
+  },
+  "required": ["mode", "publicSafe", "note", "noiseFloorControl", "groups", "fingerprints", "possibleRewordings", "excluded"],
+  "additionalProperties": false
+}

@@ -32,6 +32,19 @@ const REPORT_PATHS = [
   "skillDir",
   "gradedSkill",
   "gradedSkillHash",
+  "harnessVersion",
+  // content hashes and their enums (a hash cannot carry a secret; a manifest KEY is a file name and is scrubbed)
+  "corpusHash",
+  "packagedCorpusHash",
+  "skillTreeHash",
+  "hashBasis",
+  "source.kind",
+  "source.commit",
+  "corpusManifest[].origin",
+  "corpusManifest[].status",
+  "corpusManifest[].sha256",
+  "corpusDrift.preflightCorpusHash",
+  "corpusDrift.preflightSkillTreeHash",
   // model ids
   "gradedModels[]",
   "evaluatorModel",
@@ -55,19 +68,54 @@ const REPORT_PATHS = [
   "items[].classification",
   "items[].findingFingerprint",
   "gateAnswers[].answeredBy",
+  "evaluatorRepair[].appended", // always "}" by construction — a scrub value could only corrupt it
   "evidenceBudget.corpusOmitted[].reason",
 ];
 
 /** Which critique JSON a value is, so the allowlist is applied at the right root. */
-export type CritiqueJsonShape = "report" | "salvage" | "corpus-only";
+export type CritiqueJsonShape = "report" | "salvage" | "corpus-only" | "summary" | "compare";
 
 const KEEP: Record<CritiqueJsonShape, Set<string>> = {
+  // The --summary-out file keeps NOTHING unscrubbed: every value is already shape-checked, so any change the scrub
+  // makes means a secret matched, and the writer withholds the file rather than publish it.
+  summary: new Set(),
+  // `critique --compare`: hashes, fingerprints and enums are kept; file paths, labels and finding text are scrubbed.
+  compare: new Set([
+    "mode",
+    "note",
+    "groups[].corpusHash",
+    "groups[].skillTreeHashes[]",
+    "groups[].marks[]",
+    "groups[].reports[].kind",
+    "groups[].sameWording[].findingFingerprint",
+    "groups[].sameWording[].classification",
+    "groups[].sharedExcerpt[].anchor",
+    "fingerprints[].findingFingerprint",
+    "fingerprints[].classification",
+    "possibleRewordings.basis",
+    "excluded[].reason",
+  ]),
   report: new Set(REPORT_PATHS),
   // the salvage file's own top-level enums, plus the full report under `reportState`
   salvage: new Set(["infraFailurePhase", "infraFailureKind", ...REPORT_PATHS.map((p) => `reportState.${p}`)]),
   // `--corpus-only`'s payload (the envelope's `tool`/`version`/`command` are added after the scrub);
   // `skill` is the same resolved skills/<name> a report calls `gradedSkill`
-  "corpus-only": new Set(["mode", "skillFolder", "skillDir", "skill", "corpus.corpusOmitted[].reason"]),
+  "corpus-only": new Set([
+    "mode",
+    "skillFolder",
+    "skillDir",
+    "skill",
+    "corpus.corpusOmitted[].reason",
+    "corpusHash",
+    "packagedCorpusHash",
+    "skillTreeHash",
+    "hashBasis",
+    "source.kind",
+    "source.commit",
+    "corpusManifest[].origin",
+    "corpusManifest[].status",
+    "corpusManifest[].sha256",
+  ]),
 };
 
 /** A deep copy of `value` with every string VALUE scrubbed, except at the exact paths kept for `shape`. */
