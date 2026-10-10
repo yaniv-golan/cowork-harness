@@ -38,6 +38,16 @@
       "type": "integer",
       "description": "the version of the rules items[].findingFingerprint is computed under; fingerprints are comparable only within one scheme"
     },
+    "evaluatorRepair": {
+      "type": "array",
+      "description": "evaluator replies whose {\"items\":[...]} document was complete except for its trailing closer(s): those closers were appended, and the reply then parsed and validated as usual. A reply needing any other edit is refused, as before. Absent when no repair was made",
+      "items": {
+        "type": "object",
+        "properties": { "pass": { "enum": [1, 2] }, "appended": { "type": "string", "pattern": "^[\\]}]+$" } },
+        "required": ["pass", "appended"],
+        "additionalProperties": false
+      }
+    },
     "corpusHashScheme": {
       "type": "integer",
       "description": "the version of the rules corpusHash, packagedCorpusHash and skillTreeHash are computed under; hashes are comparable only within one scheme. Absent on a report written before 4.8.0"

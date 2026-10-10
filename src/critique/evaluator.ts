@@ -1,6 +1,7 @@
 import { claudeCliCompleteEvaluator } from "../decide/llm-transport.js";
 import type { Complete } from "../decide/decider.js";
 import { extractAllJsonObjects } from "../decide/semantic-judge.js";
+import { repairTrailingClosers } from "./reply-repair.js";
 import { validateCitations, type CritiqueItem } from "./evidence.js";
 import { armorEvidence, headTag, evidenceOpen, evidenceClose, type ArmoredEvidence, type EvidenceSection } from "./armor.js";
 import { ROOT_REFERENCE_SECTION_PREFIX, AGENT_SECTION_PREFIX } from "./package-evidence.js";
@@ -141,6 +142,8 @@ interface ParsedPassReply {
   items: CritiqueItem[];
   canaryPresent: boolean;
   droppedMalformed: number;
+  /** Set when the reply was missing only its trailing closer(s) and `repairTrailingClosers` appended them. */
+  repair?: { appended: string };
 }
 
 /** Parse a pass's reply into `CritiqueItem[]`, tagging every item with `source` (never trusting the model
@@ -170,7 +173,13 @@ interface ParsedPassReply {
  *  returns empty WITH the dropped count, so the report says exactly what happened. More than one
  *  *distinct* non-empty document still throws — a second, DIFFERENT candidate critique is an ambiguity
  *  the caller must not silently resolve by picking whichever came first. */
-function parseCritiqueItems(raw: string, source: CritiqueItem["source"], label: string, nonce: string): ParsedPassReply {
+export function parseCritiqueItems(
+  raw: string,
+  source: CritiqueItem["source"],
+  label: string,
+  nonce: string,
+  allowRepair = true,
+): ParsedPassReply {
   const canary = canaryIdea(nonce);
   const distinct = new Map<string, { valid: RawItem[]; droppedMalformed: number }>();
   let canaryPresent = false;
@@ -227,6 +236,13 @@ function parseCritiqueItems(raw: string, source: CritiqueItem["source"], label: 
         `${label}: a {"items":[...]} document was found but EVERY item failed validation ` +
           `(${allMalformed.count} malformed item(s); first failure: ${allMalformed.firstWhy}) and no integrity canary vouches for the pass.\n--- raw reply ---\n${raw}`,
       );
+    // The one bounded recovery: a document complete except for its trailing closer(s). The repaired text goes
+    // through this same parse — the same validation, canary and ambiguity rules — exactly once.
+    const repaired = allowRepair && !emptyCandidateSeen ? repairTrailingClosers(raw) : null;
+    if (repaired) {
+      const again = parseCritiqueItems(repaired.text, source, label, nonce, false);
+      return { ...again, repair: { appended: repaired.appended } };
+    }
     throw new Error(`${label}: no valid {"items":[...]} JSON found in the evaluator reply.\n--- raw reply ---\n${raw}`);
   }
   const chosen = [...distinct.values()][0]!;
@@ -501,6 +517,8 @@ export interface RunCritiqueOptions {
    *  count means the evaluator's reply carried malformed items that were dropped rather than sinking the
    *  whole document — the report must surface it (an unreported drop would be a silent recall loss). */
   onDroppedItems?: (dropped: { pass1: number; pass2?: number }) => void;
+  /** A pass's reply was missing only its trailing closer(s), and they were appended (see reply-repair.ts). */
+  onRepair?: (repair: { pass: 1 | 2; appended: string }) => void;
   /** Called once per pass, IMMEDIATELY after the transport resolves and BEFORE the reply is parsed — so
    *  the raw reply is captured structurally even when the parse then throws (the salvage path; the raw
    *  text previously survived only embedded inside the thrown error's message). */
@@ -595,6 +613,7 @@ export async function runCritique(
     // The parse strips the canary itself (pre-canonicalization — see parseCritiqueItems) and drops+counts
     // malformed items per-item, so nothing here re-filters.
     const p1 = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)", evidence.nonce);
+    if (p1.repair) opts.onRepair?.({ pass: 1, appended: p1.repair.appended });
     let pass1Items = p1.items;
     if (skillMdUnreadable) pass1Items = forceSkillMdCoverageNotAdjudicable(pass1Items);
 
@@ -618,6 +637,7 @@ export async function runCritique(
     opts.onRawReply?.(2, pass2Raw);
     opts.onUsage?.(2, pass2Usage);
     const p2 = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)", evidence.nonce);
+    if (p2.repair) opts.onRepair?.({ pass: 2, appended: p2.repair.appended });
     let pass2Items = p2.items;
     if (skillMdUnreadable) pass2Items = forceSkillMdCoverageNotAdjudicable(pass2Items);
 

@@ -78,6 +78,15 @@ All notable changes to this project are documented here. The format is based on
   `verify.py`, which checks a downloaded capture's integrity, redaction and that it can answer its probe. No harness
   behaviour changes.
 
+### Fixed
+
+- **An evaluator reply missing only its final closing brace no longer loses the whole critique.** When the
+  `{"items":[...]}` document is complete except for its trailing closer(s), critique appends exactly those
+  closers at the end, then parses and validates the reply as usual, and records the repair in the report
+  (`evaluatorRepair`), the text output and the summary (`evaluatorRepaired`). Brackets inside strings are
+  ignored. A reply cut mid-item or mid-string, with a missing inner comma, a mismatched closer or text after the
+  unclosed document is not repaired, and fails as before.
+
 ### Changed
 
 - **Reading several critiques: a fingerprint is a lower bound.** The reproduction recipe said a finding recurring

@@ -133,6 +133,7 @@ describe("--summary-out", () => {
         "droppedEvaluatorItems.pass2",
         "corpusCuts",
         "corpusDrift",
+        "evaluatorRepaired",
         "items[].findingFingerprint",
         "items[].classification",
         "items[].source",

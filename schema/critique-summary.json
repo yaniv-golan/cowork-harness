@@ -53,6 +53,7 @@
     },
     "corpusCuts": { "type": ["integer", "null"], "description": "how many corpus files the ceiling cut" },
     "corpusDrift": { "type": "boolean", "description": "a corpus or skill-tree file changed during the run" },
+    "evaluatorRepaired": { "type": "boolean", "description": "an evaluator reply was missing only its trailing closer(s) and was repaired" },
     "costUsd": {
       "type": "object",
       "description": "only with --summary-include-cost",
@@ -113,6 +114,7 @@
     "droppedEvaluatorItems",
     "corpusCuts",
     "corpusDrift",
+    "evaluatorRepaired",
     "items",
     "withheld"
   ],

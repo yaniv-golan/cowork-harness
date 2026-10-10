@@ -66,6 +66,8 @@ export interface CritiqueSummary {
   droppedEvaluatorItems: { pass1: number; pass2: number } | null;
   corpusCuts: number | null;
   corpusDrift: boolean;
+  /** An evaluator reply was missing only its trailing closer(s) and was repaired (see the report's evaluatorRepair). */
+  evaluatorRepaired: boolean;
   costUsd?: { totalUsd: number | null; complete: boolean };
   promptSha256?: string;
   items: SummaryItem[];
@@ -156,6 +158,7 @@ export function buildCritiqueSummary(report: Record<string, unknown>, ctx: Summa
     droppedEvaluatorItems: dropped ? { pass1: num(dropped.pass1) ?? 0, pass2: num(dropped.pass2) ?? 0 } : null,
     corpusCuts: Array.isArray(budget?.corpusCuts) ? budget!.corpusCuts!.length : null,
     corpusDrift: report.corpusDrift !== undefined,
+    evaluatorRepaired: Array.isArray(report.evaluatorRepair) && report.evaluatorRepair.length > 0,
     items,
     withheld,
   };

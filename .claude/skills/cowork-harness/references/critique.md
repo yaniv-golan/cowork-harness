@@ -97,6 +97,12 @@ messages, never from the flag. So `graded model(s): unknown` means no assistant 
 (crash, kill, or a gate before the first reply); passing `--model` does not change that line. Past runs
 can be checked without re-running: the same ids are in each kept run dir's `turns/1/result.json`.
 
+## A repaired evaluator reply — `evaluatorRepair`
+
+When an evaluator reply was complete except for its trailing `}`/`]`, critique appends exactly those closers and
+parses as usual; the report records `evaluatorRepair: [{pass, appended}]` (summary: `evaluatorRepaired: true`).
+Nothing else is ever repaired — a reply cut mid-item or mid-string still fails (exit 2).
+
 ## The report's item shape — no `title`, no `summary`
 
 Each `items[]` entry's prose fields are **`idea`** and **`recommendedAction`** — there is no `title` field

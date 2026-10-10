@@ -416,7 +416,12 @@ workloads — the two graded turns *and* the two evaluator passes — marked `IN
 workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFidelity` / `gradedBaseline`
 / `costUsd` — plus `requestedFidelity`, present only when `--fidelity cowork` was passed and naming what
 it resolved to — and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
-malformed evaluator items (the surviving findings are then not necessarily the complete reply). An
+malformed evaluator items (the surviving findings are then not necessarily the complete reply).
+**`evaluatorRepair`** (`[{pass, appended}]`) appears when an evaluator reply's `{"items":[...]}` document was
+complete except for its trailing closer(s): exactly those closers were appended at the end, and the reply then
+parsed and validated as usual; the text report notes it, and a `--summary-out` file carries `evaluatorRepaired`.
+Any other defect — a reply cut mid-item or mid-string, a missing inner comma, a mismatched closer — is not
+repaired, and the critique fails as before. An
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
 (total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + the skill's
 own references + every packaged agent md + every packaged plugin-root reference), `corpusPackaged`

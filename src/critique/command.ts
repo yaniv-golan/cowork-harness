@@ -1520,6 +1520,8 @@ interface ReportState {
    *  `parseCritiqueItems`). Surfaced in BOTH output formats whenever non-zero — a dropped finding the
    *  report never mentions would be a silent recall loss, the exact shape this tool exists to kill. */
   droppedEvaluatorItems?: { pass1: number; pass2?: number };
+  /** Evaluator replies that were missing only their trailing closer(s) and were repaired by appending them. */
+  evaluatorRepair?: Array<{ pass: 1 | 2; appended: string }>;
   /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
    *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`
    *  when packaging never ran (an infra failure short-circuited before it). */
@@ -1818,6 +1820,10 @@ export function buildTextReport(state: ReportState): string {
   out.push(`  verdict scope: advisory self-run — NOT an independent attestation (never gate a skill on it)`);
   out.push("");
 
+  for (const r of state.evaluatorRepair ?? [])
+    out.push(
+      `  NOTE: evaluator pass ${r.pass}'s reply was missing its closing ${JSON.stringify(r.appended)}; it was appended and the reply then parsed and validated as usual.`,
+    );
   const dropped = state.droppedEvaluatorItems;
   const droppedTotal = dropped ? dropped.pass1 + (dropped.pass2 ?? 0) : 0;
   if (droppedTotal > 0)
@@ -1981,6 +1987,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     // On `base` for the same reason as evaluatorIntegrity: a reply with dropped items is exactly where
     // the surviving findings under-represent the full reply — every branch must carry the count.
     droppedEvaluatorItems: state.droppedEvaluatorItems,
+    evaluatorRepair: state.evaluatorRepair,
     turn1ResultDegraded,
     turn1SliceDegraded,
     skillMdStatus,
@@ -2755,6 +2762,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let items: CritiqueItem[] = [];
     let evaluatorIntegrity: { pass1Canary: boolean; pass2Canary?: boolean } | undefined;
     let droppedEvaluatorItems: { pass1: number; pass2?: number } | undefined;
+    const evaluatorRepair: Array<{ pass: 1 | 2; appended: string }> = [];
     let evaluatorError: string | undefined;
     let infraFailure: string | undefined;
     let infraFailurePhase: "task turn" | "reflection turn" | undefined;
@@ -2856,6 +2864,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         items = await runCritique(sections, selfReport, {
           onEvaluatorIntegrity: (i) => {
             evaluatorIntegrity = i;
+          },
+          onRepair: (r) => {
+            evaluatorRepair.push(r);
           },
           onDroppedItems: (d) => {
             droppedEvaluatorItems = d;
@@ -2973,6 +2984,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       infraFailureKind,
       evaluatorIntegrity,
       droppedEvaluatorItems,
+      evaluatorRepair: evaluatorRepair.length ? evaluatorRepair : undefined,
       turn1ResultDegraded,
       turn1SliceDegraded,
       skillMdStatus,
