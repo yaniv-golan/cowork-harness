@@ -243,6 +243,12 @@ LANE_REMOTE_INCOMPATIBLE_FIXES = {
     "computer_links_resolve_if_present": "Assert that no link was given (`transcript_not_matches: \"computer://\"`), or set `lane: local`.",
     "no_lost_write_back": "Set `lane: local` to check it.",
 }
+# Appended to the remedy when the scenario sets device_bridge; mirrors DEVICE_BRIDGE_HINT in src/run/lane-notice.ts.
+_DEVICE_BRIDGE_HINT = (
+    " With `device_bridge: true`, a write into a connected folder through device_bash reaches the user's computer: "
+    "assert that call (`tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: ...}}`); `file_exists` "
+    "on a connected folder's path is refused under the bridge."
+)
 LANE_REMOTE_INCOMPATIBLE_KEYS = set(LANE_REMOTE_INCOMPATIBLE_FIXES)
 # Refused on `lane: remote` by VALUE, not key: a judged assert naming `evidence_files` (the judge sees the
 # transcript only there). Without evidence_files they load and are judged on the transcript.
@@ -1750,7 +1756,8 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                         "Drop `authored` (a written path is the documented proxy on this lane), or set `lane: local`."
                         if _k in LANE_REMOTE_AUTHORED_KEYS
                         else "Drop `evidence_files` and write the rubric about what the agent said, or set `lane: local`.",
-                    ),
+                    )
+                    + (_DEVICE_BRIDGE_HINT if doc.get("device_bridge") is True else ""),
                     path,
                 )
             )

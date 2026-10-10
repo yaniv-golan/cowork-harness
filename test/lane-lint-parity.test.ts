@@ -29,3 +29,14 @@ describe.runIf(havePython)("lane: remote refusals — runtime and linter agree",
     expect(authored).toEqual(["file_exists"]);
   });
 });
+
+describe("the device_bridge hint is one text in two languages", () => {
+  it("lane-notice.ts DEVICE_BRIDGE_HINT equals scenario.py _DEVICE_BRIDGE_HINT", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { DEVICE_BRIDGE_HINT } = await import("../src/run/lane-notice.js");
+    const py = readFileSync(".claude/skills/cowork-harness/scripts/scenario.py", "utf8");
+    const block = py.slice(py.indexOf("_DEVICE_BRIDGE_HINT = ("), py.indexOf("\n)\n", py.indexOf("_DEVICE_BRIDGE_HINT = (")));
+    const joined = [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]).join("");
+    expect(joined).toBe(DEVICE_BRIDGE_HINT);
+  });
+});

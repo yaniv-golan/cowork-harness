@@ -1259,6 +1259,14 @@ def test_device_tool_negative_assertion_vacuity(tmp_path, extra, flagged):
     assert (len(found) == 1) == flagged, found
 
 
+def test_lane_remote_refusal_names_device_bash_under_the_bridge(tmp_path):
+    body = _TV_HEAD + "device_bridge: true\nassert:\n  - artifact_text: {path: x, contains: y}\n"
+    found = _mk(tmp_path, body, rule="lane-remote-incompatible-key")
+    assert len(found) == 1 and "mcp__remote-devices__device_bash" in found[0].fix
+    plain = _mk(tmp_path, _TV_HEAD + "assert:\n  - artifact_text: {path: x, contains: y}\n", rule="lane-remote-incompatible-key")
+    assert len(plain) == 1 and "device_bash" not in plain[0].fix
+
+
 # --- device-bridge-misplaced -------------------------------------------------
 # `device_bridge: true` is valid only with `lane: remote` and `fidelity: container`; the loader refuses any other
 # pairing. On a direct `scenario.py lint` this ERROR is the only coverage.

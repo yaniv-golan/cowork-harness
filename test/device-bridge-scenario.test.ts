@@ -11,6 +11,7 @@ import { Scenario } from "../src/types.js";
 import { preSpendVerdicts, requiredVersionFor } from "../src/run/cassette.js";
 import { parseScenarioFile, scenarioInputFindings } from "../src/run/execute.js";
 import { deviceBridgeFolderAssertRefusal } from "../src/runtime/device-container.js";
+import { laneRemoteLoadRefusal } from "../src/run/lane-notice.js";
 
 const ajv = new Ajv({ strict: true });
 const validateScenario = ajv.compile(JSON.parse(readFileSync(join(SCHEMA_DIR, "scenario.schema.json"), "utf8")));
@@ -109,5 +110,20 @@ describe("the folder-path refusal is pre-spend", () => {
     const { scenario } = scenarioOnFolder("  - input_unmodified: proj/**\n");
     const f = scenarioInputFindings(scenario, "claude-sonnet-5", { quiet: true });
     expect(String(f.vacuity?.message ?? "")).toMatch(/device_bridge.*proj/);
+  });
+});
+
+// A bridge author refused a delivery- or body-shaped key is told what the bridge offers: the device_bash call. Without
+// the bridge the message is unchanged.
+describe("the remote-lane refusal names the device_bash route under the bridge", () => {
+  it("adds the device_bash hint only when device_bridge is set", () => {
+    const withBridge = laneRemoteLoadRefusal({
+      lane: "remote",
+      device_bridge: true,
+      assert: [{ artifact_text: { path: "x", contains: "y" } }],
+    });
+    const without = laneRemoteLoadRefusal({ lane: "remote", assert: [{ artifact_text: { path: "x", contains: "y" } }] });
+    expect(withBridge).toMatch(/device_bridge.*tool_called: \{tool: mcp__remote-devices__device_bash/);
+    expect(without).not.toMatch(/device_bash/);
   });
 });
