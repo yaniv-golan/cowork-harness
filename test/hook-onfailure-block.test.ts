@@ -90,6 +90,10 @@ describe("a failed frame of an event with an onFailure:block hook is unreadable,
     expect(run({ hook_event_blocked: { event: "PreToolUse", min: 1, max: 1 } }, c).pass).toBe(true);
     expect(run({ hook_decision: { event: "PreToolUse", decision: "deny", min: 1, max: 1 } }, c).pass).toBe(true);
   });
+  it("an exit-2 frame keeps its readable JSON channel (exit 2 is not a failure the agent converts)", () => {
+    const c = ctx(hook("PreToolUse", "Write", exit2), PRE);
+    expect(run({ hook_event_blocked: { event: "PreToolUse", via: "json", max: 0 } }, c).pass).toBe(true);
+  });
   it("the exit-2 channel count is exact: a converted failure is not an exit-2 block", () => {
     const c = ctx(hook("PreToolUse", "Bash", exit1), PRE);
     expect(run({ hook_event_blocked: { event: "PreToolUse", via: "exit2", max: 0 } }, c).pass).toBe(true);
