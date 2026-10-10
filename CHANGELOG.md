@@ -54,6 +54,7 @@ All notable changes to this project are documented here. The format is based on
   a `$schema` other than draft 2020-12. Validation uses ajv, which is now a runtime dependency (exact version 8.20.0);
   it and its dependencies add about 2.7 MB to an install, and it is loaded only when a scenario uses `schema:`. Its
   dependency `fast-uri` is locked at 3.1.8, past a moderate advisory in 3.1.7.
+
 ### Changed
 
 - **`latest` moves to `desktop-2.31226.1`** (agent **2.1.295**, was 2.1.293). The Cowork system prompt, the sub-agent
@@ -64,7 +65,6 @@ All notable changes to this project are documented here. The format is based on
     record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it; a
     re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on
     2.1.295. The bundled cassettes are re-stamped to `2.31226.1`.
-
 
 ## [4.6.1] — 2026-10-09
 
