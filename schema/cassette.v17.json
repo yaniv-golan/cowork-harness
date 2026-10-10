@@ -346,6 +346,72 @@
         }
       }
     },
+    "deviceBridge": {
+      "type": "object",
+      "description": "v17+: the run's RunResult.deviceBridge, frozen so replay reports what the recording modeled, not what a later build would. Present only on a `device_bridge: true` recording. What a `device_bridge` run modeled of the remote lane's device bridge, and where it differs from production. `served`: the device tools served; `alwaysLoad`: those that load without ToolSearch; `measuredOn`: the Desktop build both were read from; `egress`: the egress branch modeled (`allowlist`: the scenario allowlist through the proxy); `folders`: name and mode only. `divergences` by id: `delete-not-refused` (a delete in a connected folder succeeds on the device copy, where production refuses it until the user allows deletion; the harness reports it only after the run), `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`, `device-tools-unserved`. Absent when the scenario has no bridge.",
+      "required": [
+        "served",
+        "alwaysLoad",
+        "measuredOn",
+        "egress",
+        "folders",
+        "divergences"
+      ],
+      "properties": {
+        "served": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "alwaysLoad": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "measuredOn": {
+          "type": "string"
+        },
+        "egress": {
+          "type": "string",
+          "enum": [
+            "allowlist"
+          ]
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "mode"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "r",
+                  "rw",
+                  "rwd"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "divergences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "hookFailureBlocks": {
       "description": "v16+: the run's `onFailure: \"block\"` inventory (RunResult.hookFailureBlocks), frozen because replay has no plugin tree to re-read: `{events}` (sorted event names; often empty) or `{unknown: true, why}` when a hook source existed but could not be read or parsed. A failed or timed-out hook frame of a listed event (or any event, when unknown) is unreadable to the hook keys, since the agent turns that failure into a block after emitting the frame. Event names and a count only. ABSENT on an older recording: replay treats an agent at or below 2.1.293 as having none and any other as unknown.",
       "oneOf": [

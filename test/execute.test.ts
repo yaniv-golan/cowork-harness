@@ -351,6 +351,20 @@ describe("execute — scanEvents host-path leak detection", () => {
     ]);
     expect(scanEvents(f).outputsDeletes.length).toBe(1);
   });
+
+  // device_bridge: device_bash runs over copies of the connected folders, where a delete succeeds that production
+  // refuses until the user allows deletion. The post-run scan is the only place it shows, so it reads that surface too.
+  it("catches a connected-folder delete via device_bash (device_bridge)", () => {
+    const f = writeEvents([
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", name: "mcp__remote-devices__device_bash", input: { command: "rm $HOME/mnt/proj/a.txt" } }],
+        },
+      },
+    ]);
+    expect(scanEvents(f, ["proj"]).mountDeletes).toEqual([{ mount: "proj", command: expect.stringContaining("rm") }]);
+  });
 });
 
 // outputs-delete detector: mv-direction + target-based rm parsing (default) + safe-prefix suppression

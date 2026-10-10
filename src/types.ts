@@ -1980,6 +1980,26 @@ export interface JudgedDocFingerprint {
 /** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
  *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
  *  differently instead of collapsing both into one fatal class. */
+/** See `RunResult.deviceBridge`. */
+export interface DeviceBridgeRecord {
+  /** The device tools the harness served, by their bare names. */
+  served: string[];
+  /** The served tools registered to load without ToolSearch, as production registers them. */
+  alwaysLoad: string[];
+  /** The Desktop build those registrations and the tool contract were read from. */
+  measuredOn: string;
+  /** Which of production's egress branches the device container modeled: the scenario allowlist through the proxy. */
+  egress: "allowlist";
+  folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;
+  /** Known differences from production, by id: `delete-not-refused` (a delete in a connected folder succeeds on the
+   *  device copy; production refuses it until the user allows deletion, and the harness reports it only after the
+   *  run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
+   *  description paraphrases one production branch), `device-paths-tilde` (get_device_info spells folders
+   *  `~/<name>`, not their paths on the Mac), `device-tools-unserved` (device_list_dir, the stage/commit pair and
+   *  the folder and delete requests are not served). */
+  divergences: string[];
+}
+
 export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar" | "device-container" | "device-exec";
 
 /** See `RunResult.fsDiff`. `findings` are `[fs-diff] output file removed post-run: <path>` strings. */
@@ -2926,6 +2946,10 @@ export interface RunResult {
    *  inventory's `why` gives a count of the sources it could not read) — no path, server name or command. Absent on a
    *  result.json from an older build. */
   hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
+  /** What a `device_bridge` run modeled of the remote lane's device bridge, and where that differs from production
+   *  (`divergences`). Frozen into the cassette, so replay reports what the recording modeled. Folder names and
+   *  modes only, never a path. Absent when the scenario has no bridge. */
+  deviceBridge?: DeviceBridgeRecord;
   /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
    *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */

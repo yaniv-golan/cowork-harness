@@ -22,7 +22,8 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
-import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline } from "../types.js";
+import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline, DeviceBridgeRecord } from "../types.js";
+import { deviceBridgeRecord } from "../runtime/device-container.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
 import {
   deriveModelProvenance,
@@ -1796,6 +1797,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
         hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir),
+        deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts) : undefined,
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         outputsMountMode,
         turn,
@@ -2366,6 +2368,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       hookFailureBlocks, // the onFailure: "block" inventory the hook keys read failed frames by
+      deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts) : undefined, // what the bridge modeled, and how it differs
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
       fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
@@ -3171,6 +3174,8 @@ export function buildPartialResult(args: {
   turn?: number;
   /** The run's `onFailure: "block"` inventory (`runHookFailureBlocks`). */
   hookFailureBlocks?: HookFailureBlocks;
+  /** What a device_bridge run modeled (`deviceBridgeRecord`). */
+  deviceBridge?: DeviceBridgeRecord;
   /** True when this partial run was ablated (--ablate-skill). */
   ablated?: boolean;
   scenarioName: string;
@@ -3371,6 +3376,7 @@ export function buildPartialResult(args: {
     workspaceFiles, // Working folder panel's canonical file model
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     hookFailureBlocks: args.hookFailureBlocks,
+    deviceBridge: args.deviceBridge,
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
     hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
     fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
@@ -4501,7 +4507,13 @@ export function scanEvents(
       // delete/self-heal detection must cover BOTH bash surfaces — native `Bash` (container/microvm
       // tiers) AND `mcp__workspace__bash` (host-loop, where native Bash is disabled). Same `command`
       // input shape. Missing the MCP name was a host-loop blind-spot in the post-hoc backstop.
-      if (block.type === "tool_use" && (block.name === "Bash" || block.name === "mcp__workspace__bash") && msg.type === "assistant") {
+      // `mcp__remote-devices__device_bash` (device_bridge) too: it runs over copies of the connected folders, where a
+      // delete production refuses until the user allows it succeeds, so this scan is the only place it shows.
+      if (
+        block.type === "tool_use" &&
+        (block.name === "Bash" || block.name === "mcp__workspace__bash" || block.name === "mcp__remote-devices__device_bash") &&
+        msg.type === "assistant"
+      ) {
         const cmd = String(block.input?.command ?? "");
         // One detection pass over every writable mount; `outputsDeletes` is then the `outputs` slice of
         // it, so the two can never disagree about outputs the way two separate passes could.

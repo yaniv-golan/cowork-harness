@@ -9,7 +9,7 @@ import type { LaunchPlan, Mount } from "../session.js";
 import { isExecInfraError } from "../hostloop/workspace-handler.js";
 import { makeRemoteDevicesHandler, type DeviceExec } from "../hostloop/remote-devices-handler.js";
 import type { McpHandler } from "../hostloop/workspace-handler.js";
-import type { InfraErrorSource } from "../types.js";
+import type { DeviceBridgeRecord, InfraErrorSource } from "../types.js";
 import { makeInfraEmitters, startHostLoopSidecar } from "./hostloop.js";
 import { HARDENING, proxyEnvVars } from "./argv.js";
 
@@ -205,5 +205,18 @@ export function startDeviceBridge(p: {
     markTearingDown: started.markTearingDown,
     deregister: started.deregister,
     reapNow: started.reapNow,
+  };
+}
+
+/** The record a device_bridge run carries (`RunResult.deviceBridge`): what it served and how, and every known
+ *  divergence from production. Derived from the launch plan's folders by name and mode, never their paths. */
+export function deviceBridgeRecord(mounts: ReadonlyArray<Mount>): DeviceBridgeRecord {
+  return {
+    served: ["device_bash", "get_device_info"],
+    alwaysLoad: ["device_bash"],
+    measuredOn: "2.31226.1",
+    egress: "allowlist",
+    folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
+    divergences: ["delete-not-refused", "egress-allowlist", "description-paraphrase", "device-paths-tilde", "device-tools-unserved"],
   };
 }

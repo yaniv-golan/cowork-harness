@@ -49,6 +49,7 @@ import {
   type Fingerprint,
   type StalenessFinding,
   type PlatformBaseline,
+  type DeviceBridgeRecord,
   Assertion as AssertionSchema,
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
@@ -435,6 +436,9 @@ export interface Cassette {
   // reader may safely ignore); a non-empty one stamps v16, so an older reader refuses the cassette rather than read
   // a failed frame as "no decision". ABSENT (an older recording): replay decides from the recorded agent version.
   hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
+  // v17: what a device_bridge run modeled (RunResult.deviceBridge). FROZEN so replay reports what the recording
+  // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v17 by itself.
+  deviceBridge?: DeviceBridgeRecord;
   // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
   // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS
   // (guaranteed record-time-accurate) map instead of re-deriving it from the session file on disk AT
@@ -3823,6 +3827,17 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["
  *  strict authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
 const CassetteShape = z.looseObject({
   events: z.array(z.string()),
+  // The device_bridge record replay reports: a malformed one is a clean refusal, not a crash.
+  deviceBridge: z
+    .strictObject({
+      served: z.array(z.string()),
+      alwaysLoad: z.array(z.string()),
+      measuredOn: z.string(),
+      egress: z.literal("allowlist"),
+      folders: z.array(z.strictObject({ name: z.string(), mode: z.enum(["r", "rw", "rwd"]) })),
+      divergences: z.array(z.string()),
+    })
+    .optional(),
   // The onFailure inventory replay reads failed hook frames by: a malformed one is a clean refusal, not a crash.
   hookFailureBlocks: z
     .union([z.strictObject({ events: z.array(z.string()) }), z.strictObject({ unknown: z.literal(true), why: z.string() })])
@@ -6223,6 +6238,7 @@ export async function freezeRecordedRun(
     sessionFingerprint: buildSessionFingerprint(scenario.session, undefined),
     ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
     ...(result.hookFailureBlocks ? { hookFailureBlocks: result.hookFailureBlocks } : {}),
+    ...(result.deviceBridge ? { deviceBridge: result.deviceBridge } : {}),
     // v9: record-time connected-folder host-path -> mount-name map (Finding 24) — undefined when the
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
@@ -6474,6 +6490,7 @@ function replayErrorResult(file: string): RunResult {
     workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
     contextEvents: undefined, // no rec to read from on this early-bail lane
     hookFailureBlocks: undefined, // no frames to read on this early-bail lane
+    deviceBridge: undefined, // no cassette to read it from on this early-bail lane
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
     fileToolAttempts: undefined, // no rec to read from on this early-bail lane
@@ -9609,6 +9626,7 @@ export async function replayCassette(
       workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       hookFailureBlocks: replayHookFailureBlocks,
+      deviceBridge: cassette.deviceBridge, // what the recording modeled, as frozen
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the

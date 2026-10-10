@@ -156,6 +156,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     workspaceFiles,
     contextEvents: record.contextEvents,
     hookFailureBlocks: opts.hookFailureBlocks,
+    deviceBridge: undefined, // chat never sets device_bridge
     mcpErrors: record.mcpErrors,
     hookEvents: record.hookEvents,
     fileToolAttempts: record.fileToolAttempts,

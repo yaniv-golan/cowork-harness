@@ -1974,6 +1974,57 @@
       ".controlOut[]": {
         "type": "string"
       },
+      ".deviceBridge": {
+        "type": "object",
+        "closed": true
+      },
+      ".deviceBridge.alwaysLoad": {
+        "type": "array",
+        "required": true
+      },
+      ".deviceBridge.alwaysLoad[]": {
+        "type": "string"
+      },
+      ".deviceBridge.divergences": {
+        "type": "array",
+        "required": true
+      },
+      ".deviceBridge.divergences[]": {
+        "type": "string"
+      },
+      ".deviceBridge.egress": {
+        "type": "string",
+        "enum": ["allowlist"],
+        "required": true
+      },
+      ".deviceBridge.folders": {
+        "type": "array",
+        "required": true
+      },
+      ".deviceBridge.folders[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".deviceBridge.folders[].mode": {
+        "type": "string",
+        "enum": ["r", "rw", "rwd"],
+        "required": true
+      },
+      ".deviceBridge.folders[].name": {
+        "type": "string",
+        "required": true
+      },
+      ".deviceBridge.measuredOn": {
+        "type": "string",
+        "required": true
+      },
+      ".deviceBridge.served": {
+        "type": "array",
+        "required": true
+      },
+      ".deviceBridge.served[]": {
+        "type": "string"
+      },
       ".effectiveFidelity": {
         "type": "string"
       },
@@ -4399,6 +4450,57 @@
         "type": "string"
       },
       ".decisions[].requestId": {
+        "type": "string"
+      },
+      ".deviceBridge": {
+        "type": "object",
+        "closed": true
+      },
+      ".deviceBridge.alwaysLoad": {
+        "type": "array",
+        "required": true
+      },
+      ".deviceBridge.alwaysLoad[]": {
+        "type": "string"
+      },
+      ".deviceBridge.divergences": {
+        "type": "array",
+        "required": true
+      },
+      ".deviceBridge.divergences[]": {
+        "type": "string"
+      },
+      ".deviceBridge.egress": {
+        "type": "string",
+        "enum": ["allowlist"],
+        "required": true
+      },
+      ".deviceBridge.folders": {
+        "type": "array",
+        "required": true
+      },
+      ".deviceBridge.folders[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".deviceBridge.folders[].mode": {
+        "type": "string",
+        "enum": ["r", "rw", "rwd"],
+        "required": true
+      },
+      ".deviceBridge.folders[].name": {
+        "type": "string",
+        "required": true
+      },
+      ".deviceBridge.measuredOn": {
+        "type": "string",
+        "required": true
+      },
+      ".deviceBridge.served": {
+        "type": "array",
+        "required": true
+      },
+      ".deviceBridge.served[]": {
         "type": "string"
       },
       ".durationMs": {
