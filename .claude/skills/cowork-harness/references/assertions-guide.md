@@ -10,7 +10,7 @@ Conflating these is the **biggest landmine**. An assertion key has two independe
   `egress_*`, `file_exists`, `user_visible_artifact`, `result`) are robust. Free-text content is
   not: match prose with `transcript_matches` / `transcript_contains` (stable lexical markers only —
   not semantic content the model paraphrases, which re-records red); check structured JSON with YAML
-  `artifact_json` (or the [pytest lane](https://github.com/yaniv-golan/cowork-harness/blob/main/python/README.md) for complex predicates), not via a transcript substring.
+  `artifact_json` (a dotted `path` + operator, or `schema:` for a whole value's shape; or the [pytest lane](https://github.com/yaniv-golan/cowork-harness/blob/main/python/README.md) for complex predicates), not via a transcript substring.
   To check a command that RAN (not one the agent mentioned), use the object form `tool_called: {tool: <name>, input: {command: <regex>}, scope?, result?}` — see [assertion-catalog-outcome-files-tools.md](./assertion-catalog-outcome-files-tools.md).
 - **Axis B — survives `replay`?** *Independent of Axis A.* On the token-free `replay` lane, only
   **content keys** evaluate; filesystem / egress keys are skipped (live-only) — loudly, via an

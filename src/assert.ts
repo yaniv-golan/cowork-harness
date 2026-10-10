@@ -29,6 +29,7 @@ import { compileUserRegex } from "./regex.js";
 import { normalizeHost } from "./boundary-paths.js";
 import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext } from "./run/computer-links.js";
 import { scrub } from "./secrets.js";
+import { validateAgainstSchema } from "./json-schema.js";
 import { finalizeRationale } from "./decide/semantic-judge.js";
 import { scrubForTerminal, warn } from "./io.js";
 import {
@@ -2767,6 +2768,32 @@ function artifactJsonChecks(
                 ? ok()
                 : fail(`artifact_json: "${aj.path}" = ${JSON.stringify(val)}, expected one of ${JSON.stringify(aj.in)}`),
             );
+          }
+          if (aj.schema !== undefined) {
+            any = true;
+            const where = `"${aj.path ?? "(root)"}" in ${target}`;
+            const schema = aj.schema as Record<string, unknown>;
+            if ("file" in schema && Object.keys(schema).length === 1)
+              // The scenario loader reads a {file} schema and inlines it; only a hand-built context gets here with one.
+              results.push(
+                fail(
+                  `artifact_json: schema {file: ${JSON.stringify(schema.file)}} was not read — load the scenario through the scenario loader`,
+                ),
+              );
+            else if (!present)
+              // Never validate `undefined`: `{}`-like and `not` schemas would pass a value that is not there.
+              results.push(fail(`artifact_json: ${where} is not present, so there is nothing to check against the schema`));
+            else {
+              const v = validateAgainstSchema(schema, val, ctx.secrets ?? []);
+              if (v.ok) results.push(ok());
+              else if ("problem" in v) results.push(fail(`artifact_json: the schema cannot be used: ${v.problem}`));
+              else if ("unchecked" in v)
+                results.push(fail(`artifact_json: ${where} could not be checked against the schema: ${v.unchecked}`));
+              else
+                results.push(
+                  fail(`artifact_json: ${where} does not match the schema: ${v.errors.join("; ")}${v.more ? ` (+${v.more} more)` : ""}`),
+                );
+            }
           }
           // No operator → an existence assertion (the value must be present).
           if (!any)

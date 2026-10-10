@@ -1455,7 +1455,7 @@
             "type": "boolean"
           },
           "artifact_json": {
-            "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null). Rejected at load on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
+            "description": "assert over a JSON artifact's contents (dotted path + equals|in|gt|exists|absent|is_null|schema). Rejected at load on `lane: remote`, in every form: that lane's container filesystem is not locally observable, so there is no body to parse",
             "type": "object",
             "properties": {
               "artifact": {
@@ -1499,6 +1499,32 @@
               "is_null": {
                 "description": "the resolved value is JSON null (distinct from absent)",
                 "type": "boolean"
+              },
+              "schema": {
+                "description": "a JSON Schema (draft 2020-12) the resolved value (the value at `path`, or the whole document) must match; or `{file: <path>}` naming a JSON file beside the scenario, read at load and inlined, so a recorded cassette carries the schema itself. Checked at load; the full list of refusals is in docs/scenario.md (among them `format`, `$id`, a `$ref` that is not local, an unknown keyword, a type-specific keyword with no `type`, `nullable`, and a root with no validating keyword). A failure reports the first 5 errors with their JSON paths",
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "file": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "a JSON file holding the schema, relative to the scenario file"
+                      }
+                    },
+                    "required": [
+                      "file"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                ]
               },
               "authored": {
                 "description": "true: also require that THIS run created or rewrote the file — an untouched pre-run file (e.g. one a workspace_fixture staged) fails, and so does a run with no pre-run manifest to tell (evidence-unavailable). false: an inherited file is fine (the explicit opt-out a workspace_fixture scenario must state when it asserts on a file the fixture provides). Omitted: no authorship check. Undecidable on `lane: remote` (it compares the container's file with the pre-run manifest); `file_exists` with it is rejected at load there.",

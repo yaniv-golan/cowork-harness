@@ -526,8 +526,8 @@ debugging a run's behavior. The two are **numbered independently**: a bare "gotc
    `mcp__workspace__*` round-trip is not double-counted.
 
 9. **Structured JSON → a structured-field assert, not a transcript substring.** Prefer YAML
-   `artifact_json` (dotted `path` + operator); use the pytest lane (`assert_artifact_json` with a real
-   predicate) only for checks too complex for a dotted path. Find field paths via `--keep`.
+   `artifact_json` (dotted `path` + operator, or `schema:` for a whole value's shape); use the pytest lane
+   (`assert_artifact_json` with a real predicate) only for checks neither can express. Find field paths via `--keep`.
 
 10. **`subagent_dispatched` matches by `resolvedAgentType` or `description` too** — a `Task` dispatch
     with no `subagent_type` at all falls back to the built-in `general-purpose` agent (a WILDCARD tool

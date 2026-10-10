@@ -642,6 +642,12 @@ export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
     const o = aj as Record<string, unknown>;
     return "match" in o || (typeof o.artifact === "string" && isArtifactGlob(o.artifact));
   },
+  // `artifact_json.schema` — the field itself, any form: a v14 reader's strict assertion schema rejects it. (A 4.6.0
+  // reader already reads v15 and rejects it as an unrecognized assertion — fail-closed; the fix is to upgrade.)
+  (a) => {
+    const aj = a && typeof a === "object" ? (a as Record<string, unknown>).artifact_json : undefined;
+    return !!aj && typeof aj === "object" && "schema" in (aj as object);
+  },
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */

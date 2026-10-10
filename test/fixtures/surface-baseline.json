@@ -4623,6 +4623,17 @@
       ".assert[].artifact_json.path": {
         "type": "string"
       },
+      ".assert[].artifact_json.schema<anyOf:0>": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].artifact_json.schema<anyOf:0>.file": {
+        "type": "string",
+        "required": true
+      },
+      ".assert[].artifact_json.schema<anyOf:1>": {
+        "type": "object"
+      },
       ".assert[].artifact_text": {
         "type": "object",
         "closed": true

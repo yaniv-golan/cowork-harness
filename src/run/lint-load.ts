@@ -16,6 +16,7 @@ import { isAbsolute, join } from "node:path";
 import { loadBaseline as realLoadBaseline } from "../baseline.js";
 import { UsageError, renderIssuePath } from "../errors.js";
 import { loadScenarioPure } from "./execute.js";
+import { inlineSchemaFiles } from "./schema-files.js";
 import type { Scenario } from "../types.js";
 import { scanWorkspaceFixture, workspaceFixtureAsWritten, workspaceFixtureAssertRefusal } from "../fixture/workspace.js";
 
@@ -247,7 +248,7 @@ function fixtureFindings(file: string, scenario: Scenario): LintFinding[] {
  *  `lint-loader-internal` finding for the file being processed, because silently falling back to the
  *  python-only lint would be the exact false green this exists to remove. */
 export function loaderFindings(files: string[], deps: LoaderDeps = {}): LintFinding[] {
-  const load = deps.load ?? ((p: string) => loadScenarioPure(p));
+  const load = deps.load ?? ((p: string) => inlineSchemaFiles(loadScenarioPure(p), p));
   const resolveBaseline = deps.loadBaseline ?? realLoadBaseline;
   const baselineOk = new Map<string, unknown>(); // name → the error, or null when it resolved
   const out: LintFinding[] = [];
