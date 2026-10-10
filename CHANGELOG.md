@@ -84,8 +84,10 @@ All notable changes to this project are documented here. The format is based on
   `{"items":[...]}` document is complete except for its trailing closer(s), critique appends exactly those
   closers at the end, then parses and validates the reply as usual, and records the repair in the report
   (`evaluatorRepair`), the text output and the summary (`evaluatorRepaired`). Brackets inside strings are
-  ignored. A reply cut mid-item or mid-string, with a missing inner comma, a mismatched closer or text after the
-  unclosed document is not repaired, and fails as before.
+  ignored. When the findings list itself was left open (a `]` appended), the repair is marked `possiblyTruncated`:
+  the model may have been cut off, so findings after the last complete one can be missing. Not repaired, and
+  failing as before: a reply cut mid-item or mid-string, right after the list opens, or with a missing inner comma,
+  a mismatched closer, text after the unclosed document, or the document nested inside another unclosed one.
 
 ### Changed
 

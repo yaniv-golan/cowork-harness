@@ -1521,7 +1521,7 @@ interface ReportState {
    *  report never mentions would be a silent recall loss, the exact shape this tool exists to kill. */
   droppedEvaluatorItems?: { pass1: number; pass2?: number };
   /** Evaluator replies that were missing only their trailing closer(s) and were repaired by appending them. */
-  evaluatorRepair?: Array<{ pass: 1 | 2; appended: string }>;
+  evaluatorRepair?: Array<{ pass: 1 | 2; appended: string; possiblyTruncated: boolean }>;
   /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
    *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`
    *  when packaging never ran (an infra failure short-circuited before it). */
@@ -1822,7 +1822,10 @@ export function buildTextReport(state: ReportState): string {
 
   for (const r of state.evaluatorRepair ?? [])
     out.push(
-      `  NOTE: evaluator pass ${r.pass}'s reply was missing its closing ${JSON.stringify(r.appended)}; it was appended and the reply then parsed and validated as usual.`,
+      `  NOTE: evaluator pass ${r.pass}'s reply was missing its closing ${JSON.stringify(r.appended)}; it was appended and the reply then parsed and validated as usual.` +
+        (r.possiblyTruncated
+          ? ` The findings list itself was left open, so the reply may have been cut off: findings after the last complete one can be missing.`
+          : ""),
     );
   const dropped = state.droppedEvaluatorItems;
   const droppedTotal = dropped ? dropped.pass1 + (dropped.pass2 ?? 0) : 0;
@@ -2762,7 +2765,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let items: CritiqueItem[] = [];
     let evaluatorIntegrity: { pass1Canary: boolean; pass2Canary?: boolean } | undefined;
     let droppedEvaluatorItems: { pass1: number; pass2?: number } | undefined;
-    const evaluatorRepair: Array<{ pass: 1 | 2; appended: string }> = [];
+    const evaluatorRepair: Array<{ pass: 1 | 2; appended: string; possiblyTruncated: boolean }> = [];
     let evaluatorError: string | undefined;
     let infraFailure: string | undefined;
     let infraFailurePhase: "task turn" | "reflection turn" | undefined;

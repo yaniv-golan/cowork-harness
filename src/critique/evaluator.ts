@@ -142,8 +142,9 @@ interface ParsedPassReply {
   items: CritiqueItem[];
   canaryPresent: boolean;
   droppedMalformed: number;
-  /** Set when the reply was missing only its trailing closer(s) and `repairTrailingClosers` appended them. */
-  repair?: { appended: string };
+  /** Set when the reply was missing only its trailing closer(s) and `repairTrailingClosers` appended them;
+   *  `possiblyTruncated` when the items list itself was left open (the model may have been cut off mid-list). */
+  repair?: { appended: string; possiblyTruncated: boolean };
 }
 
 /** Parse a pass's reply into `CritiqueItem[]`, tagging every item with `source` (never trusting the model
@@ -238,10 +239,20 @@ export function parseCritiqueItems(
       );
     // The one bounded recovery: a document complete except for its trailing closer(s). The repaired text goes
     // through this same parse — the same validation, canary and ambiguity rules — exactly once.
-    const repaired = allowRepair && !emptyCandidateSeen ? repairTrailingClosers(raw) : null;
+    const repaired = allowRepair ? repairTrailingClosers(raw) : null;
     if (repaired) {
-      const again = parseCritiqueItems(repaired.text, source, label, nonce, false);
-      return { ...again, repair: { appended: repaired.appended } };
+      let again: ParsedPassReply;
+      try {
+        again = parseCritiqueItems(repaired.text, source, label, nonce, false);
+      } catch (e) {
+        throw new Error(
+          `${(e as Error).message.split("\n--- raw reply ---")[0]} (after appending ${JSON.stringify(repaired.appended)} to an unclosed reply)\n--- raw reply ---\n${raw}`,
+        );
+      }
+      // A repair exists to recover findings. One that yields none (a reply cut right after `{"items":[`) must not
+      // stand in for "the evaluator found nothing" — fail as before.
+      if (again.items.length > 0)
+        return { ...again, repair: { appended: repaired.appended, possiblyTruncated: repaired.possiblyTruncated } };
     }
     throw new Error(`${label}: no valid {"items":[...]} JSON found in the evaluator reply.\n--- raw reply ---\n${raw}`);
   }
@@ -518,7 +529,7 @@ export interface RunCritiqueOptions {
    *  whole document — the report must surface it (an unreported drop would be a silent recall loss). */
   onDroppedItems?: (dropped: { pass1: number; pass2?: number }) => void;
   /** A pass's reply was missing only its trailing closer(s), and they were appended (see reply-repair.ts). */
-  onRepair?: (repair: { pass: 1 | 2; appended: string }) => void;
+  onRepair?: (repair: { pass: 1 | 2; appended: string; possiblyTruncated: boolean }) => void;
   /** Called once per pass, IMMEDIATELY after the transport resolves and BEFORE the reply is parsed — so
    *  the raw reply is captured structurally even when the parse then throws (the salvage path; the raw
    *  text previously survived only embedded inside the thrown error's message). */
@@ -613,7 +624,7 @@ export async function runCritique(
     // The parse strips the canary itself (pre-canonicalization — see parseCritiqueItems) and drops+counts
     // malformed items per-item, so nothing here re-filters.
     const p1 = parseCritiqueItems(pass1Raw, "evaluator", "critique pass 1 (independent)", evidence.nonce);
-    if (p1.repair) opts.onRepair?.({ pass: 1, appended: p1.repair.appended });
+    if (p1.repair) opts.onRepair?.({ pass: 1, ...p1.repair });
     let pass1Items = p1.items;
     if (skillMdUnreadable) pass1Items = forceSkillMdCoverageNotAdjudicable(pass1Items);
 
@@ -637,7 +648,7 @@ export async function runCritique(
     opts.onRawReply?.(2, pass2Raw);
     opts.onUsage?.(2, pass2Usage);
     const p2 = parseCritiqueItems(pass2Raw, "self-report", "critique pass 2 (verify self-report)", evidence.nonce);
-    if (p2.repair) opts.onRepair?.({ pass: 2, appended: p2.repair.appended });
+    if (p2.repair) opts.onRepair?.({ pass: 2, ...p2.repair });
     let pass2Items = p2.items;
     if (skillMdUnreadable) pass2Items = forceSkillMdCoverageNotAdjudicable(pass2Items);
 

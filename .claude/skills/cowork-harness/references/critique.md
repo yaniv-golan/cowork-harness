@@ -100,8 +100,9 @@ can be checked without re-running: the same ids are in each kept run dir's `turn
 ## A repaired evaluator reply — `evaluatorRepair`
 
 When an evaluator reply was complete except for its trailing `}`/`]`, critique appends exactly those closers and
-parses as usual; the report records `evaluatorRepair: [{pass, appended}]` (summary: `evaluatorRepaired: true`).
-Nothing else is ever repaired — a reply cut mid-item or mid-string still fails (exit 2).
+parses as usual; the report records `evaluatorRepair: [{pass, appended, possiblyTruncated}]` (summary:
+`evaluatorRepaired: true`). `possiblyTruncated` (a `]` was appended) means findings after the last complete one may
+be missing. Nothing else is ever repaired — a reply cut mid-item or mid-string still fails (exit 2).
 
 ## The report's item shape — no `title`, no `summary`
 

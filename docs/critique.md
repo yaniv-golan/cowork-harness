@@ -286,7 +286,9 @@ It does **not** record their contents — see Known limitations.
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
 - **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
   cost is roughly **fixed** (bounded by the evidence package: corpus + transcript caps); the graded task
-  turn is **unbounded**. On a trivial probe the two evaluator passes (steps 4-5) are ~3/4 of the total; on a real
+  turn is **unbounded**. On a trivial probe — or a small skill (measured: a one-script example skill at the
+  default evaluator, about $1.4–1.6 a critique) — the two evaluator passes (steps 4-5) are ~3/4 of the total, pass
+  2 the larger; on a real
   document-analysis run the ratio **inverts** (measured on one: task turn ~61%, evaluator ~30%). The
   report's `cost:` line prints the four-way split and the evaluator's share of the total, and `costUsd`
   carries the same numbers — use those. A cheaper `--evaluator-model` can only ever buy you the
@@ -420,8 +422,10 @@ malformed evaluator items (the surviving findings are then not necessarily the c
 **`evaluatorRepair`** (`[{pass, appended}]`) appears when an evaluator reply's `{"items":[...]}` document was
 complete except for its trailing closer(s): exactly those closers were appended at the end, and the reply then
 parsed and validated as usual; the text report notes it, and a `--summary-out` file carries `evaluatorRepaired`.
-Any other defect — a reply cut mid-item or mid-string, a missing inner comma, a mismatched closer — is not
-repaired, and the critique fails as before. An
+`possiblyTruncated: true` means the findings list itself was left open (a `]` was appended): the model may have
+been cut off, so findings after the last complete one can be missing. Any other defect — a reply cut mid-item,
+mid-string or right after the list opens, a missing inner comma, a mismatched closer, a document nested in another
+unclosed one — is not repaired, and the critique fails as before. An
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
 (total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + the skill's
 own references + every packaged agent md + every packaged plugin-root reference), `corpusPackaged`

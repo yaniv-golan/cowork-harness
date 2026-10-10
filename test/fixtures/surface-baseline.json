@@ -2387,6 +2387,25 @@
       ".evaluatorModel": {
         "type": "string"
       },
+      ".evaluatorRepair": {
+        "type": "array"
+      },
+      ".evaluatorRepair[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".evaluatorRepair[].appended": {
+        "type": "string",
+        "required": true
+      },
+      ".evaluatorRepair[].pass": {
+        "enum": [1, 2],
+        "required": true
+      },
+      ".evaluatorRepair[].possiblyTruncated": {
+        "type": "boolean",
+        "required": true
+      },
       ".evaluatorTransport": {
         "type": "object"
       },
@@ -2789,6 +2808,10 @@
       },
       ".evaluatorModel<anyOf:1>": {
         "type": "null"
+      },
+      ".evaluatorRepaired": {
+        "type": "boolean",
+        "required": true
       },
       ".fidelity": {
         "type": ["string", "null"],
