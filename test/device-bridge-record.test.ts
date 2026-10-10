@@ -96,3 +96,13 @@ describe("the cassette freezes the record", () => {
     expect(s).toMatch(/\.\.\.\(result\.deviceBridge \? \{ deviceBridge: result\.deviceBridge \} : \{\}\)/);
   });
 });
+
+// A live run needs Docker and the agent binary, so execute.ts's hand-off is pinned on the source: the full result
+// and the partial (error / unanswered) result both carry the record, built from the launch plan.
+describe("wiring: a live run carries the record", () => {
+  const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
+  it("both the full and the partial result build it from the launch plan", () => {
+    expect(s.match(/deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts\) : undefined/g)).toHaveLength(2);
+    expect(s).toMatch(/deviceBridge: args\.deviceBridge,/);
+  });
+});
