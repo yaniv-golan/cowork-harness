@@ -200,10 +200,12 @@ async function waitRunning(runner: string, containerName: string, limitMs = 60_0
   }
 }
 
-/** Every file and link under the device tree's folders, as `<folder>/<path>` with its inode. */
-function deviceTreeListing(deviceHost: string): Record<string, number> {
+/** Every file and link under the device tree's folders, as `<folder>/<path>` with its identity `<inode>:<birth
+ *  time>`. Birth time as well as the inode: Linux reuses a freed inode for the next file created, so an inode alone
+ *  would read a delete-then-create as a rename. A rename keeps both. */
+function deviceTreeListing(deviceHost: string): Record<string, string> {
   const mnt = join(deviceHost, "mnt");
-  const out: Record<string, number> = {};
+  const out: Record<string, string> = {};
   const visit = (p: string): void => {
     let st;
     try {
@@ -221,7 +223,9 @@ function deviceTreeListing(deviceHost: string): Record<string, number> {
       for (const n of names) visit(join(p, n));
       return;
     }
-    out[relative(mnt, p).split(sep).join("/")] = st.ino;
+    // Nanoseconds: a delete and the next create can fall within the same millisecond.
+    const ns = lstatSync(p, { bigint: true });
+    out[relative(mnt, p).split(sep).join("/")] = `${ns.ino}:${ns.birthtimeNs}`;
   };
   if (existsSync(mnt)) for (const n of readdirSync(mnt)) visit(join(mnt, n));
   return out;
@@ -233,25 +237,25 @@ export function recordDeviceTree(outDir: string): void {
 }
 
 /** Files the run removed from a folder copy, by any means (`rm`, `find -delete`, a script): in the staged listing,
- *  gone afterwards, and not renamed within the tree (a rename keeps its inode). Production refuses each of these
+ *  gone afterwards, and not renamed within the tree (a rename keeps its inode and birth time). Production refuses each of these
  *  until the user allows deletion. Nothing without a recorded listing: no evidence, no claim. */
 export function deviceTreeDeletes(
   outDir: string,
   /** The delete-denied (`rw`) folders (deniedDeviceFolders): a folder that allows deletes (`rwd`) is not counted. */
   denied: ReadonlyArray<{ name: string; mountPath: string }>,
 ): { mount: string; command: string }[] {
-  let before: Record<string, number>;
+  let before: Record<string, string>;
   try {
     before = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
   } catch {
     return [];
   }
   const after = deviceTreeListing(join(resolve(outDir), "work", "device"));
-  const inodesAfter = new Set(Object.values(after));
+  const identitiesAfter = new Set(Object.values(after));
   // Named by mount path, as the command-text scan names a mount, so allow_delete_in waives both alike.
   const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
   return Object.keys(before)
-    .filter((path) => mountOf.has(path.split("/")[0]) && !(path in after) && !inodesAfter.has(before[path]))
+    .filter((path) => mountOf.has(path.split("/")[0]) && !(path in after) && !identitiesAfter.has(before[path]))
     .sort()
     .map((path) => ({ mount: mountOf.get(path.split("/")[0])!, command: `(removed from the device copy) ${path}` }));
 }

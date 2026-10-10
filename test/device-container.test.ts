@@ -473,6 +473,23 @@ describe("deviceTreeDeletes", () => {
     ] as Mount[];
     expect(deniedDeviceFolders(mounts)).toEqual([{ name: "a", mountPath: ".projects/a" }]);
   });
+  it("a reused inode with a different birth time is a new file, so the old path's removal is a delete (Linux reuses inodes)", () => {
+    const { outDir, copy } = staged();
+    const listing = join(outDir, "device-tree-pre-run.json");
+    const before = JSON.parse(readFileSync(listing, "utf8")) as Record<string, string>;
+    // As if a.txt had been deleted and the new b.txt had been given a.txt's inode: same inode, other birth time.
+    const bIdentity = before["proj/b.txt"];
+    before["proj/a.txt"] = `${bIdentity.split(":")[0]}:1`;
+    writeFileSync(listing, JSON.stringify(before));
+    rmSync(join(copy, "a.txt"));
+    expect(deviceTreeDeletes(outDir, PROJ).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
+  });
+  it("a rename followed by an edit is still a rename, not a delete", () => {
+    const { outDir, copy } = staged();
+    renameSync(join(copy, "a.txt"), join(copy, "moved.txt"));
+    writeFileSync(join(copy, "moved.txt"), "edited, longer than before\n");
+    expect(deviceTreeDeletes(outDir, PROJ)).toEqual([]);
+  });
   it("without a recorded listing it reports nothing (no evidence, no claim)", () => {
     expect(deviceTreeDeletes(scratch(), PROJ)).toEqual([]);
   });
