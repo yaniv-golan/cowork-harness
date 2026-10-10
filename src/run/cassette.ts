@@ -68,6 +68,7 @@ import {
   scenarioInputRefusal,
   scenarioInputFindings,
   loadSessionFromFile,
+  deviceBridgeFolderPreflight,
   sessionOriginSources,
 } from "./execute.js";
 import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
@@ -5879,6 +5880,10 @@ export function preSpendVerdicts(
 
   const promptReject = promptPolicyRejection(scenario);
   if (promptReject) out.push({ kind: "refuse", message: promptReject });
+
+  // device_bridge: a file assertion on a connected folder's path would grade the agent's tree, which holds no folder.
+  const bridgeFolders = deviceBridgeFolderPreflight(scenario);
+  if (bridgeFolders) out.push({ kind: "refuse", message: `scenario "${scenario.name}": ${bridgeFolders}` });
 
   // semantic_pairwise references — the SAME function executeScenario gates on before the run dir exists, so the
   // preview refuses what the real path will. Mount roots come from the scenario's session; one that cannot load

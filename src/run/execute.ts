@@ -2933,7 +2933,7 @@ export function scenarioInputFindings(
     if (opts.unloadableBaseline === "skip") return {};
     return { inputs: new UsageError(`baseline "${scenario.baseline}" does not load: ${(e as Error).message}`) };
   }
-  const vacuous = tierVacuityRefusal(scenario, baseline);
+  const vacuous = tierVacuityRefusal(scenario, baseline) ?? deviceBridgeFolderPreflight(scenario);
   let inputs: UsageError | undefined;
   let session: SessionFileError | undefined;
   try {
@@ -2980,6 +2980,20 @@ export function tierVacuityRefusal(scenario: Scenario, baseline: PlatformBaselin
     }
   }
   return undefined;
+}
+
+/** The pre-spend form of the device_bridge folder-path refusal, for `record --dry-run` and a batch's preflight.
+ *  The plan's exact folder names need the plan, so this uses each folder's basename, a superset: a collision
+ *  suffix only ever adds names. A session that does not load contributes nothing (the real path reports it). */
+export function deviceBridgeFolderPreflight(scenario: Scenario): string | undefined {
+  if (scenario.device_bridge !== true) return undefined;
+  let names: string[];
+  try {
+    names = loadSessionFromFile(scenario.session).folders.map((f) => basename(f.from.replace(/\/+$/, "")));
+  } catch {
+    return undefined;
+  }
+  return deviceBridgeFolderAssertRefusal(scenario, names);
 }
 
 export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {

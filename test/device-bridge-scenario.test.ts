@@ -1,13 +1,15 @@
 // `device_bridge: true` serves the remote lane's device tools (device_bash, get_device_info) from a second
 // container. It is valid only with `lane: remote` and `fidelity: container`; the loader and the published schema
 // must refuse every other pairing alike, and a cassette that uses it must be too new for a v16 reader.
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Ajv from "ajv";
 import { describe, expect, it } from "vitest";
 import { SCHEMA_DIR } from "../scripts/gen-schema.js";
 import { Scenario } from "../src/types.js";
-import { requiredVersionFor } from "../src/run/cassette.js";
+import { preSpendVerdicts, requiredVersionFor } from "../src/run/cassette.js";
+import { parseScenarioFile, scenarioInputFindings } from "../src/run/execute.js";
 import { deviceBridgeFolderAssertRefusal } from "../src/runtime/device-container.js";
 
 const ajv = new Ajv({ strict: true });
@@ -79,5 +81,33 @@ describe("deviceBridgeFolderAssertRefusal", () => {
       deviceBridgeFolderAssertRefusal(sc([{ file_exists: "outputs/r.md" }, { input_unmodified: "notes/**" }]), ["proj"]),
     ).toBeUndefined();
     expect(deviceBridgeFolderAssertRefusal({ assert: [{ file_exists: "proj/r.md" }] } as never, ["proj"])).toBeUndefined();
+  });
+});
+
+// The refusal must come before any spend: `record --dry-run` previews the pre-spend refusals, and eval/hillclimb run
+// scenarioInputFindings over a whole batch before the first item spends.
+describe("the folder-path refusal is pre-spend", () => {
+  function scenarioOnFolder(assertLine: string) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "db-prespend-")));
+    mkdirSync(join(dir, "proj"));
+    writeFileSync(join(dir, "s.yaml"), "folders:\n  - from: ./proj\n    mode: rw\n");
+    const f = join(dir, "sc.yaml");
+    writeFileSync(
+      f,
+      `name: db\nbaseline: latest\nsession: s.yaml\nfidelity: container\nlane: remote\ndevice_bridge: true\nprompt: hi\nassert:\n${assertLine}`,
+    );
+    return { scenario: parseScenarioFile(f), dir };
+  }
+  it("preSpendVerdicts refuses file_exists on a connected folder's path", () => {
+    const { scenario, dir } = scenarioOnFolder("  - file_exists: proj/report.md\n");
+    const v = preSpendVerdicts(scenario, join(dir, "x.cassette.json"), {});
+    expect(v.some((x) => x.kind === "refuse" && /device_bridge.*proj/.test(x.message))).toBe(true);
+    const ok = scenarioOnFolder("  - file_exists: outputs/report.md\n");
+    expect(preSpendVerdicts(ok.scenario, join(ok.dir, "x.cassette.json"), {}).some((x) => /device_bridge/.test(x.message))).toBe(false);
+  });
+  it("scenarioInputFindings reports it, so a batch refuses before its first item spends", () => {
+    const { scenario } = scenarioOnFolder("  - input_unmodified: proj/**\n");
+    const f = scenarioInputFindings(scenario, "claude-sonnet-5", { quiet: true });
+    expect(String(f.vacuity?.message ?? "")).toMatch(/device_bridge.*proj/);
   });
 });
