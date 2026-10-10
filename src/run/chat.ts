@@ -626,7 +626,7 @@ export async function cmdChat(args: string[]) {
         pinnedModel: session.model,
         outDir,
         workRoot,
-        hookFailureBlocks: runHookFailureBlocks(plan, fidelity, workRoot, sessionId),
+        hookFailureBlocks: runHookFailureBlocks(plan, fidelity, workRoot, sessionId, outDir),
         userVisibleRoots: userVisibleRootsFromPlan(plan),
         readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
         egress: sidecar ? sidecar.collect().entries : [],

@@ -21,8 +21,19 @@ All notable changes to this project are documented here. The format is based on
   - unscoped `no_hook_event_blocked: true`;
   - a hook key over a failed or timed-out hook frame.
 
-  Re-record with this release to fix it. Recordings by 2.1.293 and earlier are unaffected. Measured on 1129 kept runs
+  Re-record with this release to fix it. Recordings by 2.1.293 and earlier are unaffected, and so are new runs on those
+  agents: they have no `onFailure`, so their inventory is empty and they stamp as before. Measured on 1129 kept runs
   and the committed cassettes, no verdict changed.
+- **When the inventory reads as unknown.** A run on agent 2.1.294 or later gets an unknown inventory when a hook source
+  exists but cannot be read. That makes unscoped `no_hook_event_blocked: true`, and every failed or timed-out hook frame,
+  evidence-unavailable, and stamps the cassette v16. The likeliest cause is one installed plugin with a broken manifest
+  or `hooks.json`. Rarer causes:
+  - a settings file that does not parse;
+  - a skill or agent whose frontmatter declares `hooks:` and does not parse;
+  - more than 50,000 files to walk, which needs a very large skills tree or a plugins dir with no
+    `installed_plugins.json`.
+
+  Fix the source to clear it.
 
 ### Added
 

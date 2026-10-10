@@ -362,6 +362,15 @@ function compareVersions(a: string, b: string): number | undefined {
   return 0;
 }
 
+/** A run's inventory, gated by the agent that ran it (its init frame's version): an agent at or below the last one
+ *  without `onFailure` cannot turn a failure into a block, so it has nothing to taint and nothing to stamp, whatever
+ *  its hook sources say — and they are not read. Any newer agent, or a run whose stream reports no version (one that
+ *  crashed before init), keeps the scan: a missing version is never read as an old one. */
+export function hookFailureBlocksForAgent(agentVersion: string | undefined, scan: () => HookFailureBlocks): HookFailureBlocks {
+  const cmp = agentVersion === undefined ? undefined : compareVersions(agentVersion, LAST_AGENT_WITHOUT_ONFAILURE);
+  return cmp !== undefined && cmp <= 0 ? { events: [] } : scan();
+}
+
 /** The inventory a recording carries, or — for one made before it was recorded — what can be said: an agent at or
  *  below the last one without `onFailure` cannot have such a hook; any other (or an unknown agent) is unknown. */
 /** Is `v` a well-formed inventory? A recording is a plain file anyone can edit. */

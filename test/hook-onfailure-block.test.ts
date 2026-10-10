@@ -9,6 +9,7 @@ import { evaluate, type AssertContext } from "../src/assert.js";
 import { parseMessage } from "../src/agent/session.js";
 import {
   FRAMELESS_HOOK_EVENTS,
+  hookFailureBlocksForAgent,
   ONFAILURE_EXEMPT_EVENTS,
   resolveHookFailureBlocks,
   scanHookFailureBlocks,
@@ -525,8 +526,64 @@ describe("runHookFailureBlocks reads the plan's sources", () => {
         { kind: "folder", hostPath: folder, mountPath: "folder" },
       ],
     } as unknown as Parameters<typeof runHookFailureBlocks>[0];
-    expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t")).toEqual({
+    expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", join(dir, "no-run"))).toEqual({
       events: ["PostToolUse", "PreToolUse", "UserPromptSubmit"],
     });
+  });
+});
+
+describe("a run's own agent gates its inventory (the same rule as an older recording)", () => {
+  const eligible: HookFailureBlocks = { events: ["PreToolUse"] };
+  it("an agent at or below 2.1.293 has no onFailure: nothing to taint, and the scan is not run", () => {
+    for (const v of ["2.1.293", "2.1.286", "2.0.99"]) {
+      let scanned = false;
+      expect(
+        hookFailureBlocksForAgent(v, () => {
+          scanned = true;
+          return eligible;
+        }),
+        v,
+      ).toEqual({ events: [] });
+      expect(scanned, v).toBe(false);
+    }
+    // an unknown scan result is gated too: an old agent cannot block on a failure, whatever its sources say
+    expect(hookFailureBlocksForAgent("2.1.293", () => ({ unknown: true, why: "x" }))).toEqual({ events: [] });
+  });
+  it("a newer agent, or a run whose stream reports no version, keeps the scan", () => {
+    for (const v of ["2.1.294", "2.1.295", "2.1.1000", undefined, "garbage"])
+      expect(
+        hookFailureBlocksForAgent(v, () => eligible),
+        String(v),
+      ).toEqual(eligible);
+  });
+  it("runHookFailureBlocks reads the run's agent from its events.jsonl", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "onfail-agent-")));
+    try {
+      const plugin = join(dir, "plugin");
+      mkdirSync(join(plugin, "hooks"), { recursive: true });
+      writeFileSync(
+        join(plugin, "hooks", "hooks.json"),
+        JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "x", onFailure: "block" }] }] } }),
+      );
+      const plan = {
+        configDir: join(dir, "cfg"),
+        baseEnv: {},
+        mounts: [{ kind: "local-plugin", hostPath: plugin, mountPath: ".local-plugins/p" }],
+      } as unknown as Parameters<typeof runHookFailureBlocks>[0];
+      const outDir = join(dir, "run");
+      mkdirSync(outDir);
+      const withAgent = (v?: string) => {
+        writeFileSync(
+          join(outDir, "events.jsonl"),
+          v ? JSON.stringify({ type: "system", subtype: "init", claude_code_version: v }) + "\n" : "",
+        );
+        return runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir);
+      };
+      expect(withAgent("2.1.293")).toEqual({ events: [] });
+      expect(withAgent("2.1.295")).toEqual({ events: ["PreToolUse"] });
+      expect(withAgent()).toEqual({ events: ["PreToolUse"] }); // no init frame: stays on the scan
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
