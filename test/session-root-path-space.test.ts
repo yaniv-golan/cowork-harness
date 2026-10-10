@@ -132,7 +132,7 @@ describe("the session root comes from the spawn, not from a second derivation", 
     const s = src("runtime/container.ts");
     // The BIND TARGET, not the agent's cwd: guest paths anchor on the dir `sessionHost` is bound at.
     expect(s).toContain("const sessionRoot = m.sessionRoot;");
-    expect(s).toContain("return { child, containerName, sdkMcp, sessionRoot };");
+    expect(s).toContain("return { child, containerName, sdkMcp, sessionRoot, device };");
   });
 
   it("hostloop reports its HOST session tree", () => {
