@@ -1,0 +1,48 @@
+name: docker-hub-mirror
+description: >-
+  Resolve this runner's Docker Hub build bases through mirror.gcr.io. Anonymous pulls from registry-1.docker.io are
+  rate-limited per IP, and hosted runners share IPs, so CI's image builds hit 429. The mirror is set on the
+  daemon (`registry-mirrors`), which the BuildKit inside `docker build` uses for every FROM, including the
+  harness's own `docker build` of the egress proxy at test time. It does NOT cover a plain `docker pull` or a
+  `docker run` of a Docker Hub image that is not present: that older pull path fails mirror.gcr.io's auth
+  (measured on Docker 28.0.4: "unauthorized: authentication failed") and goes to Docker Hub as before. Build
+  instead of pulling when a job needs a Docker Hub image. A mirror miss or error falls back to Docker Hub, so the
+  worst case is today's behaviour. A digest-pinned FROM resolves to the same bytes either way: the digest is
+  checked against the content. Run it before any container or network is created: it restarts dockerd.
+runs:
+  using: composite
+  steps:
+    - name: Resolve Docker Hub build bases through mirror.gcr.io
+      shell: bash
+      run: |
+        set -euo pipefail
+        f=/etc/docker/daemon.json
+        # Absent on the hosted ubuntu-24.04 images; keep any keys an image does ship.
+        cur=$(sudo cat "$f" 2>/dev/null || true)
+        [ -n "$cur" ] || cur='{}'
+        sudo mkdir -p /etc/docker
+        echo "$cur" | jq '. + {"registry-mirrors": ["https://mirror.gcr.io"]}' | sudo tee "$f.new" >/dev/null
+        sudo mv "$f.new" "$f"
+        sudo systemctl restart docker
+        up=
+        for i in $(seq 1 30); do docker info >/dev/null 2>&1 && { up=1; break; }; sleep 1; done
+        [ -n "$up" ] || { echo "::error::dockerd did not come back within 30s after setting the registry mirror"; exit 1; }
+        mirrors=$(docker info --format '{{json .RegistryConfig.Mirrors}}')
+        echo "docker $(docker version --format '{{.Server.Version}}'), storage $(docker info --format '{{.Driver}}'), mirrors $mirrors"
+        case "$mirrors" in
+          *'https://mirror.gcr.io/'*) ;;
+          *) echo "::error::the registry mirror did not take effect (docker info mirrors: $mirrors)"; exit 1 ;;
+        esac
+    - name: Warn when the mirror no longer caches the pinned agent base
+      shell: bash
+      run: |
+        # The mirror keeps no guarantee on what it caches; an old digest is what it would drop first, and an
+        # uncached digest silently falls back to Docker Hub's rate limit. This is the early signal.
+        ref=$(grep -m1 -oE 'ubuntu:[^ @]+@sha256:[0-9a-f]{64}' docker/Dockerfile.agent || true)
+        if [ -z "$ref" ]; then echo "::warning::no digest-pinned ubuntu base found in docker/Dockerfile.agent"; exit 0; fi
+        digest=${ref#*@}
+        code=$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' -I \
+          -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+          "https://mirror.gcr.io/v2/library/ubuntu/manifests/$digest" || true)
+        if [ "$code" = "200" ]; then echo "mirror.gcr.io caches $ref"
+        else echo "::warning::mirror.gcr.io returned $code for $ref — pulls of it fall back to Docker Hub's rate limit"; fi

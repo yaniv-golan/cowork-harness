@@ -346,6 +346,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Docker Hub rate-limits anonymous pulls per IP and hosted runners share IPs; `docker build` resolves its FROM
+      # images through mirror.gcr.io (falls back to Docker Hub). First docker-touching step: it restarts dockerd.
+      - uses: ./.github/actions/docker-hub-mirror
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: "24", cache: npm }
       - run: npm ci && npm run build
@@ -372,9 +375,7 @@ jobs:
           # Pulling the tag meant CI certified whatever was published last while `doctor` certified the
           # pin — so a green CI said nothing about the pinned image, and vice versa. Reading the pin
           # here makes CI, doctor, and the README's consumer instructions all validate the same bytes.
-          # Read the pin with node, not jq: this job already runs setup-node + `npm ci`, so node is
-          # guaranteed here, while jq would be the first bare use in this workflow and an assumption
-          # about the runner image on a step that has never executed in CI.
+          # Read the pin with node: this job already runs setup-node + `npm ci`, so node is guaranteed here.
           DIGEST=$(node -p 'require("./docker/agent-image.json").variants["cowork-agent-base:2"].digest')
           IMG="ghcr.io/${{ github.repository_owner }}/cowork-agent-base@${DIGEST}"
           if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
@@ -471,6 +472,9 @@ jobs:
       COWORK_HARNESS_RUNS_DIR: runs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Docker Hub rate-limits anonymous pulls per IP and hosted runners share IPs; `docker build` resolves its FROM
+      # images through mirror.gcr.io (falls back to Docker Hub). First docker-touching step: it restarts dockerd.
+      - uses: ./.github/actions/docker-hub-mirror
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: "24", cache: npm }
       - run: npm ci && npm run build
@@ -580,6 +584,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Docker Hub rate-limits anonymous pulls per IP and hosted runners share IPs; `docker build` resolves its FROM
+      # images through mirror.gcr.io (falls back to Docker Hub). First docker-touching step: it restarts dockerd.
+      - uses: ./.github/actions/docker-hub-mirror
       - name: Build the lean/core image (the default COWORK_AGENT_IMAGE)
         run: docker build --platform linux/arm64 -t cowork-agent-base:ci -f docker/Dockerfile.agent .
       - name: Build the full-parity image (COWORK_FULL_PARITY=1 — Layer B)
