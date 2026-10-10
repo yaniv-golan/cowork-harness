@@ -438,7 +438,8 @@ A hook that blocks by FAILING (`onFailure: "block"`, agent 2.1.295+) cannot be a
 converts the failure after it emits the frame, so `hook_decision` / `hook_event_blocked` on that frame are
 evidence-unavailable. The block's message is the agent's own (`…: failed; blocking because onFailure is "block"`, or
 `timed out`); on PreToolUse it is the deny reason the tool call gets back, so `tool_result_contains` on that wording is
-the observable. This path has not been recorded end to end.
+the observable. A run with such a hook has been recorded and replayed, with the hook keys reading evidence-unavailable
+as above; a `tool_result_contains` assert on the block message has not been recorded end to end.
 
 ### Schema-check a written file
 

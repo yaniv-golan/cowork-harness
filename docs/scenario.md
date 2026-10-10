@@ -925,10 +925,13 @@ document, without `path` — must match. Write it inline, or name a JSON file in
 - **Checked when the scenario loads**, so a mistake costs a config error, not a run. Refused: an unknown keyword
   (a typo), a type-specific keyword with no `type` beside it (`required`, `properties`, `items`, `minLength`, `minimum`, …; it passes on a value of any other type: add `type: object` or the intended type),
   `format` (no format is validated, so it would check nothing: use `pattern`), `$id`, a `$ref` that is not a local
-  `#…` reference (nothing is fetched), `$dynamicRef`/`$recursiveRef`, the annotation-only `content*` keywords, a
-  `$schema` other than draft 2020-12, `nullable` (use `type: [<type>, "null"]`), a schema that contains itself or is
-  more than 64 levels deep, and an empty schema or one whose root has no validating keyword (only `title`,
-  `description`, `$defs`, …). A property *named* `format` or `$ref` is fine, and so is a union `type: [string, number]`.
+  `#…` reference (nothing is fetched), `$dynamicRef`, `$dynamicAnchor`, `$recursiveRef` and `$recursiveAnchor`, the
+  annotation-only `content*` keywords, a `$schema` other than draft 2020-12, `nullable` (use `type: [<type>, "null"]`),
+  the draft-07 list form of `items` (use `prefixItems` for a tuple), a `__proto__` key or property name (the validator
+  drops it), NaN or Infinity anywhere in `enum`, `const`, `default` or `examples` (JSON cannot carry them, so a
+  cassette would hold `null`), a `$ref` back to the root at the root or under `allOf`/`anyOf` with nothing to stop the
+  recursion (put it under a property or `items`), a schema that contains itself or is more than 64 levels deep, and
+  an empty schema or one whose root has no validating keyword (only `title`, `description`, `$defs`, …). A property *named* `format` or `$ref` is fine, and so is a union `type: [string, number]`.
   A subschema that allows anything (`properties: {a: true}`) is not refused: only the root is checked for that.
 - `pattern` uses JavaScript regex syntax with the `u` flag and is **case-sensitive**, unlike the harness's own
   regex keys. On a value holding one of the run's secrets, replay sees the scrubbed body, so a `pattern`, `const`

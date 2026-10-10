@@ -46,7 +46,9 @@ All notable changes to this project are documented here. The format is based on
   `--dry-run` preview and the `--max-budget-usd` pre-flight cover the named scenarios only, so re-recording one
   scenario of a large corpus is priced as that scenario instead of the whole directory. A stem that names no scenario
   is a usage error (exit 2) that names it and lists the ids it can select. The JSON payload carries `cases`.
-  `--case` is refused with a single scenario file or `--rerecord-stale`.
+  `--case` is refused with a single scenario file or `--rerecord-stale`. When a selected scenario and one left out
+  share a `name:`, and so one cassette path, `record` warns that recording replaces the cassette the other one wrote
+  (the whole-directory record refuses that pair).
 - **`fixture export --session-paths`** keeps the files a skill writes its own session paths into, such as an
   outputs-dir probe, a sub-agent's output path or a deliverable path compared as a string. Without it, export
   refuses them.
@@ -58,7 +60,8 @@ All notable changes to this project are documented here. The format is based on
     load.
   - Every other path, another session's included, is still refused, and so is every secret.
   - Binary files are never rewritten. Export refuses a file that already holds a token, and staging refuses a
-    binary fixture file holding one.
+    binary fixture file holding one. Staging also refuses, before writing any file, a non-ASCII session root when
+    a fixture file holding a token is not UTF-8, where the root's bytes would be garbled.
   - Export with `--session-paths` refuses a protocol run dir (no session layout) and a run dir that records no
     session id.
   - A file with tokens adds `+t1` to its fixture signature and, while the step leaves it untouched, is recorded
