@@ -261,10 +261,10 @@ export function startDeviceBridge(p: {
 } {
   const deviceHost = join(resolve(p.outDir), "work", "device");
   const folders = deviceFolders(p.mounts);
-  if (!p.resume) {
-    stageDeviceFolders(folders, deviceHost);
-    recordDeviceTree(p.outDir);
-  } else mkdirSync(join(deviceHost, "mnt"), { recursive: true });
+  if (!p.resume) stageDeviceFolders(folders, deviceHost);
+  else mkdirSync(join(deviceHost, "mnt"), { recursive: true });
+  // Every turn compares against the tree as it found it: a resumed turn must not report the first turn's deletes.
+  recordDeviceTree(p.outDir);
   const containerName = `cowork-dev-${p.runToken ?? p.sessionId}`;
   const infraErrors: { source: InfraErrorSource; message: string }[] = [];
   const { logSidecarInfra, logExecInfra } = makeInfraEmitters(p.outDir, infraErrors, { sidecar: "device-container", exec: "device-exec" });

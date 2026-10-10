@@ -349,6 +349,37 @@ describe("deviceTreeDeletes", () => {
     renameSync(join(copy, "a.txt"), join(copy, "moved.txt"));
     expect(deviceTreeDeletes(outDir)).toEqual([]);
   });
+  it("a resumed turn compares against the tree as that turn found it, not as the first turn staged it", async () => {
+    const root = scratch();
+    const f = folder(root, "proj");
+    writeFileSync(join(f.hostPath, "b.txt"), "beta\n");
+    const outDir = join(root, "out");
+    const runner = standInRunner(root, join(outDir, "work", "device"));
+    const start = (resume: boolean) =>
+      startDeviceBridge({
+        runner,
+        image: "img",
+        network: "net",
+        egressProxy: "http://p:1",
+        outDir,
+        sessionId: "s",
+        runToken: `t${resume}`,
+        mounts: [f],
+        appVersion: "2.31226.1",
+        resume,
+      });
+    const turn1 = start(false);
+    turn1.markTearingDown();
+    turn1.reapNow();
+    rmSync(join(outDir, "work", "device", "mnt", "proj", "a.txt")); // turn 1 deleted a.txt
+    expect(deviceTreeDeletes(outDir).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
+    const turn2 = start(true);
+    turn2.markTearingDown();
+    turn2.reapNow();
+    expect(deviceTreeDeletes(outDir)).toEqual([]); // turn 2 deleted nothing
+    rmSync(join(outDir, "work", "device", "mnt", "proj", "b.txt"));
+    expect(deviceTreeDeletes(outDir).map((d) => d.command)).toEqual(["(removed from the device copy) proj/b.txt"]);
+  });
   it("without a recorded listing it reports nothing (no evidence, no claim)", () => {
     expect(deviceTreeDeletes(scratch())).toEqual([]);
   });
