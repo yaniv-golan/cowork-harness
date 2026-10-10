@@ -2972,7 +2972,9 @@ export function tierVacuityRefusal(scenario: Scenario, baseline: PlatformBaselin
       const pattern = a[key];
       if (pattern === undefined) continue;
       // The object form of tool_not_called is refused only when EVERY listed tool is unserved.
-      const finding = typeof pattern === "string" ? tierVacuousTool(pattern, tier, viaApi) : objectFormTierVacuous(pattern, tier, viaApi);
+      const bridge = scenario.device_bridge === true;
+      const finding =
+        typeof pattern === "string" ? tierVacuousTool(pattern, tier, viaApi, bridge) : objectFormTierVacuous(pattern, tier, viaApi, bridge);
       if (finding) return tierVacuousMessage(finding, key, scenario.name);
     }
   }

@@ -1235,6 +1235,30 @@ def test_fidelity_missing_fails_lint_without_strict(tmp_path):
     assert code == 1
 
 
+# --- tool-not-called-tier-vacuous: the device tools ----------------------------------------------------
+# mcp__remote-devices__device_bash / get_device_info are served only under device_bridge; the other device tools
+# never. A negative assertion on one the run cannot serve passes vacuously. Mirrors tier-vacuous-tools.ts.
+
+_TV_HEAD = "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\nfidelity: container\nlane: remote\n"
+
+
+@pytest.mark.parametrize(
+    "extra,flagged",
+    [
+        ("assert:\n  - tool_not_called: mcp__remote-devices__device_bash\n", True),
+        ("assert:\n  - subagent_tool_absent: mcp__remote-devices__get_device_info\n", True),
+        ("assert:\n  - tool_not_called: {tool: mcp__remote-devices__device_bash}\n", True),
+        ("device_bridge: true\nassert:\n  - tool_not_called: mcp__remote-devices__device_bash\n", False),
+        ("device_bridge: true\nassert:\n  - tool_not_called: mcp__remote-devices__device_list_dir\n", True),
+        ("assert:\n  - tool_not_called: mcp__remote-devices__acme__lookup\n", False),
+        ("assert:\n  - tool_not_called: mcp__remote-devices__*\n", False),
+    ],
+)
+def test_device_tool_negative_assertion_vacuity(tmp_path, extra, flagged):
+    found = _mk(tmp_path, _TV_HEAD + extra, rule="tool-not-called-tier-vacuous")
+    assert (len(found) == 1) == flagged, found
+
+
 # --- device-bridge-misplaced -------------------------------------------------
 # `device_bridge: true` is valid only with `lane: remote` and `fidelity: container`; the loader refuses any other
 # pairing. On a direct `scenario.py lint` this ERROR is the only coverage.

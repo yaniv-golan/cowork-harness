@@ -373,6 +373,15 @@ if UNCLASSIFIED_KEYS:
 # reintroduce key drift. `assertions` is NOT here — it's a hard error handled by its own special-case
 # in the unknown-key check below (`k != "assertions"`). `profile` is retired vocabulary and now falls
 # through to that same unknown-key check like any other typo — no special-case for it.
+# Production's remote-devices tools (the baseline `cloud.remoteDevicesTools` list); keep in sync with
+# src/run/tier-vacuous-tools.ts REMOTE_DEVICE_TOOLS.
+_REMOTE_DEVICE_TOOLS = {
+    "list_devices", "get_device_info", "device_list_dir", "device_stage_files", "device_commit_files",
+    "device_bash", "device_request_folder_access", "device_request_delete_permission", "create_artifact",
+    "update_artifact", "list_artifacts", "list_legacy_live_artifacts", "project_memory_read",
+    "project_memory_write",
+}
+
 _EMBEDDED_TOP_LEVEL_KEYS = {
     "name",
     "baseline",
@@ -1612,6 +1621,18 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
         # `protocol` absent on purpose: it passes no tool flags, so its surface is the operator's own
         # host CLI registry — machine-dependent and about a different product.
     }
+    # The remote-devices tools: device_bash and get_device_info are served only under `device_bridge: true`, the
+    # rest of production's list never. `protocol` stays out, as above. Mirrors tierVacuousTool's device rule.
+    _bridge = doc.get("device_bridge") is True
+
+    def _device_vacuous(t):
+        if fidelity not in _TIER_VACUOUS or not isinstance(t, str) or not t.startswith("mcp__remote-devices__"):
+            return None
+        _n = t[len("mcp__remote-devices__"):]
+        if _n in ("device_bash", "get_device_info"):
+            return None if _bridge else "off"
+        return "unserved" if _n in _REMOTE_DEVICE_TOOLS else None
+
     # BOTH negative tool keys: `subagent_tool_absent` is judged against the tools sub-agents actually
     # USED, not a per-dispatch declared list, so a tool the tier never serves makes it equally vacuous.
     for _key in ("tool_not_called", "subagent_tool_absent"):
@@ -1625,13 +1646,32 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 _tools = [_tools] if isinstance(_tools, str) else _tools
                 if not isinstance(_tools, list) or not _tools or not all(isinstance(t, str) for t in _tools):
                     continue
-                if any("*" in t or "?" in t or t not in _TIER_VACUOUS.get(fidelity, {}) for t in _tools):
+                if any("*" in t or "?" in t or (t not in _TIER_VACUOUS.get(fidelity, {}) and not _device_vacuous(t)) for t in _tools):
                     continue
                 _v = _tools[0]
             else:
                 _v = _raw
             if not isinstance(_v, str) or "*" in _v or "?" in _v:
                 continue  # a glob is not a literal claim about one tool
+            _dv = _device_vacuous(_v)
+            if _dv:
+                findings.append(
+                    Finding(
+                        "WARN",
+                        "tool-not-called-tier-vacuous",
+                        f"`{_key}: {_v}` can never be violated — "
+                        + (
+                            "the harness serves it only with `device_bridge: true`, so without it this verifies nothing."
+                            if _dv == "off"
+                            else "the harness serves no such device tool (device_bridge serves device_bash and get_device_info only)."
+                        ),
+                        "Set `device_bridge: true` (lane: remote, fidelity: container), or drop this assertion."
+                        if _dv == "off"
+                        else "Drop this assertion.",
+                        path,
+                    )
+                )
+                continue
             _repl = _TIER_VACUOUS.get(fidelity, {})
             if _v not in _repl:
                 continue
