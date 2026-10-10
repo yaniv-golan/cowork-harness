@@ -366,6 +366,18 @@ describe("execute — scanEvents host-path leak detection", () => {
     expect(scanEvents(f, ["proj"]).mountDeletes).toEqual([{ mount: "proj", command: expect.stringContaining("rm") }]);
   });
 
+  it("under device_bridge the agent's own Bash cannot touch a connected folder, so its command is not counted there", () => {
+    const f = writeEvents([
+      { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "rm -rf proj/tmp outputs/old" } }] } },
+    ]);
+    expect(
+      scanEvents(f, ["outputs", "proj"])
+        .mountDeletes.map((d) => d.mount)
+        .sort(),
+    ).toEqual(["outputs", "proj"]);
+    expect(scanEvents(f, ["outputs", "proj"], undefined, { deviceBridge: true }).mountDeletes.map((d) => d.mount)).toEqual(["outputs"]);
+  });
+
   it("does not read device_bash as touching outputs: the device has no outputs folder", () => {
     const f = writeEvents([
       {

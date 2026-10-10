@@ -643,7 +643,7 @@ describe("wiring", () => {
     });
   it("execute.ts scans with inputProvenanceCorpus for this run", () => {
     expect(src("run/execute.ts")).toMatch(
-      /inputProvenanceCorpus\(outDir, sessionId, baseline, scenario\.prompt, effectiveFidelity\)[\s\S]{0,200}scanEvents\(join\(outDir, "events\.jsonl"\), deleteDeniedRootsFromPlan\(plan, outputsMountMode \?\? "rw"\), inputCorpus\)/,
+      /inputProvenanceCorpus\(outDir, sessionId, baseline, scenario\.prompt, effectiveFidelity\)[\s\S]{0,200}scanEvents\(join\(outDir, "events\.jsonl"\), deleteDeniedRootsFromPlan\(plan, outputsMountMode \?\? "rw"\), inputCorpus, \{\s*deviceBridge: scenario\.device_bridge === true,?\s*\}\)/,
     );
   });
 });
