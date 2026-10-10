@@ -32,7 +32,7 @@ import { randomUUID } from "node:crypto";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { packageEvidence, MAX_PACKAGE_BYTES } from "./package-evidence.js";
 import { appendCritiqueRollupRow, CRITIQUE_SESSION_PREFIX } from "../run/run-index.js";
-import { jsonPayloadEnvelope, envOutputFormat, fail, isJsonOutput, type ErrCategory } from "../run/envelope.js";
+import { jsonPayloadEnvelope, envOutputFormat, fail, isJsonOutput, pkgVersion, type ErrCategory } from "../run/envelope.js";
 import { checkMountDelivers } from "./mount-check.js";
 import { binaryPluginIdentity } from "../session.js";
 import { sanitizeSkillName } from "../skill-id.js";
@@ -87,6 +87,9 @@ Answer plainly, in prose. Do not restate the task's final answer.`;
 
 export interface ParsedArgs {
   skillFolder: string;
+  /** `--label`, as given. Forwarded to the task turn as before; also kept here so the report and the summary can
+   *  record it without depending on the graded turn having written a result. */
+  label?: string;
   /** The probe. Present on every spending invocation — parseArgs enforces it — and absent ONLY under
    *  `--corpus-only`, where no turn runs and a prompt would be a value with nothing to consume it. */
   prompt?: string;
@@ -327,6 +330,7 @@ function parseArgs(
   let promptFile: string | undefined;
   let taskTimeoutMs: number | undefined;
   let corpusOnly = false;
+  let label: string | undefined;
   const forwardBoth: string[] = [];
   const forwardTask: string[] = [];
   const seen = new Set<string>();
@@ -437,6 +441,7 @@ function parseArgs(
         throw new Error(
           `--on-unanswered must be "fail" or "first" for critique (got "${value}") — there is no TTY inside the spawned turn\n${usage()}`,
         );
+      if (name === "--label") label = value;
       if (name === "--timeout") {
         const n = Number(value);
         if (!Number.isInteger(n) || n <= 0) throw new Error(`--timeout requires a positive integer (ms), got "${value}"`);
@@ -520,6 +525,7 @@ function parseArgs(
     skillFolder: positional[0],
     prompt,
     corpusOnly,
+    ...(label !== undefined ? { label } : {}),
     ignoredFlags: corpusOnly ? runShaping : [],
     dotenv,
     runDir,
@@ -1331,6 +1337,10 @@ export function sumCostUsd(modelUsage: unknown): number | undefined {
 
 interface ReportState {
   skillFolder: string;
+  /** The harness version that produced the report, so reports from different releases can be told apart. */
+  harnessVersion?: string;
+  /** `--label`, when given. */
+  label?: string;
   prompt: string;
   sessionId: string;
   outDir: string;
@@ -1853,6 +1863,8 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
   // evaluatorIntegrity rides on EVERY branch: a silenced pass is exactly the case where the other fields
   // look clean, so omitting it from the infra/error branches would hide it when it matters most.
   const base = {
+    harnessVersion: state.harnessVersion,
+    label: state.label,
     skillFolder,
     prompt,
     sessionId,
@@ -2363,6 +2375,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const infraRow = taskInfra?.kind === "usage_limit" ? parseEnvelope(task.stdout)?.results?.[0] : undefined;
     if (taskInfra) {
       const state: ReportState = {
+        harnessVersion: pkgVersion(),
+        label: opts.label,
         skillFolder: opts.skillFolder,
         prompt,
         sessionId,
@@ -2650,6 +2664,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       );
     }
     const state: ReportState = {
+      harnessVersion: pkgVersion(),
+      label: opts.label,
       skillFolder: opts.skillFolder,
       prompt,
       sessionId,

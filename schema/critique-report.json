@@ -7,6 +7,14 @@
   "required": ["skillFolder", "prompt", "sessionId", "outDir", "fidelity", "selfReportStatus", "verdictProvenance", "items"],
   "additionalProperties": false,
   "properties": {
+    "harnessVersion": {
+      "type": "string",
+      "description": "the cowork-harness version that produced this report. Absent on a report written before 4.8.0"
+    },
+    "label": {
+      "type": "string",
+      "description": "the --label value, as given (single line); absent when none was passed"
+    },
     "skillFolder": {
       "type": "string",
       "description": "the positional folder BOTH turns mounted (a plain skill, or a plugin root)"

@@ -32,6 +32,7 @@ const REPORT_PATHS = [
   "skillDir",
   "gradedSkill",
   "gradedSkillHash",
+  "harnessVersion",
   // model ids
   "gradedModels[]",
   "evaluatorModel",
