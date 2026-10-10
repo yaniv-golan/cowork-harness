@@ -1873,8 +1873,16 @@ measured. Output past 8 MiB stops the command, and what was read is returned cut
 File assertions grade the agent's own container, which holds no connected folder under the bridge. So `file_exists`
 or `input_unmodified` on a folder's path is refused before the run; assert on the `device_bash` call instead.
 
-The note in the agent's prompt is the harness's, and production's own cloud prompt is not reproduced. Whether that
-prompt names the device tools is not yet measured, so the note names none.
+The note in the agent's prompt is the harness's, and production's own cloud prompt is not reproduced. The note names
+`device_bash` and `$HOME/mnt/<folder-name>` because a cloud task's model, asked about its own instructions, reported
+that they name the tools for the user's computer and give the folders' location as a path. That rests on one model
+report, not on the prompt's text, and the run's record says so (`promptNoteBasis: "model-report"`).
+
+**Egress.** The device container uses the session's allowlist by default (`egress-allowlist`). Production's device
+shell can pass all traffic through. To match that, set `egress.unrestricted: true` in the session: every request
+still goes through the proxy and is logged, but the agent's own container is opened too. The allowlist stays the
+default because the device container runs commands chosen by the skill under test on the operator's machine, where
+open egress could send the folder copies anywhere or reach the operator's network.
 
 The exact inventory is also feature-gated, so it varies by account. Recorded here so a remote-lane probe diffed
 against this harness is not misfiled as a harness bug — triage the lane first ([how](#which-lane-a-session-actually-ran-on)).

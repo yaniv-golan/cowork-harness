@@ -3833,6 +3833,7 @@ const CassetteShape = z.looseObject({
       served: z.array(z.string()),
       alwaysLoad: z.array(z.string()),
       measuredOn: z.string(),
+      promptNoteBasis: z.literal("model-report"),
       egress: z.literal("allowlist"),
       folders: z.array(z.strictObject({ name: z.string(), mode: z.enum(["r", "rw", "rwd"]) })),
       divergences: z.array(z.string()),

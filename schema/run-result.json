@@ -80,6 +80,7 @@
         "served",
         "alwaysLoad",
         "measuredOn",
+        "promptNoteBasis",
         "egress",
         "folders",
         "divergences"
@@ -96,6 +97,11 @@
           "items": {
             "type": "string"
           }
+        },
+        "promptNoteBasis": {
+          "type": "string",
+          "enum": ["model-report"],
+          "description": "What the prompt note rests on: a cloud task's model reporting that its instructions name the device tools and give the folders' path, not the production prompt's text."
         },
         "measuredOn": {
           "type": "string"

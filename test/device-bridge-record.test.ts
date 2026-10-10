@@ -25,6 +25,9 @@ describe("deviceBridgeRecord", () => {
     expect(r.alwaysLoad).toEqual(["device_bash"]);
     expect(r.measuredOn).toBe("2.31226.1");
   });
+  it("says the prompt note rests on a model's report of production's instructions, not their text", () => {
+    expect(r.promptNoteBasis).toBe("model-report");
+  });
   it("lists the folders by name and mode only, never a host path", () => {
     expect(r.folders).toEqual([
       { name: "proj", mode: "rw" },

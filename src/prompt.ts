@@ -38,15 +38,17 @@ export interface RenderedPrompts {
  * tier where the model already speaks host paths, matching what production substitutes there).
  */
 /** The note that replaces the local lane's folder claims under `device_bridge: true`, where the agent's container
- *  holds no connected folder. It names no device tool and no device path: whether production's own cloud prompt
- *  names them is not yet measured, and a note that did would teach the model what production may not. */
+ *  holds no connected folder. It names device_bash and the folders' path because a cloud task's model reported that
+ *  its own instructions name the tools for the user's computer and give the folders' location as a path. That rests
+ *  on the model's report, not on the production prompt's text (`RunResult.deviceBridge.promptNoteBasis`). */
 export const DEVICE_BRIDGE_PROMPT_NOTE =
   "The folders the user connected to this task are on the user's own computer, not in this environment: nothing " +
-  "of theirs is under {{cwd}}/mnt. Reach them through the tools for the user's computer, and keep files for the user " +
-  "beside their sources there.";
+  "of theirs is under {{cwd}}/mnt. Work with them through device_bash, the shell on the user's computer, where each " +
+  "is at $HOME/mnt/<folder-name>, and keep files for the user beside their sources there.";
 /** The VM sub-agent append's counterpart of {@link DEVICE_BRIDGE_PROMPT_NOTE}. */
 export const DEVICE_BRIDGE_SUBAGENT_NOTE =
-  "User-attached folders are on the user's own computer, not in this sandbox; reach them through the tools for the user's computer.";
+  "User-attached folders are on the user's own computer, not in this sandbox; reach them through device_bash, where " +
+  "each is at $HOME/mnt/<folder-name>.";
 
 /** The template text each note replaces, matched before token substitution. A template that no longer carries
  *  one of them is a hard error on a bridge run, never a silent no-op that leaves the false claim in place. */

@@ -268,11 +268,13 @@ runs on the user's computer with the connected folders at `$HOME/mnt/<folder-nam
 harness serves that tool from a second container:
 
 - The agent's container gets no connected folder, and the prompt's claims that a folder is mounted there give way to
-  a short note that the folders are on the user's computer. The note names no tool.
+  a short note that the folders are on the user's computer, reached through `device_bash` at
+  `$HOME/mnt/<folder-name>`.
 - `mcp__remote-devices__device_bash` runs each command as a fresh `bash -c` in the device container, starting in
   `$HOME`. The device container holds **copies** of the connected folders, so a command never touches your real
   files. `mcp__remote-devices__get_device_info` is served too, with the folders spelled `~/<folder-name>`.
 - The device container reaches the network through the run's egress proxy, so the session's allowlist applies.
+  Production's device shell can pass all traffic through; `egress.unrestricted: true` in the session matches that.
 - The tools are pre-approved. Assert on them with `tool_called` / `tool_not_called` (both forms), for example
   `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`.
 - File assertions read the agent's container, which has no folder, so `file_exists` and `input_unmodified` on a

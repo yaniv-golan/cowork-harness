@@ -2018,6 +2018,11 @@
         "type": "string",
         "required": true
       },
+      ".deviceBridge.promptNoteBasis": {
+        "type": "string",
+        "enum": ["model-report"],
+        "required": true
+      },
       ".deviceBridge.served": {
         "type": "array",
         "required": true
@@ -4494,6 +4499,11 @@
       },
       ".deviceBridge.measuredOn": {
         "type": "string",
+        "required": true
+      },
+      ".deviceBridge.promptNoteBasis": {
+        "type": "string",
+        "enum": ["model-report"],
         "required": true
       },
       ".deviceBridge.served": {

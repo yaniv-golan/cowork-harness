@@ -81,7 +81,8 @@ All notable changes to this project are documented here. The format is based on
   `fidelity: container`, the harness serves `mcp__remote-devices__device_bash` and `get_device_info` from a second
   container that holds copies of the connected folders at `$HOME/mnt/<folder-name>`, and the agent's own container
   gets no folder, as a cloud task's has none. Commands run on the copies, never on your files, through the run's
-  egress proxy. The prompt's claims that a folder is mounted in the agent's tree give way to a short note. Assert
+  egress proxy (`egress.unrestricted: true` matches production's pass-through). The prompt's claims that a folder is
+  mounted in the agent's tree give way to a note naming `device_bash` and the folders' path. Assert
   with `tool_called`. The loader refuses the key with any other lane or tier, and `lint` reports
   `device-bridge-misplaced`.
 - **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id

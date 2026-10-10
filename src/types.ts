@@ -1985,6 +1985,9 @@ export interface DeviceBridgeRecord {
   alwaysLoad: string[];
   /** The Desktop build those registrations and the tool contract were read from. */
   measuredOn: string;
+  /** What the agent's prompt note rests on: `model-report`, a cloud task's model reporting that its instructions
+   *  name the device tools and give the folders' path. Not the production prompt's text, which is not reproduced. */
+  promptNoteBasis: "model-report";
   /** Which of production's egress branches the device container modeled: the scenario allowlist through the proxy. */
   egress: "allowlist";
   folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;

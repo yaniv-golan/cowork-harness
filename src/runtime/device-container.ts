@@ -312,6 +312,7 @@ export function deviceBridgeRecord(mounts: ReadonlyArray<Mount>): DeviceBridgeRe
     served: ["device_bash", "get_device_info"],
     alwaysLoad: ["device_bash"],
     measuredOn: "2.31226.1",
+    promptNoteBasis: "model-report",
     egress: "allowlist",
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [

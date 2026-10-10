@@ -34,8 +34,11 @@ describe("device_bridge prompt note", () => {
     expect(s).not.toContain("User-attached folders are mounted under");
   });
 
-  it("names no device tool by name (pending the production check of what its own prompt names)", () => {
-    for (const note of [DEVICE_BRIDGE_PROMPT_NOTE, DEVICE_BRIDGE_SUBAGENT_NOTE]) expect(note).not.toMatch(/device_|\$HOME\/mnt/);
+  it("names device_bash and where the folders are, as the model reports production's own instructions do", () => {
+    for (const note of [DEVICE_BRIDGE_PROMPT_NOTE, DEVICE_BRIDGE_SUBAGENT_NOTE]) {
+      expect(note).toContain("device_bash");
+      expect(note).toContain("$HOME/mnt/<folder-name>");
+    }
   });
 
   it("leaves a run without the bridge exactly as it was", () => {
