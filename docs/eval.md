@@ -31,6 +31,24 @@ it.
 - **Run an A/A first.** `eval` with the same source as both arms (`--allow-identical-arms`) shows how
   far your scenarios' rates move when nothing changed. Read that before trusting a before/after.
 
+### Cutting the cost per rep
+
+Every rep re-runs the whole scenario, so a case that tests the last step of a long pipeline pays for every step
+before it on every rep. Start such a case from a workspace fixture instead: a directory whose files are copied into
+the session's `outputs/` before turn 1, so the prompt asks for the late step alone
+([Starting from a saved workspace](./scenario.md#starting-from-a-saved-workspace-workspace_fixture)).
+
+- **Make one from a kept run.** `cowork-harness fixture export <run-dir> --out <dir>`, then point the case's
+  `workspace_fixture:` at `<dir>` and commit both ([fixture export](./cli.md#exporting-a-runs-outputs-as-a-fixture-fixture-export)).
+  Add `--session-paths` when the skill reads back paths it recorded (an outputs-dir probe, a sub-agent's output
+  path). `--exclude <path>` leaves out a file the step re-creates, such as a probe the skill re-runs.
+- **Limits.** A fixture with session-path tokens is refused on the `protocol` tier, and `--session-paths` refuses a
+  protocol run. Binary files are never rewritten; one that holds a token is refused. Any other host path in a text
+  file is still refused (`--allow-host-paths` accepts an ordinary one, never a path into a run dir).
+- **What the case then measures.** Only the steps after the fixture. An untouched fixture file is pre-run, not
+  authored, so a judge grades only what this step wrote, and the conversation starts fresh. The earlier steps are no
+  longer exercised: keep a full-pipeline case for them.
+
 ## Planning before you spend (`--dry-run`)
 
 `eval … --dry-run` makes every check the real eval makes before its first run, then prints a plan and exits
