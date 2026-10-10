@@ -1,7 +1,19 @@
 // The device container behind `device_bridge: true`: a keep-alive container on the run's egress network that
 // holds COPIES of the connected folders at $HOME/mnt/<folder-name>, where device_bash runs. The one invariant that
 // keeps device_bash off the user's real files is that nothing the container binds is a mount's host path.
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  readdirSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -289,6 +301,27 @@ describe("stageDeviceFolders: a symlinked folder source", () => {
     const copy = join(deviceHost, "mnt", "linked");
     expect(lstatSync(copy).isSymbolicLink()).toBe(false);
     expect(readFileSync(join(copy, "a.txt"), "utf8")).toBe("alpha\n");
+  });
+});
+
+describe("stageDeviceFolders: special files in a folder", () => {
+  // A FIFO or a socket in a connected folder is not copied into the device tree, so nothing there can block a reader
+  // and hang the run; staging neither throws nor waits on it, and every regular file still arrives.
+  it("skips a FIFO and a socket, copies the rest, and returns promptly", () => {
+    const root = scratch();
+    const f = folder(root, "proj");
+    execFileSync("mkfifo", [join(f.hostPath, "pipe")]);
+    execFileSync("python3", ["-c", "import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])", join(f.hostPath, "sock")]);
+    expect(lstatSync(join(f.hostPath, "pipe")).isFIFO()).toBe(true);
+    expect(lstatSync(join(f.hostPath, "sock")).isSocket()).toBe(true);
+    {
+      const deviceHost = join(root, "out", "work", "device");
+      const t0 = Date.now();
+      stageDeviceFolders(deviceFolders([f]), deviceHost);
+      expect(Date.now() - t0).toBeLessThan(5000);
+      const copy = join(deviceHost, "mnt", "proj");
+      expect(readdirSync(copy).sort()).toEqual(["a.txt"]);
+    }
   });
 });
 

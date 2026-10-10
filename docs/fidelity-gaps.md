@@ -107,6 +107,13 @@ present. `CLAUDE_CODE_ENTRYPOINT` read from a hook, and report paths, point both
 heading and the Desktop log lines are positive signals for the local lane only, and their absence proves
 nothing.
 
+A task on an account that runs in the cloud can still be routed local by Desktop itself, task by task. On Desktop
+2.31226.1 the app routes a task local, when the account can run local tasks, if a connected folder or file is not
+allowed in a remote session, if the task's approval choice is Auto or Skip and the cloud side does not support that
+mode, or if the task uses computer use or a stdio plugin the cloud side cannot serve. The folder check reads a
+feature gate and the device's settings, never the folder's content. So one account can produce both lanes in an
+afternoon: check each task.
+
 - **The agent's environment.** `CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and
   `remote_cowork` on the cloud lane. Read it from a hook, because hooks run in the agent's own process
   environment: add a plugin hook on a per-turn event such as `UserPromptSubmit` whose command is
@@ -1868,7 +1875,8 @@ a simulated session.
 
 Two more limits, not differences in what the agent sees. A command that outlives its limit is stopped inside the
 device container, and the result ends `Command timed out after <n>s`; production's exact wording there is not
-measured. Output past 8 MiB stops the command, and what was read is returned cut at the usual 262,144 characters.
+measured. Output past 8 MiB stops the command, and what was read is returned cut at the usual 262,144 characters. A FIFO or socket in a connected folder is not copied to the device, so a command that would block
+reading one on the Mac finds no such file here.
 
 File assertions grade the agent's own container, which holds no connected folder under the bridge. So `file_exists`
 or `input_unmodified` on a folder's path is refused before the run; assert on the `device_bash` call instead.
