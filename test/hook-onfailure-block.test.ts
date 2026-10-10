@@ -253,6 +253,12 @@ describe("scanHookFailureBlocks: what the agent could read", () => {
       events: ["PostToolUse", "PreToolUse", "Stop"],
     });
   });
+  it("reads a symlink loop once: a self-linking plugins dir does not exhaust the budget into unknown", () => {
+    put("cfg/settings.json", { hooks: { PreToolUse: group(cmd({ onFailure: "block" })) } });
+    mkdirSync(join(root, "cfg", "plugins"), { recursive: true });
+    for (const n of ["a", "b", "c", "d"]) symlinkSync(join(root, "cfg", "plugins"), join(root, "cfg", "plugins", n));
+    expect(scanHookFailureBlocks({ configDirs: [join(root, "cfg")] })).toEqual({ events: ["PreToolUse"] });
+  });
   it("keeps only event names the agent knows; any other key is skipped, never recorded", () => {
     put("cfg/settings.json", {
       hooks: { "/Users/secret/path": group(cmd({ onFailure: "block" })), PreToolUse: group(cmd({ onFailure: "block" })) },
