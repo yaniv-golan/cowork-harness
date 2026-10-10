@@ -158,6 +158,19 @@ describe("critique --compare", () => {
     expect(changed.noiseFloorControl).toBe(false);
   });
 
+  it("a not-adjudicable item never keys a shared excerpt, even with a long cited passage", () => {
+    const d = dir();
+    const NA2 = {
+      idea: "Unclear whether the cache was used",
+      classification: "not-adjudicable",
+      evidence: PASSAGE,
+      fp: "eeeeeeeeeeeeeeee",
+    };
+    const NA3 = { idea: "Unclear whether retries happened", classification: "not-adjudicable", evidence: PASSAGE, fp: "ffffffffffffffff" };
+    const out = cmp([writeReport(d, "1.json", reportState([NA2])), writeReport(d, "2.json", reportState([NA3]))]);
+    expect((out.groups as Array<{ sharedExcerpt: unknown[] }>)[0]!.sharedExcerpt).toEqual([]);
+  });
+
   it("the same output whatever order the files are given in", () => {
     const d = dir();
     const files = [
