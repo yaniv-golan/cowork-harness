@@ -1,7 +1,7 @@
 // `onFailure: "block"` (agent 2.1.295+): a failed or timed-out eligible hook is turned into a block AFTER the agent
 // emits its `hook_response` frame, so the frame still says `error` / `cancelled`. The frame shapes below are the ones
 // the agent's runner emits for each case (read from the 2.1.295 binary; no kept run holds one).
-import { mkdirSync, mkdtempSync, readFileSync as readFile, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync as readFile, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -203,8 +203,11 @@ describe("scanHookFailureBlocks: what the agent could read", () => {
       "p/agents/a.md",
       `---\nname: a\nhooks:\n  PostToolUse:\n    - hooks:\n        - {type: http, url: "https://h", onFailure: block}\n---\n`,
     );
-    put("local/SKILL.md", `---\nname: l\nhooks:\n  UserPromptSubmit:\n    - hooks: [{type: command, command: x, onFailure: block}]\n---\n`);
-    expect(scanHookFailureBlocks({ pluginRoots: [join(root, "p")], skillDirs: [join(root, "local")] })).toEqual({
+    put(
+      "cfg/skills/l/SKILL.md",
+      `---\nname: l\nhooks:\n  UserPromptSubmit:\n    - hooks: [{type: command, command: x, onFailure: block}]\n---\n`,
+    );
+    expect(scanHookFailureBlocks({ pluginRoots: [join(root, "p")], configDirs: [join(root, "cfg")] })).toEqual({
       events: ["PostToolUse", "PreToolUse", "UserPromptSubmit"],
     });
   });
@@ -236,6 +239,61 @@ describe("scanHookFailureBlocks: what the agent could read", () => {
       events: ["PreToolUse"],
     });
   });
+  it("follows symlinks, as the agent does (a dotfiles-linked settings.json, a linked skill, a linked hooks.json)", () => {
+    put("real/settings.json", { hooks: { PreToolUse: group(cmd({ onFailure: "block" })) } });
+    put("realskill/SKILL.md", `---\nname: s\nhooks:\n  PostToolUse:\n    - hooks: [{type: command, command: x, onFailure: block}]\n---\n`);
+    put("realhooks.json", { Stop: group(cmd({ onFailure: "block" })) });
+    mkdirSync(join(root, "cfg", "skills"), { recursive: true });
+    symlinkSync(join(root, "real", "settings.json"), join(root, "cfg", "settings.json"));
+    symlinkSync(join(root, "realskill"), join(root, "cfg", "skills", "s"));
+    mkdirSync(join(root, "p", "hooks"), { recursive: true });
+    symlinkSync(join(root, "realhooks.json"), join(root, "p", "hooks", "hooks.json"));
+    symlinkSync(join(root, "cfg"), join(root, "cfg", "skills", "loop")); // a cycle is read once
+    expect(scanHookFailureBlocks({ configDirs: [join(root, "cfg")], pluginRoots: [join(root, "p")] })).toEqual({
+      events: ["PostToolUse", "PreToolUse", "Stop"],
+    });
+  });
+  it("keeps only event names the agent knows; any other key is skipped, never recorded", () => {
+    put("cfg/settings.json", {
+      hooks: { "/Users/secret/path": group(cmd({ onFailure: "block" })), PreToolUse: group(cmd({ onFailure: "block" })) },
+    });
+    const r = scanHookFailureBlocks({ configDirs: [join(root, "cfg")], knownEvents: new Set(["PreToolUse", "Stop"]) });
+    expect(r).toEqual({ events: ["PreToolUse"] });
+  });
+  it("a manifest's custom skills / commands / agents paths are read", () => {
+    put("p/.claude-plugin/plugin.json", { name: "p", skills: "./src/skills", agents: ["./team/a.md"] });
+    put(
+      "p/src/skills/s/SKILL.md",
+      `---\nname: s\nhooks:\n  PreToolUse:\n    - hooks: [{type: command, command: x, onFailure: block}]\n---\n`,
+    );
+    put("p/team/a.md", `---\nname: a\nhooks:\n  Stop:\n    - hooks: [{type: http, url: "https://h", onFailure: block}]\n---\n`);
+    expect(scanHookFailureBlocks({ pluginRoots: [join(root, "p")] })).toEqual({ events: ["PreToolUse", "Stop"] });
+  });
+  it("CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG from a settings file's env, and a personal (uploads) plugin's hooks", () => {
+    put("cfg/settings.json", { env: { CLAUDE_CODE_RESTRICT_PERSONAL_CONFIG: "1" } });
+    put("up/hooks/hooks.json", { PreToolUse: group(cmd()) });
+    put("plain/hooks/hooks.json", { UserPromptSubmit: group(cmd()) });
+    expect(
+      scanHookFailureBlocks({
+        configDirs: [join(root, "cfg")],
+        personalPluginRoots: [join(root, "up")],
+        pluginRoots: [join(root, "plain")],
+      }),
+    ).toEqual({ events: ["PreToolUse"] });
+  });
+  it("a config dir's installed_plugins.json names the plugin roots read (a broken marketplace checkout is not)", () => {
+    put("cfg/plugins/cache/mp/q/1/hooks/hooks.json", { Stop: group(cmd({ onFailure: "block" })) });
+    put("cfg/plugins/marketplaces/mp/broken/.claude-plugin/plugin.json", "{ not json");
+    put("cfg/plugins/installed_plugins.json", {
+      version: 2,
+      plugins: { "q@mp": [{ installPath: join(root, "cfg/plugins/cache/mp/q/1") }] },
+    });
+    expect(scanHookFailureBlocks({ configDirs: [join(root, "cfg")] })).toEqual({ events: ["Stop"] });
+  });
+  it("protocol's project settings (settings.json and settings.local.json) are read", () => {
+    put("work/.claude/settings.local.json", { hooks: { PreToolUse: group(cmd({ onFailure: "block" })) } });
+    expect(scanHookFailureBlocks({ projectClaudeDirs: [join(root, "work", ".claude")] })).toEqual({ events: ["PreToolUse"] });
+  });
   it("nothing staged, nothing found", () => {
     expect(scanHookFailureBlocks({})).toEqual({ events: [] });
     expect(scanHookFailureBlocks({ pluginRoots: [join(root, "missing")], configDirs: [join(root, "nope")] })).toEqual({ events: [] });
@@ -244,10 +302,11 @@ describe("scanHookFailureBlocks: what the agent could read", () => {
 
 // Through the real record and replay paths.
 
-const LIVE = loadBaseline("latest").appVersion; // its agent is 2.1.293 or older on this branch's base
+const LIVE = loadBaseline("latest").appVersion;
 const line = (o: unknown) => JSON.stringify(o);
 const NO_BLOCK = { no_hook_event_blocked: { event: "PreToolUse" } };
-function cassetteOf(frames: Frame[], extra: Partial<Cassette> = {}, baseline = LIVE): Cassette {
+/** `agent`: the version the recording's init frame reports (null: none reported). */
+function cassetteOf(frames: Frame[], extra: Partial<Cassette> = {}, agent: string | null = "2.1.293"): Cassette {
   return {
     scenario: {
       name: "onfail",
@@ -260,14 +319,14 @@ function cassetteOf(frames: Frame[], extra: Partial<Cassette> = {}, baseline = L
       assert: [NO_BLOCK],
     } as unknown as Scenario,
     events: [
-      line({ type: "system", subtype: "init", tools: [], skills: [] }),
+      line({ type: "system", subtype: "init", tools: [], skills: [], ...(agent ? { claude_code_version: agent } : {}) }),
       ...frames.map(line),
       line({ type: "result", subtype: "success", is_error: false }),
     ],
     controlOut: [],
     cassetteVersion: CASSETTE_VERSION,
     userVisibleRoots: ["outputs"],
-    fingerprint: { baseline },
+    fingerprint: { baseline: LIVE },
     ...extra,
   } as unknown as Cassette;
 }
@@ -282,15 +341,18 @@ describe("replay reads the frozen inventory", () => {
     );
     expect((await replayedNoBlock(cassetteOf(frames, { hookFailureBlocks: { events: [] } } as Partial<Cassette>))).pass).toBe(true);
   });
-  it("an older cassette without it: its recorded agent decides (≤ 2.1.293 has no onFailure; an unknown baseline is unknown)", async () => {
+  it("an older cassette without it: the agent its init frame reports decides, NOT its baseline's pin", async () => {
     const frames = hook("PreToolUse", "Bash", exit1);
-    expect((await replayedNoBlock(cassetteOf(frames))).pass).toBe(true);
-    const r = await replayedNoBlock(cassetteOf(frames, {}, "9.99999.9"));
-    expect(r.pass).toBe(false);
-    expect(r.message).toMatch(UNAVAILABLE);
+    expect((await replayedNoBlock(cassetteOf(frames, {}, "2.1.293"))).pass).toBe(true);
+    // The baseline (LIVE) pins 2.1.293, but the recording ran 2.1.295 (a hostloop substitution, a host claude):
+    for (const agent of ["2.1.295", null]) {
+      const r = await replayedNoBlock(cassetteOf(frames, {}, agent));
+      expect(r.pass, String(agent)).toBe(false);
+      expect(r.message).toMatch(UNAVAILABLE);
+    }
   });
   it("an older cassette with no failed frame is unchanged, whatever its agent", async () => {
-    expect((await replayedNoBlock(cassetteOf(hook("PreToolUse", "Bash", ok), {}, "9.99999.9"))).pass).toBe(true);
+    expect((await replayedNoBlock(cassetteOf(hook("PreToolUse", "Bash", ok), {}, "2.1.295"))).pass).toBe(true);
   });
 });
 
@@ -363,10 +425,11 @@ describe("verify-run reads the kept run's inventory", () => {
     dir = realpathSync(mkdtempSync(join(tmpdir(), "onfail-verify-")));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
-  const kept = (result: Record<string, unknown>) => {
+  const kept = (result: Record<string, unknown>, agent?: string) => {
     const runDir = join(dir, `run-${++n}`);
     mkdirSync(join(runDir, "turns", "1"), { recursive: true });
     writeFileSync(join(runDir, "turns", "1", "result.json"), JSON.stringify(result));
+    if (agent) writeFileSync(join(runDir, "events.jsonl"), line({ type: "system", subtype: "init", claude_code_version: agent }) + "\n");
     return runDir;
   };
   const scenario = ScenarioObject.parse({
@@ -376,17 +439,18 @@ describe("verify-run reads the kept run's inventory", () => {
     assert: [NO_BLOCK],
   }) as unknown as Scenario;
   const base = { result: "success", command: "run", contextEvents: toEvents(hook("PreToolUse", "Bash", exit1)) };
-  const blocks = (r: Record<string, unknown>) => {
-    const v = assertContextFromRunDir(kept(r), scenario);
+  const blocks = (r: Record<string, unknown>, agent?: string) => {
+    const v = assertContextFromRunDir(kept(r, agent), scenario);
     if (!v.ok) throw new Error(JSON.stringify(v));
     return v.ctx.hookFailureBlocks;
   };
   it("reads a recorded inventory as is", () => {
     expect(blocks({ ...base, baseline: LIVE, hookFailureBlocks: { events: ["PreToolUse"] } })).toEqual({ events: ["PreToolUse"] });
   });
-  it("resolves a result.json without it by the run's agent", () => {
-    expect(blocks({ ...base, baseline: LIVE })).toEqual({ events: [] });
-    expect("unknown" in blocks({ ...base, baseline: "9.99999.9" })!).toBe(true);
+  it("resolves a result.json without it by the agent the run's stream reports, not its baseline", () => {
+    expect(blocks({ ...base, baseline: LIVE }, "2.1.293")).toEqual({ events: [] });
+    expect("unknown" in blocks({ ...base, baseline: LIVE }, "2.1.295")!).toBe(true);
+    expect("unknown" in blocks({ ...base, baseline: LIVE })!).toBe(true); // no stream: unknown
   });
 });
 
@@ -417,7 +481,7 @@ describe("runHookFailureBlocks reads the plan's sources", () => {
         { kind: "folder", hostPath: folder, mountPath: "folder" },
       ],
     } as unknown as Parameters<typeof runHookFailureBlocks>[0];
-    expect(runHookFailureBlocks(plan, "container", join(dir, "work"))).toEqual({
+    expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t")).toEqual({
       events: ["PostToolUse", "PreToolUse", "UserPromptSubmit"],
     });
   });

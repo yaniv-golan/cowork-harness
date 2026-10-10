@@ -106,7 +106,7 @@ import { compileUserRegex } from "../regex.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan } from "./display-translate.js";
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
-import { LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
+import { KNOWN_HOOK_EVENTS, LiveAgentSession, type SdkMcp, type HookBundle } from "../agent/session.js";
 import { readTimeline } from "../agent/timeline.js";
 import { toolDurationFields, foldSkillActivity, attributeSubagentSkills } from "./timeline-fold.js";
 import { captureSubagentReasoning } from "./subagent-reasoning.js";
@@ -705,17 +705,27 @@ function assertsAuthored(a: Assertion): boolean {
  *  the agent could load: the staged plugins, the config dir it ran with (its settings, skills, agents and the plugins
  *  it installed) and, where it runs natively on this host, the host's managed settings. Over-including a source only
  *  marks more failed frames unreadable; leaving one out could pass a run whose hook blocked. */
-export function runHookFailureBlocks(plan: LaunchPlan, tier: string, workRoot: string): HookFailureBlocks {
+export function runHookFailureBlocks(plan: LaunchPlan, tier: string, workRoot: string, sessionId: string): HookFailureBlocks {
   const hostNative = tier === "hostloop" || tier === "protocol";
-  const configDirs = [plan.configDir, join(workRoot, ".claude"), ...(tier === "protocol" ? [protocolAgentConfigDir(plan)] : [])];
+  // The config dir the agent ran with: the materialized one (hostloop's CLAUDE_CONFIG_DIR, and the source of the
+  // sandbox tiers' copy), the copy the sandbox tiers bind at mnt/.claude (the run dir's for container, the VM work
+  // dir's for microvm, which is never copied back), and protocol's (the operator's real one off managed config).
+  const configDirs =
+    tier === "protocol"
+      ? [plan.configDir, protocolAgentConfigDir(plan)]
+      : [plan.configDir, join(workRoot, ".claude"), ...(tier === "microvm" ? [join(VM_WORK_HOST, sessionId, "mnt", ".claude")] : [])];
+  const plugins = plan.mounts.filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin");
   return scanHookFailureBlocks({
-    pluginRoots: plan.mounts
-      .filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin")
-      .map((m) => m.hostPath),
+    pluginRoots: plugins.filter((m) => m.kind !== "remote-plugin").map((m) => m.hostPath),
+    // A plugin carrying claude.ai uploads holds hooks the agent treats as the user's own.
+    personalPluginRoots: plugins.filter((m) => m.kind === "remote-plugin").map((m) => m.hostPath),
     configDirs: [...new Set(configDirs)],
+    // Only protocol loads project and local settings (from its cwd, the work dir); the others pass --setting-sources user.
+    projectClaudeDirs: tier === "protocol" ? [join(workRoot, ".claude")] : [],
     managedSettingsDirs: hostNative ? hostManagedSettingsDirs() : [],
     // Host-native tiers inherit the operator's env; the sandboxed ones get an allowlist drawn from baseEnv.
     spawnEnv: hostNative ? { ...process.env, ...plan.baseEnv } : plan.baseEnv,
+    knownEvents: new Set<string>(KNOWN_HOOK_EVENTS),
   });
 }
 
@@ -1755,7 +1765,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (unansweredErr) {
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
-        hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot),
+        hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId),
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         outputsMountMode,
         turn,
@@ -1909,7 +1919,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       authoredCaptureOpts({ workRoot, runDir: outDir, resume: plan.resume, priorityGlobs, totalBytes: authoredTotalBytes() }),
     );
 
-    const hookFailureBlocks = runHookFailureBlocks(plan, effectiveFidelity, workRoot);
+    const hookFailureBlocks = runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId);
     const assertCtx: AssertContext = {
       transcript: record.transcript,
       finalMessage: record.resultText,

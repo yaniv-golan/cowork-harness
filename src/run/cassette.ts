@@ -1,6 +1,6 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { hasHookFailureBlocks, resolveHookFailureBlocks, type HookFailureBlocks } from "./hook-failure-blocks.js";
-import { recordedAgentVersion } from "./recorded-agent-version.js";
+import { initAgentVersion } from "./recorded-agent-version.js";
 import { measureMetrics, type MetricsContext } from "../metrics.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
@@ -2575,18 +2575,7 @@ function computeReplacedBuiltinNote(cassette: Cassette): string[] {
  *  (`claude_code_version`), or `undefined` when the stream carries no such frame or the field is absent or
  *  not a string. Same walk and the same "absent ⇒ no evidence" rule as recordedInitTools. */
 function recordedInitAgentVersion(cassette: Cassette): string | undefined {
-  if (!Array.isArray(cassette.events)) return undefined;
-  for (const line of cassette.events) {
-    let m: { type?: string; subtype?: string; claude_code_version?: unknown };
-    try {
-      m = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (m?.type !== "system" || m?.subtype !== "init") continue;
-    return typeof m.claude_code_version === "string" && m.claude_code_version.length > 0 ? m.claude_code_version : undefined;
-  }
-  return undefined;
+  return initAgentVersion(cassette.events);
 }
 
 /** NOTE (never a finding): the agent that recorded this stream is not the agent its fingerprint baseline
@@ -8848,12 +8837,9 @@ export async function replayCassette(
     rec = minimalRec();
   }
 
-  // The onFailure: "block" inventory the recording froze; a cassette from before it existed is decided by the agent it
-  // recorded (an agent too old to have the field cannot have such a hook; any other is unknown).
-  const replayHookFailureBlocks = resolveHookFailureBlocks(
-    cassette.hookFailureBlocks,
-    recordedAgentVersion(cassette.fingerprint?.baseline),
-  );
+  // The onFailure: "block" inventory the recording froze. A cassette from before it existed is decided by the agent
+  // its own init frame says ran (an agent too old to have the field cannot have such a hook; any other is unknown).
+  const replayHookFailureBlocks = resolveHookFailureBlocks(cassette.hookFailureBlocks, initAgentVersion(cassette.events));
   // Reconstruct hook fire/block events from the recorded stream + control-out. A hook_callback is a
   // control_request in the stream; the harness's reply (built-in or custom) is the matching
   // control_response in controlOut. Both are already recorded — no cassette field needed. Only when
