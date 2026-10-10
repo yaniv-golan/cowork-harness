@@ -1,4 +1,6 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
+import { hasHookFailureBlocks, resolveHookFailureBlocks, type HookFailureBlocks } from "./hook-failure-blocks.js";
+import { initAgentVersion } from "./recorded-agent-version.js";
 import { measureMetrics, type MetricsContext } from "../metrics.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
@@ -427,6 +429,12 @@ export interface Cassette {
   // file is not readable at rehash or replay time, and both read it: `requiredVersionFor` stamps v15 from it, and
   // replay re-drives with the channel disabled so a recorded request replays as a violation, not an answer.
   answerChannel?: "none";
+  // v16: the run's `onFailure: "block"` inventory (RunResult.hookFailureBlocks) — the events it may have a hook on that
+  // blocks when it fails, or unknown. FROZEN because replay reads failed hook frames by it and has no plugin tree to
+  // re-read. Always written by a recording from this build (an empty `{events: []}` says "none", which an older
+  // reader may safely ignore); a non-empty one stamps v16, so an older reader refuses the cassette rather than read
+  // a failed frame as "no decision". ABSENT (an older recording): replay decides from the recorded agent version.
+  hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
   // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
   // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS
   // (guaranteed record-time-accurate) map instead of re-deriving it from the session file on disk AT
@@ -499,12 +507,14 @@ export interface Cassette {
 //  a v13 reader refuses it as "too new; upgrade" instead of rejecting the frozen assertion as unrecognized
 //  ("re-record" — the wrong remedy). Every other scenario stamps exactly what it did. No hashing or shape
 //  change; HASH_FORMAT_EPOCH stays at 12.
+// v16: a frozen top-level `hookFailureBlocks` that lists an event or is unknown (the onFailure: "block" inventory —
+//  see the field). Stamped per cassette only then; an empty inventory stamps exactly what it did.
 // v15: the same mechanism for the keys added after v14 (an assert-level key appends a predicate to
 //  V15_ASSERT_FEATURES below; a top-level key adds a KEY_REQUIRED_VERSION entry returning 15). Also `lane: remote`
 //  with an `artifact_json` entry, a pair no per-key entry sees (see requiredVersionFor). The stamp stays requirement-based: a cassette that uses no v15
 //  feature stamps exactly what it did, so the bump alone changes no existing cassette or verify-cassettes result.
 //  No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 15;
+export const CASSETTE_VERSION = 16;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -663,7 +673,7 @@ function usesToolCallObjectForm(a: unknown): boolean {
  *  callers hold values of different strictness — `record` has a parsed `Scenario`, `rehash` has an
  *  on-disk cassette's frozen scenario read through CassetteShape's loose passthrough, not the strict
  *  schema. */
-export function requiredVersionFor(scenario: unknown, frozen?: { answerChannel?: unknown }): number {
+export function requiredVersionFor(scenario: unknown, frozen?: { answerChannel?: unknown; hookFailureBlocks?: unknown }): number {
   const s = (scenario ?? {}) as Record<string, unknown>;
   // Derived, never hard-coded: this is what actually gets STAMPED at both write sites, so a hash-format
   // bump that moved only CASSETTE_VERSION/HASH_FORMAT_EPOCH would write new-algorithm digests into
@@ -672,12 +682,20 @@ export function requiredVersionFor(scenario: unknown, frozen?: { answerChannel?:
   // `answerChannel` is frozen beside the scenario, not in it, and a v14 reader ignores an unknown top-level key: it
   // would replay a run that parked at a question as the `stalled` fail. Every write site passes the cassette's value.
   const channel = frozen?.answerChannel === "none" ? 15 : 0;
+  // A non-empty onFailure inventory: a v15 reader ignores the key and would read a failed hook frame as "no decision".
+  const failureBlocks = hasHookFailureBlocks(frozen?.hookFailureBlocks) ? 16 : 0;
   // Two keys together, so neither per-key entry can see it: on `lane: remote` a v15 reader refuses `artifact_json`
   // (that lane's container filesystem is not locally observable), while a v14 reader grades the local work-root file
   // and can pass. `artifact_text` refused there from the start, so it needs nothing.
   const remoteJson =
     s.lane === "remote" && Array.isArray(s.assert) && s.assert.some((a) => !!a && typeof a === "object" && "artifact_json" in a) ? 15 : 0;
-  return Math.max(BASE, channel, remoteJson, ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])));
+  return Math.max(
+    BASE,
+    channel,
+    failureBlocks,
+    remoteJson,
+    ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])),
+  );
 }
 
 const DEFAULT_MANIFEST_BODY_CAP = 64 * 1024; // inline JSON/text bodies ≤ 64 KiB; larger → hash-only + truncated marker
@@ -2557,18 +2575,7 @@ function computeReplacedBuiltinNote(cassette: Cassette): string[] {
  *  (`claude_code_version`), or `undefined` when the stream carries no such frame or the field is absent or
  *  not a string. Same walk and the same "absent ⇒ no evidence" rule as recordedInitTools. */
 function recordedInitAgentVersion(cassette: Cassette): string | undefined {
-  if (!Array.isArray(cassette.events)) return undefined;
-  for (const line of cassette.events) {
-    let m: { type?: string; subtype?: string; claude_code_version?: unknown };
-    try {
-      m = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (m?.type !== "system" || m?.subtype !== "init") continue;
-    return typeof m.claude_code_version === "string" && m.claude_code_version.length > 0 ? m.claude_code_version : undefined;
-  }
-  return undefined;
+  return initAgentVersion(cassette.events);
 }
 
 /** NOTE (never a finding): the agent that recorded this stream is not the agent its fingerprint baseline
@@ -3807,6 +3814,10 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["
  *  strict authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
 const CassetteShape = z.looseObject({
   events: z.array(z.string()),
+  // The onFailure inventory replay reads failed hook frames by: a malformed one is a clean refusal, not a crash.
+  hookFailureBlocks: z
+    .union([z.strictObject({ events: z.array(z.string()) }), z.strictObject({ unknown: z.literal(true), why: z.string() })])
+    .optional(),
   // The fingerprint was previously unvalidated — it arrived through the loose passthrough as untyped data,
   // so nothing at the READ boundary enforced the version/format invariant. `looseObject` keeps unknown
   // members, so this validates the two fields the epoch depends on without freezing the rest.
@@ -6155,7 +6166,10 @@ export async function freezeRecordedRun(
   }
   // The STAMPED version — the minimum a reader needs to interpret THIS scenario, not the build's max
   // (CASSETTE_VERSION). Nearly every scenario (lane: local/omitted) stamps v10, unchanged (P8).
-  const stampedVersion = requiredVersionFor(relocatable, { answerChannel: result.answerChannel });
+  const stampedVersion = requiredVersionFor(relocatable, {
+    answerChannel: result.answerChannel,
+    hookFailureBlocks: result.hookFailureBlocks,
+  });
   // Read once — the decision stream feeds both the cassette body and the label-provenance stamp below.
   const recordedControlOut = safeLines(join(result.outDir, "control-out.jsonl"));
   const base: Cassette = {
@@ -6199,6 +6213,7 @@ export async function freezeRecordedRun(
     // "not checked" (never a false mismatch).
     sessionFingerprint: buildSessionFingerprint(scenario.session, undefined),
     ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
+    ...(result.hookFailureBlocks ? { hookFailureBlocks: result.hookFailureBlocks } : {}),
     // v9: record-time connected-folder host-path -> mount-name map (Finding 24) — undefined when the
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
@@ -6449,6 +6464,7 @@ function replayErrorResult(file: string): RunResult {
     workspaceFixture: undefined, // unreadable cassette — no scenario to read it from
     workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
     contextEvents: undefined, // no rec to read from on this early-bail lane
+    hookFailureBlocks: undefined, // no frames to read on this early-bail lane
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
     fileToolAttempts: undefined, // no rec to read from on this early-bail lane
@@ -8825,6 +8841,9 @@ export async function replayCassette(
     rec = minimalRec();
   }
 
+  // The onFailure: "block" inventory the recording froze. A cassette from before it existed is decided by the agent
+  // its own init frame says ran (an agent too old to have the field cannot have such a hook; any other is unknown).
+  const replayHookFailureBlocks = resolveHookFailureBlocks(cassette.hookFailureBlocks, initAgentVersion(cassette.events));
   // Reconstruct hook fire/block events from the recorded stream + control-out. A hook_callback is a
   // control_request in the stream; the harness's reply (built-in or custom) is the matching
   // control_response in controlOut. Both are already recorded — no cassette field needed. Only when
@@ -9171,6 +9190,7 @@ export async function replayCassette(
       // The re-drive reproduces `system_event` via parseMessage from the cassette's frozen stdout
       // stream — content-class, same as toolErrors/redundantToolCalls above.
       contextEvents: rec.contextEvents,
+      hookFailureBlocks: replayHookFailureBlocks,
       // live-only — MCP round-trips are harness-computed at drive time, not reproducible from the
       // cassette's frozen stdout stream (unlike contextEvents/toolErrors above).
       mcpErrors: undefined,
@@ -9579,6 +9599,7 @@ export async function replayCassette(
       workspaceFixture: replayWorkspaceFixtureRef(cassette),
       workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
+      hookFailureBlocks: replayHookFailureBlocks,
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the

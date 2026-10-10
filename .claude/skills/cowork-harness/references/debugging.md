@@ -130,7 +130,7 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/`dispatchModel`/
   `resolvedModel`/output/`attributedSkillId`, `outputTruncated`, `referencesRead`, `reasoning`/`reasoningElided`),
   `context` (tools/mcpServers/availableSkills), `tasks`,
-  `workspaceFiles`, `presentedFiles`, `hookEvents`, `mcpErrors`, `contextEvents`, `resources`
+  `workspaceFiles`, `presentedFiles`, `hookEvents`, `mcpErrors`, `contextEvents`, `hookFailureBlocks`, `resources`
   (`probeFailures` distinguishes a failed sample from a tier that was never sampleable). Provenance/
   evidence-health fields: `command` (`run`/`skill`/`record`/`chat`/`replay` — finer than `mode`),
   `gateProvenance` (per-gate `scripted`/`decided(llm|external)`/`first-option`/`prompt` with a

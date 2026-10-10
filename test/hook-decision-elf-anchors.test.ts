@@ -31,6 +31,31 @@ describe.skipIf(elf === undefined)("the hook-decision rules' anchors in the stag
   });
 });
 
+describe.skipIf(elf === undefined)("events whose hooks stream no frame (FRAMELESS_HOOK_EVENTS)", () => {
+  // The agent's outside-REPL hook runner (the one that logs "Policy disableAllHooks: skipping configured hooks for")
+  // never calls the function that emits `hook_response`, so a block there is invisible. Minified names change every
+  // build: both functions are found by a literal they contain, and the runner's body must not name the emitter.
+  it("the outside-REPL runner does not call the hook_response emitter", () => {
+    const text = readFileSync(elf!).toString("latin1");
+    const emitAt = text.indexOf('subtype:"hook_response"');
+    expect(emitAt, "the hook_response emitter").toBeGreaterThan(-1);
+    const emitter = /function ([\w$]+)\([\w$]+\)\{[^]*$/.exec(text.slice(text.lastIndexOf("function ", emitAt), emitAt))?.[1];
+    expect(emitter, "the emitter's name").toBeDefined();
+    const runners = [...text.matchAll(/Policy disableAllHooks: skipping configured hooks for/g)].map((m) => m.index!);
+    const bodies = runners
+      .map((at) => text.lastIndexOf("async function ", at))
+      .filter((start) => start !== -1 && /^async function [\w$]+\(e\)\{let\{session:/.test(text.slice(start, start + 60)))
+      .map((start) => {
+        const ends = [text.indexOf("}async function ", start + 100), text.indexOf("}function ", start + 100)].filter((x) => x !== -1);
+        return text.slice(start, Math.min(...ends));
+      });
+    expect(bodies.length, "the outside-REPL runner").toBe(1);
+    expect(bodies[0]!.includes(`${emitter}(`), `the runner calls ${emitter}: re-read FRAMELESS_HOOK_EVENTS`).toBe(false);
+    // and it is the runner the frameless events go through
+    expect(bodies[0]!).toContain("hook_event_name");
+  });
+});
+
 describe("HOOK_DECISION_RULES", () => {
   it("has distinct, non-empty anchors", () => {
     const anchors = HOOK_DECISION_RULES.map((r) => r.anchor);

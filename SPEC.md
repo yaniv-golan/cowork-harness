@@ -1198,8 +1198,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `unpriced[]`, and sets `lowerBound`. Every other key of that object (`budgetGateWorstUsd`, `judge*`,
   `decider*`, `items[]`) is experimental. Adding a key is MINOR; removing or renaming one, or changing its basis or
   meaning, is MAJOR.
-- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **15**
-  (`schema/cassette.v15.json`) and its verdict-modifier assertion keys.
+- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **16**
+  (`schema/cassette.v16.json`) and its verdict-modifier assertion keys.
 
   `cassetteVersion` means **the minimum reader for the whole cassette**, which covers how its digests are
   computed as well as which `scenario` keys it uses: a reader older than the cassette's hash format
@@ -1229,12 +1229,15 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   reader grades the local file there; v15 fails it), and so does an `artifact_json` entry carrying `schema` (a v14
   reader rejects the field; a 4.6.0 reader, which reads v15, rejects it as an unrecognized assertion — upgrade, don't
   re-record). So does a recording whose top-level `answerChannel` is `"none"`: a v14
-  reader ignores the field and would grade a run that parked at a question as `stalled`.
+  reader ignores the field and would grade a run that parked at a question as `stalled`. A recording whose
+  top-level `hookFailureBlocks` lists an event or is unknown stamps **v16**. That field is the run's
+  `onFailure: "block"` inventory; a v15 reader ignores it and would read a failed or timed-out hook frame as "no
+  decision". An empty `{"events": []}` stamps what the cassette needs otherwise.
   The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`
-  through `schema/cassette.v15.json`). A cassette whose stamped version exceeds what a given build understands is
+  through `schema/cassette.v16.json`). A cassette whose stamped version exceeds what a given build understands is
   refused loudly by both `replay` and `verify-cassettes`; `replay` alone offers an opt-in override
   (`--best-effort-future-cassette`), which `verify-cassettes` does not accept — a verification gate has no
   "read it anyway" path. `record --rerecord-stale`'s selection and `rehash`'s own version check accept a

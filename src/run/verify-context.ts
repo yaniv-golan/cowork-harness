@@ -6,6 +6,8 @@
  * Refusals are returned, never thrown and never printed: the caller owns the envelope and the exit code.
  * Every message is the text `verify-run` has always printed; `opts.command` only swaps the leading label.
  */
+import { resolveHookFailureBlocks } from "./hook-failure-blocks.js";
+import { runDirAgentVersion } from "./recorded-agent-version.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "../agent/session.js";
@@ -482,6 +484,8 @@ export function assertContextFromRunDir(
     mcpServers: result.context?.mcpServers,
     availableTools: result.context?.tools,
     contextEvents: result.contextEvents,
+    // A kept run from before the inventory existed is decided by the agent its own stream says ran.
+    hookFailureBlocks: resolveHookFailureBlocks(result.hookFailureBlocks, runDirAgentVersion(runDir)),
     mcpErrors: result.mcpErrors,
     resources: result.resources,
     hookEvents: result.hookEvents,

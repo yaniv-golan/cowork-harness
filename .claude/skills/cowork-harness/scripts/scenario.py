@@ -655,7 +655,7 @@ _MISSING = object()
 
 # Keep these values in sync with src/run/cassette.ts. The sync test below makes a format-range change
 # fail loudly instead of allowing lint to suppress an advisory from a cassette replay would refuse.
-CASSETTE_VERSION = 15
+CASSETTE_VERSION = 16
 MIN_SUPPORTED_CASSETTE_VERSION = 9
 
 

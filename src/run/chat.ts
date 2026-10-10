@@ -24,7 +24,7 @@ import { ResourceSampler, makeSampleOnce, resolveIntervalMs } from "../runtime/r
 import { makeRenderer, startHeartbeat, type RenderPlan } from "./renderer.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { buildChatResult } from "./chat-result.js";
-import { writeTrace, scrubRawRunLogs, beginTurn, makeContainerPhaseReap, reapAgentOnTeardown } from "./execute.js";
+import { writeTrace, scrubRawRunLogs, beginTurn, makeContainerPhaseReap, reapAgentOnTeardown, runHookFailureBlocks } from "./execute.js";
 import { installTerminationHandler, registerAgent, holdExit } from "../termination.js";
 import { agentTreeAgent, hostAgentStopTiming, type TreeAgent } from "../runtime/agent-tree.js";
 import { turnWriteDir } from "./turn-layout.js";
@@ -626,6 +626,7 @@ export async function cmdChat(args: string[]) {
         pinnedModel: session.model,
         outDir,
         workRoot,
+        hookFailureBlocks: runHookFailureBlocks(plan, fidelity, workRoot, sessionId, outDir),
         userVisibleRoots: userVisibleRootsFromPlan(plan),
         readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
         egress: sidecar ? sidecar.collect().entries : [],

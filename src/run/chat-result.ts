@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import type { HookFailureBlocks } from "./hook-failure-blocks.js";
 import { deriveModelProvenance } from "./model-provenance.js";
 import { join } from "node:path";
 import type { RunResult } from "../types.js";
@@ -13,6 +14,8 @@ import { foldResources, resolveIntervalMs } from "../runtime/resource-sampler.js
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 
 export interface ChatResultOpts {
+  /** The session's `onFailure: "block"` inventory (`runHookFailureBlocks`). */
+  hookFailureBlocks?: HookFailureBlocks;
   scenario: string;
   prompt: string;
   fidelity: string;
@@ -152,6 +155,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     workspaceFixture: undefined, // a chat session has no scenario, so no workspace_fixture
     workspaceFiles,
     contextEvents: record.contextEvents,
+    hookFailureBlocks: opts.hookFailureBlocks,
     mcpErrors: record.mcpErrors,
     hookEvents: record.hookEvents,
     fileToolAttempts: record.fileToolAttempts,

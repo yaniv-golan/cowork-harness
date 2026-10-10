@@ -76,6 +76,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     metrics: undefined,
     workspaceFiles: undefined,
     contextEvents: undefined,
+    hookFailureBlocks: undefined,
     mcpErrors: undefined,
     hookEvents: undefined,
     fileToolAttempts: undefined,
