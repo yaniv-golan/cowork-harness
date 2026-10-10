@@ -7,7 +7,7 @@
  * Every message is the text `verify-run` has always printed; `opts.command` only swaps the leading label.
  */
 import { resolveHookFailureBlocks } from "./hook-failure-blocks.js";
-import { runDirAgentVersion } from "./recorded-agent-version.js";
+import { runDirAgentVersions } from "./recorded-agent-version.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { toDecisionRequest, questionLabel, type DecisionRequest } from "../agent/session.js";
@@ -484,8 +484,9 @@ export function assertContextFromRunDir(
     mcpServers: result.context?.mcpServers,
     availableTools: result.context?.tools,
     contextEvents: result.contextEvents,
-    // A kept run from before the inventory existed is decided by the agent its own stream says ran.
-    hookFailureBlocks: resolveHookFailureBlocks(result.hookFailureBlocks, runDirAgentVersion(runDir)),
+    // A kept run from before the inventory existed is decided by the agents its own stream says ran — every init frame
+    // in the file, so an old agent's frame never vouches for a newer one's.
+    hookFailureBlocks: resolveHookFailureBlocks(result.hookFailureBlocks, runDirAgentVersions(runDir)),
     mcpErrors: result.mcpErrors,
     resources: result.resources,
     hookEvents: result.hookEvents,

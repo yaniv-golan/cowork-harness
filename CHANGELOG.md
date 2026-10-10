@@ -15,8 +15,8 @@ All notable changes to this project are documented here. The format is based on
   freezes the run's hook inventory and is stamped v16, so 4.6.x refuses it as too new rather than read a failed hook
   frame as "no decision". Every other cassette stamps exactly as before, so no existing cassette or `verify-cassettes`
   result changes. `schema/cassette.v16.json` is added; v15's is kept.
-- **A recording made before this release by agent 2.1.294 or later can change verdict.** Such a recording (or one
-  whose stream reports no agent version) has no hook inventory, so its inventory reads as unknown. Two kinds of
+- **A recording made before this release by agent 2.1.294 or later can change verdict.** Such a recording (any whose
+  init frames name an agent newer than 2.1.293, or none) has no hook inventory, so its inventory reads as unknown. Two kinds of
   assertion it holds become evidence-unavailable:
   - unscoped `no_hook_event_blocked: true`;
   - a hook key over a failed or timed-out hook frame.
@@ -111,10 +111,10 @@ All notable changes to this project are documented here. The format is based on
     InstructionsLoaded, Notification, SessionEnd, StopFailure, WorktreeCreate, WorktreeRemove, CwdChanged and
     FileChanged stream no frame at all. So unscoped `no_hook_event_blocked: true` is evidence-unavailable when one of
     those events has such a hook, or when the inventory is unknown.
-  - Replay and `verify-run` read the recorded inventory. A recording made before it existed is read by the agent its
-    own init frame reports, not the baseline it names (a hostloop run can substitute a newer native binary, and
-    protocol runs the host's `claude`): 2.1.293 and earlier have no `onFailure`; any other agent, or none reported,
-    counts as unknown.
+  - Replay and `verify-run` read the recorded inventory. A recording made before it existed is read by the agents its
+    own init frames report, not the baseline it names (a hostloop run can substitute a newer native binary, and
+    protocol runs the host's `claude`). It reads as empty only when every init frame reports 2.1.293 or earlier, which
+    have no `onFailure`; any other agent, or none reported, counts as unknown.
   - Not covered:
     - a hook that replies `{"async": true}` at run time, whose failure is read as a possible block although the agent
       does not block on it;

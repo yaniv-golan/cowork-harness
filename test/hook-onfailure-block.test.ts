@@ -150,7 +150,7 @@ describe("events whose hooks stream no frame at all (the agent's outside-REPL ru
 describe("resolveHookFailureBlocks: a malformed recorded inventory", () => {
   it("reads as unknown, never crashes, and still needs a v16 reader", () => {
     for (const bad of [null, {}, { events: "PreToolUse" }, { unknown: true }, [], "x"])
-      expect("unknown" in resolveHookFailureBlocks(bad, "2.1.293"), JSON.stringify(bad)).toBe(true);
+      expect("unknown" in resolveHookFailureBlocks(bad, ["2.1.293"]), JSON.stringify(bad)).toBe(true);
     expect(requiredVersionFor({ prompt: "x" }, { hookFailureBlocks: null })).toBe(16);
   });
   it("a cassette file carrying one is refused cleanly on read; an in-memory one replays as unknown, without a crash", async () => {
@@ -174,14 +174,29 @@ describe("resolveHookFailureBlocks: a malformed recorded inventory", () => {
 
 describe("resolveHookFailureBlocks: a recording without the inventory", () => {
   it("keeps a recorded inventory as is", () => {
-    expect(resolveHookFailureBlocks(PRE, "2.1.293")).toEqual(PRE);
+    expect(resolveHookFailureBlocks(PRE, ["2.1.293"])).toEqual(PRE);
   });
   it("an agent at or below 2.1.293 has no onFailure: nothing to taint", () => {
-    for (const v of ["2.1.293", "2.1.284", "2.0.99", "1.9.300"]) expect(resolveHookFailureBlocks(undefined, v), v).toEqual({ events: [] });
+    for (const v of ["2.1.293", "2.1.284", "2.0.99", "1.9.300"])
+      expect(resolveHookFailureBlocks(undefined, [v]), v).toEqual({ events: [] });
   });
   it("a newer or unknown agent is unknown (compared numerically: 2.1.1000 > 2.1.293)", () => {
     for (const v of ["2.1.294", "2.1.295", "2.1.1000", "3.0.0", undefined, "garbage"])
-      expect("unknown" in resolveHookFailureBlocks(undefined, v), String(v)).toBe(true);
+      expect("unknown" in resolveHookFailureBlocks(undefined, [v]), String(v)).toBe(true);
+    expect("unknown" in resolveHookFailureBlocks(undefined, [])).toBe(true); // no init frame
+  });
+  it("every agent the recording reports must be old", () => {
+    expect(resolveHookFailureBlocks(undefined, ["2.1.293", "2.1.286"])).toEqual({ events: [] });
+    expect(resolveHookFailureBlocks(undefined, ["2.1.293", "2.1.295"])).toEqual({
+      unknown: true,
+      why: "recorded before the inventory existed, by agent 2.1.293, 2.1.295",
+    });
+    for (const vs of [
+      ["2.1.293", "2.1.295"],
+      ["2.1.295", "2.1.293"],
+      ["2.1.293", undefined],
+    ])
+      expect("unknown" in resolveHookFailureBlocks(undefined, vs), String(vs)).toBe(true);
   });
 });
 
@@ -396,6 +411,18 @@ describe("replay reads the frozen inventory", () => {
       expect(r.message).toMatch(UNAVAILABLE);
     }
   });
+  it("an older cassette: every init frame counts, not the first", async () => {
+    const frames = hook("PreToolUse", "Bash", exit1);
+    const initLine = (v: string) => line({ type: "system", subtype: "init", tools: [], skills: [], claude_code_version: v });
+    const withSecond = (first: string, second: string) => {
+      const c = cassetteOf(frames, {}, first);
+      return { ...c, events: [c.events[0]!, initLine(second), ...c.events.slice(1)] } as Cassette;
+    };
+    const r = await replayedNoBlock(withSecond("2.1.293", "2.1.295"));
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(UNAVAILABLE);
+    expect((await replayedNoBlock(withSecond("2.1.293", "2.1.286"))).pass).toBe(true);
+  });
   it("an older cassette with no failed frame is unchanged, whatever its agent", async () => {
     expect((await replayedNoBlock(cassetteOf(hook("PreToolUse", "Bash", ok), {}, "2.1.295"))).pass).toBe(true);
   });
@@ -470,11 +497,17 @@ describe("verify-run reads the kept run's inventory", () => {
     dir = realpathSync(mkdtempSync(join(tmpdir(), "onfail-verify-")));
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
-  const kept = (result: Record<string, unknown>, agent?: string) => {
+  /** `agent`: the version each init frame in events.jsonl reports, in order. */
+  const kept = (result: Record<string, unknown>, agent?: string | string[]) => {
     const runDir = join(dir, `run-${++n}`);
     mkdirSync(join(runDir, "turns", "1"), { recursive: true });
     writeFileSync(join(runDir, "turns", "1", "result.json"), JSON.stringify(result));
-    if (agent) writeFileSync(join(runDir, "events.jsonl"), line({ type: "system", subtype: "init", claude_code_version: agent }) + "\n");
+    const agents = agent === undefined ? [] : typeof agent === "string" ? [agent] : agent;
+    if (agents.length)
+      writeFileSync(
+        join(runDir, "events.jsonl"),
+        agents.map((v) => line({ type: "system", subtype: "init", claude_code_version: v }) + "\n").join(""),
+      );
     return runDir;
   };
   const scenario = ScenarioObject.parse({
@@ -484,7 +517,7 @@ describe("verify-run reads the kept run's inventory", () => {
     assert: [NO_BLOCK],
   }) as unknown as Scenario;
   const base = { result: "success", command: "run", contextEvents: toEvents(hook("PreToolUse", "Bash", exit1)) };
-  const blocks = (r: Record<string, unknown>, agent?: string) => {
+  const blocks = (r: Record<string, unknown>, agent?: string | string[]) => {
     const v = assertContextFromRunDir(kept(r, agent), scenario);
     if (!v.ok) throw new Error(JSON.stringify(v));
     return v.ctx.hookFailureBlocks;
@@ -496,6 +529,35 @@ describe("verify-run reads the kept run's inventory", () => {
     expect(blocks({ ...base, baseline: LIVE }, "2.1.293")).toEqual({ events: [] });
     expect("unknown" in blocks({ ...base, baseline: LIVE }, "2.1.295")!).toBe(true);
     expect("unknown" in blocks({ ...base, baseline: LIVE })!).toBe(true); // no stream: unknown
+  });
+  it("every init frame in the stream counts, not the first: one newer agent makes it unknown", () => {
+    // Not a shape the kept corpus holds (one agent process reports one version); it pins the rule, so a first-frame
+    // read cannot let an old agent's frame vouch for a newer one's.
+    const v = assertContextFromRunDir(kept({ ...base, baseline: LIVE }, ["2.1.293", "2.1.295"]), scenario);
+    if (!v.ok) throw new Error(JSON.stringify(v));
+    expect("unknown" in v.ctx.hookFailureBlocks!).toBe(true);
+    const r = evaluate([Assertion.parse(NO_BLOCK)], v.ctx)[0]!;
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(UNAVAILABLE);
+    expect(blocks({ ...base, baseline: LIVE }, ["2.1.293", "2.1.286"])).toEqual({ events: [] });
+  });
+  it("a resumed run dir is refused before its inventory is read, whatever its turns' agents", () => {
+    // A turn marker is written only by a resumed turn, which creates turns/<N> first, so a dir whose stream spans
+    // turns always has more than one turn dir.
+    const runDir = kept({ ...base, baseline: LIVE });
+    mkdirSync(join(runDir, "turns", "2"));
+    writeFileSync(
+      join(runDir, "events.jsonl"),
+      [
+        line({ type: "system", subtype: "init", claude_code_version: "2.1.293" }),
+        line({ _emu: "turn_start", turn: 2 }),
+        line({ type: "system", subtype: "init", claude_code_version: "2.1.295" }),
+        ...hook("PreToolUse", "Bash", exit1).map(line),
+      ].join("\n") + "\n",
+    );
+    const v = assertContextFromRunDir(runDir, scenario);
+    expect(v.ok).toBe(false);
+    expect(v.ok ? "" : (v as { message: string }).message).toMatch(/holds 2 turns/);
   });
 });
 
