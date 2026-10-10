@@ -418,13 +418,12 @@ workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFid
 / `costUsd` — plus `requestedFidelity`, present only when `--fidelity cowork` was passed and naming what
 it resolved to — and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
 malformed evaluator items (the surviving findings are then not necessarily the complete reply).
-**`evaluatorRepair`** (`[{pass, appended, possiblyTruncated}]`) appears when an evaluator reply's `{"items":[...]}` document was
-complete except for its trailing closer(s): exactly those closers were appended at the end, and the reply then
-parsed and validated as usual; the text report notes it, and a `--summary-out` file carries `evaluatorRepaired`.
-`possiblyTruncated: true` means the findings list itself was left open (a `]` was appended): the model may have
-been cut off, so findings after the last complete one can be missing. Any other defect — a reply cut mid-item,
-mid-string or right after the list opens, a repair that leaves no findings, a missing inner comma, a mismatched closer, a document nested in another
-unclosed one — is not repaired, and the critique fails as before. An
+**`evaluatorRepair`** (`[{pass, appended}]`) appears when an evaluator reply's `{"items":[...]}` document was
+complete except for its final closing brace: that one `}` was appended, and the reply then parsed and validated as
+usual; the text report notes it, and a `--summary-out` file carries `evaluatorRepaired`. Nothing else is repaired:
+a reply that would also need a `]` (the findings list left open, which is what a cut-off reply looks like), one cut
+mid-item or mid-string, a repair that leaves no findings, a missing inner comma, a mismatched closer, or a document
+nested in another unclosed one fails as before — re-run the critique. An
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
 (total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + the skill's
 own references + every packaged agent md + every packaged plugin-root reference), `corpusPackaged`

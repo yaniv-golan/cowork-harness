@@ -142,9 +142,8 @@ interface ParsedPassReply {
   items: CritiqueItem[];
   canaryPresent: boolean;
   droppedMalformed: number;
-  /** Set when the reply was missing only its trailing closer(s) and `repairTrailingClosers` appended them;
-   *  `possiblyTruncated` when the items list itself was left open (the model may have been cut off mid-list). */
-  repair?: { appended: string; possiblyTruncated: boolean };
+  /** Set when the reply was missing only its final `}` and `repairTrailingClosers` appended it. */
+  repair?: { appended: string };
 }
 
 /** Parse a pass's reply into `CritiqueItem[]`, tagging every item with `source` (never trusting the model
@@ -251,8 +250,7 @@ export function parseCritiqueItems(
       }
       // A repair exists to recover findings. One that yields none (a reply cut right after `{"items":[`) must not
       // stand in for "the evaluator found nothing" — fail as before.
-      if (again.items.length > 0)
-        return { ...again, repair: { appended: repaired.appended, possiblyTruncated: repaired.possiblyTruncated } };
+      if (again.items.length > 0) return { ...again, repair: { appended: repaired.appended } };
     }
     throw new Error(`${label}: no valid {"items":[...]} JSON found in the evaluator reply.\n--- raw reply ---\n${raw}`);
   }
@@ -529,7 +527,7 @@ export interface RunCritiqueOptions {
    *  whole document — the report must surface it (an unreported drop would be a silent recall loss). */
   onDroppedItems?: (dropped: { pass1: number; pass2?: number }) => void;
   /** A pass's reply was missing only its trailing closer(s), and they were appended (see reply-repair.ts). */
-  onRepair?: (repair: { pass: 1 | 2; appended: string; possiblyTruncated: boolean }) => void;
+  onRepair?: (repair: { pass: 1 | 2; appended: string }) => void;
   /** Called once per pass, IMMEDIATELY after the transport resolves and BEFORE the reply is parsed — so
    *  the raw reply is captured structurally even when the parse then throws (the salvage path; the raw
    *  text previously survived only embedded inside the thrown error's message). */

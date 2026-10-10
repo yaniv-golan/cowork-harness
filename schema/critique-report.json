@@ -40,15 +40,11 @@
     },
     "evaluatorRepair": {
       "type": "array",
-      "description": "evaluator replies whose {\"items\":[...]} document was complete except for its trailing closer(s): those closers were appended, and the reply then parsed and validated as usual. A reply needing any other edit is refused, as before. Absent when no repair was made",
+      "description": "evaluator replies whose {\"items\":[...]} document was complete except for its final closing brace: that one } was appended, and the reply then parsed and validated as usual. A reply needing anything else (a ], an inner fix) is refused, as before. Absent when no repair was made",
       "items": {
         "type": "object",
-        "properties": {
-          "pass": { "enum": [1, 2] },
-          "appended": { "type": "string", "pattern": "^[\\]}]+$" },
-          "possiblyTruncated": { "type": "boolean", "description": "the findings list itself was left open (a ] was appended): the model may have been cut off mid-list, so findings after the last complete one can be missing" }
-        },
-        "required": ["pass", "appended", "possiblyTruncated"],
+        "properties": { "pass": { "enum": [1, 2] }, "appended": { "const": "}" } },
+        "required": ["pass", "appended"],
         "additionalProperties": false
       }
     },

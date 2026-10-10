@@ -1,6 +1,7 @@
-// A bounded repair for an evaluator reply whose `{"items":[...]}` document is complete except for its trailing
-// closer(s) — the model ended on `…}]` without the final `}`. Without it, one missing character discards a whole
-// critique.
+// A bounded repair for an evaluator reply whose `{"items":[...]}` document is complete except for its FINAL closing
+// brace — the model ended on `…}]` without the last `}`. Without it, one missing character discards a whole critique.
+// Only that one brace is ever appended: a reply that would need a `]` (the findings list left open) is what a reply
+// cut off mid-list looks like, and is refused so the critique is re-run rather than silently missing findings.
 //
 // STRICT, by construction:
 //   - the reply is scanned from its start; outside any bracket (prose) quotes are not strings, inside a bracket they
@@ -9,7 +10,8 @@
 //   - the text must end OUTSIDE a string, with unclosed openers left, and the OUTERMOST unclosed opener must be the
 //     `{` of a `{"items":` document — so nothing before the document is dropped, and nothing it is nested in is
 //     silently left unclosed;
-//   - the repair appends exactly those closers, in order, and nothing else — no truncation, no inner fix;
+//   - the only unclosed opener left must be that document's own `{` — so the repair appends exactly one `}`, and
+//     nothing else: no `]`, no truncation, no inner fix;
 //   - the result must then parse as JSON. Anything else is refused (null), and the caller fails as before.
 // A reply cut mid-item, mid-string, or with a missing inner comma does not parse after the append, so it is refused.
 // One shape this cannot tell apart: a cut right after a complete number (`"n":1` where `12` was meant) parses; only
@@ -20,15 +22,12 @@ const OPEN_TO_CLOSE: Record<string, string> = { "{": "}", "[": "]" };
 export interface ReplyRepair {
   /** The repaired document: the unclosed `{"items":…` tail plus the appended closers. */
   text: string;
-  /** The closers appended, in order (e.g. `}`). */
-  appended: string;
-  /** The items array itself was left open (`]` appended): the model may have been cut off mid-list, so items after
-   *  the last complete one can be missing. */
-  possiblyTruncated: boolean;
+  /** What was appended: always the single closing brace `}`. */
+  appended: "}";
 }
 
 /** Repair `raw` if — and only if — its one unclosed top-level document is a `{"items":` document missing only its
- *  trailing closers. Returns null otherwise. */
+ *  final `}`. Returns null otherwise. */
 export function repairTrailingClosers(raw: string): ReplyRepair | null {
   const stack: Array<{ c: string; at: number }> = [];
   let inString = false;
@@ -50,18 +49,15 @@ export function repairTrailingClosers(raw: string): ReplyRepair | null {
       if (top !== undefined && OPEN_TO_CLOSE[top.c] !== c) return null;
     }
   }
-  if (inString || stack.length === 0) return null;
+  // Exactly one opener left, and it is the items document's own `{`: anything more (a `]` to close the list) is refused.
+  if (inString || stack.length !== 1) return null;
   const outer = stack[0]!;
-  if (!/^\{\s*"items"\s*:/.test(raw.slice(outer.at))) return null;
-  const appended = [...stack]
-    .reverse()
-    .map((o) => OPEN_TO_CLOSE[o.c]!)
-    .join("");
-  const text = raw.slice(outer.at) + appended;
+  if (outer.c !== "{" || !/^\{\s*"items"\s*:/.test(raw.slice(outer.at))) return null;
+  const text = raw.slice(outer.at) + "}";
   try {
     JSON.parse(text);
   } catch {
     return null;
   }
-  return { text, appended, possiblyTruncated: appended.includes("]") };
+  return { text, appended: "}" };
 }

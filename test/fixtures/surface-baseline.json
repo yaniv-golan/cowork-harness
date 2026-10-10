@@ -2395,15 +2395,11 @@
         "closed": true
       },
       ".evaluatorRepair[].appended": {
-        "type": "string",
+        "const": "}",
         "required": true
       },
       ".evaluatorRepair[].pass": {
         "enum": [1, 2],
-        "required": true
-      },
-      ".evaluatorRepair[].possiblyTruncated": {
-        "type": "boolean",
         "required": true
       },
       ".evaluatorTransport": {

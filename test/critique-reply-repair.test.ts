@@ -16,19 +16,24 @@ describe("evaluator reply repair — only the missing trailing closers", () => {
     const raw = `{"items":[${item("first finding")},${item("second finding")}]`;
     const r = parse(raw);
     expect(r.items.map((i) => i.idea)).toEqual(["first finding", "second finding"]);
-    expect(r.repair).toEqual({ appended: "}", possiblyTruncated: false });
+    expect(r.repair).toEqual({ appended: "}" });
   });
 
-  it("repairs after leading prose, and when both ] and } are missing", () => {
-    const r = parse(`Here is my assessment:\n\n{"items":[${item("only finding")}`);
+  it("repairs after leading prose", () => {
+    const r = parse(`Here is my assessment:\n\n{"items":[${item("only finding")}]`);
     expect(r.items).toHaveLength(1);
-    expect(r.repair).toEqual({ appended: "]}", possiblyTruncated: true }); // the list was left open: maybe cut off
+    expect(r.repair).toEqual({ appended: "}" });
+  });
+
+  it("REFUSES a reply that would also need a ] (the list left open — a cut-off reply looks like this)", () => {
+    expect(repairTrailingClosers(`{"items":[${item("only finding")}`)).toBeNull();
+    expect(() => parse(`{"items":[${item("a")},${item("b")}`)).toThrow(/no valid \{"items":\[\.\.\.\]\} JSON/);
   });
 
   it("brackets inside strings do not count: an idea containing '}]' is repaired correctly", () => {
     const r = parse(`{"items":[${item('uses a literal "}]" token in its template')}]`);
     expect(r.items[0]!.idea).toBe('uses a literal "}]" token in its template');
-    expect(r.repair).toEqual({ appended: "}", possiblyTruncated: false });
+    expect(r.repair).toEqual({ appended: "}" });
   });
 
   it("a complete reply is unchanged — extra trailing text included — and carries no repair", () => {
@@ -81,7 +86,7 @@ describe("evaluator reply repair — only the missing trailing closers", () => {
   it("a stray double quote in prose before the document is not read as a string", () => {
     const r = parse(`The "summary: {"items":[${item("x")}]`);
     expect(r.items).toHaveLength(1);
-    expect(r.repair).toEqual({ appended: "}", possiblyTruncated: false });
+    expect(r.repair).toEqual({ appended: "}" });
   });
 
   it("REFUSES a canary-only reply missing its closer (a repair that leaves no findings)", () => {
@@ -105,7 +110,7 @@ describe("evaluator reply repair — from runCritique to the report, text and su
     }) as unknown as Complete;
     const repairs: unknown[] = [];
     await runCritique(SECTIONS, "self report text", { nonce: N, complete, onRepair: (r) => repairs.push(r) });
-    expect(repairs).toEqual([{ pass: 2, appended: "}", possiblyTruncated: false }]);
+    expect(repairs).toEqual([{ pass: 2, appended: "}" }]);
 
     const state = {
       skillFolder: "s",
@@ -121,8 +126,6 @@ describe("evaluator reply repair — from runCritique to the report, text and su
     const ctx = { identity: { name: "s", kind: "folder" as const }, includeCost: false, includePromptHash: false };
     expect(buildCritiqueSummary(buildJsonReport(state), ctx).evaluatorRepaired).toBe(true);
     expect(buildCritiqueSummary(buildJsonReport({ ...state, evaluatorRepair: undefined }), ctx).evaluatorRepaired).toBe(false);
-    expect(buildTextReport(state)).toContain(`evaluator pass 2's reply was missing its closing "}"`);
-    const truncated = { ...state, evaluatorRepair: [{ pass: 1, appended: "]}", possiblyTruncated: true }] } as typeof state;
-    expect(buildTextReport(truncated)).toContain("findings after the last complete one can be missing");
+    expect(buildTextReport(state)).toContain(`evaluator pass 2's reply was missing its final closing "}"`);
   });
 });

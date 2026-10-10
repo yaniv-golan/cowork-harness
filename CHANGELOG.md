@@ -81,14 +81,11 @@ All notable changes to this project are documented here. The format is based on
 ### Fixed
 
 - **An evaluator reply missing only its final closing brace no longer loses the whole critique.** When the
-  `{"items":[...]}` document is complete except for its trailing closer(s), critique appends exactly those
-  closers at the end, then parses and validates the reply as usual, and records the repair in the report
-  (`evaluatorRepair`), the text output and the summary (`evaluatorRepaired`). Brackets inside strings are
-  ignored. When the findings list itself was left open (a `]` appended), the repair is marked `possiblyTruncated`:
-  the model may have been cut off, so findings after the last complete one can be missing. Not repaired, and
-  failing as before: a reply cut mid-item or mid-string, right after the list opens or with no findings left after
-  the repair, or with a missing inner comma,
-  a mismatched closer, text after the unclosed document, or the document nested inside another unclosed one.
+  `{"items":[...]}` document is complete except for that last `}`, critique appends it, then parses and validates
+  the reply as usual, and records the repair in the report (`evaluatorRepair`), the text output and the summary
+  (`evaluatorRepaired`). Only a missing final closing brace is repaired; anything else — a `]` also needed, a reply
+  cut mid-item or mid-string, a missing inner comma, a mismatched closer, text after the document, a document nested
+  in another unclosed one, or a repair that leaves no findings — is refused as before.
 
 ### Changed
 
