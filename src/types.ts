@@ -2030,15 +2030,17 @@ export interface RunResult {
   baseline: string;
   result: "success" | "error";
   // when result==="error", classify the KIND: a tail-end transport drop, a genuine agent/skill failure, or
-  // usage_limit (quota exhausted — an is_error result with HTTP 429 + a terminal usage-limit message; NOT
-  // the skill's fault, retry after the reset). Verdict- and renderer-relevant.
+  // usage_limit (quota exhausted — an is_error result with HTTP 429 + a terminal usage-limit message, or a
+  // sub-agent's task that failed on a terminal usage-limit error whatever the main loop did next; NOT the
+  // skill's fault). Verdict- and renderer-relevant.
   resultErrorKind?: "transport" | "agent" | "usage_limit";
   /** How the run terminated in error — the `error` event's finer source (`spawn`/`protocol`/`exit`/`agent`,
    *  or `result` for the SDK-wrapped is_error-result path), OR `no_result` when the stream ended with no
    *  terminal event at all (the turn/time-exhaustion case: neither a result nor an error event fired), OR
    *  `timeout` when the harness's own wall-clock limit killed the run, OR `decider_timeout` when a
    *  `--decider-cmd`/`--decider-dir` channel did not answer a gate within its backstop (an unanswered-gate
-   *  partial). Additive diagnostic detail alongside
+   *  partial). `agent` with `resultErrorKind: "usage_limit"` can be a sub-agent's terminal quota error on a run
+   *  whose main loop ended `success` (a `subagent_usage_limit` decisions row names it). Additive diagnostic detail alongside
    *  the coarse verdict-relevant `resultErrorKind`; consumed by nobody in the verdict. Absent on a clean run;
    *  a run that recovered from a non-fatal `agent` error and then succeeded keeps the first observed source. */
   errorSource?:

@@ -18,7 +18,7 @@ companion skill, CI). This page is the CLI one.
 **Install from npm:**
 
 ```bash
-npm install -g "cowork-harness@^4.7.0"    # puts the `cowork-harness` command on your PATH
+npm install -g "cowork-harness@^4.7.1"    # puts the `cowork-harness` command on your PATH
 ```
 
 **Or build from source:**
@@ -38,7 +38,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@^4.7.0"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@^4.7.1"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -48,7 +48,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^4.7.0"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^4.7.1"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -126,7 +126,7 @@ The parts people ask about. **`package.json`'s `files[]` is the exhaustive, mach
 this table is the readable summary of it, and deliberately omits the infrastructure that always ships
 (`baselines/`, `schema/`, `fixtures/`, `scripts/`, `docker/`).
 
-| What ships | npm global (`npm install -g "cowork-harness@^4.7.0"`) | Source checkout (`git clone` + `npm ci`) |
+| What ships | npm global (`npm install -g "cowork-harness@^4.7.1"`) | Source checkout (`git clone` + `npm ci`) |
 |---|---|---|
 | CLI, `scenario.py` + assertion keys (enough for `lint` in CI) | ✓ | ✓ |
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
@@ -141,7 +141,7 @@ since a global install puts nothing in your working directory. The matrix, answe
 examples are the only ones that still need a source checkout. The **marketplace skill install** is
 narrower again — it pulls only `.claude/skills/cowork-harness/` (SKILL.md + `references/` +
 `scenario.py`/assertion keys, per `.claude-plugin/marketplace.json`'s `source`); everything in the npm column
-arrives when the skill's first command self-bootstraps `npx "cowork-harness@^4.7.0"` — the last row stays
+arrives when the skill's first command self-bootstraps `npx "cowork-harness@^4.7.1"` — the last row stays
 ✗ either way, since `matrices/`, `answer-policies/` and `probes/` are not published at all. See
 [docs/companion-skill.md](./companion-skill.md) for that install path.
 
@@ -954,7 +954,7 @@ Secrets (the injected OAuth token / API key) are scrubbed from every persisted l
 - **Verdict:** `verdict` — a kept run's overall `{pass, exitCode, signals, guards, failures}`, the same `computeVerdict` source that also drives the run/skill exit code, the footer, and the JSON envelope's `ok`; persisted and streamed verdict are one shape, so they can never diverge. Each `failures[]` entry carries a **`kind`** — `assertion` (one of yours), `guard` (an infra error, an unanswered gate, a scan-based host-path leak, …), `staleness` (skill/baseline drift on a `--strict`/`--assert-from` replay), `cassette-format`, or `coverage` (a `verify-run` answer-coverage miss) — so "did my assertions pass?" and "is the cassette stale?" are separable without scraping stderr. Filter on `kind`, not on whether `assertion` is set. `jq '.verdict' result.json` answers "did it pass, and why" without re-running `verify-run`. The same `kind` query works unchanged against **both** `run` and `verify-run` — `jq '[.results[]? | .verdict.failures[]? | select(.kind=="assertion")]'` over either command's `--output-format json` envelope answers "did MY assertions fail?" (`verify-run` emits a one-entry `results[]` alongside its flat `pass`/`assertions[]`/`signals[]` keys; through 1.24.0 it was flat-only, so that query silently returned `[]` there — an empty answer indistinguishable from "nothing failed" — against a failing run). Scope: the run/asserted lane only — `chat` carries no assertions and no verdict, so the field is absent there. (New in 0.31.0.)
 - **Sub-agents & skills:** `subagents[]` now also carries `prompt`, `dispatchModel`/`resolvedModel` (the dispatch-input vs binary-resolved model), `output`, and `attributedSkillId`; `skillActivity[]` attributes tool calls to whichever skill was active when they ran; `referencesRead[]` lists the skill's `references/*`/`scripts/*` files the agent's **main agent** actually **Read** (a progressive-disclosure signal — `SKILL.md` is delivered whole so it never appears, `assets/` is untracked; present on live and replay). `subagents[].referencesRead` is the per-dispatch counterpart, tracking a **sub-agent's own** reference/script Reads (new in 0.31.0) — top-level `referencesRead[]` remains main-agent-only.
 - **Panels:** `context` (available tools/mcpServers/skills), `tasks[]` (the agent's to-do list), `workspaceFiles[]` (every file the run produced or read, classified `output`/`mount`/`input`/`scratchpad`, with size + sha256 — `scratchpad` is the agent's working area OUTSIDE every user-visible root, i.e. produced but not delivered by location). `trace <id> --view files` renders `workspaceFiles[]` as a class-grouped tree plus a diff against `preRunHashes` (added/modified/removed/unchanged); needs a run dir. When `workspaceFiles` is absent (a replay result, or a run whose workspace root was missing at collection) the view reports evidence **UNAVAILABLE** (`workspaceFilesRecorded: false`) rather than an empty tree — distinct from a run that genuinely wrote nothing (`workspaceFilesRecorded: true`, zero rows). `trace <id> --view usage` renders per-model tokens/cost/cache-read ratio from `modelUsage`; also needs a run dir.
-- **Runtime signals:** `hookEvents` (PreToolUse block/allow decisions), `mcpErrors` (failed MCP round-trips), `contextEvents` (incl. context-compaction boundaries), `hookFailureBlocks` (the events the run may have an `onFailure: "block"` hook on), per-request `egress` detail (method/path/port/bytes + deny reason), `resources` (peak RSS, avg/peak CPU% — live lane only), `errorSource`/`stderrLogPath` (crash triage), `preRunHashes` (pre-run file hashes backing in-place-mutation checks), `apiRetries` (`{count, delayMs, subagentCount, subagentDelayMs}`: the agent's own retried model calls — the main loop's from its `api_retry` stream events, sub-agents' from `tool_progress` frames carrying `subagent_retry` — each with summed backoff; sub-agents run concurrently, so `subagentDelayMs` is not elapsed time and must not be added to `delayMs`; all zeros when a stream was observed with none, absent when none was observed), `resultErrorKind` (`transport`/`agent`/`usage_limit` — a usage/quota-limit failure is a spent quota surfaced distinctly, so a batch or CI job can halt-fast and retry after reset instead of treating it as a skill regression).
+- **Runtime signals:** `hookEvents` (PreToolUse block/allow decisions), `mcpErrors` (failed MCP round-trips), `contextEvents` (incl. context-compaction boundaries), `hookFailureBlocks` (the events the run may have an `onFailure: "block"` hook on), per-request `egress` detail (method/path/port/bytes + deny reason), `resources` (peak RSS, avg/peak CPU% — live lane only), `errorSource`/`stderrLogPath` (crash triage), `preRunHashes` (pre-run file hashes backing in-place-mutation checks), `apiRetries` (`{count, delayMs, subagentCount, subagentDelayMs}`: the agent's own retried model calls — the main loop's from its `api_retry` stream events, sub-agents' from `tool_progress` frames carrying `subagent_retry` — each with summed backoff; sub-agents run concurrently, so `subagentDelayMs` is not elapsed time and must not be added to `delayMs`; all zeros when a stream was observed with none, absent when none was observed), `resultErrorKind` (`transport`/`agent`/`usage_limit` — a usage/quota-limit failure is a spent quota surfaced distinctly, so a batch or CI job can halt-fast and retry after reset instead of treating it as a skill regression — also set when a sub-agent's task failed on a terminal usage limit and the main loop ended `success`: `errorSource: "agent"`, a `subagent_usage_limit` row in `decisions`).
 - **Execution location:** `execution` — `{location:"local"|"cloud", environmentId?, taskKind?:"interactive"|"scheduled"}`, orthogonal to `fidelity` (a local privilege tier). Stamped `location:"local"` on every locally-executed run; absence is **not** a "local" signal — it means a pre-taxonomy result or the error-replay lane, not a positive local claim.
 - **Provenance & evidence health:** `command` records the exact command that produced the result (`run`/`skill`/`record`/`chat`/`replay`) — finer than `mode` (`skill` and `record` both report `mode:"run"`), so a rebuilt run index can tell them apart. On replay, `fingerprint.frozen: true` marks the shown staleness fingerprint as the cassette's record-time value, not a fresh recompute. `evidenceErrors` counts dropped/malformed lines per telemetry stream (`taskTracking`, `webSearchParse`, `presentFilesMalformed`, `egressParse`); a non-zero count makes the dependent assertion fail evidence-unavailable rather than grade a partial signal. A dispatch's `output` and a matched result's `assertText` carry companion `outputTruncated` / `assertTextTruncated` flags when cut at the assert cap, so a substring miss against truncated evidence is reported unverifiable, never a proven absence.
 

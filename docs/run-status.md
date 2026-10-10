@@ -34,7 +34,8 @@ namespace.
    (e.g. `error_max_turns`), `stderrLogPath`, and `resultErrorKind` (`transport`/`agent`/`usage_limit`) — so a
    failure-output reader gets more than a bare `"error"` (these mirror the same fields in `result.json`).
    `resultErrorKind: "usage_limit"` is worth checking for specifically: a batch/status watcher can halt fast
-   on it instead of retrying into an already-spent quota.
+   on it instead of retrying into an already-spent quota. It is also set when a sub-agent hit the limit and the
+   main loop carried on to `success`; `errorSource` is then `agent`.
 4. **Crash safety net:** if the process unwinds via an uncaught throw, or receives `SIGINT`/`SIGTERM`, before
    either normal completion path runs, an `"exit"` handler still writes a terminal `"error"` status —
    `status.json` never gets stuck reporting `"running"` for a process that's actually gone. On a signal the

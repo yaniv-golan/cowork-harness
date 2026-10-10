@@ -497,6 +497,26 @@ On `subscription`, `cost_usd` is the agent's list-price estimate, not a charge. 
 organization's price table set it. Compare costs only across variants with the same basis. `billing_basis` describes
 the agent only: the judge and the decider run on the host's own credential, which may bill differently.
 
+### Cutting the cost per rep
+
+Every rep re-runs the whole scenario, so a case that tests the last step of a long pipeline pays for every step
+before it on every rep. Start such a case from a workspace fixture instead: a directory whose files are copied into
+the session's `outputs/` before turn 1, so the prompt asks for the late step alone
+([Starting from a saved workspace](./scenario.md#starting-from-a-saved-workspace-workspace_fixture)).
+
+- **Make one from a kept run.** `cowork-harness fixture export <run-dir> --out <dir>`, then point the case's
+  `workspace_fixture:` at `<dir>` and commit both ([fixture export](./cli.md#exporting-a-runs-outputs-as-a-fixture-fixture-export)).
+  Add `--session-paths` when the skill reads back paths it recorded (an outputs-dir probe, a sub-agent's output
+  path). `--exclude <path>` leaves out a file the step re-creates, such as a probe the skill re-runs.
+- **Limits.** A fixture with session-path tokens is refused on the `protocol` tier, and `--session-paths` refuses a
+  protocol run. Binary files are never rewritten; one that holds a token is refused. Any other host path in a text
+  file is still refused (`--allow-host-paths` accepts an ordinary one, never a path into a run dir).
+- **What the case then measures.** Only the steps after the fixture. An untouched fixture file is pre-run, not
+  authored, so a judge grades only what this step wrote, and the conversation starts fresh. The earlier steps are no
+  longer exercised: keep a full-pipeline case for them.
+- **The fixture is in the harness gate.** Its files are hashed with the scenario, so an edited or re-exported fixture
+  changes the sha and needs `--approve-harness` again.
+
 ## When the goal is cost
 
 If you pick "cut cost" as the loop's goal, it follows the `claude-api` skill's cost guide (`cost-hillclimb.md`), which

@@ -344,9 +344,9 @@ It does **not** record their contents — see Known limitations.
 
 | Code | Meaning |
 |---|---|
-| `0` | The critique ran. **Any** findings, of any classification — including a task run that itself errored, which is a legitimate finding about the skill. |
+| `0` | The critique ran. **Any** findings, of any classification — including a task run that itself errored, which is a legitimate finding about the skill — except one that hit the account's usage limit (exit `2`). |
 | `1` | **Operator interrupt only** (SIGINT/SIGTERM — e.g. Ctrl-C). Not part of the findings taxonomy, but reachable: a sweep wrapper treating `1` as impossible will misread a cancelled run as a crash. |
-| `2` | Usage error, **or an instrument failure** — the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw*. No critique was produced. A broken instrument is not a discovery outcome. |
+| `2` | Usage error, a task turn that hit the account's usage limit (an ordinary `RUN FAILED`, not a broken instrument), **or an instrument failure** — the turn was killed, the reflection protocol broke, or the evaluator was never invoked *or threw*. No critique was produced. A broken instrument is not a discovery outcome. |
 
 Never gate CI on findings; that is the whole design.
 
@@ -367,8 +367,10 @@ categories are the caller's problem, and the header is keyed on exactly that spl
 
 A turn that **ran and errored** exits `1` with a full result envelope whose top-level `error` is `null` —
 so its cause lives in `results[0]`, not in an error object. That is where an exhausted quota shows up:
-`usage_limit` renders as *"the account's quota is exhausted; retry after the reset"*, not as a broken
-instrument and not as a skill defect.
+`usage_limit` renders as *"the account's quota is exhausted; retry after the reset"* — or, when a sub-agent hit it, names
+that sub-agent and its limit text — not as a broken instrument and not as a skill defect. A **task turn** that reports
+`usage_limit` — its own final result, or a sub-agent's — is a task-turn failure: no reflection turn is spawned on
+the spent quota, no critique is produced, and critique exits `2` with `RUN FAILED (task turn, usage_limit)`.
 
 - **`RUN FAILED (<turn>, <kind>): …`** — `unanswered`, `usage`, `boundary`, `usage_limit` or `transport`.
   An ordinary, actionable
@@ -382,8 +384,9 @@ instrument and not as a skill defect.
   instrument itself may be broken. It fails **closed**: an unrecognized kind lands here.
 
 The graded turn gets the same treatment from the other side. `taskResult: "error"` is a **gradeable**
-outcome — the critique proceeds and the findings stand — but `gradedErrorReason` now names *why*, so an
-exhausted quota or a dropped connection is not read as a defect in the skill under review.
+outcome — the critique proceeds and the findings stand — but `gradedErrorReason` now names *why*, so a
+dropped connection is not read as a defect in the skill under review. The exception is `usage_limit` (above):
+the account's quota cut that turn, so there is nothing honest to grade.
 
 ## Reading the report
 

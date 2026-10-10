@@ -385,7 +385,7 @@
     },
     "gradedErrorReason": {
       "type": "string",
-      "description": "why a graded turn that ended in result:\"error\" errored — its `resultErrorKind` (usage_limit / transport / agent) plus the finer termination source. An errored task turn is a GRADEABLE outcome and the critique still runs, so this is what separates a skill defect from an exhausted quota or a dropped connection. Absent when the run did not error or recorded no classification."
+      "description": "why a graded turn that ended in result:\"error\" errored — its `resultErrorKind` (transport / agent) plus the finer termination source. An errored task turn is a GRADEABLE outcome and the critique still runs, so this is what separates a skill defect from a dropped connection. A task turn that reported usage_limit is not graded: it is a task-turn failure (infraFailureKind usage_limit), with no critique. Absent when the run did not error or recorded no classification."
     }
   },
   "dependencies": {

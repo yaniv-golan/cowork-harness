@@ -247,12 +247,12 @@
     "resultErrorKind": {
       "type": "string",
       "enum": ["transport", "agent", "usage_limit"],
-      "description": "when result is 'error', the KIND: a tail-end transport drop (connection closed after a clean result), a genuine agent/skill failure, or usage_limit (quota exhausted \u2014 an is_error result with HTTP 429 + a terminal usage-limit message; not the skill's fault, retry after reset)"
+      "description": "when result is 'error', the KIND: a tail-end transport drop (connection closed after a clean result), a genuine agent/skill failure, or usage_limit (quota exhausted \u2014 an is_error result with HTTP 429 + a terminal usage-limit message, or a sub-agent's task that failed on a terminal usage-limit error, whatever the main loop did next; not the skill's fault)"
     },
     "errorSource": {
       "type": "string",
       "enum": ["spawn", "protocol", "exit", "agent", "result", "no_result", "timeout", "decider_timeout", "answer_channel_violation"],
-      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), 'timeout' when the harness wall-clock limit killed the run, or 'decider_timeout' when an external decider channel (--decider-cmd helper, --decider-dir rendezvous) did not answer a gate within its backstop (the run is an unanswered-gate partial), or 'answer_channel_violation' when a session with `answer_channel: none` received a question or permission prompt anyway (the agent ignored `--permission-prompts none`; the request was refused, never answered). Additive diagnostic alongside resultErrorKind; not read by the verdict."
+      "description": "How the run terminated in error \u2014 the error event's finer source (spawn/protocol/exit/agent, or 'result' for the SDK-wrapped is_error result; 'agent' with resultErrorKind 'usage_limit' can be a sub-agent's terminal quota error on a run whose main loop ended success, named by a 'subagent_usage_limit' row in decisions), 'no_result' when the stream ended with no terminal event (turn/time exhaustion), 'timeout' when the harness wall-clock limit killed the run, or 'decider_timeout' when an external decider channel (--decider-cmd helper, --decider-dir rendezvous) did not answer a gate within its backstop (the run is an unanswered-gate partial), or 'answer_channel_violation' when a session with `answer_channel: none` received a question or permission prompt anyway (the agent ignored `--permission-prompts none`; the request was refused, never answered). Additive diagnostic alongside resultErrorKind; not read by the verdict."
     },
     "resultSubtype": {
       "type": "string",

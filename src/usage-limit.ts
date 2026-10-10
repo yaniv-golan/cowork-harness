@@ -40,3 +40,41 @@ export function isUsageLimit(text: string, apiErrorStatus: number | undefined): 
   if (!matchesTerminalUsageLimitText(text)) return false;
   return apiErrorStatus === undefined || apiErrorStatus === 429;
 }
+
+/** `RunResult.decisions[].name` of the row the run lane records when a SUB-AGENT's task failed on a terminal usage
+ *  limit (src/run/run.ts). Its `detail` is `{toolUseId?, subagentType?, taskId?, error, prior?}`; the verdict reads it
+ *  to name the sub-agent, since the run's `errorSource` (`agent`) does not. */
+export const SUBAGENT_USAGE_LIMIT = "subagent_usage_limit";
+
+export interface SubagentUsageLimitDetail {
+  toolUseId?: string;
+  subagentType?: string;
+  taskId?: string;
+  /** The sub-agent's own error text, capped. */
+  error: string;
+  /** The run's error label before the sub-agent's limit upgraded it (`kind / source / subtype`), when it had one. */
+  prior?: string;
+}
+
+/** The sub-agent usage-limit rows of a run's decisions, oldest first. */
+export function subagentUsageLimits(decisions: ReadonlyArray<{ name: string; detail?: unknown }> | undefined): SubagentUsageLimitDetail[] {
+  return (decisions ?? []).flatMap((d) => {
+    if (d.name !== SUBAGENT_USAGE_LIMIT || !d.detail || typeof d.detail !== "object") return [];
+    const x = d.detail as Record<string, unknown>;
+    if (typeof x.error !== "string") return [];
+    const s = (k: string) => (typeof x[k] === "string" ? { [k]: x[k] as string } : {});
+    return [{ ...s("toolUseId"), ...s("subagentType"), ...s("taskId"), error: x.error, ...s("prior") }];
+  });
+}
+
+/** One line naming the first sub-agent that hit the limit, e.g. `a sub-agent (toolu_…, research) hit a usage/quota
+ *  limit: <text>`; undefined when the run has no such row. */
+export function describeSubagentUsageLimit(decisions: Parameters<typeof subagentUsageLimits>[0]): string | undefined {
+  const all = subagentUsageLimits(decisions);
+  if (all.length === 0) return undefined;
+  const first = all[0]!;
+  const who = [first.toolUseId ?? first.taskId, first.subagentType].filter(Boolean).join(", ");
+  const more = all.length > 1 ? ` (${all.length} sub-agent tasks failed this way)` : "";
+  const prior = first.prior ? `; the run had already errored as ${first.prior}` : "";
+  return `a sub-agent${who ? ` (${who})` : ""} hit a usage/quota limit: ${first.error.replace(/\s+/g, " ").trim()}${more}${prior}`;
+}

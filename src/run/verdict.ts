@@ -1,3 +1,4 @@
+import { describeSubagentUsageLimit, subagentUsageLimits } from "../usage-limit.js";
 import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { RunResult } from "../types.js";
@@ -261,10 +262,16 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     if (result.resultErrorKind === "usage_limit") {
       // Quota exhausted (429 + terminal usage-limit text) — NOT a skill defect. Still a fail (the run didn't
       // complete), but flagged distinctly so a batch halts fast instead of retrying into a spent quota.
+      // A sub-agent's limit is named, with its dispatch id, type and text: the run's errorSource (`agent`) does not
+      // say where it came from. "Retry after the limit resets" is not promised there — a model-scoped limit on a
+      // sub-agent's pinned model, or a credits/seat message, is the skill's or the account's setup, not a window.
+      const sub = describeSubagentUsageLimit(result.decisions);
       signals.push({
         code: "usage_limit",
         severity: "fail",
-        message: "usage/quota limit hit (not a skill failure) — retry after the limit resets",
+        message: sub
+          ? `${sub} — not a skill failure${subagentUsageLimits(result.decisions)[0]?.prior ? "" : "; the main loop's result does not count"}. Retry once the quota allows, or check the sub-agent's model and the account's plan`
+          : "usage/quota limit hit (not a skill failure) — retry after the limit resets",
       });
     } else if (result.resultErrorKind === "transport") {
       const allPass = result.assertions.every((a) => a.pass);

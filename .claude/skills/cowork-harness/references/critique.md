@@ -1,6 +1,6 @@
 # Critique — the facts a plugin install can't otherwise reach
 
-Tracks `cowork-harness 4.7.0` (baseline `desktop-2.31226.1`). This is **not** a trim of the full
+Tracks `cowork-harness 4.7.1` (baseline `desktop-2.31226.1`). This is **not** a trim of the full
 [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only —
 flags, cost, reproduction discipline, known limitations all live there). This file covers exactly what a
 plugin install cannot otherwise discover: the run-dir artifact a harvester actually reads, the report's
@@ -49,12 +49,12 @@ carry that; read all three before touching anything.
 | `infraFailure` | the reason |
 | `infraFailurePhase` | `task turn` (the graded run) or `reflection turn` (critique's own protocol turn) |
 | `infraFailureKind` | why it failed — a harness `ErrCategory` (error envelope, exit 2/3) **or** a `resultErrorKind` (`usage_limit`/`transport`/`agent`) from a turn that RAN and errored (exit 1, top-level `error: null`). **Absent** = killed, or no envelope |
-| `gradedErrorReason` | on a `taskResult: "error"` run (still gradeable, exit 0): why the GRADED turn errored, so a quota exhaustion is not read as a skill defect |
+| `gradedErrorReason` | on a `taskResult: "error"` run (still gradeable, exit 0): why the GRADED turn errored, so a dropped connection is not read as a skill defect. A task turn that hit the usage limit (its own result, or a sub-agent's) is not graded: `infraFailurePhase: "task turn"`, `infraFailureKind: "usage_limit"`, exit 2 |
 
 **Do NOT read "has a kind" as "the instrument is fine".** The CLI's top-level catch turns every
 unexpected throw into category **`internal`** — Docker down, container start failure, missing staged
 agent, harness bug — and `runtime` carries a refused run dir. Only **`unanswered`, `usage`, `boundary`**
-and, from the result-row taxonomy, **`usage_limit`** (quota exhausted — retry after reset) and
+and, from the result-row taxonomy, **`usage_limit`** (the account's quota — the main loop's or a sub-agent's; on the task turn critique exits 2 with `RUN FAILED (task turn, usage_limit)` and spawns no reflection) and
 **`transport`** (a tail-end drop) are the caller's problem. `agent` is not: for critique's own protocol
 turn that IS the instrument breaking. The header encodes exactly that split and fails closed (an
 unrecognized kind renders as infrastructure):
