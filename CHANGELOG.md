@@ -6,6 +6,57 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.7.1] — 2026-10-10
+
+### Upgrade notes
+
+- **`run`, `skill`, `record` and `replay` now fail a run whose sub-agent hit the account's usage limit** (exit 1,
+  `result: "error"`, `resultErrorKind: "usage_limit"`, outcome `errored`), even when the main loop carried on and
+  ended `success`. Such a run used to grade `delivered_clean`. `errorSource` is `agent` when the main loop itself ended
+  `success`; a source the run already had (`result`, `exit`, `timeout`, `no_result`, …) is kept, and an errored
+  run's kind becomes `usage_limit`. Replaying an older cassette recorded on such a run now fails it the same way;
+  `record` refuses to freeze one without `--allow-failing`, as for any failing run.
+- **`critique` whose task turn hits the account's usage limit now exits 2 with no critique.** That covers the main
+  loop's own limit and a sub-agent's. It used to grade the errored task and exit 0, then spawn the reflection turn on
+  the spent quota. The report reads `RUN FAILED (task turn, usage_limit)`, with `infraFailurePhase: "task turn"` and
+  `infraFailureKind: "usage_limit"`, and still carries `taskResult`, `gradedOutcome` and `gradedSkillHash`. Exit 2
+  keeps its meaning — no critique was produced. A task turn that errored any other way is still graded (exit 0).
+- **`errorSource: "agent"` can now mean a sub-agent's terminal quota error.** No field or enum value is added. The
+  `usage_limit` verdict message names the sub-agent (its dispatch id, its type and the limit text), and the run's
+  `decisions` gain a row named `subagent_usage_limit` (`decision: "error"`, `detail: {toolUseId?, subagentType?,
+  taskId?, error, prior?}`; `prior` is the error label the run had before the limit upgraded it).
+
+### Fixed
+
+- **A sub-agent that hits the account's usage limit no longer makes the run grade clean.** When a sub-agent (the
+  `Agent`/`Task` tool) failed on the account's quota, the main loop narrated the failure and ended its turn `success`,
+  and the harness classified a usage limit only on the main loop's own result, so the run read `delivered_clean`. The
+  run lane now reads the agent's own task-failure update, whose error is the one the sub-agent's run threw, never
+  text the model wrote. A model quoting the limit, a sub-agent that completed with the text in its reply, a web
+  search's own limit reply, a failure for another reason, a transient rate limit and a background shell task are not
+  flagged. The run fails even when the main loop recovers and delivers, since the stream cannot show that the lost
+  work was replaced. `eval` and `hillclimb` exclude such a rep as infrastructure (`errored_infra`, rule
+  `kind_usage_limit`) instead of grading it.
+- **`critique` no longer grades a task turn that ran out of quota, or spawns its reflection turn on that quota.** See
+  the upgrade note. Such a failure used to surface, if at all, as a failed "reflection turn".
+
+### Known limits
+
+- **Chat sessions** do not name the usage limit: a chat run whose sub-agent hit it reads `error` with no
+  `resultErrorKind`, as a main-loop limit already did there.
+- **The cloud lane** does not show a sub-agent's failure text, so a sub-agent's usage limit is not detected there.
+- **A background sub-agent that fails after the main loop's final result** may not be seen before the run ends.
+- **A run that stops at an unanswered question or a decider timeout** after a sub-agent's limit is reported by
+  that stop, not as a usage limit.
+- **Run dirs written before 4.7.1** keep their recorded result under `verify-run`, which reads the stored
+  `result.json`; re-run or replay to apply the new reading.
+
+### Documentation
+
+- **Cutting the cost per rep.** `docs/eval.md`, `docs/hillclimb.md` and the skill's hillclimb reference describe
+  starting a late-step case from a workspace fixture exported from a kept run (`fixture export`, `--session-paths`,
+  `--exclude`), its limits, and that the case then measures only the steps after the fixture.
+
 ## [4.7.0] — 2026-10-10
 
 ### Upgrade notes
