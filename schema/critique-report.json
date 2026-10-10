@@ -15,6 +15,18 @@
       "type": "string",
       "description": "the --label value, as given (single line); absent when none was passed"
     },
+    "source": {
+      "type": "object",
+      "description": "where the graded files came from: {kind:'dir'} for a folder, or {kind:'git', ref, path, commit} for a `critique git:<ref>:<path>` target — `commit` is the resolved commit id, `path` the repo-relative directory snapshotted (the plugin root when the argument named a skill inside it). Absent on a report written before 4.8.0",
+      "properties": {
+        "kind": { "enum": ["dir", "git"] },
+        "ref": { "type": "string" },
+        "path": { "type": "string" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" }
+      },
+      "required": ["kind"],
+      "additionalProperties": false
+    },
     "corpusHashScheme": {
       "type": "integer",
       "description": "the version of the rules corpusHash, packagedCorpusHash and skillTreeHash are computed under; hashes are comparable only within one scheme. Absent on a report written before 4.8.0"

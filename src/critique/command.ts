@@ -21,7 +21,8 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { describeSubagentUsageLimit } from "../usage-limit.js";
-import type { CorpusDigest, CorpusManifestEntry } from "./corpus-digest.js";
+import type { CorpusDigest, CorpusManifestEntry, HashBasis } from "./corpus-digest.js";
+import { isGitTarget, stageGitTarget, type GitTargetSource } from "./git-target.js";
 import { applyCommandGlobal } from "../run/command-globals.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
@@ -132,6 +133,11 @@ function usage(): string {
   EXPERIMENTAL. Runs the skill, asks the agent what confused it, then does NOT believe the answer:
   a blinded evaluator grades the self-report against a frozen record of what actually happened, and
   drops any claim whose citation is not verbatim in that evidence. Discovery instrument, not a gate.
+
+  <skill-folder> may be git:<ref>:<path> (repo-relative, from the current repository): critique the
+  skill as it is at that commit, from a snapshot, so an edit or a moved HEAD during the run changes
+  nothing. A path at <plugin>/skills/<name> grades that skill of the plugin, as <plugin> --skill
+  <name> does; the report records the resolved commit in source.commit.
 
 Probe (one required):
   --prompt "<probe>"        the task to run the skill against
@@ -645,6 +651,7 @@ export function preflightCritique(
       pluginRoot: resolved.pluginRoot,
       mountRoot: resolved.mountRoot,
       mode,
+      hashBasis: resolved.hashBasis,
     });
   } finally {
     rmSync(runDir, { recursive: true, force: true });
@@ -692,6 +699,8 @@ export interface ResolvedCritiqueTarget {
   autoSelectedSkill?: string;
   /** The skill whose invocation the advisory checks, or undefined for a plain skill folder. */
   gradedSkillName?: string;
+  /** `git-commit` when the target is a `git:<ref>:<path>` snapshot; otherwise the packager decides. */
+  hashBasis?: HashBasis;
 }
 
 export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: string | undefined): ResolvedCritiqueTarget {
@@ -1342,6 +1351,8 @@ interface ReportState {
   skillFolder: string;
   /** See `corpusReportFields`. */
   corpus?: ReturnType<typeof corpusReportFields>;
+  /** Where the graded files came from: a folder, or a `git:<ref>:<path>` snapshot with its resolved commit. */
+  source?: GitTargetSource | { kind: "dir" };
   /** The harness version that produced the report, so reports from different releases can be told apart. */
   harnessVersion?: string;
   /** `--label`, when given. */
@@ -1875,6 +1886,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     sessionId,
     outDir,
     ...state.corpus,
+    source: state.source,
     fidelity: state.fidelity,
     requestedFidelity: state.requestedFidelity,
     gradedEffectiveFidelity: state.gradedEffectiveFidelity,
@@ -2112,7 +2124,12 @@ export function corpusReportFields(pre: CorpusDigest, post?: CorpusDigest) {
  *  pre-spend check, every target staging would not deliver or that has no readable SKILL.md, so a preview
  *  that prints a number is a promise the paid run will not die on the target. This renders that check's
  *  packaged result. */
-function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pkg: ReturnType<typeof packageEvidence>): number {
+function runCorpusPreview(
+  opts: ParsedArgs,
+  resolved: ResolvedCritiqueTarget,
+  pkg: ReturnType<typeof packageEvidence>,
+  source: GitTargetSource | { kind: "dir" } = { kind: "dir" },
+): number {
   const corpus: CorpusFields = {
     corpusBytes: pkg.corpusBytes,
     corpusCeiling: pkg.corpusCeiling,
@@ -2149,6 +2166,7 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
       // reads); `corpusHash` and `skillTreeHash` equal a graded run's unless a file changes in between.
       ...corpusReportFields(pkg.corpusDigest),
       packagedCorpusHash: pkg.corpusDigest.packagedCorpusHash,
+      source,
       ignoredFlags: opts.ignoredFlags,
       note,
     };
@@ -2327,6 +2345,23 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
 
   // A skill inside a plugin is critiqued the way Cowork runs it: as part of its plugin. Reassigns `opts`
   // itself — every consumer below reads this one binding.
+  // A `git:<ref>:<path>` target is snapshotted first, and critique then runs on the snapshot exactly as on a
+  // folder; the snapshot already resolved the plugin in the commit's tree, so promotion has nothing left to do.
+  let targetSource: GitTargetSource | { kind: "dir" } = { kind: "dir" };
+  let removeSnapshot = (): void => {};
+  if (isGitTarget(opts.skillFolder)) {
+    try {
+      const staged = stageGitTarget(opts.skillFolder, opts.skillSelector, { keep: !opts.corpusOnly });
+      process.stderr.write(
+        `::notice:: [critique] ${opts.skillFolder} → commit ${staged.source.commit.slice(0, 12)}, snapshot ${tildeify(staged.skillFolder)}${staged.skillSelector ? `, grading skill '${staged.skillSelector}'` : ""}\n`,
+      );
+      opts = { ...opts, skillFolder: staged.skillFolder, skillSelector: staged.skillSelector };
+      targetSource = staged.source;
+      removeSnapshot = staged.cleanup;
+    } catch (e) {
+      return refuse("usage", (e as Error).message);
+    }
+  }
   opts = applyTargetPromotion(opts);
 
   // Resolve which folder the PACKAGER grades — fail-fast (usage error, exit 2) BEFORE any model spend:
@@ -2335,7 +2370,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   let resolvedSkill: ReturnType<typeof resolveCritiquedSkillDir>;
   try {
     resolvedSkill = resolveCritiquedSkillDir(opts.skillFolder, opts.skillSelector);
+    if (targetSource.kind === "git") resolvedSkill = { ...resolvedSkill, hashBasis: "git-commit" };
   } catch (e) {
+    removeSnapshot();
     return refuse("usage", (e as Error).message);
   }
   if (resolvedSkill.autoSelectedSkill)
@@ -2347,12 +2384,17 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   // same check for the preview and a paid run, so `--corpus-only` greening a target means a critique of it
   // will not die on it after paying for two turns.
   const preflight = preflightCritique(resolvedSkill, opts.corpusOnly ? "preview" : "preflight");
-  if (!preflight.ok) return refuse("usage", `critique${opts.corpusOnly ? " --corpus-only" : ""}: ${preflight.message}`);
+  if (!preflight.ok) {
+    removeSnapshot();
+    return refuse("usage", `critique${opts.corpusOnly ? " --corpus-only" : ""}: ${preflight.message}`);
+  }
 
   // --corpus-only stops HERE: after target resolution and the pre-spend check, and before a session id is
   // minted — nothing under --run-dir, no index row, no spawn.
   if (opts.corpusOnly) {
-    process.exit(runCorpusPreview(opts, resolvedSkill, preflight.pkg));
+    const code = runCorpusPreview(opts, resolvedSkill, preflight.pkg, targetSource);
+    removeSnapshot();
+    process.exit(code);
     return;
   }
   // Both turns run the `skill` lane, which refuses a run that resolves no model. Check it HERE, before the
@@ -2423,6 +2465,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         harnessVersion: pkgVersion(),
         label: opts.label,
         corpus: corpusReportFields(preflight.pkg.corpusDigest),
+        source: targetSource,
         skillFolder: opts.skillFolder,
         prompt,
         sessionId,
@@ -2603,6 +2646,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         agents: resolvedSkill.agents,
         pluginRoot: resolvedSkill.pluginRoot,
         mountRoot: resolvedSkill.mountRoot,
+        hashBasis: resolvedSkill.hashBasis,
       });
       finalCorpusDigest = cdg;
       turn1ResultDegraded = trd;
@@ -2716,6 +2760,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       harnessVersion: pkgVersion(),
       label: opts.label,
       corpus: corpusReportFields(preflight.pkg.corpusDigest, finalCorpusDigest),
+      source: targetSource,
       skillFolder: opts.skillFolder,
       prompt,
       sessionId,

@@ -61,35 +61,36 @@ export function parseArmSpec(raw: string, position: number): ArmSpec {
   return { label: label ?? DEFAULT_LABELS[position] ?? `arm${position + 1}`, source: parseSource(src, raw), raw };
 }
 
-function parseSource(src: string, raw: string): ArmSource {
+/** `flag` names the option in a refusal (`--arm` for eval; critique passes `critique`). */
+export function parseSource(src: string, raw: string, flag = "--arm"): ArmSource {
   if (!src.startsWith("git:")) return { kind: "dir", path: src };
   const rest = src.slice("git:".length);
   const colon = rest.indexOf(":");
-  if (colon <= 0) throw new UsageError(`--arm ${raw}: a git source is git:<ref>:<path> (e.g. git:HEAD:plugins/my-skill)`);
+  if (colon <= 0) throw new UsageError(`${flag} ${raw}: a git source is git:<ref>:<path> (e.g. git:HEAD:plugins/my-skill)`);
   const ref = rest.slice(0, colon);
   const path = rest.slice(colon + 1);
-  validateGitRef(ref, raw);
-  return { kind: "git", ref, path: normalizeRepoPath(path, raw) };
+  validateGitRef(ref, raw, flag);
+  return { kind: "git", ref, path: normalizeRepoPath(path, raw, flag) };
 }
 
 /** A ref is passed to git as an argv element, never through a shell; a leading `-` is still refused so it can
  *  never be read as an option, and `--end-of-options` backs that up where git accepts it. */
-export function validateGitRef(ref: string, raw: string): void {
-  if (ref.startsWith("-")) throw new UsageError(`--arm ${raw}: a git ref may not start with "-" (got "${ref}")`);
+export function validateGitRef(ref: string, raw: string, flag = "--arm"): void {
+  if (ref.startsWith("-")) throw new UsageError(`${flag} ${raw}: a git ref may not start with "-" (got "${ref}")`);
   // Control characters (NUL, newline) can never be part of a ref and would confuse the argv consumer.
-  if (/[\x00-\x1f\x7f]/.test(ref)) throw new UsageError(`--arm ${raw}: the git ref contains a control character`);
+  if (/[\x00-\x1f\x7f]/.test(ref)) throw new UsageError(`${flag} ${raw}: the git ref contains a control character`);
 }
 
 /** A repo-relative path: no absolute path, no `..` segment, no leading `-`. `.` means the repo root. */
-export function normalizeRepoPath(path: string, raw: string): string {
-  if (path === "") throw new UsageError(`--arm ${raw}: the git source path is empty (use "." for the repository root)`);
+export function normalizeRepoPath(path: string, raw: string, flag = "--arm"): string {
+  if (path === "") throw new UsageError(`${flag} ${raw}: the git source path is empty (use "." for the repository root)`);
   if (isAbsolute(path) || path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path))
-    throw new UsageError(`--arm ${raw}: the git source path must be relative to the repository root (got "${path}")`);
+    throw new UsageError(`${flag} ${raw}: the git source path must be relative to the repository root (got "${path}")`);
   const segments = path.split(/[\\/]+/);
-  if (segments.includes("..")) throw new UsageError(`--arm ${raw}: the git source path may not contain ".." (got "${path}")`);
-  if (/[\x00-\x1f\x7f]/.test(path)) throw new UsageError(`--arm ${raw}: the git source path contains a control character`);
+  if (segments.includes("..")) throw new UsageError(`${flag} ${raw}: the git source path may not contain ".." (got "${path}")`);
+  if (/[\x00-\x1f\x7f]/.test(path)) throw new UsageError(`${flag} ${raw}: the git source path contains a control character`);
   const norm = posix.normalize(segments.join("/")).replace(/\/+$/, "");
-  if (norm.startsWith("-")) throw new UsageError(`--arm ${raw}: the git source path may not start with "-"`);
+  if (norm.startsWith("-")) throw new UsageError(`${flag} ${raw}: the git source path may not start with "-"`);
   return norm === "" ? "." : norm;
 }
 
@@ -228,16 +229,22 @@ export function snapshotDirArm(srcPath: string, dest: string, includeUntracked: 
  *  ambient repo variables removed; the ref is resolved to a commit id first and only that id is used after.
  *  Files are listed with `ls-tree` and read with `show` — not `git archive`, which applies `export-ignore`
  *  and would drop files the stager delivers. */
-export function snapshotGitArm(source: { ref: string; path: string }, dest: string, cwd: string, raw: string): SnapshotInfo {
-  validateGitRef(source.ref, raw);
+export function snapshotGitArm(
+  source: { ref: string; path: string },
+  dest: string,
+  cwd: string,
+  raw: string,
+  flag = "--arm",
+): SnapshotInfo {
+  validateGitRef(source.ref, raw, flag);
   const top = gitTry(["rev-parse", "--show-toplevel"], cwd)?.trim();
-  if (!top) throw new UsageError(`--arm ${raw}: a git: source needs the current directory to be inside a git work tree`);
+  if (!top) throw new UsageError(`${flag} ${raw}: a git: source needs the current directory to be inside a git work tree`);
   const commit = gitTry(["rev-parse", "--verify", "--quiet", "--end-of-options", `${source.ref}^{commit}`], top)?.trim();
   if (!commit || !/^[0-9a-f]{40,64}$/.test(commit))
-    throw new UsageError(`--arm ${raw}: "${source.ref}" does not name a commit in ${tildeify(top)}`);
+    throw new UsageError(`${flag} ${raw}: "${source.ref}" does not name a commit in ${tildeify(top)}`);
   const path = source.path;
   const kind = path === "." ? "tree" : gitTry(["cat-file", "-t", `${commit}:${path}`], top)?.trim();
-  if (kind !== "tree") throw new UsageError(`--arm ${raw}: "${path}" is not a directory at ${source.ref} (${commit.slice(0, 12)})`);
+  if (kind !== "tree") throw new UsageError(`${flag} ${raw}: "${path}" is not a directory at ${source.ref} (${commit.slice(0, 12)})`);
   const listing = gitOut(["ls-tree", "-r", "-z", "--full-tree", commit, "--", path === "." ? "." : path], top);
   const entries = listing.split("\0").filter(Boolean);
   const prefix = path === "." ? "" : path + "/";
@@ -250,11 +257,11 @@ export function snapshotGitArm(source: { ref: string; path: string }, dest: stri
     if (!file.startsWith(prefix)) continue;
     const rel = file.slice(prefix.length);
     if (type === "commit")
-      throw new UsageError(`--arm ${raw}: ${file} is a submodule at ${source.ref}; a git: arm cannot snapshot submodule content`);
+      throw new UsageError(`${flag} ${raw}: ${file} is a submodule at ${source.ref}; a git: source cannot snapshot submodule content`);
     if (type !== "blob") continue;
     const target = join(dest, ...rel.split("/"));
     if (!resolve(target).startsWith(resolve(dest) + sep))
-      throw new UsageError(`--arm ${raw}: refusing a path that escapes the snapshot: ${file}`);
+      throw new UsageError(`${flag} ${raw}: refusing a path that escapes the snapshot: ${file}`);
     mkdirSync(dirname(target), { recursive: true });
     const content = gitExec(() =>
       execFileSync("git", ["show", `${commit}:${file}`], {
@@ -271,7 +278,7 @@ export function snapshotGitArm(source: { ref: string; path: string }, dest: stri
     }
     fileCount++;
   }
-  if (fileCount === 0) throw new UsageError(`--arm ${raw}: no files under "${path}" at ${source.ref}`);
+  if (fileCount === 0) throw new UsageError(`${flag} ${raw}: no files under "${path}" at ${source.ref}`);
   return {
     dir: dest,
     fileCount,

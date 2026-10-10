@@ -23,6 +23,7 @@ const validate = ajv.compile(schema);
 const FULL_STATE = {
   harnessVersion: "4.8.0",
   label: "v1.2.3-rc1",
+  source: { kind: "git" as const, ref: "main", path: "plugins/p", commit: "cccccccccccccccccccccccccccccccccccccccc" },
   corpus: {
     corpusHashScheme: 1,
     hashBasis: "git-tracked" as const,
