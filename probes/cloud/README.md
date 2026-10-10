@@ -46,7 +46,8 @@ the real hook. The test asserts that none of them reaches the capture, and that 
 - **Never recorded:** commands, paths, ids, emails, timestamps, file names or contents, the device name, folder
   names, and any tool's input field names other than the vocabulary tools' (those are fingerprinted).
 - **The salt:** it stays in the container in `/root/cwh-cloud-probe/.salt`, is never exported, and the export
-  step shreds it. Fingerprints are comparable only within one capture. One container keeps one salt across the
+  step shreds it. Fingerprints are comparable only within one capture. Within one capture they share that salt
+  across fields, so the same string fingerprints the same whether it was a tool name, a key or result text. One container keeps one salt across the
   tasks it serves, and the capture file keeps their lines too, so an export can carry earlier tasks' lines: the
   verifier and the summary cover them all.
 - **Errors:** a failure inside the hook writes a `<hook-error>` line carrying only the exception's class name.
@@ -169,7 +170,8 @@ Use `--probe p6` for the P6 tasks. If the hash file did not arrive, write the ha
 - **P0:** whether the served tool names, input field names and result shapes for `get_device_info`,
   `device_list_dir` and `device_bash` match the harness's model field for field, plus the shapes of a failing
   shell command. The failing command's record is a `PostToolUseFailure` line: `verify.py --probe p0f` checks a
-  capture holds one for a device tool (use it for a task that runs only the failing step).
+  capture holds one for `device_bash` with an exit code or a non-empty error (use it for a task that runs only the
+  failing step).
 - **P6:** whether the approval choice reaches the agent as its permission mode, and which approvals the user still
   sees in each mode, including the delete prompt.
 - **Repeat:** each probe needs a second sample before its facts are relied on. Use a second account if one is

@@ -279,6 +279,74 @@ describe("cloud probe kit: a failed tool call (PostToolUseFailure)", () => {
   });
 });
 
+describe("cloud probe kit: failure-capture review findings", () => {
+  const failures = PAYLOADS.filter((p) => JSON.parse(p).hook_event_name === "PostToolUseFailure");
+  const tampered = (index: number, tamper: Record<string, unknown>, from = captureOf(failures).body) => {
+    const lines = from.trim().split("\n");
+    lines[index] = JSON.stringify({ ...JSON.parse(lines[index]), ...tamper });
+    return lines.join("\n") + "\n";
+  };
+
+  it("a shape key must be a schema key or a fingerprint: an identifier-shaped name is a value (exit 2)", () => {
+    for (const tamper of [
+      { failure_shape: { dict: { Dana_Levi: "null", AcmeCapital: { str_le: 8 } } } },
+      { failure_shape: { dict: { message: { dict: { investors: "null" } } } } },
+    ])
+      expect(verify("p0f", downloads(tampered(0, tamper))).status, JSON.stringify(tamper)).toBe(2);
+    const post = captureOf(PAYLOADS.slice(0, 10)).body;
+    expect(verify("p0", downloads(tampered(1, { response_shape: { dict: { Dana_Levi: "null" } } }, post))).status).toBe(2);
+  });
+
+  it("response fields on a failure line, and failure fields on a result line, are both refused (exit 2)", () => {
+    for (const tamper of [{ response_text_chars_le: 64 }, { response_exit_code: 1 }, { response_is_error: true }])
+      expect(verify("p0f", downloads(tampered(0, tamper))).status, JSON.stringify(tamper)).toBe(2);
+  });
+
+  it("every integer is bounded: an exit code fits in 4 digits, a bucket or a count in 2^32 (exit 2)", () => {
+    const post = captureOf(PAYLOADS.slice(0, 10)).body;
+    for (const [body, probe] of [
+      [tampered(0, { failure_exit_code: 10 ** 20 }), "p0f"],
+      [tampered(0, { failure_exit_code: 12345 }), "p0f"],
+      [tampered(0, { failure_text_chars_le: 2 ** 40 }), "p0f"],
+      [tampered(0, { failure_duration_ms_le: 2 ** 40 }), "p0f"],
+      [tampered(1, { response_exit_code: 99999 }, post), "p0"],
+      [tampered(0, { input_timeout_ms: 10 ** 15 }, post), "p0"],
+      [tampered(1, { response_text_chars_le: 2 ** 40 }, post), "p0"],
+    ] as const)
+      expect(verify(probe, downloads(body)).status, body.slice(0, 80)).toBe(2);
+  });
+
+  it("only an ASCII 'Exit code N' is read as an exit code", () => {
+    const fail = (error: string) =>
+      JSON.stringify({ hook_event_name: "PostToolUseFailure", tool_name: "mcp__remote-devices__device_bash", tool_input: {}, error });
+    const [ascii, arabic, full] = recsOf(
+      captureOf([fail("Exit code 2\nx"), fail("Exit code \u0662\nx"), fail("Exit code \uff12\nx")]).body,
+    );
+    expect(ascii.failure_exit_code).toBe(2);
+    expect(arabic).not.toHaveProperty("failure_exit_code");
+    expect(full).not.toHaveProperty("failure_exit_code");
+  });
+
+  it("the verifier's schema-key list is capture.py's, key for key", () => {
+    const keysOf = (file: string) => {
+      const src = readFileSync(file, "utf8");
+      const from = src.indexOf("SCHEMA_KEYS = {");
+      return [...src.slice(from, src.indexOf("}", from)).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1]).sort();
+    };
+    const capture = keysOf(HOOK);
+    expect(capture.length).toBeGreaterThan(40);
+    expect(keysOf(VERIFY)).toEqual(capture);
+  });
+
+  it("p0f is answered only by a device_bash failure that carries an exit code or a non-empty error", () => {
+    const line = (tool: string, error: unknown) =>
+      JSON.stringify({ hook_event_name: "PostToolUseFailure", tool_name: tool, tool_input: {}, error });
+    for (const p of [line("mcp__remote-devices__list_devices", "Exit code 1\nx"), line("mcp__remote-devices__device_bash", null)])
+      expect(verify("p0f", downloads(captureOf([p]).body)).status, p).toBe(4);
+    expect(verify("p0f", downloads(captureOf([line("mcp__remote-devices__device_bash", "boom")]).body)).status).toBe(0);
+  });
+});
+
 describe("cloud probe kit: re-review findings", () => {
   it("a bridged private server that looks like the computer-use or browser group is fingerprinted, input keys included", () => {
     const names = ["mcp__remote-devices__computer_vision__find_faces", "mcp__remote-devices__Claude_Browser__AcmeCapitalPortal"];

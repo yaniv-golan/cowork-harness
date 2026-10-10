@@ -55,7 +55,8 @@ MAX_INPUT_KEYS = 40
 PERMISSION_MODES = {"default", "auto", "plan", "acceptEdits", "bypassPermissions", "dontAsk"}
 EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure"}
 STRUCTURAL_CWDS = {"/home/claude", "/root", "/tmp"}
-EXIT_CODE_RE = re.compile(r"^Exit code (-?\d{1,4})\b")
+# ASCII digits only: `\d` would also match Arabic-Indic or fullwidth digits, which int() converts.
+EXIT_CODE_RE = re.compile(r"^Exit code (-?[0-9]{1,4})(?![0-9])")
 TOOL_NAME_IN_RAW_RE = re.compile(rb'"tool_name"\s*:\s*"([^"\\]{1,200})"')
 # Response-schema key names kept verbatim; any other key (which could be user data, e.g. a dict keyed by folder
 # names) is replaced by its salted fingerprint.
