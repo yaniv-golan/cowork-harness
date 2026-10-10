@@ -1160,7 +1160,8 @@ function resultRowDiagnosis(turn: TurnOutcome): { text: string; kind?: string } 
   const subtype = r0.errorSource === "result" && r0.resultSubtype && r0.resultSubtype !== "success" ? r0.resultSubtype : undefined;
   // A sub-agent's limit leaves errorSource `agent`, which would read as the agent's own fault: name the sub-agent.
   const sub = r0.resultErrorKind === "usage_limit" ? describeSubagentUsageLimit(r0.decisions) : undefined;
-  const detail = sub ?? [subtype ?? r0.errorSource].filter(Boolean).join("");
+  if (sub) return { kind: r0.resultErrorKind, text: `usage-limit — ${sub}. This is NOT a harness or skill defect` };
+  const detail = [subtype ?? r0.errorSource].filter(Boolean).join("");
   const label =
     r0.resultErrorKind === "usage_limit"
       ? "usage-limit — the account's quota is exhausted; retry after the reset. This is NOT a harness or skill defect"
@@ -1614,7 +1615,8 @@ export function buildTextReport(state: ReportState): string {
   if (evaluatorModel) out.push(`  evaluator model (resolved): ${evaluatorModel}`);
   else if (infraFailure || evaluatorError)
     out.push(`  evaluator model (requested, NOT resolved — evaluator did not complete): ${requestedModel}`);
-  if (taskResult === "error")
+  // Not on an infra failure: a usage-limit task turn carries `taskResult: "error"` but no critique follows.
+  if (taskResult === "error" && !infraFailure)
     out.push(
       `  NOTE: the task run ended in error${state.gradedErrorReason ? ` (${state.gradedErrorReason})` : ""} — ` +
         `recommendations below reflect whatever happened before the failure.`,

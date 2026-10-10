@@ -810,7 +810,7 @@ export class Run {
         },
       });
     }
-    if (this.rec.resultErrorKind === "usage_limit") return; // the main loop already named it
+    if (this.rec.result === "error" && this.rec.resultErrorKind === "usage_limit") return; // the main loop already named it
     this.rec.result = "error";
     this.rec.resultErrorKind = "usage_limit";
     this.rec.errorSource ??= "agent";
@@ -1270,7 +1270,8 @@ export class Run {
                   patch?.status === "failed" &&
                   typeof patch.error === "string" &&
                   matchesTerminalUsageLimitText(patch.error) &&
-                  (known === undefined || known === "local_agent")
+                  (known === undefined || known === "local_agent") &&
+                  (taskId === undefined || !this.subagentUsageLimits.some((u) => u.taskId === taskId))
                 )
                   this.subagentUsageLimits.push({ ...(taskId !== undefined ? { taskId } : {}), error: patch.error });
               }

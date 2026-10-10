@@ -131,6 +131,36 @@ describe("a sub-agent that hits the usage limit fails the run (usage_limit), wha
     expect((row?.detail as { prior?: string }).prior).toBe("agent / result / error_max_turns");
   });
 
+  it("a stream that died with no result keeps its no_result source; the prior label is kept on the row", async () => {
+    const { rec } = await graded([...dispatch("toolu_a"), ...failed("toolu_a")]);
+    expect([rec.result, rec.resultErrorKind, rec.errorSource]).toEqual(["error", "usage_limit", "no_result"]);
+    const row = rec.decisions.find((d) => d.name === SUBAGENT_USAGE_LIMIT);
+    expect((row?.detail as { prior?: string }).prior).toBe("no_result");
+  });
+
+  it("a turn-1 main-loop usage_limit then a clean turn 2: the sub-agent's limit still fails the run", async () => {
+    const turns = (async function* () {
+      yield "turn 1";
+      yield "turn 2";
+    })();
+    const rec = await new Run(
+      new MockSession([
+        { type: "result", isError: true, subtype: "success", resultText: LIMIT, apiErrorStatus: 429 },
+        ...dispatch("toolu_a"),
+        ...failed("toolu_a"),
+        success,
+      ]),
+      new ScriptedDecider([]),
+    ).drive(turns);
+    expect([rec.result, rec.resultErrorKind]).toEqual(["error", "usage_limit"]);
+  });
+
+  it("one task's repeated failed updates record one row", async () => {
+    const { rec, verdict } = await graded([...dispatch("toolu_a"), ...failed("toolu_a"), ...failed("toolu_a").slice(0, 1), success]);
+    expect(rec.decisions.filter((d) => d.name === SUBAGENT_USAGE_LIMIT)).toHaveLength(1);
+    expect(verdict.signals.find((s) => s.code === "usage_limit")?.message).not.toMatch(/sub-agent tasks failed this way/);
+  });
+
   it("the main loop's own 429 usage_limit is unchanged (source result)", async () => {
     const { rec } = await graded([
       ...dispatch("toolu_a"),

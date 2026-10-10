@@ -1,4 +1,4 @@
-import { describeSubagentUsageLimit } from "../usage-limit.js";
+import { describeSubagentUsageLimit, subagentUsageLimits } from "../usage-limit.js";
 import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { RunResult } from "../types.js";
@@ -270,7 +270,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         code: "usage_limit",
         severity: "fail",
         message: sub
-          ? `${sub} — not a skill failure; the main loop's result does not count. Retry once the quota allows, or check the sub-agent's model and the account's plan`
+          ? `${sub} — not a skill failure${subagentUsageLimits(result.decisions)[0]?.prior ? "" : "; the main loop's result does not count"}. Retry once the quota allows, or check the sub-agent's model and the account's plan`
           : "usage/quota limit hit (not a skill failure) — retry after the limit resets",
       });
     } else if (result.resultErrorKind === "transport") {

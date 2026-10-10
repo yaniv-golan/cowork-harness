@@ -822,6 +822,30 @@ describe("F37 residual (part 2): taskTurnInfraFailure gates a killed TASK turn b
     expect(failure?.reason).not.toMatch(/\(agent\)/);
   });
 
+  it("the report of a usage-limit task turn carries its graded facts and no 'recommendations below' NOTE", () => {
+    const state = {
+      skillFolder: "skills/foo",
+      prompt: "p",
+      sessionId: "sess-1",
+      outDir: "/tmp/x",
+      fidelity: "container" as const,
+      taskResult: "error" as const,
+      gradedOutcome: "errored",
+      gradedSkillHash: "abc123",
+      selfReportStatus: "unavailable" as const,
+      items: [],
+      requestedModel: "claude-opus-4-8",
+      infraFailure: "task turn hit the account's usage limit — usage-limit",
+      infraFailurePhase: "task turn" as const,
+      infraFailureKind: "usage_limit",
+    };
+    const text = buildTextReport(state);
+    expect(text).toMatch(/RUN FAILED \(task turn, usage_limit\)/);
+    expect(text).not.toMatch(/recommendations below reflect/);
+    const json = buildJsonReport(state);
+    expect([json.taskResult, json.gradedOutcome, json.gradedSkillHash]).toEqual(["error", "errored", "abc123"]);
+  });
+
   it("a transport or agent error kind stays gradeable (the reflection can still run on a healthy account)", () => {
     expect(taskTurnInfraFailure(quotaTask({ resultErrorKind: "transport", errorSource: "result" }))).toBeUndefined();
     expect(taskTurnInfraFailure(quotaTask({ resultErrorKind: "agent", errorSource: "result" }))).toBeUndefined();
