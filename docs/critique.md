@@ -286,10 +286,9 @@ It does **not** record their contents — see Known limitations.
   **`COWORK_HARNESS_EVALUATOR_MODEL`**.
 - **Which workload dominates spend depends on the skill — read it per run, don't assume.** Evaluator
   cost is roughly **fixed** (bounded by the evidence package: corpus + transcript caps); the graded task
-  turn is **unbounded**. On a trivial probe — or a small skill (measured: a one-script example skill at the
-  default evaluator, about $1.4–1.6 a critique) — the two evaluator passes (steps 4-5) are ~3/4 of the total, pass
-  2 the larger; on a real
-  document-analysis run the ratio **inverts** (measured on one: task turn ~61%, evaluator ~30%). The
+  turn is **unbounded**. On a trivial probe, or a small skill, the two evaluator passes (steps 4-5) are ~3/4 of
+  the total, pass 2 the larger (measured: a one-script example skill at the default evaluator, about $1.4–1.6 a
+  critique); on a real document-analysis run the ratio **inverts** (measured on one: task turn ~61%, evaluator ~30%). The
   report's `cost:` line prints the four-way split and the evaluator's share of the total, and `costUsd`
   carries the same numbers — use those. A cheaper `--evaluator-model` can only ever buy you the
   evaluator's share, so when the task turn dominates the levers are `--model`, `--timeout` and probe
@@ -419,12 +418,12 @@ workload could not be priced. In JSON these are `fidelity` / `gradedEffectiveFid
 / `costUsd` — plus `requestedFidelity`, present only when `--fidelity cowork` was passed and naming what
 it resolved to — and a `droppedEvaluatorItems` count appears when the per-item-tolerant parse dropped
 malformed evaluator items (the surviving findings are then not necessarily the complete reply).
-**`evaluatorRepair`** (`[{pass, appended}]`) appears when an evaluator reply's `{"items":[...]}` document was
+**`evaluatorRepair`** (`[{pass, appended, possiblyTruncated}]`) appears when an evaluator reply's `{"items":[...]}` document was
 complete except for its trailing closer(s): exactly those closers were appended at the end, and the reply then
 parsed and validated as usual; the text report notes it, and a `--summary-out` file carries `evaluatorRepaired`.
 `possiblyTruncated: true` means the findings list itself was left open (a `]` was appended): the model may have
 been cut off, so findings after the last complete one can be missing. Any other defect — a reply cut mid-item,
-mid-string or right after the list opens, a missing inner comma, a mismatched closer, a document nested in another
+mid-string or right after the list opens, a repair that leaves no findings, a missing inner comma, a mismatched closer, a document nested in another
 unclosed one — is not repaired, and the critique fails as before. An
 **`evidenceBudget`** object reports how much of the skill's authored content was packaged: `corpusBytes`
 (total found, before any cut) against `corpusCeiling` (512 KiB, combined across SKILL.md + the skill's
@@ -605,6 +604,7 @@ kept as written, because they are join keys or closed enums:
   `source.kind`, `source.commit`, `corpusManifest[].origin`, `corpusManifest[].status`, `corpusManifest[].sha256`,
   and `corpusDrift`'s two hashes (a manifest `key` is a file name, and is scrubbed);
 - `items[].source`, `items[].classification`, `items[].findingFingerprint`, `gateAnswers[].answeredBy`,
+  `evaluatorRepair[].appended`,
   `evidenceBudget.corpusOmitted[].reason`;
 - in the `--corpus-only` payload: `mode`, `skillFolder`, `skillDir`, `skill`, `corpus.corpusOmitted[].reason`,
   and the same hash, basis, source and manifest fields. Its stdout is scrubbed the same way as its file.

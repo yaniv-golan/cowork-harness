@@ -1,7 +1,10 @@
 // The evaluator reply repair, through the real parser (`parseCritiqueItems`): a `{"items":[...]}` document complete
 // except for its trailing closer(s) is repaired by appending exactly those; anything else is refused as before.
 import { describe, it, expect } from "vitest";
-import { parseCritiqueItems } from "../src/critique/evaluator.js";
+import { parseCritiqueItems, runCritique, canaryIdea } from "../src/critique/evaluator.js";
+import { buildJsonReport, buildTextReport } from "../src/critique/command.js";
+import { buildCritiqueSummary } from "../src/critique/summary.js";
+import type { Complete } from "../src/decide/decider.js";
 import { repairTrailingClosers } from "../src/critique/reply-repair.js";
 
 const item = (idea: string, extra = "") =>
@@ -73,5 +76,53 @@ describe("evaluator reply repair — only the missing trailing closers", () => {
   it("REFUSES a mismatched closer and trailing prose after an unclosed document", () => {
     expect(repairTrailingClosers(`{"items":[${item("x")}}`)).toBeNull();
     expect(repairTrailingClosers(`{"items":[${item("x")}] and that is all`)).toBeNull();
+  });
+
+  it("a stray double quote in prose before the document is not read as a string", () => {
+    const r = parse(`The "summary: {"items":[${item("x")}]`);
+    expect(r.items).toHaveLength(1);
+    expect(r.repair).toEqual({ appended: "}", possiblyTruncated: false });
+  });
+
+  it("REFUSES a canary-only reply missing its closer (a repair that leaves no findings)", () => {
+    const canary = `{"idea":${JSON.stringify(canaryIdea("nonce-test"))},"classification":"not-adjudicable","evidence":"","recommendedAction":"none"}`;
+    expect(() => parse(`{"items":[${canary}]`)).toThrow(/no valid/);
+  });
+});
+
+describe("evaluator reply repair — from runCritique to the report, text and summary", () => {
+  const N = "0123456789abcdef";
+  const SECTIONS = [{ title: "SKILL.md", body: "# s\n\nthe skill never says which currency" }];
+  const canary = `{"idea":${JSON.stringify(canaryIdea(N))},"classification":"not-adjudicable","evidence":"","recommendedAction":"none"}`;
+
+  it("a pass-2 reply missing its final } fires onRepair for pass 2, and the report, text and summary carry it", async () => {
+    let calls = 0;
+    const complete = (async () => {
+      calls++;
+      return calls === 1
+        ? { text: `{"items":[${canary},${item("pass one finding")}]}`, model: "m" }
+        : { text: `{"items":[${canary},${item("pass two finding")}]`, model: "m" };
+    }) as unknown as Complete;
+    const repairs: unknown[] = [];
+    await runCritique(SECTIONS, "self report text", { nonce: N, complete, onRepair: (r) => repairs.push(r) });
+    expect(repairs).toEqual([{ pass: 2, appended: "}", possiblyTruncated: false }]);
+
+    const state = {
+      skillFolder: "s",
+      prompt: "p",
+      sessionId: "crit-1",
+      outDir: "/tmp/x",
+      fidelity: "container",
+      selfReportStatus: "captured",
+      items: [],
+      requestedModel: "claude-opus-4-8",
+      evaluatorRepair: repairs,
+    } as unknown as Parameters<typeof buildJsonReport>[0];
+    const ctx = { identity: { name: "s", kind: "folder" as const }, includeCost: false, includePromptHash: false };
+    expect(buildCritiqueSummary(buildJsonReport(state), ctx).evaluatorRepaired).toBe(true);
+    expect(buildCritiqueSummary(buildJsonReport({ ...state, evaluatorRepair: undefined }), ctx).evaluatorRepaired).toBe(false);
+    expect(buildTextReport(state)).toContain(`evaluator pass 2's reply was missing its closing "}"`);
+    const truncated = { ...state, evaluatorRepair: [{ pass: 1, appended: "]}", possiblyTruncated: true }] } as typeof state;
+    expect(buildTextReport(truncated)).toContain("findings after the last complete one can be missing");
   });
 });

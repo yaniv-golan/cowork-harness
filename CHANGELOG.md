@@ -86,7 +86,8 @@ All notable changes to this project are documented here. The format is based on
   (`evaluatorRepair`), the text output and the summary (`evaluatorRepaired`). Brackets inside strings are
   ignored. When the findings list itself was left open (a `]` appended), the repair is marked `possiblyTruncated`:
   the model may have been cut off, so findings after the last complete one can be missing. Not repaired, and
-  failing as before: a reply cut mid-item or mid-string, right after the list opens, or with a missing inner comma,
+  failing as before: a reply cut mid-item or mid-string, right after the list opens or with no findings left after
+  the repair, or with a missing inner comma,
   a mismatched closer, text after the unclosed document, or the document nested inside another unclosed one.
 
 ### Changed

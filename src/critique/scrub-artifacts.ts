@@ -68,6 +68,7 @@ const REPORT_PATHS = [
   "items[].classification",
   "items[].findingFingerprint",
   "gateAnswers[].answeredBy",
+  "evaluatorRepair[].appended", // only `}` / `]` by construction — a scrub value could only corrupt it
   "evidenceBudget.corpusOmitted[].reason",
 ];
 
