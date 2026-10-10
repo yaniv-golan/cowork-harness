@@ -1,5 +1,5 @@
 import { warn } from "../io.js";
-import { isUsageLimit } from "../usage-limit.js";
+import { isUsageLimit, matchesTerminalUsageLimitText, SUBAGENT_USAGE_LIMIT } from "../usage-limit.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse, QSpec } from "../agent/session.js";
 import type { UsageInfo, CostInfo, RunResult, InfraErrorSource, ToolCallRecord } from "../types.js";
@@ -55,6 +55,8 @@ const TASK_EVENT_SUBTYPES = new Set([
   "background_tasks_changed",
   "thinking_tokens",
 ]);
+
+const SUBAGENT_LIMIT_TEXT_CAP = 500;
 
 /** Extract the DENIED path from a captured `{file_path?, path?}`-shaped input: whichever key is a
  *  `/sessions`-prefixed value (what the VM path-gate actually flags), else the first present key (the
@@ -656,6 +658,11 @@ export class Run {
   private rec: RunRecord;
   private toolLog: { name: string; input: unknown; synthetic?: boolean; parentToolUseId?: string }[] = [];
   private toolNameByUseId = new Map<string, string>();
+  // task_id → what the task-event family said about it. `task_updated` carries only `task_id`, so a sub-agent
+  // failure is joined back to its dispatch (and its type) through what `task_started`/`task_notification` carried.
+  private taskInfo = new Map<string, { toolUseId?: string; subagentType?: string; taskType?: string }>();
+  // Sub-agent tasks that failed on a terminal usage limit, in the order seen. Read once, at loop end.
+  private subagentUsageLimits: Array<{ taskId?: string; error: string }> = [];
   // toolUseIds whose children are the MAIN AGENT's own work, not an isolated sub-agent's: a top-level
   // (or fork-nested) Skill call, or an explicit Agent(subagent_type:"fork") dispatch — both inherit the
   // main agent's context rather than starting isolated. Seeded as each qualifying tool_use/dispatch is
@@ -767,6 +774,46 @@ export class Run {
   private static readonly THINKING_CAP = 50;
   private static readonly THINKING_TEXT_CAP_BYTES = 10 * 1024;
 
+  /** A sub-agent that failed on a terminal usage limit makes the run an error of kind `usage_limit`, whatever the
+   *  main loop did next — even a loop that recovered and wrote a deliverable, since the frames cannot show that the
+   *  lost work was replaced, and a false red costs one retry while a false green is a wrong grade. Sticky for the
+   *  whole Run (every turn). An already-errored run keeps its `errorSource` and has its kind upgraded (the quota is
+   *  spent either way, and a batch must halt on it); the prior label is kept in the decisions row. `errorSource`
+   *  `agent` (a non-fatal agent-side event came first) is what a main loop that ended `success` gets. Runs after
+   *  the `no_result` stamp, so a stream that also died keeps that source, and before the stall detector, which
+   *  only reads a `success` run. */
+  private applySubagentUsageLimits(): void {
+    if (this.subagentUsageLimits.length === 0) return;
+    const prior =
+      this.rec.result === "error"
+        ? [this.rec.resultErrorKind, this.rec.errorSource, this.rec.errorSource === "result" ? this.rec.resultSubtype : undefined]
+            .filter((x): x is string => typeof x === "string" && x !== "")
+            .join(" / ")
+        : undefined;
+    for (const u of this.subagentUsageLimits) {
+      const info = u.taskId !== undefined ? this.taskInfo.get(u.taskId) : undefined;
+      const sa = info?.toolUseId !== undefined ? this.rec.subagents.find((s) => s.toolUseId === info.toolUseId) : undefined;
+      const subagentType =
+        sa?.resolvedAgentType ?? info?.subagentType ?? (sa && sa.dispatchAgentType !== "unknown" ? sa.dispatchAgentType : undefined);
+      this.rec.decisions.push({
+        kind: "tool",
+        name: SUBAGENT_USAGE_LIMIT,
+        decision: "error",
+        by: "agent",
+        detail: {
+          ...(info?.toolUseId !== undefined ? { toolUseId: info.toolUseId } : {}),
+          ...(subagentType !== undefined ? { subagentType } : {}),
+          ...(u.taskId !== undefined ? { taskId: u.taskId } : {}),
+          error: u.error.slice(0, SUBAGENT_LIMIT_TEXT_CAP),
+          ...(prior ? { prior } : {}),
+        },
+      });
+    }
+    if (this.rec.resultErrorKind === "usage_limit") return; // the main loop already named it
+    this.rec.result = "error";
+    this.rec.resultErrorKind = "usage_limit";
+    this.rec.errorSource ??= "agent";
+  }
   private noteModel(model?: string): void {
     if (model && !this.rec.models.includes(model)) this.rec.models.push(model);
   }
@@ -1199,6 +1246,33 @@ export class Run {
               // arises to correlate the task_id-only sibling events, persist a separate task_id→toolUseId
               // map; today's task_started carries tool_use_id, so this direct join suffices.
               const joinId = typeof d.tool_use_id === "string" ? d.tool_use_id : undefined;
+              const taskId = typeof d.task_id === "string" ? d.task_id : undefined;
+              if (taskId !== undefined) {
+                const info = this.taskInfo.get(taskId) ?? {};
+                if (joinId !== undefined) info.toolUseId ??= joinId;
+                if (typeof d.subagent_type === "string") info.subagentType ??= d.subagent_type;
+                if (typeof d.task_type === "string") info.taskType ??= d.task_type;
+                this.taskInfo.set(taskId, info);
+              }
+              // A sub-agent that hit the account's usage limit. The main loop only narrates it and ends its turn
+              // `success`, so without this the run graded clean. The carrier is the task registry's own failure
+              // update: `patch.error` is the error the sub-agent's run threw, never model text. NOT
+              // `task_notification.summary` (on one emit path it is the dispatch's model-written description), NOT
+              // the Task tool_result's `is_error` (false when the agent salvages partial output), NOT a
+              // `rate_limit_event` (it reads `rejected` on runs that carry on, and the recorder blanks it). No
+              // sub-agent frame carries an HTTP status, so the terminal-text matcher alone decides. A task the
+              // stream named as something other than an agent (a background shell) is skipped.
+              if (ev.subtype === "task_updated") {
+                const patch = d.patch as Record<string, unknown> | undefined;
+                const known = taskId !== undefined ? this.taskInfo.get(taskId)?.taskType : undefined;
+                if (
+                  patch?.status === "failed" &&
+                  typeof patch.error === "string" &&
+                  matchesTerminalUsageLimitText(patch.error) &&
+                  (known === undefined || known === "local_agent")
+                )
+                  this.subagentUsageLimits.push({ ...(taskId !== undefined ? { taskId } : {}), error: patch.error });
+              }
               if (ev.subtype === "task_started" && joinId !== undefined && typeof d.subagent_type === "string") {
                 const sa = this.rec.subagents.find((s) => s.toolUseId === joinId);
                 if (sa) {
@@ -1347,6 +1421,7 @@ export class Run {
     // stream closed with no result and no error event at all. Diagnostic only; re-derives on replay (reads
     // only rec state), like the stall detector below.
     if (this.rec.result === "error" && !this.rec.errorSource) this.rec.errorSource = "no_result";
+    this.applySubagentUsageLimits();
     // stall-on-question detection. A turn that ends on a plain-text re-ask ("which file?") gets
     // is_error:false → result:"success" (a false-green — the SDK turn didn't error, but the task didn't
     // complete). Flag it (computeVerdict turns it into a `stalled` fail unless allow_stall). Conservative

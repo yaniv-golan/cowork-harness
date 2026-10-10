@@ -117,7 +117,9 @@ const ERROR_SOURCE_RULE: Record<ErrorSource, "infra" | "agent" | "by_kind" | "ag
   exit: "by_kind", // a nonzero child exit
   // A non-fatal agent event came first and `errorSource ??= "agent"` kept it (run.ts): an unanswered-gate
   // partial and a stream that then ended with no terminal event (the `no_result` stamp only fires when no
-  // source is set) both persist this with NO kind, and both are the agent's. A kind here has no producer.
+  // source is set) both persist this with NO kind, and both are the agent's. The one kind that rides on it is
+  // `usage_limit`, from a sub-agent that hit the quota while the main loop ended `success` (run.ts); INFRA_KINDS
+  // decides that before this rule is read.
   agent: "agent_if_no_kind",
 };
 
@@ -235,8 +237,8 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
   // reads like a limit or a login prompt ("You've reached your daily limit of 5 files") stays the skill's.
   const agentWrote = typeof r.finalMessage === "string" && (r.models ?? []).some((m) => !isLiveModelId(m));
   if (agentWrote && AUTH_FAILURE_SIGNATURE.test(r.finalMessage!)) return out("errored_infra", "auth");
-  // The run lane names a usage limit only on the `result` path (with its HTTP status); on the nonzero-exit
-  // path the same terminal text arrives as kind `agent`, even after a live model has spent. The text is the
+  // The run lane names a usage limit on the `result` path (with its HTTP status) and from a sub-agent's failed
+  // task; on the nonzero-exit path the same terminal text arrives as kind `agent`, even after a live model has spent. The text is the
   // account's quota, never the skill: the shared terminal-limit matcher (transient rate limits excluded).
   if (agentWrote && matchesTerminalUsageLimitText(r.finalMessage!)) return out("errored_infra", "usage_limit");
   if (noModelAnswered(r)) return out("errored_infra", "no_model_answered");

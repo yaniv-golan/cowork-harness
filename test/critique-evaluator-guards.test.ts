@@ -609,10 +609,13 @@ describe("validateReflectionTurn carries the failed turn's own diagnosis, not ju
     expect(isOrdinaryFailureKind(v.kind)).toBe(false);
   });
 
-  it("names WHY the GRADED turn errored — an errored task is gradeable, but a quota exhaustion is not a skill defect", () => {
+  it("names WHY the GRADED turn errored — an errored task is gradeable, but a dropped connection is not a skill defect", () => {
     // The same information gap on the other turn: `taskResult:"error"` is a legitimate gradeable outcome
-    // and the critique proceeds, but the NOTE said only "ended in error" — so a reader would attribute an
-    // exhausted quota or a dropped connection to the skill under review.
+    // and the critique proceeds, but the NOTE said only "ended in error" — so a reader would attribute a
+    // dropped connection to the skill under review.
+    // Until 4.7.1 this example was a QUOTA exhaustion, graded with exit 0. Such a task turn is now a task-turn
+    // failure with no critique (exit 2) — see "a task turn that hit the usage limit" below — so `transport` is the
+    // errored kind that still reaches this NOTE.
     const state = {
       skillFolder: "skills/foo",
       prompt: "p",
@@ -623,10 +626,10 @@ describe("validateReflectionTurn carries the failed turn's own diagnosis, not ju
       selfReportStatus: "unavailable" as const,
       items: [],
       requestedModel: "claude-opus-4-8",
-      gradedErrorReason: "usage-limit — the account's quota is exhausted; retry after the reset. This is NOT a harness or skill defect",
+      gradedErrorReason: "transport error — a tail-end connection drop, not a skill defect; retry",
     };
-    expect(buildTextReport(state)).toMatch(/ended in error \(usage-limit/);
-    expect(buildJsonReport(state).gradedErrorReason).toMatch(/quota is exhausted/);
+    expect(buildTextReport(state)).toMatch(/ended in error \(transport error/);
+    expect(buildJsonReport(state).gradedErrorReason).toMatch(/connection drop/);
     // Absent reason ⇒ the original wording, unchanged.
     expect(buildTextReport({ ...state, gradedErrorReason: undefined })).toMatch(/ended in error — recommendations/);
   });
@@ -778,6 +781,50 @@ describe("F37 residual (part 2): taskTurnInfraFailure gates a killed TASK turn b
       truncated: false,
     };
     expect(taskTurnInfraFailure(task)).toBeUndefined();
+  });
+
+  // Until 4.7.1 a quota-exhausted task turn was graded (exit 0) and the reflection was spawned on the spent quota.
+  const quotaTask = (row: Record<string, unknown>) => ({
+    stdout: JSON.stringify({ ok: false, error: null, results: [{ outDir: "/tmp/eval-x/sess-1", result: "error", ...row }] }),
+    stderr: "",
+    code: 1,
+    timedOut: false,
+    truncated: false,
+  });
+
+  it("a task turn that hit the usage limit (the main loop's own 429) is a task-turn failure, not a gradeable outcome", () => {
+    const failure = taskTurnInfraFailure(quotaTask({ resultErrorKind: "usage_limit", errorSource: "result" }));
+    expect(failure?.kind).toBe("usage_limit");
+    expect(failure?.reason).toMatch(/^task turn hit the account's usage limit — usage-limit/);
+    expect(isOrdinaryFailureKind(failure?.kind)).toBe(true); // RUN FAILED (task turn, usage_limit), not INFRASTRUCTURE
+  });
+
+  it("a task turn whose SUB-AGENT hit the usage limit is a task-turn failure that names the sub-agent", () => {
+    const failure = taskTurnInfraFailure(
+      quotaTask({
+        resultErrorKind: "usage_limit",
+        errorSource: "agent",
+        decisions: [
+          {
+            kind: "tool",
+            name: "subagent_usage_limit",
+            decision: "error",
+            by: "agent",
+            detail: { toolUseId: "toolu_sub1", subagentType: "research", error: "You've hit your org's monthly usage limit" },
+          },
+        ],
+      }),
+    );
+    expect(failure?.kind).toBe("usage_limit");
+    expect(failure?.reason).toMatch(
+      /a sub-agent \(toolu_sub1, research\) hit a usage\/quota limit: You've hit your org's monthly usage limit/,
+    );
+    expect(failure?.reason).not.toMatch(/\(agent\)/);
+  });
+
+  it("a transport or agent error kind stays gradeable (the reflection can still run on a healthy account)", () => {
+    expect(taskTurnInfraFailure(quotaTask({ resultErrorKind: "transport", errorSource: "result" }))).toBeUndefined();
+    expect(taskTurnInfraFailure(quotaTask({ resultErrorKind: "agent", errorSource: "result" }))).toBeUndefined();
   });
 });
 

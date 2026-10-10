@@ -19,6 +19,7 @@ import { InterruptedError } from "../termination.js";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
+import { describeSubagentUsageLimit } from "../usage-limit.js";
 import { applyCommandGlobal } from "../run/command-globals.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
@@ -947,6 +948,8 @@ interface SkillEnvelope {
      *  termination source. Both ride in the envelope because it spreads the whole `RunResult`. */
     resultErrorKind?: "transport" | "agent" | "usage_limit";
     errorSource?: string;
+    /** The run's decisions; read only for the row a sub-agent's usage limit records (`SUBAGENT_USAGE_LIMIT`). */
+    decisions?: Array<{ name: string; detail?: unknown }>;
     /** 1-based turn number within a `--session-id`+`--resume` session (see src/types.ts's `RunResult.turn`).
      *  1 for a fresh/single-shot run; >1 only for a genuine resume. F37 uses this as the mechanical proof
      *  that the reflection turn actually continued the SAME session rather than silently starting fresh. */
@@ -1089,7 +1092,8 @@ export function validateReflectionTurn(
  *  `result`/`finalMessage` must not be trusted as a legitimate gradeable outcome, and the reflection turn
  *  must never even be attempted against a task that was killed mid-run. Returns the infra-failure reason, or
  *  `undefined` for a task turn that completed (cleanly OR with a genuine `result:"error"` — that remains a
- *  gradeable outcome, not an infra failure). `main()` itself spawns real processes and isn't directly
+ *  gradeable outcome, not an infra failure — unless its kind is `usage_limit`: the account's quota cut it, and a
+ *  reflection would hit the same quota). `main()` itself spawns real processes and isn't directly
  *  testable, so this decision is factored out and exported for the unit test. */
 /** A turn that produced no gradeable outcome: the human-readable `reason`, plus the harness error
  *  `kind` (an `ErrCategory`) when the failed turn printed a structured error envelope. */
@@ -1154,7 +1158,9 @@ function resultRowDiagnosis(turn: TurnOutcome): { text: string; kind?: string } 
   const r0 = parseEnvelope(turn.stdout)?.results?.[0];
   if (!r0 || r0.result !== "error") return undefined;
   const subtype = r0.errorSource === "result" && r0.resultSubtype && r0.resultSubtype !== "success" ? r0.resultSubtype : undefined;
-  const detail = [subtype ?? r0.errorSource].filter(Boolean).join("");
+  // A sub-agent's limit leaves errorSource `agent`, which would read as the agent's own fault: name the sub-agent.
+  const sub = r0.resultErrorKind === "usage_limit" ? describeSubagentUsageLimit(r0.decisions) : undefined;
+  const detail = sub ?? [subtype ?? r0.errorSource].filter(Boolean).join("");
   const label =
     r0.resultErrorKind === "usage_limit"
       ? "usage-limit — the account's quota is exhausted; retry after the reset. This is NOT a harness or skill defect"
@@ -1189,6 +1195,17 @@ export function taskTurnInfraFailure(task: TurnOutcome): TurnFailure | undefined
         "graded turn and produced no critique",
     };
   if (task.truncated) return { reason: "task turn's output exceeded the byte cap and was killed" };
+  // A task turn that ran out of the account's quota — its own final result, or a sub-agent's — has nothing honest to
+  // grade: the work was cut by the account, not the skill, and the reflection turn would run on the same spent quota
+  // (it used to, and the report then blamed the "reflection turn"). Exit 2 keeps its meaning — no critique was
+  // produced — and the header reads as an ordinary run failure (`isOrdinaryFailureKind`). Until 4.7.1 this turn was
+  // graded and critique exited 0. `transport` is NOT here: the account can still pay for the reflection, and critique
+  // grades an errored task by contract (the evaluator reasons about what happened before the drop).
+  const row = parseEnvelope(task.stdout)?.results?.[0];
+  if (row?.outDir && row.result === "error" && row.resultErrorKind === "usage_limit") {
+    const diag = resultRowDiagnosis(task);
+    return { kind: "usage_limit", reason: `task turn hit the account's usage limit — ${diag?.text ?? "usage-limit"}` };
+  }
   // A task that exited NONZERO without ever printing a parseable result envelope (a `results[0]` with an
   // outDir) crashed before it completed. The task turn is spawned `--output-format json`, so a run that
   // actually finished always prints one; when it didn't, `extractOutDir` recovers the dir only from the
@@ -1197,8 +1214,8 @@ export function taskTurnInfraFailure(task: TurnOutcome): TurnFailure | undefined
   // Deliberately NARROW — this does NOT protocol-validate a COMPLETED task the way the reflection turn is
   // validated. A task that RAN and reported a failing verdict (a nonzero exit carrying a VALID envelope —
   // `ok:false` or `results[0].result:"error"`) is a genuine, GRADEABLE outcome the skill produced, the
-  // whole point of the critique. So this fires ONLY on the crash-with-no-envelope case, never on a
-  // completed run's success/verdict.
+  // whole point of the critique. So this fires ONLY on the crash-with-no-envelope case (and on the
+  // usage-limit case above, which is the account's, not the skill's), never on a completed run's verdict.
   if (task.code !== 0 && !parseEnvelope(task.stdout)?.results?.[0]?.outDir) {
     // A nonzero exit is not automatically a CRASH. `fail()` (run/envelope.ts) prints a fully-formed
     // `{ok:false, results:[], error:{category,message,hint}}` envelope on the way out, so the harness has
@@ -2337,6 +2354,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // task that was killed mid-run. Reported via the SAME ReportState/infraFailure shape as a broken
     // reflection turn below, rather than silently proceeding to package evidence from a killed run.
     const taskInfra = taskTurnInfraFailure(task);
+    // A task turn that COMPLETED and reported a usage limit has a full result row: carry its graded facts, as
+    // every other report does. A killed or crashed turn has none (and these stay undefined).
+    const infraRow = taskInfra?.kind === "usage_limit" ? parseEnvelope(task.stdout)?.results?.[0] : undefined;
     if (taskInfra) {
       const state: ReportState = {
         skillFolder: opts.skillFolder,
@@ -2345,7 +2365,9 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         outDir,
         fidelity: opts.fidelity,
         requestedFidelity: opts.requestedFidelity,
-        taskResult: undefined,
+        taskResult: infraRow?.result,
+        ...(infraRow?.outcome !== undefined ? { gradedOutcome: infraRow.outcome } : {}),
+        ...(infraRow?.fingerprint?.skillHash !== undefined ? { gradedSkillHash: infraRow.fingerprint.skillHash } : {}),
         selfReportStatus: "unavailable",
         items: [],
         requestedModel: opts.evaluatorModel ?? defaultEvaluatorModel(),
@@ -2368,7 +2390,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // NOTE: `taskResult` ("success" | "error") is a GRADEABLE outcome of the task itself — a task that ended
     // in error is still valid input to the critique (the evaluator can reason about what happened before the
     // failure); it is deliberately NOT treated as an infrastructure failure the way a broken reflection is
-    // below (F37).
+    // below (F37). The one exception, a usage limit, was routed out by `taskTurnInfraFailure` above.
     const taskResult = extractResult(task);
     const taskRow = parseEnvelope(task.stdout)?.results?.[0];
     const gradedOutcome = taskRow?.outcome;
