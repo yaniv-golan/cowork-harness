@@ -6,9 +6,11 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.7.0] — 2026-10-10
+
 ### Upgrade notes
 
-- **A cassette with an `artifact_json` `schema` is stamped v15 and needs this release to replay.** 4.6.0 also reads
+- **A cassette with an `artifact_json` `schema` is stamped v15 and needs this release to replay.** 4.6.x also reads
   v15, so it does not call such a cassette too new: it rejects the field as an unrecognized assertion and suggests
   re-recording. Upgrade the harness instead.
 - **Cassette format v16.** A recording whose run may have had an `onFailure: "block"` hook (agent 2.1.295 and later)
@@ -45,7 +47,7 @@ All notable changes to this project are documented here. The format is based on
   scenario of a large corpus is priced as that scenario instead of the whole directory. A stem that names no scenario
   is a usage error (exit 2) that names it and lists the ids it can select. The JSON payload carries `cases`.
   `--case` is refused with a single scenario file or `--rerecord-stale`.
-- `fixture export --session-paths` keeps the files a skill writes its own session paths into, such as an
+- **`fixture export --session-paths`** keeps the files a skill writes its own session paths into, such as an
   outputs-dir probe, a sub-agent's output path or a deliverable path compared as a string. Without it, export
   refuses them.
   - In each text file, this run's session root becomes a token: `__COWORK_HARNESS_SESSION_ROOT__` for the
@@ -57,17 +59,15 @@ All notable changes to this project are documented here. The format is based on
   - Every other path, another session's included, is still refused, and so is every secret.
   - Binary files are never rewritten, and a file that already holds a token is refused.
   - A file with tokens adds `+t1` to its fixture signature and, while the step leaves it untouched, is recorded
-    hash-only in a cassette. The
-    signature of a fixture without tokens does not change.
+    hash-only in a cassette. The signature of a fixture without tokens does not change.
   - A fixture exported from a container or microvm run warns when staged on hostloop: there it holds only the
     bash path, which the file tools cannot open.
   - Staging refuses a root that holds a quote, a backslash, whitespace or a control character (a `--run-dir`
     with a space, say), before writing any file. `lint` reports a fixture with tokens at `fidelity: protocol`.
   - JSON payload: a new `substituted` key (`{file, count}` per rewritten file), and a new `refused[].kind`,
     `token`.
-- `fixture export --exclude <path>` (repeatable) leaves out a file, or everything under a directory. Excluded
+- **`fixture export --exclude <path>`** (repeatable) leaves out a file, or everything under a directory. Excluded
   paths are listed in `skipped` with `why: "excluded"`. An `--exclude` that names nothing is refused.
-
 - **`artifact_json` checks a value's shape with a JSON Schema: `schema:`.** Write the schema inline, or as `schema:
   {file: <path>}` for a JSON file next to the scenario, which is read at load and inlined so a recorded cassette
   replays without it. The schema (draft 2020-12) applies to the value at `path`, or the whole document, and composes
@@ -75,8 +75,10 @@ All notable changes to this project are documented here. The format is based on
   common ways a schema checks nothing or reaches outside itself are load errors: `format` (no format is validated; use
   `pattern`), a root with no validating keyword (only `title`, `$defs`, …), `nullable`, `$id`, a `$ref` that is not a
   local `#…` reference, `$dynamicRef` / `$recursiveRef`, the annotation-only `content*` keywords, an unknown keyword,
-  a type-specific keyword (`required`, `properties`, `items`, `minLength`, `minimum`, …) with no `type` beside it, and
-  a `$schema` other than draft 2020-12. Validation uses ajv, which is now a runtime dependency (exact version 8.20.0);
+  a type-specific keyword (`required`, `properties`, `items`, `minLength`, `minimum`, …) with no `type` beside it,
+  a `$schema` other than draft 2020-12, a `__proto__` key, and a `NaN` or `Infinity` in `enum`, `const`, `default` or
+  `examples` (a cassette's JSON cannot carry them). So are a schema deeper than 64 levels and one that contains itself
+  (a YAML alias loop); a recursive shape is written as a local `$ref` to a `$defs` entry, which is supported. Validation uses ajv, which is now a runtime dependency (exact version 8.20.0);
   it and its dependencies add about 2.7 MB to an install, and it is loaded only when a scenario uses `schema:`. Its
   dependency `fast-uri` is locked at 3.1.8, past a moderate advisory in 3.1.7.
 
@@ -123,6 +125,13 @@ All notable changes to this project are documented here. The format is based on
     - a hook declared only in settings or in skill or agent frontmatter: the run asks for hook frames only when a staged
       plugin declares hooks, so such a hook's frames do not stream and the keys report "never fired" or
       evidence-unavailable for its event.
+
+### Documentation
+
+- **`input_unmodified` on `lane: remote`: the local read is confirmed.** In a real cloud session, an edit to a staged
+  copy of an input inside the container did not reach the user's device; only an explicit commit of the file wrote it
+  back. So the key keeps reading the local stand-in for the inputs on that lane, and the docs no longer call this
+  unconfirmed.
 
 ## [4.6.1] — 2026-10-09
 
