@@ -107,7 +107,9 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   `semantic_*` with `evidence_files`);
   `semantic_*` without it is judged on the transcript only. Reach for it
   to check a skill's delivery survives the cloud lane, where new Pro and Max tasks run from 2026-10-06. Orthogonal to `fidelity` — a `lane: remote`
-  scenario still runs locally.
+  scenario still runs locally. Add `device_bridge: true` (with `fidelity: container`) to serve `device_bash`, the
+  cloud task's shell on the user's computer; a red there reads from the `device_bash` tool calls and the run's
+  `deviceBridge` record, and a `device-container` / `device-exec` infra error is that second container.
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,
   plus `--skill-hash <prefix>`/`--label <tag>` to narrow to ONE skill generation and

@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **Cassette format v17.** A scenario with `device_bridge: true` stamps v17, so an older reader refuses it as too
+  new. Every other cassette stamps what it did.
+- **`infraErrors[].source` gains `device-container` and `device-exec`.** A consumer that switches on the source
+  should treat `device-container` like `hostloop-sidecar` (the run fails) and `device-exec` like `hostloop-exec`
+  (a warning).
+- **A negative assertion on a device tool the run cannot serve is now refused at load.** `tool_not_called` or
+  `subagent_tool_absent` on `mcp__remote-devices__device_bash` / `get_device_info` without `device_bridge: true`,
+  or on any other `mcp__remote-devices__*` tool the harness never serves, used to pass vacuously. Set
+  `device_bridge`, or drop the assertion. `lint` reports it as `tool-not-called-tier-vacuous`.
 - **The critique report gains fields, and its schema still forbids unknown ones.** `schema/critique-report.json`
   keeps `additionalProperties: false`, so a validator pinned to the 4.7 schema rejects a 4.8 report. The report is
   EXPERIMENTAL (SPEC §12); validate against the schema shipped with the harness that wrote it.
@@ -90,6 +99,8 @@ All notable changes to this project are documented here. The format is based on
   `device-tools-unserved`, `shell-user`). The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".
 - Under `device_bridge`, `file_exists` and `input_unmodified` on a connected folder's path are refused before the
   run: they would grade the agent's container, which holds no folder.
+- **`get_device_info` under the bridge** reports the platform as `darwin` and spells each folder `~/<folder-name>`, so
+  no host path reaches the transcript.
 - **Two infra-error sources**, `device-container` (the device container died: the run fails) and `device-exec` (one
   `device_bash` exec failed: a warning).
 
@@ -109,8 +120,6 @@ All notable changes to this project are documented here. The format is based on
   on model-written wording, and across repeats of the same probe it often never recurs. The docs and the skill
   now say to read repeats side by side, aligned by classification, and that a shared evidence excerpt is often
   cited by unrelated findings.
-- **Cassette format v17.** A scenario with `device_bridge: true` stamps v17, so an older reader refuses it as too
-  new. Every other cassette stamps what it did.
 - **The post-run delete scan reads `device_bash` commands, and compares the device copy before and after the run**,
   so `no_delete_in_mounts` sees a delete in a connected folder made through the bridge by any means. Production
   refuses such a delete until the user allows it; the device copy does not.

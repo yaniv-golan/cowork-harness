@@ -134,7 +134,8 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 7. **The tier decides what exists.** `protocol` has no sandbox and no egress, tool names differ per tier
    (`container` serves `mcp__workspace__web_fetch`, not `WebFetch`), and every tier models Cowork's
    local lane only; new Pro and Max tasks do not use it from 2026-10-06. Behaviour-shaped results transfer;
-   path, mount, delivery and egress results do not.
+   path, mount, delivery and egress results do not. `device_bridge: true` on `lane: remote` serves the cloud
+   task's `device_bash` (see `references/authoring.md`).
 8. **A WARN signal never blocks a green.** Read the verdict signals after every run
    (`prompt_asset_missing`, `undelivered_deliverables`, `model_fallback`, …).
 

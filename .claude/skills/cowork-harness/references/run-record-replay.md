@@ -299,7 +299,7 @@ Recognize these before "fixing" a non-bug:
   skill's own files never exempt a path under its host source); `scan.inputHostPathTokens` counts the
   host-path tokens the inputs carried, `scan.hostPathsFromInputs` the ones exempted, and a non-zero exemption
   prints a `::notice::` so a clean scan that relied on it is never silent.
-- **`exec_infra_error`** (`WARN`, host-loop) — one or more container `exec` calls failed for
+- **`exec_infra_error`** (`WARN`, host-loop, or `device_bash` under `device_bridge`) — one or more container `exec` calls failed for
   infrastructure reasons (daemon/container-level), so those tool calls returned an error to the agent
   rather than the command's own output. Warn-severity because the run's other evidence is intact — unlike
   the fail-severity `infra_error`, where a **supervising process** died and contaminated everything. Note

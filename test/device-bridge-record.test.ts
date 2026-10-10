@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline } from "../src/baseline.js";
 import { CASSETTE_VERSION, readCassette, replayCassette, type Cassette } from "../src/run/cassette.js";
 import { deviceBridgeRecord } from "../src/runtime/device-container.js";
+import { computeVerdict } from "../src/run/verdict.js";
 import type { Mount } from "../src/session.js";
 import type { Scenario } from "../src/types.js";
 
@@ -109,4 +110,22 @@ describe("wiring: a live run carries the record", () => {
     expect(s.match(/deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts\) : undefined/g)).toHaveLength(2);
     expect(s).toMatch(/deviceBridge: args\.deviceBridge,/);
   });
+});
+
+// A recorded device infra error replays with its own source, so replay grades it as the live run did: the
+// container's death fails, one failed device_bash exec only warns.
+describe("replay keeps the device infra-error sources", () => {
+  for (const [source, fails] of [
+    ["device-exec", false],
+    ["device-container", true],
+  ] as const)
+    it(`${source} replays as ${source}`, async () => {
+      const c = cassetteOf();
+      (c as any).events.splice(1, 0, line({ type: "infra_error", ts: "2026-10-11T00:00:00Z", source, message: "x" }));
+      const r = await replayCassette(c, []);
+      expect(r.infraErrors).toEqual([{ source, message: "x" }]);
+      const v = computeVerdict(r, "replay");
+      expect(v.signals.some((s) => s.code === "infra_error" && s.severity === "fail")).toBe(fails);
+      expect(v.signals.some((s) => s.code === "exec_infra_error")).toBe(!fails);
+    });
 });
