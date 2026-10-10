@@ -1,7 +1,7 @@
 # Scenario & session schema, replay class, web_fetch, authoring gotchas
 
 Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.6.1`
-(baseline `desktop-2.31226.0`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
+(baseline `desktop-2.31226.1`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
 **Minimal scenario** — `prompt` and `fidelity` are required:

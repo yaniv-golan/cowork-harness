@@ -55,6 +55,17 @@ All notable changes to this project are documented here. The format is based on
   it and its dependencies add about 2.7 MB to an install, and it is loaded only when a scenario uses `schema:`. Its
   dependency `fast-uri` is locked at 3.1.8, past a moderate advisory in 3.1.7.
 
+### Changed
+
+- **`latest` moves to `desktop-2.31226.1`** (agent **2.1.295**, was 2.1.293). The Cowork system prompt, the sub-agent
+  append, the egress contract, the first-party spawn env and the cloud tool surface are unchanged from
+  `desktop-2.31226.0`. The agent is staged from the stable channel again, so the CI recipe's download base (`B=`)
+  returns to the plain release path; its download matches the baseline's checksum.
+  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.31226.0 → 2.31226.1 since
+    record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it; a
+    re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on
+    2.1.295. The bundled cassettes are re-stamped to `2.31226.1`.
+
 ## [4.6.1] — 2026-10-09
 
 ### Upgrade notes
