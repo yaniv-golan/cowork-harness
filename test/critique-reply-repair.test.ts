@@ -1,17 +1,17 @@
 // The evaluator reply repair, through the real parser (`parseCritiqueItems`): a `{"items":[...]}` document complete
-// except for its trailing closer(s) is repaired by appending exactly those; anything else is refused as before.
+// except for its final closing brace is repaired by appending that one `}`; anything else is refused as before.
 import { describe, it, expect } from "vitest";
 import { parseCritiqueItems, runCritique, canaryIdea } from "../src/critique/evaluator.js";
 import { buildJsonReport, buildTextReport } from "../src/critique/command.js";
 import { buildCritiqueSummary } from "../src/critique/summary.js";
 import type { Complete } from "../src/decide/decider.js";
-import { repairTrailingClosers } from "../src/critique/reply-repair.js";
+import { repairMissingFinalBrace } from "../src/critique/reply-repair.js";
 
 const item = (idea: string, extra = "") =>
   `{"idea":${JSON.stringify(idea)},"classification":"grounded-and-actionable","evidence":"the skill never says which currency","recommendedAction":"state the currency${extra}"}`;
 const parse = (raw: string) => parseCritiqueItems(raw, "self-report", "critique pass 2 (verify self-report)", "nonce-test");
 
-describe("evaluator reply repair — only the missing trailing closers", () => {
+describe("evaluator reply repair — only the missing final closing brace", () => {
   it("repairs the observed shape: a complete items array whose final } is missing", () => {
     const raw = `{"items":[${item("first finding")},${item("second finding")}]`;
     const r = parse(raw);
@@ -26,7 +26,7 @@ describe("evaluator reply repair — only the missing trailing closers", () => {
   });
 
   it("REFUSES a reply that would also need a ] (the list left open — a cut-off reply looks like this)", () => {
-    expect(repairTrailingClosers(`{"items":[${item("only finding")}`)).toBeNull();
+    expect(repairMissingFinalBrace(`{"items":[${item("only finding")}`)).toBeNull();
     expect(() => parse(`{"items":[${item("a")},${item("b")}`)).toThrow(/no valid \{"items":\[\.\.\.\]\} JSON/);
   });
 
@@ -61,8 +61,8 @@ describe("evaluator reply repair — only the missing trailing closers", () => {
   });
 
   it("REFUSES an items document nested in another unclosed opener (nothing outside it is dropped)", () => {
-    expect(repairTrailingClosers(`{"result":{"items":[${item("x")}]`)).toBeNull();
-    expect(repairTrailingClosers(`[{"items":[${item("x")}]`)).toBeNull();
+    expect(repairMissingFinalBrace(`{"result":{"items":[${item("x")}]`)).toBeNull();
+    expect(repairMissingFinalBrace(`[{"items":[${item("x")}]`)).toBeNull();
     expect(() => parse(`{"result":{"items":[${item("x")}]`)).toThrow();
   });
 
@@ -79,8 +79,8 @@ describe("evaluator reply repair — only the missing trailing closers", () => {
   });
 
   it("REFUSES a mismatched closer and trailing prose after an unclosed document", () => {
-    expect(repairTrailingClosers(`{"items":[${item("x")}}`)).toBeNull();
-    expect(repairTrailingClosers(`{"items":[${item("x")}] and that is all`)).toBeNull();
+    expect(repairMissingFinalBrace(`{"items":[${item("x")}}`)).toBeNull();
+    expect(repairMissingFinalBrace(`{"items":[${item("x")}] and that is all`)).toBeNull();
   });
 
   it("a stray double quote in prose before the document is not read as a string", () => {
@@ -89,7 +89,7 @@ describe("evaluator reply repair — only the missing trailing closers", () => {
     expect(r.repair).toEqual({ appended: "}" });
   });
 
-  it("REFUSES a canary-only reply missing its closer (a repair that leaves no findings)", () => {
+  it("REFUSES a canary-only reply missing its final } (a repair that leaves no findings)", () => {
     const canary = `{"idea":${JSON.stringify(canaryIdea("nonce-test"))},"classification":"not-adjudicable","evidence":"","recommendedAction":"none"}`;
     expect(() => parse(`{"items":[${canary}]`)).toThrow(/no valid/);
   });

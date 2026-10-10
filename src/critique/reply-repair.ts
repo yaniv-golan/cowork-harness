@@ -7,11 +7,9 @@
 //   - the reply is scanned from its start; outside any bracket (prose) quotes are not strings, inside a bracket they
 //     are, with escapes honoured;
 //   - every closer must match its opener;
-//   - the text must end OUTSIDE a string, with unclosed openers left, and the OUTERMOST unclosed opener must be the
-//     `{` of a `{"items":` document — so nothing before the document is dropped, and nothing it is nested in is
-//     silently left unclosed;
-//   - the only unclosed opener left must be that document's own `{` — so the repair appends exactly one `}`, and
-//     nothing else: no `]`, no truncation, no inner fix;
+//   - the text must end OUTSIDE a string with exactly one unclosed opener, and it must be the `{` of a `{"items":`
+//     document — so nothing before the document is dropped, nothing it is nested in is left unclosed, and the repair
+//     appends exactly one `}`: no `]`, no truncation, no inner fix;
 //   - the result must then parse as JSON. Anything else is refused (null), and the caller fails as before.
 // A reply cut mid-item, mid-string, or with a missing inner comma does not parse after the append, so it is refused.
 // One shape this cannot tell apart: a cut right after a complete number (`"n":1` where `12` was meant) parses; only
@@ -20,7 +18,7 @@
 const OPEN_TO_CLOSE: Record<string, string> = { "{": "}", "[": "]" };
 
 export interface ReplyRepair {
-  /** The repaired document: the unclosed `{"items":…` tail plus the appended closers. */
+  /** The repaired document: the unclosed `{"items":…` tail plus the appended `}`. */
   text: string;
   /** What was appended: always the single closing brace `}`. */
   appended: "}";
@@ -28,7 +26,7 @@ export interface ReplyRepair {
 
 /** Repair `raw` if — and only if — its one unclosed top-level document is a `{"items":` document missing only its
  *  final `}`. Returns null otherwise. */
-export function repairTrailingClosers(raw: string): ReplyRepair | null {
+export function repairMissingFinalBrace(raw: string): ReplyRepair | null {
   const stack: Array<{ c: string; at: number }> = [];
   let inString = false;
   let escaped = false;

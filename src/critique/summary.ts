@@ -66,7 +66,7 @@ export interface CritiqueSummary {
   droppedEvaluatorItems: { pass1: number; pass2: number } | null;
   corpusCuts: number | null;
   corpusDrift: boolean;
-  /** An evaluator reply was missing only its trailing closer(s) and was repaired (see the report's evaluatorRepair). */
+  /** An evaluator reply was missing only its final closing brace, which was appended (see the report's evaluatorRepair). */
   evaluatorRepaired: boolean;
   costUsd?: { totalUsd: number | null; complete: boolean };
   promptSha256?: string;

@@ -1520,7 +1520,7 @@ interface ReportState {
    *  `parseCritiqueItems`). Surfaced in BOTH output formats whenever non-zero — a dropped finding the
    *  report never mentions would be a silent recall loss, the exact shape this tool exists to kill. */
   droppedEvaluatorItems?: { pass1: number; pass2?: number };
-  /** Evaluator replies that were missing only their trailing closer(s) and were repaired by appending them. */
+  /** Evaluator replies that were missing only their final closing brace, which was appended. */
   evaluatorRepair?: Array<{ pass: 1 | 2; appended: string }>;
   /** F28/F30 (thread-through, D): `packageEvidence`'s `turn1ResultDegraded` — true when the canonical
    *  turn-1 result was corrupted, or (on a validated resume) its archive was simply never written. `undefined`

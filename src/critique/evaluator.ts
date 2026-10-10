@@ -1,7 +1,7 @@
 import { claudeCliCompleteEvaluator } from "../decide/llm-transport.js";
 import type { Complete } from "../decide/decider.js";
 import { extractAllJsonObjects } from "../decide/semantic-judge.js";
-import { repairTrailingClosers } from "./reply-repair.js";
+import { repairMissingFinalBrace } from "./reply-repair.js";
 import { validateCitations, type CritiqueItem } from "./evidence.js";
 import { armorEvidence, headTag, evidenceOpen, evidenceClose, type ArmoredEvidence, type EvidenceSection } from "./armor.js";
 import { ROOT_REFERENCE_SECTION_PREFIX, AGENT_SECTION_PREFIX } from "./package-evidence.js";
@@ -142,7 +142,7 @@ interface ParsedPassReply {
   items: CritiqueItem[];
   canaryPresent: boolean;
   droppedMalformed: number;
-  /** Set when the reply was missing only its final `}` and `repairTrailingClosers` appended it. */
+  /** Set when the reply was missing only its final `}` and `repairMissingFinalBrace` appended it. */
   repair?: { appended: string };
 }
 
@@ -236,9 +236,9 @@ export function parseCritiqueItems(
         `${label}: a {"items":[...]} document was found but EVERY item failed validation ` +
           `(${allMalformed.count} malformed item(s); first failure: ${allMalformed.firstWhy}) and no integrity canary vouches for the pass.\n--- raw reply ---\n${raw}`,
       );
-    // The one bounded recovery: a document complete except for its trailing closer(s). The repaired text goes
+    // The one bounded recovery: a document complete except for its final closing brace. The repaired text goes
     // through this same parse — the same validation, canary and ambiguity rules — exactly once.
-    const repaired = allowRepair ? repairTrailingClosers(raw) : null;
+    const repaired = allowRepair ? repairMissingFinalBrace(raw) : null;
     if (repaired) {
       let again: ParsedPassReply;
       try {
@@ -526,7 +526,7 @@ export interface RunCritiqueOptions {
    *  count means the evaluator's reply carried malformed items that were dropped rather than sinking the
    *  whole document — the report must surface it (an unreported drop would be a silent recall loss). */
   onDroppedItems?: (dropped: { pass1: number; pass2?: number }) => void;
-  /** A pass's reply was missing only its trailing closer(s), and they were appended (see reply-repair.ts). */
+  /** A pass's reply was missing only its final closing brace, and it was appended (see reply-repair.ts). */
   onRepair?: (repair: { pass: 1 | 2; appended: string }) => void;
   /** Called once per pass, IMMEDIATELY after the transport resolves and BEFORE the reply is parsed — so
    *  the raw reply is captured structurally even when the parse then throws (the salvage path; the raw
