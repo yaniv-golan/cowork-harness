@@ -10,8 +10,8 @@
 //   sharedExcerpt  the same cited passage under the same classification in k of N reports, with how many distinct
 //                  ideas and actions cite it — a cue to read those items together, NOT a match.
 //
-// Groups are by `--label`: one group, or two (before/after). Two groups with the same corpusHash are labelled a
-// noise-floor control: same corpus, so any difference between them is run-to-run variation.
+// Groups are by `--label`: one group, or two (before/after). Two groups with the same corpusHash and one shared
+// skillTreeHash are labelled a noise-floor control: the same skill, so any difference is run-to-run variation.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
@@ -49,6 +49,17 @@ export interface CompareMember {
 export class CompareRefusal extends Error {}
 
 const SUMMARY_SCHEMA_RE = /^critique-summary\/\d+$/;
+/** Summary fields compare groups, de-duplicates, refuses or marks on. */
+const SUMMARY_KEY_FIELDS: ReadonlySet<string> = new Set([
+  "label",
+  "sessionId",
+  "gradedSkill",
+  "corpusHash",
+  "skillTreeHash",
+  "hashBasis",
+  "evaluatorModel",
+  "items",
+]);
 const norm = (s: string): string => s.replace(/\s+/g, " ").trim();
 const sha16 = (s: string): string => createHash("sha256").update(s).digest("hex").slice(0, 16);
 const byCodePoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -76,6 +87,14 @@ export function loadMember(file: string): CompareMember {
     throw new CompareRefusal(`${file}: an error or command envelope, not a critique report`);
 
   if (typeof j.schema === "string" && SUMMARY_SCHEMA_RE.test(j.schema)) {
+    // A summary that withheld a field compare groups, de-duplicates or marks on cannot be compared honestly: a
+    // withheld label would silently merge before/after, a withheld session id would skip de-duplication.
+    const withheld = Array.isArray(j.withheld) ? (j.withheld as unknown[]).filter((x): x is string => typeof x === "string") : [];
+    const blocking = withheld.filter((f) => SUMMARY_KEY_FIELDS.has(f));
+    if (blocking.length)
+      throw new CompareRefusal(
+        `${file}: the summary withheld ${blocking.join(", ")} (a value failed its shape check when it was written), which compare groups or matches on — compare the full report instead`,
+      );
     const items = Array.isArray(j.items) ? (j.items as Array<Record<string, unknown>>) : [];
     const integ = j.evaluatorIntegrity as { pass1Canary?: unknown; pass2Canary?: unknown } | null | undefined;
     return {
@@ -97,7 +116,7 @@ export function loadMember(file: string): CompareMember {
         j.status === "corpus_only"
           ? "a --corpus-only summary: no critique ran"
           : j.status !== "critiqued"
-            ? `no critique was produced (${String(j.status)})`
+            ? "no critique was produced"
             : integ && (integ.pass1Canary === false || integ.pass2Canary === false)
               ? "the evaluator's integrity canary failed (the critique may have been silenced)"
               : j.corpusDrift === true
@@ -411,7 +430,7 @@ export function renderCompareText(out: Record<string, unknown>): string {
   const groups = out.groups as Array<Record<string, unknown>>;
   const lines: string[] = [`critique --compare  (no verdicts — read the findings side by side)`];
   if (out.noiseFloorControl)
-    lines.push(`  noise-floor control: both groups have the same corpusHash, so any difference is run-to-run variation`);
+    lines.push(`  noise-floor control: both groups have the same corpusHash and skillTreeHash, so any difference is run-to-run variation`);
   for (const g of groups) {
     lines.push(
       "",

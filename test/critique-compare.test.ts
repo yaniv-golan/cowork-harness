@@ -302,6 +302,16 @@ describe("critique --compare", () => {
     }
   });
 
+  it("refuses a summary that withheld a field compare groups on (a label would otherwise merge before/after)", () => {
+    const d = dir();
+    const p = writeSummary(d, "w.json", reportState([A], { label: "before" }));
+    const j = JSON.parse(readFileSync(p, "utf8"));
+    j.label = null;
+    j.withheld = ["label"];
+    writeFileSync(p, JSON.stringify(j));
+    expect(() => loadMember(p)).toThrow(/withheld label/);
+  });
+
   it("the same output whatever order the files are given in", () => {
     const d = dir();
     const files = [

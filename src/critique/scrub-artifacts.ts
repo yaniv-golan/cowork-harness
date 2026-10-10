@@ -86,8 +86,6 @@ const KEEP: Record<CritiqueJsonShape, Set<string>> = {
     "groups[].skillTreeHashes[]",
     "groups[].marks[]",
     "groups[].reports[].kind",
-    "groups[].reports[].sessionId",
-    "groups[].reports[].evaluatorModel",
     "groups[].sameWording[].findingFingerprint",
     "groups[].sameWording[].classification",
     "groups[].sharedExcerpt[].anchor",

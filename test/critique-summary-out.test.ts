@@ -198,6 +198,25 @@ describe("--summary-out", () => {
     expect(JSON.stringify(s)).not.toContain(SECRET_TEXT);
   });
 
+  it("a summary is withheld when the configured scrub would alter it — through the real writer and the env", () => {
+    const prev = process.env.COWORK_HARNESS_SCRUB_VALUES;
+    process.env.COWORK_HARNESS_SCRUB_VALUES = "v1.2.3-rc1"; // the state's label
+    try {
+      const { text } = written([]);
+      expect(text).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_SCRUB_VALUES;
+      else process.env.COWORK_HARNESS_SCRUB_VALUES = prev;
+    }
+  });
+
+  it("refuses a --label the summary cannot carry when --summary-out is given", () => {
+    expect(() => parseArgs(["./s", "--prompt", "p", "--label", "fix/currency", "--summary-out", "s.json"])).toThrow(
+      /cannot go in a --summary-out file/,
+    );
+    expect(parseArgs(["./s", "--prompt", "p", "--label", "fix/currency"]).label).toBe("fix/currency"); // fine without it
+  });
+
   it("refuses --summary-out equal to --out, and the include flags without --summary-out", () => {
     expect(() => parseArgs(["./s", "--prompt", "p", "--out", "a.json", "--summary-out", "./a.json"])).toThrow(/name the same file/);
     expect(() => parseArgs(["./s", "--prompt", "p", "--summary-include-cost"])).toThrow(/need --summary-out/);

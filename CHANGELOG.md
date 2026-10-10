@@ -48,7 +48,8 @@ All notable changes to this project are documented here. The format is based on
   finding text, prompt, host path or git ref. Built by allowlist, every value shape-checked (a failure is written
   `null` and named in `withheld`); a summary that a configured secret would alter is not written, with a warning,
   and the exit code never changes. Cost and the probe's hash are opt-in (`--summary-include-cost`,
-  `--summary-include-prompt-hash`). Written on every outcome that writes a report, and by `--corpus-only`. Its
+  `--summary-include-prompt-hash`). A `--label` outside `[A-Za-z0-9._:+-]{1,64}` is refused when `--summary-out`
+  is given. Written on every outcome that writes a report, and by `--corpus-only`. Its
   shape is the new `schema/critique-summary.json`.
 - **`critique --compare <report.json | summary.json …>` lays several critiques of one skill side by side.** No
   spend, no model, and no verdict:
@@ -59,7 +60,8 @@ All notable changes to this project are documented here. The format is based on
   - two groups with an equal `corpusHash` and one shared `skillTreeHash` are labelled a noise-floor control;
   - a critique with no result, a failed evaluator canary or corpus drift is excluded from N and listed;
   - refused: a mix of skills, hash or fingerprint schemes, harness majors, or `corpusHash` within a group; labels on
-    some inputs only; the same critique twice (a summary and its own report included); a report from before
+    some inputs only; the same critique twice (a summary and its own report included); a summary that withheld a
+    field compare groups or matches on; a report from before
     4.8.0; a `--corpus-only` envelope; anything that is not a JSON report or summary;
   - marked, and refused under `--strict`: mixed evaluator models, hash bases, skill trees (a `scripts/` edit) or
     probes, and a pass-1-only member; marked only: a varying `packagedCorpusHash`, and a member with no probe

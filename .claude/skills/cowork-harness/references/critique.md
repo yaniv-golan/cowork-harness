@@ -203,7 +203,8 @@ with `--corpus-only` ($0). Kept snapshots: `~/.cowork-harness/critique-snapshots
 `findingFingerprint` / `classification` / `source` / `adjudicable` — no finding text, prompt, host path or git
 ref. Values are shape-checked (a failure is `null` + named in `withheld`); a summary a configured secret would
 alter is NOT written (warning, exit unchanged). Cost and the probe hash are opt-in
-(`--summary-include-cost`, `--summary-include-prompt-hash`). Schema: [`schema/critique-summary.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/critique-summary.json).
+(`--summary-include-cost`, `--summary-include-prompt-hash`). With `--summary-out`, a `--label` must match
+`[A-Za-z0-9._:+-]{1,64}` (e.g. `v1.2.0-rc1`, not `fix/x`). Schema: [`schema/critique-summary.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/critique-summary.json).
 
 ## Several critiques side by side — `critique --compare`
 
@@ -212,7 +213,8 @@ before/after) and lists every finding per report, aligned by classification. It 
 `findingFingerprint` match is `sameWording` k/N — a LOWER bound (it often never recurs across repeats); a
 `sharedExcerpt` is the same cited passage, NOT proven the same finding. Equal `corpusHash` and one shared
 `skillTreeHash` in both groups = `noiseFloorControl` (a scripts/ edit never is). Refused: mixed skills / schemes /
-harness majors, mixed `corpusHash` within a group, the same critique twice, a pre-4.8 report. Marked, and refused
+harness majors, mixed `corpusHash` within a group, the same critique twice, a summary that withheld a key
+field, a pre-4.8 report. Marked, and refused
 by `--strict`: mixed evaluator models / hash bases / skill trees / probes, a pass-1-only member. Marked only:
 `mixedPackagedCorpus`, `probeUnverified` (no prompt hash — the summary default).
 Its output carries finding text — not public-safe. Details: [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only).

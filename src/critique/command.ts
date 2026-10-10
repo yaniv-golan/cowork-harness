@@ -513,6 +513,11 @@ function parseArgs(
   if (positional.length !== 1) throw new Error(usage());
   if (summaryOut !== undefined && out !== undefined && resolve(summaryOut) === resolve(out))
     throw new Error(`--summary-out and --out name the same file (${summaryOut}); the summary would overwrite the report\n${usage()}`);
+  // A label the public summary cannot carry would be withheld there, and compare could not group by it: refuse it now.
+  if (summaryOut !== undefined && label !== undefined && !/^[A-Za-z0-9._:+-]{1,64}$/.test(label))
+    throw new Error(
+      `--label "${label}" cannot go in a --summary-out file (letters, digits and . _ : + - only, at most 64), so the summary could not be grouped by it; use e.g. ${label.replace(/[^A-Za-z0-9._:+-]+/g, "-").slice(0, 64)}\n${usage()}`,
+    );
   if ((summaryIncludeCost || summaryIncludePromptHash) && summaryOut === undefined)
     throw new Error(`--summary-include-cost / --summary-include-prompt-hash need --summary-out\n${usage()}`);
   if (prompt !== undefined && promptFile !== undefined) throw new Error(`--prompt and --prompt-file are mutually exclusive\n${usage()}`);

@@ -671,7 +671,9 @@ No spend and no model: it reads `--output-format json` reports (or `--out` files
 
 It refuses (exit 2): a mix of graded skills, of `corpusHashScheme` or `fingerprintScheme`, or of harness
 major versions; a mix of `corpusHash` within one group (give the other corpus its own `--label`); the same
-critique given twice (a summary and its own report count as the same critique); a report from before 4.8.0;
+critique given twice (a summary and its own report count as the same critique); a summary that withheld a
+field compare groups or matches on (its label, session id, skill, hashes, basis, evaluator model or items);
+a report from before 4.8.0;
 a `--corpus-only` envelope; any run flag. A critique that produced no result, whose evaluator canary
 failed, or that drifted during its run is **excluded from N** and listed in `excluded`. A group that mixes
 evaluator models (`mixedEvaluator`), hash bases (`mixedBasis`), skill trees (`mixedSkillTree` — a `scripts/` edit
@@ -727,6 +729,8 @@ git ref or path. Its shape is [`schema/critique-summary.json`](../schema/critiqu
 
 - Every value is checked against the shape its field must have (a model id must read `claude-…`, a label
   `[A-Za-z0-9._:+-]`, a hash `sha256:<64 hex>`). A value that fails is written `null` and named in `withheld`.
+  A `--label` outside that shape is refused up front when `--summary-out` is given, since `--compare` could not
+  group the summary by it.
 - The finished summary goes through the secret scrub. If the scrub would change anything, the file is **not
   written**, a warning says so, and the exit code is unchanged.
 - Cost (`--summary-include-cost`) and the probe's sha256 (`--summary-include-prompt-hash`, which confirms a
