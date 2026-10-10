@@ -410,12 +410,14 @@ describe.skipIf(!existsSync(CLI))("critique --compare (CLI)", () => {
       encoding: "utf8",
     });
     expect(readFileSync(outFile, "utf8")).toBe(withOut.stdout);
-    const scrubbed = spawnSync("node", [CLI, "critique", "--compare", ...files, "--output-format", "json"], {
+    // stdout also passes the CLI-wide scrub; the --out FILE is only scrubbed by compare itself.
+    const scrubOut = join(d, "scrubbed.json");
+    const scrubbed = spawnSync("node", [CLI, "critique", "--compare", ...files, "--output-format", "json", "--out", scrubOut], {
       encoding: "utf8",
       env: { ...process.env, COWORK_HARNESS_SCRUB_VALUES: d.split("/").pop()! },
     });
     expect(scrubbed.status).toBe(0);
-    expect(scrubbed.stdout).not.toContain(d.split("/").pop()!); // the report paths carry the dir name
+    expect(readFileSync(scrubOut, "utf8")).not.toContain(d.split("/").pop()!); // the report paths carry the dir name
     const top = spawnSync("node", [CLI, "--help"], { encoding: "utf8" });
     expect(top.stdout + top.stderr).toMatch(/critique --compare/);
     const text = spawnSync("node", [CLI, "critique", "--compare", ...files], { encoding: "utf8" });
