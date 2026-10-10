@@ -10,14 +10,14 @@ npm package.
 
 | File                                   | What it does |
 | -------------------------------------- | ------------ |
-| `plugin/`                              | A throwaway plugin, `cwh-cloud-probe`. `hooks/hooks.json` runs `hooks/capture.py` on every `PreToolUse` and `PostToolUse` (matcher `.*`). |
+| `plugin/`                              | A throwaway plugin, `cwh-cloud-probe`. `hooks/hooks.json` runs `hooks/capture.py` on every `PreToolUse`, `PostToolUse` and `PostToolUseFailure` (matcher `.*`). |
 | `plugin/hooks/capture.py`              | Appends one JSON line per tool call to `/root/cwh-cloud-probe/capture.jsonl` inside the cloud task's container. Redacted when written: see "What is recorded". |
 | `verify.py`                            | Run on the folder you download into. It checks that the folder holds only the two export files, integrity (the sha256 and line count the task printed), redaction (every line), and answerability (the capture can answer its probe). |
 
 The rules are tested in `test/cloud-probe-kit.test.ts`. Synthetic payloads carrying session ids, home paths,
 emails, fictional connector names (one that looks like a builtin), a device name, folder-named keys, an input keyed
-by client names and a command are fed through the real hook. The test asserts that none of them reaches the
-capture, and that the verifier rejects a wrong checksum, a tampered line, a download folder holding anything else
+by client names, a command, and failed calls whose error text carries paths, an email and a token are fed through
+the real hook. The test asserts that none of them reaches the capture, and that the verifier rejects a wrong checksum, a tampered line, a download folder holding anything else
 (the salt above all) and a capture that cannot answer its probe.
 
 ### What is recorded
@@ -30,14 +30,19 @@ capture, and that the verifier rejects a wrong checksum, a tampered line, a down
     so they are kept to compare the harness's model of the tool with production;
   - `timeout_ms`;
   - the permission mode;
-  - a shell result's exit code and error flag;
+  - a shell result's exit code and error flag, and a failed call's leading exit code and interrupt flag;
   - the working directory only when it is `/home/claude`, `/root` or `/tmp`.
 - **Fingerprinted** (12 hex characters of an HMAC under a random salt): every other tool, server and connector
   name (a bare `CamelCase` name included), every other tool's input field names (a connector's schema keys can
   name its category, and a private tool's input can be keyed by client names), response keys outside a fixed
-  schema list, and result text. At most 40 input keys are written per call, plus the count when there were more.
-- **Bucketed:** every string length (and the result text length) is written as the next power of two at or above
-  it, so a length cannot identify a device name or a home directory.
+  schema list, result text, and a failed call's error text. At most 40 input keys are written per call, plus the
+  count when there were more.
+- **Bucketed:** every string length (and the result text length, a failed call's error text length and its
+  duration) is written as the next power of two at or above it, so a length cannot identify a device name or a home
+  directory.
+- **A failed call** reaches the hook as `PostToolUseFailure`, not `PostToolUse`. Its error is free text (a failing
+  shell command's error carries the command's own output), so only its type, size class, fingerprint and a leading
+  `Exit code N` are kept.
 - **Never recorded:** commands, paths, ids, emails, timestamps, file names or contents, the device name, folder
   names, and any tool's input field names other than the vocabulary tools' (those are fingerprinted).
 - **The salt:** it stays in the container in `/root/cwh-cloud-probe/.salt`, is never exported, and the export
@@ -163,7 +168,8 @@ Use `--probe p6` for the P6 tasks. If the hash file did not arrive, write the ha
 
 - **P0:** whether the served tool names, input field names and result shapes for `get_device_info`,
   `device_list_dir` and `device_bash` match the harness's model field for field, plus the shapes of a failing
-  shell command.
+  shell command. The failing command's record is a `PostToolUseFailure` line: `verify.py --probe p0f` checks a
+  capture holds one for a device tool (use it for a task that runs only the failing step).
 - **P6:** whether the approval choice reaches the agent as its permission mode, and which approvals the user still
   sees in each mode, including the delete prompt.
 - **Repeat:** each probe needs a second sample before its facts are relied on. Use a second account if one is

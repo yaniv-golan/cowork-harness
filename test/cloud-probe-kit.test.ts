@@ -41,6 +41,10 @@ const HAZARDS = [
   "find_faces",
   "AcmeCapitalPortal",
   "Q3 forecast.xlsx",
+  "fail-secret-token-77",
+  "toolu_01FAILSECRET",
+  "E_NOPE",
+  "ledger",
 ];
 const H12 = "[0-9a-f]{12}";
 
@@ -217,6 +221,64 @@ describe("cloud probe kit: capture hook", () => {
   });
 });
 
+describe("cloud probe kit: a failed tool call (PostToolUseFailure)", () => {
+  // A failed call reaches PostToolUseFailure, not PostToolUse, so without it a failing command's result shape and exit
+  // code are never seen. Its `error` is free text (a device_bash failure carries the command's own output: paths, file
+  // names, whatever the command printed), so only its size class, a salted fingerprint and a leading exit code are kept.
+  const failures = PAYLOADS.filter((p) => JSON.parse(p).hook_event_name === "PostToolUseFailure");
+
+  it("records a failure as shape only: no hazard from the error text or the input reaches the capture", () => {
+    expect(failures).toHaveLength(2);
+    const cap = captureOf(failures).body;
+    for (const h of HAZARDS) expect(cap.includes(h), `leaked: ${h}`).toBe(false);
+    const [dev, conn] = recsOf(cap);
+    expect(dev).toMatchObject({
+      event: "PostToolUseFailure",
+      tool: "mcp__remote-devices__device_bash",
+      input_keys: ["command"],
+      permission_mode: "acceptEdits",
+      failure_exit_code: 1,
+      failure_is_interrupt: false,
+      failure_duration_ms_le: 2048,
+      failure_text_chars_le: 256,
+    });
+    expect(dev.failure_shape).toEqual({ str_le: 256 });
+    expect(dev.failure_text_sha12).toMatch(new RegExp(`^${H12}$`));
+    expect(conn.tool).toMatch(new RegExp(`^mcp__<srv:${H12}>__<tool:${H12}>$`));
+    expect(conn.failure_is_interrupt).toBe(true);
+    expect(conn).not.toHaveProperty("failure_exit_code");
+    expect(JSON.stringify(conn.failure_shape)).toMatch(/^\{"dict":\{"code":\{"str_le":\d+\},"message":\{"str_le":\d+\}\}\}$/);
+  });
+
+  it("the verifier accepts a failure capture, and --probe p0f needs a device-tool failure (else exit 4)", () => {
+    const body = captureOf(failures).body;
+    const v = verify("p0f", downloads(body));
+    expect(v.status, v.stderr).toBe(0);
+    expect(JSON.parse(v.stdout).events.PostToolUseFailure).toBe(2);
+    expect(verify("p0", downloads(body)).status).toBe(4);
+    expect(verify("p0f", downloads(captureOf([failures[1]]).body)).status).toBe(4);
+    expect(verify("p0f", downloads(captureOf(PAYLOADS.slice(0, 10)).body)).status).toBe(4);
+  });
+
+  it("the verifier rejects a failure line carrying a value (exit 2)", () => {
+    const clean = captureOf(failures).body;
+    for (const tamper of [
+      { failure_text: "Exit code 1 cat: /Users/alice" },
+      { failure_exit_code: "1" },
+      { failure_is_interrupt: "no" },
+      { failure_duration_ms_le: 1234 },
+      { failure_text_chars_le: 100 },
+      { failure_text_sha12: "/Users/alice" },
+      { failure_shape: { dict: { "/Users/alice": "null" } } },
+      { failure_exit_code: 1, event: "PostToolUse" },
+    ]) {
+      const lines = clean.trim().split("\n");
+      lines[0] = JSON.stringify({ ...JSON.parse(lines[0]), ...tamper });
+      expect(verify("p0f", downloads(lines.join("\n") + "\n")).status, JSON.stringify(tamper)).toBe(2);
+    }
+  });
+});
+
 describe("cloud probe kit: re-review findings", () => {
   it("a bridged private server that looks like the computer-use or browser group is fingerprinted, input keys included", () => {
     const names = ["mcp__remote-devices__computer_vision__find_faces", "mcp__remote-devices__Claude_Browser__AcmeCapitalPortal"];
@@ -364,11 +426,11 @@ describe("cloud probe kit: verifier", () => {
 });
 
 describe("cloud probe kit: plugin layout", () => {
-  it("wires PreToolUse and PostToolUse (matcher .*) in hooks/hooks.json only, to a capture hook that exists", () => {
+  it("wires PreToolUse, PostToolUse and PostToolUseFailure (matcher .*) in hooks/hooks.json only, to a capture hook that exists", () => {
     const m = JSON.parse(readFileSync(join(KIT, "plugin/.claude-plugin/plugin.json"), "utf8"));
     expect(m.hooks).toBeUndefined();
     const h = JSON.parse(readFileSync(join(KIT, "plugin/hooks/hooks.json"), "utf8"));
-    for (const ev of ["PreToolUse", "PostToolUse"]) {
+    for (const ev of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) {
       expect(h.hooks[ev][0].matcher).toBe(".*");
       expect(h.hooks[ev][0].hooks[0].command).toContain("${CLAUDE_PLUGIN_ROOT}/hooks/capture.py");
     }
