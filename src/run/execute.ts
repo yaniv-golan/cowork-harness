@@ -26,6 +26,7 @@ import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBas
 import {
   deviceBridgeFolderAssertRefusal,
   deviceBridgeRecord,
+  deniedDeviceFolders,
   deviceFolders,
   deviceTreeDeletes,
   type startDeviceBridge,
@@ -1721,7 +1722,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus);
     // device_bridge: a delete on the device copy by any means (`find -delete`, a glob, a script), read off the
     // device tree before and after the run, since the command text alone cannot see every one.
-    if (scenario.device_bridge === true) scan.mountDeletes.push(...deviceTreeDeletes(outDir));
+    if (scenario.device_bridge === true) scan.mountDeletes.push(...deviceTreeDeletes(outDir, deniedDeviceFolders(plan.mounts)));
     // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
     // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
     const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;

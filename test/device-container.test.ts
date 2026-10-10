@@ -23,6 +23,7 @@ import {
   deviceFolders,
   deviceVmUser,
   agentPlanFor,
+  deniedDeviceFolders,
   deviceTreeDeletes,
   makeDeviceExec,
   recordDeviceTree,
@@ -325,6 +326,8 @@ describe("stageDeviceFolders: special files in a folder", () => {
   });
 });
 
+const PROJ = [{ name: "proj", mountPath: "proj" }];
+
 describe("deviceTreeDeletes", () => {
   // The text scan cannot see every way a command deletes (`find -delete`, a glob, a script), so the device tree is
   // compared before and after the run. A rename inside the tree keeps its inode and is not a delete.
@@ -341,13 +344,13 @@ describe("deviceTreeDeletes", () => {
   it("reports a file removed from a folder copy by any means", () => {
     const { outDir, copy } = staged();
     rmSync(join(copy, "a.txt"));
-    expect(deviceTreeDeletes(outDir)).toEqual([{ mount: "proj", command: "(removed from the device copy) proj/a.txt" }]);
+    expect(deviceTreeDeletes(outDir, PROJ)).toEqual([{ mount: "proj", command: "(removed from the device copy) proj/a.txt" }]);
   });
   it("a rename is not a delete; an untouched tree reports nothing", () => {
     const { outDir, copy } = staged();
-    expect(deviceTreeDeletes(outDir)).toEqual([]);
+    expect(deviceTreeDeletes(outDir, PROJ)).toEqual([]);
     renameSync(join(copy, "a.txt"), join(copy, "moved.txt"));
-    expect(deviceTreeDeletes(outDir)).toEqual([]);
+    expect(deviceTreeDeletes(outDir, PROJ)).toEqual([]);
   });
   it("a resumed turn compares against the tree as that turn found it, not as the first turn staged it", async () => {
     const root = scratch();
@@ -372,16 +375,39 @@ describe("deviceTreeDeletes", () => {
     turn1.markTearingDown();
     turn1.reapNow();
     rmSync(join(outDir, "work", "device", "mnt", "proj", "a.txt")); // turn 1 deleted a.txt
-    expect(deviceTreeDeletes(outDir).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
+    expect(deviceTreeDeletes(outDir, PROJ).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
     const turn2 = start(true);
     turn2.markTearingDown();
     turn2.reapNow();
-    expect(deviceTreeDeletes(outDir)).toEqual([]); // turn 2 deleted nothing
+    expect(deviceTreeDeletes(outDir, PROJ)).toEqual([]); // turn 2 deleted nothing
     rmSync(join(outDir, "work", "device", "mnt", "proj", "b.txt"));
-    expect(deviceTreeDeletes(outDir).map((d) => d.command)).toEqual(["(removed from the device copy) proj/b.txt"]);
+    expect(deviceTreeDeletes(outDir, PROJ).map((d) => d.command)).toEqual(["(removed from the device copy) proj/b.txt"]);
+  });
+  it("counts only the delete-denied folders it is given, and names each by its mount path", () => {
+    const root = scratch();
+    const rw = folder(root, "proj");
+    const rwd = folder(root, "scratch", "rwd");
+    const outDir = join(root, "out");
+    const deviceHost = join(outDir, "work", "device");
+    stageDeviceFolders(deviceFolders([rw, rwd]), deviceHost);
+    recordDeviceTree(outDir);
+    rmSync(join(deviceHost, "mnt", "proj", "a.txt"));
+    rmSync(join(deviceHost, "mnt", "scratch", "a.txt"));
+    // `scratch` allows deletes (rwd): not given, not counted. `proj` is reported under its legacy mount path.
+    expect(deviceTreeDeletes(outDir, [{ name: "proj", mountPath: ".projects/proj" }])).toEqual([
+      { mount: ".projects/proj", command: "(removed from the device copy) proj/a.txt" },
+    ]);
+  });
+  it("deniedDeviceFolders picks the rw folders, with their mount paths", () => {
+    const mounts = [
+      { hostPath: "/x/a", mountPath: ".projects/a", mode: "rw", kind: "folder" },
+      { hostPath: "/x/b", mountPath: "b", mode: "rwd", kind: "folder" },
+      { hostPath: "/x/c", mountPath: "c", mode: "r", kind: "folder" },
+    ] as Mount[];
+    expect(deniedDeviceFolders(mounts)).toEqual([{ name: "a", mountPath: ".projects/a" }]);
   });
   it("without a recorded listing it reports nothing (no evidence, no claim)", () => {
-    expect(deviceTreeDeletes(scratch())).toEqual([]);
+    expect(deviceTreeDeletes(scratch(), PROJ)).toEqual([]);
   });
 });
 
@@ -447,7 +473,9 @@ describe("wiring: the review fixes reach the run", () => {
   });
   it("execute.ts adds device-tree deletes to the scan and refuses folder-path file assertions", () => {
     const s = read("run/execute.ts");
-    expect(s).toMatch(/if \(scenario\.device_bridge === true\) scan\.mountDeletes\.push\(\.\.\.deviceTreeDeletes\(outDir\)\);/);
+    expect(s).toMatch(
+      /if \(scenario\.device_bridge === true\) scan\.mountDeletes\.push\(\.\.\.deviceTreeDeletes\(outDir, deniedDeviceFolders\(plan\.mounts\)\)\);/,
+    );
     expect(s).toMatch(/deviceBridgeFolderAssertRefusal\(\s*scenario,\s*deviceFolders\(plan\.mounts\)/);
   });
 });

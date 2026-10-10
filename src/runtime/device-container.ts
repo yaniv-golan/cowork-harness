@@ -211,7 +211,11 @@ export function recordDeviceTree(outDir: string): void {
 /** Files the run removed from a folder copy, by any means (`rm`, `find -delete`, a script): in the staged listing,
  *  gone afterwards, and not renamed within the tree (a rename keeps its inode). Production refuses each of these
  *  until the user allows deletion. Nothing without a recorded listing: no evidence, no claim. */
-export function deviceTreeDeletes(outDir: string): { mount: string; command: string }[] {
+export function deviceTreeDeletes(
+  outDir: string,
+  /** The delete-denied (`rw`) folders (deniedDeviceFolders): a folder that allows deletes (`rwd`) is not counted. */
+  denied: ReadonlyArray<{ name: string; mountPath: string }>,
+): { mount: string; command: string }[] {
   let before: Record<string, number>;
   try {
     before = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
@@ -220,10 +224,20 @@ export function deviceTreeDeletes(outDir: string): { mount: string; command: str
   }
   const after = deviceTreeListing(join(resolve(outDir), "work", "device"));
   const inodesAfter = new Set(Object.values(after));
+  // Named by mount path, as the command-text scan names a mount, so allow_delete_in waives both alike.
+  const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
   return Object.keys(before)
-    .filter((path) => !(path in after) && !inodesAfter.has(before[path]))
+    .filter((path) => mountOf.has(path.split("/")[0]) && !(path in after) && !inodesAfter.has(before[path]))
     .sort()
-    .map((path) => ({ mount: path.split("/")[0], command: `(removed from the device copy) ${path}` }));
+    .map((path) => ({ mount: mountOf.get(path.split("/")[0])!, command: `(removed from the device copy) ${path}` }));
+}
+
+/** The folders production refuses deletes in until the user allows them: mode `rw` (`rwd` is delete-approved,
+ *  `r` is read-only and mounted so). Matches deleteDeniedRootsFromPlan's folder rule. */
+export function deniedDeviceFolders(mounts: ReadonlyArray<Mount>): { name: string; mountPath: string }[] {
+  return deviceFolders(mounts)
+    .filter((f) => f.mode === "rw")
+    .map((f) => ({ name: f.name, mountPath: f.source.mountPath }));
 }
 
 /** The model-visible names of the tools the bridge serves, advertised and pre-approved (production pre-approves
