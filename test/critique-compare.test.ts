@@ -1,0 +1,264 @@
+// `critique --compare`: real reports and summaries, written by the real writers (`writeOutFile`,
+// `writeSummaryIfAsked`), compared through the CLI and through `compareMembers`. No verdicts; k/N everywhere.
+import { describe, it, expect } from "vitest";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { parseArgs, writeOutFile, writeSummaryIfAsked } from "../src/critique/command.js";
+import { compareMembers, loadMember, CompareRefusal } from "../src/critique/compare.js";
+
+const CLI = resolve("dist/cli.js");
+const H = (c: string) => `sha256:${c.repeat(64)}`;
+let n = 0;
+
+type Item = { idea: string; classification: string; evidence: string; action?: string; fp: string; source?: string };
+function reportState(items: Item[], over: Record<string, unknown> = {}) {
+  n++;
+  return {
+    harnessVersion: "4.8.0",
+    label: undefined,
+    corpus: {
+      corpusHashScheme: 1,
+      hashBasis: "git-commit",
+      corpusHash: H("a"),
+      packagedCorpusHash: H("b"),
+      skillTreeHash: H("c"),
+      corpusManifest: [],
+      skillTreeUntracked: [],
+    },
+    source: { kind: "dir" },
+    summaryIdentity: { name: "plug:ms", kind: "plugin_skill" },
+    skillFolder: "./plug",
+    prompt: "the same probe",
+    sessionId: `crit-${String(n).padStart(8, "0")}-0000-4000-8000-000000000000`,
+    outDir: "/tmp/x",
+    fidelity: "container",
+    evaluatorModel: "claude-opus-4-8",
+    taskResult: "success",
+    selfReportStatus: "captured",
+    evaluatorIntegrity: { pass1Canary: true, pass2Canary: true },
+    requestedModel: "claude-opus-4-8",
+    items: items.map((i) => ({
+      source: i.source ?? "evaluator",
+      idea: i.idea,
+      classification: i.classification,
+      evidence: i.evidence,
+      recommendedAction: i.action ?? "do the thing",
+      citationResolved: true,
+      findingFingerprint: i.fp,
+    })),
+    ...over,
+  } as unknown as Parameters<typeof writeOutFile>[1];
+}
+
+const dir = () => mkdtempSync(join(tmpdir(), "cwh-compare-"));
+function writeReport(d: string, name: string, st: ReturnType<typeof reportState>): string {
+  const p = join(d, name);
+  writeOutFile(p, st, "json");
+  return p;
+}
+function writeSummary(d: string, name: string, st: ReturnType<typeof reportState>): string {
+  const p = join(d, name);
+  writeSummaryIfAsked(parseArgs(["./s", "--prompt", "p", "--summary-out", p]), st);
+  return p;
+}
+const cmp = (files: string[], strict = false) => compareMembers(files.map(loadMember), { strict });
+
+const PASSAGE = "the skill never says which currency the figures use";
+const A = {
+  idea: "Currency is unspecified in the output table",
+  classification: "grounded-and-actionable",
+  evidence: PASSAGE,
+  fp: "aaaaaaaaaaaaaaaa",
+};
+const B = {
+  idea: "The rounding rule is undocumented for small totals",
+  classification: "grounded-and-actionable",
+  evidence: PASSAGE,
+  fp: "bbbbbbbbbbbbbbbb",
+};
+const C = {
+  idea: "Currency is unspecified in the output table rows",
+  classification: "grounded-and-actionable",
+  evidence: "another quoted passage here",
+  fp: "cccccccccccccccc",
+};
+const NA = { idea: "Cannot tell whether the cache was used", classification: "not-adjudicable", evidence: "", fp: "dddddddddddddddd" };
+
+describe("critique --compare", () => {
+  it("one group: findings aligned by classification, exact matches as k/N, shared excerpts as an aid — and no verdict", () => {
+    const d = dir();
+    const out = cmp([
+      writeReport(d, "1.json", reportState([A, NA])),
+      writeReport(d, "2.json", reportState([A, B, NA])),
+      writeReport(d, "3.json", reportState([C])),
+    ]);
+    const g = (out.groups as Array<Record<string, unknown>>)[0]!;
+    expect(g.N).toBe(3);
+    expect(g.sameWording).toEqual([
+      { findingFingerprint: "aaaaaaaaaaaaaaaa", classification: "grounded-and-actionable", k: 2, N: 3 },
+      { findingFingerprint: "dddddddddddddddd", classification: "not-adjudicable", k: 2, N: 3 },
+    ]);
+    // A and B cite the same passage with different ideas; the not-adjudicable items' empty evidence is not a passage.
+    expect(g.sharedExcerpt).toEqual([
+      { anchor: expect.stringMatching(/^[0-9a-f]{16}$/), k: 2, N: 3, distinctIdeas: 2, distinctActions: 1 },
+    ]);
+    expect(Object.keys(g.byClassification as object)).toEqual(["grounded-and-actionable", "not-adjudicable"]);
+    expect((out.possibleRewordings as { pairs: unknown[] }).pairs.length).toBeGreaterThan(0); // A vs C
+    expect(out.publicSafe).toBe(false);
+    expect(JSON.stringify(out)).not.toMatch(/"(reproduced|oneOff|one-off|gone|new|persists|weakened|emerging|status)"/);
+  });
+
+  it("two label groups: each fingerprint with k/N per group; equal corpusHash is a noise-floor control", () => {
+    const d = dir();
+    const out = cmp([
+      writeReport(d, "b1.json", reportState([A], { label: "before" })),
+      writeReport(d, "b2.json", reportState([A, B], { label: "before" })),
+      writeReport(d, "a1.json", reportState([B], { label: "after" })),
+    ]);
+    expect(out.noiseFloorControl).toBe(true);
+    expect((out.groups as Array<{ label: string }>).map((g) => g.label)).toEqual(["after", "before"]);
+    expect(out.fingerprints).toEqual([
+      {
+        findingFingerprint: "aaaaaaaaaaaaaaaa",
+        classification: "grounded-and-actionable",
+        groups: [
+          { k: 0, N: 1 },
+          { k: 2, N: 2 },
+        ],
+      },
+      {
+        findingFingerprint: "bbbbbbbbbbbbbbbb",
+        classification: "grounded-and-actionable",
+        groups: [
+          { k: 1, N: 1 },
+          { k: 1, N: 2 },
+        ],
+      },
+    ]);
+    const changed = cmp([
+      writeReport(d, "b3.json", reportState([A], { label: "before" })),
+      writeReport(
+        d,
+        "a3.json",
+        reportState([A], {
+          label: "after",
+          corpus: {
+            corpusHashScheme: 1,
+            hashBasis: "git-commit",
+            corpusHash: H("9"),
+            skillTreeHash: H("c"),
+            corpusManifest: [],
+            skillTreeUntracked: [],
+          },
+        }),
+      ),
+    ]);
+    expect(changed.noiseFloorControl).toBe(false);
+  });
+
+  it("the same output whatever order the files are given in", () => {
+    const d = dir();
+    const files = [
+      writeReport(d, "1.json", reportState([A])),
+      writeReport(d, "2.json", reportState([B, A])),
+      writeReport(d, "3.json", reportState([C])),
+    ];
+    expect(JSON.stringify(cmp([files[2]!, files[0]!, files[1]!]))).toBe(JSON.stringify(cmp(files)));
+  });
+
+  it("refusals", () => {
+    const d = dir();
+    const r = (st: ReturnType<typeof reportState>, name: string) => writeReport(d, name, st);
+    const ok1 = r(reportState([A]), "ok1.json");
+    const cases: Array<[string[], RegExp]> = [
+      [[ok1], /at least two/],
+      [[ok1, r(reportState([A], { summaryIdentity: { name: "plug:other", kind: "plugin_skill" } }), "s.json")], /mix graded skills/],
+      [
+        [
+          ok1,
+          r(
+            reportState([A], {
+              corpus: {
+                corpusHashScheme: 1,
+                hashBasis: "git-commit",
+                corpusHash: H("e"),
+                skillTreeHash: H("c"),
+                corpusManifest: [],
+                skillTreeUntracked: [],
+              },
+            }),
+            "h.json",
+          ),
+        ],
+        /mixes corpusHash/,
+      ],
+      [[ok1, r(reportState([A], { label: "x" }), "l.json")], /some inputs carry a --label/],
+      [[ok1, ok1], /are the same critique/],
+      [[ok1, r(reportState([A], { harnessVersion: "5.0.0" }), "v.json")], /harness major versions/],
+    ];
+    for (const [files, re] of cases) expect(() => cmp(files)).toThrow(re);
+    const old = join(d, "old.json");
+    writeFileSync(old, JSON.stringify({ verdictProvenance: {}, items: [], skillFolder: "x" }));
+    expect(() => loadMember(old)).toThrow(/before 4\.8\.0/);
+    const env = join(d, "env.json");
+    writeFileSync(env, JSON.stringify({ tool: "cowork-harness", command: "critique", mode: "corpus-only" }));
+    expect(() => loadMember(env)).toThrow(/corpus-only/);
+    const three = ["a", "b", "c"].map((l) => r(reportState([A], { label: l }), `${l}.json`));
+    expect(() => cmp(three)).toThrow(/3 label groups/);
+    expect(CompareRefusal).toBeDefined();
+  });
+
+  it("marks a group mixing evaluator models; --strict refuses it", () => {
+    const d = dir();
+    const files = [
+      writeReport(d, "1.json", reportState([A])),
+      writeReport(d, "2.json", reportState([A], { evaluatorModel: "claude-sonnet-5" })),
+    ];
+    expect((cmp(files).groups as Array<{ marks: string[] }>)[0]!.marks).toEqual(["mixedEvaluator"]);
+    expect(() => cmp(files, true)).toThrow(/--strict: .* mixedEvaluator/);
+  });
+
+  it("a critique with no result is excluded from N and listed", () => {
+    const d = dir();
+    const out = cmp([
+      writeReport(d, "1.json", reportState([A])),
+      writeReport(d, "2.json", reportState([A])),
+      writeReport(d, "3.json", reportState([], { infraFailure: "quota", infraFailurePhase: "task turn" })),
+    ]);
+    expect((out.groups as Array<{ N: number }>)[0]!.N).toBe(2);
+    expect(out.excluded).toEqual([{ file: expect.stringMatching(/3\.json$/), reason: expect.stringMatching(/no critique/) }]);
+  });
+
+  it("summaries compare by fingerprint, with no rewording bucket; a summary and its own report are the same critique", () => {
+    const d = dir();
+    const s1 = reportState([A, B]);
+    const s2 = reportState([A]);
+    const out = cmp([writeSummary(d, "s1.json", s1), writeSummary(d, "s2.json", s2)]);
+    expect((out.groups as Array<{ sameWording: unknown[] }>)[0]!.sameWording).toEqual([
+      { findingFingerprint: "aaaaaaaaaaaaaaaa", classification: "grounded-and-actionable", k: 2, N: 2 },
+    ]);
+    expect((out.possibleRewordings as { basis: string }).basis).toMatch(/unavailable/);
+    expect(() => cmp([writeSummary(d, "s3.json", s1), writeReport(d, "r3.json", s1)])).toThrow(/same critique/);
+  });
+});
+
+describe.skipIf(!existsSync(CLI))("critique --compare (CLI)", () => {
+  it("prints the standard envelope, exits 0, and refuses a run flag with --compare", () => {
+    const d = dir();
+    const files = [writeReport(d, "1.json", reportState([A])), writeReport(d, "2.json", reportState([A, B]))];
+    const r = spawnSync("node", [CLI, "critique", "--compare", ...files, "--output-format", "json"], { encoding: "utf8" });
+    expect(r.status, r.stderr).toBe(0);
+    const env = JSON.parse(r.stdout);
+    expect([env.tool, env.command, env.ok, env.mode, env.publicSafe]).toEqual(["cowork-harness", "critique", true, "compare", false]);
+    const bad = spawnSync("node", [CLI, "critique", "--compare", ...files, "--prompt", "x", "--output-format", "json"], {
+      encoding: "utf8",
+    });
+    expect(bad.status).toBe(2);
+    expect(JSON.parse(bad.stdout).error.message).toMatch(/--prompt is not accepted with --compare/);
+    const text = spawnSync("node", [CLI, "critique", "--compare", ...files], { encoding: "utf8" });
+    expect(text.status).toBe(0);
+    expect(text.stdout).toMatch(/no verdicts/);
+  });
+});

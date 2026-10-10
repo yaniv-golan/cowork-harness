@@ -24,6 +24,7 @@ import { describeSubagentUsageLimit } from "../usage-limit.js";
 import type { CorpusDigest, CorpusManifestEntry, HashBasis } from "./corpus-digest.js";
 import { isGitTarget, stageGitTarget, type GitTargetSource } from "./git-target.js";
 import { buildCritiqueSummary, writeSummaryFile, type SummaryContext } from "./summary.js";
+import { CompareRefusal, compareMembers, loadMember, renderCompareText } from "./compare.js";
 import { applyCommandGlobal } from "../run/command-globals.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
@@ -46,7 +47,7 @@ import type { SkillMdStatus } from "./package-evidence.js";
 import { resolveDispatchableAgents, readPluginName, type ResolvedAgent } from "./resolve-agents.js";
 import { findEnclosingPluginDir } from "../run/analyze-skill.js";
 import { safePathSegment } from "../staging/resolve.js";
-import { snapshotTurnBoundary, readTurn1Result, readTurn1Slice, type TurnBoundary } from "./evidence.js";
+import { snapshotTurnBoundary, readTurn1Result, readTurn1Slice, FINGERPRINT_SCHEME, type TurnBoundary } from "./evidence.js";
 import { runCritique, defaultEvaluatorModel } from "./evaluator.js";
 import { loadBaseline } from "../baseline.js";
 import type { PlatformBaseline } from "../types.js";
@@ -146,6 +147,12 @@ function usage(): string {
   skill as it is at that commit, from a snapshot, so an edit or a moved HEAD during the run changes
   nothing. A path at <plugin>/skills/<name> grades that skill of the plugin, as <plugin> --skill
   <name> does; the report records the resolved commit in source.commit.
+
+  critique --compare <report.json | summary.json …> [--strict] [--out <path>] [--output-format json]
+  lines up several critiques of one skill side by side (no spend, no model): one group, or two by
+  --label (before/after). No verdicts — exact fingerprints are a lower-bound "same wording" aid, a shared
+  cited passage a "read these together" aid. --strict refuses a group mixing evaluator models, hash
+  bases or probes. Its output carries finding text: not for a public repository.
 
 Probe (one required):
   --prompt "<probe>"        the task to run the skill against
@@ -1925,6 +1932,10 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     outDir,
     ...state.corpus,
     source: state.source,
+    // The graded skill's identity, as `--summary-out` and `--compare` key on it: a plain skill folder has no
+    // `gradedSkill`, so this names it by its SKILL.md frontmatter (else its folder).
+    gradedSkillIdentity: state.summaryIdentity,
+    fingerprintScheme: FINGERPRINT_SCHEME,
     fidelity: state.fidelity,
     requestedFidelity: state.requestedFidelity,
     gradedEffectiveFidelity: state.gradedEffectiveFidelity,
@@ -2395,6 +2406,46 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   // clean one. `json` is read from argv until the parse succeeds, then from the parsed options.
   let json = isJsonOutput(argv);
   const refuse = (category: ErrCategory, message: string): never => fail("critique", category, message, undefined, json);
+  // `--compare` is its own mode: its positionals are report files, it runs nothing, and it takes no run flag.
+  if (argv.includes("--compare")) {
+    let strict = false;
+    let out: string | undefined;
+    const files: string[] = [];
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i]!;
+      if (a === "--compare") continue;
+      else if (a === "--strict") strict = true;
+      else if (a === "--output-format" || a === "--out") {
+        const v = argv[i + 1];
+        if (v === undefined || v.startsWith("-")) return refuse("usage", `${a} requires a value`);
+        if (a === "--out") out = v;
+        else if (v !== "json" && v !== "text") return refuse("usage", `--output-format must be json or text (got "${v}")`);
+        i++;
+      } else if (a.startsWith("--output-format=")) {
+        if (!["json", "text"].includes(a.slice("--output-format=".length))) return refuse("usage", `--output-format must be json or text`);
+      } else if (a.startsWith("--out=")) out = a.slice("--out=".length);
+      else if (a.startsWith("-"))
+        return refuse("usage", `${a} is not accepted with --compare (it takes report files, --strict, --out and --output-format)`);
+      else files.push(a);
+    }
+    let result: Record<string, unknown>;
+    try {
+      result = compareMembers(files.map(loadMember), { strict });
+    } catch (e) {
+      if (e instanceof CompareRefusal) return refuse("usage", `critique --compare: ${e.message}`);
+      throw e;
+    }
+    const content = json ? jsonPayloadEnvelope("critique", true, result) + "\n" : renderCompareText(result);
+    writeAllSync(1, content);
+    if (out !== undefined)
+      try {
+        writeFileSync(out, json ? JSON.stringify(result, null, 2) + "\n" : content);
+      } catch (e) {
+        process.stderr.write(`critique: --out ${tildeify(out)} could not be written: ${String(e)}\n`);
+      }
+    process.exit(0);
+    return;
+  }
   let opts: ParsedArgs;
   try {
     opts = prepareCritique(argv);

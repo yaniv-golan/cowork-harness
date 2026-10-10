@@ -2328,6 +2328,9 @@
         "enum": ["container", "hostloop"],
         "required": true
       },
+      ".fingerprintScheme": {
+        "type": "integer"
+      },
       ".gateAnswers": {
         "type": "array"
       },
@@ -2370,6 +2373,18 @@
       },
       ".gradedSkillHash": {
         "type": "string"
+      },
+      ".gradedSkillIdentity": {
+        "type": "object",
+        "closed": true
+      },
+      ".gradedSkillIdentity.kind": {
+        "enum": ["plugin_skill", "folder"],
+        "required": true
+      },
+      ".gradedSkillIdentity.name": {
+        "type": "string",
+        "required": true
       },
       ".harnessVersion": {
         "type": "string"

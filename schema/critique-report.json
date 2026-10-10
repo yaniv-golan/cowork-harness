@@ -27,6 +27,17 @@
       "required": ["kind"],
       "additionalProperties": false
     },
+    "gradedSkillIdentity": {
+      "type": "object",
+      "description": "the graded skill's identity as --summary-out and --compare key on it: kind plugin_skill (name = the registered skills/<name>) or folder (a plain skill folder, named by its SKILL.md frontmatter, else its folder — the case where gradedSkill is absent)",
+      "properties": { "name": { "type": "string" }, "kind": { "enum": ["plugin_skill", "folder"] } },
+      "required": ["name", "kind"],
+      "additionalProperties": false
+    },
+    "fingerprintScheme": {
+      "type": "integer",
+      "description": "the version of the rules items[].findingFingerprint is computed under; fingerprints are comparable only within one scheme"
+    },
     "corpusHashScheme": {
       "type": "integer",
       "description": "the version of the rules corpusHash, packagedCorpusHash and skillTreeHash are computed under; hashes are comparable only within one scheme. Absent on a report written before 4.8.0"

@@ -22,6 +22,7 @@ const validate = ajv.compile(schema);
 /** Every optional field populated, so a schema that under-declares any of them fails loud. */
 const FULL_STATE = {
   harnessVersion: "4.8.0",
+  summaryIdentity: { name: "demo-analyze", kind: "plugin_skill" as const },
   label: "v1.2.3-rc1",
   source: { kind: "git" as const, ref: "main", path: "plugins/p", commit: "cccccccccccccccccccccccccccccccccccccccc" },
   corpus: {
