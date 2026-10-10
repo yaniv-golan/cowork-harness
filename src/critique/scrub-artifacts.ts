@@ -72,12 +72,30 @@ const REPORT_PATHS = [
 ];
 
 /** Which critique JSON a value is, so the allowlist is applied at the right root. */
-export type CritiqueJsonShape = "report" | "salvage" | "corpus-only" | "summary";
+export type CritiqueJsonShape = "report" | "salvage" | "corpus-only" | "summary" | "compare";
 
 const KEEP: Record<CritiqueJsonShape, Set<string>> = {
   // The --summary-out file keeps NOTHING unscrubbed: every value is already shape-checked, so any change the scrub
   // makes means a secret matched, and the writer withholds the file rather than publish it.
   summary: new Set(),
+  // `critique --compare`: hashes, fingerprints and enums are kept; file paths, labels and finding text are scrubbed.
+  compare: new Set([
+    "mode",
+    "note",
+    "groups[].corpusHash",
+    "groups[].skillTreeHashes[]",
+    "groups[].marks[]",
+    "groups[].reports[].kind",
+    "groups[].reports[].sessionId",
+    "groups[].reports[].evaluatorModel",
+    "groups[].sameWording[].findingFingerprint",
+    "groups[].sameWording[].classification",
+    "groups[].sharedExcerpt[].anchor",
+    "fingerprints[].findingFingerprint",
+    "fingerprints[].classification",
+    "possibleRewordings.basis",
+    "excluded[].reason",
+  ]),
   report: new Set(REPORT_PATHS),
   // the salvage file's own top-level enums, plus the full report under `reportState`
   salvage: new Set(["infraFailurePhase", "infraFailureKind", ...REPORT_PATHS.map((p) => `reportState.${p}`)]),

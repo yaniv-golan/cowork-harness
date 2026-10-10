@@ -25,7 +25,7 @@ All notable changes to this project are documented here. The format is based on
   - `skillTreeHash` covers every file staging delivered for the skill (its whole folder, `scripts/` included) plus
     the resolved agents and linked plugin-root references: the "anything changed" key.
   - `corpusHash` covers the evaluator's static corpus. It is a floor: `scripts/` is not in it.
-  - `packagedCorpusHash` covers exactly what the evaluator was handed, including plugin-root files the graded
+  - `packagedCorpusHash` covers what the packager put in the evaluator's corpus, including plugin-root files the graded
     agent read and the ceiling's cuts; it moves with the agent's reading.
   - `corpusHash` and `skillTreeHash` are the same in `--corpus-only` and a graded run on the same files.
   - `corpusManifest` lists the files behind the hashes, a delivered file that cannot be read included;
@@ -56,10 +56,14 @@ All notable changes to this project are documented here. The format is based on
   - an exact `findingFingerprint` match is shown as `sameWording` with k/N, a lower bound;
   - a passage cited under the same classification in several reports is shown as `sharedExcerpt`, with its
     distinct ideas and actions — a cue to read those items together, not a match;
-  - two groups with an equal `corpusHash` are labelled a noise-floor control;
+  - two groups with an equal `corpusHash` and one shared `skillTreeHash` are labelled a noise-floor control;
   - a critique with no result, a failed evaluator canary or corpus drift is excluded from N and listed;
-  - a mix of skills, hash or fingerprint schemes, harness majors, or `corpusHash` within a group is refused; mixed
-    evaluator models, hash bases or probes are marked, and refused under `--strict`;
+  - refused: a mix of skills, hash or fingerprint schemes, harness majors, or `corpusHash` within a group; labels on
+    some inputs only; the same critique twice (a summary and its own report included); a report from before
+    4.8.0; a `--corpus-only` envelope; anything that is not a JSON report or summary;
+  - marked, and refused under `--strict`: mixed evaluator models, hash bases, skill trees (a `scripts/` edit) or
+    probes, and a pass-1-only member; marked only: a varying `packagedCorpusHash`, and a member with no probe
+    hash (the default for a summary);
   - exits 0 when compared, 2 on a refusal. Its output carries finding text and says it is not public-safe; its
     payload is described by the new `schema/critique-compare.json`.
 - **The critique report records `harnessVersion`, `label`, `source`, `gradedSkillIdentity` and

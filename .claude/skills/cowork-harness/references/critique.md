@@ -2,9 +2,9 @@
 
 Tracks `cowork-harness 4.7.1` (baseline `desktop-2.31226.1`). This is **not** a trim of the full
 [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only —
-flags, cost, reproduction discipline, known limitations all live there). This file covers exactly what a
+flags, cost, reading several critiques, known limitations all live there). This file covers exactly what a
 plugin install cannot otherwise discover: the run-dir artifact a harvester actually reads, the report's
-real field names, and what the evaluator was and was not shown. See **Recipe 5** in `task-recipes.md` for
+real field names, and what the evaluator was and was not shown. See **Recipe 6** in `task-recipes.md` for
 the harvest → reproduce → fix loop this feeds.
 
 ## The run-dir artifact a harvester reads
@@ -181,7 +181,7 @@ two clones of one commit hash alike):
 |---|---|---|
 | `skillTreeHash` | every file staging delivered for the skill (`scripts/` included) + resolved agents + linked plugin-root references | "did ANYTHING change since the last critique?" — equal in `--corpus-only` and a graded run |
 | `corpusHash` | the evaluator's static corpus (`SKILL.md`, `references/**`, agents, linked root refs) | a FLOOR: unchanged ≠ unchanged behaviour, since `scripts/` is not in it |
-| `packagedCorpusHash` | exactly what the evaluator was handed, incl. root files the agent READ and the ceiling's cuts | evidence of what was graded — moves with the agent's reading, never a "changed" key |
+| `packagedCorpusHash` | what the packager put in the evaluator's corpus, incl. root files the agent READ and the ceiling's cuts | evidence of what was graded — moves with the agent's reading, never a "changed" key |
 
 `corpusManifest` lists the files (diff two to see which one moved a hash); `hashBasis` is `git-tracked`
 (working-tree bytes of tracked files), `worktree-all` or `git-commit`; untracked files under the skill are listed
@@ -210,9 +210,11 @@ alter is NOT written (warning, exit unchanged). Cost and the probe hash are opt-
 `critique --compare <report.json | summary.json …>` ($0, no model) groups by `--label` (one group, or two for
 before/after) and lists every finding per report, aligned by classification. It gives **no verdict**: an exact
 `findingFingerprint` match is `sameWording` k/N — a LOWER bound (it often never recurs across repeats); a
-`sharedExcerpt` is the same cited passage, NOT proven the same finding. Equal `corpusHash` in both groups =
-`noiseFloorControl`. Refused: mixed skills / schemes / harness majors, mixed `corpusHash` within a group, the
-same critique twice, a pre-4.8 report. Mixed evaluator models / bases / probes are marked (`--strict` refuses).
+`sharedExcerpt` is the same cited passage, NOT proven the same finding. Equal `corpusHash` and one shared
+`skillTreeHash` in both groups = `noiseFloorControl` (a scripts/ edit never is). Refused: mixed skills / schemes /
+harness majors, mixed `corpusHash` within a group, the same critique twice, a pre-4.8 report. Marked, and refused
+by `--strict`: mixed evaluator models / hash bases / skill trees / probes, a pass-1-only member. Marked only:
+`mixedPackagedCorpus`, `probeUnverified` (no prompt hash — the summary default).
 Its output carries finding text — not public-safe. Details: [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only).
 
 ## An untracked skill file is not graded

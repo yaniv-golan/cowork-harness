@@ -1024,8 +1024,8 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
   smaller artifact. Note this budget does not lift the 16384-byte PER-FILE cap; only an `evidence_files` scope does.
   The budget a live run actually captured under is recorded as `result.json`'s `authoredCapture` (`{perFileBytes, totalBytes, scratchpadWalked}`; `scratchpadWalked` is false on a `--resume` turn, where session-root files are never candidates).
 - `COWORK_HARNESS_EVALUATOR_MODEL` — the default `critique` grading model (overridden by the `--evaluator-model` flag;
-- `COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR` — where `critique git:<ref>:<path>` keeps its commit snapshots (default `~/.cowork-harness/critique-snapshots`); it must not be inside a git work tree. Nothing removes a kept snapshot: delete one once the runs that mounted it are gone.
   falls back to the pinned default `claude-opus-4-8`).
+- `COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR` — where `critique git:<ref>:<path>` keeps its commit snapshots (default `~/.cowork-harness/critique-snapshots`); it must not be inside a git work tree. Nothing removes a kept snapshot: delete one once the runs that mounted it are gone.
 
 ### Run output, evidence caps and status
 

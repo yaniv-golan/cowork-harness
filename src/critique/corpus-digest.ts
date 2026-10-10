@@ -4,7 +4,8 @@
 //   corpusHash          the STATIC evaluator corpus — SKILL.md, the skill's references/, the resolved agents and
 //                       the plugin-root references those files LINK to. The same in `--corpus-only` and a graded
 //                       run unless a file changed. A FLOOR for "did the skill change": scripts/ is not in it.
-//   packagedCorpusHash  exactly what the packager handed the evaluator: the static corpus PLUS the plugin-root
+//   packagedCorpusHash  what the packager put in the evaluator's corpus (before the overall package cap, which only
+//                       trims run sections in practice): the static corpus PLUS the plugin-root
 //                       files the graded agent merely READ, and how much of each file the ceiling kept. Moves when
 //                       the agent's reading varies, so it is evidence of what was graded, not a "changed" key.
 //   skillTreeHash       every file staging DELIVERED for the skill (its whole folder, scripts/ included) plus the

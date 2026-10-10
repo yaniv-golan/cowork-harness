@@ -138,7 +138,7 @@ describe("corpus hashes", () => {
   });
 
   it("the hashes do not depend on the plugin's directory name", () => {
-    const a = preview(tree(PLUGIN, { dirName: "founder-skills" }));
+    const a = preview(tree(PLUGIN, { dirName: "plugin-one-clone" }));
     const b = preview(tree(PLUGIN, { dirName: "some-other-clone" }));
     expect([a.corpusHash, a.skillTreeHash, a.packagedCorpusHash]).toEqual([b.corpusHash, b.skillTreeHash, b.packagedCorpusHash]);
   });

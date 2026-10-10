@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs, writeOutFile, writeSummaryIfAsked } from "../src/critique/command.js";
-import { compareMembers, loadMember, CompareRefusal } from "../src/critique/compare.js";
+import { compareMembers, loadMember, CompareRefusal, MARKS, STRICT_MARKS } from "../src/critique/compare.js";
 
 const CLI = resolve("dist/cli.js");
 const H = (c: string) => `sha256:${c.repeat(64)}`;
@@ -185,6 +185,123 @@ describe("critique --compare", () => {
     expect(cmp([noHash("before"), noHash("after")]).noiseFloorControl).toBe(false);
   });
 
+  it("a scripts/-only change between groups is NOT a noise-floor control; inside a group it is marked mixedSkillTree", () => {
+    const d = dir();
+    const corpusWith = (tree: string) => ({
+      corpusHashScheme: 1,
+      hashBasis: "git-commit",
+      corpusHash: H("a"),
+      packagedCorpusHash: H("b"),
+      skillTreeHash: H(tree),
+      corpusManifest: [],
+      skillTreeUntracked: [],
+      skillTreeUntrackedCount: 0,
+    });
+    const across = cmp([
+      writeReport(d, "b.json", reportState([A], { label: "before", corpus: corpusWith("1") })),
+      writeReport(d, "a.json", reportState([A], { label: "after", corpus: corpusWith("2") })),
+    ]);
+    expect(across.noiseFloorControl).toBe(false);
+    const within = [
+      writeReport(d, "w1.json", reportState([A], { corpus: corpusWith("1") })),
+      writeReport(d, "w2.json", reportState([A], { corpus: corpusWith("2") })),
+    ];
+    expect((cmp(within).groups as Array<{ marks: string[] }>)[0]!.marks).toContain("mixedSkillTree");
+    expect(() => cmp(within, true)).toThrow(/mixedSkillTree/);
+  });
+
+  it("--strict refuses exactly the strict marks; probeUnverified and mixedPackagedCorpus are marked only", () => {
+    const d = dir();
+    // probeUnverified: summaries carry no prompt hash by default. mixedPackagedCorpus: packaged hashes differ.
+    const a = reportState([A]);
+    const b = reportState([A], {
+      corpus: {
+        corpusHashScheme: 1,
+        hashBasis: "git-commit",
+        corpusHash: H("a"),
+        packagedCorpusHash: H("f"),
+        skillTreeHash: H("c"),
+        corpusManifest: [],
+        skillTreeUntracked: [],
+        skillTreeUntrackedCount: 0,
+      },
+    });
+    const out = cmp([writeSummary(d, "s1.json", a), writeSummary(d, "s2.json", b)], true);
+    expect((out.groups as Array<{ marks: string[] }>)[0]!.marks.sort()).toEqual(["mixedPackagedCorpus", "probeUnverified"]);
+    expect([...STRICT_MARKS].sort()).toEqual(["mixedBasis", "mixedEvaluator", "mixedProbe", "mixedSkillTree", "pass1Only"]);
+  });
+
+  it("excludes canary-failed and drifted critiques from N; a group with nothing left is refused", () => {
+    const d = dir();
+    const out = cmp([
+      writeReport(d, "ok1.json", reportState([A])),
+      writeReport(d, "ok2.json", reportState([A])),
+      writeReport(d, "canary.json", reportState([A], { evaluatorIntegrity: { pass1Canary: false, pass2Canary: true } })),
+      writeReport(
+        d,
+        "drift.json",
+        reportState([A], {
+          corpus: {
+            corpusHashScheme: 1,
+            hashBasis: "git-commit",
+            corpusHash: H("a"),
+            packagedCorpusHash: H("b"),
+            skillTreeHash: H("c"),
+            corpusManifest: [],
+            skillTreeUntracked: [],
+            skillTreeUntrackedCount: 0,
+            corpusDrift: { preflightCorpusHash: H("9"), preflightSkillTreeHash: H("9"), changed: ["x"] },
+          },
+        }),
+      ),
+    ]);
+    expect((out.groups as Array<{ N: number }>)[0]!.N).toBe(2);
+    expect((out.excluded as Array<{ reason: string }>).map((e) => e.reason).join(" | ")).toMatch(/canary.*\|.*drift|drift.*\|.*canary/i);
+    expect(() =>
+      cmp([
+        writeReport(d, "x1.json", reportState([A], { label: "before" })),
+        writeReport(d, "x2.json", reportState([], { label: "after", infraFailure: "q", infraFailurePhase: "task turn" })),
+      ]),
+    ).toThrow(/has no usable critique/);
+  });
+
+  it("refuses a scheme mix, a text-format report and an unreadable file", () => {
+    const d = dir();
+    const ok = writeReport(d, "ok.json", reportState([A]));
+    const other = join(d, "scheme.json");
+    writeReport(d, "scheme.json", reportState([A]));
+    const j = JSON.parse(readFileSync(other, "utf8"));
+    j.fingerprintScheme = 2;
+    writeFileSync(other, JSON.stringify(j));
+    expect(() => cmp([ok, other])).toThrow(/fingerprint schemes/);
+    const text = join(d, "report.txt");
+    writeFileSync(text, "critique report\n  graded skill: x\n");
+    expect(() => loadMember(text)).toThrow(/not JSON/);
+    expect(() => loadMember(join(d, "nope.json"))).toThrow(/cannot be read/);
+  });
+
+  it("an excerpt under 12 characters never keys a shared excerpt", () => {
+    const d = dir();
+    const S1 = { idea: "Short quote one", classification: "grounded-and-actionable", evidence: "too short", fp: "1212121212121212" };
+    const S2 = { idea: "Short quote two", classification: "grounded-and-actionable", evidence: "too short", fp: "3434343434343434" };
+    expect(
+      (
+        cmp([writeReport(d, "1.json", reportState([S1])), writeReport(d, "2.json", reportState([S2]))]).groups as Array<{
+          sharedExcerpt: unknown[];
+        }>
+      )[0]!.sharedExcerpt,
+    ).toEqual([]);
+  });
+
+  it("every mark is documented in docs/critique.md and the compare schema, and the strict set in critique --help", () => {
+    const doc = readFileSync(resolve("docs/critique.md"), "utf8");
+    const schema = readFileSync(resolve("schema/critique-compare.json"), "utf8");
+    for (const m of MARKS) {
+      expect(doc, m).toContain(`\`${m}\``);
+      expect(schema, m).toContain(`"${m}"`);
+    }
+  });
+
   it("the same output whatever order the files are given in", () => {
     const d = dir();
     const files = [
@@ -293,6 +410,14 @@ describe.skipIf(!existsSync(CLI))("critique --compare (CLI)", () => {
       encoding: "utf8",
     });
     expect(readFileSync(outFile, "utf8")).toBe(withOut.stdout);
+    const scrubbed = spawnSync("node", [CLI, "critique", "--compare", ...files, "--output-format", "json"], {
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_SCRUB_VALUES: d.split("/").pop()! },
+    });
+    expect(scrubbed.status).toBe(0);
+    expect(scrubbed.stdout).not.toContain(d.split("/").pop()!); // the report paths carry the dir name
+    const top = spawnSync("node", [CLI, "--help"], { encoding: "utf8" });
+    expect(top.stdout + top.stderr).toMatch(/critique --compare/);
     const text = spawnSync("node", [CLI, "critique", "--compare", ...files], { encoding: "utf8" });
     expect(text.status).toBe(0);
     expect(text.stdout).toMatch(/no verdicts/);

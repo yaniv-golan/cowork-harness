@@ -244,8 +244,8 @@ export interface CritiqueItem {
    *  over the whitespace-normalized idea + classification + recommendedAction, deliberately EXCLUDING
    *  the `evidence` excerpt — evidence quotes the specific input document, so including it would give
    *  the same finding a different fingerprint on every deck/model/transcript it recurs against. This
-   *  complements `fingerprint.skillHash`: skillHash pairs critiques of the SAME skill across fixes;
-   *  this clusters the SAME finding across DIFFERENT inputs. */
+   *  is exact-match on model-written wording, so it is a LOWER bound: a match shows the same wording came back;
+   *  across repeats of the same probe it often never recurs, and no match shows nothing. */
   findingFingerprint?: string;
 }
 

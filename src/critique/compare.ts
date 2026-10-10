@@ -28,6 +28,7 @@ export interface CompareMember {
   corpusHashScheme: number | null;
   fingerprintScheme: number | null;
   corpusHash: string | null;
+  skillTreeHash: string | null;
   packagedCorpusHash: string | null;
   hashBasis: string | null;
   evaluatorModel: string | null;
@@ -87,6 +88,7 @@ export function loadMember(file: string): CompareMember {
       corpusHashScheme: num(j.corpusHashScheme),
       fingerprintScheme: num(j.fingerprintScheme),
       corpusHash: str(j.corpusHash),
+      skillTreeHash: str(j.skillTreeHash),
       packagedCorpusHash: str(j.packagedCorpusHash),
       hashBasis: str(j.hashBasis),
       evaluatorModel: str(j.evaluatorModel),
@@ -129,6 +131,7 @@ export function loadMember(file: string): CompareMember {
     corpusHashScheme: num(j.corpusHashScheme),
     fingerprintScheme: num(j.fingerprintScheme),
     corpusHash: str(j.corpusHash),
+    skillTreeHash: str(j.skillTreeHash),
     packagedCorpusHash: str(j.packagedCorpusHash),
     hashBasis: str(j.hashBasis),
     evaluatorModel: str(j.evaluatorModel),
@@ -156,8 +159,21 @@ export function loadMember(file: string): CompareMember {
   };
 }
 
-const MARKS = ["mixedEvaluator", "mixedBasis", "mixedPackagedCorpus", "mixedProbe", "probeUnverified", "pass1Only"] as const;
+/** Every mark a group can carry. */
+export const MARKS = [
+  "mixedEvaluator",
+  "mixedBasis",
+  "mixedSkillTree",
+  "mixedPackagedCorpus",
+  "mixedProbe",
+  "probeUnverified",
+  "pass1Only",
+] as const;
 type Mark = (typeof MARKS)[number];
+/** The marks `--strict` refuses: each means the group's critiques did not grade the same thing the same way.
+ *  `mixedPackagedCorpus` (it moves with what the agent happened to read) and `probeUnverified` (the default for a
+ *  summary written without its prompt hash) are marked but not refused: they are expected, not a defect. */
+export const STRICT_MARKS: ReadonlySet<Mark> = new Set(["mixedEvaluator", "mixedBasis", "mixedSkillTree", "mixedProbe", "pass1Only"]);
 
 const tokens = (s: string): Set<string> => new Set((s.toLowerCase().match(/[a-z0-9]{3,}/g) ?? []) as string[]);
 function jaccard(a: Set<string>, b: Set<string>): number {
@@ -235,12 +251,15 @@ export function compareMembers(input: CompareMember[], opts: { strict?: boolean 
     const distinct = <T>(vals: T[]) => new Set(vals).size > 1;
     if (distinct(g.members.map((m) => m.evaluatorModel))) marks.push("mixedEvaluator");
     if (distinct(g.members.map((m) => m.hashBasis))) marks.push("mixedBasis");
+    // corpusHash is a floor: a scripts/ edit moves skillTreeHash only.
+    if (distinct(g.members.map((m) => m.skillTreeHash))) marks.push("mixedSkillTree");
     if (distinct(g.members.map((m) => m.packagedCorpusHash))) marks.push("mixedPackagedCorpus");
     if (g.members.some((m) => m.promptSha256 === null)) marks.push("probeUnverified");
     else if (distinct(g.members.map((m) => m.promptSha256))) marks.push("mixedProbe");
     if (g.members.some((m) => m.pass1Only)) marks.push("pass1Only");
-    if (opts.strict && marks.length)
-      throw new CompareRefusal(`--strict: label group ${g.label ?? "(no label)"} is marked ${marks.join(", ")}`);
+    const strictHits = marks.filter((m) => STRICT_MARKS.has(m));
+    if (opts.strict && strictHits.length)
+      throw new CompareRefusal(`--strict: label group ${g.label ?? "(no label)"} is marked ${strictHits.join(", ")}`);
 
     // Every finding, per report, aligned by classification.
     const byClassification: Record<string, Array<Record<string, unknown>>> = {};
@@ -307,6 +326,7 @@ export function compareMembers(input: CompareMember[], opts: { strict?: boolean 
         findings: m.items.length,
       })),
       corpusHash: g.members[0]!.corpusHash,
+      skillTreeHashes: [...new Set(g.members.map((m) => m.skillTreeHash))].filter((h): h is string => h !== null).sort(byCodePoint),
       marks,
       byClassification: Object.fromEntries(Object.entries(byClassification).sort(([a], [b]) => byCodePoint(a, b))),
       sameWording,
@@ -367,7 +387,13 @@ export function compareMembers(input: CompareMember[], opts: { strict?: boolean 
     mode: "compare",
     publicSafe: false,
     note: "No verdicts. sameWording is a LOWER bound (reworded repeats do not match); sharedExcerpt is the same cited passage, not proven the same finding; read the findings side by side, aligned by classification.",
-    noiseFloorControl: groups.length === 2 && groupOut[0]!.corpusHash !== null && groupOut[0]!.corpusHash === groupOut[1]!.corpusHash,
+    // Same corpus AND the same delivered skill tree in both groups (a scripts/ edit moves only the latter).
+    noiseFloorControl:
+      groups.length === 2 &&
+      groupOut[0]!.corpusHash !== null &&
+      groupOut[0]!.corpusHash === groupOut[1]!.corpusHash &&
+      groupOut[0]!.skillTreeHashes.length === 1 &&
+      JSON.stringify(groupOut[0]!.skillTreeHashes) === JSON.stringify(groupOut[1]!.skillTreeHashes),
     groups: groupOut,
     fingerprints,
     possibleRewordings: fullReports

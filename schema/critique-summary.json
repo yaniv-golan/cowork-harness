@@ -23,20 +23,20 @@
       "description": "the version of the findingFingerprint rules; fingerprints are comparable only within one scheme"
     },
     "hashBasis": { "enum": ["git-tracked", "worktree-all", "git-commit", null] },
-    "corpusHash": { "type": ["string", "null"] },
-    "packagedCorpusHash": { "type": ["string", "null"] },
-    "skillTreeHash": { "type": ["string", "null"] },
+    "corpusHash": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] },
+    "packagedCorpusHash": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] },
+    "skillTreeHash": { "anyOf": [{ "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }, { "type": "null" }] },
     "source": {
       "type": "object",
-      "properties": { "kind": { "enum": ["dir", "git"] }, "commit": { "type": ["string", "null"] } },
+      "properties": { "kind": { "enum": ["dir", "git"] }, "commit": { "anyOf": [{ "type": "string", "pattern": "^[0-9a-f]{40,64}$" }, { "type": "null" }] } },
       "required": ["kind"],
       "additionalProperties": false
     },
-    "label": { "type": ["string", "null"] },
+    "label": { "anyOf": [{ "type": "string", "pattern": "^[A-Za-z0-9._:+-]{1,64}$" }, { "type": "null" }] },
     "fidelity": { "type": ["string", "null"] },
     "gradedBaseline": { "type": ["string", "null"] },
-    "evaluatorModel": { "type": ["string", "null"] },
-    "gradedModels": { "type": "array", "items": { "type": "string" } },
+    "evaluatorModel": { "anyOf": [{ "type": "string", "pattern": "^claude-[a-z0-9.-]{1,64}$" }, { "type": "null" }] },
+    "gradedModels": { "type": "array", "items": { "type": "string", "pattern": "^claude-[a-z0-9.-]{1,64}$" } },
     "status": { "enum": ["critiqued", "task_turn_failed", "reflection_turn_failed", "evaluator_failed", "corpus_only"] },
     "selfReportStatus": { "enum": ["captured", "unavailable", null] },
     "evaluatorIntegrity": {

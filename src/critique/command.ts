@@ -151,8 +151,10 @@ function usage(): string {
   critique --compare <report.json | summary.json …> [--strict] [--out <path>] [--output-format json]
   lines up several critiques of one skill side by side (no spend, no model): one group, or two by
   --label (before/after). No verdicts — exact fingerprints are a lower-bound "same wording" aid, a shared
-  cited passage a "read these together" aid. --strict refuses a group mixing evaluator models, hash
-  bases or probes. Its output carries finding text: not for a public repository.
+  cited passage a "read these together" aid. A group mixing evaluator models, hash bases, skill trees or
+  probes, or holding a pass-1-only critique, is marked and --strict refuses it; a group with no probe
+  hash, or whose packaged corpus varies, is only marked. Its output carries finding text: not for a
+  public repository.
 
 Probe (one required):
   --prompt "<probe>"        the task to run the skill against
@@ -200,8 +202,9 @@ Critique's own:
   --corpus-only             NO SPEND: package the skill corpus with the packager a critique uses (same
                             code, same git-tracked filter, same ceiling) over an EMPTY run and print the six
                             corpus fields — corpusBytes / corpusCeiling / corpusCuts / corpusExcluded /
-                            corpusPackaged / corpusOmitted — plus corpusHash, skillTreeHash and the per-file
-                            corpusManifest, then exit. --prompt becomes optional. corpusHash and skillTreeHash
+                            corpusPackaged / corpusOmitted — plus corpusHash, skillTreeHash, packagedCorpusHash,
+                            hashBasis, source and the per-file corpusManifest, then exit (with --summary-out it
+                            writes a corpus_only summary; the include flags do not apply). --prompt becomes optional. corpusHash and skillTreeHash
                             equal a graded run's on the same files; the byte count is a FLOOR: plugin-root
                             references the agent READS during the graded turn are added at critique time,
                             so a paid run's corpusBytes (and packagedCorpusHash) can differ. Every other flag
@@ -217,7 +220,7 @@ Critique's own:
 
 Not accepted (each errors with its reason rather than being silently ignored):
   --session-id / --resume   critique mints and manages its own session internally
-  --repeat + companions     fixed two-turn protocol — loop critique itself; pair reports by corpusHash / skillTreeHash
+  --repeat + companions     fixed two-turn protocol — loop critique itself; read the reports side by side with critique --compare
   --ablate-skill            grading a skill you removed is incoherent
   --quiet/--verbose/--compact/--demo/--dry-run   inner-turn rendering or preview — no effect on the report
                                                  (which already collapses host paths to ~)
@@ -257,6 +260,8 @@ EXIT CODES: 0 = the critique ran (ANY findings, including a task run that itself
   sub-agent's; RUN FAILED (task turn, usage_limit)), or an instrument failure (turn killed, reflection
   protocol broke, evaluator never invoked or threw). Findings NEVER gate. --corpus-only: 0 = measured (even over the ceiling — it is a measurement, not a gate; gate on
   corpusBytes <= corpusCeiling yourself), 2 = usage error, unresolvable target, or 0 git-tracked files.
+  --compare: 0 = compared, 2 = a refusal or usage error. A --summary-out file that cannot be written or is
+  withheld never changes the exit code.
 
 ${renderKnownLimitations()}
 
@@ -1674,7 +1679,9 @@ export function buildTextReport(state: ReportState): string {
   // reflection turn's result.json for them).
   if (gradedOutcome) out.push(`  graded outcome: ${gradedOutcome}`);
   if (state.gradedSkill)
-    out.push(`  graded skill: ${state.gradedSkill} (pair by skillHash + this name — skillHash keys the whole mounted plugin)`);
+    out.push(
+      `  graded skill: ${state.gradedSkill} (skillTreeHash below is the per-skill change key; skillHash keys the whole mounted plugin)`,
+    );
   if (gradedSkillHash) out.push(`  graded skillHash: ${gradedSkillHash.slice(0, 12)}`);
   if (state.corpus) {
     out.push(
@@ -2462,7 +2469,11 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       if (e instanceof CompareRefusal) return refuse("usage", `critique --compare: ${e.message}`);
       throw e;
     }
-    const content = json ? jsonPayloadEnvelope("critique", true, result) + "\n" : renderCompareText(result);
+    // Scrubbed like every other critique output: report paths and labels are argv and report text, and either can
+    // carry a configured secret.
+    const content = json
+      ? jsonPayloadEnvelope("critique", true, scrubCritiqueJson(result, "compare")) + "\n"
+      : critiqueFileText({ text: renderCompareText(result) });
     writeAllSync(1, content);
     if (out !== undefined)
       try {

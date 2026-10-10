@@ -54,7 +54,7 @@
     "packagedCorpusHash": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$",
-      "description": "hash of exactly what the evaluator was handed: the static corpus plus plugin-root files the graded agent READ, and how much of each file the corpus ceiling kept. Moves when the agent's reading varies. Absent when the critique stopped before packaging"
+      "description": "hash of what the packager put in the evaluator's corpus: the static corpus plus plugin-root files the graded agent READ, and how much of each file the corpus ceiling kept. Moves when the agent's reading varies. Absent when the critique stopped before packaging"
     },
     "skillTreeHash": {
       "type": "string",
@@ -237,7 +237,7 @@
     },
     "gradedSkillHash": {
       "type": "string",
-      "description": "content-exact hash of the MOUNTED folder — the cross-FIX pairing key (per-plugin under --skill)"
+      "description": "content-exact hash of the MOUNTED folder — the cross-FIX pairing key (per-plugin under --skill); it keys the whole mounted plugin — for per-skill change detection use skillTreeHash (corpusHash is a floor)"
     },
     "selfReportStatus": {
       "type": "string",
@@ -449,7 +449,7 @@
           },
           "findingFingerprint": {
             "type": "string",
-            "description": "sha256/16 over normalized, secret-scrubbed idea+classification+recommendedAction (evidence excluded). Cross-INPUT clustering key — HIGH-PRECISION, LOW-RECALL: idea is model-authored free text, so a MATCH proves the same finding recurred; a MISMATCH does NOT prove non-reproduction (the same finding reworded fingerprints differently)"
+            "description": "sha256/16 over the scrubbed, whitespace-normalised idea + classification + recommendedAction (the evidence excerpt is excluded). Exact match on model-written wording — a LOWER bound: a match shows the same wording came back; across repeats of the same probe it often never recurs, and no match shows nothing"
           }
         }
       }

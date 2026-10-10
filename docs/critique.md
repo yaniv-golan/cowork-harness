@@ -495,7 +495,7 @@ directory is called:
 |---|---|---|
 | `corpusHash` | the evaluator's static corpus: `SKILL.md`, the skill's `references/**`, the resolved agents, and the plugin-root references they link to | yes, unless one of those files changed in between |
 | `skillTreeHash` | every file staging delivered for the skill — its whole folder, `scripts/` included — plus the resolved agents and linked plugin-root references | yes, unless one of those files changed in between |
-| `packagedCorpusHash` | exactly what the evaluator was handed: the static corpus plus plugin-root files the graded agent READ, and how much of each file the ceiling kept | no: it moves whenever the agent's reading differs, or that reading pushes the corpus over the ceiling |
+| `packagedCorpusHash` | what the packager put in the evaluator's corpus: the static corpus plus plugin-root files the graded agent READ, and how much of each file the ceiling kept | no: it moves whenever the agent's reading differs, or that reading pushes the corpus over the ceiling |
 
 - **Which to key on.** `skillTreeHash` is the "anything changed" key. `corpusHash` is a FLOOR for it: an
   unchanged `corpusHash` does not mean unchanged behaviour, because `scripts/` and other files outside the
@@ -628,9 +628,11 @@ for i in 1 2 3; do
 done
 ```
 
-- **Same skill generation?** pair by (`gradedSkillHash`, `gradedSkill`). `gradedSkillHash` keys the whole mounted
-  plugin, so on a multi-skill plugin it alone cross-pairs critiques of *different* skills; `gradedSkill` is the
-  report's resolved `skills/<name>` (or the registered name of a skill folder that cannot be promoted to its plugin).
+- **Same skill generation?** pair by `skillTreeHash` (every delivered file of the skill; `corpusHash` is a floor —
+  see [Has the skill changed?](#has-the-skill-changed--corpushash-skilltreehash-packagedcorpushash)).
+  (`gradedSkillHash`, `gradedSkill`) is coarser: `gradedSkillHash` keys the whole mounted plugin, so an edit to a
+  sibling skill moves it; `gradedSkill` is the report's resolved `skills/<name>` (or the registered name of a skill
+  folder that cannot be promoted to its plugin).
 - **Same finding?** Read the reports side by side, finding by finding, aligned by `classification`. No key in the
   report proves two findings are the same:
   - **`findingFingerprint`** hashes the model-written `idea`, the `classification` and the `recommendedAction`. It
@@ -663,16 +665,20 @@ No spend and no model: it reads `--output-format json` reports (or `--out` files
 - **`fingerprints`**: every exact fingerprint with its k/N in each group (one entry per group).
 - **`possibleRewordings`**: pairs of items in different reports, same classification, whose ideas share most
   of their words — a lexical judgement, labelled as one. Full reports only (a summary has no text).
-- **`noiseFloorControl: true`** when both groups have the same `corpusHash`: same corpus, so any difference is
-  run-to-run variation.
+- **`noiseFloorControl: true`** when both groups have the same `corpusHash` and one, shared `skillTreeHash`: the
+  same skill in both, so any difference is run-to-run variation. A `scripts/` edit moves `skillTreeHash` only, so
+  it is never a noise-floor control.
 
 It refuses (exit 2): a mix of graded skills, of `corpusHashScheme` or `fingerprintScheme`, or of harness
 major versions; a mix of `corpusHash` within one group (give the other corpus its own `--label`); the same
 critique given twice (a summary and its own report count as the same critique); a report from before 4.8.0;
 a `--corpus-only` envelope; any run flag. A critique that produced no result, whose evaluator canary
 failed, or that drifted during its run is **excluded from N** and listed in `excluded`. A group that mixes
-evaluator models, hash bases or probes (`promptSha256`), or holds a pass-1-only critique, is **marked**
-(`marks`); `--strict` refuses it instead. Its output carries finding text (`"publicSafe": false`): keep it
+evaluator models (`mixedEvaluator`), hash bases (`mixedBasis`), skill trees (`mixedSkillTree` — a `scripts/` edit
+inside the group) or probes (`mixedProbe`), or that holds a pass-1-only critique (`pass1Only`), is **marked**,
+and `--strict` refuses it. Two marks are recorded but never refused: `mixedPackagedCorpus` (it moves with what
+the agent happened to read) and `probeUnverified` (a member has no probe hash — the default for a summary
+written without `--summary-include-prompt-hash` — so a same-probe group cannot be confirmed). Its output carries finding text (`"publicSafe": false`): keep it
 out of a public repository — that is what `--summary-out` is for. `--out` writes the same bytes as stdout.
 The JSON payload is described by [`schema/critique-compare.json`](../schema/critique-compare.json).
 
@@ -708,6 +714,8 @@ during the run changes nothing, and two critiques of one commit grade the same f
   work tree.
 - Under `git-tracked`, a dir target's bytes are the working tree's; under `git-commit` they are the commit's.
   A smudge filter, `core.autocrlf` or `ident` can make the two differ for the same commit.
+- For a `git:` target the report's `skillFolder` is the snapshot directory (under `--corpus-only`, a temporary
+  one that is already gone); the argument as given is in `source.ref` and `source.path`.
 
 ## A public summary — `--summary-out`
 

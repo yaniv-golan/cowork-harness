@@ -2144,7 +2144,7 @@
         "required": true
       },
       ".groups[].marks[]": {
-        "enum": ["mixedEvaluator", "mixedBasis", "mixedPackagedCorpus", "mixedProbe", "probeUnverified", "pass1Only"]
+        "enum": ["mixedEvaluator", "mixedBasis", "mixedSkillTree", "mixedPackagedCorpus", "mixedProbe", "probeUnverified", "pass1Only"]
       },
       ".groups[].reports": {
         "type": "array",
@@ -2202,6 +2202,13 @@
       ".groups[].sharedExcerpt[].k": {
         "type": "integer",
         "required": true
+      },
+      ".groups[].skillTreeHashes": {
+        "type": "array",
+        "required": true
+      },
+      ".groups[].skillTreeHashes[]": {
+        "type": "string"
       },
       ".mode": {
         "const": "compare",
@@ -2724,8 +2731,13 @@
         "required": true
       },
       ".corpusHash": {
-        "type": ["string", "null"],
         "required": true
+      },
+      ".corpusHash<anyOf:0>": {
+        "type": "string"
+      },
+      ".corpusHash<anyOf:1>": {
+        "type": "null"
       },
       ".corpusHashScheme": {
         "type": ["integer", "null"],
@@ -2770,8 +2782,13 @@
         "required": true
       },
       ".evaluatorModel": {
-        "type": ["string", "null"],
         "required": true
+      },
+      ".evaluatorModel<anyOf:0>": {
+        "type": "string"
+      },
+      ".evaluatorModel<anyOf:1>": {
+        "type": "null"
       },
       ".fidelity": {
         "type": ["string", "null"],
@@ -2833,12 +2850,22 @@
         "required": true
       },
       ".label": {
-        "type": ["string", "null"],
         "required": true
       },
+      ".label<anyOf:0>": {
+        "type": "string"
+      },
+      ".label<anyOf:1>": {
+        "type": "null"
+      },
       ".packagedCorpusHash": {
-        "type": ["string", "null"],
         "required": true
+      },
+      ".packagedCorpusHash<anyOf:0>": {
+        "type": "string"
+      },
+      ".packagedCorpusHash<anyOf:1>": {
+        "type": "null"
       },
       ".promptSha256": {
         "type": "string"
@@ -2856,16 +2883,24 @@
         "required": true
       },
       ".skillTreeHash": {
-        "type": ["string", "null"],
         "required": true
+      },
+      ".skillTreeHash<anyOf:0>": {
+        "type": "string"
+      },
+      ".skillTreeHash<anyOf:1>": {
+        "type": "null"
       },
       ".source": {
         "type": "object",
         "closed": true,
         "required": true
       },
-      ".source.commit": {
-        "type": ["string", "null"]
+      ".source.commit<anyOf:0>": {
+        "type": "string"
+      },
+      ".source.commit<anyOf:1>": {
+        "type": "null"
       },
       ".source.kind": {
         "enum": ["dir", "git"],
