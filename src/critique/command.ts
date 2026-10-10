@@ -21,6 +21,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { describeSubagentUsageLimit } from "../usage-limit.js";
+import type { CorpusDigest, CorpusManifestEntry } from "./corpus-digest.js";
 import { applyCommandGlobal } from "../run/command-globals.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
@@ -171,9 +172,11 @@ Critique's own:
   --corpus-only             NO SPEND: package the skill corpus with the packager a critique uses (same
                             code, same git-tracked filter, same ceiling) over an EMPTY run and print the six
                             corpus fields — corpusBytes / corpusCeiling / corpusCuts / corpusExcluded /
-                            corpusPackaged / corpusOmitted — then exit. --prompt becomes optional. The number
-                            is a FLOOR: plugin-root references the agent READS during the graded turn are
-                            added at critique time, so a paid run's corpusBytes is >= this. Every other flag
+                            corpusPackaged / corpusOmitted — plus corpusHash, skillTreeHash and the per-file
+                            corpusManifest, then exit. --prompt becomes optional. corpusHash and skillTreeHash
+                            equal a graded run's on the same files; the byte count is a FLOOR: plugin-root
+                            references the agent READS during the graded turn are added at critique time,
+                            so a paid run's corpusBytes (and packagedCorpusHash) can differ. Every other flag
                             is still parsed and type-checked as a critique line, but a run-shaping one is not
                             acted on and is named in ignoredFlags — a PATH value (--upload, --folder,
                             --plugin) is only checked when a turn stages, so a missing one does not fail here. Applies staging's git rules: a work
@@ -186,7 +189,7 @@ Critique's own:
 
 Not accepted (each errors with its reason rather than being silently ignored):
   --session-id / --resume   critique mints and manages its own session internally
-  --repeat + companions     fixed two-turn protocol — loop critique itself; pair by fingerprint.skillHash
+  --repeat + companions     fixed two-turn protocol — loop critique itself; pair reports by corpusHash / skillTreeHash
   --ablate-skill            grading a skill you removed is incoherent
   --quiet/--verbose/--compact/--demo/--dry-run   inner-turn rendering or preview — no effect on the report
                                                  (which already collapses host paths to ~)
@@ -1337,6 +1340,8 @@ export function sumCostUsd(modelUsage: unknown): number | undefined {
 
 interface ReportState {
   skillFolder: string;
+  /** See `corpusReportFields`. */
+  corpus?: ReturnType<typeof corpusReportFields>;
   /** The harness version that produced the report, so reports from different releases can be told apart. */
   harnessVersion?: string;
   /** `--label`, when given. */
@@ -1869,6 +1874,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     prompt,
     sessionId,
     outDir,
+    ...state.corpus,
     fidelity: state.fidelity,
     requestedFidelity: state.requestedFidelity,
     gradedEffectiveFidelity: state.gradedEffectiveFidelity,
@@ -2058,6 +2064,34 @@ export function buildReflectionTurnArgs(opts: ParsedArgs, sessionId: string): st
   ];
 }
 
+/** The corpus hashes a report carries. `pre` is the pre-spend packaging (preflight), `post` the real packaging
+ *  after the turns, absent when the critique stopped before it. The hashes come from `post` when it exists —
+ *  that is what the evaluator graded — and `corpusDrift` says when the static corpus or the skill tree changed
+ *  between the two (an edit during the run), naming the files. Plugin-root files the agent merely READ are not
+ *  drift: they only exist in `post`. */
+export function corpusReportFields(pre: CorpusDigest, post?: CorpusDigest) {
+  const cur = post ?? pre;
+  const staticRows = (d: CorpusDigest) =>
+    new Map(d.corpusManifest.filter((e) => e.origin !== "root_ref_read").map((e) => [e.key, `${e.status}:${e.sha256 ?? ""}`]));
+  let corpusDrift: { preflightCorpusHash: string; preflightSkillTreeHash: string; changed: string[] } | undefined;
+  if (post && (post.corpusHash !== pre.corpusHash || post.skillTreeHash !== pre.skillTreeHash)) {
+    const a = staticRows(pre);
+    const b = staticRows(post);
+    const changed = [...new Set([...a.keys(), ...b.keys()])].filter((k) => a.get(k) !== b.get(k)).sort();
+    corpusDrift = { preflightCorpusHash: pre.corpusHash, preflightSkillTreeHash: pre.skillTreeHash, changed };
+  }
+  return {
+    corpusHashScheme: cur.corpusHashScheme,
+    hashBasis: cur.hashBasis,
+    corpusHash: cur.corpusHash,
+    ...(post ? { packagedCorpusHash: post.packagedCorpusHash } : {}),
+    skillTreeHash: cur.skillTreeHash,
+    corpusManifest: cur.corpusManifest as CorpusManifestEntry[],
+    skillTreeUntracked: cur.skillTreeUntracked,
+    ...(corpusDrift ? { corpusDrift } : {}),
+  };
+}
+
 /** `critique --corpus-only`: the packager's answer for a skill, with no run behind it.
  *
  *  WHY THE REAL PACKAGER AND NOT A STATIC COUNT. `lint-skill`'s corpus check is a static approximation that
@@ -2111,11 +2145,17 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
       skillDir: resolved.skillDir,
       skill,
       corpus,
+      // The pre-run packaging's hashes. `packagedCorpusHash` here is the FLOOR's packaging (no plugin-root
+      // reads); `corpusHash` and `skillTreeHash` equal a graded run's unless a file changes in between.
+      ...corpusReportFields(pkg.corpusDigest),
+      packagedCorpusHash: pkg.corpusDigest.packagedCorpusHash,
       ignoredFlags: opts.ignoredFlags,
       note,
     };
-    content = jsonPayloadEnvelope("critique", true, payload) + "\n";
-    fileContent = jsonPayloadEnvelope("critique", true, scrubCritiqueJson(payload, "corpus-only")) + "\n";
+    // stdout is scrubbed like the file: the manifest names files, and a name is as able to carry a secret as a
+    // body is.
+    content = jsonPayloadEnvelope("critique", true, scrubCritiqueJson(payload, "corpus-only")) + "\n";
+    fileContent = content;
   } else {
     const pct = ((corpus.corpusBytes * 100) / corpus.corpusCeiling).toFixed(1);
     content =
@@ -2126,6 +2166,11 @@ function runCorpusPreview(opts: ParsedArgs, resolved: ResolvedCritiqueTarget, pk
           `  evidence corpus (pre-run FLOOR): ${corpus.corpusBytes.toLocaleString()} B = ${pct}% of the ${corpus.corpusCeiling.toLocaleString()} B ceiling`,
         ),
         `  packaged: ${corpus.corpusPackaged?.length ?? 0} file(s)`,
+        `  corpusHash ${pkg.corpusDigest.corpusHash}  (${pkg.corpusDigest.hashBasis})`,
+        `  skillTreeHash ${pkg.corpusDigest.skillTreeHash}`,
+        ...(pkg.corpusDigest.skillTreeUntracked.length
+          ? [`  not delivered (untracked), not hashed: ${pkg.corpusDigest.skillTreeUntracked.join(", ")}`]
+          : []),
         `  ${note}`,
       ].join("\n") + "\n";
     fileContent = critiqueFileText({ text: content });
@@ -2377,6 +2422,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       const state: ReportState = {
         harnessVersion: pkgVersion(),
         label: opts.label,
+        corpus: corpusReportFields(preflight.pkg.corpusDigest),
         skillFolder: opts.skillFolder,
         prompt,
         sessionId,
@@ -2496,6 +2542,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     let turn1SliceDegraded: boolean | undefined;
     let skillMdStatus: SkillMdStatus | undefined;
     let evidenceBudget: ReportState["evidenceBudget"];
+    let finalCorpusDigest: CorpusDigest | undefined;
     let noSkillFilesRead: boolean | undefined;
     let referenceAccessUnobservable: boolean | undefined;
     // Salvage/cost/evidence capture — populated by the evaluator's callbacks (raw replies land here
@@ -2551,11 +2598,13 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         packageTruncated: pt,
         noSkillFilesRead: nofr,
         referenceAccessUnobservable: rau,
+        corpusDigest: cdg,
       } = packageEvidence(outDir, boundary, resolvedSkill.skillDir, true, {
         agents: resolvedSkill.agents,
         pluginRoot: resolvedSkill.pluginRoot,
         mountRoot: resolvedSkill.mountRoot,
       });
+      finalCorpusDigest = cdg;
       turn1ResultDegraded = trd;
       turn1SliceDegraded = tsd;
       skillMdStatus = sms;
@@ -2666,6 +2715,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const state: ReportState = {
       harnessVersion: pkgVersion(),
       label: opts.label,
+      corpus: corpusReportFields(preflight.pkg.corpusDigest, finalCorpusDigest),
       skillFolder: opts.skillFolder,
       prompt,
       sessionId,

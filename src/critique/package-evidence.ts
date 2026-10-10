@@ -3,6 +3,17 @@ import type { ResolvedAgent } from "./resolve-agents.js";
 import { listSkillFilesRecursive } from "./corpus-walk.js";
 import { resolveRootReferences, type OmissionReason } from "./resolve-references.js";
 import { flattenTitle } from "./armor.js";
+import {
+  CORPUS_HASH_SCHEME,
+  corpusHashOf,
+  packagedCorpusHashOf,
+  sha256Hex,
+  skillTreeHashOf,
+  type CorpusDigest,
+  type CorpusManifestEntry,
+  type CorpusOrigin,
+  type HashBasis,
+} from "./corpus-digest.js";
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync, type Dirent } from "node:fs";
 import { join, basename, relative, resolve, sep, isAbsolute } from "node:path";
 import { warn } from "../io.js";
@@ -441,6 +452,9 @@ export interface PackageEvidenceResult {
    *  a bare boolean, so a package that lost its transcript tail was indistinguishable from one that lost
    *  nothing — the failure was undetectable after the fact, including by the consumer. */
   trimRecord: Array<{ section: string; droppedBytes: number }>;
+  /** Content hashes over the graded corpus and the delivered skill tree, with the per-file manifest behind
+   *  them — see corpus-digest.ts. */
+  corpusDigest: CorpusDigest;
 }
 
 /** Assemble the evidence document for `runCritique`. `runDir` is the KEPT run dir of the task+reflection
@@ -488,6 +502,9 @@ export function packageEvidence(
      *  may change any corpus field: the preview's whole value is that it IS this function's answer, and a
      *  mode that computed differently would be a second derivation. */
     mode?: "preview" | "preflight";
+    /** Set by a caller that staged a `git:<ref>:<path>` snapshot, so the hashes record the commit as their
+     *  basis rather than the snapshot directory's (which has no work tree). */
+    hashBasis?: HashBasis;
   },
 ): PackageEvidenceResult {
   // Keys for the ONE tracked set staging read (see `mountRoot`). Lexical on both sides: `realpathSync` on
@@ -501,6 +518,22 @@ export function packageEvidence(
   const skillPrefix = prefixInsideMount("skillDir", skillDir);
   const pluginPrefix = opts.pluginRoot !== undefined ? prefixInsideMount("pluginRoot", opts.pluginRoot) : "";
   const mountAccept = corpusAcceptFor(mountRoot, opts.mode === "preflight");
+  // The corpus manifest, recorded as each file is read (see corpus-digest.ts). `tagEntry` joins an entry to the
+  // ceiling's cut ledger, which is keyed by the same internal tag `applyCorpus` uses.
+  const manifest: CorpusManifestEntry[] = [];
+  const tagEntry = new Map<string, CorpusManifestEntry>();
+  const record = (tag: string | undefined, origin: CorpusOrigin, key: string, read: { sha256: string; bytes: number } | null): void => {
+    const e: CorpusManifestEntry = read
+      ? { origin, key, status: "ok", sha256: read.sha256, bytes: read.bytes }
+      : { origin, key, status: "unreadable" };
+    manifest.push(e);
+    if (tag !== undefined) tagEntry.set(tag, e);
+  };
+  /** One read: the decoded text and the hash come from the same bytes. */
+  const readHashed = (p: string): { text: string; sha256: string; bytes: number } => {
+    const buf = readFileSync(p);
+    return { text: buf.toString("utf8"), sha256: sha256Hex(buf), bytes: buf.length };
+  };
   // Track whether any budget was hit. `boundText` returns its input UNCHANGED when it fits, so `out !== s`
   // is an exact truncation signal — no separate length check that could drift from boundText's own cut rule.
   let truncated = false;
@@ -620,11 +653,14 @@ export function packageEvidence(
   const skillMdPath = join(skillDir, "SKILL.md");
   let skillMd = "";
   let skillMdStatus: SkillMdStatus;
+  let skillMdRead: { sha256: string; bytes: number } | null = null;
   if (!existsSync(skillMdPath)) {
     skillMdStatus = "missing";
   } else {
     try {
-      skillMd = neutralizeForgedTruncationMarkers(readFileSync(skillMdPath, "utf8"));
+      const r = readHashed(skillMdPath);
+      skillMd = neutralizeForgedTruncationMarkers(r.text);
+      skillMdRead = r;
       skillMdStatus = "readable";
     } catch {
       skillMdStatus = "unreadable";
@@ -650,6 +686,8 @@ export function packageEvidence(
     skillMd = "";
     skillMdStatus = "untracked";
   }
+  if (skillMdStatus === "readable") record("skill\u0000SKILL.md", "skill_md", `${skillPrefix}SKILL.md`, skillMdRead);
+  else if (skillMdStatus === "unreadable" && (!accept || accept("SKILL.md"))) record(undefined, "skill_md", `${skillPrefix}SKILL.md`, null);
 
   // `scripts/` as the AGENT would have received it: same contained cycle-guarded walk, same tracked-set
   // filter. Probing the raw host dir instead let an UNTRACKED script — never delivered by staging — suppress
@@ -664,9 +702,14 @@ export function packageEvidence(
   // Neutralized HERE, once. Everything downstream (ceiling measurement, per-file cuts, section assembly)
   // treats these as already-clean and must bound them with `boundText`, never `bound` — see `applyCorpus`.
   const referenceBodies: Array<{ name: string; body: string | null }> = referenceFiles.map((name) => {
+    const tag = `ref\u0000references/${name}`;
+    const key = `${skillPrefix}references/${name}`;
     try {
-      return { name, body: neutralizeForgedTruncationMarkers(readFileSync(join(referenceRoot, name), "utf8")) };
+      const r = readHashed(join(referenceRoot, name));
+      record(tag, "reference", key, r);
+      return { name, body: neutralizeForgedTruncationMarkers(r.text) };
     } catch {
+      record(tag, "reference", key, null);
       return { name, body: null };
     }
   });
@@ -691,15 +734,21 @@ export function packageEvidence(
       }
       let body: string;
       let isPlaceholder = false;
+      const agentTag = `agent\u0000${agent.rel}`;
+      const agentKey = `${pluginPrefix}${agent.rel}`;
       if (!existsSync(agent.absPath)) {
         body = `(no file found at ${agent.absPath})`;
         isPlaceholder = true;
+        record(agentTag, "agent", agentKey, null);
       } else {
         try {
-          body = neutralizeForgedTruncationMarkers(readFileSync(agent.absPath, "utf8"));
+          const r = readHashed(agent.absPath);
+          body = neutralizeForgedTruncationMarkers(r.text);
+          record(agentTag, "agent", agentKey, r);
         } catch {
           body = `(exists at ${agent.absPath} but could not be read)`;
           isPlaceholder = true;
+          record(agentTag, "agent", agentKey, null);
         }
       }
       // `via` is load-bearing, not decoration: the `subagent_type` extraction has no context awareness, so
@@ -750,11 +799,16 @@ export function packageEvidence(
       }
       let body: string;
       let isPlaceholder = false;
+      const refTag = `rootref\u0000${ref.displayKey}`;
+      const refOrigin: CorpusOrigin = ref.via === "read-by-agent" ? "root_ref_read" : "root_ref_linked";
       try {
-        body = neutralizeForgedTruncationMarkers(readFileSync(ref.absPath, "utf8"));
+        const r = readHashed(ref.absPath);
+        body = neutralizeForgedTruncationMarkers(r.text);
+        record(refTag, refOrigin, `${pluginPrefix}${ref.rel}`, r);
       } catch {
         body = `(exists at ${ref.absPath} but could not be read)`;
         isPlaceholder = true;
+        record(refTag, refOrigin, `${pluginPrefix}${ref.rel}`, null);
       }
       rootRefBodies.push({
         isPlaceholder,
@@ -818,7 +872,9 @@ export function packageEvidence(
     // ignores the NUL), which measurably flips WHICH equal-sized files get zeroed — and in the unfavourable
     // direction, zeroing the skill's OWN references before the shared plugin-root ones. The tag disambiguates
     // identity; it must not decide priority.
-    const bySizeAsc = [...corpusEntries].sort((a, b) => a.bytes - b.bytes || a.key.localeCompare(b.key));
+    // Code-point tiebreak, not `localeCompare`: which equal-size file is cut first must not depend on the machine's
+    // collation, or `packagedCorpusHash` would differ between two machines grading the same tree.
+    const bySizeAsc = [...corpusEntries].sort((a, b) => a.bytes - b.bytes || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     let left = bySizeAsc.length;
     for (const e of bySizeAsc) {
       const fair = Math.floor(remaining / left);
@@ -988,7 +1044,33 @@ export function packageEvidence(
   //     first (it caused the breach and has its own loud per-file accounting above), transcript last.
   const { pkg, trimRecord } = trimToPackageCap(sections, MAX_PACKAGE_BYTES);
   if (trimRecord.length) truncated = true;
+  for (const c of corpusCuts) {
+    const e = tagEntry.get(c.tag);
+    if (e) e.keptBytes = c.keptBytes;
+  }
+  // The skill folder as staging delivers it: every file (scripts/, assets/ … not only the corpus), through the
+  // same contained walk and the same tracked-set filter. A file it does not deliver is listed, never hashed — the
+  // agent never had it.
+  const allSkillFiles = listSkillFilesRecursive(skillDir);
+  const deliveredSkillFiles = accept ? allSkillFiles.filter((rel) => accept(rel)) : allSkillFiles;
+  const skillTreeFiles = deliveredSkillFiles.map((rel) => {
+    try {
+      return { key: `${skillPrefix}${rel}`, sha256: sha256Hex(readFileSync(join(skillDir, rel))), status: "ok" as const };
+    } catch {
+      return { key: `${skillPrefix}${rel}`, status: "unreadable" as const };
+    }
+  });
+  const corpusDigest: CorpusDigest = {
+    corpusHashScheme: CORPUS_HASH_SCHEME,
+    hashBasis: opts.hashBasis ?? (mountAccept ? "git-tracked" : "worktree-all"),
+    corpusHash: corpusHashOf(manifest),
+    packagedCorpusHash: packagedCorpusHashOf(manifest),
+    skillTreeHash: skillTreeHashOf(skillTreeFiles, manifest),
+    corpusManifest: manifest,
+    skillTreeUntracked: allSkillFiles.filter((rel) => !deliveredSkillFiles.includes(rel)),
+  };
   return {
+    corpusDigest,
     pkg,
     sections,
     truncated,

@@ -33,6 +33,16 @@ const REPORT_PATHS = [
   "gradedSkill",
   "gradedSkillHash",
   "harnessVersion",
+  // content hashes and their enums (a hash cannot carry a secret; a manifest KEY is a file name and is scrubbed)
+  "corpusHash",
+  "packagedCorpusHash",
+  "skillTreeHash",
+  "hashBasis",
+  "corpusManifest[].origin",
+  "corpusManifest[].status",
+  "corpusManifest[].sha256",
+  "corpusDrift.preflightCorpusHash",
+  "corpusDrift.preflightSkillTreeHash",
   // model ids
   "gradedModels[]",
   "evaluatorModel",
@@ -68,7 +78,20 @@ const KEEP: Record<CritiqueJsonShape, Set<string>> = {
   salvage: new Set(["infraFailurePhase", "infraFailureKind", ...REPORT_PATHS.map((p) => `reportState.${p}`)]),
   // `--corpus-only`'s payload (the envelope's `tool`/`version`/`command` are added after the scrub);
   // `skill` is the same resolved skills/<name> a report calls `gradedSkill`
-  "corpus-only": new Set(["mode", "skillFolder", "skillDir", "skill", "corpus.corpusOmitted[].reason"]),
+  "corpus-only": new Set([
+    "mode",
+    "skillFolder",
+    "skillDir",
+    "skill",
+    "corpus.corpusOmitted[].reason",
+    "corpusHash",
+    "packagedCorpusHash",
+    "skillTreeHash",
+    "hashBasis",
+    "corpusManifest[].origin",
+    "corpusManifest[].status",
+    "corpusManifest[].sha256",
+  ]),
 };
 
 /** A deep copy of `value` with every string VALUE scrubbed, except at the exact paths kept for `shape`. */
