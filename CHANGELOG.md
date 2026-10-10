@@ -72,6 +72,12 @@ All notable changes to this project are documented here. The format is based on
   `fingerprintScheme`.** `gradedSkillIdentity` names a plain skill folder (by its SKILL.md frontmatter) where
   `gradedSkill` is absent.
 
+- **A cloud-lane probe kit for maintainers (`probes/cloud/`), not shipped in the npm package.** A throwaway plugin
+  whose hooks record the SHAPE of each tool call a real cloud task makes (tool names, input field names, result
+  shape, permission mode), with names outside the product's vocabulary fingerprinted and every length bucketed, and
+  `verify.py`, which checks a downloaded capture's integrity, redaction and that it can answer its probe. No harness
+  behaviour changes.
+
 ### Changed
 
 - **Reading several critiques: a fingerprint is a lower bound.** The reproduction recipe said a finding recurring
