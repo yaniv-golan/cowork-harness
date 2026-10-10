@@ -22,3 +22,8 @@ docs/superpowers/
 
 # The scrub-set installation key (beside a runs root such as `--run-dir runs`): never commit it.
 scrubset.key
+
+# Cloud probe kit: what a sitting downloads or builds never enters the repository
+export.jsonl
+export.sha256
+cwh-cloud-probe*

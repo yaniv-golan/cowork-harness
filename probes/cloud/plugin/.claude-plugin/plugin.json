@@ -1,0 +1,7 @@
+{
+  "name": "cwh-cloud-probe",
+  "version": "0.3.0",
+  "description": "Maintainer probe for cowork-harness: records the shape of tool calls in a real Claude Desktop cloud task (never their content). Inert elsewhere. Not for general use; uninstall after the probe.",
+  "author": { "name": "cowork-harness maintainers" },
+  "license": "MIT"
+}
