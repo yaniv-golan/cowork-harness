@@ -57,6 +57,9 @@ const TASK_EVENT_SUBTYPES = new Set([
 ]);
 
 const SUBAGENT_LIMIT_TEXT_CAP = 500;
+/** Task types that run no model: a failure there is never a sub-agent's usage limit. A deny-list, so an agent task
+ *  type the stream adds later (today `local_agent`, `remote_agent`, `in_process_teammate`) is checked, not skipped. */
+const NON_AGENT_TASK_TYPES: ReadonlySet<string> = new Set(["local_bash", "monitor_mcp"]);
 
 /** Extract the DENIED path from a captured `{file_path?, path?}`-shaped input: whichever key is a
  *  `/sessions`-prefixed value (what the VM path-gate actually flags), else the first present key (the
@@ -1270,7 +1273,7 @@ export class Run {
                   patch?.status === "failed" &&
                   typeof patch.error === "string" &&
                   matchesTerminalUsageLimitText(patch.error) &&
-                  (known === undefined || known === "local_agent") &&
+                  (known === undefined || !NON_AGENT_TASK_TYPES.has(known)) &&
                   (taskId === undefined || !this.subagentUsageLimits.some((u) => u.taskId === taskId))
                 )
                   this.subagentUsageLimits.push({ ...(taskId !== undefined ? { taskId } : {}), error: patch.error });

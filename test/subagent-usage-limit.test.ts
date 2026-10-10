@@ -210,6 +210,17 @@ describe("not flagged: the limit text anywhere but a sub-agent task's failure er
     expect(rec.result).toBe("success");
   });
 
+  it("a remote-agent or teammate task that hit the limit IS flagged (only non-agent task types are skipped)", async () => {
+    for (const task_type of ["remote_agent", "in_process_teammate"]) {
+      const { rec } = await graded([
+        sys("task_started", { task_id: "task-r", tool_use_id: "toolu_r", task_type }),
+        sys("task_updated", { task_id: "task-r", patch: { status: "failed", error: WRAPPED } }),
+        success,
+      ]);
+      expect([rec.result, rec.resultErrorKind], task_type).toEqual(["error", "usage_limit"]);
+    }
+  });
+
   it("a failed background SHELL task whose error carries the text → not flagged (not an agent)", async () => {
     const { rec } = await graded([
       sys("task_started", { task_id: "task-sh", tool_use_id: "toolu_sh", task_type: "local_bash" }),
