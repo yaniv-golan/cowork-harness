@@ -7,7 +7,8 @@
 // `scheduleCostJson`): those are stable from this release on `eval --dry-run`.
 import type { RowKey } from "./classify.js";
 import type { RowHistoryLoad } from "./plan-history.js";
-import { attainableFloor, minRowsToConfirm, type Correction, type Mdd } from "./stats.js";
+import { attainableFloor, type Correction, type Mdd } from "./stats.js";
+import { familiesFromCounts, familyReach, type MetricCorrection } from "./families.js";
 import {
   HISTORY_WINDOW,
   estimateScheduleCost,
@@ -40,6 +41,8 @@ export interface PlanScenarioInput {
   baseline: string;
   agentPin: string;
   rows: readonly RowKey[];
+  /** Declared metrics: each is a metric row, in its own family, never planned. */
+  metricCount?: number;
   cost: CostHistory;
   rates: RowHistoryLoad;
 }
@@ -49,6 +52,8 @@ export interface PlanInput {
   alpha: number;
   correction: Correction;
   q: number;
+  /** The metric family's rule (see families.ts); absent → the default, Holm split across families. */
+  metricCorrection?: MetricCorrection;
   /** Percentage points (30 = 30pp). The source of truth for every `…Pp` key; the estimator gets pp / 100. */
   targetEffectPp?: number;
   allowUnderpowered: boolean;
@@ -124,6 +129,8 @@ export interface PlannedSection {
   /** The fixed design the eval runs today: the smallest p any table at --reps can reach, and how many
    *  collapsed rows `confirmed` needs (null: unreachable). */
   fixed: { attainableFloor: number; minRowsToConfirm: number | null };
+  /** The section's metric family, when it declares metrics: graded by eval, not planned (no rate history). */
+  metricFamily?: { m: number; rule: Correction; level: number; minRowsToConfirm: number | null; planned: false };
   sequential: SequentialPreview;
 }
 
@@ -260,7 +267,16 @@ export function planEval(input: PlanInput): EvalPlan {
   const floor = attainableFloor(reps, reps);
   const section = (held: boolean): PlannedSection | null => {
     const size = held ? m.heldOut : m.tuned;
-    if (size === 0) return null;
+    const metricM = input.scenarios.filter((s) => s.heldOut === held).reduce((n, s) => n + (s.metricCount ?? 0), 0);
+    if (size === 0 && metricM === 0) return null;
+    const fam = familiesFromCounts(size, metricM, {
+      correction,
+      alpha,
+      q,
+      ...(input.metricCorrection ? { metricCorrection: input.metricCorrection } : {}),
+    });
+    const reach = familyReach(fam, reps);
+    const metricReach = reach.find((r) => r.kind === "metrics");
     const known = scenarios
       .filter((s) => s.heldOut === held)
       .flatMap((s) => s.rows)
@@ -268,7 +284,18 @@ export function planEval(input: PlanInput): EvalPlan {
       .map((r) => ({ id: r.id, p: (r.rate as { p: number }).p }));
     return {
       m: size,
-      fixed: { attainableFloor: floor, minRowsToConfirm: minRowsToConfirm(floor, size, { correction, q, alpha }) },
+      fixed: { attainableFloor: floor, minRowsToConfirm: reach.find((r) => r.kind === "pass")?.minRowsToConfirm ?? null },
+      ...(metricReach
+        ? {
+            metricFamily: {
+              m: metricM,
+              rule: fam.metric.rule,
+              level: fam.metric.level,
+              minRowsToConfirm: metricReach.minRowsToConfirm,
+              planned: false as const,
+            },
+          }
+        : {}),
       sequential: sequentialPreview({
         reps,
         m: size,
@@ -479,14 +506,20 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
     if (!sec) continue;
     const seq = sec.sequential;
     const j = sec.fixed.minRowsToConfirm;
-    L.push(
-      `[eval] fixed design (what eval runs today), ${name} section: ${sec.m} row(s) in the family; at --reps ${plan.reps} ` +
-        (j === null
-          ? "`confirmed` is unreachable"
-          : j === 1
-            ? "one collapsed row can reach `confirmed`"
-            : `\`confirmed\` needs >= ${j} collapsed rows`),
-    );
+    const reachText = (j: number | null) =>
+      j === null
+        ? "`confirmed` is unreachable"
+        : j === 1
+          ? "one collapsed row can reach `confirmed`"
+          : `\`confirmed\` needs >= ${j} collapsed rows`;
+    if (sec.m > 0)
+      L.push(
+        `[eval] fixed design (what eval runs today), ${name} section: ${sec.m} row(s) in the family; at --reps ${plan.reps} ${reachText(j)}`,
+      );
+    if (sec.metricFamily)
+      L.push(
+        `[eval] ${name} metrics: ${sec.metricFamily.m} row(s) in their own family (${sec.metricFamily.rule} at ${sec.metricFamily.level}); at --reps ${plan.reps} ${reachText(sec.metricFamily.minRowsToConfirm)} — not planned (no rate history for a metric)`,
+      );
     L.push(
       `[eval] sequential, ${name} section (planned, NOT implemented — assumed: a look every ${seq.scheme.lookEveryReps} reps per arm, L=${seq.scheme.looks}, alpha/L per look, holm within a look): ` +
         (seq.firstConfirmableLook

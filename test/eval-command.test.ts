@@ -1724,3 +1724,245 @@ describe("eval: an interrupt learned from a probe inside a job", () => {
     await expect(runEval(args(scen, a, b, ["--concurrency", "1"]), deps(runJob))).rejects.toThrow(InterruptedError);
   });
 });
+
+describe("eval: metric rows (a scenario's declared `metrics:`)", () => {
+  /** The csv scenario plus a metrics block; each id's declaration is `better` + unbounded. */
+  function setupMetrics(metrics: Array<{ id: string; better: "higher" | "lower" }>) {
+    const s = setup();
+    const block = metrics
+      .map((m) => `  - id: ${m.id}\n    artifact: outputs/metrics.json\n    path: n\n    better: ${m.better}\n    unbounded: true\n`)
+      .join("");
+    writeFileSync(
+      join(s.scen, "csv-metrics.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: analyze\nmetrics:\n${block}${CSV_ASSERTS}`,
+    );
+    return s;
+  }
+  type Value = { value: number } | { unavailable: NonNullable<RunResult["metrics"]>[number]["unavailable"] };
+  /** A runner whose rep `rep` of `arm` measures `byArm[arm][rep-1]` for metric `id`. */
+  const measuring =
+    (id: string, byArm: Record<string, Value[]>, extra: Behaviour = (_s, r) => r): Behaviour =>
+    (spec, r) =>
+      extra(spec, { ...r, metrics: [{ id, ...byArm[spec.job.arm][spec.job.rep - 1] }] } as RunResult);
+  const v = (xs: number[]): Value[] => xs.map((value) => ({ value }));
+
+  it("records each rep's metrics in runs.jsonl and freezes the declarations and the metric correction in the manifest", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner(measuring("leaks", { before: v([1, 2, 3, 4, 5]), after: v([1, 2, 3, 4, 5]) }))),
+    );
+    const { lines } = readRunsLines(join(out.evalDir, "runs.jsonl"));
+    expect(lines.every((l) => l.result?.metrics?.[0]?.id === "leaks" && typeof l.result.metrics[0].value === "number")).toBe(true);
+    const manifest = JSON.parse(readFileSync(join(out.evalDir, "manifest.json"), "utf8"));
+    expect(manifest.scenarios[0].metrics).toEqual([
+      { id: "leaks", artifact: "outputs/metrics.json", path: "n", better: "lower", unbounded: true },
+    ]);
+    expect(manifest.settings.metricCorrection).toEqual({ rule: "holm", split: true });
+    expect(out.report.summary.metricsRecorded).toBe(true);
+    expect(out.report.sections.tuned!.metricRows).toHaveLength(1);
+    expect(out.report.sections.tuned!.metricRows[0].label).toBe("no detectable change");
+    // Both families are stated, the pass family unchanged (bh, unsplit) and metrics at Holm alpha/2.
+    expect(out.report.sections.tuned!.families.map((f) => [f.kind, f.correction, f.level, f.split])).toEqual([
+      ["pass", "bh", 0.1, false],
+      ["metrics", "holm", 0.025, true],
+    ]);
+    // One metric row at Holm 0.025, 5v5: the null mass at or below 0.025 is 4/252.
+    expect(out.report.sections.tuned!.families[1].aaFalseConfirm).toBeCloseTo(4 / 252, 12);
+  });
+
+  it("a count metric that got worse in every rep is `confirmed worse` beside pass rows, and --fail-on confirmed exits 1", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const out = await runEval(
+      args(scen, a, b, ["--fail-on", "confirmed"]),
+      deps(fakeRunner(measuring("leaks", { before: v([0, 1, 1, 2, 0]), after: v([5, 6, 7, 8, 9]) }))),
+    );
+    const row = out.report.sections.tuned!.metricRows[0];
+    expect(row.label).toBe("confirmed worse");
+    expect(row.numericDirection).toBe("up");
+    expect(row.p).toBeCloseTo(2 / 252, 12);
+    expect(out.report.summary.failOnHit).toBe(true);
+    expect(out.report.summary.exitCode).toBe(1);
+    // Every pass row is unchanged: the metric never touched the pass family.
+    expect(out.report.sections.tuned!.rows.every((r) => r.label === "no detectable change")).toBe(true);
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toMatch(/\*\*confirmed worse\*\*/);
+  });
+
+  it("p = 8/252 beside pass rows: `possible worse` (Holm at alpha/2 cannot confirm it), and --fail-on possible exits 1", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "score", better: "higher" }]);
+    const byArm = { before: v([4, 7, 8, 9, 10]), after: v([1, 2, 3, 5, 6]) };
+    const possible = await runEval(args(scen, a, b, ["--fail-on", "possible"]), deps(fakeRunner(measuring("score", byArm))));
+    const row = possible.report.sections.tuned!.metricRows[0];
+    expect(row.p).toBeCloseTo(8 / 252, 12);
+    expect(row.label).toBe("possible worse");
+    expect(possible.report.summary.exitCode).toBe(1);
+    rmSync(join(root, "eval"), { recursive: true, force: true });
+    const confirmed = await runEval(args(scen, a, b, ["--fail-on", "confirmed"]), deps(fakeRunner(measuring("score", byArm))));
+    expect(confirmed.report.summary.exitCode).toBe(0);
+  });
+
+  it("a metric that got better never gates", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const out = await runEval(
+      args(scen, a, b, ["--fail-on", "possible"]),
+      deps(fakeRunner(measuring("leaks", { before: v([5, 6, 7, 8, 9]), after: v([0, 1, 1, 2, 0]) }))),
+    );
+    expect(out.report.sections.tuned!.metricRows[0].label).toBe("confirmed better");
+    expect(out.report.summary.exitCode).toBe(0);
+  });
+
+  it("the agent's own failures rank worst on the metric (never an imputed 0), with the worst-rank note on a worse row", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const errored = (r: RunResult): RunResult => ({ ...r, result: "error", errorSource: "timeout", metrics: undefined }) as RunResult;
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner(
+          // better: lower — B's one measured value is worse than every A value, and its four errored reps rank worse still.
+          measuring("leaks", { before: v([2, 3, 4, 5, 6]), after: v([10, 10, 10, 10, 10]) }, (s, r) =>
+            s.job.arm === "after" && s.job.rep >= 2 ? errored(r) : r,
+          ),
+        ),
+      ),
+    );
+    const row = out.report.sections.tuned!.metricRows[0];
+    expect(row.worstRanked.b).toEqual({ errored_agent: 4 });
+    expect(row.n2).toBe(5);
+    expect(row.direction).toBe("worse");
+    expect(row.label).toBe("confirmed worse");
+    expect(row.note).toMatch(/B 4 of 5 worst-ranked \(errored 4, unmeasured 0\)/);
+    expect(out.report.arms[1].metricStates.worst).toEqual({ errored_agent: 4 });
+  });
+
+  it("B with 2 extra excluded (size) reps below the threshold is `insufficient_unmeasured`, which --fail-on possible gates on", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const after: Value[] = [{ value: 1 }, { value: 2 }, { value: 3 }, { unavailable: "size" }, { unavailable: "size" }];
+    const out = await runEval(
+      args(scen, a, b, ["--fail-on", "possible"]),
+      deps(fakeRunner(measuring("leaks", { before: v([1, 2, 3, 4, 5]), after }))),
+    );
+    const row = out.report.sections.tuned!.metricRows[0];
+    expect(row.excluded.b).toEqual({ size: 2 });
+    expect(row.label).toBe("insufficient_unmeasured");
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(out.report.arms[1].metricStates.excluded).toEqual({ size: 2 });
+  });
+
+  it("an excluded rep cannot carry a verdict: full separation with one B rep excluded is `unresolved` and never gates", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "score", better: "higher" }]);
+    const after: Value[] = [{ value: 1 }, { value: 2 }, { value: 3 }, { value: 4 }, { unavailable: "remote" }];
+    const out = await runEval(
+      args(scen, a, b, ["--fail-on", "possible"]),
+      deps(fakeRunner(measuring("score", { before: v([10, 11, 12, 13, 14]), after }))),
+    );
+    const row = out.report.sections.tuned!.metricRows[0];
+    expect(row.label).toBe("unresolved");
+    expect(row.survivorP).toBeCloseTo(2 / 126, 12);
+    expect(out.report.summary.exitCode).toBe(0);
+  });
+
+  it("a `pruned` metric state on one rep leaves the row `not compared`, out of the family, and the eval exits 1", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const after: Value[] = [{ value: 1 }, { value: 2 }, { unavailable: "pruned" }, { value: 4 }, { value: 5 }];
+    const out = await runEval(args(scen, a, b), deps(fakeRunner(measuring("leaks", { before: v([1, 2, 3, 4, 5]), after }))));
+    const row = out.report.sections.tuned!.metricRows[0];
+    expect(row.label).toBe("not compared");
+    expect(row.notCompared).toEqual(["pruned"]);
+    expect(out.report.sections.tuned!.metricFamily!.m).toBe(0);
+    expect(out.report.summary.notCompared).toBe(1);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it("an eval dir written before metric grading: metrics not recorded, no rows, exit code unchanged", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner(measuring("leaks", { before: v([0, 0, 0, 0, 0]), after: v([9, 9, 9, 9, 9]) }))),
+    );
+    expect(out.report.summary.exitCode).toBe(0);
+    const mf = join(out.evalDir, "manifest.json");
+    const manifest = JSON.parse(readFileSync(mf, "utf8"));
+    for (const sc of manifest.scenarios) delete sc.metrics;
+    delete manifest.settings.metricCorrection;
+    writeFileSync(mf, JSON.stringify(manifest));
+    const rep = writeEvalReport(out.evalDir);
+    expect(rep.summary.metricsRecorded).toBe(false);
+    expect(rep.sections.tuned!.metricRows).toEqual([]);
+    expect(rep.summary.exitCode).toBe(0);
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toMatch(/Metrics: not recorded in this eval dir/);
+  });
+
+  it.each([[[]], [["--correction", "holm"]], [["--correction", "bh"]]])(
+    "the pass family is identical with and without metrics declared (%j)",
+    async (extra) => {
+      const behaviour: Behaviour = (s, r) => (s.job.arm === "after" && s.job.rep <= 4 ? failAssertion(r, 2) : r);
+      const plain = setup();
+      const without = await runEval(args(plain.scen, plain.a, plain.b, extra), deps(fakeRunner(behaviour)));
+      rmSync(join(root, "eval"), { recursive: true, force: true });
+      const m = setupMetrics([{ id: "leaks", better: "lower" }]);
+      const withM = await runEval(
+        args(m.scen, m.a, m.b, extra),
+        deps(fakeRunner(measuring("leaks", { before: v([0, 0, 0, 0, 0]), after: v([9, 9, 9, 9, 9]) }, behaviour))),
+      );
+      const strip = (rows: unknown[]) => JSON.parse(JSON.stringify(rows).replace(/"evidence":\{[^}]*\}/g, '"evidence":{}'));
+      expect(strip(withM.report.sections.tuned!.rows)).toEqual(strip(without.report.sections.tuned!.rows));
+      expect(withM.report.sections.tuned!.minRowsToConfirm).toBe(without.report.sections.tuned!.minRowsToConfirm);
+    },
+  );
+
+  it("--correction bh grades metrics with BH at q = 0.10, unsplit", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const out = await runEval(
+      args(scen, a, b, ["--correction", "bh"]),
+      deps(fakeRunner(measuring("leaks", { before: v([1, 2, 3, 4, 5]), after: v([1, 2, 3, 4, 5]) }))),
+    );
+    const manifest = JSON.parse(readFileSync(join(out.evalDir, "manifest.json"), "utf8"));
+    expect(manifest.settings.metricCorrection).toEqual({ rule: "bh", split: false });
+    expect(out.report.sections.tuned!.families[1]).toMatchObject({
+      kind: "metrics",
+      correction: "bh",
+      level: 0.1,
+      split: false,
+      aaBasis: "bound-only",
+    });
+  });
+
+  it("`eval report` rebuilds a report with metric rows byte-identically", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner(measuring("leaks", { before: v([0, 1, 1, 2, 0]), after: v([5, 6, 7, 8, 9]) }))),
+    );
+    const md = readFileSync(join(out.evalDir, "report.md"));
+    const js = readFileSync(join(out.evalDir, "report.json"));
+    writeEvalReport(out.evalDir);
+    expect(readFileSync(join(out.evalDir, "report.md")).equals(md)).toBe(true);
+    expect(readFileSync(join(out.evalDir, "report.json")).equals(js)).toBe(true);
+  });
+
+  it("the Holm flip: under --correction holm 7 pass rows cannot confirm at --reps 5, so --fail-on confirmed is refused — one metric makes it accepted, with a warning", async () => {
+    const plain = setup();
+    await expect(
+      runEval(args(plain.scen, plain.a, plain.b, ["--correction", "holm", "--fail-on", "confirmed"]), deps(fakeRunner())),
+    ).rejects.toThrow(/can never fire.*tuned pass rates: 7 row\(s\)/);
+    const m = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const log: string[] = [];
+    const out = await runEval(
+      { ...args(m.scen, m.a, m.b, ["--correction", "holm", "--fail-on", "confirmed"]), quiet: false },
+      deps(fakeRunner(measuring("leaks", { before: v([1, 2, 3, 4, 5]), after: v([1, 2, 3, 4, 5]) })), log),
+    );
+    expect(out.report.summary.confirmReach).toEqual([
+      { section: "tuned", kind: "pass", m: 7, minRowsToConfirm: null },
+      { section: "tuned", kind: "metrics", m: 1, minRowsToConfirm: 1 },
+    ]);
+    expect(log.join("\n")).toMatch(/--fail-on confirmed can fire only on: tuned metrics\. tuned pass rates \(m = 7\) cannot confirm/);
+  });
+
+  it("refuses --fail-on confirmed when no family can confirm, naming each family", async () => {
+    const ids = ["m1", "m2", "m3", "m4"].map((id) => ({ id, better: "lower" as const }));
+    const { scen, a, b } = setupMetrics(ids);
+    await expect(runEval(args(scen, a, b, ["--correction", "holm", "--fail-on", "confirmed"]), deps(fakeRunner()))).rejects.toThrow(
+      /tuned pass rates: 7 row\(s\); tuned metrics: 4 row\(s\)/,
+    );
+  });
+});

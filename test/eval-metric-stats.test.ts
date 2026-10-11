@@ -189,6 +189,29 @@ describe("worst rank: strictly beyond every measured value, tied only with other
   });
 });
 
+describe("the crash detector under the DEFAULT metric rule (Holm at alpha/2), computed independently (Fractions)", () => {
+  it.each([
+    ["m = 1 (level 0.025)", 0.025, [1 / 126, 1 / 63, 1 / 28, 2 / 21, 1 / 2, 1]],
+    ["m = 3 (rank-1 level 0.025/3)", 0.025 / 3, [1 / 252, 1 / 126, 1 / 56, 1 / 21, 1 / 6, 1]],
+  ])("P(`confirmed worse`) for e = 0…5 errored B reps, %s", (_name, level, expected) => {
+    for (let e = 0; e <= 5; e++) {
+      const vals = Array.from({ length: 10 - e }, (_, i) => i);
+      const subsets = combinations(10 - e, 5 - e);
+      const confirmed = subsets.filter((s) => {
+        const set = new Set(s);
+        const row: MetricRowInput = {
+          id: "c",
+          better: "higher",
+          a: { values: vals.filter((_, i) => !set.has(i)), worst: 0, excluded: 0 },
+          b: { values: s.map((i) => vals[i]), worst: e, excluded: 0 },
+        };
+        return evaluateMetricFamily([row], { rule: "holm", alpha: 0.05, q: 0.1, level, threshold: 4 }).rows[0].label === "confirmed worse";
+      }).length;
+      expect(confirmed / subsets.length).toBeCloseTo((expected as number[])[e], 12);
+    }
+  });
+});
+
 describe("metricRowP: excluded (class X) reps are guarded by the adversarial completion", () => {
   const row = (a: { values: number[]; worst?: number; excluded?: number }, b: typeof a): Parameters<typeof metricRowP>[0] => ({
     better: "higher",

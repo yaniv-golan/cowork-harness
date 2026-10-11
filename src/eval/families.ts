@@ -59,7 +59,17 @@ export function sectionFamilies(
 ): SectionFamilies {
   const passM = scenarios.reduce((n, sc) => n + scenarioRows(sc.name, sc.assertions).filter((r) => r.kind !== "semantic_rollup").length, 0);
   const metricM = scenarios.reduce((n, sc) => n + (sc.metrics?.length ?? 0), 0);
+  return familiesFromCounts(passM, metricM, s);
+}
+
+/** The same families from row counts already taken (the dry-run plan counts its rows itself). */
+export function familiesFromCounts(
+  passM: number,
+  metricM: number,
+  s: { correction: Correction; alpha: number; q: number; metricCorrection?: MetricCorrection },
+): SectionFamilies {
   const F = (passM > 0 ? 1 : 0) + (metricM > 0 ? 1 : 0);
+  // An old manifest records no metric correction; it froze no metrics either, so the default is never read there.
   const mc = s.metricCorrection ?? metricCorrectionFor(undefined);
   const level = mc.rule === "bh" ? s.q : s.alpha / (mc.split ? Math.max(1, F) : 1);
   return {

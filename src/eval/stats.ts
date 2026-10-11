@@ -526,6 +526,10 @@ export function metricRowP(row: { better: "higher" | "lower"; a: MetricArmInput;
     [...a, ...(favoured === "a" ? worstEnd(row.a.excluded) : bestEnd(row.a.excluded))],
     [...b, ...(favoured === "b" ? worstEnd(row.b.excluded) : bestEnd(row.b.excluded))],
   );
+  // Each adversarial group is one tied block. That is not always the completion with the LARGEST p (ties shrink
+  // the null's spread; distinct values at the extreme can give a larger one), but a search over every interleaving
+  // at n = 5–7 with up to three excluded reps, at levels 0.0083–0.10, found no label it changes: the survivors' p
+  // already decides max(survivor, adversarial) wherever the two could differ.
   const adversarialP = adv.favours === survivor.favours ? adv.p : 1;
   return { ...out, p: Math.max(survivor.p, adversarialP), adversarialP };
 }
@@ -849,4 +853,14 @@ export function evaluateMetricFamily(rows: readonly MetricRowInput[], o: MetricF
     minRowsToConfirm: family.length ? minRowsToConfirm(Math.min(...floors), family.length, co) : null,
     confirmableRows: confirmableRowCount(floors, co),
   };
+}
+
+/** P(Fisher p <= level) for a null pass row of n1 v n2 reps whose true rate is pi in both arms — the exact A/A
+ *  false-positive mass at that rate. The report evaluates it at a row's pooled observed rate: descriptive only. */
+export function fisherNullMass(n1: number, n2: number, pi: number, level: number): number {
+  const binom = (n: number, k: number) => Math.exp(logChoose(n, k) + (k ? k * Math.log(pi) : 0) + (n - k ? (n - k) * Math.log(1 - pi) : 0));
+  let mass = 0;
+  for (let k1 = 0; k1 <= n1; k1++)
+    for (let k2 = 0; k2 <= n2; k2++) if (fisherTwoSided(k1, n1, k2, n2) <= level * (1 + REL_TOL)) mass += binom(n1, k1) * binom(n2, k2);
+  return Math.min(1, mass);
 }
