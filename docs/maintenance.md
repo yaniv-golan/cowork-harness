@@ -418,13 +418,15 @@ committed baseline and say why in that baseline's `$comment`.
      instead, since that is the reader or the format drifting, not a missing session.
    - **Reader drift.** The write also blocks when the bundle no longer logs `[HostLoop] sdkOptions after patch`
      with an `envKeys` list (pass `--spawn-env-unobservable` if the lane really is gone), when a `Starting app`
-     entry carries no `appVersion`, or when an `envKeys` item is not env-name shaped: re-derive
+     entry carries no `appVersion`, when an `envKeys` item is not env-name shaped, when the logs hold text but
+     no line the reader recognises, or when local sessions started under the build but none logged a dump (a
+     VM-loop session logs none: if only those ran, run one host-loop task): re-derive
      `src/sync/observed-spawn-env.ts`.
    - **When the local lane is gone.** `sync --spawn-env-unobservable local-lane-removed` (or
-     `no-local-entitlement`) records `reason: "lane-gone"` for this build. It is refused when any local session
-     or log entry exists for the build, it is not inherited by the next Desktop release, and the preflight
-     only warns on it. Coverage then falls back to the post-construction scanner alone. (If the bundle no longer
-     logs the dump at all, the declaration is accepted without that check.)
+     `no-local-entitlement`) records `reason: "lane-gone"` for this build. It is accepted only when the logs show
+     this build's `Starting app` entry and no local session or dump for it (also when the bundle no longer logs
+     the dump); it is not inherited by the next Desktop release, and the preflight only warns on it. Coverage
+     then falls back to the post-construction scanner alone.
    - **After log rotation.** Desktop rotates these logs. If none of this build's entries remain, `sync` keeps
      the committed observation of the same build rather than recording it unobserved.
    - **Privacy.** The same log entry holds paths with your username and your plugin list. The reader reads only

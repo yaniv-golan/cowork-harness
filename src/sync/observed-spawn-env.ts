@@ -80,6 +80,10 @@ export interface ParsedLog {
   sessions: ParsedSession[];
   /** `Starting app` entries that carried no appVersion line: the log format drifted. */
   startsWithoutVersion: number;
+  /** Desktop versions named by `Starting app` entries, in log order. */
+  starts: string[];
+  /** Log entries recognised at all (any timestamped line). Zero over non-empty logs means the format moved. */
+  entries: number;
 }
 
 const ENTRY = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) \[\w+\] (.*)$/;
@@ -111,6 +115,8 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
   let currentApp: string | null = null;
   let startHadVersion = true;
   let startsWithoutVersion = 0;
+  const starts: string[] = [];
+  let entries = 0;
   let mode: "none" | "start" | "dump" = "none";
   let dump: ParsedDump | null = null;
   let inEnvKeys = false;
@@ -132,6 +138,7 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
   for (const line of lines) {
     const entry = line.match(ENTRY);
     if (entry) {
+      entries++;
       if (mode === "dump") finish();
       if (mode === "start" && !startHadVersion) startsWithoutVersion++;
       const rest = entry[7];
@@ -155,6 +162,7 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
       if (v) {
         currentApp = v[1];
         startHadVersion = true;
+        starts.push(v[1]);
       }
       continue;
     }
@@ -196,11 +204,11 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
   }
   if (mode === "dump") finish();
   if (mode === "start" && !startHadVersion) startsWithoutVersion++;
-  return { dumps, sessions, startsWithoutVersion };
+  return { dumps, sessions, startsWithoutVersion, starts, entries };
 }
 
 /** `main<N>.log` oldest first (highest N), then `main.log`. Nothing else in the dir is opened. */
-function* logLines(dir: string, counts: { unreadable: number }): Generator<string> {
+function* logLines(dir: string, counts: { unreadable: number; nonEmpty: number }): Generator<string> {
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -220,6 +228,7 @@ function* logLines(dir: string, counts: { unreadable: number }): Generator<strin
       counts.unreadable++;
       continue;
     }
+    if (text.trim() !== "") counts.nonEmpty++;
     yield* text.split("\n");
   }
 }
@@ -236,35 +245,21 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
     );
     return { block: noSession, deltas, notes };
   }
-  if (!input.bundle.hasProducer) {
-    // Nothing in the logs can contradict a declaration when Desktop no longer writes the entry at all.
-    if (input.declare) {
-      notes.push(
-        `WARNING: observedSpawnEnv UNOBSERVABLE (declared: ${input.declare}; the bundle no longer logs the host-loop dump) — coverage of Desktop's post-construction spawn env is down to the minimal scanner for Desktop ${input.appVersion}.`,
-      );
-      return { block: { observed: false, appVersion: input.appVersion, reason: "lane-gone", declared: input.declare }, deltas, notes };
-    }
-    deltas.push(
-      `observedSpawnEnv: the Desktop bundle no longer logs "${SPAWN_ENV_PRODUCER_LITERAL}" with an envKeys list built from the env's keys — ` +
-        "the oracle's producer is gone. Re-derive src/sync/observed-spawn-env.ts against this build, or pass --spawn-env-unobservable",
-    );
-    return { block: noSession, deltas, notes };
-  }
-
-  const counts = { unreadable: 0 };
+  // The logs are always read first: no branch below may decide anything the logs could contradict.
+  const counts = { unreadable: 0, nonEmpty: 0 };
   const parsed = parseDesktopLogLines(logLines(input.logsDir, counts));
+  if (counts.nonEmpty > 0 && parsed.entries === 0)
+    deltas.push(
+      `observedSpawnEnv: ${counts.nonEmpty} log file(s) under ${DESKTOP_LOGS_DISPLAY} hold text but no line this reader recognises as a log entry — the log format moved; re-derive src/sync/observed-spawn-env.ts`,
+    );
   if (parsed.startsWithoutVersion > 0)
     deltas.push(
       `observedSpawnEnv: ${parsed.startsWithoutVersion} 'Starting app' log entr${parsed.startsWithoutVersion === 1 ? "y has" : "ies have"} no appVersion line, so dumps after ${parsed.startsWithoutVersion === 1 ? "it" : "them"} cannot be attributed to a Desktop build — the log format drifted; re-derive src/sync/observed-spawn-env.ts`,
     );
-  let fallback = 0;
-  const ours = (x: { appVersion: string | null; atMs: number }) => {
-    if (x.appVersion !== null) return x.appVersion === input.appVersion;
-    const hit = input.installedAtMs !== null && x.atMs >= input.installedAtMs;
-    return hit;
-  };
+  const ours = (x: { appVersion: string | null; atMs: number }) =>
+    x.appVersion !== null ? x.appVersion === input.appVersion : input.installedAtMs !== null && x.atMs >= input.installedAtMs;
   const raw = parsed.dumps.filter(ours);
-  fallback = raw.filter((d) => d.appVersion === null).length;
+  const fallback = raw.filter((d) => d.appVersion === null).length;
   const sessions = parsed.sessions.filter(ours).length;
   const selected = raw.filter((d) => d.status === "ok");
   if (counts.unreadable)
@@ -274,10 +269,30 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
       `observedSpawnEnv: ${fallback} dump(s) attributed by the Desktop install time (no 'Starting app' entry before them in the retained logs)`,
     );
 
-  if (input.declare && (raw.length > 0 || sessions > 0)) {
+  // A declaration needs positive evidence that this build ran here and logged nothing: its own 'Starting app' entry,
+  // and no session and no dump attributed to it. A reader that cannot see the logs at all never qualifies.
+  const startedHere = parsed.starts.includes(input.appVersion);
+  const declarable = raw.length === 0 && sessions === 0 && startedHere;
+  if (input.declare && !declarable)
     deltas.push(
-      `observedSpawnEnv: refusing --spawn-env-unobservable — ${raw.length} host-loop dump(s) and ${sessions} local session(s) were logged under Desktop ${input.appVersion}, so the lane is not gone`,
+      `observedSpawnEnv: refusing --spawn-env-unobservable — ` +
+        (startedHere
+          ? `${raw.length} host-loop dump(s) and ${sessions} local session(s) were logged under Desktop ${input.appVersion}, so the lane is not gone`
+          : `no 'Starting app' entry for Desktop ${input.appVersion} is in the retained logs, so nothing confirms this build ran here without a local session; open Desktop once, then re-run sync`),
     );
+
+  if (!input.bundle.hasProducer) {
+    if (input.declare && declarable) {
+      notes.push(
+        `WARNING: observedSpawnEnv UNOBSERVABLE (declared: ${input.declare}; the bundle no longer logs the host-loop dump) — coverage of Desktop's post-construction spawn env is down to the minimal scanner for Desktop ${input.appVersion}.`,
+      );
+      return { block: { observed: false, appVersion: input.appVersion, reason: "lane-gone", declared: input.declare }, deltas, notes };
+    }
+    deltas.push(
+      `observedSpawnEnv: the Desktop bundle no longer logs "${SPAWN_ENV_PRODUCER_LITERAL}" with an envKeys list built from the env's keys — ` +
+        "the oracle's producer is gone. Re-derive src/sync/observed-spawn-env.ts against this build, or pass --spawn-env-unobservable if no local task can run",
+    );
+    return { block: noSession, deltas, notes };
   }
 
   if (selected.length > 0) {
@@ -301,6 +316,14 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
     if (withheld > 0)
       notes.push(
         `observedSpawnEnv: ${withheld} env key name(s) not attributable to Desktop (likely organisation-managed) — withheld, names not shown. Inspect envKeys in ${DESKTOP_LOGS_DISPLAY}/main.log by hand`,
+      );
+    if (selected.every((d) => d.agentVersion === null))
+      deltas.push(
+        "observedSpawnEnv: no dump named the agent it launched (the agent path in executableArgs moved) — re-derive src/sync/observed-spawn-env.ts",
+      );
+    if (sessions > raw.length)
+      notes.push(
+        `observedSpawnEnv: ${sessions} local session(s) but ${raw.length} host-loop dump(s) under Desktop ${input.appVersion} — some sessions logged no dump (a VM-loop session logs none)`,
       );
     const skipped = raw.length - selected.length;
     if (skipped > 0) notes.push(`observedSpawnEnv: ${skipped} dump(s) for this build skipped as incomplete or empty`);
@@ -327,14 +350,25 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
     return { block: noSession, deltas, notes };
   }
 
+  if (sessions > 0) {
+    deltas.push(
+      `observedSpawnEnv: ${sessions} local session(s) started under Desktop ${input.appVersion} but none logged a host-loop dump — ` +
+        "the dump moved or this reader drifted; re-derive src/sync/observed-spawn-env.ts. (If only VM-loop sessions ran, which log no dump, run one host-loop task and re-sync.)",
+    );
+    return { block: noSession, deltas, notes };
+  }
+
   if (input.declare) {
-    if (sessions > 0) return { block: noSession, deltas, notes };
+    if (!declarable) return { block: noSession, deltas, notes };
     notes.push(
       `WARNING: observedSpawnEnv UNOBSERVABLE (declared: ${input.declare}) — coverage of Desktop's post-construction spawn env is down to the minimal scanner for Desktop ${input.appVersion}.`,
     );
     return { block: { observed: false, appVersion: input.appVersion, reason: "lane-gone", declared: input.declare }, deltas, notes };
   }
 
+  // Same Desktop build only. The agent version is not compared: Desktop, not the agent, builds the spawn env (dumps are
+  // selected by Desktop build for the same reason). The carried names are re-checked by the CI test over committed
+  // baselines, which holds every recorded name to the current registry.
   const prev = input.previous;
   if (prev?.observed === true && prev.appVersion === input.appVersion) {
     notes.push(
@@ -345,7 +379,6 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
 
   notes.push(
     `WARNING: observedSpawnEnv UNOBSERVED — no local host-loop task has run under Desktop ${input.appVersion}` +
-      (sessions > 0 ? ` (${sessions} local session(s) started, but none logged a host-loop dump; a VM-loop session logs none)` : "") +
       ". Recorded observed:false; a release cannot ship it. Start one Cowork task with 'Only on this computer' on, then re-run sync.",
   );
   return { block: noSession, deltas, notes };

@@ -13,6 +13,7 @@ import {
 import { ObservedSpawnEnv } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
 import { classifySpawnEnvKey } from "../src/sync/spawn-env-registry.js";
+import { readPreviousObservedSpawnEnv } from "../src/sync/cowork-sync.js";
 
 // Synthetic Desktop main.log text in the shape Desktop's logger writes (util.inspect of the sdkOptions object):
 // several short items per line, a `[length]: N` trailer, a long `plugins` list BEFORE `envKeys` (envKeys sits ~140
@@ -391,7 +392,10 @@ describe("observed spawn-env oracle — review regressions", () => {
 
   it("records a lane-gone declaration when the producer is gone, instead of leaving only --allow-empty", () => {
     const r = readObservedSpawnEnv(
-      input(logsDir({ "main.log": "" }), { bundle: { hasProducer: false, hasProductName: () => true }, declare: "local-lane-removed" }),
+      input(logsDir({ "main.log": startApp("2026-10-09 22:46:06", "2.31226.1") }), {
+        bundle: { hasProducer: false, hasProductName: () => true },
+        declare: "local-lane-removed",
+      }),
     );
     expect(r.deltas).toEqual([]);
     expect(r.block).toEqual({ observed: false, appVersion: "2.31226.1", reason: "lane-gone", declared: "local-lane-removed" });
@@ -412,5 +416,64 @@ describe("observed spawn-env oracle — review regressions", () => {
     expect(checkObservedAgainstHarness(block, new Set()).notes.join()).toMatch(
       /CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is classed session-conditional/,
     );
+  });
+});
+
+describe("observed spawn-env oracle — final-review regressions", () => {
+  const busyNoDump = () =>
+    logsDir({ "main.log": [startApp("2026-10-09 22:46:06", "2.31226.1"), session("2026-10-10 11:00:00")].join("\n") });
+
+  it("blocks when local sessions ran under the build but none logged a dump, and never carries an old observation over it", () => {
+    const prev: ObservedSpawnEnv = {
+      observed: true,
+      appVersion: "2.31226.1",
+      nativeAgentVersions: ["2.1.295"],
+      sessions: 3,
+      keysAll: [...CORE].sort(),
+      keysSome: [],
+      withheld: 0,
+    };
+    const r = readObservedSpawnEnv(input(busyNoDump(), { previous: prev }));
+    expect(r.deltas.some((d) => /none logged a host-loop dump/.test(d))).toBe(true);
+    expect(r.block).toMatchObject({ observed: false, reason: "no-session" });
+  });
+
+  it("refuses a declaration when the producer is gone but local sessions still ran", () => {
+    const r = readObservedSpawnEnv(
+      input(busyNoDump(), { bundle: { hasProducer: false, hasProductName: () => true }, declare: "local-lane-removed" }),
+    );
+    expect(r.block).toMatchObject({ observed: false, reason: "no-session" });
+    expect(r.deltas.some((d) => /refusing --spawn-env-unobservable/.test(d))).toBe(true);
+  });
+
+  it("refuses a declaration with no 'Starting app' entry for the build, and blocks logs it cannot read at all", () => {
+    expect(readObservedSpawnEnv(input(logsDir({ "main.log": "" }), { declare: "local-lane-removed" })).deltas.join()).toMatch(
+      /no 'Starting app' entry for Desktop 2\.31226\.1/,
+    );
+    const alien = logsDir({ "main.log": "[10/10/2026, 11:00:00] info: something\n[10/10/2026, 11:00:01] info: more" });
+    const r = readObservedSpawnEnv(input(alien, { declare: "local-lane-removed" }));
+    expect(r.deltas.some((d) => /no line this reader recognises/.test(d))).toBe(true);
+    expect(r.block).toMatchObject({ observed: false, reason: "no-session" });
+  });
+
+  it("blocks when no selected dump names the agent it launched", () => {
+    const text = dump({ when: "2026-10-10 11:00:01", keys: CORE }).replace(/claude-code\/[^']*claude\.app/, "somewhere/else.app");
+    const r = readObservedSpawnEnv(input(logsDir({ "main.log": [startApp("2026-10-09 22:46:06", "2.31226.1"), text].join("\n") })));
+    expect(r.deltas.some((d) => /named the agent/.test(d))).toBe(true);
+  });
+});
+
+describe("readPreviousObservedSpawnEnv", () => {
+  it("reads the NEWEST baseline's block, and returns null for an invalid one", () => {
+    const d = mkdtempSync(join(tmpdir(), "oracle-baselines-"));
+    dirs.push(d);
+    const block = (appVersion: string) => ({
+      provenance: { observedSpawnEnv: { observed: false, appVersion, reason: "no-session" } },
+    });
+    writeFileSync(join(d, "desktop-2.9939.4.json"), JSON.stringify(block("2.9939.4")));
+    writeFileSync(join(d, "desktop-2.31226.1.json"), JSON.stringify(block("2.31226.1")));
+    expect(readPreviousObservedSpawnEnv(d)).toEqual({ observed: false, appVersion: "2.31226.1", reason: "no-session" });
+    writeFileSync(join(d, "desktop-2.31226.2.json"), JSON.stringify({ provenance: { observedSpawnEnv: { observed: true } } }));
+    expect(readPreviousObservedSpawnEnv(d)).toBeNull();
   });
 });

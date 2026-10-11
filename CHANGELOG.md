@@ -160,8 +160,8 @@ All notable changes to this project are documented here. The format is based on
   unclassified name that Desktop's own bundle carries refuses the write and is named in sync's local output; any
   other unclassified name (an organisation's managed env, say) is counted as `withheld` and never printed or
   committed. A name the registry says the harness sets, but the harness host loop does not set, also refuses the
-  write, as do unreadable dumps, a `Starting app` log entry with no version, and a bundle that no longer logs the
-  dump.
+  write, as do unreadable dumps, local sessions that logged no dump, a `Starting app` log entry with no version, and
+  a bundle that no longer logs the dump.
 - **`npm run preflight` refuses a newest baseline whose observed spawn env is unobserved** (no local host-loop task
   ran on that Desktop build). `--allow-unobserved-spawn-env` downgrades it to a warning for an emergency release.
   When local tasks can no longer run, `sync --spawn-env-unobservable local-lane-removed|no-local-entitlement`

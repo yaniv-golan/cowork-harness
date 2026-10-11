@@ -792,8 +792,6 @@ export const NETWORK_ALLOWDOMAINS_COMMENT =
   "reviewed act. checkEgressContractFacts in src/sync/cowork-sync.ts fails closed if the construction that " +
   "justifies pinning moves.";
 
-/** The `network` block a sync writes: the previous baseline's block, with the facts this sync owns
- *  replaced. `$comment` is replaced too — carrying it forward is how a stale sentence gets republished. */
 /** The newest committed baseline's `provenance.observedSpawnEnv`, schema-checked; null when absent or invalid. */
 export function readPreviousObservedSpawnEnv(dir = BASELINES_DIR): ObservedSpawnEnv | null {
   try {
@@ -811,6 +809,9 @@ export function readPreviousObservedSpawnEnv(dir = BASELINES_DIR): ObservedSpawn
     return null;
   }
 }
+
+/** The `network` block a sync writes: the previous baseline's block, with the facts this sync owns
+ *  replaced. `$comment` is replaced too — carrying it forward is how a stale sentence gets republished. */
 
 export function syncedNetworkBlock(
   prior: Record<string, unknown> | undefined,
@@ -4277,7 +4278,7 @@ export function deriveSpawnEnv(
   for (const k of windowAllowlistedNames()) {
     if (!enumerated.has(k))
       flags.push(
-        `NOTE: spawn.env allowlist entry ${k} is no longer constructed in the asar — prune it from SPAWN_ENV_ALLOWLIST (src/sync/spawn-env-registry.ts)`,
+        `NOTE: spawn.env allowlist entry ${k} is no longer constructed in the asar — prune it from SPAWN_ENV_ALLOWLIST (src/sync/spawn-env-registry.ts), unless the observed spawn env or the post-write scan still records it`,
       );
   }
 
