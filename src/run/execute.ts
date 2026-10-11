@@ -2830,6 +2830,9 @@ export function loadMultiLegScenario(path: string): MultiLegScenario {
     }
   for (const leg of s.legs) {
     try {
+      // `artifact_json.schema: {file}` resolves relative to the scenario file, inlined in place as a single
+      // scenario's is (parseScenarioFile), so the frozen form and every leg read the same schema.
+      inlineSchemaFiles({ assert: leg.assert } as unknown as Scenario, path);
       if (leg.prompt !== undefined) validateScenarioRegexes(legScenario(s, leg), path);
       else
         for (const a of hostActionAsserts(leg))

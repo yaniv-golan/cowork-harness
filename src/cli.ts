@@ -5225,6 +5225,9 @@ function detectDiffKind(arg: string): DiffKind {
     }
     if (whole && typeof whole === "object") {
       const w = whole as Record<string, unknown>;
+      // A multi-leg cassette has no top-level events (each leg nests its own): refused by name, never read as a baseline.
+      if (Array.isArray(w.legs) && w.scenario)
+        throw new UsageError(`diff: ${arg} is a multi-leg cassette; diff takes a single-prompt cassette, run or baseline`);
       if (Array.isArray(w.events) && w.scenario) return "cassette";
       if (typeof w.type === "string" && SDK_MESSAGE_TYPES.has(w.type)) return "run";
       return "baseline";

@@ -232,3 +232,73 @@ describe.runIf(can)("multi-leg host actions (stub agent, protocol)", () => {
     }
   });
 });
+
+describe.runIf(can)("multi-leg record → replay → verify-cassettes (stub agent, protocol, $0)", () => {
+  it("records one v18 cassette with a nested cassette per prompt leg, each frozen at ITS end; replays green", async () => {
+    const f = fixture();
+    try {
+      const p = threeLeg(f, "rec", ["sh", "-c", "echo applied 2 corrections"], ['      - stdout_matches: "applied \\\\d+"']);
+      const cass = join(f.cwd, "rec.cassette.json");
+      const r = await cli(f, ["record", p, "--out", cass, "--output-format", "json"]);
+      expect(r.code, r.stderr).toBe(0);
+      const c = JSON.parse(readFileSync(cass, "utf8"));
+      expect(c.cassetteVersion).toBe(18);
+      expect(c.scenario.prompt).toBeUndefined();
+      expect(c.events).toBeUndefined();
+      expect(c.legs.map((l: { id: string; kind: string }) => `${l.id}:${l.kind}`)).toEqual(["ask:prompt", "apply:action", "resume:prompt"]);
+      // leg 1's nested cassette holds leg 1's tree (waiting), not the final one (complete): frozen when IT ended.
+      const status = (leg: { cassette: { artifacts: Array<{ path: string; body?: string }> } }) =>
+        JSON.parse(leg.cassette.artifacts.find((a) => a.path.endsWith("run_status.json"))!.body!).status;
+      expect(status(c.legs[0])).toBe("waiting");
+      expect(status(c.legs[2])).toBe("complete");
+      // The frozen prompts are the nested cassettes' own.
+      expect(c.scenario.legs[0].prompt).toBe(c.legs[0].cassette.scenario.prompt);
+
+      const rep = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(rep.code, rep.stderr).toBe(0);
+      const env = JSON.parse(rep.stdout);
+      expect(env.ok).toBe(true);
+      expect(env.multiLegs[0].legs.map((l: { id: string; status: string }) => `${l.id}:${l.status}`)).toEqual([
+        "ask:passed",
+        "apply:passed",
+        "resume:passed",
+      ]);
+      const vc = await cli(f, ["verify-cassettes", cass, "--output-format", "json"]);
+      expect(vc.code, vc.stdout + vc.stderr).toBe(0);
+
+      // An edited prompt in the scenario file is drift; an edited action exit expectation fails the replay.
+      writeFileSync(p, readFileSync(p, "utf8").replace("run the gated probe. FS_HOST_ANSWER g1=a", "something else"));
+      const vc2 = await cli(f, ["verify-cassettes", cass, "--output-format", "json"]);
+      expect(vc2.code).toBe(1);
+      expect(vc2.stdout).toMatch(/leg resume: the prompt changed/);
+      const bad = JSON.parse(readFileSync(cass, "utf8"));
+      bad.legs[1].action.exitCode = 1;
+      writeFileSync(join(f.cwd, "bad.cassette.json"), JSON.stringify(bad));
+      const rep2 = await cli(f, ["replay", join(f.cwd, "bad.cassette.json"), "--output-format", "json"]);
+      expect(rep2.code).toBe(1);
+      const env2 = JSON.parse(rep2.stdout);
+      expect(env2.ok).toBe(false);
+      expect(env2.multiLegs[0].legs.map((l: { status: string }) => l.status)).toEqual(["passed", "failed", "skipped"]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("a single-prompt reader refuses a multi-leg cassette by name; a dir batch names a legs scenario instead of skipping it", async () => {
+    const f = fixture();
+    try {
+      const p = scenario(f, "persistent");
+      const cass = join(f.cwd, "two.cassette.json");
+      expect((await cli(f, ["record", p, "--out", cass])).code).toBe(0);
+      const rh = await cli(f, ["rehash", cass, "--session", join(f.cwd, "s.yaml"), "--dry-run", "--output-format", "json"]);
+      expect(rh.stdout + rh.stderr).toMatch(/multi-leg cassette/);
+      const df = await cli(f, ["diff", cass, cass]);
+      expect(df.code).not.toBe(0);
+      expect(df.stderr + df.stdout).toMatch(/multi-leg cassette/);
+      const batch = await cli(f, ["record", f.cwd, "--dry-run", "--output-format", "json"]);
+      expect(batch.stdout + batch.stderr).toMatch(/recorded on its own/);
+    } finally {
+      f.cleanup();
+    }
+  });
+});

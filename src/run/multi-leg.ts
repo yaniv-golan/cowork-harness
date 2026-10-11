@@ -134,6 +134,29 @@ function prefixVerdict(id: string, v: ScenarioVerdict): { signals: ScenarioVerdi
   };
 }
 
+/** The scenario verdict, the same live and on replay: every leg passed and none was skipped. Signals and failures name
+ *  their leg; `extra` is the scenario-level signals (plugin identity). */
+export function composeScenarioVerdict(
+  legEntries: readonly ScenarioLegEntry[],
+  stopped: string | undefined,
+  extra: readonly MultiLegSignal[] = [],
+): ScenarioVerdict {
+  const parts = legEntries.filter((e) => e.verdict).map((e) => prefixVerdict(e.id, e.verdict!));
+  const skipped = legEntries.filter((e) => e.status === "skipped").map((e) => e.id);
+  const signals: ScenarioVerdict["signals"] = [...parts.flatMap((p) => p.signals), ...extra];
+  const failures = [...parts.flatMap((p) => p.failures ?? []), ...extra.map((s) => ({ kind: "guard", message: s.message }))];
+  if (skipped.length)
+    failures.push({ kind: "guard", message: `skipped (prior leg ${stopped} failed): ${skipped.join(", ")}` } as (typeof failures)[number]);
+  const pass = stopped === undefined && extra.length === 0 && legEntries.every((e) => e.status === "passed");
+  return {
+    pass,
+    exitCode: pass ? 0 : 1,
+    signals,
+    guards: [...new Map(legEntries.flatMap((e) => e.verdict?.guards ?? []).map((g) => [g.name, g])).values()],
+    failures,
+  } as ScenarioVerdict;
+}
+
 /** Run one host-action leg: read the status file, resolve the argv, take the pre-run manifest, run in the tier, take
  *  the post-run manifest, grade, and record everything in action.json. A status, template or spawn failure fails the
  *  leg without running (or after failing to run) the command. */
@@ -237,7 +260,13 @@ function readJsonHashes(path: string): Record<string, string | null> {
 }
 
 /** Run a multi-leg scenario. Refusals (tier, flags) throw UsageError before the scenario root exists. */
-export async function executeMultiLeg(ms: MultiLegScenario, opts: ExecuteOptions = {}): Promise<MultiLegOutcome> {
+export async function executeMultiLeg(
+  ms: MultiLegScenario,
+  opts: ExecuteOptions = {},
+  /** `afterPromptLeg` runs right after a prompt leg finishes, BEFORE the next leg can change the shared tree: the
+   *  moment a recorder must snapshot that leg's files (multi-leg-cassette.ts). */
+  hooks: { afterPromptLeg?: (leg: Leg, result: RunResult) => Promise<void> } = {},
+): Promise<MultiLegOutcome> {
   if (opts.sessionId !== undefined || opts.resume)
     throw new UsageError("--session-id and --resume take a single-prompt scenario; a multi-leg run's legs are new sessions by design");
   if (opts.ablateSkill) throw new UsageError("--ablate-skill is not supported with a multi-leg scenario");
@@ -287,121 +316,121 @@ export async function executeMultiLeg(ms: MultiLegScenario, opts: ExecuteOptions
   let skillHash: string | undefined;
   const identityFailures: MultiLegSignal[] = [];
 
-  for (const [index, leg] of ms.legs.entries()) {
-    const kind: "prompt" | "action" = leg.prompt !== undefined ? "prompt" : "action";
-    if (stopped !== undefined) {
-      legEntries.push({ id: leg.id, kind, status: "skipped" });
-      continue;
-    }
-    const legDir = join(root, "legs", leg.id);
-    writeLegMarker(legDir, { scenarioRoot: "../..", id: leg.id, index, kind, workdir: ms.workdir });
-    if (kind === "action") {
-      // The action runs in the tree the previous prompt leg left: the shared one, or that leg's own (cowork-task).
-      const action = await executeHostAction({
-        leg,
-        legDir,
-        tier: tier as ActionTier,
-        baseline,
-        session: baseSession,
-        sessionId: prevSessionId!,
-        workBase: prevWorkBase!,
-      });
-      legEntries.push({ id: leg.id, kind, status: action.pass ? "passed" : "failed", verdict: action.verdict });
-      if (!action.pass) stopped = leg.id;
-      continue;
-    }
-    const persistent = ms.workdir === "persistent";
-    const workBase = persistent ? root : legDir;
-    const legStage: LegStage | undefined =
-      prevWorkBase === undefined
-        ? undefined
-        : persistent
-          ? { workdir: "persistent" }
-          : { workdir: "cowork-task", carryFromMnt: workRootOf(prevWorkBase, tier) };
-    const scn = legScenario(ms, leg);
-    const session = overlaySession(baseSession, leg.session);
-    // The run-time half of the vacuity rule: a `none` leg whose file block already passes on the earlier legs' tree
-    // proves nothing. Checked before the leg spends.
-    if (prevWorkBase !== undefined && session.answer_channel === "none") {
-      const hit = blockPassesBefore(scn.assert, workRootOf(prevWorkBase, tier), !persistent, tier);
-      if (hit) {
-        const message = `leg ${leg.id}: vacuous_positive_assertion: its positive file assertions already pass on the earlier legs' files (${JSON.stringify(hit)}), so they cannot show this leg did anything`;
-        legEntries.push({
-          id: leg.id,
-          kind,
-          status: "failed",
-          verdict: {
-            pass: false,
-            exitCode: 1,
-            signals: [{ code: "vacuous_positive_assertion", severity: "fail", message }],
-            guards: [],
-            failures: [{ kind: "guard", message }],
-          } as ScenarioVerdict,
+  try {
+    for (const [index, leg] of ms.legs.entries()) {
+      const kind: "prompt" | "action" = leg.prompt !== undefined ? "prompt" : "action";
+      if (stopped !== undefined) {
+        legEntries.push({ id: leg.id, kind, status: "skipped" });
+        continue;
+      }
+      const legDir = join(root, "legs", leg.id);
+      writeLegMarker(legDir, { scenarioRoot: "../..", id: leg.id, index, kind, workdir: ms.workdir });
+      if (kind === "action") {
+        // The action runs in the tree the previous prompt leg left: the shared one, or that leg's own (cowork-task).
+        const action = await executeHostAction({
+          leg,
+          legDir,
+          tier: tier as ActionTier,
+          baseline,
+          session: baseSession,
+          sessionId: prevSessionId!,
+          workBase: prevWorkBase!,
         });
+        legEntries.push({ id: leg.id, kind, status: action.pass ? "passed" : "failed", verdict: action.verdict });
+        if (!action.pass) stopped = leg.id;
+        continue;
+      }
+      const persistent = ms.workdir === "persistent";
+      const workBase = persistent ? root : legDir;
+      const legStage: LegStage | undefined =
+        prevWorkBase === undefined
+          ? undefined
+          : persistent
+            ? { workdir: "persistent" }
+            : { workdir: "cowork-task", carryFromMnt: workRootOf(prevWorkBase, tier) };
+      const scn = legScenario(ms, leg);
+      const session = overlaySession(baseSession, leg.session);
+      // The run-time half of the vacuity rule: a `none` leg whose file block already passes on the earlier legs' tree
+      // proves nothing. Checked before the leg spends.
+      if (prevWorkBase !== undefined && session.answer_channel === "none") {
+        const hit = blockPassesBefore(scn.assert, workRootOf(prevWorkBase, tier), !persistent, tier);
+        if (hit) {
+          const message = `leg ${leg.id}: vacuous_positive_assertion: its positive file assertions already pass on the earlier legs' files (${JSON.stringify(hit)}), so they cannot show this leg did anything`;
+          legEntries.push({
+            id: leg.id,
+            kind,
+            status: "failed",
+            verdict: {
+              pass: false,
+              exitCode: 1,
+              signals: [{ code: "vacuous_positive_assertion", severity: "fail", message }],
+              guards: [],
+              failures: [{ kind: "guard", message }],
+            } as ScenarioVerdict,
+          });
+          stopped = leg.id;
+          continue;
+        }
+      }
+      const agentSessionId = randomUUID();
+      const legSessionId = persistent ? runId : `${runId}-${leg.id}`;
+      let result: RunResult | undefined;
+      try {
+        result = await executeScenario(scn, {
+          ...opts,
+          session,
+          leg: {
+            outDir: legDir,
+            sessionId: legSessionId,
+            workBase,
+            ...(legStage ? { legStage } : {}),
+            agentSessionId,
+          },
+        });
+      } catch (e) {
+        if (!(e instanceof UnansweredError)) throw e;
+        unanswered = e;
+      }
+      prevWorkBase = workBase;
+      prevSessionId = legSessionId;
+      if (!result) {
+        legEntries.push({ id: leg.id, kind, agentSessionId, status: "failed" });
         stopped = leg.id;
         continue;
       }
+      legResults.set(leg.id, result);
+      await hooks.afterPromptLeg?.(leg, result);
+      legRows.push(indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
+      const verdict: ScenarioVerdict = computeVerdict(result, "live");
+      // Every leg runs the same plugins: a skill tree that changed between legs is not the scenario the author wrote.
+      const h = result.fingerprint?.skillHash;
+      if (h !== undefined) {
+        if (skillHash === undefined) skillHash = h;
+        else if (h !== skillHash)
+          identityFailures.push({
+            code: "plugin_identity_changed",
+            severity: "fail",
+            message: `leg ${leg.id}: the staged skill/plugin tree changed between legs (${skillHash.slice(0, 12)} → ${h.slice(0, 12)})`,
+          });
+      }
+      const passed = verdict.pass && identityFailures.length === 0;
+      legEntries.push({ id: leg.id, kind, agentSessionId, status: passed ? "passed" : "failed", verdict });
+      if (!passed) stopped = leg.id;
     }
-    const agentSessionId = randomUUID();
-    const legSessionId = persistent ? runId : `${runId}-${leg.id}`;
-    let result: RunResult | undefined;
-    try {
-      result = await executeScenario(scn, {
-        ...opts,
-        session,
-        leg: {
-          outDir: legDir,
-          sessionId: legSessionId,
-          workBase,
-          ...(legStage ? { legStage } : {}),
-          agentSessionId,
-        },
-      });
-    } catch (e) {
-      if (!(e instanceof UnansweredError)) throw e;
-      unanswered = e;
-    }
-    prevWorkBase = workBase;
-    prevSessionId = legSessionId;
-    if (!result) {
-      legEntries.push({ id: leg.id, kind, agentSessionId, status: "failed" });
-      stopped = leg.id;
-      continue;
-    }
-    legResults.set(leg.id, result);
-    legRows.push(indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
-    const verdict: ScenarioVerdict = computeVerdict(result, "live");
-    // Every leg runs the same plugins: a skill tree that changed between legs is not the scenario the author wrote.
-    const h = result.fingerprint?.skillHash;
-    if (h !== undefined) {
-      if (skillHash === undefined) skillHash = h;
-      else if (h !== skillHash)
-        identityFailures.push({
-          code: "plugin_identity_changed",
-          severity: "fail",
-          message: `leg ${leg.id}: the staged skill/plugin tree changed between legs (${skillHash.slice(0, 12)} → ${h.slice(0, 12)})`,
-        });
-    }
-    const passed = verdict.pass && identityFailures.length === 0;
-    legEntries.push({ id: leg.id, kind, agentSessionId, status: passed ? "passed" : "failed", verdict });
-    if (!passed) stopped = leg.id;
+  } catch (e) {
+    // A leg's own run dir is finalized by its execution; the scenario root must not be left reading "running".
+    finalizeRunStatus(
+      root,
+      meta,
+      { toolCounts: {}, subagents: [] } as unknown as Parameters<typeof finalizeRunStatus>[2],
+      "error",
+      Date.now() - startedAt.getTime(),
+    );
+    throw e;
   }
 
-  // The scenario verdict: every leg passed and none was skipped. Signals and failures name their leg.
-  const parts = legEntries.filter((e) => e.verdict).map((e) => prefixVerdict(e.id, e.verdict!));
-  const skipped = legEntries.filter((e) => e.status === "skipped").map((e) => e.id);
-  const signals: ScenarioVerdict["signals"] = [...parts.flatMap((p) => p.signals), ...identityFailures];
-  const failures = [...parts.flatMap((p) => p.failures ?? []), ...identityFailures.map((s) => ({ kind: "guard", message: s.message }))];
-  if (skipped.length)
-    failures.push({ kind: "guard", message: `skipped (prior leg ${stopped} failed): ${skipped.join(", ")}` } as (typeof failures)[number]);
-  const pass = stopped === undefined && legEntries.every((e) => e.status === "passed");
-  const verdict = {
-    pass,
-    exitCode: pass ? 0 : 1,
-    signals,
-    guards: [...new Map(legEntries.flatMap((e) => e.verdict?.guards ?? []).map((g) => [g.name, g])).values()],
-    failures,
-  } as ScenarioVerdict;
+  const verdict = composeScenarioVerdict(legEntries, stopped, identityFailures);
+  const pass = verdict.pass;
 
   const finishedAt = new Date();
   const indexRow = rollupRow(root, ms, legRows, pass, finishedAt.toISOString(), finishedAt.getTime() - startedAt.getTime(), opts);
