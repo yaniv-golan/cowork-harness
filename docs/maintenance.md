@@ -416,7 +416,7 @@ committed baseline and say why in that baseline's `$comment`.
      with `--spawn-env-unobservable no-local-entitlement`), then re-run `sync`. `npm run preflight` refuses to release it; `--allow-unobserved-spawn-env` downgrades
      that to a warning for an emergency release. Log entries for the build that cannot be read block the write
      instead, since that is the reader or the format drifting, not a missing session.
-   - **Reader drift.** The write also blocks when the bundle no longer logs `[HostLoop] sdkOptions after patch`
+   - **Reader drift.** The write also blocks when the bundle does not log `[HostLoop] sdkOptions after patch`
      with an `envKeys` list (pass `--spawn-env-unobservable` if the lane really is gone), when a `Starting app`
      entry carries no `appVersion`, when an `envKeys` item is not env-name shaped, when the logs hold text but
      no line the reader recognises, or when local sessions started under the build but none logged a dump (a
@@ -424,7 +424,7 @@ committed baseline and say why in that baseline's `$comment`.
      `src/sync/observed-spawn-env.ts`.
    - **When the local lane is gone.** `sync --spawn-env-unobservable local-lane-removed` (or
      `no-local-entitlement`) records `reason: "lane-gone"` for this build. It is accepted only when the logs show
-     this build's `Starting app` entry and no local session or dump for it (also when the bundle no longer logs
+     this build's `Starting app` entry and no local session or dump for it (also when the bundle does not log
      the dump); it is not inherited by the next Desktop release, and the preflight only warns on it. Coverage
      then falls back to the post-construction scanner alone.
    - **After log rotation.** Desktop rotates these logs. If none of this build's entries remain, `sync` keeps
