@@ -9,7 +9,7 @@
 // executeScenario with a LegRunContext. A failing leg stops the scenario: every later leg is reported `skipped`, never
 // run on bad state. The scenario's verdict, its one index row and its per-leg verdicts go to scenario-result.json.
 
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { RunResult, Assertion } from "../types.js";
@@ -32,8 +32,20 @@ import {
 } from "./scenario-result.js";
 import { evaluate } from "../assert.js";
 import type { MultiLegScenario, Leg, LegSessionOverlay } from "./multi-leg-scenario.js";
-import type { SessionConfig } from "../session.js";
-import type { LegStage } from "../session.js";
+import { buildLaunchPlan, resolveLaunchSources, type SessionConfig, type LegStage } from "../session.js";
+import { collectSecrets, scrub } from "../secrets.js";
+import { readPreRunManifestHashes } from "./pre-run-manifest.js";
+import {
+  readActionStatus,
+  resolveActionArgv,
+  recordedStream,
+  gradeAction,
+  producedFiles,
+  writeActionRecord,
+  type ActionRecord,
+} from "./host-action.js";
+import { actionPaths, runActionInTier, takeActionManifest, actionFileCtx, type ActionTier } from "./host-action-runners.js";
+import { hostActionAsserts } from "./multi-leg-scenario.js";
 
 /** The tiers a multi-leg run can host in M1. The host loop is refused: its shell runs in a separate sidecar that a
  *  leg loop cannot keep, and `answer_channel: none` refuses it anyway. */
@@ -122,6 +134,108 @@ function prefixVerdict(id: string, v: ScenarioVerdict): { signals: ScenarioVerdi
   };
 }
 
+/** Run one host-action leg: read the status file, resolve the argv, take the pre-run manifest, run in the tier, take
+ *  the post-run manifest, grade, and record everything in action.json. A status, template or spawn failure fails the
+ *  leg without running (or after failing to run) the command. */
+async function executeHostAction(p: {
+  leg: Leg;
+  legDir: string;
+  tier: ActionTier;
+  baseline: ReturnType<typeof loadBaseline>;
+  session: SessionConfig;
+  sessionId: string;
+  workBase: string;
+}): Promise<{ pass: boolean; verdict: ScenarioVerdict }> {
+  const { leg, legDir, tier, baseline, session, sessionId, workBase } = p;
+  const ha = leg.host_action!;
+  const secrets = collectSecrets();
+  const plan = buildLaunchPlan(session, baseline, legDir, tier, false, "local", resolveLaunchSources(session, baseline, tier, false), {
+    workBase,
+  });
+  const paths = actionPaths(tier, baseline, sessionId, workBase);
+  const empty = { sha256: "", bytes: 0, head: "" };
+  const finish = (rec: Omit<ActionRecord, "pass">): { pass: boolean; verdict: ScenarioVerdict } => {
+    const pass = rec.refused === undefined && rec.assertions.every((a) => a.pass);
+    writeActionRecord(legDir, { ...rec, pass });
+    const messages = [
+      ...(rec.refused ? [rec.refused] : []),
+      ...rec.assertions.filter((a) => !a.pass).map((a) => a.message ?? JSON.stringify(a.assertion)),
+    ];
+    return {
+      pass,
+      verdict: {
+        pass,
+        exitCode: pass ? 0 : 1,
+        signals: messages.map((message) => ({ code: "assertion", severity: "fail", message }) as VerdictSignal),
+        guards: [],
+        failures: messages.map((message) => ({ kind: "assertion", message })),
+      } as unknown as ScenarioVerdict,
+    };
+  };
+  const refusedRecord = (why: string, argv: string[] = ha.run) =>
+    finish({
+      argv,
+      exitCode: null,
+      timedOut: false,
+      durationMs: 0,
+      stdout: empty,
+      stderr: empty,
+      produced: [],
+      refused: why,
+      assertions: [],
+    });
+
+  let status: Record<string, unknown> | undefined;
+  if (ha.status) {
+    const r = readActionStatus(paths.hostWorkRoot, ha.status);
+    if (!r.ok) return refusedRecord(r.why);
+    status = r.status;
+  }
+  const resolved = resolveActionArgv(ha.run, status, paths.sessionRoot);
+  if (!resolved.ok) return refusedRecord(resolved.why);
+  takeActionManifest(plan, paths.hostWorkRoot, legDir, tier, "pre");
+  process.stderr.write(`[leg ${leg.id}] host action: ${resolved.argv.map((a) => JSON.stringify(scrub(a, secrets))).join(" ")}\n`);
+  const exec = await runActionInTier({
+    tier,
+    baseline,
+    plan,
+    sessionId,
+    workBase,
+    legDir,
+    argv: resolved.argv,
+    timeoutMs: ha.timeout * 1000,
+  });
+  if (exec.spawnError) return refusedRecord(`the action could not run: ${exec.spawnError}`, resolved.argv);
+  takeActionManifest(plan, paths.hostWorkRoot, legDir, tier, "post");
+  const before = readPreRunManifestHashes(legDir) ?? {};
+  const after = readJsonHashes(join(legDir, "post-run-manifest.json"));
+  const assertions = gradeAction(
+    hostActionAsserts(leg),
+    exec,
+    scrub(exec.stdout, secrets),
+    actionFileCtx(plan, paths.hostWorkRoot, legDir, tier),
+  );
+  return finish({
+    argv: resolved.argv.map((a) => scrub(a, secrets)),
+    exitCode: exec.exitCode,
+    timedOut: exec.timedOut,
+    durationMs: exec.durationMs,
+    stdout: recordedStream(exec.stdout, exec.stdoutBytes, secrets),
+    stderr: recordedStream(exec.stderr, exec.stderrBytes, secrets),
+    produced: producedFiles(before, after),
+    assertions,
+  });
+}
+
+function readJsonHashes(path: string): Record<string, string | null> {
+  try {
+    const o = JSON.parse(readFileSync(path, "utf8")) as { hashes?: Record<string, string | null> };
+    return o.hashes ?? {};
+  } catch {
+    return {};
+  }
+}
+
 /** Run a multi-leg scenario. Refusals (tier, flags) throw UsageError before the scenario root exists. */
 export async function executeMultiLeg(ms: MultiLegScenario, opts: ExecuteOptions = {}): Promise<MultiLegOutcome> {
   if (opts.sessionId !== undefined || opts.resume)
@@ -169,6 +283,7 @@ export async function executeMultiLeg(ms: MultiLegScenario, opts: ExecuteOptions
   let stopped: string | undefined; // the leg that failed; every later leg is skipped
   let unanswered: UnansweredError | undefined;
   let prevWorkBase: string | undefined;
+  let prevSessionId: string | undefined;
   let skillHash: string | undefined;
   const identityFailures: MultiLegSignal[] = [];
 
@@ -181,8 +296,19 @@ export async function executeMultiLeg(ms: MultiLegScenario, opts: ExecuteOptions
     const legDir = join(root, "legs", leg.id);
     writeLegMarker(legDir, { scenarioRoot: "../..", id: leg.id, index, kind, workdir: ms.workdir });
     if (kind === "action") {
-      // Host actions land with their runners (container, microvm, protocol); refused until then.
-      throw new UsageError(`leg "${leg.id}": host_action legs are not runnable in this build`);
+      // The action runs in the tree the previous prompt leg left: the shared one, or that leg's own (cowork-task).
+      const action = await executeHostAction({
+        leg,
+        legDir,
+        tier: tier as ActionTier,
+        baseline,
+        session: baseSession,
+        sessionId: prevSessionId!,
+        workBase: prevWorkBase!,
+      });
+      legEntries.push({ id: leg.id, kind, status: action.pass ? "passed" : "failed", verdict: action.verdict });
+      if (!action.pass) stopped = leg.id;
+      continue;
     }
     const persistent = ms.workdir === "persistent";
     const workBase = persistent ? root : legDir;
@@ -217,6 +343,7 @@ export async function executeMultiLeg(ms: MultiLegScenario, opts: ExecuteOptions
       }
     }
     const agentSessionId = randomUUID();
+    const legSessionId = persistent ? runId : `${runId}-${leg.id}`;
     let result: RunResult | undefined;
     try {
       result = await executeScenario(scn, {
@@ -224,7 +351,7 @@ export async function executeMultiLeg(ms: MultiLegScenario, opts: ExecuteOptions
         session,
         leg: {
           outDir: legDir,
-          sessionId: persistent ? runId : `${runId}-${leg.id}`,
+          sessionId: legSessionId,
           workBase,
           ...(legStage ? { legStage } : {}),
           agentSessionId,
@@ -235,6 +362,7 @@ export async function executeMultiLeg(ms: MultiLegScenario, opts: ExecuteOptions
       unanswered = e;
     }
     prevWorkBase = workBase;
+    prevSessionId = legSessionId;
     if (!result) {
       legEntries.push({ id: leg.id, kind, agentSessionId, status: "failed" });
       stopped = leg.id;

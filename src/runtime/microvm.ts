@@ -1,5 +1,4 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { artifactsRootEnv } from "../answer-channel.js";
 import type { TerminableAgent } from "../termination.js";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -7,11 +6,11 @@ import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { limaPath, vmInit, applyGuestFirewall, vmGatewayIp, VM_WORK_HOST, VM_GUEST_SESSIONS_ROOT } from "./lima.js";
 import { resolveMounts } from "../baseline.js";
-import { spawnEnv, baseAgentArgs } from "./argv.js";
+import { sandboxAgentEnv, baseAgentArgs } from "./argv.js";
 import { stageWorkspace } from "./stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { captureInputHostPathCorpus } from "../run/input-host-paths.js";
-import { runtimeAuthEnv, SECRET_ENV_KEYS } from "./host-env.js";
+import { SECRET_ENV_KEYS } from "./host-env.js";
 
 /**
  * #52 root-cause fix: snapshot a microvm run's SESSION-ROOT tree from the host-side Lima mount into the
@@ -161,13 +160,7 @@ export function spawnMicroVm(
 
   // Use the shared contract-layer env builder so all four proxy vars (incl. lowercase
   // http_proxy/https_proxy) and the auth-env fidelity drop are identical to container/host-loop.
-  const env = spawnEnv(baseline, {
-    configGuest: configVm,
-    proxyHost: proxyUrl,
-    // The tier-uniform agent_env knob rides in via `extra`, which spawnEnv applies LAST — no scrub
-    // needed here: the microvm's env is a constructed allowlist, never the operator's shell.
-    extra: { ...runtimeAuthEnv(), ...plan.agentEnv, ...artifactsRootEnv(plan.artifactsRoot, `${mntVm}/outputs`) },
-  });
+  const env = sandboxAgentEnv(baseline, plan, { configGuest: configVm, proxyHost: proxyUrl, outputsGuest: `${mntVm}/outputs` });
   // Keep SECRET values off the `limactl shell …` argv (host-visible via ps). Public env rides
   // argv via `env KEY=value`; secrets are handed to the guest over a stdin PROLOGUE the shell script
   // consumes before exec'ing claude (NOT argv, NOT disk).

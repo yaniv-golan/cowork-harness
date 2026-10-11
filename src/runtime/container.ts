@@ -1,11 +1,9 @@
 import { spawn } from "node:child_process";
-import { artifactsRootEnv } from "../answer-channel.js";
 import { resolve, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import { type LaunchPlan, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent, workBaseOf } from "../session.js";
 import { resolveMounts, resolveAgentBinary } from "../baseline.js";
-import { agentArgs, spawnEnv, dockerRunArgv } from "./argv.js";
-import { runtimeAuthEnv } from "./host-env.js";
+import { agentArgs, sandboxAgentEnv, dockerRunArgv } from "./argv.js";
 import { stageWorkspace } from "./stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { captureInputHostPathCorpus } from "../run/input-host-paths.js";
@@ -148,13 +146,7 @@ export function spawnContainer(
   // agent loads via --plugin-dir; the `claude plugin marketplace add` registry is inert
   // in cowork mode — SPEC §6). No pre-registration step needed.
 
-  const env = spawnEnv(baseline, {
-    configGuest,
-    proxyHost,
-    // The tier-uniform agent_env knob rides in via `extra`, which spawnEnv applies LAST — no scrub
-    // needed here: the container's env is a constructed allowlist, never the operator's shell.
-    extra: { ...runtimeAuthEnv(), ...plan.agentEnv, ...artifactsRootEnv(plan.artifactsRoot, `${mntRoot}/outputs`) },
-  });
+  const env = sandboxAgentEnv(baseline, plan, { configGuest, proxyHost, outputsGuest: `${mntRoot}/outputs` });
   // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
   // a registered tool with no backing server is a phantom capability the model can try and fail to use.
   const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];

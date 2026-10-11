@@ -4,7 +4,8 @@ import { warn } from "../io.js";
 import type { PlatformBaseline } from "../types.js";
 import { DEFAULT_MAX_THINKING_TOKENS } from "../types.js";
 import { resolveEffort, type LaunchPlan } from "../session.js";
-import { SECRET_ENV_KEYS } from "./host-env.js";
+import { SECRET_ENV_KEYS, runtimeAuthEnv } from "./host-env.js";
+import { artifactsRootEnv } from "../answer-channel.js";
 import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 
 /**
@@ -263,6 +264,28 @@ export function spawnEnv(
       : {}),
     ...(opts.extra ?? {}),
   };
+}
+
+/** The sandboxed agent's whole env (container, microvm): the spawn env, the credentials, the `agent_env` knob and the
+ *  artifacts root, in that order. ONE builder for the agent and for a multi-leg host action, which gets this same env
+ *  with the credentials removed (`withoutSecrets`), so the two cannot drift. */
+export function sandboxAgentEnv(
+  baseline: PlatformBaseline,
+  plan: Pick<LaunchPlan, "agentEnv" | "artifactsRoot">,
+  opts: { configGuest: string; proxyHost: string; outputsGuest: string },
+): Record<string, string> {
+  return spawnEnv(baseline, {
+    configGuest: opts.configGuest,
+    proxyHost: opts.proxyHost,
+    // The tier-uniform agent_env knob rides in via `extra`, which spawnEnv applies LAST — no scrub needed: the env is
+    // a constructed allowlist, never the operator's shell.
+    extra: { ...runtimeAuthEnv(), ...plan.agentEnv, ...artifactsRootEnv(plan.artifactsRoot, opts.outputsGuest) },
+  });
+}
+
+/** `env` without the credential keys (SECRET_ENV_KEYS). */
+export function withoutSecrets<T extends Record<string, string | undefined>>(env: T): T {
+  return Object.fromEntries(Object.entries(env).filter(([k]) => !SECRET_ENV_KEYS.has(k))) as T;
 }
 
 /**

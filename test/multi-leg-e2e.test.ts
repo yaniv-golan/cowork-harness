@@ -15,7 +15,7 @@ const S = '"$COWORK_ARTIFACTS_ROOT/runs/r1/run_status.json"';
 const STUB = [
   `mkdir -p "$COWORK_ARTIFACTS_ROOT/runs/r1"`,
   `if grep -q waiting ${S} 2>/dev/null; then printf '{"status":"complete","invocation":2,"resumed_from":{"gate":"g1"}}' > ${S}; ` +
-    `else printf '{"status":"waiting","invocation":1}' > ${S}; fi`,
+    `else printf '{"status":"waiting","invocation":1,"up":"../etc"}' > ${S}; fi`,
   out({ type: "system", subtype: "init", session_id: "stub", model: "claude-sonnet-5", tools: [], cwd: "/tmp" }),
   out({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Done for now." }] }, session_id: "stub" }),
   out({
@@ -73,6 +73,37 @@ function scenario(f: StubFixture, workdir: "persistent" | "cowork-task"): string
   );
   return p;
 }
+/** ask → a host action → resume. `run` is the action's argv; `status` its status read. */
+function threeLeg(f: StubFixture, name: string, run: string[], extra: string[] = []): string {
+  const p = join(f.cwd, `${name}.yaml`);
+  writeFileSync(
+    p,
+    [
+      `name: ${name}`,
+      "baseline: latest",
+      "session: ./s.yaml",
+      "fidelity: protocol",
+      "legs:",
+      "  - id: ask",
+      "    prompt: run the gated probe",
+      "    assert:",
+      `      - artifact_json: { artifact: ${STATUS}, path: status, equals: waiting }`,
+      "  - id: apply",
+      "    host_action:",
+      `      status: { artifact: ${STATUS}, expect: { status: waiting } }`,
+      `      run: ${JSON.stringify(run)}`,
+      ...(extra.length ? ["    assert:", ...extra] : []),
+      "  - id: resume",
+      "    prompt: run the gated probe. FS_HOST_ANSWER g1=a",
+      "    assert:",
+      `      - artifact_json: { artifact: ${STATUS}, path: status, equals: complete }`,
+    ].join("\n") + "\n",
+  );
+  return p;
+}
+const legStatus = (env: { multiLeg: { legs: Array<{ id: string; status: string }> } }) =>
+  env.multiLeg.legs.map((l) => `${l.id}:${l.status}`);
+
 async function cli(f: StubFixture, args: string[]) {
   const c = spawnCli(f, args);
   const r = await exited(c, 120_000);
@@ -127,6 +158,75 @@ describe.runIf(can)("multi-leg run (stub agent, protocol)", () => {
       const root = onlyRun(f);
       expect(existsSync(join(root, "legs", "ask", "work"))).toBe(true);
       expect(existsSync(join(root, "legs", "resume", "work"))).toBe(true);
+    } finally {
+      f.cleanup();
+    }
+  });
+});
+
+describe.runIf(can)("multi-leg host actions (stub agent, protocol)", () => {
+  const WRITE = 'mkdir -p artifacts/runs/r1 && printf "{\\"n\\":2}" > artifacts/runs/r1/corrections.json && echo applied 2 corrections';
+  it("runs between the legs in the leg's tree, records what it wrote, and the resume leg completes", async () => {
+    const f = fixture();
+    try {
+      const p = threeLeg(
+        f,
+        "act",
+        ["sh", "-c", WRITE],
+        [
+          "      - exit_code: 0",
+          '      - stdout_matches: "applied \\\\d+ corrections"',
+          "      - file_exists: { path: outputs/artifacts/runs/r1/corrections.json, authored: true }",
+        ],
+      );
+      const r = await cli(f, ["run", p, "--output-format", "json"]);
+      expect(r.code, r.stderr).toBe(0);
+      const env = JSON.parse(r.stdout);
+      expect(legStatus(env)).toEqual(["ask:passed", "apply:passed", "resume:passed"]);
+      const root = join(f.runsDir, "act", readdirSync(join(f.runsDir, "act")).filter((x) => !x.startsWith("."))[0]!);
+      const action = JSON.parse(readFileSync(join(root, "legs", "apply", "action.json"), "utf8"));
+      expect(action).toMatchObject({ exitCode: 0, timedOut: false, pass: true });
+      expect(action.stdout.head).toContain("applied 2 corrections");
+      expect(action.produced.map((x: { path: string }) => x.path)).toEqual(["outputs/artifacts/runs/r1/corrections.json"]);
+      expect(classifyRunDir(join(root, "legs", "apply"))).toEqual({ kind: "action-leg" });
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("an action that exits 1 fails its leg, and the resume leg is skipped, never run", async () => {
+    const f = fixture();
+    try {
+      const r = await cli(f, ["run", threeLeg(f, "act1", ["sh", "-c", "exit 1"]), "--output-format", "json"]);
+      expect(r.code).toBe(1);
+      const env = JSON.parse(r.stdout);
+      expect(legStatus(env)).toEqual(["ask:passed", "apply:failed", "resume:skipped"]);
+      expect(env.results).toHaveLength(1); // the resume leg never ran
+      expect(JSON.stringify(env.multiLeg.verdict.failures)).toMatch(/exited 1, expected 0 \(default\)/);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("a status file that is absent, or a template that climbs out with .., fails the leg without running the command", async () => {
+    const f = fixture();
+    try {
+      const marker = join(f.root, "ran");
+      const p1 = threeLeg(f, "act2", ["sh", "-c", `touch ${marker}`]).replace("act2", "act2");
+      writeFileSync(
+        p1,
+        readFileSync(p1, "utf8").replace(
+          `status: { artifact: ${STATUS}, expect: { status: waiting } }`,
+          "status: { artifact: outputs/nope.json }",
+        ),
+      );
+      const r1 = await cli(f, ["run", p1, "--output-format", "json"]);
+      expect(r1.code).toBe(1);
+      expect(JSON.stringify(JSON.parse(r1.stdout).multiLeg.verdict.failures)).toMatch(/outputs\/nope.json is absent/);
+      const r2 = await cli(f, ["run", threeLeg(f, "act3", ["ls", "{status.up}"]), "--output-format", "json"]);
+      expect(r2.code).toBe(1);
+      expect(JSON.stringify(JSON.parse(r2.stdout).multiLeg.verdict.failures)).toMatch(/\.\.\\" segment|\.\." segment/);
+      expect(existsSync(marker)).toBe(false);
     } finally {
       f.cleanup();
     }
