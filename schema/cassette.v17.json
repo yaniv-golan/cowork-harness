@@ -348,7 +348,7 @@
     },
     "deviceBridge": {
       "type": "object",
-      "description": "v17+: the run's RunResult.deviceBridge, frozen so replay reports what the recording modeled, not what a later build would. Present only on a `device_bridge: true` recording. What a `device_bridge` run modeled of the remote lane's device bridge, and where it differs from production. `served`: the device tools served; `alwaysLoad`: those that load without ToolSearch; `measuredOn`: the Desktop build both were read from; `egress`: the egress branch modeled (`allowlist`: the scenario allowlist through the proxy); `folders`: name and mode only. `divergences` by id: `delete-not-refused` (a delete in a connected folder succeeds on the device copy, where production refuses it until the user allows deletion; the harness reports it only after the run), `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`, `device-tools-unserved`, `shell-user`, `device-network-shared`. Absent when the scenario has no bridge.",
+      "description": "v17+: the run's RunResult.deviceBridge, frozen so replay reports what the recording modeled, not what a later build would. Present only on a `device_bridge: true` recording. What a `device_bridge` run modeled of the remote lane's device bridge, and where it differs from production. `served`: the device tools served; `alwaysLoad`: those that load without ToolSearch; `measuredOn`: the Desktop build both were read from; `egress`: the egress branch modeled (`allowlist`: the session allowlist through the proxy; `unrestricted`: everything through it, from `egress.unrestricted: true`, and then no `egress-allowlist` divergence); `folders`: name and mode only. `divergences` by id: `delete-not-refused` (a delete in a connected folder succeeds on the device copy, where production refuses it until the user allows deletion; the harness reports it only after the run), `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`, `device-tools-unserved`, `shell-user`, `device-network-shared`. Absent when the scenario has no bridge.",
       "required": [
         "served",
         "alwaysLoad",
@@ -399,7 +399,8 @@
         "egress": {
           "type": "string",
           "enum": [
-            "allowlist"
+            "allowlist",
+            "unrestricted"
           ]
         },
         "folders": {

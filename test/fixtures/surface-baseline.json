@@ -1994,7 +1994,7 @@
       },
       ".deviceBridge.egress": {
         "type": "string",
-        "enum": ["allowlist"],
+        "enum": ["allowlist", "unrestricted"],
         "required": true
       },
       ".deviceBridge.folders": {
@@ -4491,7 +4491,7 @@
       },
       ".deviceBridge.egress": {
         "type": "string",
-        "enum": ["allowlist"],
+        "enum": ["allowlist", "unrestricted"],
         "required": true
       },
       ".deviceBridge.folders": {

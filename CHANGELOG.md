@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **The session schema's `permission_mode` no longer declares a default.** An unset value resolves at launch:
+  `default`, or `acceptEdits` under `device_bridge`. A validator or editor that fills schema defaults no longer
+  writes `permission_mode: default` into a session.
+- **`verify-cassettes` may report a recording as unverifiable after upgrading.** A recording whose session sets a
+  non-default `permission_mode` predates the fingerprint's coverage of that field; re-record it to clear the note.
 - **Cassette format v17.** A scenario with `device_bridge: true` stamps v17, so an older reader refuses it as too
   new. Every other cassette stamps what it did.
 - **`infraErrors[].source` gains `device-container` and `device-exec`.** A consumer that switches on the source
@@ -101,12 +106,14 @@ All notable changes to this project are documented here. The format is based on
   included. A run without the bridge still defaults to `default`. The session schema no longer carries a default for
   the field; an unset value resolves at launch.
 - **`verify-cassettes` notices a changed `permission_mode`.** The session fingerprint now covers it when set to
-  anything but `default`, so a session that says `default` or nothing hashes as before. A recording made on a
+  anything but `default`, so a session that says `default` or nothing hashes as before. One change is not seen:
+  under `device_bridge`, unset (`acceptEdits`) and an explicit `default` hash alike. A recording made on a
   non-default mode before this release is reported as unverifiable, with a note, not as drift; re-record it to gain
   the coverage.
 - **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
   (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,
-  `device-tools-unserved`, `shell-user`, `device-network-shared`), and whether the prompt note was included
+  `device-tools-unserved`, `shell-user`, `device-network-shared`), the egress branch it modeled (`egress`:
+  `allowlist`, or `unrestricted` under `egress.unrestricted: true`, which drops `egress-allowlist`), and whether the prompt note was included
   (`promptNote`; a maintainer control, `COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off`, leaves it out), and the agent's
   permission mode with where it came from (`permissionMode`, `permissionModeSource`: `session` or `bridge-default`).
   The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".

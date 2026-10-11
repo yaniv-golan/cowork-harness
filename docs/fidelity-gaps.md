@@ -1864,7 +1864,8 @@ a simulated session.
   assert `no_delete_in_mounts` when that matters.
 - **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
   applies. Production's device shell follows the account's egress policy, which can pass all traffic through. A
-  fetch the allowlist blocks fails here and may succeed in production.
+  fetch the allowlist blocks fails here and may succeed in production. A session with `egress.unrestricted: true`
+  records `egress: "unrestricted"` and no `egress-allowlist` divergence.
 - **`description-paraphrase`.** The tool description paraphrases one production branch (45 s limit, no
   folder-request tool) and names no tool the harness does not serve. A test fails when the newest baseline no
   longer carries that branch.

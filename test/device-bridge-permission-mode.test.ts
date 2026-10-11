@@ -59,3 +59,16 @@ describe("wiring", () => {
     expect(src.split("deviceBridgeRecord(plan.mounts, bridgeNote, plan)").length - 1).toBe(2);
   });
 });
+
+describe("the record's egress follows the session", () => {
+  it("an allowlist session records allowlist, with the divergence", () => {
+    const r = deviceBridgeRecord([], "included", plan({}, true));
+    expect(r.egress).toBe("allowlist");
+    expect(r.divergences).toContain("egress-allowlist");
+  });
+  it("egress.unrestricted records unrestricted, without the divergence", () => {
+    const r = deviceBridgeRecord([], "included", plan({ egress: { unrestricted: true } }, true));
+    expect(r.egress).toBe("unrestricted");
+    expect(r.divergences).not.toContain("egress-allowlist");
+  });
+});

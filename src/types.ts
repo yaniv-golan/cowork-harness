@@ -1995,8 +1995,9 @@ export interface DeviceBridgeRecord {
    *  (`bridge-default`: `acceptEdits`, what a production cloud task reports under the Manual choice). */
   permissionMode: string;
   permissionModeSource: "session" | "bridge-default";
-  /** Which of production's egress branches the device container modeled: the scenario allowlist through the proxy. */
-  egress: "allowlist";
+  /** Which of production's egress branches the device container modeled: the session allowlist through the proxy
+   *  (`allowlist`), or everything through it (`unrestricted`, from `egress.unrestricted: true`). */
+  egress: "allowlist" | "unrestricted";
   folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;
   /** Known differences from production, by id: `delete-not-refused` (a delete in a connected folder succeeds on the
    *  device copy; production refuses it until the user allows deletion through `device_request_delete_permission`,
