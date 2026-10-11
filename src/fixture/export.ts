@@ -14,6 +14,7 @@ import { isUnderRealRoot } from "../boundary-paths.js";
 import { tildeify } from "../io.js";
 import { hostPathTokens } from "../run/host-path-tokens.js";
 import { legTreeRoot, readLegMarker, requireTurns, turnArtifactPath } from "../run/turn-layout.js";
+import { legTreeDrift } from "../run/leg-manifest.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { VM_GUEST_SESSIONS_ROOT, VM_WORK_HOST } from "../runtime/lima.js";
 import { scanText } from "../scan.js";
@@ -206,6 +207,17 @@ export function exportFixture(opts: {
   // A multi-leg leg dir: its turns are its own, but its session tree may be the scenario root's shared work/.
   const tree = legTreeRoot(opts.runDir, cmd);
   if ("refused" in tree) return refuse(tree.refused, source);
+  // A leg's tree may have been changed by a later leg or host action since it ended: export only the leg's own files.
+  if (readLegMarker(opts.runDir) && result.workDir) {
+    const drift = legTreeDrift(opts.runDir, result.workDir);
+    if (drift === undefined || drift.length)
+      return refuse(
+        drift === undefined
+          ? `${cmd}: ${opts.runDir} has no complete post-run manifest of its files, so whether its tree is still the leg's own cannot be told`
+          : `${cmd}: ${opts.runDir}'s tree changed after the leg ended (${drift.slice(0, 5).join(", ")}): these are not this leg's files`,
+        source,
+      );
+  }
   const runReal = realpathSync.native(tree.root);
   const shapes = OUTPUTS_TAILS.map((t) => join(runReal, ...t));
   // The outputs are always read from the given run dir's OWN tree, never from the recorded path: a run dir moved or

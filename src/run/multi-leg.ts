@@ -12,17 +12,27 @@
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { RunResult, Assertion } from "../types.js";
+import type { RunResult, Assertion, Scenario } from "../types.js";
 import type { Verdict, VerdictSignal } from "./verdict.js";
 import { computeVerdict } from "./verdict.js";
-import { executeScenario, legScenario, loadSessionFromFile, runOutDir, effectiveTier, type ExecuteOptions } from "./execute.js";
+import {
+  executeScenario,
+  legScenario,
+  loadSessionFromFile,
+  runOutDir,
+  effectiveTier,
+  isMultiLegFile,
+  loadMultiLegScenario,
+  parseScenarioFile,
+  type ExecuteOptions,
+} from "./execute.js";
 import { loadBaseline } from "../baseline.js";
 import { UsageError, UnansweredError } from "../errors.js";
 import { writeTextAtomic } from "../io.js";
 import { writeRunningStatus, finalizeRunStatus, type RunStatusMeta } from "./run-status.js";
 import { indexRowFromResult, appendIndexRow, type RunIndexRow } from "./run-index.js";
 import { runsWriteRoot } from "./trace-view.js";
-import { SCENARIO_RESULT, type LegMarker } from "./turn-layout.js";
+import { SCENARIO_RESULT, readLegMarker, type LegMarker } from "./turn-layout.js";
 import {
   SCENARIO_RESULT_SCHEMA,
   type ScenarioResult,
@@ -31,6 +41,7 @@ import {
   type MultiLegSignal,
 } from "./scenario-result.js";
 import { evaluate } from "../assert.js";
+import { writeLegPostManifest } from "./leg-manifest.js";
 import type { MultiLegScenario, Leg, LegSessionOverlay } from "./multi-leg-scenario.js";
 import { buildLaunchPlan, resolveLaunchSources, type SessionConfig, type LegStage } from "../session.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -399,6 +410,9 @@ export async function executeMultiLeg(
         continue;
       }
       legResults.set(leg.id, result);
+      // The leg's files as they stand NOW, before a later leg or action can change them: what a later re-grade of
+      // this leg compares the tree with (leg-manifest.ts).
+      if (result.workDir) writeLegPostManifest(legDir, result.workDir, result.userVisibleRoots ?? ["outputs"]);
       await hooks.afterPromptLeg?.(leg, result);
       legRows.push(indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
       const verdict: ScenarioVerdict = computeVerdict(result, "live");
@@ -502,4 +516,33 @@ function rollupRow(
     outDir: root,
     git: first?.git ?? { branch: null, sha: null },
   } as RunIndexRow;
+}
+
+/** What a re-grade of one leg reads (`verify-run --leg`, `regrade --leg`): the leg's run dir and its leg as a single-
+ *  prompt scenario. `runDir` is the scenario root (with `leg`) or a `legs/<id>` dir itself. A single-prompt scenario
+ *  file passes through unchanged (and `--leg` is refused with it). */
+export function resolveLegTarget(
+  runDir: string,
+  scenarioFile: string,
+  leg: string | undefined,
+  cmd: string,
+): { ok: true; runDir: string; load: () => Scenario } | { ok: false; message: string } {
+  if (!isMultiLegFile(scenarioFile)) {
+    if (leg !== undefined)
+      return { ok: false, message: `${cmd}: --leg takes a multi-leg scenario (\`legs:\`); ${scenarioFile} is a single-prompt one` };
+    return { ok: true, runDir, load: () => parseScenarioFile(scenarioFile) };
+  }
+  const own = readLegMarker(runDir);
+  const id = leg ?? own?.id;
+  if (id === undefined)
+    return { ok: false, message: `${cmd}: ${scenarioFile} is a multi-leg scenario: pass --leg <id> to name the leg to re-grade` };
+  const legDir = own ? runDir : join(runDir, "legs", id);
+  const marker = readLegMarker(legDir);
+  if (!marker || marker.id !== id) return { ok: false, message: `${cmd}: ${runDir} has no leg "${id}"` };
+  if (marker.kind === "action")
+    return { ok: false, message: `${cmd}: leg "${id}" is a host action (no agent session); its record is ${join(legDir, "action.json")}` };
+  const ms = loadMultiLegScenario(scenarioFile);
+  const def = ms.legs.find((l) => l.id === id);
+  if (!def || def.prompt === undefined) return { ok: false, message: `${cmd}: ${scenarioFile} has no prompt leg "${id}"` };
+  return { ok: true, runDir: legDir, load: () => legScenario(ms, def) };
 }

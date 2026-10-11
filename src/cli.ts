@@ -58,7 +58,7 @@ import {
   effectiveTier,
   type ExecuteOptions,
 } from "./run/execute.js";
-import { executeMultiLeg } from "./run/multi-leg.js";
+import { executeMultiLeg, resolveLegTarget } from "./run/multi-leg.js";
 import { unresolvedModelRefusal, envModelDefault } from "./run/model-provenance.js";
 import {
   ScriptedDecider,
@@ -4665,7 +4665,7 @@ async function cmdVerifyRun(args: string[]) {
       args,
       withCommandGlobals({
         booleans: ["--allow-metric-commands"],
-        values: ["--output-format"],
+        values: ["--output-format", "--leg"],
         enums: { "--output-format": ["text", "json"] },
       }),
     );
@@ -4679,7 +4679,7 @@ async function cmdVerifyRun(args: string[]) {
     return fail(
       "verify-run",
       "usage",
-      "usage: verify-run <run-dir> <scenario.yaml> [--allow-metric-commands] [--output-format json]",
+      "usage: verify-run <run-dir> <scenario.yaml> [--leg <id>] [--allow-metric-commands] [--output-format json]",
       undefined,
       isJsonOutput(args),
     );
@@ -4696,7 +4696,11 @@ async function cmdVerifyRun(args: string[]) {
   // Evidence loading (run-dir refusals, the scenario load, the AssertContext rebuild), the recorded-fixture refusal,
   // the evaluation (`evaluate` + `expandExpectDenied`) and the metrics re-measure are shared with every other
   // consumer that re-evaluates a kept run; see `reevaluateRun` in src/run/verify-context.ts.
-  const loaded = reevaluateRun(runDir, () => parseScenarioFile(scenarioFile));
+  // A multi-leg scenario re-grades ONE prompt leg (`--leg <id>`, or the leg dir itself): that leg as a single-prompt
+  // scenario, against its own run dir, refused when its tree has changed since it ended (verify-context.ts).
+  const target = resolveLegTarget(runDir, scenarioFile, p.options["--leg"], "verify-run");
+  if (!target.ok) return fail("verify-run", "usage", target.message, undefined, isJsonOutput(args));
+  const loaded = reevaluateRun(target.runDir, target.load);
   if (!loaded.ok) {
     if (loaded.kind === "scenario") {
       // The scenario file is the caller's input: absent or not loadable is a usage error, as it is for `run`.

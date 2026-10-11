@@ -74,7 +74,7 @@ function scenario(f: StubFixture, workdir: "persistent" | "cowork-task"): string
   return p;
 }
 /** ask → a host action → resume. `run` is the action's argv; `status` its status read. */
-function threeLeg(f: StubFixture, name: string, run: string[], extra: string[] = []): string {
+function threeLeg(f: StubFixture, name: string, run: string[], extra: string[] = [], workdir = "persistent"): string {
   const p = join(f.cwd, `${name}.yaml`);
   writeFileSync(
     p,
@@ -83,6 +83,7 @@ function threeLeg(f: StubFixture, name: string, run: string[], extra: string[] =
       "baseline: latest",
       "session: ./s.yaml",
       "fidelity: protocol",
+      `workdir: ${workdir}`,
       "legs:",
       "  - id: ask",
       "    prompt: run the gated probe",
@@ -297,6 +298,53 @@ describe.runIf(can)("multi-leg record → replay → verify-cassettes (stub agen
       expect(df.stderr + df.stdout).toMatch(/multi-leg cassette/);
       const batch = await cli(f, ["record", f.cwd, "--dry-run", "--output-format", "json"]);
       expect(batch.stdout + batch.stderr).toMatch(/recorded on its own/);
+    } finally {
+      f.cleanup();
+    }
+  });
+});
+
+describe.runIf(can)("verify-run --leg (stub agent, protocol, $0)", () => {
+  const rootOf = (f: StubFixture, name: string) =>
+    join(f.runsDir, name, readdirSync(join(f.runsDir, name)).filter((x) => !x.startsWith("."))[0]!);
+  it("persistent: the last leg verifies; an earlier leg is refused (the shared tree moved on)", async () => {
+    const f = fixture();
+    try {
+      const p = scenario(f, "persistent");
+      expect((await cli(f, ["run", p])).code).toBe(0);
+      const root = rootOf(f, "ml");
+      const last = await cli(f, ["verify-run", root, p, "--leg", "resume", "--output-format", "json"]);
+      expect(last.code, last.stdout + last.stderr).toBe(0);
+      const first = await cli(f, ["verify-run", root, p, "--leg", "ask"]);
+      expect(first.code).toBe(2);
+      expect(first.stderr + first.stdout).toMatch(/its session tree is shared and was changed by later legs/);
+      const noLeg = await cli(f, ["verify-run", root, p]);
+      expect(noLeg.stderr + noLeg.stdout).toMatch(/pass --leg <id>/);
+      // regrade resolves the same leg the same way: the last leg loads as its own scenario (which has no judged assert,
+      // so it stops there with no spend); an earlier leg is refused for the same reason verify-run refuses it.
+      const rg = await cli(f, ["regrade", root, "--scenario", p, "--leg", "resume", "--output-format", "json"]);
+      expect(rg.stdout + rg.stderr).toMatch(/no_semantic_asserts/);
+      const rg1 = await cli(f, ["regrade", root, "--scenario", p, "--leg", "ask", "--output-format", "json"]);
+      expect(rg1.stdout + rg1.stderr).toMatch(/its session tree is shared and was changed by later legs/);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("cowork-task: a leg verifies against its own tree, until a host action writes to that tree", async () => {
+    const f = fixture();
+    try {
+      const p = scenario(f, "cowork-task");
+      await cli(f, ["run", p]); // the resume leg fails by design (a new task does not see the run); ask is intact
+      const ok = await cli(f, ["verify-run", join(rootOf(f, "ml"), "legs", "ask"), p, "--output-format", "json"]);
+      expect(ok.code, ok.stdout + ok.stderr).toBe(0);
+      const p2 = threeLeg(f, "touch", ["sh", "-c", "echo x > touched.txt"], [], "cowork-task");
+      await cli(f, ["run", p2]);
+      const moved = await cli(f, ["verify-run", rootOf(f, "touch"), p2, "--leg", "ask"]);
+      expect(moved.code).toBe(2);
+      expect(moved.stderr + moved.stdout).toMatch(/tree changed after the leg ended \(added outputs\/touched\.txt/);
+      const action = await cli(f, ["verify-run", rootOf(f, "touch"), p2, "--leg", "apply"]);
+      expect(action.stderr + action.stdout).toMatch(/is a host action/);
     } finally {
       f.cleanup();
     }

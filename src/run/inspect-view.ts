@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { RunResult } from "../types.js";
-import { requireTurns, turnArtifactPath } from "./turn-layout.js";
+import { legTreeRoot, readLegMarker, requireTurns, turnArtifactPath } from "./turn-layout.js";
 import { decideRunDir, noteRelocation } from "./run-dir-identity.js";
 import { warn } from "../io.js";
 
@@ -68,7 +68,9 @@ function digestFor(runDir: string): InspectDigest {
   // Where the run's evidence is read from (run-dir-identity.ts). inspect is a view of the run's own record (header,
   // manifest), so a dir the graders refuse — a copy beside its original, an evidence path outside the run dir — is
   // still shown, with a warning and no previews: they would read another dir's bytes under this run's name.
-  const placed = decideRunDir(runDir, result, "inspect");
+  // A multi-leg leg's tree may live at its scenario root (persistent): its evidence is still its own.
+  const leg = legTreeRoot(runDir, "inspect");
+  const placed = decideRunDir(runDir, result, "inspect", readLegMarker(runDir) && "root" in leg ? leg.root : undefined);
   if (placed.kind === "refuse")
     warn(`::warning:: ${placed.message.replace(/ \(can't verify ⇒ not green\)$/, "")} — artifact previews skipped.\n`);
   else noteRelocation(placed);
