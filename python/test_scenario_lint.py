@@ -1250,6 +1250,8 @@ _TV_HEAD = "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\nfidelity: 
         ("assert:\n  - tool_not_called: {tool: mcp__remote-devices__device_bash}\n", True),
         ("device_bridge: true\nassert:\n  - tool_not_called: mcp__remote-devices__device_bash\n", False),
         ("device_bridge: true\nassert:\n  - tool_not_called: mcp__remote-devices__device_list_dir\n", True),
+        ("device_bridge: true\nassert:\n  - tool_not_called: mcp__remote-devices__device_request_delete_permission\n", False),
+        ("assert:\n  - tool_not_called: mcp__remote-devices__device_request_delete_permission\n", True),
         ("assert:\n  - tool_not_called: mcp__remote-devices__acme__lookup\n", False),
         ("assert:\n  - tool_not_called: mcp__remote-devices__*\n", False),
     ],
