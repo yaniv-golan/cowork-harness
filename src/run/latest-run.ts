@@ -8,6 +8,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { slugForPath } from "./execute.js";
 import { classifyRunDir, latestTurn, preLayoutMessage, turnArtifactPath } from "./turn-layout.js";
+import { readScenarioResult, scenarioResultMtime } from "./scenario-result.js";
 import { LegacyRunDirError } from "../errors.js";
 
 export interface LatestRunInfo {
@@ -45,6 +46,9 @@ function originCreatedAt(dir: string): string | undefined {
  *  `undefined` on a `legacy`/`mixed`/`none` dir (`latestTurn` returns no addressable turn there) — the
  *  caller falls through to `statusStartedAt`, same degrade as a genuinely missing file. */
 function resultJsonMtime(dir: string): string | undefined {
+  // A multi-leg root: run END is scenario-result.json's mtime; an unfinished one has none, so the caller falls
+  // through to statusStartedAt exactly as for an in-flight single run. Branch BEFORE latestTurn, which throws there.
+  if (classifyRunDir(dir).kind === "legs") return scenarioResultMtime(dir);
   const turn = latestTurn(dir);
   if (turn === undefined) return undefined;
   const p = turnArtifactPath(dir, turn, "result.json");
@@ -76,6 +80,10 @@ function statusStartedAt(dir: string): string | undefined {
  *  `legacy`/`mixed`/`none` dir, where `latestTurn` has no addressable turn to read) just means both stay
  *  at their fallback — a root read here silently dropped `scenario`/`verdict` on every current-layout dir. */
 function readResultJson(dir: string): { scenario?: string; verdict?: LatestRunInfo["verdict"] } {
+  if (classifyRunDir(dir).kind === "legs") {
+    const sr = readScenarioResult(dir);
+    return sr ? { scenario: sr.scenario, verdict: sr.verdict as LatestRunInfo["verdict"] } : {};
+  }
   const turn = latestTurn(dir);
   if (turn === undefined) return {};
   const p = turnArtifactPath(dir, turn, "result.json");

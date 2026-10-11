@@ -151,15 +151,38 @@ export function compactSchemaError(messageOrIssues: string | unknown[], limit = 
 }
 
 /**
+ * A run dir the turn-layout seam refuses to address. The base for every such refusal, so a CLI catch site routes
+ * them all with one `instanceof` (category `runtime`, the message, no stack).
+ */
+export class RunDirShapeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunDirShapeError";
+  }
+}
+
+/**
  * Thrown by `turn-layout.ts`'s `requireTurns` when a run dir is `legacy` (pre-layout, root-only),
  * `mixed` (a pre-layout dir resumed under current code — turns/ AND stray root files), or `none` (never
  * completed). Named for the shape the whole class shares (a dir the seam refuses to address, rather than
  * silently guessing), not just the pre-layout case, so one catch site covers all three refusals.
  */
-export class LegacyRunDirError extends Error {
+export class LegacyRunDirError extends RunDirShapeError {
   constructor(message: string) {
     super(message);
     this.name = "LegacyRunDirError";
+  }
+}
+
+/**
+ * Thrown by the turn-layout helpers on a multi-leg scenario root (`legs/<id>/…`, complete or still running) or on a
+ * host-action leg, which has no agent session. Those dirs have no `turns/` of their own, so the helpers' quiet
+ * "no turns" answer would read as an empty run; a caller that was not taught the shape fails loud instead.
+ */
+export class MultiLegRunDirError extends RunDirShapeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "MultiLegRunDirError";
   }
 }
 

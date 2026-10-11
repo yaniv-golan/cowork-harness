@@ -51,6 +51,8 @@ import {
   UsageError,
   SessionFileError,
   LegacyRunDirError,
+  MultiLegRunDirError,
+  RunDirShapeError,
   effectiveTier,
   type ExecuteOptions,
 } from "./run/execute.js";
@@ -3877,13 +3879,14 @@ function cmdStats(args: string[]) {
 
   const root = runsRoot();
   if (reindex) {
-    const { written, skipped, skippedReplay, skippedUnsafe, skippedLegacy } = reindexFromRunsTree(root);
+    const { written, skipped, skippedReplay, skippedUnsafe, skippedLegacy, skippedInFlightLegs } = reindexFromRunsTree(root);
     const notes = [
       skipped ? `${skipped} skipped — missing/corrupt result.json` : "",
       skippedReplay ? `${skippedReplay} skipped — replay re-check, not evidence` : "",
       // Naming the remedy matters: a bare count reads as "nothing I can do about it".
       skippedLegacy ? `${skippedLegacy} skipped — pre-layout, run: cowork-harness migrate-run-dir` : "",
       skippedUnsafe ? `${skippedUnsafe} skipped — symlinked run dir/result.json rejected` : "",
+      skippedInFlightLegs ? `${skippedInFlightLegs} skipped — multi-leg run not finished (no scenario-result.json)` : "",
     ].filter(Boolean);
     log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
   }
@@ -5202,6 +5205,9 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const diffShape = classifyRunDir(runDir);
   if (diffShape.kind === "legacy" || diffShape.kind === "mixed")
     throw new LegacyRunDirError(`diff: ${preLayoutMessage(diffShape, runDir)}`);
+  // A multi-leg root has no turns of its own; a leg dir (legs/<id>) diffs as an ordinary run.
+  if (diffShape.kind === "legs" || diffShape.kind === "action-leg")
+    throw new MultiLegRunDirError(`diff: ${preLayoutMessage(diffShape, runDir, "diff")}`);
   // Same seam, same turn, same reason for both: a root read here silently produced an EMPTY transcript
   // (transcriptDiffers:false regardless of real drift) and, for meta, a guard-invisible root read of
   // `result.json` (`join(runDir, …)` — no PER_TURN_ARTIFACTS literal on the line) that silently emptied
@@ -5478,6 +5484,8 @@ function cmdInspect(args: string[]) {
   try {
     runDir = hasTurnDirs(target) ? target : dirname(resolveEventsFile(target));
   } catch (e) {
+    // A multi-leg root or an action leg resolved fine; it is a refused shape (`runtime`), not a bad argument.
+    if (e instanceof RunDirShapeError) return void fail("inspect", "runtime", e.message, undefined, json);
     return void fail("inspect", "usage", String((e as Error).message), undefined, json);
   }
   // A legacy/mixed/pre-completion dir is refused HERE, before buildInspectView ever tries to load a
@@ -5512,7 +5520,8 @@ main().catch((e) => {
   // well-formed-invocation refusal, not an internal harness bug — route it the same clean, no-stack way as
   // BoundaryError/UsageError rather than falling through to the `internal` branch below, which prints a
   // stack trace for what is actually the expected "this dir predates the layout" message.
-  if (e instanceof LegacyRunDirError) fail(command, "runtime", e.message, undefined, json);
+  // RunDirShapeError covers LegacyRunDirError and MultiLegRunDirError (a multi-leg root or a host-action leg).
+  if (e instanceof RunDirShapeError) fail(command, "runtime", e.message, undefined, json);
   // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
   if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
   else log(String(e?.stack ?? e));

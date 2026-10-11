@@ -13,7 +13,7 @@ import { FsRefusal, NoFollowRoot, isSymlink, lstatOrNull } from "../hillclimb/fs
 import { isUnderRealRoot } from "../boundary-paths.js";
 import { tildeify } from "../io.js";
 import { hostPathTokens } from "../run/host-path-tokens.js";
-import { requireTurns, turnArtifactPath } from "../run/turn-layout.js";
+import { legTreeRoot, readLegMarker, requireTurns, turnArtifactPath } from "../run/turn-layout.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { VM_GUEST_SESSIONS_ROOT, VM_WORK_HOST } from "../runtime/lima.js";
 import { scanText } from "../scan.js";
@@ -203,7 +203,10 @@ export function exportFixture(opts: {
   const source = { partial: result.partial === true, result: result.result === "success" ? ("success" as const) : ("error" as const) };
   const recorded = result.outputsDir;
   if (typeof recorded !== "string" || recorded === "") return refuse(`${cmd}: ${resultPath} records no outputsDir`, source);
-  const runReal = realpathSync.native(opts.runDir);
+  // A multi-leg leg dir: its turns are its own, but its session tree may be the scenario root's shared work/.
+  const tree = legTreeRoot(opts.runDir, cmd);
+  if ("refused" in tree) return refuse(tree.refused, source);
+  const runReal = realpathSync.native(tree.root);
   const shapes = OUTPUTS_TAILS.map((t) => join(runReal, ...t));
   // The outputs are always read from the given run dir's OWN tree, never from the recorded path: a run dir moved or
   // copied since it ran records an outputs dir under its old location (which, for a copy, still exists and is a
@@ -225,7 +228,10 @@ export function exportFixture(opts: {
   // --out inside the run dir would write into the kept run it is reading from.
   let anchor = resolve(opts.out);
   while (lstatOrNull(anchor) === null && dirname(anchor) !== anchor) anchor = dirname(anchor);
-  if (isUnderRealRoot(runReal, realpathSync.native(anchor)))
+  // For a leg, the kept run is the whole scenario root, not just this leg's dir.
+  const legMarker = readLegMarker(opts.runDir);
+  const keptReal = legMarker ? realpathSync.native(join(opts.runDir, legMarker.scenarioRoot)) : runReal;
+  if (isUnderRealRoot(keptReal, realpathSync.native(anchor)))
     return refuse(`${cmd}: --out ${opts.out} is inside the run dir; exporting there would alter the kept run`, {
       outputsDir,
       ...source,

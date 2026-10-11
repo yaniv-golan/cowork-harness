@@ -112,15 +112,21 @@ export interface RunDirEvidence {
   turns: boolean;
   /** Pre-layout per-turn files at the dir's root (`classifyRunDir`'s markers that are regular files). */
   legacy: string[];
+  /** A multi-leg scenario root (`legs/<id>/leg.json`), finished or not. A leg marker is written before the leg starts,
+   *  so this protects an in-flight or crashed multi-leg run the way a root events.jsonl protects a single run. */
+  legs: boolean;
 }
 export function runDirEvidence(dir: string): RunDirEvidence {
   const shape = classifyRunDir(dir);
   return {
     status: isFile(join(dir, "status.json")),
     origin: isFile(join(dir, ".origin")),
-    events: isFile(join(dir, "events.jsonl")),
+    events:
+      isFile(join(dir, "events.jsonl")) ||
+      (shape.kind === "legs" && shape.legs.some((id) => isFile(join(dir, "legs", id, "events.jsonl")))),
     turns: shape.kind === "turns" || shape.kind === "mixed",
     legacy: shape.kind === "legacy" || shape.kind === "mixed" ? shape.markers.filter((m) => isFile(join(dir, m))) : [],
+    legs: shape.kind === "legs",
   };
 }
 
@@ -133,7 +139,7 @@ export function runDirEvidence(dir: string): RunDirEvidence {
  *  current writers produce. Without it an unmigrated legacy dir (root result.json, no events.jsonl) dropped into
  *  the junk tier and prune deleted it ahead of an empty scaffold: silent destruction of exactly the history
  *  `migrate-run-dir` exists to preserve. */
-const isRealRunFrom = (e: RunDirEvidence): boolean => e.turns || e.events || e.legacy.length > 0;
+const isRealRunFrom = (e: RunDirEvidence): boolean => e.turns || e.events || e.legacy.length > 0 || e.legs;
 export const isRealRun = (dir: string): boolean => isRealRunFrom(runDirEvidence(dir));
 const looksLikeRunDirFrom = (e: RunDirEvidence): boolean => e.status || e.origin || isRealRunFrom(e);
 /** Anything that marks `dir` as a run dir, the scaffold tier (status.json or .origin only) included.

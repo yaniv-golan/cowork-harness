@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { join, resolve } from "node:path";
-import { UsageError } from "../errors.js";
+import { MultiLegRunDirError, UsageError } from "../errors.js";
 import { loadCases, selectCases } from "./cases.js";
 import { FlowWriter } from "./flow.js";
 import { lexists } from "./fs.js";
@@ -189,7 +189,10 @@ function runResultField(runDir: string, field: string): unknown {
     const turn = latestTurn(runDir);
     if (turn === undefined) return undefined;
     return (JSON.parse(readFileSync(turnArtifactPath(runDir, turn, "result.json"), "utf8")) as Record<string, unknown>)[field];
-  } catch {
+  } catch (e) {
+    // A multi-leg root is a refused shape, not "unreadable": never let it read as a missing result.
+    if (e instanceof MultiLegRunDirError)
+      throw new MultiLegRunDirError(`freeze-ref: multi-leg runs are not hillclimb rows (hillclimb refuses \`legs\`): ${runDir}`);
     return undefined;
   }
 }

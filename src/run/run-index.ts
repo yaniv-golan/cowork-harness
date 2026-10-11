@@ -3,6 +3,7 @@
 // heavy artifacts (events.jsonl/trace.json/result.json); only the discovery/query layer moved here.
 import { existsSync, mkdirSync, appendFileSync, readFileSync, readdirSync, lstatSync, statSync } from "node:fs";
 import { classifyRunDir, hasTurnDirs, listTurns, turnArtifactPath } from "./turn-layout.js";
+import { readScenarioResult, scenarioResultMtime } from "./scenario-result.js";
 import { execFileSync } from "node:child_process";
 import { join, basename, dirname } from "node:path";
 import type { RunResult } from "../types.js";
@@ -58,6 +59,9 @@ export interface RunIndexRow {
   /** `"none"` for a run whose session declared `answer_channel: none` (RunResult.answerChannel). Absent = the
    *  stdio channel, which is also what every row written before the field means. `stats` never pools the two. */
   answerChannel?: "none";
+  /** Set on the ONE row a multi-leg (`legs:`) scenario run gets: its scenario verdict, from scenario-result.json.
+   *  The legs get no rows of their own, so a two-leg pass counts once. */
+  multiLeg?: true;
   signals: string[]; // VerdictSignal["code"][]
   costUsd?: number;
   tokens?: number;
@@ -197,6 +201,7 @@ function rowIdentity(r: RunIndexRow): string {
   // A critique's roll-up shares its outDir with the two turn rows and has no `turn` of its own, so without
   // the role it would collide with a legacy no-turn row under bare `outDir` and be merged away on reindex.
   if (r.critiqueRole === "rollup") return `${r.outDir} critique:rollup`;
+  if (r.multiLeg === true) return `${r.outDir} legs:rollup`;
   return r.turn !== undefined ? `${r.outDir} turn:${r.turn}` : r.outDir;
 }
 
@@ -238,6 +243,8 @@ function isValidRunIndexRow(x: unknown): x is RunIndexRow {
   if (r.runLabel !== undefined && typeof r.runLabel !== "string") return false;
   // Consumed by the stats group key, like the two above.
   if (r.answerChannel !== undefined && r.answerChannel !== "none") return false;
+  // Interpolated into rowIdentity, like `turn` and `critiqueRole`.
+  if (r.multiLeg !== undefined && r.multiLeg !== true) return false;
   if (typeof r.git !== "object" || r.git === null) return false;
   const git = r.git as Record<string, unknown>;
   if (git.branch !== null && typeof git.branch !== "string") return false;
@@ -542,6 +549,8 @@ export function reindexFromRunsTree(runsRoot: string): {
   skippedUnsafe: number;
   /** Pre-layout dirs the walk cannot read. Reported, never silently dropped. */
   skippedLegacy: number;
+  /** Multi-leg runs with no scenario-result.json yet (running or interrupted): no row until they finish. */
+  skippedInFlightLegs: number;
 } {
   const priorRows = readIndex(runsRoot);
   // Command-inheritance fallback ONLY (see below) — last-one-wins-per-outDir is fine for a heuristic hint,
@@ -560,6 +569,7 @@ export function reindexFromRunsTree(runsRoot: string): {
   let skippedReplay = 0;
   let skippedUnsafe = 0;
   let skippedLegacy = 0;
+  let skippedInFlightLegs = 0;
   if (existsSync(runsRoot)) {
     for (const slug of readdirSync(runsRoot)) {
       const slugDir = join(runsRoot, slug);
@@ -598,6 +608,23 @@ export function reindexFromRunsTree(runsRoot: string): {
         const shape = classifyRunDir(outDir);
         if (shape.kind === "legacy" || shape.kind === "mixed") {
           skippedLegacy++;
+          continue;
+        }
+        // A multi-leg scenario: ONE row, the roll-up the live path appended (scenario-result.json carries it), so a
+        // two-leg pass counts once. The walk never descends into legs/. Branch before listTurns, which throws here;
+        // an unfinished one has no result yet and is counted like an in-flight run, never half-indexed.
+        if (shape.kind === "legs") {
+          const sr = shape.complete ? readScenarioResult(outDir) : undefined;
+          if (!sr) {
+            skippedInFlightLegs++;
+            continue;
+          }
+          const row = { ...sr.indexRow, ts: scenarioResultMtime(outDir) ?? sr.indexRow.ts };
+          if (isValidRunIndexRow(row)) {
+            walked.push(row);
+            walkedIdentities.add(rowIdentity(row));
+            rootWalkedOutDirs.add(row.outDir);
+          } else skipped++;
           continue;
         }
 
@@ -653,7 +680,7 @@ export function reindexFromRunsTree(runsRoot: string): {
   const rows = [...walked, ...preserved];
   mkdirSync(runsRoot, { recursive: true });
   writeTextAtomic(indexPath(runsRoot), rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
-  return { rows, written: walked.length, skipped, skippedReplay, skippedUnsafe, skippedLegacy };
+  return { rows, written: walked.length, skipped, skippedReplay, skippedUnsafe, skippedLegacy, skippedInFlightLegs };
 }
 
 /** An exact `runId` or `slug/runId` match — split out from `resolveRunsFromIndex` (below) so

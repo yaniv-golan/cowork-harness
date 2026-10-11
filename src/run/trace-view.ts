@@ -10,6 +10,10 @@ import { readTimeline } from "../agent/timeline.js";
 import { currentTurnEventLines } from "./turn-events.js";
 import { foldToolDurations, pairToolCalls, type ToolDurationEntry, type ToolDurationsBasis } from "./timeline-fold.js";
 import { latestTurn, turnArtifactPath, classifyRunDir, preLayoutMessage } from "./turn-layout.js";
+import { MultiLegRunDirError } from "../errors.js";
+
+/** A ranking placeholder for a multi-leg root in the fragment walk (a name no run dir file can have). */
+const MULTI_LEG_SENTINEL = "(multi-leg run: no events.jsonl at its root)";
 
 /**
  * The default runs root when no override is set: a per-user state dir OUTSIDE any working tree, so run
@@ -143,6 +147,16 @@ function rowFor(ev: AgentEvent, translate: (s: string) => string): TraceRow[] {
  *  filesystem operations). Returns `undefined` on no rows, OR when the winning row's `events.jsonl` no
  *  longer exists on disk (an index entry surviving a `prune` of the physical run dir) — either way, the
  *  caller falls through to the next tier. */
+/** A multi-leg scenario root has no events.jsonl of its own (each leg has one). Resolving past it would pick an
+ *  OLDER run with no warning, so a multi-leg candidate is refused, never skipped. */
+function isMultiLegDir(dir: string): boolean {
+  const k = classifyRunDir(dir).kind;
+  return k === "legs" || k === "action-leg";
+}
+function multiLegCandidate(arg: string, dir: string): MultiLegRunDirError {
+  return new MultiLegRunDirError(`"${arg}" matches multi-leg run ${dir}: pass --leg <id> (trace) or point at ${join(dir, "legs")}/<id>`);
+}
+
 function resolveViaIndexRows(rows: RunIndexRow[], arg: string): string | undefined {
   if (rows.length === 0) return undefined;
   const sorted = rows.length > 1 ? [...rows].sort((a, b) => (a.ts < b.ts ? 1 : -1)) : rows;
@@ -153,6 +167,7 @@ function resolveViaIndexRows(rows: RunIndexRow[], arg: string): string | undefin
         `\nUsing the most recent: ${join(sorted[0].outDir, "events.jsonl")}\nPass a more specific id or full path to be deterministic.\n`,
     );
   }
+  if (sorted[0].multiLeg === true || isMultiLegDir(sorted[0].outDir)) throw multiLegCandidate(arg, sorted[0].outDir);
   const f = join(sorted[0].outDir, "events.jsonl");
   return existsSync(f) ? f : undefined;
 }
@@ -174,6 +189,7 @@ function resolveViaIndexRows(rows: RunIndexRow[], arg: string): string | undefin
 export function resolveEventsFile(arg: string): string {
   if (existsSync(arg) && statSync(arg).isFile()) return arg;
   if (existsSync(arg) && statSync(arg).isDirectory()) {
+    if (isMultiLegDir(arg)) throw multiLegCandidate(arg, arg);
     const f = join(arg, "events.jsonl");
     if (existsSync(f)) return f;
   }
@@ -195,6 +211,7 @@ export function resolveEventsFile(arg: string): string {
       if (!sdStat.isDirectory()) continue;
       const direct = join(sd, arg, "events.jsonl");
       if (existsSync(direct)) return direct; // exact run-dir name match under scenario dir
+      if (isMultiLegDir(join(sd, arg))) throw multiLegCandidate(arg, join(sd, arg));
     }
   }
   const viaIndexFragment = resolveViaIndexRows(resolveRunsFragmentFromIndex(indexRows, arg), arg);
@@ -212,12 +229,18 @@ export function resolveEventsFile(arg: string): string {
       }
       if (!sdStat.isDirectory()) continue;
       for (const run of readdirSync(sd)) {
+        if (!(run.includes(arg) || scen.includes(arg))) continue;
         const f = join(sd, run, "events.jsonl");
-        if (!existsSync(f)) continue;
-        if (run.includes(arg) || scen.includes(arg)) candidates.push(f);
+        // A multi-leg root joins the ranking under its own path (it has no root events.jsonl), so it can win.
+        if (existsSync(f)) candidates.push(f);
+        else if (isMultiLegDir(join(sd, run))) candidates.push(join(sd, run, MULTI_LEG_SENTINEL));
       }
     }
-    if (candidates.length === 1) return candidates[0];
+    const pick = (c: string): string => {
+      if (c.endsWith(MULTI_LEG_SENTINEL)) throw multiLegCandidate(arg, dirname(c));
+      return c;
+    };
+    if (candidates.length === 1) return pick(candidates[0]);
     if (candidates.length > 1) {
       candidates.sort((a, b) => {
         let am = 0,
@@ -235,7 +258,7 @@ export function resolveEventsFile(arg: string): string {
           candidates.map((c) => `  ${c}`).join("\n") +
           `\nUsing the most recent: ${candidates[0]}\nPass a more specific id or full path to be deterministic.\n`,
       );
-      return candidates[0];
+      return pick(candidates[0]);
     }
   }
   throw new Error(`no events.jsonl for "${arg}" — pass a run dir, an events.jsonl path, or a run id under runs/`);

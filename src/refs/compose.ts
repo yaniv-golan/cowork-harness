@@ -13,7 +13,7 @@ import { scrub } from "../secrets.js";
 import { parseScenarioFile } from "../run/execute.js";
 import { pkgVersion } from "../run/envelope.js";
 import { candidateDocument, distinct, pairwiseComposeKey } from "../run/pairwise-prepass.js";
-import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
+import { classifyRunDir, latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { assertContextFromRunDir } from "../run/verify-context.js";
 import { NoFollowRoot } from "../hillclimb/fs.js";
 import { redactDeep } from "../hillclimb/flow.js";
@@ -58,6 +58,10 @@ export function composeFromRunDir(
   // The live result first: its capture budget and evidence globs decide what the recomposition captures.
   let result: RunResult;
   let resultSha256: string;
+  // Before the try: a multi-leg run would otherwise surface as "cannot read the run's result.json".
+  const shapeKind = classifyRunDir(runDir).kind;
+  if (shapeKind === "legs" || shapeKind === "action-leg")
+    return { refused: `pairwise refs: a multi-leg run cannot be a reference (its identity is not one prompt): ${runDir}` };
   try {
     const turn = latestTurn(runDir);
     if (turn === undefined) return { refused: `${runDir} has no turns/` };

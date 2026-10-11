@@ -6,7 +6,16 @@ import { metricsFor } from "../metrics.js";
 import { resolveCommandMetrics, resolvedCommand } from "../metric-command/resolve.js";
 import { resolvePython } from "../metric-command/interpreters.js";
 import { asOutcomes, commandMetricNotice, measureCommandMetrics } from "../metric-command/live.js";
-import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
+import {
+  BoundaryError,
+  UsageError,
+  LegacyRunDirError,
+  MultiLegRunDirError,
+  RunDirShapeError,
+  SessionFileError,
+  ScenarioFileError,
+  compactSchemaError,
+} from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
@@ -4819,7 +4828,16 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
   return id;
 }
 
-export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError };
+export {
+  UnansweredError,
+  BoundaryError,
+  UsageError,
+  LegacyRunDirError,
+  MultiLegRunDirError,
+  RunDirShapeError,
+  SessionFileError,
+  ScenarioFileError,
+};
 
 /** The judges `executeScenario` grades with: `ExecuteOptions` mapped onto `judgesForRun`. Exported so the
  *  option wiring itself is under test, not only the helper it calls. */

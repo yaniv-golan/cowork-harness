@@ -14,7 +14,7 @@
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, type Dirent, type Stats } from "node:fs";
 import { dirname, join, posix, relative } from "node:path";
-import { UsageError } from "../errors.js";
+import { MultiLegRunDirError, UsageError } from "../errors.js";
 import { FsRefusal, NoFollowRoot, lstatOrNull } from "../hillclimb/fs.js";
 import { gitModeEnabled, gitTrackedSet, GITSET_ENV } from "../run/skill-files.js";
 import { OS_JUNK_PATTERN } from "../run/skill-hash.js";
@@ -540,7 +540,9 @@ export function recordedFixtureFileSigs(runDir: string): Array<[string, string]>
   let turns: number[];
   try {
     turns = listTurns(runDir);
-  } catch {
+  } catch (e) {
+    // `--resume` is refused with `legs`, so this is a backstop: a multi-leg root must never read as "no fixture".
+    if (e instanceof MultiLegRunDirError) throw e;
     return undefined;
   }
   for (const t of turns) {

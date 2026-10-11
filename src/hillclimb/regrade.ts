@@ -19,7 +19,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { InterruptedError } from "../termination.js";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { UsageError } from "../errors.js";
+import { MultiLegRunDirError, UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
 import { classifyRep } from "../eval/classify.js";
 import { pkgVersion } from "../run/envelope.js";
@@ -370,7 +370,10 @@ function readResult(runDir: string): RunResult | undefined {
     const turn = latestTurn(runDir);
     if (turn === undefined) return undefined;
     return JSON.parse(NoFollowRoot.existing(runDir).readFile(turnArtifactPath(runDir, turn, "result.json"))) as RunResult;
-  } catch {
+  } catch (e) {
+    // A multi-leg root is a refused shape, not "unreadable": never let it read as a missing result.
+    if (e instanceof MultiLegRunDirError)
+      throw new MultiLegRunDirError(`regrade: multi-leg runs are not hillclimb rows (hillclimb refuses \`legs\`): ${runDir}`);
     return undefined;
   }
 }
@@ -514,7 +517,10 @@ function gradedSource(row: Row, runDir: string, result: RunResult): { entries: E
     const doc = JSON.parse(NoFollowRoot.existing(runDir).readFile(file)) as { assertions?: RegradeRunReport["assertions"] };
     if (!Array.isArray(doc.assertions)) return undefined;
     return { entries: doc.assertions.map(reportEntry), at: doc.assertions.map((a) => a.assertionIndex), file: true };
-  } catch {
+  } catch (e) {
+    // A multi-leg root is a refused shape, not "unreadable": never let it read as a missing result.
+    if (e instanceof MultiLegRunDirError)
+      throw new MultiLegRunDirError(`regrade: multi-leg runs are not hillclimb rows (hillclimb refuses \`legs\`): ${runDir}`);
     return undefined;
   }
 }

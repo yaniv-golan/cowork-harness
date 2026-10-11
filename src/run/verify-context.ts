@@ -20,7 +20,7 @@ import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./a
 import { readPreRunManifestOrigin } from "./pre-run-manifest.js";
 import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { unionReferenceAccesses } from "./run.js";
-import { requireTurns, turnArtifactPath } from "./turn-layout.js";
+import { legTreeRoot, requireTurns, turnArtifactPath } from "./turn-layout.js";
 import { decideRunDir, noteRelocation, withDecidedPaths } from "./run-dir-identity.js";
 import { recordedSlashInvokedSkills } from "../critique/skill-invocation.js";
 
@@ -173,6 +173,11 @@ export function assertContextFromRunDir(
   } catch (e) {
     return refuse("runtime", (e as Error).message);
   }
+  // A leg of a multi-leg run: its filesystem evidence is the recorded workDir, which under `workdir: persistent` is the
+  // scenario's SHARED tree. Only the last leg's post-state still matches it; grading any other persistent leg there
+  // would silently use a later leg's files.
+  const tree = legTreeRoot(runDir, cmd);
+  if ("refused" in tree) return refuse("runtime", tree.refused);
   // A MULTI-TURN run dir addresses more than one completion, and this command cannot tell which one the
   // caller's scenario describes. Checked on the TURN COUNT (before loading any result), not a `result.turn`
   // field read off whichever turn we'd otherwise load — RunResult.turn is documented absent on some lanes,
