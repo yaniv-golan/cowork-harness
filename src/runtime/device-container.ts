@@ -1,5 +1,17 @@
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { containedRealPath } from "../boundary-paths.js";
@@ -204,34 +216,56 @@ async function waitRunning(runner: string, containerName: string, limitMs = 60_0
   }
 }
 
-/** Every file and link under the device tree's folders, as `<folder>/<path>` with its identity `<inode>:<birth
- *  time>`. Birth time as well as the inode: Linux reuses a freed inode for the next file created, so an inode alone
- *  would read a delete-then-create as a rename. A rename keeps both. */
-function deviceTreeListing(deviceHost: string): Record<string, string> {
+/** One entry of a device-tree listing, keyed `<folder>/<path>` (a directory with a trailing `/`). `id` is
+ *  `<inode>:<birth time>`: Linux reuses a freed inode for the next file created, so an inode alone would read a
+ *  delete-then-create as a rename. Birth times can be coarse too, so a file also carries its size and sha256, and a
+ *  link the hash of its target (never followed): a reappearing identity is a rename only when its bytes match. */
+export type TreeEntry = { id: string; type: "f" | "d" | "l"; size?: number; sha256?: string };
+
+function deviceTreeListing(deviceHost: string): Record<string, TreeEntry> {
   const mnt = join(deviceHost, "mnt");
-  const out: Record<string, string> = {};
-  const visit = (p: string): void => {
+  const out: Record<string, TreeEntry> = {};
+  const visit = (p: string, top: boolean): void => {
     let st;
     try {
-      st = lstatSync(p);
+      // Nanoseconds: a delete and the next create can fall within the same millisecond.
+      st = lstatSync(p, { bigint: true });
     } catch {
       return;
     }
+    const rel = relative(mnt, p).split(sep).join("/");
+    const id = `${st.ino}:${st.birthtimeNs}`;
     if (st.isDirectory()) {
+      // A folder root is the folder itself: its removal is not something the device shell can do.
+      if (!top) out[`${rel}/`] = { id, type: "d" };
       let names: string[] = [];
       try {
         names = readdirSync(p);
       } catch {
         return;
       }
-      for (const n of names) visit(join(p, n));
+      for (const n of names) visit(join(p, n), false);
       return;
     }
-    // Nanoseconds: a delete and the next create can fall within the same millisecond.
-    const ns = lstatSync(p, { bigint: true });
-    out[relative(mnt, p).split(sep).join("/")] = `${ns.ino}:${ns.birthtimeNs}`;
+    if (st.isSymbolicLink()) {
+      let target = "";
+      try {
+        target = readlinkSync(p);
+      } catch {
+        /* unreadable: hashed as empty */
+      }
+      out[rel] = { id, type: "l", sha256: createHash("sha256").update(target).digest("hex") };
+      return;
+    }
+    let sha256: string | undefined;
+    try {
+      sha256 = createHash("sha256").update(readFileSync(p)).digest("hex");
+    } catch {
+      sha256 = undefined; // unreadable: no rename can be proven for it
+    }
+    out[rel] = { id, type: "f", size: Number(st.size), ...(sha256 ? { sha256 } : {}) };
   };
-  if (existsSync(mnt)) for (const n of readdirSync(mnt)) visit(join(mnt, n));
+  if (existsSync(mnt)) for (const n of readdirSync(mnt)) visit(join(mnt, n), true);
   return out;
 }
 
@@ -240,28 +274,54 @@ export function recordDeviceTree(outDir: string): void {
   writeFileSync(join(outDir, DEVICE_TREE_FILE), JSON.stringify(deviceTreeListing(join(resolve(outDir), "work", "device"))));
 }
 
-/** Files the run removed from a folder copy, by any means (`rm`, `find -delete`, a script): in the staged listing,
- *  gone afterwards, and not renamed within the tree (a rename keeps its inode and birth time). Production refuses each of these
- *  until the user allows deletion. Nothing without a recorded listing: no evidence, no claim. */
+/** Whether a staged entry's identity reappears after the run as a rename. A directory: the same identity as a
+ *  directory. A file or link whose filesystem records a birth time: the same `inode:birth time`, so a rename followed by
+ *  an edit is still a rename. Where the filesystem reports no birth time (0), the identity is only the inode, which Linux
+ *  reuses at once for the next file created: there the size and sha256 must match too, so a delete followed by a new
+ *  file cannot pass as a rename (an edit after a rename then reads as a delete, the safe side). A listing written
+ *  before entries carried bytes proves no rename. */
+function renamedAfter(b: TreeEntry | string, afterById: ReadonlyMap<string, TreeEntry[]>): boolean {
+  if (typeof b === "string") return false;
+  const birthKnown = b.id.split(":")[1] !== "0";
+  return (afterById.get(b.id) ?? []).some((a) =>
+    b.type === "d"
+      ? a.type === "d"
+      : a.type === b.type && (birthKnown || (a.size === b.size && a.sha256 !== undefined && a.sha256 === b.sha256)),
+  );
+}
+
+/** The staged entries gone after the run and not renamed (`renamedAfter`), in the delete-denied folders, named by
+ *  mount path. Pure: the listings in, the deletes out. */
+export function treeDeletes(
+  before: Readonly<Record<string, TreeEntry | string>>,
+  after: Readonly<Record<string, TreeEntry>>,
+  denied: ReadonlyArray<{ name: string; mountPath: string }>,
+): { mount: string; command: string }[] {
+  const afterById = new Map<string, TreeEntry[]>();
+  for (const e of Object.values(after)) afterById.set(e.id, [...(afterById.get(e.id) ?? []), e]);
+  // Named by mount path, as the command-text scan names a mount, so allow_delete_in waives both alike.
+  const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
+  return Object.keys(before)
+    .filter((path) => mountOf.has(path.split("/")[0]!) && !(path in after) && !renamedAfter(before[path]!, afterById))
+    .sort()
+    .map((path) => ({ mount: mountOf.get(path.split("/")[0]!)!, command: `(removed from the device copy) ${path}` }));
+}
+
+/** Entries the run removed from a folder copy, by any means (`rm`, `find -delete`, `rmdir`, a script): the staged
+ *  listing compared with the tree after the run (`treeDeletes`). Production refuses each of these until the user allows
+ *  deletion. Nothing without a recorded listing: no evidence, no claim. */
 export function deviceTreeDeletes(
   outDir: string,
   /** The delete-denied (`rw`) folders (deniedDeviceFolders): a folder that allows deletes (`rwd`) is not counted. */
   denied: ReadonlyArray<{ name: string; mountPath: string }>,
 ): { mount: string; command: string }[] {
-  let before: Record<string, string>;
+  let before: Record<string, TreeEntry | string>;
   try {
     before = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
   } catch {
     return [];
   }
-  const after = deviceTreeListing(join(resolve(outDir), "work", "device"));
-  const identitiesAfter = new Set(Object.values(after));
-  // Named by mount path, as the command-text scan names a mount, so allow_delete_in waives both alike.
-  const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
-  return Object.keys(before)
-    .filter((path) => mountOf.has(path.split("/")[0]) && !(path in after) && !identitiesAfter.has(before[path]))
-    .sort()
-    .map((path) => ({ mount: mountOf.get(path.split("/")[0])!, command: `(removed from the device copy) ${path}` }));
+  return treeDeletes(before, deviceTreeListing(join(resolve(outDir), "work", "device")), denied);
 }
 
 /** The folders production refuses deletes in until the user allows them: mode `rw` (`rwd` is delete-approved,

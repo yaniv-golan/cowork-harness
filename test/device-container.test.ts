@@ -1,6 +1,7 @@
 // The device container behind `device_bridge: true`: a keep-alive container on the run's egress network that
 // holds COPIES of the connected folders at $HOME/mnt/<folder-name>, where device_bash runs. The one invariant that
 // keeps device_bash off the user's real files is that nothing the container binds is a mount's host path.
+import { treeDeletes, type TreeEntry } from "../src/runtime/device-container.js";
 import {
   existsSync,
   lstatSync,
@@ -11,6 +12,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  rmdirSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -547,10 +549,10 @@ describe("deviceTreeDeletes", () => {
   it("a reused inode with a different birth time is a new file, so the old path's removal is a delete (Linux reuses inodes)", () => {
     const { outDir, copy } = staged();
     const listing = join(outDir, "device-tree-pre-run.json");
-    const before = JSON.parse(readFileSync(listing, "utf8")) as Record<string, string>;
+    const before = JSON.parse(readFileSync(listing, "utf8")) as Record<string, { id: string }>;
     // As if a.txt had been deleted and the new b.txt had been given a.txt's inode: same inode, other birth time.
-    const bIdentity = before["proj/b.txt"];
-    before["proj/a.txt"] = `${bIdentity.split(":")[0]}:1`;
+    const bIdentity = before["proj/b.txt"]!.id;
+    before["proj/a.txt"]!.id = `${bIdentity.split(":")[0]}:1`;
     writeFileSync(listing, JSON.stringify(before));
     rmSync(join(copy, "a.txt"));
     expect(deviceTreeDeletes(outDir, PROJ).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
@@ -592,7 +594,7 @@ describe("wiring: spawnContainer", () => {
     expect(s).toMatch(/stageWorkspace\(plan, mntHost, /);
   });
   it("advertises, pre-approves and serves the bridge's tools", () => {
-    expect(s).toMatch(/extraTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\)\]/);
+    expect(s).toMatch(/extraTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\), \.\.\.\(device\?\.askTools \?\? \[\]\)\]/);
     expect(s).toMatch(/extraAllowedTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\)\]/);
     expect(s).toMatch(/\.\.\.\(device \? \[device\.bundle\] : \[\]\)/);
   });
@@ -630,5 +632,58 @@ describe("wiring: the review fixes reach the run", () => {
       /if \(scenario\.device_bridge === true\) scan\.mountDeletes\.push\(\.\.\.deviceTreeDeletes\(outDir, deniedDeviceFolders\(plan\.mounts\)\)\);/,
     );
     expect(s).toMatch(/deviceBridgeFolderAssertRefusal\(\s*scenario,\s*deviceFolders\(plan\.mounts\)/);
+  });
+});
+
+describe("deviceTreeDeletes: an identity is a rename only when its bytes match", () => {
+  // On Linux an inode is reused at once and birth times can be coarse, so a deleted file and a new one can share
+  // `ino:birthtime`. The listing therefore records each file's size and sha256: a reappearing identity whose bytes
+  // differ is a delete, never laundered into a rename. Directories are listed too.
+  function staged(setup: (hostDir: string) => void = () => {}) {
+    const root = scratch();
+    const f = folder(root, "proj");
+    setup(f.hostPath);
+    const outDir = join(root, "out");
+    const deviceHost = join(outDir, "work", "device");
+    stageDeviceFolders(deviceFolders([f]), deviceHost);
+    recordDeviceTree(outDir);
+    return { outDir, copy: join(deviceHost, "mnt", "proj") };
+  }
+  // The rule itself, over listings: where the filesystem reports no birth time (0) the identity is only the inode,
+  // which Linux reuses at once, so the bytes must match; where it reports one, an edit after a rename stays a rename.
+  const f = (id: string, sha256: string, size = 4): TreeEntry => ({ id, type: "f", size, sha256 });
+  it("no birth time: the same inode under a new path with other bytes is a delete (a reused inode)", () => {
+    expect(treeDeletes({ "proj/a.txt": f("7:0", "aa") }, { "proj/new.txt": f("7:0", "bb") }, PROJ).map((d) => d.command)).toEqual([
+      "(removed from the device copy) proj/a.txt",
+    ]);
+  });
+  it("no birth time: the same inode with the same bytes is a rename", () => {
+    expect(treeDeletes({ "proj/a.txt": f("7:0", "aa") }, { "proj/moved.txt": f("7:0", "aa") }, PROJ)).toEqual([]);
+  });
+  it("a birth time recorded: the same identity with other bytes is a rename followed by an edit", () => {
+    expect(treeDeletes({ "proj/a.txt": f("7:123", "aa") }, { "proj/moved.txt": f("7:123", "bb", 9) }, PROJ)).toEqual([]);
+  });
+  it("a removed empty directory is a delete", () => {
+    const { outDir, copy } = staged((h) => mkdirSync(join(h, "empty")));
+    rmdirSync(join(copy, "empty"));
+    expect(deviceTreeDeletes(outDir, PROJ)).toEqual([{ mount: "proj", command: "(removed from the device copy) proj/empty/" }]);
+  });
+  it("a renamed directory, contents and all, is not a delete", () => {
+    const { outDir, copy } = staged((h) => {
+      mkdirSync(join(h, "sub"));
+      writeFileSync(join(h, "sub", "x.txt"), "x\n");
+    });
+    renameSync(join(copy, "sub"), join(copy, "sub2"));
+    expect(deviceTreeDeletes(outDir, PROJ)).toEqual([]);
+  });
+  it("a listing that records no bytes (written before this check) cannot prove a rename: the move reads as a delete", () => {
+    const { outDir, copy } = staged();
+    const listing = JSON.parse(readFileSync(join(outDir, "device-tree-pre-run.json"), "utf8")) as Record<string, { id: string }>;
+    writeFileSync(
+      join(outDir, "device-tree-pre-run.json"),
+      JSON.stringify(Object.fromEntries(Object.entries(listing).map(([k, v]) => [k, v.id]))),
+    );
+    renameSync(join(copy, "a.txt"), join(copy, "moved.txt"));
+    expect(deviceTreeDeletes(outDir, PROJ).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
   });
 });
