@@ -23,6 +23,8 @@ const can = existsSync(CLI);
 const ALLOWLIST: Record<string, string> = {
   "--diff":
     "only `sync --diff`, which compares a live Claude Desktop install with the shipped baseline: baseline maintenance, not skill testing",
+  "--spawn-env-unobservable":
+    "only `sync`, recording that no local Cowork task can run on the synced Desktop build: baseline maintenance, not skill testing",
   "--strict-independent": "not a flag: help prose (analyze-skill's exit 3 holds whether or not --strict is passed)",
 };
 

@@ -172,6 +172,92 @@ export function renderInitSurfaceEntries(entries: BaselineDiffEntry[]): { lines:
   return { lines, rest: [...rest, ...unhandled] };
 }
 
+const OBS = "provenance.observedSpawnEnv";
+type ObsBlock = { observed?: boolean; appVersion?: string; reason?: string; declared?: string; keysAll?: string[]; keysSome?: string[] };
+
+function describeObsBlock(b: ObsBlock): string {
+  if (!b.observed) return `UNOBSERVED at \`${b.appVersion}\` (${b.reason}${b.declared ? `: ${b.declared}` : ""})`;
+  const some = b.keysSome ?? [];
+  return `recorded at \`${b.appVersion}\`: ${(b.keysAll ?? []).length} key(s) in every session${some.length ? `; in some: ${code(some)}` : ""}`;
+}
+
+/** Block-level rendering for `provenance.observedSpawnEnv`, for the same reasons as renderInitSurfaceEntries: an
+ *  observed → unobserved change replaces the key removals it causes, and a key that moved between `keysAll` and
+ *  `keysSome` arrives as two array entries that mean one thing. Unrecognized entries are returned in `rest`. */
+export function renderObservedSpawnEnvEntries(entries: BaselineDiffEntry[]): { lines: string[]; rest: BaselineDiffEntry[] } {
+  const mine = entries.filter((e) => e.path === OBS || e.path.startsWith(`${OBS}.`));
+  const rest = entries.filter((e) => !mine.includes(e));
+  const lines: string[] = [];
+  if (mine.length === 0) return { lines, rest };
+  const unhandled: BaselineDiffEntry[] = [];
+  const whole = mine.find((e) => e.path === OBS);
+  if (whole) {
+    if (whole.kind === "added")
+      lines.push(
+        `- Desktop host-loop spawn env now ${describeObsBlock(whole.to as ObsBlock).replace(/^UNOBSERVED/, "recorded UNOBSERVED")}`,
+      );
+    else if (whole.kind === "removed") lines.push("- Desktop host-loop spawn env no longer recorded (field removed)");
+    else unhandled.push(whole);
+    return { lines, rest: [...rest, ...unhandled] };
+  }
+  const leaf = (name: string) => mine.find((e) => e.path === `${OBS}.${name}`);
+  const value = (name: string): unknown => {
+    const e = leaf(name);
+    return e?.kind === "scalar" || e?.kind === "added" ? e.to : undefined;
+  };
+  const observed = leaf("observed");
+  const app = (value("appVersion") as string | undefined) ?? undefined;
+  if (observed?.kind === "scalar" && observed.from === true && observed.to === false) {
+    const reason = value("reason") as string | undefined;
+    const declared = value("declared") as string | undefined;
+    lines.push(
+      `- Desktop host-loop spawn env UNOBSERVED${app ? ` at \`${app}\`` : ""} (${reason ?? "?"}${declared ? `: ${declared}` : ""}) — the key removals it implies are NOT evidence (not shown)`,
+    );
+    return { lines, rest };
+  }
+  if (observed?.kind === "scalar" && observed.from === false && observed.to === true) {
+    const keys = leaf("keysAll");
+    const n = keys?.kind === "added" ? (keys.to as string[]).length : undefined;
+    lines.push(
+      `- Desktop host-loop spawn env now OBSERVED${app ? ` at \`${app}\`` : ""}${n !== undefined ? `: ${n} key(s) in every session` : ""}`,
+    );
+    return { lines, rest };
+  }
+  const arr = (name: string) => {
+    const e = leaf(name);
+    return e?.kind === "array" ? { added: e.added as string[], removed: e.removed as string[] } : { added: [], removed: [] };
+  };
+  const all = arr("keysAll");
+  const some = arr("keysSome");
+  const toAll = all.added.filter((k) => some.removed.includes(k));
+  const toSome = some.added.filter((k) => all.removed.includes(k));
+  const moved = new Set([...toAll, ...toSome]);
+  const appeared = [...all.added, ...some.added].filter((k) => !moved.has(k)).sort();
+  const disappeared = [...all.removed, ...some.removed].filter((k) => !moved.has(k)).sort();
+  if (appeared.length) lines.push(`- Desktop host-loop spawn env: key(s) APPEARED: ${code(appeared)}`);
+  if (disappeared.length) lines.push(`- Desktop host-loop spawn env: key(s) DISAPPEARED: ${code(disappeared)}`);
+  const mix = "(sensitive to the mix of session kinds read — a prompt to look, not evidence)";
+  if (toAll.length) lines.push(`- Desktop host-loop spawn env: ${code(toAll.sort())} moved from some sessions to every session ${mix}`);
+  if (toSome.length) lines.push(`- Desktop host-loop spawn env: ${code(toSome.sort())} moved from every session to some sessions ${mix}`);
+  for (const e of mine) {
+    if (e.path === `${OBS}.keysAll` || e.path === `${OBS}.keysSome`) {
+      if (e.kind !== "array") unhandled.push(e);
+      continue;
+    }
+    if (e.path === `${OBS}.appVersion` && e.kind === "scalar") {
+      lines.push(`- Desktop host-loop spawn env re-read for \`${e.to}\``);
+      continue;
+    }
+    if (e.path === `${OBS}.reason` && e.kind === "scalar") {
+      lines.push(`- Desktop host-loop spawn env still unobserved: \`${e.from}\` → \`${e.to}\``);
+      continue;
+    }
+    if (e.path === `${OBS}.sessions` || e.path === `${OBS}.nativeAgentVersions` || e.path === `${OBS}.withheld`) continue;
+    unhandled.push(e);
+  }
+  return { lines, rest: [...rest, ...unhandled] };
+}
+
 /** Maps KNOWN baseline fields to prose; an unrecognized path still renders (never silently dropped),
  *  just as a generic line. Annotation-class entries are grouped into their own de-emphasized section
  *  instead of interleaved with real drift. */
@@ -226,8 +312,9 @@ export function renderCloudEntries(entries: BaselineDiffEntry[]): { lines: strin
 
 export function renderChangelog(allEntries: BaselineDiffEntry[]): string {
   const { lines: initOnly, rest: afterInit } = renderInitSurfaceEntries(allEntries);
-  const { lines: cloudLines, rest: entries } = renderCloudEntries(afterInit);
-  const initLines = [...initOnly, ...cloudLines];
+  const { lines: obsLines, rest: afterObs } = renderObservedSpawnEnvEntries(afterInit);
+  const { lines: cloudLines, rest: entries } = renderCloudEntries(afterObs);
+  const initLines = [...initOnly, ...obsLines, ...cloudLines];
   const notable = entries.filter((e) => !e.annotation);
   const annotations = entries.filter((e) => e.annotation);
   const lines: string[] = [...initLines];
@@ -336,8 +423,9 @@ export function formatDiffLines(allEntries: BaselineDiffEntry[]): string[] {
   // The init-surface block needs block-level context (see renderInitSurfaceEntries) — without it an
   // unobserved re-sync prints as three bare server removals here too.
   const { lines: initOnly, rest: afterInit } = renderInitSurfaceEntries(allEntries);
-  const { lines: cloudLines, rest: entries } = renderCloudEntries(afterInit);
-  const initLines = [...initOnly, ...cloudLines];
+  const { lines: obsLines, rest: afterObs } = renderObservedSpawnEnvEntries(afterInit);
+  const { lines: cloudLines, rest: entries } = renderCloudEntries(afterObs);
+  const initLines = [...initOnly, ...obsLines, ...cloudLines];
   return [
     ...initLines.map((l) => l.replace(/^- /, "")),
     ...entries.map((e) => {

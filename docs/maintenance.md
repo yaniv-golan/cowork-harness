@@ -49,6 +49,10 @@ silently half-derived spawn contract is not a state it can produce.
 
 When Claude Desktop updates (on a machine that has the app installed):
 
+**Before syncing, run one Cowork task with *Only on this computer* on** (on an account that still offers local
+tasks; in our observation, a Team-plan organization). Without one, `provenance.desktopInitSurface` and
+`provenance.observedSpawnEnv` are recorded unobserved and `npm run preflight` refuses the release.
+
 ```bash
 cowork-harness sync --diff      # show what moved vs the committed baseline
 ```
@@ -66,8 +70,8 @@ cowork-harness sync --diff      # show what moved vs the committed baseline
 
 **Read `provenance.spawnEnvKeys` and `spawnEnvSpreadCount` in that diff first.** They are the spawn-env drift
 alarm: the recorded set of ALL-CAPS keys the 1p spawn windows construct, plus the spread count. If either moves,
-Desktop added or removed a spawn env key, or the extractor drifted — stop and classify it before writing the
-baseline. A key-set delta *names* the key, which is why it beats any count-based signal. (Worth stating because
+Desktop added or removed a spawn env key, or the extractor drifted — stop and classify it (in
+`src/sync/spawn-env-registry.ts`) before writing the baseline. A key-set delta *names* the key, which is why it beats any count-based signal. (Worth stating because
 it is easy to miss and easy to re-invent: a 2026-09 design exercise spent four review rounds specifying a facility
 whose first half was this field, already shipped and already correct on the same release pair.)
 
@@ -391,6 +395,49 @@ committed baseline and say why in that baseline's `$comment`.
      committed baseline enforces it), and sync's messages carry counts, never names or paths. The recorded
      set still reflects what **this account** is served — `save_skill` needs org skill-creation access — the
      same class of fact `provenance.gates` already records.
+
+   **`provenance.observedSpawnEnv` → the env key names Desktop's own host-loop spawn actually carried.** The
+   spawn-env tier (`spawn.env`, `provenance.spawnEnvKeys`) reads the env literals in the bundle, but Desktop keeps
+   writing to the env after those are built: computed keys, helper transforms, a second host-loop literal, a proxy
+   transform that returns a new object. Desktop logs the final key list of every local host-loop session as
+   `[HostLoop] sdkOptions after patch` in `~/Library/Logs/Claude/main*.log`, and `sync` reads the key names from
+   it (`src/sync/observed-spawn-env.ts`): those present in **every** session read (`keysAll`) and in only
+   **some** (`keysSome`).
+   - **Which sessions.** Each log entry belongs to the Desktop build named by the `Starting app` entry before it
+     (the rotated `main<N>.log` files are read oldest first). Only when no such entry survives in the logs does
+     the Desktop install time decide. A cloud task and a VM-loop session log no such entry.
+   - **Classification.** Every recorded name must be classified in `src/sync/spawn-env-registry.ts` (the one
+     registry the window scan, the post-construction scanner and this reader all use). An unclassified name that
+     Desktop's bundle carries blocks the write and is named locally: classify it, with a reason, and re-sync. A
+     name pinned or harness-set there must also be in the env the harness host loop spawns, or the write blocks.
+   - **Unobserved.** No local host-loop task under this Desktop build: `sync` prints a `WARNING` and records
+     `observed: false, reason: "no-session"`. **Remedy:** run one Cowork task with *Only on this computer* on
+     (on an account that still offers local tasks — see *After the local-lane sunset* above; otherwise declare it
+     with `--spawn-env-unobservable no-local-entitlement`), then re-run `sync`. `npm run preflight` refuses to release it; `--allow-unobserved-spawn-env` downgrades
+     that to a warning for an emergency release. Log entries for the build that cannot be read block the write
+     instead, since that is the reader or the format drifting, not a missing session.
+   - **Reader drift.** The write also blocks when the bundle does not log `[HostLoop] sdkOptions after patch`
+     with an `envKeys` list (pass `--spawn-env-unobservable` if the lane really is gone), when a `Starting app`
+     entry carries no `appVersion`, when an `envKeys` item is not env-name shaped, when the logs hold text but
+     no line the reader recognises, or when local sessions started under the build but none logged a dump (a
+     VM-loop session logs none: if only those ran, run one host-loop task): re-derive
+     `src/sync/observed-spawn-env.ts`.
+   - **When the local lane is gone.** `sync --spawn-env-unobservable local-lane-removed` (or
+     `no-local-entitlement`) records `reason: "lane-gone"` for this build. It is accepted only when the logs show
+     this build's `Starting app` entry and no local session or dump for it (also when the bundle does not log
+     the dump); it is not inherited by the next Desktop release, and the preflight only warns on it. Coverage
+     then falls back to the post-construction scanner alone.
+   - **After log rotation.** Desktop rotates these logs. If none of this build's entries remain, `sync` keeps
+     the committed observation of the same build rather than recording it unobserved.
+   - **Privacy.** The same log entry holds paths with your username and your plugin list. The reader reads only
+     the `envKeys` list, the `Starting app` version, the agent version in the agent's path, and the timestamps
+     and local-session start entries (to count sessions). Only registry-classified names are committed. Any
+     other name (an organisation's managed env, say) is counted as `withheld` and never printed or committed.
+
+   **Post-construction spawn-env writes.** `sync` also scans the code between the W1 env literal and the spawn
+   call for direct writes to the env (`src/sync/spawn-env-post-writes.ts`), so a key set only under a condition
+   that never held on your machine is still caught. Each key must be classified at the registry's `post-write`
+   site, or the write blocks. It does not follow calls: writes inside helpers are the observed spawn env's job.
 
    **`cloud` → what Desktop serves to a cloud Cowork session.** A cloud session reaches this computer
    through Desktop's `remote-devices` MCP server. From Desktop 2.19675.1, `sync` records, as a top-level

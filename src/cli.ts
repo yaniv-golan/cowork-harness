@@ -11,6 +11,8 @@ import {
   Assertion,
   FIDELITY_TIERS,
   DesktopInitSurface,
+  ObservedSpawnEnv,
+  ObservedSpawnEnvDeclaration,
   type RunResult,
   type RunStatus,
   type PlatformBaseline,
@@ -62,6 +64,7 @@ import type { DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName, vmProvisioned, type VmProvisioning } from "./runtime/lima.js";
 import { resolveVmBaselineArg } from "./runtime/vm-baseline-arg.js";
 import { sync, canonicalizeEnv, syncedNetworkBlock } from "./sync/cowork-sync.js";
+import { checkObservedAgainstHarness, harnessHostLoopKeys } from "./sync/observed-spawn-env.js";
 import { cloudSchemaRefusal, withSyncedCloudBlock } from "./sync/remote-devices.js";
 import { diffBaselines, formatDiffLines, renderChangelog } from "./sync/baseline-diff.js";
 import { runBoundaryChecks, formatBoundary } from "./boundary.js";
@@ -401,7 +404,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       answer it with 'gates'/'answer' above (the one path here that waits — that is the rehearsal)
 
 ── Platform admin ─────────────────────────────────────────────────────────────
-  sync [--diff] [--allow-empty|--force]  derive/refresh a platform baseline from the live Desktop install (macOS only)
+  sync [--diff] [--allow-empty|--force] [--spawn-env-unobservable <reason>]  derive/refresh a platform baseline from the live Desktop install (macOS only)
   list                         list available platform baselines
   boundary-check [baseline] [--session <file>]   prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); macOS arm64 only
@@ -650,7 +653,7 @@ function hasHelp(args: string[]): boolean {
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
 
 const SUBCOMMAND_USAGE: Record<string, string> = {
-  sync: "usage: sync [--diff] [--allow-empty|--force]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty",
+  sync: "usage: sync [--diff] [--allow-empty|--force] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [<baseline>] [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove the VM\n  prune   drop all orphaned VMs\n  <baseline> (default: latest) is a baseline name like desktop-<version>, not a VM name — each acts on that baseline's VM",
@@ -3127,7 +3130,14 @@ async function cmdSync(args: string[]) {
   const normalizedArgs = args.map((a) => (a === "--force" ? "--allow-empty" : a));
   let syncParsed;
   try {
-    syncParsed = parseArgs(normalizedArgs, withCommandGlobals({ booleans: ["--diff", "--allow-empty"] }));
+    syncParsed = parseArgs(
+      normalizedArgs,
+      withCommandGlobals({
+        booleans: ["--diff", "--allow-empty"],
+        values: ["--spawn-env-unobservable"],
+        enums: { "--spawn-env-unobservable": [...ObservedSpawnEnvDeclaration.options] },
+      }),
+    );
   } catch (e) {
     return fail("sync", "usage", (e as Error).message, undefined, isJsonOutput(normalizedArgs));
   }
@@ -3142,7 +3152,8 @@ async function cmdSync(args: string[]) {
     );
   }
   const allowEmpty = !!syncParsed.flags["--allow-empty"];
-  const res = sync();
+  const declared = syncParsed.options["--spawn-env-unobservable"];
+  const res = sync({ declareUnobservable: declared ? ObservedSpawnEnvDeclaration.parse(declared) : null });
 
   // refuse to write a baseline with empty version fields. An empty appVersion would produce
   // `desktop-.json` (invalid filename); an empty agentVersion means resolveAgentBinary will fail.
@@ -3409,6 +3420,17 @@ async function cmdSync(args: string[]) {
       1,
     );
   }
+  const observedCheck = ObservedSpawnEnv.safeParse(res.observedSpawnEnv);
+  if (!observedCheck.success) {
+    fail(
+      "sync",
+      "runtime",
+      `ERROR: provenance.observedSpawnEnv failed its schema — refusing to write baseline (issue paths: ${observedCheck.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")})`,
+      "This is a reader bug in src/sync/observed-spawn-env.ts, not a Desktop change.",
+      isJsonOutput(normalizedArgs),
+      1,
+    );
+  }
   // Same rule for the cloud block: names, hashes and counts only. A null block (extraction failed) already
   // printed a WARNING note, and is omitted rather than carried forward from the previous release.
   if (res.cloud) {
@@ -3476,10 +3498,19 @@ async function cmdSync(args: string[]) {
         // stamp the previous release's surface with this release's identity. Unobserved is written as
         // `observed:false`, which the release preflight refuses to ship.
         desktopInitSurface: res.desktopInitSurface,
+        // The env key NAMES Desktop's own host-loop spawn carried on THIS build, from its local log. Carried forward
+        // by the reader only for the same build (log rotation); never from a previous release.
+        observedSpawnEnv: res.observedSpawnEnv,
       },
     },
     res.cloud,
   );
+  // Desktop's observed host-loop env against what the harness host loop spawns for the baseline about to be written.
+  {
+    const cmp = checkObservedAgainstHarness(res.observedSpawnEnv, harnessHostLoopKeys(next as unknown as PlatformBaseline));
+    res.unknownDeltas.push(...cmp.deltas);
+    res.notes.push(...cmp.notes);
+  }
   const diffFlag = !!syncParsed.flags["--diff"];
   if (diffFlag) {
     // Diff against `base` (the latest committed baseline `next` was merged onto), NOT a separate read of
@@ -3503,7 +3534,7 @@ async function cmdSync(args: string[]) {
     for (const n of res.notes) log("   - " + n);
   }
   if (res.unknownDeltas.length) {
-    log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
+    log("\n⚠ unknown deltas (each line names the file to fix):");
     for (const d of res.unknownDeltas) log("   - " + d);
     // unknown deltas block the write unless --diff (diagnosis mode) is active.
     if (!diffFlag && !allowEmpty) {

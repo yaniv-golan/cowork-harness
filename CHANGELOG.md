@@ -6,6 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.8.1] — Unreleased
+
+### Upgrade notes
+
+- **For maintainers: `npm run preflight` now also fails when the newest baseline has no
+  `provenance.observedSpawnEnv`.** A baseline synced with an older cowork-harness must be re-synced before a
+  release. The shipped newest baseline already carries the block.
+
+### Changed
+
+- **`sync` records the env key names Desktop's own host-loop spawn carried.** The spawn-env check read only the env
+  literals in Desktop's bundle, and Desktop keeps writing to the env after they are built. `sync` now reads the final
+  key list Desktop logs for each local host-loop session (`~/Library/Logs/Claude/main*.log`) and records the names as
+  `provenance.observedSpawnEnv`. It also scans Desktop's spawn path for direct writes to the env made after it is built.
+  Every recorded name must be classified, with a reason, in one registry (`src/sync/spawn-env-registry.ts`). An
+  unclassified name that Desktop's own bundle carries refuses the write and is named in sync's local output; any
+  other unclassified name (an organisation's managed env, say) is counted as `withheld` and never printed or
+  committed. A name the registry says the harness sets, but the harness host loop does not set, also refuses the
+  write, as do unreadable dumps, local sessions that logged no dump, a `Starting app` log entry with no version, and
+  a bundle that no longer logs the dump.
+- **`npm run preflight` refuses a newest baseline whose observed spawn env is unobserved** (no local host-loop task
+  ran on that Desktop build). `--allow-unobserved-spawn-env` downgrades it to a warning for an emergency release.
+  When local tasks can no longer run, `sync --spawn-env-unobservable local-lane-removed|no-local-entitlement`
+  records that for the build, and the preflight only warns.
+
 ## [4.8.0] — 2026-10-11
 
 ### Upgrade notes

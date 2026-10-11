@@ -18,7 +18,8 @@ import {
 } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
-import { PlatformBaseline as PlatformBaselineSchema, DesktopInitSurface } from "../src/types.js";
+import { PlatformBaseline as PlatformBaselineSchema, DesktopInitSurface, ObservedSpawnEnv } from "../src/types.js";
+import { classifySpawnEnvKey } from "../src/sync/spawn-env-registry.js";
 import {
   decodeFcacheGates,
   sync,
@@ -4541,6 +4542,30 @@ describe("committed baselines: provenance.desktopInitSurface is allowlisted and 
     // Tautological on sync-written data (sync stamps both sides); guards hand edits and cross-file copies.
     expect(block.agentVersion).toBe(b.agentVersion);
     expect(block.appVersion).toBe(b.appVersion);
+  });
+});
+
+// provenance.observedSpawnEnv over every committed baseline that carries it: strict schema (names only, all
+// registry-classified), and coherent with the baseline's own Desktop version. Present on the newest baseline.
+describe("provenance.observedSpawnEnv in committed baselines", () => {
+  const files = readdirSync(BASELINES_DIR)
+    .filter((f) => /^desktop-.+\.json$/.test(f))
+    .sort(compareBaselineVersions);
+  const withBlock = files.filter(
+    (f) => JSON.parse(readFileSync(join(BASELINES_DIR, f), "utf8")).provenance?.observedSpawnEnv !== undefined,
+  );
+
+  it("is present on the NEWEST baseline (non-vacuity)", () => {
+    expect(withBlock).toContain(files[files.length - 1]);
+  });
+
+  it.each(withBlock)("%s: strict schema, registry-classified names, and the baseline's own Desktop version", (file) => {
+    const b = JSON.parse(readFileSync(join(BASELINES_DIR, file), "utf8"));
+    const block = b.provenance.observedSpawnEnv;
+    const parsed = ObservedSpawnEnv.safeParse(block);
+    expect(parsed.success, parsed.success ? "" : parsed.error.issues.map((i) => i.path.join(".")).join(", ")).toBe(true);
+    expect(block.appVersion).toBe(b.appVersion);
+    if (block.observed) for (const k of [...block.keysAll, ...block.keysSome]) expect(classifySpawnEnvKey(k, "observed"), k).not.toBeNull();
   });
 });
 

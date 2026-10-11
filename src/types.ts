@@ -250,6 +250,48 @@ export const DesktopInitSurface = z
   });
 export type DesktopInitSurface = z.infer<typeof DesktopInitSurface>;
 
+const SpawnEnvKeyName = z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/);
+const DottedVersion = z.string().regex(/^\d+\.\d+\.\d+$/);
+
+/** Why the observed spawn env is absent. `no-session`: no local host-loop task ran on this Desktop build yet (the
+ *  release preflight refuses to ship it). `lane-gone`: the maintainer declared, for this build, that the local lane
+ *  cannot run here; `declared` says why, as a closed set rather than free text, since the baseline is public. */
+export const ObservedSpawnEnvDeclaration = z.enum(["local-lane-removed", "no-local-entitlement"]);
+export type ObservedSpawnEnvDeclaration = z.infer<typeof ObservedSpawnEnvDeclaration>;
+
+/** `provenance.observedSpawnEnv` — the env key NAMES Desktop's own host-loop spawn carried on the synced build, read
+ *  from its `[HostLoop] sdkOptions after patch` log entries (src/sync/observed-spawn-env.ts). Names only, and only
+ *  registry-classified ones: anything else is withheld and counted. STRICT, for the same reason as
+ *  DesktopInitSurface, and likewise not attached to `PlatformBaseline`. */
+export const ObservedSpawnEnv = z.discriminatedUnion("observed", [
+  z
+    .strictObject({
+      observed: z.literal(true),
+      appVersion: z.string().min(1),
+      nativeAgentVersions: z.array(DottedVersion),
+      sessions: z.number().int().positive(),
+      keysAll: z.array(SpawnEnvKeyName),
+      keysSome: z.array(SpawnEnvKeyName),
+      withheld: z.number().int().nonnegative(),
+    })
+    .superRefine((v, ctx) => {
+      for (const [k, xs] of [
+        ["keysAll", v.keysAll],
+        ["keysSome", v.keysSome],
+        ["nativeAgentVersions", v.nativeAgentVersions],
+      ] as const)
+        if (!isSortedUnique(xs)) ctx.addIssue({ code: "custom", message: `${k} must be sorted and duplicate-free` });
+      if (v.keysAll.some((k) => v.keysSome.includes(k))) ctx.addIssue({ code: "custom", message: "keysAll and keysSome must be disjoint" });
+    }),
+  z.strictObject({
+    observed: z.literal(false),
+    appVersion: z.string().min(1),
+    reason: z.enum(["no-session", "lane-gone"]),
+    declared: ObservedSpawnEnvDeclaration.optional(),
+  }),
+]);
+export type ObservedSpawnEnv = z.infer<typeof ObservedSpawnEnv>;
+
 /** A name in the `cloud` block: a lowercase identifier. Never prose, a path or a `__`-split wire name. */
 const CloudName = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/);
 

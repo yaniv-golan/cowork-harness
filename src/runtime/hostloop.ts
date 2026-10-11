@@ -89,9 +89,14 @@ export const VM_LOOP_TOOL_ALIASES: Record<string, string> = { WebFetch: "mcp__wo
  */
 export function buildHostLoopNativeEnv(
   baseline: PlatformBaseline,
-  opts: Parameters<typeof hostNativeSpawnEnv>[1] & { agentEnv?: Record<string, string> },
+  opts: Parameters<typeof hostNativeSpawnEnv>[1] & {
+    agentEnv?: Record<string, string>;
+    /** The operator layer (default: this process's env). `sync` passes `{}` to compare against Desktop's spawn
+     *  without reading the maintainer's shell (src/sync/observed-spawn-env.ts harnessHostLoopKeys). */
+    operatorEnv?: NodeJS.ProcessEnv;
+  },
 ): NodeJS.ProcessEnv {
-  const nativeEnv: NodeJS.ProcessEnv = { ...process.env };
+  const nativeEnv: NodeJS.ProcessEnv = { ...(opts.operatorEnv ?? process.env) };
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete nativeEnv[k];
   delete nativeEnv[AUTO_MEMORY_ENV_KEY]; // owned by hostNativeSpawnEnv's autoMemoryEnv overlay — see AUTO_MEMORY_ENV_KEY
   Object.assign(nativeEnv, hostNativeSpawnEnv(baseline, opts));
