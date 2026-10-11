@@ -110,7 +110,10 @@ export const SessionConfig = z.strictObject({
   // → no flag passed → the agent inherits its own default (faithful: real Cowork passes no --max-turns for
   // an interactive session, only scheduled tasks default to 100).
   agent_max_turns: z.number().int().positive().optional(),
-  permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).default("default"), // setPermissionMode
+  // setPermissionMode. Absent resolves at launch (`resolvePermissionMode`): `acceptEdits` for a device_bridge run, as a
+  // production cloud task reports under the Manual choice, `default` otherwise. Kept absent here so an explicit
+  // `default` can be told apart from an unset one.
+  permission_mode: z.enum(["default", "acceptEdits", "plan", "bypassPermissions"]).optional(),
   // cowork = pre-approve built-ins (like real Cowork's allowedTools) + auto-allow unscripted
   // tools with a finding; strict = deny unmatched (for adversarial tests).
   permission_parity: z.enum(["cowork", "strict"]).default("cowork"),
@@ -454,6 +457,8 @@ export interface LaunchPlan {
   /** `answer_channel: none`: spawn with `--permission-prompts none` instead of the stdio tool (`permissionPromptArgs`). */
   answerChannel?: "none";
   permissionMode: string;
+  /** Where `permissionMode` came from: the session, the device_bridge default, or the plain default. */
+  permissionModeSource?: "session" | "bridge-default" | "default";
   permissionParity: "cowork" | "strict";
   baseEnv: NodeJS.ProcessEnv; // Cowork bg-env-strip applied; CLAUDE_CONFIG_DIR set by the runtime
   mounts: Mount[]; // uploads + projects + plugin roots (mountPath relative to mnt)
@@ -1293,6 +1298,8 @@ export function buildLaunchPlan(
   /** The session's sources, already resolved — `executeScenario` resolves them before it creates the run
    *  directory, so a missing source refuses the run with nothing left behind. Computed here when absent. */
   sources: LaunchSources = resolveLaunchSources(session, baseline, tier, resume),
+  /** `deviceBridge`: the scenario's `device_bridge`, which changes the mode an unset `permission_mode` resolves to. */
+  opts: { deviceBridge?: boolean } = {},
 ): LaunchPlan {
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
   const { pinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders } = sources;
@@ -1358,7 +1365,7 @@ export function buildLaunchPlan(
     agentEnv: agentEnvOverrides(session.agent_env),
     ...(session.agent_env.artifacts_root !== undefined ? { artifactsRoot: session.agent_env.artifacts_root } : {}),
     ...(session.answer_channel ? { answerChannel: session.answer_channel } : {}),
-    permissionMode: session.permission_mode,
+    ...resolvePermissionMode(session, opts.deviceBridge === true),
     permissionParity: session.permission_parity,
     baseEnv,
     mounts: presentMounts,
@@ -1368,6 +1375,19 @@ export function buildLaunchPlan(
     ...(sources.workspaceFixture ? { workspaceFixture: sources.workspaceFixture } : {}),
     ...(skills.length ? { stagedSkills: skills.map(({ src, dest }) => ({ src, dest })) } : {}),
   };
+}
+
+/** The agent's permission mode. An explicit `permission_mode` wins. Unset, a device_bridge run gets `acceptEdits`: a
+ *  production cloud task under the composer's Manual choice reports that mode to its hooks. Anything else gets
+ *  `default`, Cowork's own spawn mode. */
+export function resolvePermissionMode(
+  session: Pick<SessionConfig, "permission_mode">,
+  deviceBridge: boolean,
+): { permissionMode: string; permissionModeSource: "session" | "bridge-default" | "default" } {
+  if (session.permission_mode !== undefined) return { permissionMode: session.permission_mode, permissionModeSource: "session" };
+  return deviceBridge
+    ? { permissionMode: "acceptEdits", permissionModeSource: "bridge-default" }
+    : { permissionMode: "default", permissionModeSource: "default" };
 }
 
 /** Load + validate a session baseline from a YAML/JSON file. Normalizes `effort: extra` (the UI label

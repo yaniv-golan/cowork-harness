@@ -383,18 +383,34 @@ export function deviceBridgeNoteMode(env: Record<string, string | undefined> = p
   return env.COWORK_HARNESS_DEVICE_BRIDGE_NOTE === "off" ? "omitted" : "included";
 }
 
-export function deviceBridgeRecord(mounts: ReadonlyArray<Mount>, promptNote: "included" | "omitted" = "included"): DeviceBridgeRecord {
+export function deviceBridgeRecord(
+  mounts: ReadonlyArray<Mount>,
+  promptNote: "included" | "omitted" = "included",
+  plan: Pick<LaunchPlan, "permissionMode" | "permissionModeSource" | "egressAllow"> = {
+    permissionMode: "acceptEdits",
+    permissionModeSource: "bridge-default",
+    egressAllow: [],
+  },
+): DeviceBridgeRecord {
+  // `egress.unrestricted` resolves to `*`, which the run's proxy passes through: production's pass-through branch.
+  const unrestricted = plan.egressAllow.includes("*");
+  // A bridge plan resolves its mode from the session or from the bridge default; anything else is a wiring bug.
+  const source = plan.permissionModeSource;
+  if (source !== "session" && source !== "bridge-default")
+    throw new Error(`deviceBridgeRecord: permissionModeSource ${String(source)} is not a device_bridge plan's`);
   return {
     served: ["device_bash", "get_device_info"],
     alwaysLoad: ["device_bash"],
     measuredOn: "2.31226.1",
     promptNoteBasis: "model-report",
     promptNote,
-    egress: "allowlist",
+    permissionMode: plan.permissionMode,
+    permissionModeSource: source,
+    egress: unrestricted ? "unrestricted" : "allowlist",
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [
       "delete-not-refused",
-      "egress-allowlist",
+      ...(unrestricted ? [] : ["egress-allowlist"]),
       "description-paraphrase",
       "device-paths-tilde",
       "device-tools-unserved",

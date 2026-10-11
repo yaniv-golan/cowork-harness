@@ -1,6 +1,6 @@
 # Scenario & session schema, replay class, web_fetch, authoring gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.7.1`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.8.0`
 (baseline `desktop-2.31226.1`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -192,7 +192,7 @@ extended_thinking: true          # real Cowork on/off toggle; default true (ON) 
                                   # or --thinking disabled when false (no arbitrary budget in real Cowork)
 agent_max_turns: 500              # optional turn ceiling -> agent --max-turns; omit for the agent default
                                   # (distinct from the max_turns ASSERTION)
-permission_mode: default         # default | acceptEdits | plan | bypassPermissions
+permission_mode: default         # default | acceptEdits | plan | bypassPermissions; omitted -> default (acceptEdits under device_bridge)
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
 # answer_channel: none           # NOT Cowork: nobody answers the agent (--permission-prompts none; the agent then
                                   # offers no AskUserQuestion/EnterPlanMode/ExitPlanMode). Needs bypassPermissions +

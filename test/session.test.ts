@@ -648,10 +648,10 @@ describe("fail-loud declared-source staging", () => {
 
 describe("applySessionOverrides (E3 — matrix runner's session-loading override seam)", () => {
   it("overrides model, leaving everything else untouched", () => {
-    const base = loadSession({ model: "claude-sonnet-4-6" });
+    const base = loadSession({ model: "claude-sonnet-4-6", permission_mode: "plan" });
     const next = applySessionOverrides(base, { model: "claude-opus-4-8" });
     expect(next.model).toBe("claude-opus-4-8");
-    expect(next.permission_mode).toBe(base.permission_mode);
+    expect(next.permission_mode).toBe("plan");
   });
 
   it("is a no-op when no overrides are given (same values, per-field, not necessarily same reference)", () => {

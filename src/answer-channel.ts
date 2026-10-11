@@ -93,7 +93,7 @@ export function answerChannelRefusal(args: {
   scenario: Scenario;
   session: {
     answer_channel?: "none";
-    permission_mode: string;
+    permission_mode?: string;
     permission_parity: string;
     web_fetch: { approved_domains: string[] };
   };
@@ -110,7 +110,7 @@ export function answerChannelRefusal(args: {
 
   if (session.permission_mode !== "bypassPermissions")
     return why(
-      `requires \`permission_mode: bypassPermissions\` (got "${session.permission_mode}"). Under any other mode the agent's ordinary permission asks are denied too — including Cowork's own present_files and delivery — and plan mode can never exit, so the run would fail for reasons that have nothing to do with the skill.`,
+      `requires \`permission_mode: bypassPermissions\` (got ${session.permission_mode === undefined ? "none" : `"${session.permission_mode}"`}). Under any other mode the agent's ordinary permission asks are denied too — including Cowork's own present_files and delivery — and plan mode can never exit, so the run would fail for reasons that have nothing to do with the skill.`,
     );
   if (scenario.fidelity === "cowork" || tier === "hostloop")
     return why(

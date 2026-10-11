@@ -117,7 +117,7 @@ describe("the device_bridge note can be omitted for a control run", () => {
   it("execute.ts renders, fingerprints and records with the mode", () => {
     const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
     expect(s).toMatch(/deviceBridgeNote: bridgeNote,/);
-    expect(s.match(/deviceBridgeRecord\(plan\.mounts, bridgeNote\)/g)).toHaveLength(2);
+    expect(s.match(/deviceBridgeRecord\(plan\.mounts, bridgeNote, plan\)/g)).toHaveLength(2);
     expect(s.match(/deviceBridge: scenario\.device_bridge === true,\s*deviceBridgeNote: bridgeNote,/g)?.length).toBeGreaterThanOrEqual(3);
   });
 });

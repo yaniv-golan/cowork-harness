@@ -10,9 +10,9 @@ usage: verify.py --probe p0|p0f|p6 <download folder> [<line count from the trans
    mismatch voids the probe. A 64-hex string INSIDE export.jsonl is a redaction failure (no field holds one).
 2. Redaction: every line must pass validate_record(): only the fields capture.py writes, each with the expected
    type or pattern. Anything else (a path, an id, a free-text value) fails the whole file.
-3. Answerability: a capture that cannot answer its probe is void, not a result. P0 needs at least one
-   PostToolUse record for a remote-devices tool; P0F (a failing device command) needs at least one
-   PostToolUseFailure record for device_bash carrying an exit code or a non-empty error; P6 needs at least one record with a recognised permission mode.
+3. Answerability: a capture that cannot answer its probe is void, not a result. p0 needs at least one
+   PostToolUse record for a remote-devices tool; p0f (a failing device command) needs at least one
+   PostToolUseFailure record for device_bash carrying an exit code or a non-empty error; p6 needs at least one record with a recognised permission mode.
    "<hook-error>" lines are allowed (they carry only an exception class name) and are counted in the summary.
 Exit 0 ok, 1 integrity failure, 2 redaction failure or a stray file, 3 usage, 4 the capture cannot answer the probe.
 The summary printed on success names tools verbatim; keep it out of any repository.
@@ -242,7 +242,7 @@ def main(argv):
         events[event] = events.get(event, 0) + 1
         if rec.get("event") == "PostToolUse" and REMOTE_DEVICE_TOOL_RE.match(rec.get("tool", "")):
             device_results += 1
-        # Answers P0F only when it is device_bash's own failure with something to read: an exit code, or an error.
+        # Answers p0f only when it is device_bash's own failure with something to read: an exit code, or an error.
         if (
             rec.get("event") == "PostToolUseFailure"
             and DEVICE_BASH_RE.match(rec.get("tool", ""))
@@ -257,13 +257,13 @@ def main(argv):
         print(f"REDACTION FAIL: {bad} line(s) rejected — do not keep or share this file", file=sys.stderr)
         return 2
     if probe == "p0" and device_results == 0:
-        print("UNANSWERABLE: no PostToolUse record for a remote-devices tool — P0 void", file=sys.stderr)
+        print("UNANSWERABLE: no PostToolUse record for a remote-devices tool — p0 void", file=sys.stderr)
         return 4
     if probe == "p0f" and device_failures == 0:
-        print("UNANSWERABLE: no PostToolUseFailure record for a remote-devices tool — P0F void", file=sys.stderr)
+        print("UNANSWERABLE: no PostToolUseFailure record for a remote-devices tool — p0f void", file=sys.stderr)
         return 4
     if probe == "p6" and recognised_modes == 0:
-        print("UNANSWERABLE: no record with a recognised permission mode — P6 void", file=sys.stderr)
+        print("UNANSWERABLE: no record with a recognised permission mode — p6 void", file=sys.stderr)
         return 4
     print(json.dumps({"ok": True, "probe": probe, "sha256": actual, "lines": len(lines), "hook_errors": hook_errors,
                       "events": events, "permission_modes": modes, "tools": tools}, indent=2, sort_keys=True))

@@ -88,7 +88,7 @@ microvm still prepend it for the `docker run … claude …`/`limactl … claude
 claude -p --verbose
   --input-format stream-json --output-format stream-json
   --permission-prompt-tool stdio                # `answer_channel: none`: `--permission-prompts none` instead
-  --permission-mode <session.permissionMode ?? baseline.spawn.permissionMode ?? default>
+  --permission-mode <session.permissionMode ?? (device_bridge ? acceptEdits : default)>
   --setting-sources user
   --effort <session.effort ?? baseline.spawn.effortDefault>   # always emitted; medium fallback; per-model validated
   (--max-thinking-tokens 31999 | --thinking disabled)   # session.extended_thinking on|off (default on)
@@ -528,7 +528,7 @@ such an edit). The `session` is **not drift-checked on the replay path**, so a s
 re-assert does not move the replay verdict — the notice states this; re-record if the session changed.
 It *is* fingerprinted, but only `verify-cassettes` checks that hash (§11.1): `sessionFingerprint`
 covers the session's connected `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch` and the `model:` the
-session file pins, plus `projects`, `agent_env`, `answer_channel` and `agent_env.artifacts_root` when set. A model supplied by `--model` or
+session file pins, plus `projects`, `agent_env`, `answer_channel` and `agent_env.artifacts_root` when set, and `permission_mode` when not `default`. A model supplied by `--model` or
 `COWORK_HARNESS_MODEL` is not in that hash; the cassette's `environment.model` records the model that ran.
 
 **`replay_protocol_fidelity` (O7 guard):** after the run, `replay` re-serializes each decision
@@ -1235,7 +1235,7 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   top-level `hookFailureBlocks` lists an event or is unknown stamps **v16**. That field is the run's
   `onFailure: "block"` inventory; a v15 reader ignores it and would read a failed or timed-out hook frame as "no
   decision". An empty `{"events": []}` stamps what the cassette needs otherwise. A scenario with
-  `device_bridge: true` stamps **v17**: a v16 reader rejects the key as unrecognized.
+  `device_bridge: true` stamps **v17**: a v16 reader refuses it as too new.
   The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and

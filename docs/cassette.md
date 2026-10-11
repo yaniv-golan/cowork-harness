@@ -154,9 +154,9 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
   ],
   "fingerprint": { "baseline": "…", "skillHash": "…", "mode": "git", "contentSig": "…", "fileSigs": [["skills/x/SKILL.md", "…"]], "skillSources": ["…"], "promptAssetsHash": "…" }, // staleness tripwire (v5: fileSigs only; v6: mode + git default; v7: NUL-delimited hash entries; v8: folds fixed-length content shas + type-prefixed/NUL-framed entries; promptAssetsHash: sha16 over the baseline's committed prompt-asset files, keyed independently of `baseline` (appVersion) — see the prompt-assets staleness class below)
   "answerChannel": "none", // v15: present only when recorded under `answer_channel: none`; replay re-drives with the channel still absent
-  "deviceBridge": { "served": ["device_bash", "get_device_info"], "alwaysLoad": ["device_bash"], "measuredOn": "2.31226.1", "promptNoteBasis": "model-report", "egress": "allowlist", "folders": [{ "name": "proj", "mode": "rw" }], "divergences": ["delete-not-refused", "egress-allowlist"] }, // device_bridge only (v17): what the run modeled of the remote device bridge, frozen; replay reports it as recorded
+  "deviceBridge": { "served": ["device_bash", "get_device_info"], "alwaysLoad": ["device_bash"], "measuredOn": "2.31226.1", "promptNoteBasis": "model-report", "promptNote": "included", "permissionMode": "acceptEdits", "permissionModeSource": "bridge-default", "egress": "allowlist", "folders": [{ "name": "proj", "mode": "rw" }], "divergences": ["delete-not-refused", "egress-allowlist", "description-paraphrase", "device-paths-tilde", "device-tools-unserved", "shell-user", "device-network-shared"] }, // device_bridge only (v17): what the run modeled of the remote device bridge, frozen; replay reports it as recorded
   "hookFailureBlocks": { "events": ["PreToolUse"] }, // the run's onFailure: "block" inventory (or {"unknown": true, "why": "…"}); replay reads a failed or timed-out hook frame of a listed event as unreadable. Non-empty ⇒ v16. Absent on an older recording: read by the agents its init frames report — empty only when every one is 2.1.293 or earlier; any other (or none reported) is unknown
-  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (model/folders/plugins/skills/mcp/egress/web_fetch, plus projects, agent_env, answer_channel and agent_env.artifacts_root when set) — verify-cassettes-only, never the default replay verdict
+  "sessionFingerprint": "…", // v9+: hash of the session's content-relevant SHAPE (model/folders/plugins/skills/mcp/egress/web_fetch, plus projects, agent_env, answer_channel and agent_env.artifacts_root when set, and permission_mode when not default) — verify-cassettes-only, never the default replay verdict
   "folderPrefixMap": [{ "from": "/Users/me/myproject", "mount": "myproject" }], // v9+: record-time connected-folder host-path → mount-name map; computer_links_resolve uses THIS on replay
   "timeline": [ /* … */ ], // harness-observation timeline (see src/agent/timeline.ts): seq/ts/line/type per meaningful in-run event, in total order; `ts` is wall-clock-observation-time, frozen not recomputed on replay — informational only, no verdict impact. ABSENT on a pre-timeline cassette or when timeline.jsonl was empty/unreadable at record time
   "timelineHeader": { "startedAtMono": "…", "startedAtWall": "…" }, // written once as timeline.jsonl's first line; `startedAtMono` is the raw `process.hrtime.bigint()` start value (as a string) that every `timeline[].ts` is milliseconds-elapsed-since; `startedAtWall` is the wall-clock anchor so absolute times are recoverable from the relative `ts` stream
@@ -189,7 +189,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 | **v14** | declares `workspace_fixture` (an older reader would replay it without the fixture staleness check), or has an `assert:` entry using the object form of `file_exists` / `user_visible_artifact` or the `authored` field of `artifact_text` / `artifact_json` (any value), or a `question_option_count`, `hook_output_contains` or `hook_output_not_contains` entry | v13: refuses as too new — upgrade the harness, don't re-record |
 | **v15** | has a `gates_all_scripted` entry (either form), a `no_hook_event_blocked` or `hook_decision` entry, a `hook_event_blocked` entry in its object form (`{event, …}`; the bare event name stays v14-readable), or an `artifact_json` entry whose `artifact` is a glob or that carries `match` (a v14 reader would grade the glob as a literal path), or any `artifact_json` entry in a `lane: remote` scenario (a v14 reader grades the local file, where v15 fails it), or an `artifact_json` entry carrying `schema` (4.6.0, which reads v15, rejects that field as an unrecognized assertion and suggests re-recording: upgrade instead). Also a recording made under `answer_channel: none`, whose `answerChannel` is frozen beside the scenario: a v14 reader ignores that field and would grade a run that parked at a question as `stalled` | v14: refuses as too new — upgrade the harness, don't re-record |
 | **v16** | a recording whose top-level `hookFailureBlocks` lists an event or is unknown: the run may have had an `onFailure: "block"` hook (agent 2.1.295+), so a failed or timed-out hook frame is unreadable. A v15 reader ignores the field and would read that frame as "no decision". An empty `{"events": []}` stamps what the cassette needs otherwise | v15: refuses as too new — upgrade the harness, don't re-record |
-| **v17** | a scenario with `device_bridge: true` (the remote lane's device tools, served from a second container). A v16 reader rejects the key as unrecognized | v16: refuses as too new — upgrade the harness, don't re-record |
+| **v17** | a scenario with `device_bridge: true` (the remote lane's device tools, served from a second container). A v16 reader refuses it as too new | v16: refuses as too new — upgrade the harness, don't re-record |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes
@@ -879,7 +879,7 @@ possible.
   own drift. (With `COWORK_HARNESS_AGENT_SCOPE=skill`, a changed `agents/<x>.md` is attributed to skill `x`,
   matching the hash boundary.)
 - **`session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch
-  config changed since record; projects, agent_env, answer_channel and agent_env.artifacts_root are hashed only when set) — re-record`** (v9+) — the recorded `sessionFingerprint` no longer matches the
+  config changed since record; projects, agent_env, answer_channel and agent_env.artifacts_root are hashed only when set, permission_mode only when not default) — re-record`** (v9+) — the recorded `sessionFingerprint` no longer matches the
   live session's SHAPE. Distinct from `fingerprint.skillHash` (skill/plugin file content): a folder swapped or
   egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
   `verify-cassettes` **only**, gated by the same `--skip-staleness` flag as the rest of this list — it never
@@ -889,7 +889,7 @@ possible.
   **except** when the session file was only resolved via a name-lookup fallback (its persisted source path
   was missing, so the cassette may have been relocated onto a tree that doesn't mirror the original layout
   and the match could be an unrelated same-named sibling). In that one case `verify-cassettes` downgrades the
-  mismatch to a non-failing note instead of a hard fail.
+  mismatch to a non-failing note instead of a hard fail. Under `device_bridge` the hash and the mode the agent runs in part ways: an unset `permission_mode` (the agent runs in `acceptEdits`) and an explicit `default` hash alike, so a switch between them passes `verify-cassettes` clean, while a switch from unset to an explicit `acceptEdits` reports drift although the mode did not change.
 
   There is a second downgrade, for a cassette recorded before `projects[]` was part of the shape: its hash
   covers everything *except* `projects[]`, so if the rest matches exactly, the mismatch is reported as
@@ -953,12 +953,15 @@ for the `cowork` → `hostloop`/`container` resolution.
   it (a planted symlink, an untracked file in git mode). Can't verify ⇒ not green: it **fails the default
   replay**, and `verify-cassettes` reports it as could-not-verify (exit 3).
 
-- **`session-fingerprint: predates \`model\` coverage …`** — the same non-failing shape one bullet up, for
+- **`session-fingerprint: predates \`model\` coverage …`** (or `` `permission_mode` ``, or several fields joined by
+  `+`) — the same non-failing shape one bullet up, for
   the session shape rather than the prompt assets. A cassette recorded before `model` joined the hashed
   session shape carries a hash that says nothing about the pinned model, so a model change since record is
   undetectable on it — while everything the hash *does* cover still matches. It stays **clean** (exit 0);
   re-record only if you want that coverage. The reason it matters is that the agent selects part of its
   system prompt by model capability — see [fidelity-gaps.md](./fidelity-gaps.md#model-selection--the-harness-inherits-the-local-cli-default).
+  The `permission_mode` form fires only on a recording made before 4.8.0 whose session sets a mode other than
+  `default`; on a later recording a changed mode is drift (exit 1). Under `device_bridge` the hash and the mode the agent runs in part ways: an unset `permission_mode` (the agent runs in `acceptEdits`) and an explicit `default` hash alike, so a switch between them passes `verify-cassettes` clean, while a switch from unset to an explicit `acceptEdits` reports drift although the mode did not change.
 
 **The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
 source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /

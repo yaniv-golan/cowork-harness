@@ -382,3 +382,61 @@ describe("the staleness message and the doc that quotes it", () => {
     expect(doc).toContain(flat(msg!));
   });
 });
+
+// `permission_mode` is a run input (device_bridge resolves an unset one to acceptEdits), so a change to it must move
+// the hash. Hashed only when set to something other than `default`, so a session that says `default` or nothing hashes
+// as it did before the field was covered. PRE_COVERAGE is `model: m` hashed by the release before that coverage.
+describe("buildSessionFingerprint — permission_mode", () => {
+  const PRE_COVERAGE = "65ec84aa6305b9551a814c15a5b472ee0a15d1966d212609b07ad5e4790215cd";
+  const fp = (yaml: string) => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-pm-"));
+    writeFileSync(join(d, "s.yaml"), yaml);
+    return buildSessionFingerprint("s.yaml", d);
+  };
+  it("unset and an explicit `default` hash as they did before the field was covered", () => {
+    expect(fp("model: m\n")).toBe(PRE_COVERAGE);
+    expect(fp("model: m\npermission_mode: default\n")).toBe(PRE_COVERAGE);
+  });
+  it("a non-default mode moves the hash, and each mode hashes differently", () => {
+    const modes = ["acceptEdits", "plan", "bypassPermissions"].map((m) => fp(`model: m\npermission_mode: ${m}\n`));
+    expect(modes).not.toContain(PRE_COVERAGE);
+    expect(new Set(modes).size).toBe(3);
+  });
+  it("a recording made before the coverage, on a non-default mode, is unverifiable, not drifted", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-pm-"));
+    writeFileSync(join(d, "s.yaml"), "model: m\npermission_mode: bypassPermissions\n");
+    const r = sessionFingerprintDrift({ sessionFingerprint: PRE_COVERAGE, scenario: { session: "s.yaml" } as Cassette["scenario"] }, d);
+    expect(r.drifted).toBe(false);
+    expect(r.unverifiable).toBe(true);
+    expect(r.note).toMatch(/`permission_mode`/);
+  });
+  it("a recording on one non-default mode, replayed against another, is drift", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-pm-"));
+    writeFileSync(join(d, "s.yaml"), "model: m\npermission_mode: plan\n");
+    const recorded = buildSessionFingerprint("s.yaml", d)!;
+    writeFileSync(join(d, "s.yaml"), "model: m\npermission_mode: bypassPermissions\n");
+    const r = sessionFingerprintDrift({ sessionFingerprint: recorded, scenario: { session: "s.yaml" } as Cassette["scenario"] }, d);
+    expect(r.drifted).toBe(true);
+  });
+});
+
+// The pre-coverage probe cannot tell a recording made before the coverage from one made after it on a `default`
+// session: both hash without the key. The recorder's version can, so a 4.8.0+ recording never takes that excuse.
+describe("sessionFingerprintDrift — permission_mode set after a 4.8.0 recording", () => {
+  const run = (harnessVersion: string | undefined) => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-pmv-"));
+    writeFileSync(join(d, "s.yaml"), "model: m\n");
+    const recorded = buildSessionFingerprint("s.yaml", d)!;
+    writeFileSync(join(d, "s.yaml"), "model: m\npermission_mode: acceptEdits\n");
+    const cassette = {
+      sessionFingerprint: recorded,
+      scenario: { session: "s.yaml" } as Cassette["scenario"],
+      ...(harnessVersion ? { environment: { location: "local" as const, harnessVersion } } : {}),
+    };
+    return sessionFingerprintDrift(cassette, d);
+  };
+  it("a 4.8.0 recording is drift", () => expect(run("4.8.0").drifted).toBe(true));
+  it("a later recording is drift", () => expect(run("4.10.2").drifted).toBe(true));
+  it("a 4.7.1 recording is unverifiable", () => expect(run("4.7.1")).toMatchObject({ drifted: false, unverifiable: true }));
+  it("a recording with no version is unverifiable", () => expect(run(undefined)).toMatchObject({ drifted: false, unverifiable: true }));
+});

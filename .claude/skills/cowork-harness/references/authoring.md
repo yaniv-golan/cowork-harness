@@ -1,6 +1,6 @@
 # Authoring a scenario
 
-Tracks `cowork-harness 4.7.1` (baseline `desktop-2.31226.1`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
+Tracks `cowork-harness 4.8.0` (baseline `desktop-2.31226.1`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
 
 ## Part I — AUTHOR a scenario
 
@@ -80,8 +80,10 @@ computer, `mcp__remote-devices__device_bash`, from a second container holding CO
 files: `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`, plus `transcript_matches`.
 `file_exists` / `input_unmodified` on a connected folder's path are refused under the bridge (they would read the
 agent's container). `no_delete_in_mounts` covers the folders (the device copy allows a delete production refuses).
-`tool_not_called` on a device tool without the bridge is refused as vacuous. Egress follows the session allowlist;
-`egress.unrestricted: true` matches production's pass-through. The run's `deviceBridge` lists every known
+`tool_not_called` on `device_bash`/`get_device_info` without the bridge, or on a device tool the harness never serves
+(with it or without), is refused as vacuous. Egress follows the session allowlist;
+`egress.unrestricted: true` matches production's pass-through. With no `permission_mode` in the session the agent
+runs in `acceptEdits` (a production cloud task's mode under Manual); a mode you set wins. The run's `deviceBridge` lists every known
 difference from production.
 
 ### Choose an answer path (gates: AskUserQuestion + tool-permission)
