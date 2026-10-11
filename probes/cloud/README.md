@@ -45,8 +45,8 @@ the real hook. The test asserts that none of them reaches the capture, and that 
   `Exit code N` are kept.
 - **Never recorded:** commands, paths, ids, emails, timestamps, file names or contents, the device name, folder
   names, and any tool's input field names other than the vocabulary tools' (those are fingerprinted).
-- **The salt:** it stays in the container in `/root/cwh-cloud-probe/.salt`, is never exported, and the export
-  step shreds it. Fingerprints are comparable only within one capture. Within one capture they share that salt
+- **The salt:** it stays in the container in `/root/cwh-cloud-probe/.salt`, is never exported, and goes away with
+  the throwaway cloud container. Fingerprints are comparable only within one capture. Within one capture they share that salt
   across fields, so the same string fingerprints the same whether it was a tool name, a key or result text. One container keeps one salt across the
   tasks it serves, and the capture file keeps their lines too, so an export can carry earlier tasks' lines: the
   verifier and the summary cover them all.
@@ -120,7 +120,7 @@ for each. If your build shows a different set, do one task per choice shown and 
 Paste:
 
 > Using **your own Bash tool** (not the shell on my computer), run exactly:
-> `cp /root/cwh-cloud-probe/capture.jsonl /home/claude/export.jsonl && { shred -u /root/cwh-cloud-probe/.salt 2>/dev/null || rm -f /root/cwh-cloud-probe/.salt; } && wc -l /home/claude/export.jsonl && sha256sum /home/claude/export.jsonl | tee /home/claude/export.sha256`
+> `cp /root/cwh-cloud-probe/capture.jsonl /home/claude/export.jsonl && wc -l /home/claude/export.jsonl && sha256sum /home/claude/export.jsonl | tee /home/claude/export.sha256`
 > Print both output lines exactly as they appear. Then send me exactly two files, `/home/claude/export.jsonl`
 > and `/home/claude/export.sha256`, and no other file.
 
@@ -130,9 +130,11 @@ Why this shape:
 - **The agent's own shell:** the capture lives in the cloud container, which the shell on your computer cannot
   see.
 - **`/home/claude`:** it is the delivery location that has been measured.
-- **Remove the salt** (`shred -u`, or `rm -f` where `shred` is missing): after the copy no later step can ship it,
-  so a loose follow-up prompt cannot make every fingerprint dictionary-attackable. (The hook makes a new salt for
-  any later tool call; it is never exported either.)
+- **The salt is left alone:** the export never touches `.salt`, so the same command works in every approval mode
+  (an auto mode can read removing it as tampering with logs). It is never exported and goes away with the cloud
+  container. The guards are `verify.py`'s: the download must hold exactly the two export files, and no line may
+  carry a 64-hex string. Residual risk: a loose follow-up prompt in the same task could still send the salt, and
+  `verify.py` voids any export that includes it.
 - **Output without both lines** (the `wc -l` count and the sha256) **is void**: a step of the chain failed. Run
   the export again in the same task; never send files from a run that did not print both.
 - **Exactly two files:** if the task sends anything else (above all a `.salt`), the export is void: delete it
