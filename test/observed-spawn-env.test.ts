@@ -12,14 +12,15 @@ import {
 } from "../src/sync/observed-spawn-env.js";
 import { ObservedSpawnEnv } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
+import { classifySpawnEnvKey } from "../src/sync/spawn-env-registry.js";
 
 // Synthetic Desktop main.log text in the shape Desktop's logger writes (util.inspect of the sdkOptions object):
 // several short items per line, a `[length]: N` trailer, a long `plugins` list BEFORE `envKeys` (envKeys sits ~140
 // lines into a real dump), and username-bearing paths in the fields the reader must never read.
-const FAKE_TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE-R48";
-const FAKE_EMAIL = "someone.r48@example.invalid";
+const FAKE_TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE-TEST";
+const FAKE_EMAIL = "someone.test@example.invalid";
 const ORG_KEY = "ACME_INTERNAL_BILLING_ID";
-const SECRET_SHAPED = "SECRET_SHAPED_VALUE_R48";
+const SECRET_SHAPED = "SECRET_SHAPED_VALUE_TEST";
 
 const ts = (d: string) => `${d} [info]`;
 const startApp = (when: string, appVersion: string) =>
@@ -78,13 +79,18 @@ afterEach(() => {
   dirs = [];
 });
 function logsDir(files: Record<string, string>): string {
-  const d = mkdtempSync(join(tmpdir(), "r48-logs-"));
+  const d = mkdtempSync(join(tmpdir(), "oracle-logs-"));
   dirs.push(d);
   mkdirSync(d, { recursive: true });
   for (const [n, t] of Object.entries(files)) writeFileSync(join(d, n), t + "\n");
   return d;
 }
-const productNames = new Set([...CORE, "HTTPS_PROXY", "CLAUDE_CODE_SKILL_ATTRIBUTION", "CLAUDE_CODE_WORKSPACE_HOST_PATHS"]);
+const productNames = new Set([
+  ...CORE,
+  "CLAUDE_CODE_UNCLASSIFIED_TEST",
+  "CLAUDE_CODE_SKILL_ATTRIBUTION",
+  "CLAUDE_CODE_WORKSPACE_HOST_PATHS",
+]);
 const input = (logs: string, over: Partial<ObservedSpawnEnvInput> = {}): ObservedSpawnEnvInput => ({
   logsDir: logs,
   appVersion: "2.31226.1",
@@ -102,16 +108,17 @@ describe("observed spawn-env oracle — privacy", () => {
       "main1.log": startApp("2026-10-09 22:46:06", "2.31226.1"),
       "main.log": [
         session("2026-10-10 11:28:40"),
-        dump({ when: "2026-10-10 11:28:43", keys: [...CORE, ORG_KEY, "HTTPS_PROXY"], extraItems: [`'${FAKE_TOKEN}'`] }),
+        dump({ when: "2026-10-10 11:28:43", keys: [...CORE, ORG_KEY, "CLAUDE_CODE_UNCLASSIFIED_TEST"], extraItems: [`'${FAKE_TOKEN}'`] }),
       ].join("\n"),
     });
     const r = readObservedSpawnEnv(input(logs));
     const committed = JSON.stringify(r.block);
-    for (const leak of [FAKE_TOKEN, FAKE_EMAIL, ORG_KEY, SECRET_SHAPED, "HTTPS_PROXY", "/Users/"]) expect(committed).not.toContain(leak);
+    for (const leak of [FAKE_TOKEN, FAKE_EMAIL, ORG_KEY, SECRET_SHAPED, "CLAUDE_CODE_UNCLASSIFIED_TEST", "/Users/"])
+      expect(committed).not.toContain(leak);
     for (const leak of [FAKE_TOKEN, FAKE_EMAIL, ORG_KEY, SECRET_SHAPED, "/Users/"]) expect(everything(r)).not.toContain(leak);
     expect(r.block).toMatchObject({ observed: true, withheld: 1 });
     // Desktop vocabulary that nobody classified: a LOCAL write-blocking delta that may name it.
-    expect(r.deltas.some((d) => d.includes("HTTPS_PROXY"))).toBe(true);
+    expect(r.deltas.some((d) => d.includes("CLAUDE_CODE_UNCLASSIFIED_TEST"))).toBe(true);
     // The fake token as an envKeys item is not key-shaped: a malformed delta, counted, never quoted.
     expect(r.deltas.some((d) => /malformed/.test(d))).toBe(true);
     expect(ObservedSpawnEnv.safeParse(r.block).success).toBe(true);
@@ -315,10 +322,10 @@ describe("observed spawn-env oracle — comparison with the harness host-loop en
   });
 
   it("notes harness-only keys by registry name only, never an unregistered name", () => {
-    const r = checkObservedAgainstHarness(observed(["TZ"]), new Set(["TZ", "CLAUDE_CODE_SIMPLE", "R48_SHELL_ONLY"]));
+    const r = checkObservedAgainstHarness(observed(["TZ"]), new Set(["TZ", "CLAUDE_CODE_SIMPLE", "TEST_SHELL_ONLY"]));
     expect(r.deltas).toEqual([]);
     expect(r.notes.join()).toContain("CLAUDE_CODE_SIMPLE");
-    expect(r.notes.join()).not.toContain("R48_SHELL_ONLY");
+    expect(r.notes.join()).not.toContain("TEST_SHELL_ONLY");
   });
 
   it("does nothing for an unobserved block", () => {
@@ -329,15 +336,15 @@ describe("observed spawn-env oracle — comparison with the harness host-loop en
   });
 
   it("builds the harness side from an EMPTY operator env, so the maintainer's shell never enters the comparison", () => {
-    process.env.R48_SHELL_ONLY = "1";
+    process.env.TEST_SHELL_ONLY = "1";
     try {
       const keys = harnessHostLoopKeys(loadBaseline("latest"));
-      expect(keys.has("R48_SHELL_ONLY")).toBe(false);
+      expect(keys.has("TEST_SHELL_ONLY")).toBe(false);
       expect(keys.has("PATH")).toBe(false);
       for (const k of ["CLAUDE_CODE_IS_COWORK", "TZ", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_WORKSPACE_HOST_PATHS"])
         expect(keys.has(k), k).toBe(true);
     } finally {
-      delete process.env.R48_SHELL_ONLY;
+      delete process.env.TEST_SHELL_ONLY;
     }
   });
 });
@@ -360,5 +367,50 @@ describe.skipIf(!REAL_LOGS || !REAL_APP)("observed spawn-env oracle over real De
     const out = JSON.stringify(r);
     expect(out).not.toContain("/Users/");
     expect(out).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/);
+  });
+});
+
+describe("observed spawn-env oracle — review regressions", () => {
+  const startNoVersion = (when: string) => [`${ts(when)} Starting app {`, "  version: 'x',", "  isPackaged: true,", "}"].join("\n");
+
+  it("a 'Starting app' entry without its appVersion never lets the previous build attribute what follows", () => {
+    const logs = logsDir({
+      "main.log": [
+        startApp("2026-10-09 04:35:07", "2.31226.0"),
+        startNoVersion("2026-10-09 22:46:06"),
+        session("2026-10-10 11:00:00"),
+        dump({ when: "2026-10-10 11:00:01", keys: CORE }),
+      ].join("\n"),
+    });
+    // Synced build 2.31226.1: the dump must not be credited to 2.31226.0, and the drift must block.
+    const r = readObservedSpawnEnv(input(logs, { declare: "local-lane-removed" }));
+    expect(r.deltas.some((d) => /no appVersion line/.test(d))).toBe(true);
+    const asOld = readObservedSpawnEnv(input(logs, { appVersion: "2.31226.0" }));
+    expect(asOld.block).toMatchObject({ observed: false, reason: "no-session" });
+  });
+
+  it("records a lane-gone declaration when the producer is gone, instead of leaving only --allow-empty", () => {
+    const r = readObservedSpawnEnv(
+      input(logsDir({ "main.log": "" }), { bundle: { hasProducer: false, hasProductName: () => true }, declare: "local-lane-removed" }),
+    );
+    expect(r.deltas).toEqual([]);
+    expect(r.block).toEqual({ observed: false, appVersion: "2.31226.1", reason: "lane-gone", declared: "local-lane-removed" });
+  });
+
+  it("classifies the standard proxy names, and notes a default-absent key that every session carries", () => {
+    for (const k of ["HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"])
+      expect(classifySpawnEnvKey(k, "observed")?.class).toBe("host-loop-unmodeled");
+    const block: ObservedSpawnEnv = {
+      observed: true,
+      appVersion: "2.31226.1",
+      nativeAgentVersions: [],
+      sessions: 2,
+      keysAll: ["CLAUDE_CODE_COWORK_FRAME_ARTIFACTS"],
+      keysSome: [],
+      withheld: 0,
+    };
+    expect(checkObservedAgainstHarness(block, new Set()).notes.join()).toMatch(
+      /CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is classed session-conditional/,
+    );
   });
 });

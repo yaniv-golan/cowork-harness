@@ -418,7 +418,7 @@ committed baseline and say why in that baseline's `$comment`.
    - **After log rotation.** The logs keep about ten days. If none of this build's entries remain, `sync` keeps
      the committed observation of the same build rather than recording it unobserved.
    - **Privacy.** The same log entry holds paths with your username and your plugin list; the reader reads only
-     the `envKeys` list. Only registry-classified names are committed. Any other name (an organisation's managed
+     the `envKeys` list, plus the `Starting app` version and the agent version in the agent's path. Only registry-classified names are committed. Any other name (an organisation's managed
      env, say) is counted as `withheld` and never printed or committed.
 
    **Post-construction spawn-env writes.** `sync` also scans the code between the W1 env literal and the spawn

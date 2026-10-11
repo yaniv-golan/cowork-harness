@@ -1660,7 +1660,7 @@ function extractFromAsar(
         (bundle.includes(`"${name}"`) ||
           bundle.includes(`{${name}:`) ||
           bundle.includes(`,${name}:`) ||
-          new RegExp(`\\.${name}(?![\\w$])`).test(bundle)),
+          new RegExp(`\\.${reEsc(name)}(?![\\w$])`).test(bundle)),
       spawnEnvProducer: bundleHasSpawnEnvProducer(bundle),
       cloud,
       notes: [...notes, ...postWriteNotes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],

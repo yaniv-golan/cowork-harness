@@ -384,6 +384,23 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
   },
   FORCE_AUTOUPDATE_PLUGINS: { class: "host-loop-unmodeled", reason: "plugin cache mode only; untriaged, follow-up", sites: ["observed"] },
   CLAUDE_HOST_CLI_LAUNCHER_NOTE: { class: "host-loop-unmodeled", reason: "host CLI launcher mode only", sites: ["observed"] },
+  // Desktop's proxy transform (host loop) adds these from the system or managed proxy. Standard public names; only
+  // their values are private, and the oracle never reads a value. Any other name that transform adds stays withheld.
+  HTTPS_PROXY: {
+    class: "host-loop-unmodeled",
+    reason: "Desktop's proxy transform, from the system or managed proxy; untriaged, follow-up",
+    sites: ["observed"],
+  },
+  HTTP_PROXY: {
+    class: "host-loop-unmodeled",
+    reason: "Desktop's proxy transform, from the system or managed proxy; untriaged, follow-up",
+    sites: ["observed"],
+  },
+  NO_PROXY: {
+    class: "host-loop-unmodeled",
+    reason: "Desktop's proxy transform, from the system or managed proxy; untriaged, follow-up",
+    sites: ["observed"],
+  },
   CLAUDE_CODE_USE_GATEWAY: {
     class: "3p-only",
     reason: "custom third-party gateway routing; harness models first-party",

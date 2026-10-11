@@ -78,6 +78,8 @@ export interface ParsedSession {
 export interface ParsedLog {
   dumps: ParsedDump[];
   sessions: ParsedSession[];
+  /** `Starting app` entries that carried no appVersion line: the log format drifted. */
+  startsWithoutVersion: number;
 }
 
 const ENTRY = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) \[\w+\] (.*)$/;
@@ -107,6 +109,8 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
   const dumps: ParsedDump[] = [];
   const sessions: ParsedSession[] = [];
   let currentApp: string | null = null;
+  let startHadVersion = true;
+  let startsWithoutVersion = 0;
   let mode: "none" | "start" | "dump" = "none";
   let dump: ParsedDump | null = null;
   let inEnvKeys = false;
@@ -129,9 +133,14 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
     const entry = line.match(ENTRY);
     if (entry) {
       if (mode === "dump") finish();
+      if (mode === "start" && !startHadVersion) startsWithoutVersion++;
       const rest = entry[7];
-      if (rest === "Starting app {") mode = "start";
-      else if (DUMP_HEAD.test(rest)) {
+      if (rest === "Starting app {") {
+        // A new Desktop process: never let the previous build's version attribute what follows.
+        mode = "start";
+        currentApp = null;
+        startHadVersion = false;
+      } else if (DUMP_HEAD.test(rest)) {
         mode = "dump";
         dump = { appVersion: currentApp, atMs: localMs(entry), agentVersion: null, names: new Set(), status: "incomplete", malformed: 0 };
         dumps.push(dump);
@@ -143,7 +152,10 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
     }
     if (mode === "start") {
       const v = line.match(START_APP_VERSION);
-      if (v) currentApp = v[1];
+      if (v) {
+        currentApp = v[1];
+        startHadVersion = true;
+      }
       continue;
     }
     if (mode !== "dump" || !dump || envDone) continue;
@@ -183,7 +195,8 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
     }
   }
   if (mode === "dump") finish();
-  return { dumps, sessions };
+  if (mode === "start" && !startHadVersion) startsWithoutVersion++;
+  return { dumps, sessions, startsWithoutVersion };
 }
 
 /** `main<N>.log` oldest first (highest N), then `main.log`. Nothing else in the dir is opened. */
@@ -224,6 +237,13 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
     return { block: noSession, deltas, notes };
   }
   if (!input.bundle.hasProducer) {
+    // Nothing in the logs can contradict a declaration when Desktop no longer writes the entry at all.
+    if (input.declare) {
+      notes.push(
+        `WARNING: observedSpawnEnv UNOBSERVABLE (declared: ${input.declare}; the bundle no longer logs the host-loop dump) — coverage of Desktop's post-construction spawn env is down to the minimal scanner for Desktop ${input.appVersion}.`,
+      );
+      return { block: { observed: false, appVersion: input.appVersion, reason: "lane-gone", declared: input.declare }, deltas, notes };
+    }
     deltas.push(
       `observedSpawnEnv: the Desktop bundle no longer logs "${SPAWN_ENV_PRODUCER_LITERAL}" with an envKeys list built from the env's keys — ` +
         "the oracle's producer is gone. Re-derive src/sync/observed-spawn-env.ts against this build, or pass --spawn-env-unobservable",
@@ -233,6 +253,10 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
 
   const counts = { unreadable: 0 };
   const parsed = parseDesktopLogLines(logLines(input.logsDir, counts));
+  if (parsed.startsWithoutVersion > 0)
+    deltas.push(
+      `observedSpawnEnv: ${parsed.startsWithoutVersion} 'Starting app' log entr${parsed.startsWithoutVersion === 1 ? "y has" : "ies have"} no appVersion line, so dumps after ${parsed.startsWithoutVersion === 1 ? "it" : "them"} cannot be attributed to a Desktop build — the log format drifted; re-derive src/sync/observed-spawn-env.ts`,
+    );
   let fallback = 0;
   const ours = (x: { appVersion: string | null; atMs: number }) => {
     if (x.appVersion !== null) return x.appVersion === input.appVersion;
@@ -329,11 +353,15 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
 
 /** Classes whose keys the harness host loop claims to set itself; an observed one it does not set is a contradiction. */
 const HARNESS_OWNED = new Set(["pinned", "harness-set"]);
+/** Classes whose keys a default session should not carry. */
+const DEFAULT_ABSENT = new Set(["settings-conditional", "session-conditional", "gate-conditional-off", "non-cowork-session", "3p-only"]);
 
 /**
  * The env key names the harness host loop spawns for `baseline`, built over an EMPTY operator env (so no name from the
  * maintainer's shell can enter the comparison or a message) and with placeholder values for the keys the harness adds
- * at spawn (`runtimeAuthEnv`: TZ and the OAuth token) and for a connected folder. Only the key set is used.
+ * at spawn (`runtimeAuthEnv`: TZ and the OAuth token) and for a connected folder. Only the key set is used. The OAuth
+ * token is assumed present: `runtimeAuthEnv` sends ANTHROPIC_API_KEY instead when the operator has no token, which is
+ * the CI fallback, not the Cowork path being compared.
  */
 export function harnessHostLoopKeys(baseline: PlatformBaseline): Set<string> {
   const env = buildHostLoopNativeEnv(baseline, {
@@ -357,6 +385,7 @@ export function checkObservedAgainstHarness(
   if (!block.observed) return { deltas: [], notes: [] };
   const seen = new Set([...block.keysAll, ...block.keysSome]);
   const deltas: string[] = [];
+  const notes: string[] = [];
   for (const k of [...seen].sort()) {
     const c = classifySpawnEnvKey(k, "observed");
     if (c && HARNESS_OWNED.has(c.class) && !harnessKeys.has(k))
@@ -364,9 +393,18 @@ export function checkObservedAgainstHarness(
         `observedSpawnEnv: Desktop's host-loop spawn carries ${k}, classed ${c.class}, but the harness host loop does not set it — model it or reclassify it in src/sync/spawn-env-registry.ts`,
       );
   }
+  // A key the registry calls absent by default that every observed session carries: the reason is out of date.
+  for (const k of block.keysAll) {
+    const c = classifySpawnEnvKey(k, "observed");
+    if (c && DEFAULT_ABSENT.has(c.class))
+      notes.push(
+        `observedSpawnEnv: ${k} is classed ${c.class} (absent by default) but every observed session carries it — re-check its classification in src/sync/spawn-env-registry.ts`,
+      );
+  }
   const harnessOnly = [...harnessKeys].filter((k) => !seen.has(k) && classifySpawnEnvKey(k, "observed") !== null).sort();
-  const notes = harnessOnly.length
-    ? [`observedSpawnEnv: the harness host loop sets ${harnessOnly.length} key(s) no observed dump carried: ${harnessOnly.join(", ")}`]
-    : [];
+  if (harnessOnly.length)
+    notes.push(
+      `observedSpawnEnv: the harness host loop sets ${harnessOnly.length} key(s) no observed dump carried: ${harnessOnly.join(", ")}`,
+    );
   return { deltas, notes };
 }

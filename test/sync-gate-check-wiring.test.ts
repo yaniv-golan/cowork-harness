@@ -12,7 +12,7 @@ function bodyOf(header: string): string {
 }
 
 describe("sync wires its gate notes and the auto-memory anchor", () => {
-  const sync = bodyOf("export function sync(): SyncResult {");
+  const sync = bodyOf("export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration | null } = {}): SyncResult {");
   const extract = bodyOf("function extractFromAsar(");
   it("finds both functions", () => {
     expect(sync.length).toBeGreaterThan(0);

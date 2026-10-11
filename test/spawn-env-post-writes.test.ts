@@ -29,7 +29,7 @@ const files = (b = builder(), c = caller(), extra = "") =>
     ["index.chunk-main.js", `const t=require("./index.chunk-consts.js");${b}${c}${extra}`],
     ["index.chunk-consts.js", CONSTS],
   ]);
-const registryAll = (n: string) => (/^(?:R48_|SHADOWED)/.test(n) ? null : { class: "pinned" as const, reason: "test" });
+const registryAll = (n: string) => (/^(?:TEST_|SHADOWED)/.test(n) ? null : { class: "pinned" as const, reason: "test" });
 
 describe("scanSpawnEnvPostWrites — direct writes to the spawn env after W1 is built", () => {
   it("finds re-spread literal and computed keys, member writes, and resolves constants in any quote style", () => {
@@ -53,14 +53,14 @@ describe("scanSpawnEnvPostWrites — direct writes to the spawn env after W1 is 
   });
 
   it("hard-fails an unclassified key, naming it", () => {
-    const r = scanSpawnEnvPostWrites(files(builder(), caller('J.env.R48_NEW_KEY="1";')), registryAll);
+    const r = scanSpawnEnvPostWrites(files(builder(), caller('J.env.TEST_NEW_KEY="1";')), registryAll);
     expect(r.flags).toHaveLength(1);
-    expect(r.flags[0]).toContain("R48_NEW_KEY");
+    expect(r.flags[0]).toContain("TEST_NEW_KEY");
   });
 
   it("hard-fails a computed key it cannot resolve", () => {
-    const r = scanSpawnEnvPostWrites(files(builder(), caller("J.env={...J.env,[t.R48NOPE]:x};")), registryAll);
-    expect(r.flags.some((f) => /t\.R48NOPE/.test(f) && /resolve/.test(f))).toBe(true);
+    const r = scanSpawnEnvPostWrites(files(builder(), caller("J.env={...J.env,[t.TESTNOPE]:x};")), registryAll);
+    expect(r.flags.some((f) => /t\.TESTNOPE/.test(f) && /resolve/.test(f))).toBe(true);
   });
 
   it("hard-fails a missing or duplicated anchor", () => {
