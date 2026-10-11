@@ -26,13 +26,12 @@ import {
   evaluateMetricFamily,
   fisherNullMass,
   mdsSdUnits,
-  wmwNullMass,
   type FamilyRowOutput,
   type Mdd,
   type MetricRowInput,
   type MetricRowOutput,
 } from "./stats.js";
-import { confirmedAddsNoEvidence, familyReach, sectionFamilies, type SectionFamilies } from "./families.js";
+import { confirmedAddsNoEvidence, familyReach, metricAaFalseConfirm, sectionFamilies, type SectionFamilies } from "./families.js";
 import { readManifest, type EvalManifest } from "./manifest.js";
 import { readRunsLines, repEvidenceOf, RUNS_FILE, type RunsLine } from "./runs.js";
 import { redactHostPaths } from "../run/host-path-tokens.js";
@@ -594,7 +593,7 @@ function metricSection(
         `survivor p ${fmtP(r.survivorP)} (${r.direction}) holds only while ${x.a.excluded + x.b.excluded} excluded rep(s) stay unknown (A ${x.a.excluded}, B ${x.b.excluded})`,
       );
     if (!unmeasured && Math.abs(excess) >= UNMEASURED_GAP)
-      notes.push(`${excess > 0 ? "B" : "A"}: ${Math.abs(excess)} more scorer failures than ${excess > 0 ? "A" : "B"}`);
+      notes.push(`${excess > 0 ? "B" : "A"}: ${Math.abs(excess)} more excluded values than ${excess > 0 ? "A" : "B"}`);
     if (r.hl && x.a.worst + x.b.worst > 0) notes.push(`HL over measured reps (${x.a.values.length + x.b.values.length} of ${r.n1 + r.n2})`);
     if (r.floor === 1 && label === "underpowered") notes.push("every value tied");
     if (r.mds && r.n1 !== r.n2) notes.push(`MDS at n = ${r.mds.n} per arm (the smaller arm; conservative)`);
@@ -650,7 +649,7 @@ function metricSection(
   }
   if (fams.metricM > 0 && metricsRecorded) {
     const mm = out.m;
-    const aa = fams.metric.rule === "holm" && mm > 0 ? 1 - (1 - wmwNullMass(reps, reps, fams.metric.level / mm)) ** mm : undefined;
+    const aa = metricAaFalseConfirm(fams, reps, mm);
     families.push({
       kind: "metrics",
       m: mm,
@@ -1182,6 +1181,23 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
           : r.b.refused > r.a.refused
             ? "Read the candidate's run dirs: a deliverable that outgrew the evidence budget can hide a drop."
             : "Read those run dirs before trusting this assertion's rows."),
+      "",
+    );
+  }
+  // Excluded metric values unbalanced between the arms: the only signal of a candidate whose scorer fails exactly on
+  // its bad runs, so it is named in the header whatever the row's label.
+  const total = (rec: Record<string, number>) => Object.values(rec).reduce((n, v) => n + v, 0);
+  const listed = (rec: Record<string, number>) =>
+    Object.entries(rec)
+      .map(([k, v]) => `${k} ${v}`)
+      .join(", ");
+  for (const r of [...(rep.sections.tuned?.metricRows ?? []), ...(rep.sections.heldOut?.metricRows ?? [])]) {
+    const excess = total(r.excluded.b) - total(r.excluded.a);
+    if (Math.abs(excess) < UNMEASURED_GAP) continue;
+    const more = excess > 0 ? "B" : "A";
+    L.push(
+      `**⚠ ${r.scenario} ${r.metricId}: ${more}: ${Math.abs(excess)} more excluded metric values than ${more === "B" ? "A" : "B"}** (A ${listed(r.excluded.a) || "none"}; B ${listed(r.excluded.b) || "none"}) — ` +
+        "values the scorer, the capture or a cap left out; the row is graded on the rest, and a scorer that fails exactly on the bad runs hides a regression. Read those run dirs.",
       "",
     );
   }

@@ -259,6 +259,53 @@ describe("metricRowP: excluded (class X) reps are guarded by the adversarial com
   });
 });
 
+describe("the adversarial completion's tied blocks never change a label (the searched range of the stats.ts comment)", () => {
+  // A tied block of excluded reps at an extreme is not always the completion with the LARGEST p (distinct values there
+  // can give a larger one), so the claim is narrower: over every split of distinct survivors, the label from
+  // max(survivor, tied adversarial) equals the label from max(survivor, distinct adversarial) at every level.
+  const levels = [0.025 / 3, 0.0125, 0.025, 0.05, 0.1];
+  const xSplits: Array<[number, number]> = [
+    [0, 2],
+    [2, 0],
+    [1, 1],
+    [0, 3],
+    [1, 2],
+    [2, 1],
+  ];
+  const label = (p: number, survivor: number, level: number) => (p <= level ? "flag" : survivor <= level ? "unresolved" : "none");
+  it.each([
+    [5, 3],
+    [5, 4],
+    [4, 4],
+    [5, 5],
+  ])("survivors %i v %i", (n1, n2) => {
+    const vals = Array.from({ length: n1 + n2 }, (_, i) => i);
+    for (const s of combinations(n1 + n2, n2)) {
+      const set = new Set(s);
+      const a = vals.filter((_, i) => !set.has(i));
+      const b = s.map((i) => vals[i]);
+      for (const [xa, xb] of xSplits) {
+        const tied = metricRowP({ better: "higher", a: { values: a, worst: 0, excluded: xa }, b: { values: b, worst: 0, excluded: xb } });
+        if (tied.adversarialP === undefined) continue;
+        // The same completion with each excluded rep distinct (its own key) instead of one tied block.
+        let distinctP = 1;
+        if (tied.favours !== "none") {
+          const favA = tied.favours === "A";
+          const worst = (n: number, base: number) => Array.from({ length: n }, (_, i): MetricKey => ({ level: 0, g: base + i }));
+          const best = (n: number, base: number) => Array.from({ length: n }, (_, i): MetricKey => ({ level: 3, g: base + i }));
+          const adv = wmwExact(
+            [...a.map(M), ...(favA ? worst(xa, 0) : best(xa, 0))],
+            [...b.map(M), ...(favA ? best(xb, 100) : worst(xb, 100))],
+          );
+          distinctP = adv.favours === tied.favours ? adv.p : 1;
+        }
+        for (const lv of levels)
+          expect(label(Math.max(tied.survivorP, distinctP), tied.survivorP, lv)).toBe(label(tied.p, tied.survivorP, lv));
+      }
+    }
+  });
+});
+
 describe("hodgesLehmann", () => {
   it("a hand-computed 5v5 case: shift 2, interval [D(3), D(23)] = [-1, 5], coverage 0.968", () => {
     const hl = hodgesLehmann([1, 2, 3, 4, 5], [3, 4, 5, 6, 7])!;

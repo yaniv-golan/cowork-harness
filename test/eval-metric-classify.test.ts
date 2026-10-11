@@ -61,9 +61,9 @@ describe("repMetricValues", () => {
   ] as const)("a valid rep with %s maps to its class", (reason, v) => {
     expect(repMetricValues([decl], rep("valid"), result([{ id: "leaks", unavailable: reason }]))[0].v).toEqual(v);
   });
-  it("a valid rep with no entry for the declared id is excluded as metric_unrecorded (guarded, never worst-ranked)", () => {
-    expect(repMetricValues([decl], rep("valid"), result())[0].v).toEqual({ excluded: "metric_unrecorded" });
-    expect(repMetricValues([decl], rep("valid"), result([{ id: "other", value: 1 }]))[0].v).toEqual({ excluded: "metric_unrecorded" });
+  it("a valid rep with no entry for the declared id is not compared (metric_unrecorded: a completed run records every id)", () => {
+    expect(repMetricValues([decl], rep("valid"), result())[0].v).toEqual({ notCompared: "metric_unrecorded" });
+    expect(repMetricValues([decl], rep("valid"), result([{ id: "other", value: 1 }]))[0].v).toEqual({ notCompared: "metric_unrecorded" });
   });
 });
 

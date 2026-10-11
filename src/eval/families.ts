@@ -126,10 +126,12 @@ export function confirmedAddsNoEvidence(kind: "pass" | "metrics", f: SectionFami
   return level >= att[att.length - 1] * (1 - 1e-9);
 }
 
-/** The metric family's exact A/A any-confirmed rate at reps v reps under Holm (no ties; ties only lower it), or
- *  undefined under BH, whose exact rate for non-identical rows needs a computation the report does not carry. */
-export function metricAaFalseConfirm(f: SectionFamilies, reps: number): number | undefined {
-  if (f.metricM === 0 || f.metric.rule !== "holm") return undefined;
-  const single = wmwNullMass(reps, reps, f.metric.level / f.metricM);
-  return 1 - (1 - single) ** f.metricM;
+/** The metric family's exact A/A any-confirmed rate at reps v reps under Holm over its `m` TESTED rows (no ties; ties
+ *  only lower it): Holm confirms anything iff the smallest p <= level / m, so P = 1 − (1 − P(p <= level / m))^m.
+ *  Undefined under BH, whose exact rate for non-identical rows needs a computation the report does not carry, and
+ *  for an empty family. */
+export function metricAaFalseConfirm(f: SectionFamilies, reps: number, m: number): number | undefined {
+  if (m === 0 || f.metric.rule !== "holm") return undefined;
+  const single = wmwNullMass(reps, reps, f.metric.level / m);
+  return 1 - (1 - single) ** m;
 }

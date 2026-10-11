@@ -35,6 +35,7 @@ import { buildFingerprint } from "../src/run/cassette.js";
 import { runOutDir } from "../src/run/execute.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { runEval, parseEvalArgs, EvalStagingError, type EvalJobSpec } from "../src/eval/command.js";
+import { makeEvalJobRunner } from "../src/eval/job-runner.js";
 import { writeEvalReport, erroredHint } from "../src/eval/report.js";
 import { readRunsLines } from "../src/eval/runs.js";
 import { classifyRep } from "../src/eval/classify.js";
@@ -1956,6 +1957,122 @@ describe("eval: metric rows (a scenario's declared `metrics:`)", () => {
       { section: "tuned", kind: "metrics", m: 1, minRowsToConfirm: 1 },
     ]);
     expect(log.join("\n")).toMatch(/--fail-on confirmed can fire only on: tuned metrics\. tuned pass rates \(m = 7\) cannot confirm/);
+  });
+
+  it("a completed rep with no entry for a declared metric is a harness defect: the row is not compared and the eval exits 1", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "score", better: "higher" }]);
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner((spec, r) =>
+          spec.job.arm === "after" && spec.job.rep === 5
+            ? ({ ...r, metrics: [] } as RunResult)
+            : ({ ...r, metrics: [{ id: "score", value: spec.job.arm === "before" ? 9 + spec.job.rep : spec.job.rep }] } as RunResult),
+        ),
+      ),
+    );
+    const row = out.report.sections.tuned!.metricRows[0];
+    expect(row.label).toBe("not compared");
+    expect(row.notCompared).toEqual(["metric_unrecorded"]);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it("an eval of a scenario with metrics: and no assert: is legal; its metric family is Holm at alpha (no pass family)", async () => {
+    const s = setup();
+    writeFileSync(
+      join(s.scen, "csv-metrics.yaml"),
+      "baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: analyze\nmetrics:\n  - id: leaks\n    artifact: outputs/metrics.json\n    path: n\n    better: lower\n    unbounded: true\n",
+    );
+    const out = await runEval(
+      args(s.scen, s.a, s.b),
+      deps(
+        fakeRunner(
+          measuring("leaks", { before: v([0, 1, 1, 2, 0]), after: v([5, 6, 7, 8, 9]) }, (_s, r) => ({ ...r, assertions: [] }) as RunResult),
+        ),
+      ),
+    );
+    expect(out.report.sections.tuned!.rows).toEqual([]);
+    expect(out.report.sections.tuned!.metricRows[0].label).toBe("confirmed worse");
+    expect(out.report.sections.tuned!.families).toEqual([
+      expect.objectContaining({ kind: "metrics", correction: "holm", level: 0.05, split: false }),
+    ]);
+  });
+
+  it.each([
+    [
+      "insufficient_unmeasured",
+      {
+        before: v([1, 2, 3, 4, 5]),
+        after: [{ value: 1 }, { value: 2 }, { value: 3 }, { unavailable: "size" }, { unavailable: "size" }] as Value[],
+      },
+      0,
+    ],
+    [
+      "unresolved",
+      {
+        before: v([10, 11, 12, 13, 14]),
+        after: [{ value: 1 }, { value: 2 }, { value: 3 }, { value: 4 }, { unavailable: "remote" }] as Value[],
+      },
+      0,
+    ],
+    [
+      "not compared",
+      { before: v([1, 2, 3, 4, 5]), after: [{ value: 1 }, { value: 2 }, { unavailable: "pruned" }, { value: 4 }, { value: 5 }] as Value[] },
+      1,
+    ],
+  ] as const)("--fail-on confirmed never gates on %s (a not-compared row still exits 1 on its own)", async (label, byArm, exit) => {
+    const { scen, a, b } = setupMetrics([{ id: "score", better: "higher" }]);
+    const out = await runEval(
+      args(scen, a, b, ["--fail-on", "confirmed"]),
+      deps(fakeRunner(measuring("score", byArm as Record<string, Value[]>))),
+    );
+    expect(out.report.sections.tuned!.metricRows[0].label).toBe(label);
+    expect(out.report.summary.failOnHit).toBe(false);
+    expect(out.report.summary.exitCode).toBe(exit);
+  });
+
+  it("F counts FROZEN rows: with every pass row untested (insufficient), the metric family stays at alpha/2", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner(
+          measuring("leaks", { before: v([0, 1, 1, 2, 0]), after: v([5, 6, 7, 8, 9]) }, (_s, r) => ({ ...r, assertions: [] }) as RunResult),
+        ),
+      ),
+    );
+    expect(out.report.sections.tuned!.m).toBe(0);
+    expect(out.report.sections.tuned!.rows.every((r) => r.label === "insufficient")).toBe(true);
+    expect(out.report.sections.tuned!.families.find((f) => f.kind === "metrics")).toMatchObject({ level: 0.025, split: true, m: 1 });
+  });
+
+  it("the header names an arm with 2 or more extra excluded metric values", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const after: Value[] = [{ value: 1 }, { value: 2 }, { value: 3 }, { value: 4 }, { unavailable: "size" }];
+    const before: Value[] = [{ value: 1 }, { value: 2 }, { value: 3 }, { value: 4 }, { value: 5 }];
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner(measuring("leaks", { before, after: [{ unavailable: "size" }, ...after.slice(1)] }))),
+    );
+    expect(out.report.sections.tuned!.metricRows[0].excluded.b).toEqual({ size: 2 });
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toMatch(/csv-metrics leaks: B: 2 more excluded metric values than A/);
+  });
+
+  it("the channel is real: every job hands the runner the scenario with its declared metrics (not a fabricated result)", async () => {
+    const { scen, a, b } = setupMetrics([{ id: "leaks", better: "lower" }]);
+    const calls: EvalJobSpec[] = [];
+    await runEval(args(scen, a, b), deps(fakeRunner(measuring("leaks", { before: v([1, 2, 3, 4, 5]), after: v([1, 2, 3, 4, 5]) }), calls)));
+    expect(calls).toHaveLength(10);
+    for (const c of calls)
+      expect(c.scenario.metrics).toEqual([{ id: "leaks", artifact: "outputs/metrics.json", path: "n", better: "lower", unbounded: true }]);
+    // And the eval's job runner forwards that same scenario object to the per-scenario runner (which measures it).
+    const seen: unknown[] = [];
+    const runJob = makeEvalJobRunner(async (x) => {
+      seen.push(x.scenario);
+      return {} as RunResult;
+    }, {});
+    await runJob(calls[0]);
+    expect(seen[0]).toBe(calls[0].scenario);
   });
 
   it("refuses --fail-on confirmed when no family can confirm, naming each family", async () => {

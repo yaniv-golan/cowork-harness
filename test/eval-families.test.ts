@@ -105,17 +105,21 @@ describe("confirmedAddsNoEvidence", () => {
 
 describe("metricAaFalseConfirm", () => {
   it("Holm at alpha/2, m = 3, 5v5: 1 − (1 − 2/252)^3 = 2.36%", () => {
-    expect(metricAaFalseConfirm(sectionFamilies([scen(3, 3)], bh), 5)).toBeCloseTo(1 - (1 - 2 / 252) ** 3, 12);
+    expect(metricAaFalseConfirm(sectionFamilies([scen(3, 3)], bh), 5, 3)).toBeCloseTo(1 - (1 - 2 / 252) ** 3, 12);
   });
   it("Holm at alpha, metrics-only m = 1: 8/252 = 3.17%", () => {
-    expect(metricAaFalseConfirm(sectionFamilies([scen(0, 1)], bh), 5)).toBeCloseTo(8 / 252, 12);
+    expect(metricAaFalseConfirm(sectionFamilies([scen(0, 1)], bh), 5, 1)).toBeCloseTo(8 / 252, 12);
+  });
+  it("uses the TESTED m it is given, not the frozen count: 3 frozen, 1 tested → the m = 1 figure", () => {
+    expect(metricAaFalseConfirm(sectionFamilies([scen(3, 3)], bh), 5, 1)).toBeCloseTo(4 / 252, 12);
+    expect(metricAaFalseConfirm(sectionFamilies([scen(3, 3)], bh), 5, 0)).toBeUndefined();
   });
   it("BH: no exact figure (bound only)", () => {
     expect(
-      metricAaFalseConfirm(sectionFamilies([scen(0, 3)], { ...bh, metricCorrection: { rule: "bh", split: false } }), 5),
+      metricAaFalseConfirm(sectionFamilies([scen(0, 3)], { ...bh, metricCorrection: { rule: "bh", split: false } }), 5, 3),
     ).toBeUndefined();
   });
   it("Holm at alpha/2 at 4v4 is 0: unreachable", () => {
-    expect(metricAaFalseConfirm(sectionFamilies([scen(3, 1)], bh), 4)).toBe(0);
+    expect(metricAaFalseConfirm(sectionFamilies([scen(3, 1)], bh), 4, 1)).toBe(0);
   });
 });

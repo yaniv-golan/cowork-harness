@@ -427,14 +427,14 @@ function resolveEvalContext(args: EvalArgs, deps: EvalDeps): EvalContext {
   let rowCount = 0;
   for (const s of scenarios) {
     try {
-      rowCount += scenarioRows(s.scenario.name, s.scenario.assert ?? []).length;
+      rowCount += scenarioRows(s.scenario.name, s.scenario.assert ?? []).length + (s.scenario.metrics?.length ?? 0);
     } catch (e) {
       throw new UsageError((e as Error).message);
     }
   }
   if (rowCount === 0)
     throw new UsageError(
-      "eval: no scenario has an assert: entry that is compared (a verdict modifier such as allow_stall is not a row) — there is nothing to compare",
+      "eval: no scenario has an assert: entry that is compared (a verdict modifier such as allow_stall is not a row) or a declared metric — there is nothing to compare",
     );
 
   // Pins.

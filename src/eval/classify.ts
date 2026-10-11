@@ -524,10 +524,11 @@ export type MetricRepValue =
   | { value: number }
   /** `errored_agent`, or a class-W reason. */
   | { worst: "errored_agent" | MetricUnavailable }
-  /** A class-X reason, or `metric_unrecorded`: a valid rep whose result holds no entry for the declared id (a live
-   *  eval always records one), so it is guarded like a scorer failure rather than read as the skill's. */
-  | { excluded: MetricUnavailable | "metric_unrecorded" }
-  | { notCompared: MetricUnavailable }
+  /** A class-X reason. */
+  | { excluded: MetricUnavailable }
+  /** A class-N reason, or `metric_unrecorded`: a valid rep whose result holds no entry for a declared id. A completed
+   *  run records every declared id (`extractMetrics`), so a gap is a harness defect, and the row is not compared. */
+  | { notCompared: MetricUnavailable | "metric_unrecorded" }
   /** The rep is excluded from every row of the eval (infrastructure, drift, a pin or judge-prompt mismatch). */
   | { dropped: RepBucket };
 
@@ -543,10 +544,10 @@ export function repMetricValues(
     if (c.bucket === "errored_agent") return { id: d.id, v: { worst: "errored_agent" } };
     if (c.bucket !== "valid" && c.bucket !== "judge_invalid") return { id: d.id, v: { dropped: c.bucket } };
     const entry = result?.metrics?.find((m) => m.id === d.id);
-    if (entry === undefined) return { id: d.id, v: { excluded: "metric_unrecorded" } };
+    if (entry === undefined) return { id: d.id, v: { notCompared: "metric_unrecorded" } };
     if (typeof entry.value === "number" && Number.isFinite(entry.value)) return { id: d.id, v: { value: entry.value } };
     const reason = entry.unavailable;
-    if (reason === undefined) return { id: d.id, v: { excluded: "metric_unrecorded" } };
+    if (reason === undefined) return { id: d.id, v: { notCompared: "metric_unrecorded" } };
     const cls = METRIC_STATE_CLASS[reason];
     return { id: d.id, v: cls === "W" ? { worst: reason } : cls === "X" ? { excluded: reason } : { notCompared: reason } };
   });

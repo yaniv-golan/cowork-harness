@@ -663,8 +663,8 @@ export function pooledSdInterval95(s: number, df: number): Interval | undefined 
 
 /** Minimum detectable shift in SD units (normal shift, 80% power, B better, directional), keyed by n per arm and
  *  the attainable no-tie p it must reach. Computed OFFLINE by seeded simulation (4,000 sims per 0.2 SD grid
- *  point) — an estimate, ±0.2 — because exact WMW power under a shift has no closed form and a simulation here
- *  would break this module's no-randomness contract. */
+ *  point; `scripts/eval-mds-table.py` regenerates every row) — an estimate, ±0.2 — because exact WMW power under a
+ *  shift has no closed form and a simulation here would break this module's no-randomness contract. */
 const MDS_TABLE: Record<number, ReadonlyArray<readonly [p: number, sd: number]>> = {
   4: [[2 / 70, 3.0]],
   5: [

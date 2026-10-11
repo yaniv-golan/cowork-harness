@@ -276,7 +276,8 @@ The rows are checked in that order, and the first that matches decides. Two cons
 ## Metric rows
 
 A scenario's `metrics:` ([Numeric metrics](./scenario.md)) each become one row per scenario: the same id in two
-scenarios gives two rows. The row compares the two arms' per-rep numbers.
+scenarios gives two rows. The row compares the two arms' per-rep numbers. A scenario may declare metrics and no
+`assert:` at all; an eval is refused only when it has neither a compared assertion nor a metric.
 
 **The test** is the exact two-sided Wilcoxon–Mann–Whitney rank-sum test. It is exact with ties (it conditions on
 them), it needs no assumption about the metric's distribution, and a monotone rescale (a log, a square) changes
@@ -305,8 +306,8 @@ estimates from an offline table (n = 4 to 6 only).
 | a measured value | ranked by value |
 | the agent failed (`errored_agent`: timeout, max turns, crash, an unanswered gate) | **worst rank**, whatever the metric |
 | `missing_artifact`, `missing_path`, `not_json`, `not_a_number`, `pre_run` (the skill did not produce the number) | **worst rank** |
-| `size`, `readonly`, `remote`, or no entry for the id (`metric_unrecorded`) — the scorer, the capture or a cap, not the skill | **excluded**, counted per arm, and guarded (below) |
-| `pruned`, `no_manifest` (a harness defect on a live eval) | the row is **`not compared`**: out of the family, never gates, and the eval exits 1 |
+| `size`, `readonly`, `remote` — the scorer, the capture or a cap, not the skill | **excluded**, counted per arm, and guarded (below) |
+| `pruned`, `no_manifest`, or a completed rep with no entry for the id (`metric_unrecorded`) — a harness defect on a live eval | the row is **`not compared`**: out of the family, never gates, and the eval exits 1 |
 | infrastructure, drift, pin and judge-prompt mismatches | excluded, as on every row |
 
 A worst-ranked rep ranks strictly below every measured value, including a value at a bounded metric's own worst
