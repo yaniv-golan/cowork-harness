@@ -2,7 +2,7 @@
 // bridge differently cannot re-describe an old recording. It names its own divergences from production, so a bridge
 // run never reads as faithful where it is not (a delete the device copy allows, an allowlist where production may
 // pass everything through).
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import { loadBaseline } from "../src/baseline.js";
 import { CASSETTE_VERSION, readCassette, replayCassette, type Cassette } from "../src/run/cassette.js";
 import { deviceBridgeRecord } from "../src/runtime/device-container.js";
 import { computeVerdict } from "../src/run/verdict.js";
+import { assertContextFromRunDir } from "../src/run/verify-context.js";
 import type { Mount } from "../src/session.js";
 import type { Scenario } from "../src/types.js";
 
@@ -129,4 +130,38 @@ describe("replay keeps the device infra-error sources", () => {
       expect(v.signals.some((s) => s.code === "infra_error" && s.severity === "fail")).toBe(fails);
       expect(v.signals.some((s) => s.code === "exec_infra_error")).toBe(!fails);
     });
+});
+
+// verify-run, regrade and refs rebuild an assertion context from a kept run dir. A bridge run's folders lived in the
+// device container, and its delete evidence came from the device tree before teardown; nothing in the run dir lets
+// those be re-checked, so the builder refuses rather than grading device-side assertions over evidence it lacks.
+describe("a kept bridge run dir is refused by the run-dir context builder", () => {
+  it("refuses a result carrying deviceBridge, saying to re-run or replay", () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "bridge-verify-")));
+    try {
+      const scenario = {
+        name: "b",
+        fidelity: "container",
+        lane: "remote",
+        device_bridge: true,
+        prompt: "hi",
+        assert: [{ result: "success" }],
+      } as unknown as Scenario;
+      const runDir = (record?: unknown) => {
+        const d = join(dir, `run-${record ? "bridge" : "plain"}`);
+        mkdirSync(join(d, "turns", "1"), { recursive: true });
+        writeFileSync(
+          join(d, "turns", "1", "result.json"),
+          JSON.stringify({ result: "success", command: "run", ...(record ? { deviceBridge: record } : {}) }),
+        );
+        return d;
+      };
+      const refused = assertContextFromRunDir(runDir(deviceBridgeRecord(mounts)), scenario);
+      expect(refused.ok).toBe(false);
+      expect((refused as { message: string }).message).toMatch(/device_bridge[\s\S]*re-run[\s\S]*replay/i);
+      expect(assertContextFromRunDir(runDir(), { ...scenario, device_bridge: undefined } as Scenario).ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

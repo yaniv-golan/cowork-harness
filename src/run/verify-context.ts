@@ -233,6 +233,16 @@ export function assertContextFromRunDir(
         `Re-run to completion before verifying. (can't verify ⇒ not green)`,
     );
   }
+  // A device_bridge run's connected folders lived in the device container, and its delete evidence came from the
+  // device tree before teardown. Nothing kept in the run dir lets those be re-checked, so device-side assertions
+  // would be graded over evidence this command does not have. Refuse rather than pass them vacuously.
+  if ((result as { deviceBridge?: unknown }).deviceBridge !== undefined) {
+    return refuse(
+      "runtime",
+      `${cmd}: ${runDir} is a device_bridge run: its folders lived in the device container, whose state this ` +
+        `command cannot re-check. Re-run the scenario, or replay its cassette, instead. (can't verify ⇒ not green)`,
+    );
+  }
   // A `command:"replay"` result is a RE-CHECK of a recorded cassette, not run evidence (same rule
   // as the stats indexer, which never indexes replay rows). Certifying it would launder a re-check into a
   // fresh verification. Keyed on `command`, not `workspaceFiles` — an old live result.json that simply
