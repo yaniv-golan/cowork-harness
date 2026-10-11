@@ -277,8 +277,22 @@ harness serves that tool from a second container:
   Production's device shell can pass all traffic through; `egress.unrestricted: true` in the session matches that.
 - With no `permission_mode` in the session, the agent runs in `acceptEdits`, the mode a production cloud task reports
   under the composer's Manual choice. A `permission_mode` you set wins, `default` included. Under `device_bridge` the hash and the mode the agent runs in part ways: an unset `permission_mode` (the agent runs in `acceptEdits`) and an explicit `default` hash alike, so a switch between them passes `verify-cassettes` clean, while a switch from unset to an explicit `acceptEdits` reports drift although the mode did not change.
-- The tools are pre-approved. Assert on them with `tool_called` / `tool_not_called` (both forms), for example
-  `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`.
+- `device_bash` and `get_device_info` are pre-approved. Assert on them with `tool_called` / `tool_not_called` (both
+  forms), for example `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`.
+- **The delete card**, `mcp__remote-devices__device_request_delete_permission`, is served as production serves it:
+  the agent calls it to ask the user to allow deletes in whole connected folders (`paths`, 1 to 8 of the roots
+  `get_device_info` lists, plus an optional `reason`). A person must answer it, so the harness never does:
+  - script it like any tool permission: `- when_tool: mcp__remote-devices__device_request_delete_permission` with
+    `decide: allow` ("Allow for this session") or `decide: deny` ("Decline"), or `allow_if` over `paths`. `grant:` is
+    refused: production offers only a session-long allow;
+  - unscripted, it ends the run as an unanswered gate under the default `on_unanswered: fail`; `on_unanswered: first`
+    declines it (its first button); `llm` and `--decider-cmd` pick one of its two buttons;
+  - permission parity never answers it, under either parity;
+  - under `permission_mode: bypassPermissions` no card is shown and the grant is immediate (recorded as
+    `grant-without-prompt`).
+  The run's `deviceBridge.grants` lists each grant, its folders and who answered it. In this release nothing refuses a
+  delete on the device copy (`deviceBridge.deleteRefusal: "reported"`): a delete succeeds and is reported after the
+  run, so a model rarely needs to ask.
 - File assertions read the agent's container, which has no folder, so `file_exists` and `input_unmodified` on a
   connected folder's path are refused before the run. `no_delete_in_mounts` does cover the folders: it reads
   `device_bash` commands and compares the device copy before and after the run.

@@ -13,6 +13,35 @@ All notable changes to this project are documented here. The format is based on
   pass vacuously on `hostloop`, `container` and `microvm`, because the harness never serves them. Drop the assertion.
   A session whose own `mcp.config` declares a server named `visualize` is not refused. `lint` reports it as
   `tool-not-called-tier-vacuous`; `protocol` is not judged.
+- **Cassette format v18.** A scenario with `device_bridge: true` now stamps v18: its frozen `deviceBridge` carries
+  the delete card's fields, which a v17 reader rejects, so an older reader refuses it as too new. A v17 bridge
+  recording still reads and replays as recorded. Every other cassette stamps what it did.
+- **A device_bridge run can now end on an unanswered delete card.** The bridge serves
+  `device_request_delete_permission`, which only a person answers. Unscripted, it fails the run as an unanswered gate
+  under the default `on_unanswered: fail` (exit 2), where a 4.8 run never saw the card. Script it with
+  `when_tool: mcp__remote-devices__device_request_delete_permission` and `decide: allow` or `deny`.
+- **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal` and `grants`;
+  `divergences` gains `decline-text`, and `grant-without-prompt` when a grant came with no card.
+- **`tool_not_called` / `subagent_tool_absent` on the delete card are no longer refused under `device_bridge`**; without
+  it they still are, as for `device_bash`.
+
+### Added
+
+- **`device_bridge` serves the delete card, `device_request_delete_permission`.** Production's schema (1 to 8 connected
+  folder roots, an optional reason), registered to load without ToolSearch and not pre-approved, so the agent asks
+  first. The handler refuses a path that is not a connected folder root, a read-only folder, or a malformed request,
+  as production does. A scenario answers the card like any tool permission; permission parity never answers it,
+  `on_unanswered: fail` ends the run, `first` declines it, and `llm`, the prompt and `--decider-cmd` choose between
+  its two buttons (`Decline`, `Allow for this session`). Under `bypassPermissions` the grant is immediate. Each grant is
+  recorded in `RunResult.deviceBridge.grants` with who answered it. Nothing refuses a delete on the device copy yet:
+  `deleteRefusal: "reported"`, and `delete-not-refused` stays.
+
+### Fixed
+
+- **The device bridge's delete check no longer reads a reused inode as a rename.** The pre-run listing records each
+  file's size and sha256 and lists directories. Where the filesystem reports no birth time, a file that reappears
+  under another path counts as a rename only when its bytes match; a removed empty directory is now reported as a
+  delete.
 
 ## [4.8.1] — 2026-10-12
 
