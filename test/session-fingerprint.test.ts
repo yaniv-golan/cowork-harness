@@ -382,3 +382,40 @@ describe("the staleness message and the doc that quotes it", () => {
     expect(doc).toContain(flat(msg!));
   });
 });
+
+// `permission_mode` is a run input (device_bridge resolves an unset one to acceptEdits), so a change to it must move
+// the hash. Hashed only when set to something other than `default`, so a session that says `default` or nothing hashes
+// as it did before the field was covered. PRE_COVERAGE is `model: m` hashed by the release before that coverage.
+describe("buildSessionFingerprint — permission_mode", () => {
+  const PRE_COVERAGE = "65ec84aa6305b9551a814c15a5b472ee0a15d1966d212609b07ad5e4790215cd";
+  const fp = (yaml: string) => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-pm-"));
+    writeFileSync(join(d, "s.yaml"), yaml);
+    return buildSessionFingerprint("s.yaml", d);
+  };
+  it("unset and an explicit `default` hash as they did before the field was covered", () => {
+    expect(fp("model: m\n")).toBe(PRE_COVERAGE);
+    expect(fp("model: m\npermission_mode: default\n")).toBe(PRE_COVERAGE);
+  });
+  it("a non-default mode moves the hash, and each mode hashes differently", () => {
+    const modes = ["acceptEdits", "plan", "bypassPermissions"].map((m) => fp(`model: m\npermission_mode: ${m}\n`));
+    expect(modes).not.toContain(PRE_COVERAGE);
+    expect(new Set(modes).size).toBe(3);
+  });
+  it("a recording made before the coverage, on a non-default mode, is unverifiable, not drifted", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-pm-"));
+    writeFileSync(join(d, "s.yaml"), "model: m\npermission_mode: bypassPermissions\n");
+    const r = sessionFingerprintDrift({ sessionFingerprint: PRE_COVERAGE, scenario: { session: "s.yaml" } as Cassette["scenario"] }, d);
+    expect(r.drifted).toBe(false);
+    expect(r.unverifiable).toBe(true);
+    expect(r.note).toMatch(/`permission_mode`/);
+  });
+  it("a recording on one non-default mode, replayed against another, is drift", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-pm-"));
+    writeFileSync(join(d, "s.yaml"), "model: m\npermission_mode: plan\n");
+    const recorded = buildSessionFingerprint("s.yaml", d)!;
+    writeFileSync(join(d, "s.yaml"), "model: m\npermission_mode: bypassPermissions\n");
+    const r = sessionFingerprintDrift({ sessionFingerprint: recorded, scenario: { session: "s.yaml" } as Cassette["scenario"] }, d);
+    expect(r.drifted).toBe(true);
+  });
+});

@@ -1605,7 +1605,7 @@ export function buildSessionFingerprint(
   /** `omitProjects`/`omitModel` reproduce the shape as it stood BEFORE each field joined it. Only
    *  `sessionFingerprintDrift` passes them, to tell "this recording predates that coverage" apart from
    *  "your session changed" — see there. They compose: a pre-`projects` recording is also pre-`model`. */
-  opts?: { omitProjects?: boolean; omitModel?: boolean },
+  opts?: { omitProjects?: boolean; omitModel?: boolean; omitPermissionMode?: boolean },
 ): string | undefined {
   if (sessionPath === "(inline)") return undefined;
   // Same resolver as skillSourceDirs: an override that reached only ONE of them would verify skill
@@ -1675,6 +1675,12 @@ export function buildSessionFingerprint(
     // must not.
     ...(cfg.answer_channel !== undefined ? { answer_channel: cfg.answer_channel } : {}),
     ...(cfg.agent_env.artifacts_root !== undefined ? { artifacts_root: cfg.agent_env.artifacts_root } : {}),
+    // The permission mode, only when set to something other than `default`: a session that says `default` or
+    // nothing hashes as it did before the field was covered. A run input in its own right, and device_bridge
+    // resolves an unset one to acceptEdits, so a changed mode must not replay as if nothing changed.
+    ...(!opts?.omitPermissionMode && cfg.permission_mode !== undefined && cfg.permission_mode !== "default"
+      ? { permission_mode: cfg.permission_mode }
+      : {}),
   };
   return createHash("sha256")
     .update(Buffer.from(JSON.stringify(shape), "utf8"))
@@ -6770,13 +6776,26 @@ export function sessionFingerprintDrift(
   // tell "the field was never covered" from "the pin changed since", and the pin is exactly the input
   // whose silent drift this coverage was added to catch. Both flags are tried, so a recording that
   // predates BOTH fields still lands here instead of reading as a genuine mismatch.
-  for (const probe of [{ omitModel: true }, { omitProjects: true, omitModel: true }] as const) {
+  // `permission_mode` joined after `model`, so a recording that predates it may predate `model` and `projects` too.
+  for (const probe of [
+    { omitModel: true },
+    { omitProjects: true, omitModel: true },
+    { omitPermissionMode: true },
+    { omitPermissionMode: true, omitModel: true },
+    { omitPermissionMode: true, omitProjects: true, omitModel: true },
+  ] as const) {
     const preModel = buildSessionFingerprint(cassette.scenario.session, cassetteDir, sessionOverride, probe);
     if (preModel !== undefined && preModel === cassette.sessionFingerprint) {
       // Name the fields the MATCHING probe actually omitted. `model` is hashed unconditionally, so a
       // genuinely pre-`projects` recording can only match the second probe — reporting just `model` there
       // would understate what the hash fails to cover and send the reader looking for the wrong change.
-      const missing = "omitProjects" in probe ? "`projects[]` + `model`" : "`model`";
+      const missing = [
+        "omitProjects" in probe ? "`projects[]`" : undefined,
+        "omitModel" in probe ? "`model`" : undefined,
+        "omitPermissionMode" in probe ? "`permission_mode`" : undefined,
+      ]
+        .filter(Boolean)
+        .join(" + ");
       // Kept to ONE line, matching the prompt-assets note beside it. This note fires on every cassette
       // recorded before the field existed — i.e. on all of them, at once, for a consumer with a dozen —
       // so a paragraph repeated per file buries the findings that are actually per file. The renderer
@@ -7959,7 +7978,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia, vcSessionOverride);
       if (sfd.drifted)
         staleness.push(
-          "session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects, agent_env, answer_channel and agent_env.artifacts_root are hashed only when set) — re-record",
+          "session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects, agent_env, answer_channel and agent_env.artifacts_root are hashed only when set, permission_mode only when not default) — re-record",
         );
       if (sfd.note) notes.push(sfd.note);
     }

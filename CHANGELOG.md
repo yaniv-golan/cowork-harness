@@ -100,6 +100,10 @@ All notable changes to this project are documented here. The format is based on
   cloud task reports under the composer's Manual choice. A `permission_mode` the session sets wins, `default`
   included. A run without the bridge still defaults to `default`. The session schema no longer carries a default for
   the field; an unset value resolves at launch.
+- **`verify-cassettes` notices a changed `permission_mode`.** The session fingerprint now covers it when set to
+  anything but `default`, so a session that says `default` or nothing hashes as before. A recording made on a
+  non-default mode before this release is reported as unverifiable, with a note, not as drift; re-record it to gain
+  the coverage.
 - **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
   (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,
   `device-tools-unserved`, `shell-user`, `device-network-shared`), and whether the prompt note was included
