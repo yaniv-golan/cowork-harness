@@ -4439,9 +4439,9 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   // spawn tool set to model), never silently absorbed. Capture groups: s6[1]=optional design-tools spread
   // id (undefined on older asars), s6[2]=TASK_TOOL_NAMES spread id.
   // A5 (Desktop 1.28929.0): a conditional `...<cond>?["Artifact"]:[]` spread may now sit between
-  // "AskUserQuestion" and "ToolSearch" — the "frame artifacts" feature. It renders EMPTY on a default
-  // first-party session (the condition requires the server-delivered session flag frameArtifactsEnabled,
-  // which is off by default), so the hand-pinned spawn.tools stays 20 entries. Admit it OPTIONALLY (older
+  // "AskUserQuestion" and "ToolSearch" — the "frame artifacts" feature. Its condition requires the
+  // server-delivered session flag frameArtifactsEnabled, which is per account (on for the recording account);
+  // the harness does not serve the Artifact tool, so the hand-pinned spawn.tools stays 20 entries. Admit it OPTIONALLY (older
   // asars lack it); S6c below walks the condition's definition and REQUIRES it to still be the
   // frame-artifacts predicate — a widened or unconditional Artifact fails loud, never silently absorbed.
   // The condition capture is deliberately narrow (bare local identifier, no dots): the live construct is

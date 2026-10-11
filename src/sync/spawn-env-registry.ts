@@ -104,19 +104,24 @@ const SPAWN_ENV_ALLOWLIST: Record<string, readonly [SpawnEnvClass, string]> = {
   CLAUDE_CODE_BRIEF: ["non-cowork-session", "non-chat (agent) sessionType branch; harness models chat sessions"],
   DISABLE_BRIEF_MODE_STOP_HOOK: ["non-cowork-session", "non-chat sessionType + gate 451382573; harness models chat sessions"],
   CLAUDE_CODE_SUBAGENT_MODEL: ["settings-conditional", "user-settings-conditional (default absent)"],
-  CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: ["settings-conditional", "user-settings-conditional (default absent)"],
+  CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: [
+    "settings-conditional",
+    "server-delivered: the claude.ai account config's enableAdditionalDirectoriesClaudeMd (forced on for third-party and managed deployments); not set by the harness; follow-up",
+  ],
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: ["settings-conditional", "user-settings-conditional (default absent)"],
   CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: ["settings-conditional", "user-settings-conditional (default absent)"],
   CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: ["server-config", "server-pushed per-account map (default absent)"],
   // Conditional on the SERVER-delivered session flag `frameArtifactsEnabled` (a session-config field
   // alongside memoryEnabled/skillsEnabled — NOT a GrowthBook gate, so it has no fcache id and cannot be
-  // pinned in provenance.gates). Off for a default first-party session, so the key is absent from the
-  // spawn env the baseline describes; pinning it would bake in a value real sessions never receive.
+  // pinned in provenance.gates). It is per ACCOUNT, not off by default: a claude.ai feature flag delivers it
+  // through the renderer's session config, and the recording account has it on in every observed host-loop session.
+  // It stays deliberately unset in the harness because the Artifact tool it pairs with is not served (see
+  // docs/fidelity-gaps.md), so pinning it would announce a tool the modeled session cannot use.
   // S6d asserts the key stays gated on the SAME predicate as the Artifact tool spread, so this
   // allowlist entry cannot silently start admitting an unconditional or re-keyed construction.
   CLAUDE_CODE_COWORK_FRAME_ARTIFACTS: [
     "session-conditional",
-    "frameArtifactsEnabled server-flag-conditional (default absent); shared-predicate conditionality asserted by S6d",
+    "frameArtifactsEnabled per-account server flag (on for the recording account); deliberately unset because the Artifact tool is not served; shared-predicate conditionality asserted by S6d",
   ],
   // Desktop 2.26454.0 moved the construction into a one-key module object, `l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}`,
   // exported with its predicate; W1 spreads it as `...o.Y(a)&&o.J`, and the Code-tab spawn also uses it, under its own
