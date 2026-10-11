@@ -33,6 +33,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { MultiLegScenario, REFUSED_TOP_LEVEL, hostActionAsserts, promptLegAsserts, type Leg } from "./multi-leg-scenario.js";
 import { Scenario } from "../types.js";
 import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline, DeviceBridgeRecord } from "../types.js";
 import {
@@ -2698,6 +2699,12 @@ export function loadScenarioPure(path: string): Scenario {
   let rawDoc: unknown;
   try {
     rawDoc = readYamlFile(path, "scenario", (message, _hint, syntax) => new ScenarioFileError(message, syntax === true));
+    // A `legs:` file is a different scenario form. Refuse it by name: Zod would say only "unrecognized key", and a
+    // reader that took its first leg as the whole run would grade a resume flow on its first half.
+    if (isMultiLegDoc(rawDoc))
+      throw new UsageError(
+        `${path} is a multi-leg scenario (\`legs:\`): only \`run\` and \`record\` take one; this command grades a single prompt`,
+      );
     scenario = Scenario.parse(rawDoc);
   } catch (e) {
     // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
@@ -2753,6 +2760,90 @@ export function loadScenarioPure(path: string): Scenario {
 }
 
 export { assertSpawnAllowed } from "../spawn-guard.js";
+
+const isMultiLegDoc = (doc: unknown): boolean => typeof doc === "object" && doc !== null && "legs" in (doc as Record<string, unknown>);
+
+/** Is this scenario file the multi-leg form? A YAML read, no schema: callers pick a loader by it. False for a file that
+ *  cannot be read or parsed, which the chosen loader then reports. */
+export function isMultiLegFile(path: string): boolean {
+  try {
+    return isMultiLegDoc(parseYaml(readFileSync(path, "utf8")));
+  } catch {
+    return false;
+  }
+}
+
+/** Load a `legs:` scenario: the schema (MultiLegScenario), the keys it refuses by name, the filename-derived name, the
+ *  file-relative `session:` and `workspace_fixture:`, and the regex checks each prompt leg's block gets as a single
+ *  scenario would. Throws UsageError. */
+export function loadMultiLegScenario(path: string): MultiLegScenario {
+  const rawDoc = readYamlFile(path, "scenario", (message, _hint, syntax) => new ScenarioFileError(message, syntax === true));
+  if (typeof rawDoc === "object" && rawDoc !== null)
+    for (const [k, why] of Object.entries(REFUSED_TOP_LEVEL))
+      if (k in (rawDoc as Record<string, unknown>))
+        throw new UsageError(`invalid scenario ${path}: \`${k}\` is refused with \`legs:\`: ${why}`);
+  const r = MultiLegScenario.safeParse(rawDoc);
+  if (!r.success)
+    throw new UsageError(`invalid scenario ${path}: ${compactSchemaError(r.error.issues)}`, JSON.stringify(r.error.issues, null, 2));
+  const s = r.data as MultiLegScenario;
+  if (!s.name) s.name = basename(path).replace(/\.ya?ml$/i, "");
+  if (isFileRelative(s.session)) s.session = resolve(dirname(path), s.session);
+  if (s.workspace_fixture !== undefined)
+    try {
+      const asWritten = s.workspace_fixture;
+      s.workspace_fixture = expandUserPath(asWritten, dirname(resolve(path)));
+      setWorkspaceFixtureAsWritten(s as unknown as Scenario, asWritten);
+    } catch (e) {
+      throw new UsageError(`invalid scenario ${path}: workspace_fixture: ${(e as Error).message}`);
+    }
+  for (const leg of s.legs) {
+    try {
+      if (leg.prompt !== undefined) validateScenarioRegexes(legScenario(s, leg), path);
+      else
+        for (const a of hostActionAsserts(leg))
+          for (const k of ["stdout_matches", "stdout_not_matches"] as const) {
+            const pat = (a as Record<string, unknown>)[k];
+            if (typeof pat !== "string") continue;
+            const c = compileUserRegex(pat);
+            if ("error" in c) throw new Error(`bad regex in ${k}: ${c.error}`);
+          }
+    } catch (e) {
+      throw new UsageError(`invalid scenario ${path}: leg "${leg.id}": ${(e as Error).message}`);
+    }
+  }
+  return s;
+}
+
+/** One PROMPT leg as the single-prompt scenario the executor runs: the leg's prompt, assertions and time limit, plus
+ *  the scenario-wide keys. `workspace_fixture` stages into the first leg only; a later leg starts from the previous
+ *  leg's end state. */
+export function legScenario(s: MultiLegScenario, leg: Leg): Scenario {
+  if (leg.prompt === undefined) throw new Error(`leg "${leg.id}" is a host_action leg, not a prompt leg`);
+  const first = s.legs[0]?.id === leg.id;
+  const scn: Scenario = {
+    name: s.name,
+    ...(s.baseline !== undefined ? { baseline: s.baseline } : {}),
+    session: s.session,
+    fidelity: s.fidelity,
+    execution: "local",
+    lane: "local",
+    prompt: leg.prompt,
+    ...(leg.timeout_ms !== undefined ? { timeout_ms: leg.timeout_ms } : {}),
+    answers: s.answers,
+    ...(s.on_unanswered !== undefined ? { on_unanswered: s.on_unanswered } : {}),
+    expect_denied: s.expect_denied,
+    assert: promptLegAsserts(leg),
+    skills: s.skills,
+    requires_capabilities: s.requires_capabilities,
+    ...(s.allow_host_hooks !== undefined ? { allow_host_hooks: s.allow_host_hooks } : {}),
+    ...(first && s.workspace_fixture !== undefined ? { workspace_fixture: s.workspace_fixture } : {}),
+  } as Scenario;
+  if (first && s.workspace_fixture !== undefined) {
+    const asWritten = workspaceFixtureAsWritten(s as unknown as Scenario);
+    if (asWritten !== undefined) setWorkspaceFixtureAsWritten(scn, asWritten);
+  }
+  return scn;
+}
 
 /** Every nested `{ …: <regex> }` leaf in the Assertion schema, derived from zod rather than enumerated.
  *
