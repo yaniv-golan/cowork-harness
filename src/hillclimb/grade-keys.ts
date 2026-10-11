@@ -32,6 +32,7 @@ import type { Assertion, ScenarioMetric } from "../types.js";
 import { UsageError } from "../errors.js";
 import { scenarioRows } from "../eval/classify.js";
 import { firstAssertionKey } from "../run/repeat.js";
+import { declTuple } from "../metric-sig.js";
 
 /** A scenario-declared numeric metric (the scenario's `metrics:` entry, whole). */
 export type MetricDecl = ScenarioMetric;
@@ -225,15 +226,7 @@ export function flowMetricDecls(
 export const flowHasPairwise = (cases: ReadonlyArray<{ assertions: readonly Assertion[] }>): boolean =>
   cases.some((c) => c.assertions.some((a) => a.semantic_pairwise !== undefined));
 
-/** The canonical declaration tuple: every field that changes what a metric's column means. The id is folded to
- *  lower case (ids compare case-insensitively), an absent `min` is its schema default 0 (writing `min: 0` changes
- *  nothing), and any other absent field is always `null`, so key order and an explicit `undefined` never change it. */
-const declTuple = (m: MetricDecl): string =>
-  JSON.stringify([m.id.toLowerCase(), m.artifact, m.path, m.better, m.scale ?? null, m.unbounded ?? null, m.min ?? 0]);
-
-/** A metric declaration's signature, stamped on every scored row (`meta.metric_sigs`): the first 16 hex chars of
- *  the sha256 of its canonical tuple. A later pass compares it, so a column cannot change meaning mid-flow. */
-export const metricSig = (m: MetricDecl): string => createHash("sha256").update(declTuple(m)).digest("hex").slice(0, 16);
+export { metricSig } from "../metric-sig.js";
 
 /** A JSON value with every object's keys sorted, so key order never changes it; `undefined` members are dropped, as
  *  `JSON.stringify` drops them. Two assertions are the same assertion when their canonical JSON is equal. */

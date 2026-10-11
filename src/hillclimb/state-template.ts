@@ -159,7 +159,11 @@ function metricsMd(declared: readonly GradeKeyDecl[], floats: readonly MetricDec
     );
   for (const m of floats)
     L.push(
-      `- \`${m.id}\` — a scenario-declared number: the value at \`${m.path}\` in \`${m.artifact}\`, ${m.better} is better, ` +
+      `- \`${m.id}\` — a scenario-declared number: ${
+        m.command !== undefined
+          ? `what the script \`${m.command[0]}\` prints over the run's own events`
+          : `the value at \`${m.path}\` in \`${m.artifact}\``
+      }, ${m.better} is better, ` +
         `${m.scale !== undefined ? `bounded above by ${m.scale}` : "no upper bound"}, floor ${m.min ?? 0}. ` +
         `\`${m.id}_present\` is 1 when it was measured; when 0 the value is absent (not 0), so its mean is over measured rows only, ` +
         "and the row's `meta.metrics_unavailable` says why.",

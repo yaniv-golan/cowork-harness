@@ -517,6 +517,18 @@ export const METRIC_STATE_CLASS: Record<MetricUnavailable, "W" | "X" | "N"> = {
   // A live eval arms the manifest, so either of these means a harness defect.
   pruned: "N",
   no_manifest: "N",
+  // A command metric's scorer or capture, not the skill: excluded and guarded, never worst-ranked — a script that
+  // fails, stalls, prints junk or wobbles on one arm must not manufacture `worse`.
+  command_failed: "X",
+  command_timeout: "X",
+  command_output: "X",
+  nondeterministic: "X",
+  no_events: "X",
+  // The comparison itself is broken: the arm would mix scorers, or the scorer is gone, or (on a live eval, which runs
+  // commands without a flag) a state that should never arise.
+  command_changed: "N",
+  command_missing: "N",
+  command_not_allowed: "N",
 };
 
 /** One rep's contribution to one metric row. */

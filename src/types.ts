@@ -1555,8 +1555,36 @@ export const METRIC_UNAVAILABLE = [
   "pruned",
   "pre_run",
   "no_manifest",
+  // Command metrics (a script over the run's own events):
+  "command_failed",
+  "command_timeout",
+  "command_output",
+  "command_changed",
+  "command_missing",
+  "command_not_allowed",
+  "nondeterministic",
+  "no_events",
 ] as const;
 export type MetricUnavailable = (typeof METRIC_UNAVAILABLE)[number];
+
+/** What a command metric's measurement records (`RunResult.metrics[].command`): enough to tell which scorer produced
+ *  the value over which bytes, and whether it was measured here, carried forward, or frozen at record time. */
+export interface MetricCommandRecord {
+  /** The declaration's full signature: script and deps by root-relative path and content, args, timeout. */
+  sig: string;
+  /** Root-relative script path. */
+  script: string;
+  scriptSha256: string;
+  /** sha256 of the exact events bytes the script read; absent when it read none. */
+  eventsSha256?: string;
+  /** `<executable> <version>`. */
+  interpreter?: string;
+  durationMs?: number;
+  /** Carried forward from an earlier measurement without executing (a grading path without --allow-metric-commands). */
+  carried?: true;
+  /** A replay's record-time value, never re-measured. */
+  frozen?: true;
+}
 
 /** Ids a scenario metric may not take: each would collide with a key the hillclimb runner generates (its grade
  *  keys, per-index keys, `_present` companions and pairwise keys). */
@@ -1597,6 +1625,15 @@ function isContainedRelPath(p: string): boolean {
   return !METRIC_ARTIFACT_REFUSED_PATTERNS.some((r) => new RegExp(r, "u").test(p));
 }
 
+/** A command metric's script extensions: Python under the harness's runner, or Node under its permission model. */
+export const COMMAND_SCRIPT_EXTENSIONS = [".py", ".mjs", ".js", ".cjs"] as const;
+
+/** A command script or dep path as written: relative to the scenario file, forward slashes. `..` IS allowed lexically
+ *  (a script normally sits beside the scenarios dir); containment is enforced on the real path when it is resolved. */
+export function isCommandRelPath(p: string): boolean {
+  return p.trim().length > 0 && !p.includes("\\") && !p.includes("\0") && !p.startsWith("/") && !/^[a-zA-Z]:/.test(p);
+}
+
 export const ScenarioMetric = z
   .strictObject({
     id: z
@@ -1612,10 +1649,45 @@ export const ScenarioMetric = z
         message:
           "a metric artifact is a path relative to the work root, with forward slashes: not blank, not starting with `/` or a drive root (`c:/`), no `..` segment, no backslash, no NUL",
       })
+      .optional()
       .describe(
-        "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder",
+        "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder. Set exactly one of artifact or command",
       ),
-    path: z.string().min(1).describe("dotted path to the number inside the JSON (e.g. totals.words; array items by index, items.0.score)"),
+    path: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "dotted path to the number inside the JSON (e.g. totals.words; array items by index, items.0.score); required with artifact, refused with command",
+      ),
+    command: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(4096)
+          .refine((v) => !v.includes("\0"), { message: "a command argument may not contain NUL" }),
+      )
+      .min(1)
+      .max(32)
+      .optional()
+      .describe(
+        "a script that computes the number from the run's own events: [script, ...literal args]. The script (relative to the scenario file; .py, .mjs, .js or .cjs) is run as `<interpreter> <script> <events-file> [args...]` and must print exactly one JSON number. It must be a regular, git-tracked file inside the scenario's repository; it runs as you, so only run scenarios from repositories you would run `npm test` in. Set exactly one of artifact or command",
+      ),
+    deps: z
+      .array(z.string().min(1))
+      .max(32)
+      .optional()
+      .describe(
+        "other files the command's script imports, relative to the scenario file; hashed with the script and staged beside it (command only)",
+      ),
+    timeout_ms: z
+      .number()
+      .int()
+      .min(1000)
+      .max(300000)
+      .optional()
+      .describe("the command's wall-clock limit per run, in ms (default 30000, max 300000; command only)"),
     better: z.enum(["higher", "lower"]).describe("which direction is an improvement"),
     scale: z
       .number()
@@ -1631,6 +1703,43 @@ export const ScenarioMetric = z
       .describe("the floor of the metric's range (default 0); with `scale`, it must be below `scale` (refused at load otherwise)"),
   })
   .superRefine((m, ctx) => {
+    if ((m.artifact === undefined) === (m.command === undefined))
+      ctx.addIssue({ code: "custom", path: ["artifact"], message: `metric "${m.id}": set exactly one of \`artifact\` or \`command\`` });
+    if (m.artifact !== undefined && m.path === undefined)
+      ctx.addIssue({ code: "custom", path: ["path"], message: `metric "${m.id}": \`path\` is required with \`artifact\`` });
+    if (m.command !== undefined) {
+      if (m.path !== undefined)
+        ctx.addIssue({
+          code: "custom",
+          path: ["path"],
+          message: `metric "${m.id}": \`path\` is refused with \`command\` (the script prints the number)`,
+        });
+      const script = m.command[0] ?? "";
+      if (!isCommandRelPath(script))
+        ctx.addIssue({
+          code: "custom",
+          path: ["command", 0],
+          message: `metric "${m.id}": the command's script must be a relative path with forward slashes (no backslash, no drive root, not absolute)`,
+        });
+      else if (!COMMAND_SCRIPT_EXTENSIONS.some((x) => script.endsWith(x)))
+        ctx.addIssue({
+          code: "custom",
+          path: ["command", 0],
+          message: `metric "${m.id}": the command's script must end in .py, .mjs, .js or .cjs`,
+        });
+      for (const [i, d] of (m.deps ?? []).entries())
+        if (!isCommandRelPath(d))
+          ctx.addIssue({
+            code: "custom",
+            path: ["deps", i],
+            message: `metric "${m.id}": a dep must be a relative path with forward slashes (no backslash, no drive root, not absolute)`,
+          });
+    } else {
+      if (m.deps !== undefined)
+        ctx.addIssue({ code: "custom", path: ["deps"], message: `metric "${m.id}": \`deps\` is for a command metric` });
+      if (m.timeout_ms !== undefined)
+        ctx.addIssue({ code: "custom", path: ["timeout_ms"], message: `metric "${m.id}": \`timeout_ms\` is for a command metric` });
+    }
     if (m.scale !== undefined && m.min !== undefined && !(m.min < m.scale))
       ctx.addIssue({ code: "custom", path: ["min"], message: `metric "${m.id}": \`min\` (${m.min}) must be below \`scale\` (${m.scale})` });
     if ((m.scale === undefined) === (m.unbounded === undefined))
@@ -2842,7 +2951,7 @@ export interface RunResult {
    *  exactly one of `value` (a finite number read from the artifact) or `unavailable` (why not — see
    *  METRIC_UNAVAILABLE). Never part of the verdict. Absent when the scenario declares none (an empty list included),
    *  on a partial run, on chat, and on a replay that could not drive the cassette. */
-  metrics?: Array<{ id: string; value?: number; unavailable?: MetricUnavailable }>;
+  metrics?: Array<{ id: string; value?: number; unavailable?: MetricUnavailable; command?: MetricCommandRecord }>;
   /** workRoot-relative paths that existed under the user-visible roots BEFORE the agent ran (captured
    *  post-staging, pre-spawn; `pre-run-manifest.json`) — the baseline `no_unexpected_files` diffs
    *  against. undefined = the run didn't capture it (it never armed one, or predates the seam; a --resume turn reads the first turn's manifest if that turn captured one; otherwise the key fails evidence-unavailable); the

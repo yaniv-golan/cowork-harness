@@ -1723,8 +1723,8 @@
             }
           },
           "artifact": {
+            "description": "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder. Set exactly one of artifact or command",
             "type": "string",
-            "description": "the JSON file to read, relative to the work root (e.g. outputs/scores.json) — a file the run writes under outputs/ or a connected folder",
             "not": {
               "anyOf": [
                 {
@@ -1749,9 +1749,35 @@
             }
           },
           "path": {
+            "description": "dotted path to the number inside the JSON (e.g. totals.words; array items by index, items.0.score); required with artifact, refused with command",
             "type": "string",
-            "minLength": 1,
-            "description": "dotted path to the number inside the JSON (e.g. totals.words; array items by index, items.0.score)"
+            "minLength": 1
+          },
+          "command": {
+            "description": "a script that computes the number from the run's own events: [script, ...literal args]. The script (relative to the scenario file; .py, .mjs, .js or .cjs) is run as `<interpreter> <script> <events-file> [args...]` and must print exactly one JSON number. It must be a regular, git-tracked file inside the scenario's repository; it runs as you, so only run scenarios from repositories you would run `npm test` in. Set exactly one of artifact or command",
+            "minItems": 1,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "deps": {
+            "description": "other files the command's script imports, relative to the scenario file; hashed with the script and staged beside it (command only)",
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "timeout_ms": {
+            "description": "the command's wall-clock limit per run, in ms (default 30000, max 300000; command only)",
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 300000
           },
           "better": {
             "type": "string",
@@ -1778,8 +1804,6 @@
         },
         "required": [
           "id",
-          "artifact",
-          "path",
           "better"
         ],
         "additionalProperties": false,
@@ -1819,6 +1843,85 @@
                 "scale": {}
               }
             }
+          }
+        ],
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "artifact",
+                  "path"
+                ],
+                "properties": {
+                  "artifact": {},
+                  "path": {}
+                },
+                "not": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "command"
+                      ],
+                      "properties": {
+                        "command": {}
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "deps"
+                      ],
+                      "properties": {
+                        "deps": {}
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "timeout_ms"
+                      ],
+                      "properties": {
+                        "timeout_ms": {}
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "command"
+                ],
+                "properties": {
+                  "command": {}
+                },
+                "not": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "artifact"
+                      ],
+                      "properties": {
+                        "artifact": {}
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "path"
+                      ],
+                      "properties": {
+                        "path": {}
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
           }
         ]
       }
