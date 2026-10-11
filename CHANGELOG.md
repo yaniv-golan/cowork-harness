@@ -101,6 +101,8 @@ All notable changes to this project are documented here. The format is based on
   `device-tools-unserved`, `shell-user`, `device-network-shared`). The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".
 - Under `device_bridge`, `file_exists` and `input_unmodified` on a connected folder's path are refused before the
   run: they would grade the agent's container, which holds no folder.
+- `verify-run`, `regrade` and `refs` refuse a kept `device_bridge` run dir: the device container's state cannot be
+  re-checked from it. Re-run the scenario, or replay its cassette.
 - **`get_device_info` under the bridge** reports the platform as `darwin` and spells each folder `~/<folder-name>`, so
   no host path reaches the transcript.
 - **Two infra-error sources**, `device-container` (the device container died: the run fails) and `device-exec` (one
