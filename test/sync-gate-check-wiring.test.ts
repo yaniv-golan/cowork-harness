@@ -59,3 +59,21 @@ describe("release preflight runs check 7b", () => {
   it("lists checkSpawnEnvObserved among the hard checks", () =>
     expect(pre).toMatch(/hardResults: CheckResult\[\] = \[[\s\S]*checkSpawnEnvObserved\(newestBaseline\(\), allowUnobservedSpawnEnv\)/));
 });
+
+// Unknown deltas come from several files now (the registry, the observed-env reader, the post-write scanner), and each
+// delta line names its own. The header and the refusal must not send the maintainer to one fixed file.
+describe("cmdSync's unknown-delta output names no single file to fix", () => {
+  const cli = readFileSync(join(import.meta.dirname, "..", "src", "cli.ts"), "utf8");
+  const start = cli.indexOf("async function cmdSync(");
+  const body = start < 0 ? "" : cli.slice(start, cli.indexOf("\n}\n", start));
+  const deltaBlock = body.slice(
+    body.indexOf("if (res.unknownDeltas.length) {"),
+    body.indexOf("if (!diffFlag) {", body.indexOf("if (res.unknownDeltas.length) {")),
+  );
+  it("finds the unknown-delta block", () => expect(deltaBlock).toContain("Refusing to write baseline with unknown deltas."));
+  it("the header and the refusal point at the file each delta names, not cowork-sync.ts", () => {
+    expect(deltaBlock).toContain("each line names the file to fix");
+    expect(deltaBlock).toContain("Fix the file each delta names");
+    expect(deltaBlock).not.toContain("cowork-sync.ts");
+  });
+});

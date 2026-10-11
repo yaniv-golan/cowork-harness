@@ -3541,7 +3541,7 @@ async function cmdSync(args: string[]) {
       fail(
         "sync",
         "runtime",
-        "Refusing to write baseline with unknown deltas. Fix src/sync/cowork-sync.ts or pass --allow-empty to force-write.",
+        "Refusing to write baseline with unknown deltas. Fix the file each delta names, or pass --allow-empty to force-write.",
         undefined,
         isJsonOutput(normalizedArgs),
         1,

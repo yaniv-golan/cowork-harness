@@ -225,7 +225,7 @@ committed baseline and say why in that baseline's `$comment`.
    delta and the affected field is left empty/stale rather than silently wrong:
 
    ```
-   ⚠ unknown deltas (extend src/sync/cowork-sync.ts):
+   ⚠ unknown deltas (each line names the file to fix):
       - egress: the 1p `vmEgressPolicy(){return null}` branch is gone — first-party egress may no
         longer be server-delivered. network.allowDomains is a PINNED, hand-curated list that is only
         sound while this holds; re-verify how Cowork computes the VM allowlist
