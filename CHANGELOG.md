@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [4.8.1] — Unreleased
+## [4.8.1] — 2026-10-11
 
 ### Upgrade notes
 
@@ -30,6 +30,12 @@ All notable changes to this project are documented here. The format is based on
   ran on that Desktop build). `--allow-unobserved-spawn-env` downgrades it to a warning for an emergency release.
   When local tasks can no longer run, `sync --spawn-env-unobservable local-lane-removed|no-local-entitlement`
   records that for the build, and the preflight only warns.
+- **`diff <baseline> <baseline>` describes a change to the observed spawn env in a few readable lines**, in the
+  default text output, with `--changelog`, and in `sync --diff`. A build that went from observed to unobserved
+  prints one line saying so, rather than a removal for every key it no longer records. Keys that moved between
+  "every session" and "some sessions" are listed as moved, not as an addition and a removal.
+- **`sync`'s unknown-delta header no longer points at `src/sync/cowork-sync.ts`.** Each delta line now names the
+  file to fix.
 
 ## [4.8.0] — 2026-10-11
 
