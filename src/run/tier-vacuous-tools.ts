@@ -18,7 +18,8 @@ import { WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloo
  *
  * So this table names ONLY tools the harness itself removes or registers, per tier. It never consults
  * `spawn.tools`, which makes it immune to that hole by construction, independent of the baseline (a
- * `spawn`-less baseline cannot make it misfire), and unable to collide with any MCP name (the visualize prefix below is skipped when the session's own MCP config declares a server of that name). The cost is
+ * `spawn`-less baseline cannot make it misfire), and unable to collide with any MCP name (the visualize rule below
+ * steps aside when the session's own MCP config declares a server of that name). The cost is
  * that it under-approximates — `REPL` at hostloop is genuinely vacuous too and is not caught — which is
  * the correct side to err on when the verdict is a hard refusal.
  *

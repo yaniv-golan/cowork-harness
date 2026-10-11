@@ -1505,7 +1505,9 @@ both. Neither channel is dead, and which one a given turn takes is not determini
 **What the harness does:** it never registers the `visualize` tools. The spawned MCP surface is
 `mcp__workspace__bash`, `mcp__workspace__web_fetch`, `mcp__cowork__present_files` and the
 skills/plugins discovery servers — no `read_me`, no `show_widget`. The elicitation module therefore does
-not exist inside a run, and the model falls back to `AskUserQuestion` every time.
+not exist inside a run, and the model falls back to `AskUserQuestion` every time. Because the tools are
+never served, a `tool_not_called` or `subagent_tool_absent` naming `mcp__visualize__read_me` or
+`mcp__visualize__show_widget` is refused at load as vacuous on `hostloop`, `container` and `microvm`.
 
 **The residual, stated plainly:** a harness run deterministically pins the `AskUserQuestion` branch. That
 is good for reproducibility — the same scenario collects arguments the same way every time, which is what
