@@ -383,13 +383,22 @@ export function deviceBridgeNoteMode(env: Record<string, string | undefined> = p
   return env.COWORK_HARNESS_DEVICE_BRIDGE_NOTE === "off" ? "omitted" : "included";
 }
 
-export function deviceBridgeRecord(mounts: ReadonlyArray<Mount>, promptNote: "included" | "omitted" = "included"): DeviceBridgeRecord {
+export function deviceBridgeRecord(
+  mounts: ReadonlyArray<Mount>,
+  promptNote: "included" | "omitted" = "included",
+  plan: Pick<LaunchPlan, "permissionMode" | "permissionModeSource"> = {
+    permissionMode: "acceptEdits",
+    permissionModeSource: "bridge-default",
+  },
+): DeviceBridgeRecord {
   return {
     served: ["device_bash", "get_device_info"],
     alwaysLoad: ["device_bash"],
     measuredOn: "2.31226.1",
     promptNoteBasis: "model-report",
     promptNote,
+    permissionMode: plan.permissionMode,
+    permissionModeSource: plan.permissionModeSource === "session" ? "session" : "bridge-default",
     egress: "allowlist",
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [

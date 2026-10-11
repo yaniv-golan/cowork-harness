@@ -275,6 +275,8 @@ harness serves that tool from a second container:
   files. `mcp__remote-devices__get_device_info` is served too, with the folders spelled `~/<folder-name>`.
 - The device container reaches the network through the run's egress proxy, so the session's allowlist applies.
   Production's device shell can pass all traffic through; `egress.unrestricted: true` in the session matches that.
+- With no `permission_mode` in the session, the agent runs in `acceptEdits`, the mode a production cloud task reports
+  under the composer's Manual choice. A `permission_mode` you set wins, `default` included.
 - The tools are pre-approved. Assert on them with `tool_called` / `tool_not_called` (both forms), for example
   `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`.
 - File assertions read the agent's container, which has no folder, so `file_exists` and `input_unmodified` on a

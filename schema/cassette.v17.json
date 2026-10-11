@@ -355,6 +355,8 @@
         "measuredOn",
         "promptNoteBasis",
         "promptNote",
+        "permissionMode",
+        "permissionModeSource",
         "egress",
         "folders",
         "divergences"
@@ -381,6 +383,15 @@
           "type": "string",
           "enum": ["included", "omitted"],
           "description": "Whether the run's prompt carried the note (included) or a maintainer control run left it out (omitted, COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off), leaving the model only the device tools' own descriptions."
+        },
+        "permissionMode": {
+          "type": "string",
+          "description": "The agent's permission mode for the run."
+        },
+        "permissionModeSource": {
+          "type": "string",
+          "enum": ["session", "bridge-default"],
+          "description": "Whether the session set the mode (session) or the bridge's default did (bridge-default: acceptEdits, what a production cloud task reports under the Manual choice)."
         },
         "measuredOn": {
           "type": "string"

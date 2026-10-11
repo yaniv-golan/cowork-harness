@@ -81,7 +81,8 @@ files: `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: 
 `file_exists` / `input_unmodified` on a connected folder's path are refused under the bridge (they would read the
 agent's container). `no_delete_in_mounts` covers the folders (the device copy allows a delete production refuses).
 `tool_not_called` on a device tool without the bridge is refused as vacuous. Egress follows the session allowlist;
-`egress.unrestricted: true` matches production's pass-through. The run's `deviceBridge` lists every known
+`egress.unrestricted: true` matches production's pass-through. With no `permission_mode` in the session the agent
+runs in `acceptEdits` (a production cloud task's mode under Manual); a mode you set wins. The run's `deviceBridge` lists every known
 difference from production.
 
 ### Choose an answer path (gates: AskUserQuestion + tool-permission)

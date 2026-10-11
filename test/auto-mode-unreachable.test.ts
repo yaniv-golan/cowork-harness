@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { agentArgs } from "../src/runtime/argv.js";
-import { SessionConfig } from "../src/session.js";
+import { resolvePermissionMode, SessionConfig } from "../src/session.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { LaunchPlan } from "../src/session.js";
 import type { PlatformBaseline } from "../src/types.js";
@@ -64,9 +64,11 @@ describe("auto-mode cannot be requested through the session schema", () => {
     expect(SessionConfig.safeParse({ permission_mode: "auto" }).success).toBe(false);
   });
 
-  it("defaults to `default` when a session says nothing", () => {
+  it("a session that says nothing resolves to `default` (acceptEdits under device_bridge), never auto", () => {
     const parsed = SessionConfig.parse({});
-    expect(parsed.permission_mode).toBe("default");
+    expect(parsed.permission_mode).toBeUndefined();
+    expect(resolvePermissionMode(parsed, false).permissionMode).toBe("default");
+    expect(resolvePermissionMode(parsed, true).permissionMode).toBe("acceptEdits");
   });
 });
 

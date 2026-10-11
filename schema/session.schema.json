@@ -30,7 +30,6 @@
       "maximum": 9007199254740991
     },
     "permission_mode": {
-      "default": "default",
       "type": "string",
       "enum": [
         "default",

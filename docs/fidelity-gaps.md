@@ -1444,8 +1444,8 @@ if (e.permissionMode === "auto") r = fme(r)
 Trusted sources therefore govern only *where the rules would be read from*, never *whether the mode is on*.
 Two structural guards keep the harness out of it, both pinned by `test/auto-mode-unreachable.test.ts`:
 the session schema's `permission_mode` enum has no `"auto"` member, so no scenario can request it; and the
-argv builder's only sources for the flag are that session value and the baseline's sentinel-pinned
-`spawn.permissionMode` (`"default"`). The rubric is *structurally unreachable*, not excluded by session
+argv builder's only sources for the flag are that session value, `acceptEdits` for a `device_bridge` run whose
+session sets none, and the baseline's sentinel-pinned `spawn.permissionMode` (`"default"`). The rubric is *structurally unreachable*, not excluded by session
 type — and the test fails the day either guard is relaxed, which is when this gap needs re-triage rather
 than after.
 
@@ -1888,9 +1888,12 @@ reading one on the Mac finds no such file here.
 File assertions grade the agent's own container, which holds no connected folder under the bridge. So `file_exists`
 or `input_unmodified` on a folder's path is refused before the run; assert on the `device_bash` call instead.
 
-**Permission mode.** The bridge's tools are pre-approved, and the agent runs with `acceptEdits`, which is what a cloud
-task's hooks report under the Manual approval choice. Under Auto a task still ran in the cloud with the same cards;
-the mode its hooks report under Auto is not measured. Skip was not offered on the account measured.
+**Permission mode.** The bridge's tools are pre-approved. When the session sets no `permission_mode`, the agent runs
+with `acceptEdits`, which is what a cloud task's hooks report under the Manual approval choice, the composer's
+default. A `permission_mode` the session sets wins, `default` included. The run's record names the mode and where it
+came from (`deviceBridge.permissionMode`, `permissionModeSource`). Under Auto, a cloud task's hooks report `auto`,
+a mode the harness cannot model: the session schema has no `auto`. Each of those two readings is a single task.
+Skip was not offered on the account measured.
 
 The note in the agent's prompt is the harness's, and production's own cloud prompt is not reproduced. The note names
 `device_bash` and `$HOME/mnt/<folder-name>` because a cloud task's model, asked about its own instructions, reported

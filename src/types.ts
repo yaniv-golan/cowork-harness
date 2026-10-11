@@ -1991,6 +1991,10 @@ export interface DeviceBridgeRecord {
   /** Whether the run's prompt carried that note (`included`, the default) or a control run left it out (`omitted`,
    *  COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off), leaving the model only the tool's own description. */
   promptNote: "included" | "omitted";
+  /** The agent's permission mode, and whether the session set it (`session`) or the bridge's default did
+   *  (`bridge-default`: `acceptEdits`, what a production cloud task reports under the Manual choice). */
+  permissionMode: string;
+  permissionModeSource: "session" | "bridge-default";
   /** Which of production's egress branches the device container modeled: the scenario allowlist through the proxy. */
   egress: "allowlist";
   folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;

@@ -2018,6 +2018,15 @@
         "type": "string",
         "required": true
       },
+      ".deviceBridge.permissionMode": {
+        "type": "string",
+        "required": true
+      },
+      ".deviceBridge.permissionModeSource": {
+        "type": "string",
+        "enum": ["session", "bridge-default"],
+        "required": true
+      },
       ".deviceBridge.promptNote": {
         "type": "string",
         "enum": ["included", "omitted"],
@@ -4504,6 +4513,15 @@
       },
       ".deviceBridge.measuredOn": {
         "type": "string",
+        "required": true
+      },
+      ".deviceBridge.permissionMode": {
+        "type": "string",
+        "required": true
+      },
+      ".deviceBridge.permissionModeSource": {
+        "type": "string",
+        "enum": ["session", "bridge-default"],
         "required": true
       },
       ".deviceBridge.promptNote": {

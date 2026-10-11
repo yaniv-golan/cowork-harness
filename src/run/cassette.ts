@@ -3842,6 +3842,8 @@ const CassetteShape = z.looseObject({
       measuredOn: z.string(),
       promptNoteBasis: z.literal("model-report"),
       promptNote: z.enum(["included", "omitted"]),
+      permissionMode: z.string(),
+      permissionModeSource: z.enum(["session", "bridge-default"]),
       egress: z.literal("allowlist"),
       folders: z.array(z.strictObject({ name: z.string(), mode: z.enum(["r", "rw", "rwd"]) })),
       divergences: z.array(z.string()),

@@ -88,7 +88,7 @@ microvm still prepend it for the `docker run … claude …`/`limactl … claude
 claude -p --verbose
   --input-format stream-json --output-format stream-json
   --permission-prompt-tool stdio                # `answer_channel: none`: `--permission-prompts none` instead
-  --permission-mode <session.permissionMode ?? baseline.spawn.permissionMode ?? default>
+  --permission-mode <session.permissionMode ?? (device_bridge ? acceptEdits : default)>
   --setting-sources user
   --effort <session.effort ?? baseline.spawn.effortDefault>   # always emitted; medium fallback; per-model validated
   (--max-thinking-tokens 31999 | --thinking disabled)   # session.extended_thinking on|off (default on)

@@ -96,11 +96,16 @@ All notable changes to this project are documented here. The format is based on
   mounted in the agent's tree give way to a note naming `device_bash` and the folders' path. Assert
   with `tool_called`. The loader refuses the key with any other lane or tier, and `lint` reports
   `device-bridge-misplaced`.
+- **A `device_bridge` run whose session sets no `permission_mode` runs in `acceptEdits`**, the mode a production
+  cloud task reports under the composer's Manual choice. A `permission_mode` the session sets wins, `default`
+  included. A run without the bridge still defaults to `default`. The session schema no longer carries a default for
+  the field; an unset value resolves at launch.
 - **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
   (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,
   `device-tools-unserved`, `shell-user`, `device-network-shared`), and whether the prompt note was included
-  (`promptNote`; a maintainer control, `COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off`, leaves it out). The cassette freezes
-  it. See docs/fidelity-gaps.md, "Remote device bridge".
+  (`promptNote`; a maintainer control, `COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off`, leaves it out), and the agent's
+  permission mode with where it came from (`permissionMode`, `permissionModeSource`: `session` or `bridge-default`).
+  The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".
 - Under `device_bridge`, `file_exists` and `input_unmodified` on a connected folder's path are refused before the
   run: they would grade the agent's container, which holds no folder.
 - `verify-run`, `regrade` and `refs` refuse a kept `device_bridge` run dir: the device container's state cannot be

@@ -114,7 +114,7 @@ describe("wiring: a live run carries the record", () => {
   const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
   it("both the full and the partial result build it from the launch plan", () => {
     expect(
-      s.match(/deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts, bridgeNote\) : undefined/g),
+      s.match(/deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts, bridgeNote, plan\) : undefined/g),
     ).toHaveLength(2);
     expect(s).toMatch(/deviceBridge: args\.deviceBridge,/);
   });
