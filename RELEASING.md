@@ -242,7 +242,9 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       the push-to-main live suite will be skipped and this release won't be live-validated in CI; warns if a
       ruleset **required status check** names no job in `ci.yml`; fails if the newest baseline's
       `provenance.desktopInitSurface` is unobserved — start one Cowork session and re-run `sync`, or pass
-      `--allow-unobserved-init-surface` for an emergency release; fails if the covered surface lost or changed
+      `--allow-unobserved-init-surface` for an emergency release; fails if its `provenance.observedSpawnEnv`
+      is unobserved with no declaration — run one local Cowork task on that Desktop and re-run `sync`, or pass
+      `--allow-unobserved-spawn-env` for an emergency release (a declared `lane-gone` only warns); fails if the covered surface lost or changed
       a leaf since the last release tag and the bumped version is not a major — the same check as
       `npm run check:surface -- --since-tag`, which prints the counts and lists every removed/changed leaf.
       Before the bump it reports the diff without enforcing it).

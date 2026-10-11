@@ -148,6 +148,17 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`sync` records the env key names Desktop's own host-loop spawn carried.** The spawn-env check read only the env
+  literals in Desktop's bundle, and Desktop keeps writing to the env after they are built. `sync` now reads the final
+  key list Desktop logs for each local host-loop session (`~/Library/Logs/Claude/main*.log`) and records the names as
+  `provenance.observedSpawnEnv`. It also scans Desktop's spawn path for direct writes to the env made after it is built.
+  Every recorded name must be classified, with a reason, in one registry (`src/sync/spawn-env-registry.ts`), or the
+  write is refused. Only classified names are committed; any other name is counted and never printed. A name the
+  registry says the harness sets, but the harness host loop does not set, also refuses the write.
+- **`npm run preflight` refuses a newest baseline whose observed spawn env is unobserved** (no local host-loop task
+  ran on that Desktop build). `--allow-unobserved-spawn-env` downgrades it to a warning for an emergency release.
+  When local tasks can no longer run, `sync --spawn-env-unobservable local-lane-removed|no-local-entitlement`
+  records that for the build, and the preflight only warns.
 - **Reading several critiques: a fingerprint is a lower bound.** The reproduction recipe said a finding recurring
   with the same `findingFingerprint` across two runs meets the reproduction bar. The fingerprint is exact-match
   on model-written wording, and across repeats of the same probe it often never recurs. The docs and the skill

@@ -341,3 +341,24 @@ describe("observed spawn-env oracle — comparison with the harness host-loop en
     }
   });
 });
+
+// Over the operator's real Desktop logs (opt-in: COWORK_DESKTOP_LOGS_DIR=~/Library/Logs/Claude, plus the Desktop
+// version to attribute to). Never on CI. Asserts the reader observes the build and that nothing private survives.
+const REAL_LOGS = process.env.COWORK_DESKTOP_LOGS_DIR;
+const REAL_APP = process.env.COWORK_DESKTOP_APP_VERSION;
+describe.skipIf(!REAL_LOGS || !REAL_APP)("observed spawn-env oracle over real Desktop logs (COWORK_DESKTOP_LOGS_DIR)", () => {
+  it("observes the build, and its output carries no path, no email and no unclassified name", () => {
+    const r = readObservedSpawnEnv({
+      logsDir: REAL_LOGS!,
+      appVersion: REAL_APP!,
+      installedAtMs: null,
+      bundle: { hasProducer: true, hasProductName: () => false },
+      previous: null,
+      declare: null,
+    });
+    expect(r.block.observed).toBe(true);
+    const out = JSON.stringify(r);
+    expect(out).not.toContain("/Users/");
+    expect(out).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/);
+  });
+});
