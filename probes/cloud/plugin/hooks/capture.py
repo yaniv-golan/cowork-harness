@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cloud-lane probe capture hook (PreToolUse + PostToolUse, matcher ".*").
+"""Cloud-lane probe capture hook (PreToolUse, PostToolUse and PostToolUseFailure, matcher ".*").
 
 Records the SHAPE of every tool call in a real cloud task, never its content. One JSON line per hook call is
 appended to $HOME/cwh-cloud-probe/capture.jsonl. Everything is redacted at capture time: a value that is not on
@@ -53,9 +53,10 @@ BUILTIN_TOOLS = {
 COWORK_TOOLS = {"present_files", "request_cowork_directory", "save_skill", "allow_cowork_file_delete"}
 MAX_INPUT_KEYS = 40
 PERMISSION_MODES = {"default", "auto", "plan", "acceptEdits", "bypassPermissions", "dontAsk"}
-EVENTS = {"PreToolUse", "PostToolUse"}
+EVENTS = {"PreToolUse", "PostToolUse", "PostToolUseFailure"}
 STRUCTURAL_CWDS = {"/home/claude", "/root", "/tmp"}
-EXIT_CODE_RE = re.compile(r"^Exit code (-?\d{1,4})\b")
+# ASCII digits only: `\d` would also match Arabic-Indic or fullwidth digits, which int() converts.
+EXIT_CODE_RE = re.compile(r"^Exit code (-?[0-9]{1,4})(?![0-9])")
 TOOL_NAME_IN_RAW_RE = re.compile(rb'"tool_name"\s*:\s*"([^"\\]{1,200})"')
 # Response-schema key names kept verbatim; any other key (which could be user data, e.g. a dict keyed by folder
 # names) is replaced by its salted fingerprint.
@@ -206,6 +207,21 @@ def record(payload: dict) -> dict:
             rec["response_exit_code"] = int(m.group(1))
         if isinstance(response, dict) and isinstance(response.get("isError"), bool):
             rec["response_is_error"] = response["isError"]
+    if event == "PostToolUseFailure":
+        # A failed call's `error` is free text: a device_bash failure carries the command's own output (paths, file
+        # names, whatever it printed). Only its shape, size class, a salted fingerprint and a leading exit code are kept.
+        error = payload.get("error")
+        text = error if isinstance(error, str) else text_of(error)
+        rec["failure_shape"] = shape(error)
+        rec["failure_text_chars_le"] = bucket(len(text))
+        rec["failure_text_sha12"] = h12(text) if text else None
+        m = EXIT_CODE_RE.match(text)
+        if m:
+            rec["failure_exit_code"] = int(m.group(1))
+        if isinstance(payload.get("is_interrupt"), bool):
+            rec["failure_is_interrupt"] = payload["is_interrupt"]
+        if isinstance(payload.get("duration_ms"), (int, float)) and not isinstance(payload.get("duration_ms"), bool):
+            rec["failure_duration_ms_le"] = bucket(int(payload["duration_ms"]))
     return rec
 
 
