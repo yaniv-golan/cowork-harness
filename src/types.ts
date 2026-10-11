@@ -1992,8 +1992,8 @@ export interface DeviceBridgeRecord {
   egress: "allowlist";
   folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;
   /** Known differences from production, by id: `delete-not-refused` (a delete in a connected folder succeeds on the
-   *  device copy; production refuses it until the user allows deletion, and the harness reports it only after the
-   *  run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
+   *  device copy; production refuses it until the user allows deletion through `device_request_delete_permission`,
+   *  and the harness reports it only after the run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
    *  description paraphrases one production branch), `device-paths-tilde` (get_device_info spells folders
    *  `~/<name>`, not their paths on the Mac), `device-tools-unserved` (device_list_dir, the stage/commit pair and
    *  the folder and delete requests are not served), `shell-user` (commands run as the image's user, not a per-task

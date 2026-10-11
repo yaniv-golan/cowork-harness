@@ -1853,12 +1853,15 @@ a simulated session.
 
 **Where it differs from production.** A run's `deviceBridge` record lists these by id:
 
-- **`delete-not-refused`.** Production refuses `rm`, `rmdir` and `unlink` in a connected folder until the user
-  allows deletion, and that request is not served here. On the device copy a delete succeeds. The harness reports it
-  after the run instead, two ways: from the text of each `device_bash` command, and by comparing the device copy
-  before and after the run, which catches a delete by any means (`find -delete`, a glob, a script). A rename within
-  a folder is not a delete. A skill that deletes passes the command in the harness where production would have
-  stopped it, so assert `no_delete_in_mounts` when that matters.
+- **`delete-not-refused`.** Production mounts a connected folder read-write without delete: the first `rm` in it
+  fails, and the model then calls `device_request_delete_permission` (input `paths`, `reason`). That shows the user
+  a card ("Allow Claude to permanently delete files in this folder on your computer?", for the rest of the session,
+  subfolders included). Once allowed, the folder is remounted with delete and the `rm` succeeds. That request is
+  not served here, and on the device copy a delete succeeds at once. The harness reports it after the run instead,
+  two ways: from the text of each `device_bash` command, and by comparing the device copy before and after the run,
+  which catches a delete by any means (`find -delete`, a glob, a script). A rename within a folder is not a delete.
+  A skill that deletes passes the command in the harness where production would have asked the user first, so
+  assert `no_delete_in_mounts` when that matters.
 - **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
   applies. Production's device shell follows the account's egress policy, which can pass all traffic through. A
   fetch the allowlist blocks fails here and may succeed in production.
@@ -1884,6 +1887,10 @@ reading one on the Mac finds no such file here.
 
 File assertions grade the agent's own container, which holds no connected folder under the bridge. So `file_exists`
 or `input_unmodified` on a folder's path is refused before the run; assert on the `device_bash` call instead.
+
+**Permission mode.** The bridge's tools are pre-approved, and the agent runs with `acceptEdits`, which is what a cloud
+task's hooks report under the Manual approval choice. Under Auto a task still ran in the cloud with the same cards;
+the mode its hooks report under Auto is not measured. Skip was not offered on the account measured.
 
 The note in the agent's prompt is the harness's, and production's own cloud prompt is not reproduced. The note names
 `device_bash` and `$HOME/mnt/<folder-name>` because a cloud task's model, asked about its own instructions, reported
