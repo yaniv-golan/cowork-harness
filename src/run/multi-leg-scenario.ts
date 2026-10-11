@@ -128,8 +128,8 @@ export function hostActionAsserts(l: Leg): HostActionAssertion[] {
 }
 
 export const MultiLegScenarioObject = z.strictObject({
-  name: z.string().optional(),
-  baseline: z.string().optional(),
+  name: z.string().default(""),
+  baseline: z.string().default("latest"),
   session: z.string().default("(inline)"),
   fidelity: z.enum(FIDELITY_TIERS),
   execution: z.enum(["local"], { message: "a multi-leg scenario runs locally (execution: local)" }).default("local"),

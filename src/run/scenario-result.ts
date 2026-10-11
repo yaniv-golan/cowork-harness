@@ -7,11 +7,21 @@
 
 import { readFileSync, lstatSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { Verdict } from "./verdict.js";
+import type { Verdict, VerdictSignal } from "./verdict.js";
 import { SCENARIO_RESULT } from "./turn-layout.js";
 import type { RunIndexRow } from "./run-index.js";
 
 export const SCENARIO_RESULT_SCHEMA = "cowork-harness/scenario-result";
+
+/** The scenario-level signals only a multi-leg run raises, beside the legs' own (each prefixed with its leg). */
+export interface MultiLegSignal {
+  code: "vacuous_positive_assertion" | "plugin_identity_changed";
+  severity: "fail";
+  message: string;
+}
+
+/** A RunResult `verdict`'s shape, so `.verdict.pass` reads the same; its signals may also be multi-leg ones. */
+export type ScenarioVerdict = Omit<Verdict, "signals"> & { signals: Array<VerdictSignal | MultiLegSignal> };
 
 export interface ScenarioLegEntry {
   id: string;
@@ -21,7 +31,7 @@ export interface ScenarioLegEntry {
   /** `passed` / `failed`; `skipped` for a leg after the one that failed (never run on bad state). */
   status: "passed" | "failed" | "skipped";
   /** The leg's own verdict, as in its `turns/1/result.json` (prompt) or `action.json` (action). Absent when skipped. */
-  verdict?: Verdict;
+  verdict?: ScenarioVerdict;
 }
 
 export interface ScenarioResult {
@@ -29,7 +39,7 @@ export interface ScenarioResult {
   version: 1;
   scenario: string;
   /** Same shape as a RunResult's `verdict`, so a consumer reading `.verdict.pass` works unchanged. */
-  verdict: Verdict;
+  verdict: ScenarioVerdict;
   legs: ScenarioLegEntry[];
   startedAt: string;
   finishedAt: string;

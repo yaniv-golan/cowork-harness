@@ -192,7 +192,21 @@ export { collectArtifacts, collectArtifactPaths } from "./artifacts.js";
 
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 
+/** One prompt leg of a multi-leg run (src/run/multi-leg.ts), run as an ordinary single-prompt execution with these
+ *  differences: its run dir is the leg dir, its agent-visible session id is the scenario's (`persistent`) or the
+ *  leg's own (`cowork-task`), its session tree may live at the scenario root (`workBase`), a later leg stages per
+ *  `legStage`, its agent session id is fresh and never resumed, and it appends no index row (the scenario appends one). */
+export interface LegRunContext {
+  outDir: string;
+  sessionId: string;
+  workBase: string;
+  legStage?: LegStage;
+  agentSessionId: string;
+}
+
 export interface ExecuteOptions {
+  /** Internal: this execution is one prompt leg of a multi-leg run. */
+  leg?: LegRunContext;
   session?: ReturnType<typeof loadSession>;
   /** `--model <id>`: a one-off pin that overrides the session file's `model:`. Applied to whichever
    *  session this run ends up using, so `run`/`record` gain the flag the `skill`/`chat` lanes already had.
@@ -854,11 +868,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (opts.sessionId !== undefined || opts.resume)
       throw new UsageError("a pre-assigned run id cannot be combined with --session-id or --resume");
   }
+  if (opts.leg && (opts.sessionId !== undefined || opts.resume || opts.runId !== undefined))
+    throw new UsageError("a multi-leg run cannot be combined with --session-id, --resume or a pre-assigned run id");
   const stable = opts.sessionId ? `sess-${opts.sessionId}` : undefined;
-  const sessionId = stable ?? opts.runId ?? `local_${process.hrtime.bigint().toString(36)}`;
+  const sessionId = opts.leg?.sessionId ?? stable ?? opts.runId ?? `local_${process.hrtime.bigint().toString(36)}`;
   // the scenario name (YAML or filename-derived) is a PATH component — slugify so a name like
   // "../x" can't place run artifacts outside runs/. The display name (scenario.name) is unchanged.
-  const outDir = runOutDir(scenario.name, sessionId);
+  // A multi-leg leg runs in its own leg dir under the scenario root, which the multi-leg driver chose.
+  const outDir = opts.leg?.outDir ?? runOutDir(scenario.name, sessionId);
   if (opts.runId !== undefined && existsSync(outDir))
     throw new UsageError(`run id ${opts.runId} is already used by ${outDir}; a pre-assigned run id is never reused`);
   // The marker lives at outDir/.origin — ABOVE workRoot (outDir/work/...), so it's invisible to
@@ -1112,7 +1129,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane, launchSources, {
     deviceBridge: scenario.device_bridge === true,
+    ...(opts.leg ? { workBase: opts.leg.workBase, ...(opts.leg.legStage ? { legStage: opts.leg.legStage } : {}) } : {}),
   });
+  // A leg is a NEW agent session (its own id, never --resume): the next task, not the next turn of this one.
+  if (opts.leg) {
+    plan.agentSessionId = opts.leg.agentSessionId;
+    plan.resume = false;
+  }
   // A maintainer control run leaves the device_bridge prompt note out (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off). Read once:
   // the render, both fingerprints and the record must agree on it.
   const bridgeNote = deviceBridgeNoteMode();
@@ -1165,7 +1188,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // diff does NOT depend on this: it reads its own outputs-only snapshot, taken on every turn.
   // Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs
   // that never look at it; absence stays loud.
-  plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record" || opts.armPreRunManifest === true);
+  // Every leg of a multi-leg run takes one: `authored` on a leg means "this leg wrote it", against the earlier legs' files.
+  plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record" || opts.armPreRunManifest === true || !!opts.leg);
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity
@@ -1917,7 +1941,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const partialText = scrub(JSON.stringify(partialResult, null, 2), secrets);
       writeTextAtomic(join(tDirPartial, "result.json"), partialText);
 
-      appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
+      // A leg's row is the scenario's one roll-up (multi-leg.ts), never its own.
+      if (!opts.leg) appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
       writeTrace(tDirPartial, record, egress, secrets, partialResult.durationMs);
       // Loud PARTIAL marker so the populated artifacts are never misread as success (the no-false-green rule).
       warn(
@@ -2541,7 +2566,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
     const resultText = scrub(JSON.stringify(result, null, 2), secrets);
     writeTextAtomic(join(tDir, "result.json"), resultText);
-    appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
+    if (!opts.leg) appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
     writeTrace(tDir, record, egress, secrets, result.durationMs);
     return result;
   } finally {
@@ -2829,7 +2854,7 @@ export function legScenario(s: MultiLegScenario, leg: Leg): Scenario {
   const first = s.legs[0]?.id === leg.id;
   const scn: Scenario = {
     name: s.name,
-    ...(s.baseline !== undefined ? { baseline: s.baseline } : {}),
+    baseline: s.baseline,
     session: s.session,
     fidelity: s.fidelity,
     execution: "local",

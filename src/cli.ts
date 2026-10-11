@@ -40,6 +40,8 @@ import { checkCaptureOrg } from "./sync/capture-org.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
   executeScenario,
+  isMultiLegFile,
+  loadMultiLegScenario,
   parseScenarioFile,
   loadRunnableScenario,
   loadSessionFromFile,
@@ -56,6 +58,7 @@ import {
   effectiveTier,
   type ExecuteOptions,
 } from "./run/execute.js";
+import { executeMultiLeg } from "./run/multi-leg.js";
 import { unresolvedModelRefusal, envModelDefault } from "./run/model-provenance.js";
 import {
   ScriptedDecider,
@@ -1637,6 +1640,52 @@ async function runRepeatBatch(opts: {
   return { iterationResults, rollup };
 }
 
+/** `run <legs.yaml>`: load, run every leg in order, report each leg and the scenario verdict. Exit 0 when the scenario
+ *  passed, 1 when it did not. */
+async function runMultiLegFile(
+  file: string,
+  p: {
+    flags: CommonFlags;
+    policy: OnUnanswered;
+    externalChannel: ReturnType<typeof resolveExternal>;
+    o: ReturnType<typeof resolveOutput>;
+    modelFlag: string | undefined;
+  },
+): Promise<void> {
+  const { flags, policy, externalChannel, o, modelFlag } = p;
+  const ms = loadMultiLegScenario(file);
+  if (ms.on_unanswered === "prompt")
+    fail("run", "usage", `scenario "${ms.name}" sets on_unanswered: prompt — rejected on \`run\``, undefined, o.json);
+  let outcome: Awaited<ReturnType<typeof executeMultiLeg>>;
+  try {
+    outcome = await executeMultiLeg(ms, {
+      command: "run",
+      onUnanswered: policy,
+      onUnansweredFlag: flags.onUnanswered,
+      externalChannel,
+      compact: !!(flags.compact || flags.demo),
+      runLabel: flags.label,
+      ...(modelFlag !== undefined ? { modelOverride: modelFlag } : {}),
+    });
+  } catch (e) {
+    if (e instanceof UnansweredError)
+      fail("run", "unanswered", `${ms.name}: unanswered question (on_unanswered=${policy})`, e.hint, o.json);
+    throw e;
+  } finally {
+    externalChannel?.close?.();
+  }
+  const sr = outcome.scenarioResult;
+  if (o.json) out(jsonEnvelope("run", [...outcome.legResults.values()], { multiLeg: sr as unknown as { verdict: { pass: boolean } } }));
+  else {
+    for (const leg of sr.legs) {
+      const why = leg.verdict && !leg.verdict.pass ? ` — ${(leg.verdict.failures ?? []).map((f) => f.message).join("; ")}` : "";
+      log(`  leg ${leg.id} (${leg.kind}): ${leg.status}${why}`);
+    }
+    log(`${sr.verdict.pass ? "PASS" : "FAIL"} ${ms.name} (${sr.legs.length} legs) — ${outcome.outDir}`);
+  }
+  process.exit(sr.verdict.pass ? 0 : 1);
+}
+
 async function cmdRun(rawArgs: string[]) {
   if (hasHelp(rawArgs)) return void log(RUN_HELP);
   // --decider-model overrides the LLM decider's answering model for scenarios that use `on_unanswered: llm`
@@ -1829,6 +1878,19 @@ async function cmdRun(rawArgs: string[]) {
   const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
   const o = resolveOutput("run", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
+
+  // A multi-leg (`legs:`) scenario is its own mode: one scenario root, its legs in order, one verdict.
+  if (files.some((f) => isMultiLegFile(f))) {
+    if (files.length !== 1 || matrixFile !== undefined || repeatN !== undefined)
+      fail(
+        "run",
+        "usage",
+        "a multi-leg scenario (`legs:`) runs on its own: `run <file.yaml>`, not in a directory batch, and without --matrix or --repeat",
+        undefined,
+        o.json,
+      );
+    return void (await runMultiLegFile(files[0], { flags, policy, externalChannel, o, modelFlag }));
+  }
 
   // --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
   // cells, not "N files each run once or N times" — so it's handled as its own early branch and exits.

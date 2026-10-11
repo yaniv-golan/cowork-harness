@@ -64,6 +64,9 @@ export interface JsonEnvelopeOpts {
   matrix?: MatrixRollup;
   /** `--matrix` + `--repeat` composed: each cell is its own repeat batch. */
   matrixRepeat?: MatrixRepeatRollup;
+  /** A multi-leg (`legs:`) run: its scenario result. `results[]` holds the prompt legs' RunResults; `ok` is the
+   *  scenario's verdict, which also counts a failed host action and the legs skipped after a failure. */
+  multiLeg?: { verdict: { pass: boolean } } & Record<string, unknown>;
   /** Command-specific metadata merged into the envelope alongside `results` (e.g. `record`'s
    *  `artifacts`/`cassette`). Kept separate from `results` so the per-result verdict/`ok` computation
    *  is unaffected. */
@@ -114,16 +117,18 @@ export function publishedResult(r: RunResult, lane: "live" | "replay" = "live") 
  *  backward-compat constraint to preserve). `results[]` still holds every raw RunResult either way — across every cell
  *  and every one of its repeat iterations for the composed mode — nothing is hidden from any caller. */
 function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelopeOpts = {}): Record<string, unknown> {
-  const { rollups, minPassRate, allowBudgetStop, matrix, matrixRepeat, extra } = opts;
+  const { rollups, minPassRate, allowBudgetStop, matrix, matrixRepeat, multiLeg, extra } = opts;
   const lane = command === "replay" ? "replay" : "live";
   const withVerdict = results.map((r) => publishedResult(r, lane));
-  const ok = matrixRepeat
-    ? !matrixRepeat.anyFail
-    : matrix
-      ? !matrix.anyFail
-      : rollups
-        ? rollups.every((ru) => rollupPasses(ru, minPassRate, allowBudgetStop))
-        : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
+  const ok = multiLeg
+    ? multiLeg.verdict.pass
+    : matrixRepeat
+      ? !matrixRepeat.anyFail
+      : matrix
+        ? !matrix.anyFail
+        : rollups
+          ? rollups.every((ru) => rollupPasses(ru, minPassRate, allowBudgetStop))
+          : withVerdict.length > 0 && withVerdict.every((r) => r.verdict.pass);
   return {
     tool: "cowork-harness",
     version: pkgVersion(),
@@ -133,6 +138,7 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
     rollups,
     matrix,
     matrixRepeat,
+    multiLeg,
     ...extra,
     ...budgetFrame(),
     error: null,
