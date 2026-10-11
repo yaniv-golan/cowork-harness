@@ -3534,7 +3534,7 @@ async function cmdSync(args: string[]) {
     for (const n of res.notes) log("   - " + n);
   }
   if (res.unknownDeltas.length) {
-    log("\n⚠ unknown deltas (extend src/sync/cowork-sync.ts):");
+    log("\n⚠ unknown deltas (each line names the file to fix):");
     for (const d of res.unknownDeltas) log("   - " + d);
     // unknown deltas block the write unless --diff (diagnosis mode) is active.
     if (!diffFlag && !allowEmpty) {

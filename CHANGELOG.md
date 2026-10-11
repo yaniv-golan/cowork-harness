@@ -27,6 +27,10 @@ All notable changes to this project are documented here. The format is based on
   the harness never serves (`device_list_dir`, the stage/commit pair, the folder and delete requests and the
   others production registers), used to pass vacuously. Set
   `device_bridge`, or drop the assertion. `lint` reports it as `tool-not-called-tier-vacuous`.
+- **For maintainers: `npm run preflight` now also fails when the newest baseline has no
+  `provenance.observedSpawnEnv`.** A baseline synced with an older cowork-harness must be re-synced before a
+  release. The shipped newest baseline already carries the block.
+
 - **The critique report gains fields, and its schema still forbids unknown ones.** `schema/critique-report.json`
   keeps `additionalProperties: false`, so a validator pinned to the 4.7 schema rejects a 4.8 report. The report is
   EXPERIMENTAL (SPEC §12); validate against the schema shipped with the harness that wrote it.
@@ -152,9 +156,12 @@ All notable changes to this project are documented here. The format is based on
   literals in Desktop's bundle, and Desktop keeps writing to the env after they are built. `sync` now reads the final
   key list Desktop logs for each local host-loop session (`~/Library/Logs/Claude/main*.log`) and records the names as
   `provenance.observedSpawnEnv`. It also scans Desktop's spawn path for direct writes to the env made after it is built.
-  Every recorded name must be classified, with a reason, in one registry (`src/sync/spawn-env-registry.ts`), or the
-  write is refused. Only classified names are committed; any other name is counted and never printed. A name the
-  registry says the harness sets, but the harness host loop does not set, also refuses the write.
+  Every recorded name must be classified, with a reason, in one registry (`src/sync/spawn-env-registry.ts`). An
+  unclassified name that Desktop's own bundle carries refuses the write and is named in sync's local output; any
+  other unclassified name (an organisation's managed env, say) is counted as `withheld` and never printed or
+  committed. A name the registry says the harness sets, but the harness host loop does not set, also refuses the
+  write, as do unreadable dumps, a `Starting app` log entry with no version, and a bundle that no longer logs the
+  dump.
 - **`npm run preflight` refuses a newest baseline whose observed spawn env is unobserved** (no local host-loop task
   ran on that Desktop build). `--allow-unobserved-spawn-env` downgrades it to a warning for an emergency release.
   When local tasks can no longer run, `sync --spawn-env-unobservable local-lane-removed|no-local-entitlement`

@@ -289,7 +289,7 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
       if (classifySpawnEnvKey(n, "observed")) committed.push(n);
       else if (input.bundle.hasProductName(n))
         deltas.push(
-          `observedSpawnEnv: Desktop's host-loop spawn carries ${n}, which src/sync/spawn-env-registry.ts does not classify — classify it (site "observed") and re-sync`,
+          `observedSpawnEnv: Desktop's host-loop spawn carries ${n}, which src/sync/spawn-env-registry.ts does not classify — classify it (site "observed") and re-sync; do NOT bypass with --allow-empty`,
         );
       else withheld++;
     }
@@ -390,7 +390,7 @@ export function checkObservedAgainstHarness(
     const c = classifySpawnEnvKey(k, "observed");
     if (c && HARNESS_OWNED.has(c.class) && !harnessKeys.has(k))
       deltas.push(
-        `observedSpawnEnv: Desktop's host-loop spawn carries ${k}, classed ${c.class}, but the harness host loop does not set it — model it or reclassify it in src/sync/spawn-env-registry.ts`,
+        `observedSpawnEnv: Desktop's host-loop spawn carries ${k}, classed ${c.class}, but the harness host loop does not set it — model it or reclassify it in src/sync/spawn-env-registry.ts; do NOT bypass with --allow-empty`,
       );
   }
   // A key the registry calls absent by default that every observed session carries: the reason is out of date.
