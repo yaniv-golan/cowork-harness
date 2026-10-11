@@ -6,7 +6,7 @@ appended to $HOME/cwh-cloud-probe/capture.jsonl. Everything is redacted at captu
 an allowlist below is never written, only its type, its size or a salted 12-character fingerprint.
 
 Fingerprints are HMAC-SHA256 under a random salt kept in $HOME/cwh-cloud-probe/.salt, which is never exported and
-is shredded by the export step. Without the salt a fingerprint cannot be matched against a dictionary of likely
+goes away with the throwaway cloud container (verify.py voids an export that carries it). Without the salt a fingerprint cannot be matched against a dictionary of likely
 names. Only product vocabulary is kept verbatim: the builtin tools, the remote-devices tools and the known cowork
 tools (explicit allowlists below), and the input field NAMES of those tools. Every other tool name and input key is
 fingerprinted, because a connector's names and schema keys can identify the user's services (a "to"/"subject"/"body"

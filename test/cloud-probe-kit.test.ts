@@ -397,10 +397,19 @@ describe("cloud probe kit: re-review findings", () => {
     expect(verify("p0", dir).status).toBe(0);
   });
 
-  it("the export step removes the salt even without shred, and says output without both lines is void", () => {
+  // One export command for every approval mode: removing the salt in the export was read by an auto-mode classifier
+  // as tampering with logs. The salt stays in the throwaway container and is never exported; verify.py voids an
+  // export that carries it (the test below).
+  it("the export step is copy, count and checksum only, never touches the salt, and says output without both lines is void", () => {
     const readme = readFileSync(join(KIT, "README.md"), "utf8");
-    expect(readme).toContain("shred -u /root/cwh-cloud-probe/.salt 2>/dev/null || rm -f /root/cwh-cloud-probe/.salt");
+    expect(readme).toContain(
+      "`cp /root/cwh-cloud-probe/capture.jsonl /home/claude/export.jsonl && wc -l /home/claude/export.jsonl && sha256sum /home/claude/export.jsonl | tee /home/claude/export.sha256`",
+    );
+    expect(readme).not.toMatch(/shred|rm -f \/root\/cwh-cloud-probe\/\.salt/);
     expect(readme).toMatch(/without both lines[^.]*void/i);
+  });
+  it("no kit file says the export removes the salt", () => {
+    for (const f of [join(KIT, "README.md"), HOOK, VERIFY]) expect(readFileSync(f, "utf8"), f).not.toMatch(/shred/i);
   });
 });
 
