@@ -10,7 +10,8 @@ import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from 
 import { ObservedSpawnEnv, type CloudBlock, type DesktopInitSurface, type ObservedSpawnEnvDeclaration } from "../types.js";
 import { safeCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
-import { classifySpawnEnvKey, windowAllowlistedNames } from "./spawn-env-registry.js";
+import { classifySpawnEnvKey, windowAllowlistedNames, postWriteOnlyNames } from "./spawn-env-registry.js";
+import { scanSpawnEnvPostWrites } from "./spawn-env-post-writes.js";
 import { readObservedSpawnEnv, bundleHasSpawnEnvProducer } from "./observed-spawn-env.js";
 
 /**
@@ -1594,6 +1595,15 @@ function extractFromAsar(
     // become unknown deltas (hard-fail); NOTEs (stale-allowlist prune hints) are collected into
     // `notes` and printed by the sync CLI as informational lines — never a delta, never write-blocking.
     for (const f of checkSpawnContractFacts(bundle, bundleFiles)) flag(unknown, f);
+    // Direct writes to the spawn env after W1 is built (spawn-env-post-writes.ts): each key must be classified.
+    const postWrites = scanSpawnEnvPostWrites(bundleFiles);
+    for (const f of postWrites.flags) flag(unknown, f);
+    const postWriteNotes: string[] = [];
+    for (const k of postWriteOnlyNames())
+      if (!postWrites.flags.length && !postWrites.keys.includes(k))
+        postWriteNotes.push(
+          `NOTE: spawn-env registry row ${k} (site "post-write") is no longer written directly after W1 — prune its post-write site in src/sync/spawn-env-registry.ts`,
+        );
     for (const f of checkVmAgentStagingFacts(bundleFiles)) flag(unknown, f);
     const subagentFps = readSubagentFingerprints();
     for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
@@ -1653,7 +1663,7 @@ function extractFromAsar(
           new RegExp(`\\.${name}(?![\\w$])`).test(bundle)),
       spawnEnvProducer: bundleHasSpawnEnvProducer(bundle),
       cloud,
-      notes: [...notes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],
+      notes: [...notes, ...postWriteNotes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],
     };
   } catch (e) {
     flag(unknown, `asar extract failed (npx @electron/asar): ${(e as Error).message} — check network/npx, or unpack ${ASAR} manually`);

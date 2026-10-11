@@ -293,27 +293,27 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
     class: "harness-set",
     reason:
       "autoMemoryEnv (src/loop-decision.ts) sets it on every tier when the session has no memory directory, as Desktop does (checkAutoMemoryFacts)",
-    sites: ["post-write", "observed"],
+    sites: ["observed"],
   },
   CLAUDE_COWORK_MEMORY_PATH_OVERRIDE: {
     class: "anchored-elsewhere",
     reason: "memory-directory mode (gate 123929380 on); checkAutoMemoryFacts; not modeled",
-    sites: ["post-write", "observed"],
+    sites: ["observed"],
   },
   CLAUDE_COWORK_MEMORY_GUIDELINES: {
     class: "anchored-elsewhere",
     reason: "memory-directory mode, gate 1696890383; checkAutoMemoryFacts; not modeled",
-    sites: ["post-write", "observed"],
+    sites: ["observed"],
   },
   CLAUDE_COWORK_MEMORY_INDEX_CONTENT: {
     class: "anchored-elsewhere",
     reason: "memory-directory mode; checkAutoMemoryFacts; not modeled",
-    sites: ["post-write", "observed"],
+    sites: ["observed"],
   },
   CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES: {
     class: "anchored-elsewhere",
     reason: "memory-directory mode; checkAutoMemoryFacts; not modeled",
-    sites: ["post-write", "observed"],
+    sites: ["observed"],
   },
   CLAUDE_CODE_MAX_CONTEXT_TOKENS: {
     class: "server-config",
@@ -448,6 +448,13 @@ export function classifySpawnEnvKey(name: string, site: SpawnEnvSite): { class: 
   if (site === "window") return null;
   const p = SPAWN_ENV_PATTERNS.find((x) => x.re.test(name));
   return p ? { class: p.class, reason: p.reason } : null;
+}
+
+/** Post-write rows outside the window tables: the minimal scanner's prune NOTE walks these. */
+export function postWriteOnlyNames(): string[] {
+  return registryEntries()
+    .filter((e) => e.sites.includes("post-write") && !e.sites.includes("window"))
+    .map((e) => e.name);
 }
 
 /** Window-site rows that are allowlisted (classified, not pinned): deriveSpawnEnv's prune NOTE walks these. */
