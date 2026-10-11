@@ -21,7 +21,8 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ObservedSpawnEnv, ObservedSpawnEnvDeclaration } from "../types.js";
+import type { ObservedSpawnEnv, ObservedSpawnEnvDeclaration, PlatformBaseline } from "../types.js";
+import { buildHostLoopNativeEnv } from "../runtime/hostloop.js";
 import { classifySpawnEnvKey } from "./spawn-env-registry.js";
 
 /** Fixed display form of the logs dir: messages use this, never the resolved (username-bearing) path. */
@@ -324,4 +325,48 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
       ". Recorded observed:false; a release cannot ship it. Start one Cowork task with 'Only on this computer' on, then re-run sync.",
   );
   return { block: noSession, deltas, notes };
+}
+
+/** Classes whose keys the harness host loop claims to set itself; an observed one it does not set is a contradiction. */
+const HARNESS_OWNED = new Set(["pinned", "harness-set"]);
+
+/**
+ * The env key names the harness host loop spawns for `baseline`, built over an EMPTY operator env (so no name from the
+ * maintainer's shell can enter the comparison or a message) and with placeholder values for the keys the harness adds
+ * at spawn (`runtimeAuthEnv`: TZ and the OAuth token) and for a connected folder. Only the key set is used.
+ */
+export function harnessHostLoopKeys(baseline: PlatformBaseline): Set<string> {
+  const env = buildHostLoopNativeEnv(baseline, {
+    configDir: "/placeholder/config",
+    folderHostPaths: ["/placeholder/folder"],
+    extra: { TZ: "UTC", CLAUDE_CODE_OAUTH_TOKEN: "placeholder" },
+    operatorEnv: {},
+  });
+  return new Set(Object.keys(env));
+}
+
+/**
+ * Compare Desktop's observed host-loop spawn env with the harness's. Write-blocking: an observed key the registry
+ * classes `pinned` or `harness-set` that the harness does not set. Informational: registry-named keys the harness sets
+ * that no observed dump carried (conditional keys legitimately differ). Unregistered names are never printed.
+ */
+export function checkObservedAgainstHarness(
+  block: ObservedSpawnEnv,
+  harnessKeys: ReadonlySet<string>,
+): { deltas: string[]; notes: string[] } {
+  if (!block.observed) return { deltas: [], notes: [] };
+  const seen = new Set([...block.keysAll, ...block.keysSome]);
+  const deltas: string[] = [];
+  for (const k of [...seen].sort()) {
+    const c = classifySpawnEnvKey(k, "observed");
+    if (c && HARNESS_OWNED.has(c.class) && !harnessKeys.has(k))
+      deltas.push(
+        `observedSpawnEnv: Desktop's host-loop spawn carries ${k}, classed ${c.class}, but the harness host loop does not set it — model it or reclassify it in src/sync/spawn-env-registry.ts`,
+      );
+  }
+  const harnessOnly = [...harnessKeys].filter((k) => !seen.has(k) && classifySpawnEnvKey(k, "observed") !== null).sort();
+  const notes = harnessOnly.length
+    ? [`observedSpawnEnv: the harness host loop sets ${harnessOnly.length} key(s) no observed dump carried: ${harnessOnly.join(", ")}`]
+    : [];
+  return { deltas, notes };
 }

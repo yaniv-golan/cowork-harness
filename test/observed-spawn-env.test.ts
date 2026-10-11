@@ -6,9 +6,12 @@ import {
   parseDesktopLogLines,
   readObservedSpawnEnv,
   bundleHasSpawnEnvProducer,
+  checkObservedAgainstHarness,
+  harnessHostLoopKeys,
   type ObservedSpawnEnvInput,
 } from "../src/sync/observed-spawn-env.js";
 import { ObservedSpawnEnv } from "../src/types.js";
+import { loadBaseline } from "../src/baseline.js";
 
 // Synthetic Desktop main.log text in the shape Desktop's logger writes (util.inspect of the sdkOptions object):
 // several short items per line, a `[length]: N` trailer, a long `plugins` list BEFORE `envKeys` (envKeys sits ~140
@@ -289,5 +292,52 @@ describe("producer check", () => {
     expect(bundleHasSpawnEnvProducer(real)).toBe(true);
     expect(bundleHasSpawnEnvProducer(real.replace(": %o", ""))).toBe(false);
     expect(bundleHasSpawnEnvProducer(real.replace("envKeys:", "keys:"))).toBe(false);
+  });
+});
+
+describe("observed spawn-env oracle — comparison with the harness host-loop env", () => {
+  const observed = (keysAll: string[], keysSome: string[] = []): ObservedSpawnEnv => ({
+    observed: true,
+    appVersion: "2.31226.1",
+    nativeAgentVersions: ["2.1.295"],
+    sessions: 2,
+    keysAll,
+    keysSome,
+    withheld: 0,
+  });
+
+  it("blocks when a key the registry calls pinned or harness-set is missing from what the harness spawns", () => {
+    const r = checkObservedAgainstHarness(observed(["CLAUDE_CODE_IS_COWORK", "TZ", "PATH"]), new Set(["TZ"]));
+    expect(r.deltas).toHaveLength(1);
+    expect(r.deltas[0]).toContain("CLAUDE_CODE_IS_COWORK");
+    // host-inherited / host-derived keys are not the harness's to set in this comparison
+    expect(r.deltas.join()).not.toContain("PATH");
+  });
+
+  it("notes harness-only keys by registry name only, never an unregistered name", () => {
+    const r = checkObservedAgainstHarness(observed(["TZ"]), new Set(["TZ", "CLAUDE_CODE_SIMPLE", "R48_SHELL_ONLY"]));
+    expect(r.deltas).toEqual([]);
+    expect(r.notes.join()).toContain("CLAUDE_CODE_SIMPLE");
+    expect(r.notes.join()).not.toContain("R48_SHELL_ONLY");
+  });
+
+  it("does nothing for an unobserved block", () => {
+    expect(checkObservedAgainstHarness({ observed: false, appVersion: "2.31226.1", reason: "no-session" }, new Set())).toEqual({
+      deltas: [],
+      notes: [],
+    });
+  });
+
+  it("builds the harness side from an EMPTY operator env, so the maintainer's shell never enters the comparison", () => {
+    process.env.R48_SHELL_ONLY = "1";
+    try {
+      const keys = harnessHostLoopKeys(loadBaseline("latest"));
+      expect(keys.has("R48_SHELL_ONLY")).toBe(false);
+      expect(keys.has("PATH")).toBe(false);
+      for (const k of ["CLAUDE_CODE_IS_COWORK", "TZ", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_WORKSPACE_HOST_PATHS"])
+        expect(keys.has(k), k).toBe(true);
+    } finally {
+      delete process.env.R48_SHELL_ONLY;
+    }
   });
 });

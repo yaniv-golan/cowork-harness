@@ -7,10 +7,11 @@ import { gunzipSync } from "node:zlib";
 import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
-import type { CloudBlock, DesktopInitSurface } from "../types.js";
+import { ObservedSpawnEnv, type CloudBlock, type DesktopInitSurface, type ObservedSpawnEnvDeclaration } from "../types.js";
 import { safeCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
 import { classifySpawnEnvKey, windowAllowlistedNames } from "./spawn-env-registry.js";
+import { readObservedSpawnEnv, bundleHasSpawnEnvProducer } from "./observed-spawn-env.js";
 
 /**
  * cowork-sync — derive a VOLATILE parity baseline from the live Claude Desktop
@@ -67,6 +68,10 @@ export interface SyncResult {
    *  release was installed (see desktop-init-surface.ts). `observed:false` when no such session exists.
    *  NEVER carried forward from the base baseline: that would stamp one release's surface with the next's. */
   desktopInitSurface: DesktopInitSurface;
+  /** The env key NAMES Desktop's own host-loop spawn carried on this build, from its local log (see
+   *  observed-spawn-env.ts). `observed:false` with a reason when no dump exists. Carried forward only for the
+   *  SAME build, after its log entries rotated away. */
+  observedSpawnEnv: ObservedSpawnEnv;
   /** The `cloud` block (remote-devices tool list + description fingerprints + unreachable features); null when
    *  the asar could not be read or the extraction failed (a delta says which). Never carried forward. */
   cloud: CloudBlock | null;
@@ -788,6 +793,24 @@ export const NETWORK_ALLOWDOMAINS_COMMENT =
 
 /** The `network` block a sync writes: the previous baseline's block, with the facts this sync owns
  *  replaced. `$comment` is replaced too — carrying it forward is how a stale sentence gets republished. */
+/** The newest committed baseline's `provenance.observedSpawnEnv`, schema-checked; null when absent or invalid. */
+export function readPreviousObservedSpawnEnv(dir = BASELINES_DIR): ObservedSpawnEnv | null {
+  try {
+    let newest: { version: string; file: string } | null = null;
+    for (const f of readdirSync(dir)) {
+      if (!f.startsWith("desktop-") || !f.endsWith(".json")) continue;
+      const version = f.slice("desktop-".length, -".json".length);
+      if (!newest || cmpVersionStrings(version, newest.version) > 0) newest = { version, file: f };
+    }
+    if (!newest) return null;
+    const parsed = JSON.parse(readFileSync(join(dir, newest.file), "utf8")) as { provenance?: { observedSpawnEnv?: unknown } };
+    const r = ObservedSpawnEnv.safeParse(parsed.provenance?.observedSpawnEnv);
+    return r.success ? r.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export function syncedNetworkBlock(
   prior: Record<string, unknown> | undefined,
   networkMode: string | null,
@@ -835,7 +858,7 @@ export function readPinnedAllowDomains(unknown: string[], dir = BASELINES_DIR): 
   return domains as string[];
 }
 
-export function sync(): SyncResult {
+export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration | null } = {}): SyncResult {
   // defensive platform guard. The paths above (SUPPORT/ASAR/Info.plist) are macOS-only; on
   // Windows/Linux they don't exist, so the extractor would return EMPTY version/allowlist/gate fields
   // and (without the write guards) could persist a garbage baseline. Fail LOUD instead of
@@ -886,6 +909,8 @@ export function sync(): SyncResult {
     promptFingerprint,
     agentReleaseChannel,
     bundleHasLiteral,
+    bundleHasProductName,
+    spawnEnvProducer,
     cloud,
     notes,
   } = extractFromAsar(unknown, gates);
@@ -903,6 +928,21 @@ export function sync(): SyncResult {
   });
   for (const d of initSurface.deltas) flag(unknown, d);
   notes.push(...initSurface.notes);
+
+  // 7. The env key names Desktop's own host-loop spawn carried on THIS build, from its local log (see
+  // observed-spawn-env.ts): the final env, after every post-construction write the window scan cannot see.
+  // Unobserved is a WARNING for the same reason as above; the release preflight refuses to ship it.
+  const observedSpawnEnv = readObservedSpawnEnv({
+    logsDir: join(homedir(), "Library/Logs/Claude"),
+    appVersion,
+    installedAtMs: desktopInstalledAtMs(ASAR),
+    bundle:
+      bundleHasProductName && spawnEnvProducer !== null ? { hasProducer: spawnEnvProducer, hasProductName: bundleHasProductName } : null,
+    previous: readPreviousObservedSpawnEnv(),
+    declare: opts.declareUnobservable ?? null,
+  });
+  for (const d of observedSpawnEnv.deltas) flag(unknown, d);
+  notes.push(...observedSpawnEnv.notes);
 
   // network.allowDomains is a PINNED, hand-curated list carried forward from the newest committed
   // baseline — never re-derived from the bundle. See checkEgressContractFacts for why deriving it is
@@ -949,6 +989,7 @@ export function sync(): SyncResult {
     agentReleaseBaseUrl: agentReleaseChannel?.baseUrl ?? null,
     agentReleaseChannel,
     desktopInitSurface: initSurface.surface,
+    observedSpawnEnv: observedSpawnEnv.block,
     cloud,
     unknownDeltas: unknown,
     notes,
@@ -1501,6 +1542,11 @@ function extractFromAsar(
   agentReleaseChannel: AgentReleaseChannel | null;
   /** Quoted-literal membership over the normalized bundle; null when the bundle could not be read. */
   bundleHasLiteral: ((name: string) => boolean) | null;
+  /** Whether a name is Desktop vocabulary: a quoted literal, an object key (`{NAME:` / `,NAME:`) or a member
+   *  (`.NAME`) in the normalized bundle. null when the bundle could not be read. */
+  bundleHasProductName: ((name: string) => boolean) | null;
+  /** Whether the bundle still logs the host-loop dump the observed spawn-env oracle reads; null = unread. */
+  spawnEnvProducer: boolean | null;
   cloud: CloudBlock | null;
   notes: string[];
 } {
@@ -1516,6 +1562,8 @@ function extractFromAsar(
       promptFingerprint: null,
       agentReleaseChannel: null,
       bundleHasLiteral: null,
+      bundleHasProductName: null,
+      spawnEnvProducer: null,
       cloud: null,
       notes: [],
     };
@@ -1597,6 +1645,13 @@ function extractFromAsar(
       agentReleaseChannel: extractAgentReleaseChannel(bundle),
       // Quoted, after normalizeBundleQuotes: a bare substring would match any identifier fragment.
       bundleHasLiteral: (name: string) => bundle.includes(`"${name}"`),
+      bundleHasProductName: (name: string) =>
+        /^[A-Z][A-Z0-9_]*$/.test(name) &&
+        (bundle.includes(`"${name}"`) ||
+          bundle.includes(`{${name}:`) ||
+          bundle.includes(`,${name}:`) ||
+          new RegExp(`\\.${name}(?![\\w$])`).test(bundle)),
+      spawnEnvProducer: bundleHasSpawnEnvProducer(bundle),
       cloud,
       notes: [...notes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],
     };
@@ -1612,6 +1667,8 @@ function extractFromAsar(
       promptFingerprint: null,
       agentReleaseChannel: null,
       bundleHasLiteral: null,
+      bundleHasProductName: null,
+      spawnEnvProducer: null,
       cloud: null,
       notes: [],
     };

@@ -316,3 +316,57 @@ describe("renderChangelog / formatDiffLines — Desktop init surface", () => {
     expect(md(a, b)).toContain("`provenance.desktopInitSurface.oddity`: `1` → `2`");
   });
 });
+
+// provenance.observedSpawnEnv likewise renders block-level: an observed→unobserved change must not read as every key
+// disappearing, and a key moving between keysAll and keysSome is one fact, not an add plus a remove.
+describe("renderChangelog / formatDiffLines — observed spawn env", () => {
+  const obs = (keysAll: string[], keysSome: string[] = [], appVersion = "2.31226.1") => ({
+    provenance: {
+      observedSpawnEnv: { observed: true, appVersion, nativeAgentVersions: ["2.1.295"], sessions: 3, keysAll, keysSome, withheld: 0 },
+    },
+  });
+  const unobs = (reason: string, declared?: string, appVersion = "2.31226.2") => ({
+    provenance: { observedSpawnEnv: { observed: false, appVersion, reason, ...(declared ? { declared } : {}) } },
+  });
+  const GENERIC = "`provenance.observedSpawnEnv";
+  const md = (a: object, b: object) => renderChangelog(diffBaselines(a, b));
+  const plain = (a: object, b: object) => formatDiffLines(diffBaselines(a, b)).join("\n");
+
+  it("first introduction names the keys", () => {
+    const out = md({ provenance: {} }, obs(["PATH", "TZ"], ["CLAUDE_CODE_HOST_SCHEDULED_RUN"]));
+    expect(out).toContain(
+      "- Desktop host-loop spawn env now recorded at `2.31226.1`: 2 key(s) in every session; in some: `CLAUDE_CODE_HOST_SCHEDULED_RUN`",
+    );
+    expect(out).not.toContain(GENERIC);
+  });
+
+  it("an observed → unobserved change says so and does not list the keys as removed", () => {
+    const out = md(obs(["PATH", "TZ"]), unobs("no-session"));
+    expect(out).toContain("- Desktop host-loop spawn env UNOBSERVED at `2.31226.2` (no-session)");
+    expect(out).not.toContain("DISAPPEARED");
+    expect(out).not.toContain(GENERIC);
+    const declared = md(obs(["PATH"]), unobs("lane-gone", "local-lane-removed"));
+    expect(declared).toContain("UNOBSERVED at `2.31226.2` (lane-gone: local-lane-removed)");
+  });
+
+  it("names keys that appeared, disappeared, or moved between every session and some", () => {
+    const a = obs(["PATH", "TZ", "OLD_KEY"], ["CLAUDE_CODE_WORKSPACE_HOST_PATHS"]);
+    const b = obs(["PATH", "NEW_KEY", "CLAUDE_CODE_WORKSPACE_HOST_PATHS"], ["TZ"]);
+    const out = md(a, b);
+    expect(out).toContain("- Desktop host-loop spawn env: key(s) APPEARED: `NEW_KEY`");
+    expect(out).toContain("- Desktop host-loop spawn env: key(s) DISAPPEARED: `OLD_KEY`");
+    expect(out).toContain("`CLAUDE_CODE_WORKSPACE_HOST_PATHS` moved from some sessions to every session");
+    expect(out).toContain("`TZ` moved from every session to some sessions");
+    expect(out).not.toContain(GENERIC);
+    expect(plain(a, b)).toContain("Desktop host-loop spawn env: key(s) APPEARED: `NEW_KEY`");
+  });
+
+  it("an unobserved → observed change says so", () => {
+    expect(md(unobs("no-session", undefined, "2.31226.1"), obs(["PATH"]))).toContain(
+      "- Desktop host-loop spawn env now OBSERVED: 1 key(s) in every session",
+    );
+    expect(md(unobs("no-session", undefined, "2.31226.0"), obs(["PATH"]))).toContain(
+      "- Desktop host-loop spawn env now OBSERVED at `2.31226.1`",
+    );
+  });
+});

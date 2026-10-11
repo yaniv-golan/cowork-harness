@@ -11,6 +11,8 @@ import {
   unreportedRequiredContexts,
   checkInitSurfaceObserved,
   ALLOW_UNOBSERVED_INIT_SURFACE_FLAG,
+  checkSpawnEnvObserved,
+  ALLOW_UNOBSERVED_SPAWN_ENV_FLAG,
 } from "../scripts/release-preflight.js";
 
 describe("isValidSemver", () => {
@@ -184,6 +186,34 @@ describe("checkInitSurfaceObserved (check 7)", () => {
 
   it("the override downgrades to WARN, never PASS", () => {
     expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: block(false) }, true).status).toBe("WARN");
+  });
+});
+
+describe("checkSpawnEnvObserved (check 7b)", () => {
+  const nb = (block: unknown) => ({ name: "desktop-9.json", json: { provenance: block === undefined ? {} : { observedSpawnEnv: block } } });
+  const observed = { observed: true, appVersion: "9", nativeAgentVersions: [], sessions: 1, keysAll: [], keysSome: [], withheld: 0 };
+
+  it("passes an observed newest baseline", () => {
+    expect(checkSpawnEnvObserved(nb(observed), false).status).toBe("PASS");
+  });
+
+  it("FAILS no-session and names the dedicated override (never --allow-empty)", () => {
+    const r = checkSpawnEnvObserved(nb({ observed: false, appVersion: "9", reason: "no-session" }), false);
+    expect(r.status).toBe("FAIL");
+    expect(r.detail).toContain(ALLOW_UNOBSERVED_SPAWN_ENV_FLAG);
+    expect(r.detail).not.toContain("--allow-empty");
+    expect(checkSpawnEnvObserved(nb({ observed: false, appVersion: "9", reason: "no-session" }), true).status).toBe("WARN");
+  });
+
+  it("WARNS on a declared lane-gone, which was an explicit recorded decision", () => {
+    const r = checkSpawnEnvObserved(nb({ observed: false, appVersion: "9", reason: "lane-gone", declared: "local-lane-removed" }), false);
+    expect(r.status).toBe("WARN");
+    expect(r.detail).toContain("local-lane-removed");
+  });
+
+  it("FAILS a newest baseline with no block, or a malformed one", () => {
+    expect(checkSpawnEnvObserved(nb(undefined), false).status).toBe("FAIL");
+    expect(checkSpawnEnvObserved(nb({ observed: true }), false).status).toBe("FAIL");
   });
 });
 

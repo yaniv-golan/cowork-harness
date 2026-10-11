@@ -4,6 +4,7 @@
 //   npx tsx scripts/release-preflight.ts             # pre-flight for the release branch/PR
 //   npx tsx scripts/release-preflight.ts --for-tag    # ALSO run the tag-time HEAD/CI check (hard fail)
 //   npx tsx scripts/release-preflight.ts --allow-unobserved-init-surface   # emergency: downgrade check 7 to WARN
+//   npx tsx scripts/release-preflight.ts --allow-unobserved-spawn-env      # emergency: downgrade check 7b to WARN
 //
 // Checks 1-4 mirror (and check 2 tightens) the gates release.yml enforces after the tag push:
 //   1. check:versions passes (scripts/check-versions.ts).
@@ -21,6 +22,8 @@
 //      `observed:false` when no Cowork session ran on the synced Desktop — a routine local state, so it
 //      is allowed in a commit but must not ship. Emergency override: --allow-unobserved-init-surface
 //      (dedicated on purpose: never --allow-empty, which would waive sync's other guards).
+//   7b. The NEWEST baseline's provenance.observedSpawnEnv is observed (HARD fail on `no-session` or a missing or
+//      malformed block; WARN on a declared `lane-gone`). Emergency override: --allow-unobserved-spawn-env.
 //   8. The covered surface since the last release tag (scripts/check-surface.ts --since-tag): a removed or
 //      changed leaf FAILS unless the package.json version is a MAJOR bump over that tag. The per-PR snapshot
 //      cannot catch this — every PR regenerates it, so it reads +0 at release time. Before the bump
@@ -34,6 +37,7 @@ import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
 import { checkSurfaceSinceLastTag } from "./check-surface.js";
 import { compareBaselineVersions } from "../src/baseline.js";
+import { ObservedSpawnEnv } from "../src/types.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const r = (p: string) => readFileSync(join(REPO_ROOT, p), "utf8");
@@ -185,6 +189,39 @@ export function checkInitSurfaceObserved(newest: { name: string; json: unknown }
       detail: `${why} (overridden by ${ALLOW_UNOBSERVED_INIT_SURFACE_FLAG} — ship notes should say the surface is unverified)`,
     };
   return { name, status: "FAIL", detail: `${why}. Emergency override: ${ALLOW_UNOBSERVED_INIT_SURFACE_FLAG}` };
+}
+
+export const ALLOW_UNOBSERVED_SPAWN_ENV_FLAG = "--allow-unobserved-spawn-env";
+
+/** Check 7b — pure over the newest baseline's parsed JSON. `no-session` (no local host-loop task ran on that Desktop)
+ *  is routine locally but must not ship; a declared `lane-gone` was an explicit, recorded decision, so it WARNs. */
+export function checkSpawnEnvObserved(newest: { name: string; json: unknown }, allowUnobserved: boolean): CheckResult {
+  const name = "newest baseline's Desktop host-loop spawn env is observed";
+  const raw = (newest.json as { provenance?: { observedSpawnEnv?: unknown } } | null)?.provenance?.observedSpawnEnv;
+  const parsed = ObservedSpawnEnv.safeParse(raw);
+  if (raw === undefined || !parsed.success) {
+    const why =
+      raw === undefined
+        ? `${newest.name} carries no provenance.observedSpawnEnv — re-sync it with a current cowork-harness`
+        : `${newest.name}'s provenance.observedSpawnEnv fails its schema — re-sync it`;
+    return { name, status: "FAIL", detail: why };
+  }
+  const b = parsed.data;
+  if (b.observed) return { name, status: "PASS", detail: `${newest.name}: observed (${b.sessions} session(s))` };
+  if (b.reason === "lane-gone")
+    return {
+      name,
+      status: "WARN",
+      detail: `${newest.name}: declared unobservable (${b.declared}) — post-construction spawn-env coverage is down to the minimal scanner; ship notes should say so`,
+    };
+  const why = `${newest.name} records observedSpawnEnv no-session — run one Cowork task with 'Only on this computer' on, under that Desktop, then re-run \`cowork-harness sync\``;
+  if (allowUnobserved)
+    return {
+      name,
+      status: "WARN",
+      detail: `${why} (overridden by ${ALLOW_UNOBSERVED_SPAWN_ENV_FLAG} — ship notes should say the spawn env is unverified)`,
+    };
+  return { name, status: "FAIL", detail: `${why}. Emergency override: ${ALLOW_UNOBSERVED_SPAWN_ENV_FLAG}` };
 }
 
 function newestBaseline(): { name: string; json: unknown } {
@@ -439,6 +476,7 @@ function printResult(res: CheckResult): void {
 function main(): void {
   const forTag = process.argv.includes("--for-tag");
   const allowUnobserved = process.argv.includes(ALLOW_UNOBSERVED_INIT_SURFACE_FLAG);
+  const allowUnobservedSpawnEnv = process.argv.includes(ALLOW_UNOBSERVED_SPAWN_ENV_FLAG);
   const pkg = json("package.json");
   const version = pkg.version as string;
   if (!isValidSemver(version)) {
@@ -456,6 +494,7 @@ function main(): void {
     checkTagDoesNotExist(version),
     checkWorkingTreeClean(),
     checkInitSurfaceObserved(newestBaseline(), allowUnobserved),
+    checkSpawnEnvObserved(newestBaseline(), allowUnobservedSpawnEnv),
     checkReleaseSurface(version),
   ];
   const warnResults = [checkRulesetContexts(), checkLiveSuiteKeyReminder()];
