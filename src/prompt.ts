@@ -71,18 +71,18 @@ const BRIDGE_REPLACEMENTS: ReadonlyArray<{ anchor: string; note: string; where: 
 ];
 
 /** Every constant the bridge puts into a prompt, for the prompt-asset fingerprint. */
-export function deviceBridgePromptText(): string {
-  return BRIDGE_REPLACEMENTS.map((r) => `${r.anchor}\0${r.note}`).join("\0");
+export function deviceBridgePromptText(note: "included" | "omitted" = "included"): string {
+  return BRIDGE_REPLACEMENTS.map((r) => `${r.anchor}\0${note === "omitted" ? "" : r.note}`).join("\0") + `\0note:${note}`;
 }
 
-function applyBridgeNotes(template: string, where: "main" | "subagent", rel: string): string {
+function applyBridgeNotes(template: string, where: "main" | "subagent", rel: string, note: "included" | "omitted"): string {
   let out = template;
   for (const r of BRIDGE_REPLACEMENTS.filter((x) => x.where === where)) {
     if (!out.includes(r.anchor))
       throw new Error(
         `cowork-harness: device_bridge: prompt asset ${rel} no longer carries the folder text the bridge replaces: "${r.anchor.slice(0, 60)}…"`,
       );
-    out = out.split(r.anchor).join(r.note);
+    out = out.split(r.anchor).join(note === "omitted" ? "" : r.note);
   }
   return out;
 }
@@ -90,6 +90,9 @@ function applyBridgeNotes(template: string, where: "main" | "subagent", rel: str
 export interface RenderPromptOpts {
   /** `device_bridge: true`: the agent's container holds no connected folder (see {@link DEVICE_BRIDGE_PROMPT_NOTE}). */
   deviceBridge?: boolean;
+  /** `omitted`: a control run (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off) — the folder claims are removed and no note
+   *  replaces them, so the model has only the tool's own description. Default `included`. */
+  deviceBridgeNote?: "included" | "omitted";
   /** The effective tier — ALSO the sub-agent-append branch selector, REQUIRED on every call
    *  (hostloop -> subagent_env_hl asset; container/microvm -> subagent_env_vm asset;
    *  protocol -> no append, a decided divergence — see docs/fidelity-gaps.md). */
@@ -210,7 +213,9 @@ export function renderPrompts(
       throw new Error(`cowork-harness: missing prompt asset: ${p}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
     }
     const template = stripComments(readFileSync(p, "utf8"));
-    return subst(opts.deviceBridge && where ? applyBridgeNotes(template, where, rel) : template).trim();
+    return subst(
+      opts.deviceBridge && where ? applyBridgeNotes(template, where, rel, opts.deviceBridgeNote ?? "included") : template,
+    ).trim();
   };
   const isProtocol = opts.effectiveFidelity === "protocol";
   /** Mirrors production's composition (Desktop >=1.46388.3):

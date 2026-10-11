@@ -30,6 +30,10 @@ describe("deviceBridgeRecord", () => {
   it("says the prompt note rests on a model's report of production's instructions, not their text", () => {
     expect(r.promptNoteBasis).toBe("model-report");
   });
+  it("records whether the prompt note was included (the default) or omitted for a control run", () => {
+    expect(r.promptNote).toBe("included");
+    expect(deviceBridgeRecord(mounts, "omitted").promptNote).toBe("omitted");
+  });
   it("lists the folders by name and mode only, never a host path", () => {
     expect(r.folders).toEqual([
       { name: "proj", mode: "rw" },
@@ -109,7 +113,9 @@ describe("the cassette freezes the record", () => {
 describe("wiring: a live run carries the record", () => {
   const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
   it("both the full and the partial result build it from the launch plan", () => {
-    expect(s.match(/deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts\) : undefined/g)).toHaveLength(2);
+    expect(
+      s.match(/deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts, bridgeNote\) : undefined/g),
+    ).toHaveLength(2);
     expect(s).toMatch(/deviceBridge: args\.deviceBridge,/);
   });
 });

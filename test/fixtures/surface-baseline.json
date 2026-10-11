@@ -2018,6 +2018,11 @@
         "type": "string",
         "required": true
       },
+      ".deviceBridge.promptNote": {
+        "type": "string",
+        "enum": ["included", "omitted"],
+        "required": true
+      },
       ".deviceBridge.promptNoteBasis": {
         "type": "string",
         "enum": ["model-report"],
@@ -4499,6 +4504,11 @@
       },
       ".deviceBridge.measuredOn": {
         "type": "string",
+        "required": true
+      },
+      ".deviceBridge.promptNote": {
+        "type": "string",
+        "enum": ["included", "omitted"],
         "required": true
       },
       ".deviceBridge.promptNoteBasis": {
@@ -7355,6 +7365,7 @@
       "COWORK_HARNESS_DECIDER_DIR_POLL_MS",
       "COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS",
       "COWORK_HARNESS_DECIDER_MODEL",
+      "COWORK_HARNESS_DEVICE_BRIDGE_NOTE",
       "COWORK_HARNESS_DIALOG_TIMEOUT_MS",
       "COWORK_HARNESS_EVALUATOR_MODEL",
       "COWORK_HARNESS_FIDELITY",

@@ -378,12 +378,18 @@ export function startDeviceBridge(p: {
 
 /** The record a device_bridge run carries (`RunResult.deviceBridge`): what it served and how, and every known
  *  divergence from production. Derived from the launch plan's folders by name and mode, never their paths. */
-export function deviceBridgeRecord(mounts: ReadonlyArray<Mount>): DeviceBridgeRecord {
+/** The maintainer control: COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off leaves the bridge's prompt note out. */
+export function deviceBridgeNoteMode(env: Record<string, string | undefined> = process.env): "included" | "omitted" {
+  return env.COWORK_HARNESS_DEVICE_BRIDGE_NOTE === "off" ? "omitted" : "included";
+}
+
+export function deviceBridgeRecord(mounts: ReadonlyArray<Mount>, promptNote: "included" | "omitted" = "included"): DeviceBridgeRecord {
   return {
     served: ["device_bash", "get_device_info"],
     alwaysLoad: ["device_bash"],
     measuredOn: "2.31226.1",
     promptNoteBasis: "model-report",
+    promptNote,
     egress: "allowlist",
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [

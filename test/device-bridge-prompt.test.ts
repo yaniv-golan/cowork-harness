@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline } from "../src/baseline.js";
 import { renderPrompts, DEVICE_BRIDGE_PROMPT_NOTE, DEVICE_BRIDGE_SUBAGENT_NOTE } from "../src/prompt.js";
 import { hashBaselinePromptAssets, promptAssetStaleness } from "../src/run/cassette.js";
+import { deviceBridgeNoteMode } from "../src/runtime/device-container.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -70,11 +71,78 @@ describe("wiring: the bridge flag reaches the render and both fingerprint sites"
   it("execute.ts renders with it and fingerprints with it", () => {
     const s = read("run/execute.ts");
     expect(s).toMatch(/renderPrompts\([^;]*deviceBridge: scenario\.device_bridge === true/);
-    expect(s.match(/buildFingerprint\([^;]*\{\s*deviceBridge: scenario\.device_bridge === true,?\s*\}\)/g)).toHaveLength(2);
+    expect(
+      s.match(/buildFingerprint\([^;]*\{\s*deviceBridge: scenario\.device_bridge === true,\s*deviceBridgeNote: bridgeNote,?\s*\}\)/g),
+    ).toHaveLength(2);
   });
   it("replay staleness reads it off the frozen scenario", () => {
     expect(read("run/cassette.ts")).toMatch(
-      /promptAssetStaleness\(fp, liveBaselineObj, \{ deviceBridge: cassette\.scenario\.device_bridge === true \}\)/,
+      /promptAssetStaleness\(fp, liveBaselineObj, \{\s*deviceBridge: cassette\.scenario\.device_bridge === true,/,
+    );
+  });
+});
+
+// A maintainer control: COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off renders the bridge with the folder claims removed and NO
+// note, to measure whether the model finds device_bash from the tool's own description alone. The run records which,
+// and the prompt-asset fingerprint follows it, so a no-note recording never reads as stale against a note one.
+describe("the device_bridge note can be omitted for a control run", () => {
+  it("deviceBridgeNoteMode reads the env switch: only 'off' omits it", () => {
+    expect(deviceBridgeNoteMode({ COWORK_HARNESS_DEVICE_BRIDGE_NOTE: "off" })).toBe("omitted");
+    for (const v of [undefined, "", "on", "OFF "]) expect(deviceBridgeNoteMode({ COWORK_HARNESS_DEVICE_BRIDGE_NOTE: v })).toBe("included");
+  });
+  it("omitted: no note in either append, and the false folder claims are still gone", () => {
+    const r = renderPrompts(baseline, {} as never, "abc", "proj", {
+      effectiveFidelity: "container",
+      deviceBridge: true,
+      deviceBridgeNote: "omitted",
+    });
+    expect(r.systemPromptAppend).not.toContain("device_bash");
+    expect(r.systemPromptAppend).not.toContain("a connected work folder is mounted under");
+    expect(r.systemPromptAppend).not.toContain("this folder IS that folder");
+    expect(r.subagentAppend).not.toContain("device_bash");
+    expect(r.subagentAppend).not.toContain("User-attached folders are mounted under");
+  });
+  it("the fingerprint tells included, omitted and no bridge apart, and staleness reads the recorded mode", () => {
+    const b = loadBaseline("latest");
+    const inc = hashBaselinePromptAssets(b, { deviceBridge: true });
+    const om = hashBaselinePromptAssets(b, { deviceBridge: true, deviceBridgeNote: "omitted" });
+    expect(new Set([inc, om, hashBaselinePromptAssets(b)]).size).toBe(3);
+    expect(hashBaselinePromptAssets(b, { deviceBridge: true, deviceBridgeNote: "included" })).toBe(inc);
+    const fp = { baseline: b.appVersion, promptAssetsHash: om } as never;
+    expect(promptAssetStaleness(fp, b, { deviceBridge: true, deviceBridgeNote: "omitted" })).toBeNull();
+    expect(readFileSync(join(import.meta.dirname, "..", "src", "run", "cassette.ts"), "utf8")).toMatch(
+      /promptAssetStaleness\(fp, liveBaselineObj, \{\s*deviceBridge: cassette\.scenario\.device_bridge === true,\s*deviceBridgeNote: cassette\.deviceBridge\?\.promptNote \?\? "included",?\s*\}\)/,
+    );
+  });
+  it("execute.ts renders, fingerprints and records with the mode", () => {
+    const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
+    expect(s).toMatch(/deviceBridgeNote: bridgeNote,/);
+    expect(s.match(/deviceBridgeRecord\(plan\.mounts, bridgeNote\)/g)).toHaveLength(2);
+    expect(s.match(/deviceBridge: scenario\.device_bridge === true,\s*deviceBridgeNote: bridgeNote,/g)?.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("a no-note recording and a note recording are stale against each other", () => {
+  const b = loadBaseline("latest");
+  const fpOf = (deviceBridgeNote: "included" | "omitted") =>
+    ({ baseline: b.appVersion, promptAssetsHash: hashBaselinePromptAssets(b, { deviceBridge: true, deviceBridgeNote }) }) as never;
+  it("note-off recording, checked as note-on: drift", () => {
+    expect(promptAssetStaleness(fpOf("omitted"), b, { deviceBridge: true, deviceBridgeNote: "included" })).toMatchObject({
+      class: "prompt-assets",
+    });
+  });
+  it("note-on recording, checked as note-off: drift", () => {
+    expect(promptAssetStaleness(fpOf("included"), b, { deviceBridge: true, deviceBridgeNote: "omitted" })).toMatchObject({
+      class: "prompt-assets",
+    });
+  });
+});
+
+describe("a control run says so on stderr", () => {
+  it("execute.ts prints a notice when the note is omitted", () => {
+    const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
+    expect(s).toMatch(
+      /if \(scenario\.device_bridge === true && bridgeNote === "omitted"\)\s*warn\(\s*`::notice:: \[device_bridge\] prompt note OMITTED/,
     );
   });
 });

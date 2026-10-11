@@ -98,7 +98,9 @@ All notable changes to this project are documented here. The format is based on
   `device-bridge-misplaced`.
 - **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
   (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,
-  `device-tools-unserved`, `shell-user`, `device-network-shared`). The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".
+  `device-tools-unserved`, `shell-user`, `device-network-shared`), and whether the prompt note was included
+  (`promptNote`; a maintainer control, `COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off`, leaves it out). The cassette freezes
+  it. See docs/fidelity-gaps.md, "Remote device bridge".
 - Under `device_bridge`, `file_exists` and `input_unmodified` on a connected folder's path are refused before the
   run: they would grade the agent's container, which holds no folder.
 - `verify-run`, `regrade` and `refs` refuse a kept `device_bridge` run dir: the device container's state cannot be

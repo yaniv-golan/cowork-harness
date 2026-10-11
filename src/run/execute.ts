@@ -25,6 +25,7 @@ import { Scenario } from "../types.js";
 import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline, DeviceBridgeRecord } from "../types.js";
 import {
   deviceBridgeFolderAssertRefusal,
+  deviceBridgeNoteMode,
   deviceBridgeRecord,
   deniedDeviceFolders,
   deviceFolders,
@@ -1082,6 +1083,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const turnNumber = beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane, launchSources);
+  // A maintainer control run leaves the device_bridge prompt note out (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off). Read once:
+  // the render, both fingerprints and the record must agree on it.
+  const bridgeNote = deviceBridgeNoteMode();
+  if (scenario.device_bridge === true && bridgeNote === "omitted")
+    warn(
+      `::notice:: [device_bridge] prompt note OMITTED (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off): a maintainer control run; the model sees only the device tools' own descriptions. Recorded as deviceBridge.promptNote: "omitted".\n`,
+    );
   // device_bridge: a file assertion on a connected folder's path would grade the agent's tree, which holds no folder.
   const bridgeFolderRefusal = deviceBridgeFolderAssertRefusal(
     scenario,
@@ -1414,6 +1422,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, {
         ...hostLoopOpts,
         deviceBridge: scenario.device_bridge === true,
+        deviceBridgeNote: bridgeNote,
       });
       promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
       let sdkMcp: SdkMcp | undefined;
@@ -1816,7 +1825,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
         hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir),
-        deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts) : undefined,
+        deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts, bridgeNote) : undefined,
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         outputsMountMode,
         turn,
@@ -1851,6 +1860,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         fingerprint: withWorkspaceFixtureSig(
           buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession, undefined, {
             deviceBridge: scenario.device_bridge === true,
+            deviceBridgeNote: bridgeNote,
           }),
           plan.workspaceFixture,
         ),
@@ -2387,7 +2397,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       hookFailureBlocks, // the onFailure: "block" inventory the hook keys read failed frames by
-      deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts) : undefined, // what the bridge modeled, and how it differs
+      deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts, bridgeNote) : undefined, // what the bridge modeled, and how it differs
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
       fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
@@ -2444,6 +2454,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       fingerprint: withWorkspaceFixtureSig(
         buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession, undefined, {
           deviceBridge: scenario.device_bridge === true,
+          deviceBridgeNote: bridgeNote,
         }),
         plan.workspaceFixture,
       ),

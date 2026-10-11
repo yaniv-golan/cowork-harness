@@ -1160,7 +1160,10 @@ export function skillCommit(sessionPath: string, inlineSession?: SessionConfig):
 // substitution), so a comment-only edit doesn't produce false staleness; {{tokens}} are left intact
 // (they're deterministic pre-substitution).
 type PromptAssetKey = "promptTemplate" | "subagentAppend" | "subagentAppendHostLoop";
-export function hashBaselinePromptAssets(baseline: PlatformBaseline, opts: { deviceBridge?: boolean } = {}): string | undefined {
+export function hashBaselinePromptAssets(
+  baseline: PlatformBaseline,
+  opts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
+): string | undefined {
   const spawn = (baseline.spawn ?? {}) as Record<string, unknown>;
   const entries = (["promptTemplate", "subagentAppend", "subagentAppendHostLoop"] as const satisfies readonly PromptAssetKey[])
     .map((k) => [k, spawn[k]] as const)
@@ -1176,7 +1179,7 @@ export function hashBaselinePromptAssets(baseline: PlatformBaseline, opts: { dev
   h.update("subagentGenerated").update("\0").update(subagentGeneratedPromptText()).update("\0");
   // device_bridge replaces the folder text with harness notes; a bridge run's prompt carries them, so its hash
   // does. Every other run hashes exactly what it did.
-  if (opts.deviceBridge) h.update("deviceBridge").update("\0").update(deviceBridgePromptText()).update("\0");
+  if (opts.deviceBridge) h.update("deviceBridge").update("\0").update(deviceBridgePromptText(opts.deviceBridgeNote)).update("\0");
   for (const [key, rel] of entries) {
     const p = join(BASELINES_DIR, rel);
     if (!existsSync(p)) return undefined; // a dangling pointer already fails test/prompt-assets.test.ts
@@ -1493,7 +1496,7 @@ export function buildFingerprint(
   baseline?: PlatformBaseline,
   inlineSession?: SessionConfig,
   sessionOverride?: string,
-  promptOpts: { deviceBridge?: boolean } = {},
+  promptOpts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
 ): Fingerprint {
   const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline, promptOpts) : undefined;
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession, sessionOverride);
@@ -2445,7 +2448,7 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
 export function promptAssetStaleness(
   fp: Fingerprint,
   liveBaselineObj: PlatformBaseline | undefined,
-  promptOpts: { deviceBridge?: boolean } = {},
+  promptOpts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
 ): StalenessFinding | { note: string } | null {
   if (fp.promptAssetsHash === undefined)
     return {
@@ -2682,7 +2685,10 @@ export function computeStaleness(
     });
   else if (liveBaseline !== fp.baseline)
     findings.push({ class: "baseline", message: `baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record` });
-  const pa = promptAssetStaleness(fp, liveBaselineObj, { deviceBridge: cassette.scenario.device_bridge === true });
+  const pa = promptAssetStaleness(fp, liveBaselineObj, {
+    deviceBridge: cassette.scenario.device_bridge === true,
+    deviceBridgeNote: cassette.deviceBridge?.promptNote ?? "included",
+  });
   if (pa) {
     if ("note" in pa) notes.push(pa.note);
     else findings.push(pa);
@@ -3835,6 +3841,7 @@ const CassetteShape = z.looseObject({
       alwaysLoad: z.array(z.string()),
       measuredOn: z.string(),
       promptNoteBasis: z.literal("model-report"),
+      promptNote: z.enum(["included", "omitted"]),
       egress: z.literal("allowlist"),
       folders: z.array(z.strictObject({ name: z.string(), mode: z.enum(["r", "rw", "rwd"]) })),
       divergences: z.array(z.string()),

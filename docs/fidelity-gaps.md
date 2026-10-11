@@ -1897,6 +1897,11 @@ The note in the agent's prompt is the harness's, and production's own cloud prom
 that they name the tools for the user's computer and give the folders' location as a path. That rests on one model
 report, not on the prompt's text, and the run's record says so (`promptNoteBasis: "model-report"`).
 
+For maintainers, `COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off` runs a control without the note: the folder claims are still
+removed, and the model has only the device tools' own descriptions (`device_bash`'s says the folders are at
+`$HOME/mnt/<folder-name>`). The run prints a notice, records `promptNote: "omitted"`, and fingerprints its prompt
+apart from a normal run, so neither recording replays as fresh against the other.
+
 **Egress.** The device container uses the session's allowlist by default (`egress-allowlist`). Production's device
 shell can pass all traffic through. To match that, set `egress.unrestricted: true` in the session: every request
 still goes through the proxy and is logged, but the agent's own container is opened too. The allowlist stays the
