@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [4.8.1] — 2026-10-11
+## [4.8.1] — 2026-10-12
 
 ### Upgrade notes
 
