@@ -1,7 +1,7 @@
 import { describeSubagentUsageLimit, subagentUsageLimits } from "../usage-limit.js";
 import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
-import type { RunResult } from "../types.js";
+import type { InfraErrorSource, RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
 import { endsOnRequestForInput } from "./input-request.js";
 import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified, outputsCheckArmed } from "./outputs-delete-tier.js";
@@ -317,8 +317,10 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
   // evidence is worthless, yet the run still only warns. Escalating that needs a successful-exec count,
   // which is not observable on the replay lane without freezing it into the cassette — deliberately left
   // for a follow-up rather than shipped as a rule that silently disagrees between lanes.
-  const fatalInfra = (result.infraErrors ?? []).filter((e) => e.source !== "hostloop-exec");
-  const execInfra = (result.infraErrors ?? []).filter((e) => e.source === "hostloop-exec");
+  // The device container (device_bridge) splits the same way: its death is fatal, one failed device_bash exec warns.
+  const isExecSource = (s: InfraErrorSource) => s === "hostloop-exec" || s === "device-exec";
+  const fatalInfra = (result.infraErrors ?? []).filter((e) => !isExecSource(e.source));
+  const execInfra = (result.infraErrors ?? []).filter((e) => isExecSource(e.source));
   if (fatalInfra.length > 0) {
     signals.push({
       code: "infra_error",

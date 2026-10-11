@@ -107,6 +107,13 @@ present. `CLAUDE_CODE_ENTRYPOINT` read from a hook, and report paths, point both
 heading and the Desktop log lines are positive signals for the local lane only, and their absence proves
 nothing.
 
+A task on an account that runs in the cloud can still be routed local by Desktop itself, task by task. On Desktop
+2.31226.1 the app routes a task local, when the account can run local tasks, if a connected folder or file is not
+allowed in a remote session, if the task's approval choice is Auto or Skip and the cloud side does not support that
+mode, or if the task uses computer use or a stdio plugin the cloud side cannot serve. The folder check reads a
+feature gate and the device's settings, never the folder's content. So one account can produce both lanes in an
+afternoon: check each task.
+
 - **The agent's environment.** `CLAUDE_CODE_ENTRYPOINT` is `local-agent` on the local lane and
   `remote_cowork` on the cloud lane. Read it from a hook, because hooks run in the agent's own process
   environment: add a plugin hook on a per-turn event such as `UserPromptSubmit` whose command is
@@ -1808,9 +1815,10 @@ is a false red. It has no file or network effect, so file, artifact and egress a
 of its enabled-model condition, never the model list itself. A model added to or removed from the set, or the tool
 enabled for every model, therefore changes the digest and shows up as a `sync --diff` line.
 
-### Remote device bridge — `mcp__remote-devices__*`, deliberately unmodeled
+### Remote device bridge — `mcp__remote-devices__*`, modeled in part by `device_bridge`
 
-The remote lane also has an internal MCP server the harness does not model at all. The agent calls its
+The remote lane also has an internal MCP server, which the harness serves only in part, and only when a scenario
+sets `device_bridge: true` (see below). The agent calls its
 tools as `mcp__remote-devices__<tool>`, and a host-side MCP server that Desktop bridges into the session
 nests one level deeper, as `mcp__remote-devices__<server>__<tool>`. Agent-facing tools include
 `device_bash`, `device_list_dir`, `device_stage_files`, `device_commit_files`,
@@ -1835,10 +1843,73 @@ calls `session_type: "cowork-remote"`. None of these tools is in the local spawn
 it from the container that hosts the ordinary `Bash` tool. So a remote session reaches back into a
 local VM (process namespace `rcw-<session>`, which the disk janitor's orphan cleanup deliberately skips).
 
-**Deliberately unmodeled.** Emulating it faithfully would mean real command execution and real writes on
-the operator's machine on behalf of a simulated remote session. The exact inventory is also
-feature-gated, so it varies by account. Recorded here so a remote-lane probe diffed against this harness
-is not misfiled as a harness bug — triage the lane first ([how](#which-lane-a-session-actually-ran-on)).
+**What `device_bridge: true` models.** `device_bash` and `get_device_info`, served from a second container that
+holds copies of the connected folders at `$HOME/mnt/<folder-name>`. The agent's own container gets no folder, as a
+cloud task's has none. `device_bash` takes `command` and an optional `timeout_ms` capped at 45 s, and returns one
+text item: the output, cut at 262,144 characters, or `Exit code N` and the output when the command fails.
+`device_bash` loads without ToolSearch and `get_device_info` does not, as Desktop 2.31226.1 registers them. Running
+on copies is deliberate: a faithful bridge would run commands and write files on the operator's machine on behalf of
+a simulated session.
+
+**Where it differs from production.** A run's `deviceBridge` record lists these by id:
+
+- **`delete-not-refused`.** Production mounts a connected folder read-write without delete: the first `rm` in it
+  fails, and the model then calls `device_request_delete_permission` (input `paths`, `reason`). That shows the user
+  a card ("Allow Claude to permanently delete files in this folder on your computer?", for the rest of the session,
+  subfolders included). Once allowed, the folder is remounted with delete and the `rm` succeeds. That request is
+  not served here, and on the device copy a delete succeeds at once. The harness reports it after the run instead,
+  two ways: from the text of each `device_bash` command, and by comparing the device copy before and after the run,
+  which catches a delete by any means (`find -delete`, a glob, a script). A rename within a folder is not a delete.
+  A skill that deletes passes the command in the harness where production would have asked the user first, so
+  assert `no_delete_in_mounts` when that matters.
+- **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
+  applies. Production's device shell follows the account's egress policy, which can pass all traffic through. A
+  fetch the allowlist blocks fails here and may succeed in production.
+- **`description-paraphrase`.** The tool description paraphrases one production branch (45 s limit, no
+  folder-request tool) and names no tool the harness does not serve. A test fails when the newest baseline no
+  longer carries that branch.
+- **`device-paths-tilde`.** `get_device_info` spells each folder `~/<folder-name>`; production gives its path on
+  the Mac.
+- **`device-tools-unserved`.** `device_list_dir`, `device_stage_files`, `device_commit_files`, and the folder-access
+  and delete-permission requests are not served. A skill that tells the agent to call one gets an unknown-tool error
+  here.
+- **`shell-user`.** Commands run as the image's own user. Production runs them as a per-task user named
+  `rcw-<id>`; `$HOME` matches it (`/sessions/rcw-<id>`).
+- **`device-network-shared`.** The device container and the agent's own container share the run's internal network,
+  so a service started through `device_bash` is reachable from the agent's own shell. A cloud container has no route
+  to the user's machine.
+
+Two more limits, not differences in what the agent sees. A command that outlives its limit is stopped inside the
+device container, and the result ends `Command timed out after <n>s`; production's exact wording there is not
+measured. The harness reads at most 8 MiB of a command's output and returns it cut at the usual 262,144 characters; past
+that, the command runs on in the device container until its time limit. A FIFO or socket in a connected folder is not copied to the device, so a command that would block
+reading one on the Mac finds no such file here.
+
+File assertions grade the agent's own container, which holds no connected folder under the bridge. So `file_exists`
+or `input_unmodified` on a folder's path is refused before the run; assert on the `device_bash` call instead.
+
+**Permission mode.** The bridge's tools are pre-approved, and the agent runs with `acceptEdits`, which is what a cloud
+task's hooks report under the Manual approval choice. Under Auto a task still ran in the cloud with the same cards;
+the mode its hooks report under Auto is not measured. Skip was not offered on the account measured.
+
+The note in the agent's prompt is the harness's, and production's own cloud prompt is not reproduced. The note names
+`device_bash` and `$HOME/mnt/<folder-name>` because a cloud task's model, asked about its own instructions, reported
+that they name the tools for the user's computer and give the folders' location as a path. That rests on one model
+report, not on the prompt's text, and the run's record says so (`promptNoteBasis: "model-report"`).
+
+For maintainers, `COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off` runs a control without the note: the folder claims are still
+removed, and the model has only the device tools' own descriptions (`device_bash`'s says the folders are at
+`$HOME/mnt/<folder-name>`). The run prints a notice, records `promptNote: "omitted"`, and fingerprints its prompt
+apart from a normal run, so neither recording replays as fresh against the other.
+
+**Egress.** The device container uses the session's allowlist by default (`egress-allowlist`). Production's device
+shell can pass all traffic through. To match that, set `egress.unrestricted: true` in the session: every request
+still goes through the proxy and is logged, but the agent's own container is opened too. The allowlist stays the
+default because the device container runs commands chosen by the skill under test on the operator's machine, where
+open egress could send the folder copies anywhere or reach the operator's network.
+
+The exact inventory is also feature-gated, so it varies by account. Recorded here so a remote-lane probe diffed
+against this harness is not misfiled as a harness bug — triage the lane first ([how](#which-lane-a-session-actually-ran-on)).
 
 ### Where it bites — it looks like a harness bug
 

@@ -236,7 +236,7 @@ against. `local` is this harness's default because `local` is the lane every tie
 |---|---|---|
 | A file under a user-visible root | **is delivered** — `outputs/` is durable, and Cowork's own prompt tells the agent to save deliverables there | **is not delivered** — a remote container has no auto-delivering outputs directory, and it is reclaimed at session end |
 | `present_files` | served | **not served** — a local MCP server cannot reach a remote session |
-| `user_visible_artifact` | asserts location, as always | rejected at scenario-LOAD time — location proves nothing there. **Tool-level delivery is not assertable on this lane** (the harness models no remote delivery tool): assert the written path plus the agent's own statement of it (`file_exists` + `transcript_matches`), or set `lane: local`. |
+| `user_visible_artifact` | asserts location, as always | rejected at scenario-LOAD time — location proves nothing there. **Tool-level delivery is not assertable on this lane** (the harness models no remote delivery tool): assert the written path plus the agent's own statement of it (`file_exists` + `transcript_matches`), or set `lane: local`. Under `device_bridge`, a write into a connected folder goes through `device_bash`: assert that call with `tool_called` (and `file_exists` on a folder's path is refused). |
 | `present_files_called` / `no_scratchpad_leak` | as documented per tier | rejected at scenario-LOAD time — the tool does not exist on that lane, so the scenario never runs |
 | File reads: `artifact_text` / `artifact_json` (file bodies), `file_absent` / `no_unexpected_files` (absence), `computer_links_resolve(_if_present)` (links), `no_lost_write_back` (authored sources) | as documented | rejected at scenario-LOAD time — each reads files inside the agent's container. The run executes locally, so a local file is on disk, but the lane's container filesystem is not observable from outside it, so none of these can pass there. A written path is assertable (with `file_exists`); its content or absence is not: assert the agent's own statement of it (`transcript_matches` / `transcript_not_matches`), or set `lane: local` |
 | Authorship: `authored: true` (on `file_exists`, `artifact_text`, `artifact_json`) | decided from the pre-run manifest | `file_exists` with it is rejected at scenario-LOAD time (the other two are refused whole): it compares the container's file with the pre-run manifest, so it is undecidable there. Plain `file_exists` stays: a written path is the documented proxy on this lane |
@@ -257,10 +257,34 @@ against. `local` is this harness's default because `local` is the lane every tie
 (where the run happens). A `lane: remote` scenario still executes locally, in whichever tier you chose —
 what changes is the contract its assertions are held to.
 
-**Scoped to delivery semantics.** The remote lane's device bridge (`device_bash`, `device_commit_files`,
-and the rest of the `mcp__remote-devices__*` tools) is deliberately not modeled: emulating it faithfully would
-mean real command execution and real writes on the operator's machine on behalf of a simulated session.
-See [fidelity-gaps.md](./fidelity-gaps.md).
+**Scoped to delivery semantics, unless `device_bridge` is set.** By default the remote lane's device bridge (the
+`mcp__remote-devices__*` tools a cloud task uses to reach the user's computer) is not served. Add
+`device_bridge: true` to serve part of it, as below.
+
+### `device_bridge: true` — the cloud task's way to the user's computer
+
+A cloud task's own container holds none of the user's folders. It reaches them through `device_bash`, a shell that
+runs on the user's computer with the connected folders at `$HOME/mnt/<folder-name>`. With `device_bridge: true` the
+harness serves that tool from a second container:
+
+- The agent's container gets no connected folder, and the prompt's claims that a folder is mounted there give way to
+  a short note that the folders are on the user's computer, reached through `device_bash` at
+  `$HOME/mnt/<folder-name>`.
+- `mcp__remote-devices__device_bash` runs each command as a fresh `bash -c` in the device container, starting in
+  `$HOME`. The device container holds **copies** of the connected folders, so a command never touches your real
+  files. `mcp__remote-devices__get_device_info` is served too, with the folders spelled `~/<folder-name>`.
+- The device container reaches the network through the run's egress proxy, so the session's allowlist applies.
+  Production's device shell can pass all traffic through; `egress.unrestricted: true` in the session matches that.
+- The tools are pre-approved. Assert on them with `tool_called` / `tool_not_called` (both forms), for example
+  `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`.
+- File assertions read the agent's container, which has no folder, so `file_exists` and `input_unmodified` on a
+  connected folder's path are refused before the run. `no_delete_in_mounts` does cover the folders: it reads
+  `device_bash` commands and compares the device copy before and after the run.
+
+Valid only with `lane: remote` and `fidelity: container`; the loader refuses any other pairing (and `lint` reports
+`device-bridge-misplaced`). Only `true` is valid. A recording that uses it stamps cassette v17, and its result
+carries `deviceBridge`: what was served and every known difference from production. The differences, and what is
+not served, are in [fidelity-gaps.md](./fidelity-gaps.md#remote-device-bridge--mcp__remote-devices__-modeled-in-part-by-device_bridge).
 
 **When to reach for it.** `lane: remote` is the contract to hold a skill to when it will run on new Pro and Max
 tasks, which run in the cloud from 2026-10-06: it checks whether the skill's delivery survives the cloud lane. A
@@ -766,10 +790,10 @@ Only thirteen codes are **warn**-severity (informational, never flip pass/fail):
   because the harness detects post-hoc what production enforces — the agent already proceeded where it
   would have hit `EPERM`. Assert `no_delete_in_mounts: true` to hard-fail on it, or
   `allow_delete_in: ["<mount>"]` to waive that mount.
-- `exec_infra_error` (**warn**, host-loop) — one or more container `exec` calls failed for infrastructure
+- `exec_infra_error` (**warn**, host-loop, or `device_bash` under `device_bridge`) — one or more container `exec` calls failed for infrastructure
   reasons (daemon/container-level), so those tool calls returned an error to the agent. The run's other
   evidence is intact, which is why this warns rather than fails — unlike a `hostloop-sidecar` /
-  `egress-sidecar` crash, which is fail-severity `infra_error` because a dead supervisor contaminates the
+  `egress-sidecar` / `device-container` crash, which is fail-severity `infra_error` because a dead supervisor contaminates the
   whole run. Note the residual gap: if *every* exec failed, the agent ran nothing and this still only
   warns — inspect `result.infraErrors` when a run looks suspiciously empty.
 - `ended_with_question` (**warn**, live lane) — the agent's final answer contains a question (or closes on
@@ -1080,7 +1104,7 @@ Two consequences for CI:
 
 
 **A cassette freezes the entire scenario, not just its `assert:` block.** `name`, `prompt`, `session`,
-`baseline`, `fidelity`, `execution`, `lane`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
+`baseline`, `fidelity`, `execution`, `lane`, `device_bridge`, `timeout_ms`, `answers`, `on_unanswered`, `expect_denied`,
 `assert`, `skills`, `requires_capabilities`, `allow_host_writes`, `allow_host_hooks`, `workspace_fixture` and `metrics` — every field the schema defines — are
 all captured at `record` time, and a plain `replay` evaluates **every one
 of them from that frozen copy**. Nothing you edit in the working tree can change a plain replay's verdict.

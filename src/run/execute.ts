@@ -22,7 +22,16 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { Scenario } from "../types.js";
-import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline } from "../types.js";
+import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline, DeviceBridgeRecord } from "../types.js";
+import {
+  deviceBridgeFolderAssertRefusal,
+  deviceBridgeNoteMode,
+  deviceBridgeRecord,
+  deniedDeviceFolders,
+  deviceFolders,
+  deviceTreeDeletes,
+  type startDeviceBridge,
+} from "../runtime/device-container.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
 import {
   deriveModelProvenance,
@@ -1074,6 +1083,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const turnNumber = beginTurn(outDir);
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane, launchSources);
+  // A maintainer control run leaves the device_bridge prompt note out (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off). Read once:
+  // the render, both fingerprints and the record must agree on it.
+  const bridgeNote = deviceBridgeNoteMode();
+  if (scenario.device_bridge === true && bridgeNote === "omitted")
+    warn(
+      `::notice:: [device_bridge] prompt note OMITTED (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off): a maintainer control run; the model sees only the device tools' own descriptions. Recorded as deviceBridge.promptNote: "omitted".\n`,
+    );
+  // device_bridge: a file assertion on a connected folder's path would grade the agent's tree, which holds no folder.
+  const bridgeFolderRefusal = deviceBridgeFolderAssertRefusal(
+    scenario,
+    deviceFolders(plan.mounts).map((f) => f.name),
+  );
+  if (bridgeFolderRefusal) throw new UsageError(bridgeFolderRefusal);
   // Same layer, protocol's own hazard: this tier passes --plugin-dir, so a staged plugin's hooks execute
   // as native host processes. Gate only when a plugin actually declares runnable hooks.
   if (effectiveFidelity === "protocol") {
@@ -1223,6 +1245,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
   let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
+  let deviceBridge: ReturnType<typeof startDeviceBridge> | undefined; // device_bridge's second container: removed after the agent's, before the network
   let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
   let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
   // Where the protocol agent's child transcripts land — the managed config dir, or undefined when it read the
@@ -1396,7 +1419,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
               };
             })()
           : { effectiveFidelity };
-      const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, hostLoopOpts);
+      const prompts = renderPrompts(baseline, session, sessionId, plan.mounts.find((m) => m.kind === "folder")?.mountPath, {
+        ...hostLoopOpts,
+        deviceBridge: scenario.device_bridge === true,
+        deviceBridgeNote: bridgeNote,
+      });
       promptFidelityWarnings = prompts.fidelityWarnings; // hoist out so RunResult construction (after try) can access it
       let sdkMcp: SdkMcp | undefined;
       // The session root as reported BY THE SPAWN that just happened — the dir whose `mnt/` is the
@@ -1463,6 +1490,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           provenanceRef,
           dedup,
           onEgress: (e) => containerWebFetchEgress.push(e),
+          onDeviceStarted: (d) => (deviceBridge = d), // known to the teardown even if the spawn throws after it
         });
         child = ct.child;
         containerName = ct.containerName; // so the Ctrl-C / finally reap removes the agent container by name
@@ -1610,6 +1638,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // Drops the signal-time thunks only once the container is gone; a failed `rm -f` keeps them for a signal
       // or the process exit.
       removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);
+      // The device container (device_bridge): marked first, so its forced exit is not a crash, then removed, its
+      // `docker run` client stopped, and removed again, since a create still in flight can finish after a removal.
+      if (deviceBridge && !(await deviceBridge.teardown()))
+        warn(
+          `::warning:: [cleanup] could not remove container ${deviceBridge.containerName} — it stays registered and is removed on a signal or at exit\n`,
+        );
       if (sidecar) {
         const eg = sidecar.collect();
         egress = eg.entries;
@@ -1636,6 +1670,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // out-of-band row spawnHostLoop appends to events.jsonl. Without this fold, a live sidecar crash
     // would reach the raw log but never `result.json`'s infraErrors, leaving the verdict green.
     if (hostloopInfraErrors?.length) record.infraErrors.push(...hostloopInfraErrors);
+    // The device container's crash and failed device_bash execs, from its own live sink, for the same reason.
+    if (deviceBridge?.infraErrors.length) record.infraErrors.push(...deviceBridge.infraErrors);
 
     // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
     // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
@@ -1693,7 +1729,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Host paths the user supplied (the staged input files, captured on the first turn, and this turn's
     // prompt) are not a leak when the agent quotes them back verbatim.
     const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity);
-    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus);
+    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus, {
+      deviceBridge: scenario.device_bridge === true,
+    });
+    // device_bridge: a delete on the device copy by any means (`find -delete`, a glob, a script), read off the
+    // device tree before and after the run, since the command text alone cannot see every one.
+    if (scenario.device_bridge === true) scan.mountDeletes.push(...deviceTreeDeletes(outDir, deniedDeviceFolders(plan.mounts)));
     // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
     // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
     const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
@@ -1784,6 +1825,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
         hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir),
+        deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts, bridgeNote) : undefined,
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         outputsMountMode,
         turn,
@@ -1816,7 +1858,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         durationMs: Date.now() - startedAt - agentStopMs,
         unanswered: { message: unansweredErr.message, hint: unansweredErr.hint },
         fingerprint: withWorkspaceFixtureSig(
-          buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
+          buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession, undefined, {
+            deviceBridge: scenario.device_bridge === true,
+            deviceBridgeNote: bridgeNote,
+          }),
           plan.workspaceFixture,
         ),
         onUnanswered,
@@ -2352,6 +2397,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       hookFailureBlocks, // the onFailure: "block" inventory the hook keys read failed frames by
+      deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts, bridgeNote) : undefined, // what the bridge modeled, and how it differs
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
       fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
@@ -2406,7 +2452,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // detect a kept run that predates a skill change and refuse to vouch for answer-coverage. Same call the
       // record path uses for the cassette (cassette.ts) — `(inline)`/no-skill sessions yield a {baseline}-only fp.
       fingerprint: withWorkspaceFixtureSig(
-        buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession),
+        buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession, undefined, {
+          deviceBridge: scenario.device_bridge === true,
+          deviceBridgeNote: bridgeNote,
+        }),
         plan.workspaceFixture,
       ),
       resources, // same single fold as the evaluate() ctx above — not re-read
@@ -2898,7 +2947,7 @@ export function scenarioInputFindings(
     if (opts.unloadableBaseline === "skip") return {};
     return { inputs: new UsageError(`baseline "${scenario.baseline}" does not load: ${(e as Error).message}`) };
   }
-  const vacuous = tierVacuityRefusal(scenario, baseline);
+  const vacuous = tierVacuityRefusal(scenario, baseline) ?? deviceBridgeFolderPreflight(scenario);
   let inputs: UsageError | undefined;
   let session: SessionFileError | undefined;
   try {
@@ -2938,11 +2987,27 @@ export function tierVacuityRefusal(scenario: Scenario, baseline: PlatformBaselin
       const pattern = a[key];
       if (pattern === undefined) continue;
       // The object form of tool_not_called is refused only when EVERY listed tool is unserved.
-      const finding = typeof pattern === "string" ? tierVacuousTool(pattern, tier, viaApi) : objectFormTierVacuous(pattern, tier, viaApi);
+      const bridge = scenario.device_bridge === true;
+      const finding =
+        typeof pattern === "string" ? tierVacuousTool(pattern, tier, viaApi, bridge) : objectFormTierVacuous(pattern, tier, viaApi, bridge);
       if (finding) return tierVacuousMessage(finding, key, scenario.name);
     }
   }
   return undefined;
+}
+
+/** The pre-spend form of the device_bridge folder-path refusal, for `record --dry-run` and a batch's preflight.
+ *  The plan's exact folder names need the plan, so this uses each folder's basename, a superset: a collision
+ *  suffix only ever adds names. A session that does not load contributes nothing (the real path reports it). */
+export function deviceBridgeFolderPreflight(scenario: Scenario): string | undefined {
+  if (scenario.device_bridge !== true) return undefined;
+  let names: string[];
+  try {
+    names = loadSessionFromFile(scenario.session).folders.map((f) => basename(f.from.replace(/\/+$/, "")));
+  } catch {
+    return undefined;
+  }
+  return deviceBridgeFolderAssertRefusal(scenario, names);
 }
 
 export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadSession> {
@@ -3155,6 +3220,8 @@ export function buildPartialResult(args: {
   turn?: number;
   /** The run's `onFailure: "block"` inventory (`runHookFailureBlocks`). */
   hookFailureBlocks?: HookFailureBlocks;
+  /** What a device_bridge run modeled (`deviceBridgeRecord`). */
+  deviceBridge?: DeviceBridgeRecord;
   /** True when this partial run was ablated (--ablate-skill). */
   ablated?: boolean;
   scenarioName: string;
@@ -3355,6 +3422,7 @@ export function buildPartialResult(args: {
     workspaceFiles, // Working folder panel's canonical file model
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     hookFailureBlocks: args.hookFailureBlocks,
+    deviceBridge: args.deviceBridge,
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
     hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
     fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
@@ -4396,6 +4464,9 @@ export function scanEvents(
   /** Host-path tokens the USER supplied (captured from the staged inputs before the agent ran). A matched
    *  token found here verbatim is not a leak; omitted ⇒ every match leaks, as before. */
   inputCorpus?: InputHostPathCorpus,
+  /** device_bridge: the connected folders live in the device container, so only device_bash can touch them, and the
+   *  agent's own shell can touch only `outputs`. */
+  opts: { deviceBridge?: boolean } = {},
 ): {
   outputsDeletes: string[];
   /** POSITIONAL companion of `outputsDeletes` — same length, same order — saying why each entry was
@@ -4485,11 +4556,24 @@ export function scanEvents(
       // delete/self-heal detection must cover BOTH bash surfaces — native `Bash` (container/microvm
       // tiers) AND `mcp__workspace__bash` (host-loop, where native Bash is disabled). Same `command`
       // input shape. Missing the MCP name was a host-loop blind-spot in the post-hoc backstop.
-      if (block.type === "tool_use" && (block.name === "Bash" || block.name === "mcp__workspace__bash") && msg.type === "assistant") {
+      // `mcp__remote-devices__device_bash` (device_bridge) too: it runs over copies of the connected folders, where a
+      // delete production refuses until the user allows it succeeds, so this scan is the only place it shows.
+      if (
+        block.type === "tool_use" &&
+        (block.name === "Bash" || block.name === "mcp__workspace__bash" || block.name === "mcp__remote-devices__device_bash") &&
+        msg.type === "assistant"
+      ) {
         const cmd = String(block.input?.command ?? "");
         // One detection pass over every writable mount; `outputsDeletes` is then the `outputs` slice of
         // it, so the two can never disagree about outputs the way two separate passes could.
-        const hits = detectMountDeletes(cmd, mounts);
+        // The device holds only the connected folders, so a device_bash command never touches `outputs`.
+        const scope =
+          block.name === "mcp__remote-devices__device_bash"
+            ? mounts.filter((m) => m !== "outputs")
+            : opts.deviceBridge
+              ? mounts.filter((m) => m === "outputs")
+              : mounts;
+        const hits = detectMountDeletes(cmd, scope);
         for (const m of hits) out.mountDeletes.push({ mount: m, command: outputsDeleteSnippet(cmd, m) });
         // `outputsDeletes` is the `outputs` slice of THIS command's hits — one detection pass feeds both,
         // so they cannot disagree about outputs the way two separate passes could.

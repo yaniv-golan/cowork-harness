@@ -351,6 +351,48 @@ describe("execute — scanEvents host-path leak detection", () => {
     ]);
     expect(scanEvents(f).outputsDeletes.length).toBe(1);
   });
+
+  // device_bridge: device_bash runs over copies of the connected folders, where a delete succeeds that production
+  // refuses until the user allows deletion. The post-run scan is the only place it shows, so it reads that surface too.
+  it("catches a connected-folder delete via device_bash (device_bridge)", () => {
+    const f = writeEvents([
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", name: "mcp__remote-devices__device_bash", input: { command: "rm $HOME/mnt/proj/a.txt" } }],
+        },
+      },
+    ]);
+    expect(scanEvents(f, ["proj"]).mountDeletes).toEqual([{ mount: "proj", command: expect.stringContaining("rm") }]);
+  });
+
+  it("under device_bridge the agent's own Bash cannot touch a connected folder, so its command is not counted there", () => {
+    const f = writeEvents([
+      { type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "rm -rf proj/tmp outputs/old" } }] } },
+    ]);
+    expect(
+      scanEvents(f, ["outputs", "proj"])
+        .mountDeletes.map((d) => d.mount)
+        .sort(),
+    ).toEqual(["outputs", "proj"]);
+    expect(scanEvents(f, ["outputs", "proj"], undefined, { deviceBridge: true }).mountDeletes.map((d) => d.mount)).toEqual(["outputs"]);
+  });
+
+  it("does not read device_bash as touching outputs: the device has no outputs folder", () => {
+    const f = writeEvents([
+      {
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", name: "mcp__remote-devices__device_bash", input: { command: "rm -rf $HOME/mnt/proj/outputs/old" } },
+          ],
+        },
+      },
+    ]);
+    const scan = scanEvents(f, ["proj"]);
+    expect(scan.outputsDeletes).toEqual([]);
+    expect(scan.mountDeletes.map((d) => d.mount)).toEqual(["proj"]);
+  });
 });
 
 // outputs-delete detector: mv-direction + target-based rm parsing (default) + safe-prefix suppression

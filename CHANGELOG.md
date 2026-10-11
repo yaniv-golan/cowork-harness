@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **Cassette format v17.** A scenario with `device_bridge: true` stamps v17, so an older reader refuses it as too
+  new. Every other cassette stamps what it did.
+- **`infraErrors[].source` gains `device-container` and `device-exec`.** A consumer that switches on the source
+  should treat `device-container` like `hostloop-sidecar` (the run fails) and `device-exec` like `hostloop-exec`
+  (a warning).
+- **A negative assertion on a device tool the run cannot serve is now refused at load.** `tool_not_called` or
+  `subagent_tool_absent` on `mcp__remote-devices__device_bash` / `get_device_info` without `device_bridge: true`,
+  or on any other `mcp__remote-devices__*` tool the harness never serves, used to pass vacuously. Set
+  `device_bridge`, or drop the assertion. `lint` reports it as `tool-not-called-tier-vacuous`.
 - **The critique report gains fields, and its schema still forbids unknown ones.** `schema/critique-report.json`
   keeps `additionalProperties: false`, so a validator pinned to the 4.7 schema rejects a 4.8 report. The report is
   EXPERIMENTAL (SPEC §12); validate against the schema shipped with the harness that wrote it.
@@ -75,8 +84,31 @@ All notable changes to this project are documented here. The format is based on
 - **A cloud-lane probe kit for maintainers (`probes/cloud/`), not shipped in the npm package.** A throwaway plugin
   whose hooks record the SHAPE of each tool call a real cloud task makes (tool names, input field names, result
   shape, permission mode), with names outside the product's vocabulary fingerprinted and every length bucketed, and
-  `verify.py`, which checks a downloaded capture's integrity, redaction and that it can answer its probe. No harness
-  behaviour changes.
+  `verify.py`, which checks a downloaded capture's integrity, redaction and that it can answer its probe. A failed tool
+  call is recorded too (`PostToolUseFailure`), as its error's type, size class, fingerprint and a leading exit code
+  only, never its text; `verify.py --probe p0f` checks a capture holds a `device_bash` failure. The verifier bounds
+  every number and accepts a shape key only from a fixed schema list or as a fingerprint. No harness behaviour changes.
+- **`device_bridge: true` serves the remote lane's shell on the user's computer.** On `lane: remote` with
+  `fidelity: container`, the harness serves `mcp__remote-devices__device_bash` and `get_device_info` from a second
+  container that holds copies of the connected folders at `$HOME/mnt/<folder-name>`, and the agent's own container
+  gets no folder, as a cloud task's has none. Commands run on the copies, never on your files, through the run's
+  egress proxy (`egress.unrestricted: true` matches production's pass-through). The prompt's claims that a folder is
+  mounted in the agent's tree give way to a note naming `device_bash` and the folders' path. Assert
+  with `tool_called`. The loader refuses the key with any other lane or tier, and `lint` reports
+  `device-bridge-misplaced`.
+- **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
+  (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,
+  `device-tools-unserved`, `shell-user`, `device-network-shared`), and whether the prompt note was included
+  (`promptNote`; a maintainer control, `COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off`, leaves it out). The cassette freezes
+  it. See docs/fidelity-gaps.md, "Remote device bridge".
+- Under `device_bridge`, `file_exists` and `input_unmodified` on a connected folder's path are refused before the
+  run: they would grade the agent's container, which holds no folder.
+- `verify-run`, `regrade` and `refs` refuse a kept `device_bridge` run dir: the device container's state cannot be
+  re-checked from it. Re-run the scenario, or replay its cassette.
+- **`get_device_info` under the bridge** reports the platform as `darwin` and spells each folder `~/<folder-name>`, so
+  no host path reaches the transcript.
+- **Two infra-error sources**, `device-container` (the device container died: the run fails) and `device-exec` (one
+  `device_bash` exec failed: a warning).
 
 ### Fixed
 
@@ -94,6 +126,9 @@ All notable changes to this project are documented here. The format is based on
   on model-written wording, and across repeats of the same probe it often never recurs. The docs and the skill
   now say to read repeats side by side, aligned by classification, and that a shared evidence excerpt is often
   cited by unrelated findings.
+- **The post-run delete scan reads `device_bash` commands, and compares the device copy before and after the run**,
+  so `no_delete_in_mounts` sees a delete in a connected folder made through the bridge by any means. Production
+  refuses such a delete until the user allows it; the device copy does not.
 
 ## [4.7.1] — 2026-10-10
 

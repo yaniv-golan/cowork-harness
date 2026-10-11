@@ -49,6 +49,7 @@ import {
   type Fingerprint,
   type StalenessFinding,
   type PlatformBaseline,
+  type DeviceBridgeRecord,
   Assertion as AssertionSchema,
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
@@ -67,6 +68,7 @@ import {
   scenarioInputRefusal,
   scenarioInputFindings,
   loadSessionFromFile,
+  deviceBridgeFolderPreflight,
   sessionOriginSources,
 } from "./execute.js";
 import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
@@ -88,7 +90,7 @@ import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { loadSession, resolveSessionPaths, agentEnvOverrides, expandUserPath, expandHome, type SessionConfig } from "../session.js";
 import { loadBaseline, pinnedNativeAgentVersion, BASELINES_DIR } from "../baseline.js";
-import { stripComments } from "../prompt.js";
+import { deviceBridgePromptText, stripComments } from "../prompt.js";
 import { decideLoopFromBaseline } from "../loop-decision.js";
 import {
   Run,
@@ -435,6 +437,9 @@ export interface Cassette {
   // reader may safely ignore); a non-empty one stamps v16, so an older reader refuses the cassette rather than read
   // a failed frame as "no decision". ABSENT (an older recording): replay decides from the recorded agent version.
   hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
+  // v17: what a device_bridge run modeled (RunResult.deviceBridge). FROZEN so replay reports what the recording
+  // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v17 by itself.
+  deviceBridge?: DeviceBridgeRecord;
   // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
   // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS
   // (guaranteed record-time-accurate) map instead of re-deriving it from the session file on disk AT
@@ -514,7 +519,9 @@ export interface Cassette {
 //  with an `artifact_json` entry, a pair no per-key entry sees (see requiredVersionFor). The stamp stays requirement-based: a cassette that uses no v15
 //  feature stamps exactly what it did, so the bump alone changes no existing cassette or verify-cassettes result.
 //  No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 16;
+// v17: a frozen scenario with `device_bridge: true` (the remote lane's device tools). Stamped per cassette only
+//  then. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
+export const CASSETTE_VERSION = 17;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -554,7 +561,7 @@ export function cassetteSchemaUrl(version: number): string {
  *  every cassette, exactly the unconditional bump this mechanism exists to avoid (the falsified v1
  *  design). Returning 0 means "any supported reader interprets this value the same way" — the BASE=10
  *  floor in requiredVersionFor still applies via Math.max, so 0 is not "no version".
- *  MUST carry one entry per ScenarioObject.shape key (18 today) — enforced by a coverage test in
+ *  MUST carry one entry per ScenarioObject.shape key (19 today) — enforced by a coverage test in
  *  test/cassette-version-stamp.test.ts. Adding a scenario key without deciding its cassette-version
  *  impact must red CI, not silently default to 0. */
 export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
@@ -567,6 +574,8 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // served) — a pre-lane reader doesn't know that and would misread it. `lane: "local"` (the default, and
   // the only behavior a pre-lane reader has ever had) needs no bump.
   lane: (v) => (v === "remote" ? 11 : 0),
+  // A v16 reader's strict scenario schema rejects the key as unrecognized ("re-record"); v17 makes it "too new".
+  device_bridge: (v) => (v === true ? 17 : 0),
   prompt: () => 0,
   timeout_ms: () => 0,
   answers: () => 0,
@@ -1151,7 +1160,10 @@ export function skillCommit(sessionPath: string, inlineSession?: SessionConfig):
 // substitution), so a comment-only edit doesn't produce false staleness; {{tokens}} are left intact
 // (they're deterministic pre-substitution).
 type PromptAssetKey = "promptTemplate" | "subagentAppend" | "subagentAppendHostLoop";
-export function hashBaselinePromptAssets(baseline: PlatformBaseline): string | undefined {
+export function hashBaselinePromptAssets(
+  baseline: PlatformBaseline,
+  opts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
+): string | undefined {
   const spawn = (baseline.spawn ?? {}) as Record<string, unknown>;
   const entries = (["promptTemplate", "subagentAppend", "subagentAppendHostLoop"] as const satisfies readonly PromptAssetKey[])
     .map((k) => [k, spawn[k]] as const)
@@ -1165,6 +1177,9 @@ export function hashBaselinePromptAssets(baseline: PlatformBaseline): string | u
   // the model and is hashed by nothing. The generator's OUTPUT varies with live mounts, so what is mixed
   // in is its constant templates with every interpolation blanked.
   h.update("subagentGenerated").update("\0").update(subagentGeneratedPromptText()).update("\0");
+  // device_bridge replaces the folder text with harness notes; a bridge run's prompt carries them, so its hash
+  // does. Every other run hashes exactly what it did.
+  if (opts.deviceBridge) h.update("deviceBridge").update("\0").update(deviceBridgePromptText(opts.deviceBridgeNote)).update("\0");
   for (const [key, rel] of entries) {
     const p = join(BASELINES_DIR, rel);
     if (!existsSync(p)) return undefined; // a dangling pointer already fails test/prompt-assets.test.ts
@@ -1481,8 +1496,9 @@ export function buildFingerprint(
   baseline?: PlatformBaseline,
   inlineSession?: SessionConfig,
   sessionOverride?: string,
+  promptOpts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
 ): Fingerprint {
-  const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline) : undefined;
+  const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline, promptOpts) : undefined;
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession, sessionOverride);
   // `hashFormat` is stamped on EVERY return path, including the two early ones. A v12 fingerprint that
   // omits it violates the load-time invariant and would fail its own validation — so a baseline-only or
@@ -2432,13 +2448,14 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
 export function promptAssetStaleness(
   fp: Fingerprint,
   liveBaselineObj: PlatformBaseline | undefined,
+  promptOpts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
 ): StalenessFinding | { note: string } | null {
   if (fp.promptAssetsHash === undefined)
     return {
       note: "prompt-assets: cassette predates prompt-asset fingerprinting — a prompt-asset edit since record would be invisible; re-record to adopt the guard",
     };
   if (liveBaselineObj === undefined || liveBaselineObj.appVersion !== fp.baseline) return null; // baseline finding handles the version mismatch
-  const liveAssets = hashBaselinePromptAssets(liveBaselineObj);
+  const liveAssets = hashBaselinePromptAssets(liveBaselineObj, promptOpts);
   if (liveAssets === undefined)
     return {
       class: "unverifiable-prompt-assets",
@@ -2668,7 +2685,10 @@ export function computeStaleness(
     });
   else if (liveBaseline !== fp.baseline)
     findings.push({ class: "baseline", message: `baseline moved ${fp.baseline} → ${liveBaseline} since record — re-record` });
-  const pa = promptAssetStaleness(fp, liveBaselineObj);
+  const pa = promptAssetStaleness(fp, liveBaselineObj, {
+    deviceBridge: cassette.scenario.device_bridge === true,
+    deviceBridgeNote: cassette.deviceBridge?.promptNote ?? "included",
+  });
   if (pa) {
     if ("note" in pa) notes.push(pa.note);
     else findings.push(pa);
@@ -3814,6 +3834,19 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["
  *  strict authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
 const CassetteShape = z.looseObject({
   events: z.array(z.string()),
+  // The device_bridge record replay reports: a malformed one is a clean refusal, not a crash.
+  deviceBridge: z
+    .strictObject({
+      served: z.array(z.string()),
+      alwaysLoad: z.array(z.string()),
+      measuredOn: z.string(),
+      promptNoteBasis: z.literal("model-report"),
+      promptNote: z.enum(["included", "omitted"]),
+      egress: z.literal("allowlist"),
+      folders: z.array(z.strictObject({ name: z.string(), mode: z.enum(["r", "rw", "rwd"]) })),
+      divergences: z.array(z.string()),
+    })
+    .optional(),
   // The onFailure inventory replay reads failed hook frames by: a malformed one is a clean refusal, not a crash.
   hookFailureBlocks: z
     .union([z.strictObject({ events: z.array(z.string()) }), z.strictObject({ unknown: z.literal(true), why: z.string() })])
@@ -5855,6 +5888,10 @@ export function preSpendVerdicts(
   const promptReject = promptPolicyRejection(scenario);
   if (promptReject) out.push({ kind: "refuse", message: promptReject });
 
+  // device_bridge: a file assertion on a connected folder's path would grade the agent's tree, which holds no folder.
+  const bridgeFolders = deviceBridgeFolderPreflight(scenario);
+  if (bridgeFolders) out.push({ kind: "refuse", message: `scenario "${scenario.name}": ${bridgeFolders}` });
+
   // semantic_pairwise references — the SAME function executeScenario gates on before the run dir exists, so the
   // preview refuses what the real path will. Mount roots come from the scenario's session; one that cannot load
   // is the real path's own refusal, reported there, so it contributes no roots here.
@@ -6214,6 +6251,7 @@ export async function freezeRecordedRun(
     sessionFingerprint: buildSessionFingerprint(scenario.session, undefined),
     ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
     ...(result.hookFailureBlocks ? { hookFailureBlocks: result.hookFailureBlocks } : {}),
+    ...(result.deviceBridge ? { deviceBridge: result.deviceBridge } : {}),
     // v9: record-time connected-folder host-path -> mount-name map (Finding 24) — undefined when the
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
@@ -6465,6 +6503,7 @@ function replayErrorResult(file: string): RunResult {
     workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
     contextEvents: undefined, // no rec to read from on this early-bail lane
     hookFailureBlocks: undefined, // no frames to read on this early-bail lane
+    deviceBridge: undefined, // no cassette to read it from on this early-bail lane
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
     fileToolAttempts: undefined, // no rec to read from on this early-bail lane
@@ -9600,6 +9639,7 @@ export async function replayCassette(
       workspaceFiles: undefined, // no live filesystem to scan on replay (see the doc note in execute.ts)
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       hookFailureBlocks: replayHookFailureBlocks,
+      deviceBridge: cassette.deviceBridge, // what the recording modeled, as frozen
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the

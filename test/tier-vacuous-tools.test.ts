@@ -188,3 +188,60 @@ describe("a bad regex nested in the object form is a load-time error, not a post
       expect(() => scenarioWith("container", yaml)).toThrow(/bad regex in tool_(not_)?called\./);
     });
 });
+
+// The remote lane's device tools: served only under `device_bridge: true`, and only two of them. A negative
+// assertion on one the run cannot serve passes vacuously, whatever the tier.
+describe("device tools the run does not serve", () => {
+  const DB = "mcp__remote-devices__device_bash";
+  it("device_bash and get_device_info are vacuous without device_bridge, and served with it", () => {
+    for (const tool of [DB, "mcp__remote-devices__get_device_info"]) {
+      for (const tier of ["container", "hostloop", "microvm"])
+        expect(tierVacuousTool(tool, tier, GATE_OFF), `${tool} ${tier}`).toMatchObject({ tool, reason: "device-bridge-off" });
+      expect(tierVacuousTool(tool, "container", GATE_OFF, true)).toBeUndefined();
+    }
+  });
+  it("a device tool the harness never serves is vacuous even with the bridge", () => {
+    expect(tierVacuousTool("mcp__remote-devices__device_list_dir", "container", GATE_OFF, true)).toMatchObject({
+      reason: "device-unserved",
+    });
+    expect(tierVacuousTool("mcp__remote-devices__device_commit_files", "hostloop", GATE_OFF)).toMatchObject({ reason: "device-unserved" });
+  });
+  it("leaves protocol, globs and a bridged host server's tools alone", () => {
+    expect(tierVacuousTool(DB, "protocol", GATE_OFF)).toBeUndefined();
+    expect(tierVacuousTool("mcp__remote-devices__*", "container", GATE_OFF)).toBeUndefined();
+    expect(tierVacuousTool("mcp__remote-devices__acme__lookup", "container", GATE_OFF)).toBeUndefined();
+  });
+  it("the message names device_bridge as the way to serve it", () => {
+    const f = tierVacuousTool(DB, "container", GATE_OFF)!;
+    expect(tierVacuousMessage(f, "tool_not_called", "s")).toMatch(/device_bridge: true/);
+  });
+  it("executeScenario refuses it at load, before any spend", async () => {
+    await expect(executePinned(scenarioWith("container", `  - tool_not_called: ${DB}\n`))).rejects.toThrow(/device_bridge: true/);
+    await expect(executePinned(scenarioWith("container", `  - subagent_tool_absent: ${DB}\n`))).rejects.toThrow(/device_bridge: true/);
+    await expect(executePinned(scenarioWith("container", `  - tool_not_called: {tool: ${DB}}\n`))).rejects.toThrow(/device_bridge: true/);
+  });
+});
+
+describe("the device-tool list is one list", () => {
+  it("tier-vacuous-tools.ts, the skill linter and the newest baseline's cloud block name the same tools", async () => {
+    const { readFileSync, readdirSync } = await import("node:fs");
+    /** The quoted names between `start` and the first `end` after it. */
+    const names = (src: string, start: string, end: string) => {
+      const from = src.indexOf(start);
+      expect(from, start).toBeGreaterThan(-1);
+      const block = src.slice(from, src.indexOf(end, from));
+      return [...block.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    };
+    const ts = names(readFileSync("src/run/tier-vacuous-tools.ts", "utf8"), "const REMOTE_DEVICE_TOOLS = new Set([", "]);");
+    const py = names(readFileSync(".claude/skills/cowork-harness/scripts/scenario.py", "utf8"), "_REMOTE_DEVICE_TOOLS = {", "}");
+    const newest = readdirSync("baselines")
+      .map((f) => /^desktop-(\d+)\.(\d+)\.(\d+)\.json$/.exec(f))
+      .filter((m): m is RegExpExecArray => !!m)
+      .sort((a, b) => +a[1] - +b[1] || +a[2] - +b[2] || +a[3] - +b[3])
+      .pop()!;
+    const base = [...JSON.parse(readFileSync(`baselines/${newest[0]}`, "utf8")).cloud.remoteDevicesTools].sort();
+    expect(ts).toHaveLength(14);
+    expect(py).toEqual(ts);
+    expect(base).toEqual(ts);
+  });
+});

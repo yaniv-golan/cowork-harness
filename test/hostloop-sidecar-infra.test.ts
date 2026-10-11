@@ -32,6 +32,14 @@ function fakeSidecar(): SidecarWatchTarget & {
 }
 
 describe("watchHostLoopSidecar — mid-run failures reach logInfra", () => {
+  it("names the container it watches: the device_bridge container is not the host-loop sidecar", () => {
+    const sidecar = fakeSidecar();
+    const messages: string[] = [];
+    watchHostLoopSidecar(sidecar, (m) => messages.push(m), "device_bridge container");
+    sidecar.emitExit(1, null);
+    expect(messages[0]).toMatch(/^device_bridge container exited unexpectedly/);
+  });
+
   it("a non-zero exit code is reported", () => {
     const sidecar = fakeSidecar();
     const messages: string[] = [];

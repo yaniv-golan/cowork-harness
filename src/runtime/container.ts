@@ -18,6 +18,7 @@ import { combineSdkMcp } from "../agent/session.js";
 import { listMountedSkills } from "../run/skill-metadata.js";
 import type { McpHandler } from "../hostloop/workspace-handler.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
+import { agentPlanFor, startDeviceBridge } from "./device-container.js";
 
 /** The VM loop's web_fetch surface, as three coupled answers derived from ONE gate reading.
  *
@@ -47,9 +48,9 @@ export function vmLoopWebFetchSurface(webFetchViaApi: boolean): { advertised: st
  * The agent binary is bind-mounted from the user's own install (not in the image).
  */
 export function spawnContainer(
-  _scenario: Scenario,
+  scenario: Scenario,
   baseline: PlatformBaseline,
-  plan: LaunchPlan,
+  launchPlan: LaunchPlan,
   outDir: string,
   sessionId: string,
   opts: {
@@ -74,8 +75,13 @@ export function spawnContainer(
     provenanceRef?: { current?: WebFetchProvenance };
     dedup?: WebFetchDedupCache;
     onEgress?: (entry: EgressEntry) => void;
+    /** Called as soon as the device_bridge container starts, before anything else here can throw. */
+    onDeviceStarted?: (device: ReturnType<typeof startDeviceBridge>) => void;
   } = {},
 ) {
+  // device_bridge (lane: remote): the connected folders live on the "device", a second container. Every agent-side
+  // use below reads `plan`; only startDeviceBridge sees the launch plan's folders.
+  const plan: LaunchPlan = agentPlanFor(scenario, launchPlan);
   const m = resolveMounts(baseline, sessionId, "proj1");
   // BIND TARGET (and the anchor for every guest path), vs the agent's working dir. Equal on every synced
   // baseline; kept distinct because production's cwd is a folder mount or `outputs`, not the session root.
@@ -99,9 +105,6 @@ export function spawnContainer(
   const { mcpStaged } = stageWorkspace(plan, mntHost, { sessionRoot, vmSessionRoot: sessionRoot });
   // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
   capturePreRunManifest(plan, mntHost, outDir, "container");
-  // Host-path tokens in the user's staged inputs, so the post-run host_path_leak scan can tell a path the
-  // user supplied from one the sandbox leaked. First turn only (a no-op on resume).
-  captureInputHostPathCorpus(plan, mntHost, outDir);
   const mcpGuest = mcpStaged ? `${configGuest}/mcp.json` : undefined;
 
   const agentHost = resolveAgentBinary(baseline);
@@ -118,6 +121,28 @@ export function spawnContainer(
   const proxyHost = opts.egressProxy ?? "http://egress-proxy:8080";
   const network = opts.dockerNetwork ?? "cowork-net";
   const runner = resolveContainerRuntime();
+  // Started before the agent so the container is up by its first device_bash; registered for signal-time
+  // removal from the moment it starts.
+  const device = scenario.device_bridge
+    ? startDeviceBridge({
+        runner,
+        image,
+        network,
+        egressProxy: proxyHost,
+        outDir,
+        sessionId,
+        runToken: opts.runToken,
+        mounts: launchPlan.mounts,
+        appVersion: baseline.appVersion,
+        resume: !!plan.resume,
+      })
+    : undefined;
+  // Handed to the caller at once, so its teardown removes the container even if something below throws.
+  if (device) opts.onDeviceStarted?.(device);
+  // Host-path tokens in the user's staged inputs, so the post-run host_path_leak scan can tell a path the
+  // user supplied from one the sandbox leaked. First turn only (a no-op on resume). Under device_bridge the
+  // folders' copies are in the device tree, so they are visited there.
+  captureInputHostPathCorpus(plan, mntHost, outDir, device?.inputRoots);
 
   // NOTE: local marketplaces are resolved to --plugin-dir in buildLaunchPlan (the in-VM
   // agent loads via --plugin-dir; the `claude plugin marketplace add` registry is inert
@@ -152,10 +177,10 @@ export function spawnContainer(
     // §3: `isEnabled` = `sessionType==="cowork"`, which container satisfies) — pre-approved for the same
     // off-registry-auto-allow reason present_files is.
     disallowed: webFetchDisallowed,
-    extraTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES],
+    extraTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? [])],
     // web_fetch is absent here ON PURPOSE — see webFetchTools above. It is the one registered tool this
     // tier does not pre-approve, because production gates it at can_use_tool.
-    extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
+    extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? [])],
   });
   const dockerArgs = dockerRunArgv({
     network,
@@ -234,10 +259,11 @@ export function spawnContainer(
     ...(coworkBundle ? [coworkBundle] : []),
     skillsBundle,
     pluginsBundle,
+    ...(device ? [device.bundle] : []),
   );
   // `sessionRoot` is the VM path the agent sees (`-w` above, and the cowork handler's own
   // `sessionRootVm`). Returned so the caller classifies present_files against the root THIS spawn used,
   // instead of re-deriving one — the two lived in different path spaces (host vs VM) once, which made
   // every container leak read as `leaked: false`.
-  return { child, containerName, sdkMcp, sessionRoot };
+  return { child, containerName, sdkMcp, sessionRoot, device };
 }

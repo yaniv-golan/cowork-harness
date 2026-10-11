@@ -132,9 +132,25 @@ const AUTHORSHIP =
 const SEMANTIC_FILES =
   "its `evidence_files` names files to grade, and on this lane the files the run wrote live in a remote container whose filesystem is not locally observable, so the judge sees the transcript only. Drop `evidence_files` and write the rubric about what the agent said, or set `lane: local`.";
 
+/** Appended to a refusal when the scenario sets `device_bridge`: what the bridge offers instead. Mirrored by
+ *  _DEVICE_BRIDGE_HINT in the skill's scenario.py. */
+export const DEVICE_BRIDGE_HINT =
+  " With `device_bridge: true`, a write into a connected folder through device_bash reaches the user's computer: " +
+  "assert that call (`tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: ...}}`); `file_exists` " +
+  "on a connected folder's path is refused under the bridge.";
+
 /** The load-time refusal for a `lane: remote` scenario, or undefined. Shared by the scenario loader and the pre-spend
  *  list `record` runs (which `record --from-embedded` reaches without the loader). */
 export function laneRemoteLoadRefusal(scenario: {
+  lane?: "local" | "remote";
+  device_bridge?: true;
+  assert: readonly Partial<Record<string, unknown>>[];
+}): string | undefined {
+  const refusal = laneRemoteRefusalText(scenario);
+  return refusal && scenario.device_bridge === true ? refusal + DEVICE_BRIDGE_HINT : refusal;
+}
+
+function laneRemoteRefusalText(scenario: {
   lane?: "local" | "remote";
   assert: readonly Partial<Record<string, unknown>>[];
 }): string | undefined {

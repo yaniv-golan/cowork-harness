@@ -74,6 +74,16 @@ reach the device), and
 plain `file_exists` is the proxy for a written path. Delivery itself is the `delivery_unobservable` WARN (see
 `run-record-replay.md`).
 
+**`device_bridge: true`** (with `lane: remote` and `fidelity: container`) serves the remote lane's shell on the user's
+computer, `mcp__remote-devices__device_bash`, from a second container holding COPIES of the connected folders at
+`$HOME/mnt/<folder-name>`; the agent's own container gets no folder. Assert on that call, never on the folder's
+files: `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`, plus `transcript_matches`.
+`file_exists` / `input_unmodified` on a connected folder's path are refused under the bridge (they would read the
+agent's container). `no_delete_in_mounts` covers the folders (the device copy allows a delete production refuses).
+`tool_not_called` on a device tool without the bridge is refused as vacuous. Egress follows the session allowlist;
+`egress.unrestricted: true` matches production's pass-through. The run's `deviceBridge` lists every known
+difference from production.
+
 ### Choose an answer path (gates: AskUserQuestion + tool-permission)
 
 Default to **deterministic**: scripted `answers:` + `on_unanswered: fail`. Anything that brings a
@@ -258,6 +268,7 @@ cowork-harness lint scenarios/*.yaml
 | `host-path-assert-cowork` | WARN | `transcript_no_host_path` on `cowork` — it fails by design if the tier resolves to hostloop |
 | `host-path-assert-tier` | ERROR | `transcript_no_host_path` on `hostloop` / `protocol`, where it fails by design |
 | `lane-remote-incompatible-key` | ERROR | a key that can never pass on `lane: remote`, which the runtime refuses at load: `present_files_called` / `no_scratchpad_leak` / `user_visible_artifact` (delivery), `artifact_text` / `artifact_json` (file bodies), `file_absent` / `no_unexpected_files` (absence), `computer_links_resolve(_if_present)`, `no_lost_write_back`, `file_exists` with `authored: true`, and `semantic_matches` / `semantic_pairwise` with `evidence_files`. Tier rules are suppressed there |
+| `device-bridge-misplaced` | ERROR | `device_bridge` set anywhere but `true` with `lane: remote` and `fidelity: container`; the loader refuses it |
 | `linter-extra-findings-invalid` | ERROR | the loader findings `cowork-harness lint` hands the linter could not be read |
 | `linter-unclassified-key` | ERROR | a valid assertion key this linter cannot classify (the linter is out of date) |
 | `manifest-needs-snapshot` | INFO | manifest-backed keys, which evaluate on replay only when the cassette carries an `artifacts` manifest (not reported on `lane: remote` for `user_visible_artifact` / `artifact_json` / `artifact_text`, which cannot pass there) |

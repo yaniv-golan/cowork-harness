@@ -637,13 +637,13 @@ describe("wiring", () => {
     it(`${tier} captures the corpus right after staging`, () => {
       const s = src(tier);
       const staged = s.indexOf("stageWorkspace(plan, mntHost, ");
-      const captured = s.indexOf("captureInputHostPathCorpus(plan, mntHost, outDir)");
+      const captured = s.indexOf("captureInputHostPathCorpus(plan, mntHost, outDir");
       expect(staged).toBeGreaterThan(-1);
       expect(captured).toBeGreaterThan(staged);
     });
   it("execute.ts scans with inputProvenanceCorpus for this run", () => {
     expect(src("run/execute.ts")).toMatch(
-      /inputProvenanceCorpus\(outDir, sessionId, baseline, scenario\.prompt, effectiveFidelity\)[\s\S]{0,200}scanEvents\(join\(outDir, "events\.jsonl"\), deleteDeniedRootsFromPlan\(plan, outputsMountMode \?\? "rw"\), inputCorpus\)/,
+      /inputProvenanceCorpus\(outDir, sessionId, baseline, scenario\.prompt, effectiveFidelity\)[\s\S]{0,200}scanEvents\(join\(outDir, "events\.jsonl"\), deleteDeniedRootsFromPlan\(plan, outputsMountMode \?\? "rw"\), inputCorpus, \{\s*deviceBridge: scenario\.device_bridge === true,?\s*\}\)/,
     );
   });
 });
@@ -719,4 +719,23 @@ describe("own roots respelled", () => {
       const corpus = { tokens: new Set([tok]), neverExemptRoots: subtree, neverExemptExact: exact };
       expect(scanEvents(events(say(`see ${tok}`)), ["outputs"], corpus as any).hostPathLeaked).toBe(true);
     });
+});
+
+// device_bridge: the connected folders live in the device tree, not the agent's staged mounts. A host path in one of
+// their files is the user's input as much as one in a staged mount, so quoting it back through device_bash is not a leak.
+describe("extra input roots (device_bridge's folder copies)", () => {
+  it("tokens in a file under an extra root count as input", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "corpus-extra-")));
+    try {
+      const mntHost = join(root, "mnt");
+      const deviceCopy = join(root, "device", "mnt", "proj");
+      const outDir = join(root, "out");
+      for (const d of [mntHost, deviceCopy, outDir]) mkdirSync(d, { recursive: true });
+      writeFileSync(join(deviceCopy, "notes.md"), "see /Users/alice/proj/spec.md\n");
+      provenance.captureInputHostPathCorpus({ mounts: [] } as unknown as LaunchPlan, mntHost, outDir, [deviceCopy]);
+      expect(readCorpus(outDir).has("/Users/alice/proj/spec.md")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

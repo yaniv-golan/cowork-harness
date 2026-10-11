@@ -243,6 +243,12 @@ LANE_REMOTE_INCOMPATIBLE_FIXES = {
     "computer_links_resolve_if_present": "Assert that no link was given (`transcript_not_matches: \"computer://\"`), or set `lane: local`.",
     "no_lost_write_back": "Set `lane: local` to check it.",
 }
+# Appended to the remedy when the scenario sets device_bridge; mirrors DEVICE_BRIDGE_HINT in src/run/lane-notice.ts.
+_DEVICE_BRIDGE_HINT = (
+    " With `device_bridge: true`, a write into a connected folder through device_bash reaches the user's computer: "
+    "assert that call (`tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: ...}}`); `file_exists` "
+    "on a connected folder's path is refused under the bridge."
+)
 LANE_REMOTE_INCOMPATIBLE_KEYS = set(LANE_REMOTE_INCOMPATIBLE_FIXES)
 # Refused on `lane: remote` by VALUE, not key: a judged assert naming `evidence_files` (the judge sees the
 # transcript only there). Without evidence_files they load and are judged on the transcript.
@@ -373,6 +379,15 @@ if UNCLASSIFIED_KEYS:
 # reintroduce key drift. `assertions` is NOT here — it's a hard error handled by its own special-case
 # in the unknown-key check below (`k != "assertions"`). `profile` is retired vocabulary and now falls
 # through to that same unknown-key check like any other typo — no special-case for it.
+# Production's remote-devices tools (the baseline `cloud.remoteDevicesTools` list); keep in sync with
+# src/run/tier-vacuous-tools.ts REMOTE_DEVICE_TOOLS.
+_REMOTE_DEVICE_TOOLS = {
+    "list_devices", "get_device_info", "device_list_dir", "device_stage_files", "device_commit_files",
+    "device_bash", "device_request_folder_access", "device_request_delete_permission", "create_artifact",
+    "update_artifact", "list_artifacts", "list_legacy_live_artifacts", "project_memory_read",
+    "project_memory_write",
+}
+
 _EMBEDDED_TOP_LEVEL_KEYS = {
     "name",
     "baseline",
@@ -380,6 +395,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "fidelity",
     "execution",  # execution-location axis, orthogonal to fidelity; "cloud-describe" is reserved (load-time error)
     "lane",  # Cowork product-lane axis: which delivery contract the run is held to (local | remote)
+    "device_bridge",  # remote-lane device tools from a second container; lane: remote + fidelity: container only
     "on_unanswered",
     "prompt",
     "timeout_ms",  # wall-clock budget → kill + errorSource:timeout on expiry
@@ -655,7 +671,7 @@ _MISSING = object()
 
 # Keep these values in sync with src/run/cassette.ts. The sync test below makes a format-range change
 # fail loudly instead of allowing lint to suppress an advisory from a cassette replay would refuse.
-CASSETTE_VERSION = 16
+CASSETTE_VERSION = 17
 MIN_SUPPORTED_CASSETTE_VERSION = 9
 
 
@@ -1528,6 +1544,21 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             )
         )
 
+    # E: `device_bridge: true` outside `lane: remote` + `fidelity: container` — the loader refuses it.
+    if "prompt" in doc and "device_bridge" in doc and not (
+        doc.get("device_bridge") is True and lane == "remote" and doc.get("fidelity") == "container"
+    ):
+        findings.append(
+            Finding(
+                "ERROR",
+                "device-bridge-misplaced",
+                f"`device_bridge: {doc.get('device_bridge')}` with lane: {lane}, fidelity: {doc.get('fidelity')} — "
+                "the key is valid only as `true` with `lane: remote` and `fidelity: container`; the loader refuses this scenario.",
+                "Set `lane: remote` and `fidelity: container`, or drop `device_bridge`.",
+                path,
+            )
+        )
+
     # W: unknown top-level keys (typo or hallucinated schema)
     for k in doc:
         if k not in TOP_LEVEL_KEYS and k != "assertions":
@@ -1596,6 +1627,18 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
         # `protocol` absent on purpose: it passes no tool flags, so its surface is the operator's own
         # host CLI registry — machine-dependent and about a different product.
     }
+    # The remote-devices tools: device_bash and get_device_info are served only under `device_bridge: true`, the
+    # rest of production's list never. `protocol` stays out, as above. Mirrors tierVacuousTool's device rule.
+    _bridge = doc.get("device_bridge") is True
+
+    def _device_vacuous(t):
+        if fidelity not in _TIER_VACUOUS or not isinstance(t, str) or not t.startswith("mcp__remote-devices__"):
+            return None
+        _n = t[len("mcp__remote-devices__"):]
+        if _n in ("device_bash", "get_device_info"):
+            return None if _bridge else "off"
+        return "unserved" if _n in _REMOTE_DEVICE_TOOLS else None
+
     # BOTH negative tool keys: `subagent_tool_absent` is judged against the tools sub-agents actually
     # USED, not a per-dispatch declared list, so a tool the tier never serves makes it equally vacuous.
     for _key in ("tool_not_called", "subagent_tool_absent"):
@@ -1609,13 +1652,32 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 _tools = [_tools] if isinstance(_tools, str) else _tools
                 if not isinstance(_tools, list) or not _tools or not all(isinstance(t, str) for t in _tools):
                     continue
-                if any("*" in t or "?" in t or t not in _TIER_VACUOUS.get(fidelity, {}) for t in _tools):
+                if any("*" in t or "?" in t or (t not in _TIER_VACUOUS.get(fidelity, {}) and not _device_vacuous(t)) for t in _tools):
                     continue
                 _v = _tools[0]
             else:
                 _v = _raw
             if not isinstance(_v, str) or "*" in _v or "?" in _v:
                 continue  # a glob is not a literal claim about one tool
+            _dv = _device_vacuous(_v)
+            if _dv:
+                findings.append(
+                    Finding(
+                        "WARN",
+                        "tool-not-called-tier-vacuous",
+                        f"`{_key}: {_v}` can never be violated — "
+                        + (
+                            "the harness serves it only with `device_bridge: true`, so without it this verifies nothing."
+                            if _dv == "off"
+                            else "the harness serves no such device tool (device_bridge serves device_bash and get_device_info only)."
+                        ),
+                        "Set `device_bridge: true` (lane: remote, fidelity: container), or drop this assertion."
+                        if _dv == "off"
+                        else "Drop this assertion.",
+                        path,
+                    )
+                )
+                continue
             _repl = _TIER_VACUOUS.get(fidelity, {})
             if _v not in _repl:
                 continue
@@ -1694,7 +1756,8 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                         "Drop `authored` (a written path is the documented proxy on this lane), or set `lane: local`."
                         if _k in LANE_REMOTE_AUTHORED_KEYS
                         else "Drop `evidence_files` and write the rubric about what the agent said, or set `lane: local`.",
-                    ),
+                    )
+                    + (_DEVICE_BRIDGE_HINT if doc.get("device_bridge") is True else ""),
                     path,
                 )
             )
@@ -2502,6 +2565,7 @@ LINT_RULES = {
     "capabilities-on-protocol": "ERROR",
     "cassette-evidence-skipped": "INFO",
     "container-only-key-off-container": "ERROR",
+    "device-bridge-misplaced": "ERROR",
     "egress-on-protocol": "ERROR",
     "enum-value-invalid": "ERROR",
     "artifact-json-match": "ERROR",

@@ -73,6 +73,84 @@
         { "type": "object", "required": ["unknown", "why"], "properties": { "unknown": { "const": true }, "why": { "type": "string" } }, "additionalProperties": false }
       ]
     },
+    "deviceBridge": {
+      "type": "object",
+      "description": "What a `device_bridge` run modeled of the remote lane's device bridge, and where it differs from production. `served`: the device tools served; `alwaysLoad`: those that load without ToolSearch; `measuredOn`: the Desktop build both were read from; `egress`: the egress branch modeled (`allowlist`: the scenario allowlist through the proxy); `folders`: name and mode only. `divergences` by id: `delete-not-refused` (a delete in a connected folder succeeds on the device copy, where production refuses it until the user allows deletion; the harness reports it only after the run), `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`, `device-tools-unserved`, `shell-user`, `device-network-shared`. Absent when the scenario has no bridge.",
+      "required": [
+        "served",
+        "alwaysLoad",
+        "measuredOn",
+        "promptNoteBasis",
+        "promptNote",
+        "egress",
+        "folders",
+        "divergences"
+      ],
+      "properties": {
+        "served": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "alwaysLoad": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "promptNoteBasis": {
+          "type": "string",
+          "enum": ["model-report"],
+          "description": "What the prompt note rests on: a cloud task's model reporting that its instructions name the device tools and give the folders' path, not the production prompt's text."
+        },
+        "promptNote": {
+          "type": "string",
+          "enum": ["included", "omitted"],
+          "description": "Whether the run's prompt carried the note (included) or a maintainer control run left it out (omitted, COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off), leaving the model only the device tools' own descriptions."
+        },
+        "measuredOn": {
+          "type": "string"
+        },
+        "egress": {
+          "type": "string",
+          "enum": [
+            "allowlist"
+          ]
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "mode"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "r",
+                  "rw",
+                  "rwd"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "divergences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "mcpErrors": {
       "type": "array",
       "items": {
@@ -368,14 +446,14 @@
     },
     "infraErrors": {
       "type": "array",
-      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died \u2014 a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'hostloop-exec' is a single failed container exec: the tool call failed, the run did not, so it only warns.",
+      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died \u2014 a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'device-container' (the device_bridge container) is the same class. 'hostloop-exec' is a single failed container exec, and 'device-exec' a single failed device_bash exec: the tool call failed, the run did not, so it only warns.",
       "items": {
         "type": "object",
         "required": ["source", "message"],
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar"]
+            "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-exec"]
           },
           "message": {
             "type": "string"

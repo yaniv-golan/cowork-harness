@@ -616,7 +616,11 @@ function spawnHostLoopTracked(
 /** The two infra-error emitters a host-loop run needs, sharing one sink and one events.jsonl writer.
  *  Every row carries its `source` so the verdict can tell a dead supervisor apart from a failed command,
  *  and so the replay re-drive can reconstruct the same distinction from the frozen events. */
-export function makeInfraEmitters(outDir: string, sink: Array<{ source: InfraErrorSource; message: string }>) {
+export function makeInfraEmitters(
+  outDir: string,
+  sink: Array<{ source: InfraErrorSource; message: string }>,
+  sources: { sidecar: InfraErrorSource; exec: InfraErrorSource } = { sidecar: "hostloop-sidecar", exec: "hostloop-exec" },
+) {
   const emit = (source: InfraErrorSource) => (message: string) => {
     try {
       appendFileSync(
@@ -626,7 +630,7 @@ export function makeInfraEmitters(outDir: string, sink: Array<{ source: InfraErr
     } catch {}
     sink.push({ source, message });
   };
-  return { logSidecarInfra: emit("hostloop-sidecar"), logExecInfra: emit("hostloop-exec") };
+  return { logSidecarInfra: emit(sources.sidecar), logExecInfra: emit(sources.exec) };
 }
 
 /** Minimal child-process shape {@link watchHostLoopSidecar} needs (a subset of node:child_process's
@@ -645,7 +649,14 @@ export interface SidecarWatchTarget {
  * the de-register for the normal path, which must call it only AFTER its own `rm -f` of the container has
  * succeeded (`removeContainerThenRelease`): until then a signal, or the process exit, must still find it.
  */
-export function startHostLoopSidecar(p: { runner: string; argv: string[]; containerName: string; logInfra: (message: string) => void }): {
+export function startHostLoopSidecar(p: {
+  runner: string;
+  argv: string[];
+  containerName: string;
+  logInfra: (message: string) => void;
+  /** What an infra message calls the container; the host-loop sidecar's wording by default. */
+  label?: string;
+}): {
   child: ReturnType<typeof spawn>;
   markTearingDown: () => void;
   deregister: () => void;
@@ -653,7 +664,7 @@ export function startHostLoopSidecar(p: { runner: string; argv: string[]; contai
   reapNow: () => boolean;
 } {
   const child = spawn(p.runner, p.argv, { stdio: ["ignore", "ignore", "pipe"] });
-  const { markTearingDown } = watchHostLoopSidecar(child, p.logInfra);
+  const { markTearingDown } = watchHostLoopSidecar(child, p.logInfra, p.label);
   let removed = false;
   const reap = makeHostLoopSidecarReap({
     markTearingDown,
@@ -717,6 +728,8 @@ export function makeHostLoopSidecarReap(p: {
 export function watchHostLoopSidecar(
   sidecarChild: SidecarWatchTarget,
   logInfra: (message: string) => void,
+  /** What the infra message calls the container (the device_bridge container reuses this watcher). */
+  label = "hostloop VM sidecar",
 ): { markTearingDown: () => void } {
   let tearingDown = false;
   let stderrTail = "";
@@ -724,11 +737,11 @@ export function watchHostLoopSidecar(
     stderrTail = (stderrTail + d.toString()).slice(-4000);
   });
   sidecarChild.on("error", (e) => {
-    if (!tearingDown) logInfra(`hostloop VM sidecar failed to spawn: ${String(e)}`);
+    if (!tearingDown) logInfra(`${label} failed to spawn: ${String(e)}`);
   });
   sidecarChild.on("exit", (code, signal) => {
     if (tearingDown) return;
-    logInfra(`hostloop VM sidecar exited unexpectedly (code=${code} signal=${signal}): ${stderrTail}`);
+    logInfra(`${label} exited unexpectedly (code=${code} signal=${signal}): ${stderrTail}`);
   });
   return { markTearingDown: () => (tearingDown = true) };
 }

@@ -53,13 +53,51 @@ export interface TierVacuousFinding {
   tier: string;
   /** The tool to assert instead, or null when the tier removes it with no replacement. */
   instead: string | null;
+  /** Set for a remote-devices tool: served only under `device_bridge: true` (`device-bridge-off`), or never served by
+   *  the harness (`device-unserved`). Absent for a tier-table tool. */
+  reason?: "device-bridge-off" | "device-unserved";
 }
+
+const DEVICE_PREFIX = "mcp__remote-devices__";
+/** What `device_bridge: true` serves (src/hostloop/remote-devices-handler.ts). */
+const DEVICE_BRIDGE_SERVED = new Set(["device_bash", "get_device_info"]);
+/** Production's remote-devices tools (the baseline `cloud.remoteDevicesTools` list). A bridged host server's tool
+ *  nests one level deeper (`<server>__<tool>`) and is not in this list, so it is never refused. */
+const REMOTE_DEVICE_TOOLS = new Set([
+  "list_devices",
+  "get_device_info",
+  "device_list_dir",
+  "device_stage_files",
+  "device_commit_files",
+  "device_bash",
+  "device_request_folder_access",
+  "device_request_delete_permission",
+  "create_artifact",
+  "update_artifact",
+  "list_artifacts",
+  "list_legacy_live_artifacts",
+  "project_memory_read",
+  "project_memory_write",
+]);
 
 /** Is this EXACT tool name provably unservable at this tier? Literals only — a glob is never rejected,
  *  since `mcp__*` or `Ba*` can match something the tier does serve. */
-export function tierVacuousTool(pattern: string, tier: string, webFetchViaApi: boolean): TierVacuousFinding | undefined {
+export function tierVacuousTool(
+  pattern: string,
+  tier: string,
+  webFetchViaApi: boolean,
+  deviceBridge = false,
+): TierVacuousFinding | undefined {
   // A pattern with a glob metacharacter is not a literal claim about one tool.
   if (/[*?]/.test(pattern)) return undefined;
+  // The remote-devices tools are served by no tier on their own: two of them under device_bridge, the rest never.
+  // `protocol` stays out, as below: its surface is the operator's own CLI registry.
+  if (pattern.startsWith(DEVICE_PREFIX) && tier in TIER_VACUOUS) {
+    const name = pattern.slice(DEVICE_PREFIX.length);
+    if (DEVICE_BRIDGE_SERVED.has(name))
+      return deviceBridge ? undefined : { tool: pattern, tier, instead: null, reason: "device-bridge-off" };
+    if (REMOTE_DEVICE_TOOLS.has(name)) return { tool: pattern, tier, instead: null, reason: "device-unserved" };
+  }
   const table = tier === "container" ? containerVacuous(webFetchViaApi) : TIER_VACUOUS[tier];
   if (!table || !(pattern in table)) return undefined;
   return { tool: pattern, tier, instead: table[pattern] ?? null };
@@ -74,9 +112,10 @@ export function objectFormTierVacuous(
   value: { tool: string | string[] },
   tier: string,
   webFetchViaApi: boolean,
+  deviceBridge = false,
 ): TierVacuousFinding | undefined {
   const tools = Array.isArray(value.tool) ? value.tool : [value.tool];
-  const findings = tools.map((t) => tierVacuousTool(t, tier, webFetchViaApi));
+  const findings = tools.map((t) => tierVacuousTool(t, tier, webFetchViaApi, deviceBridge));
   if (findings.length === 0 || findings.some((f) => f === undefined)) return undefined;
   return findings[0];
 }
@@ -95,6 +134,16 @@ export type TierVacuousKey = "tool_not_called" | "subagent_tool_absent";
 /** The load-time refusal text. Names what is wrong, why it can never hold, what to write instead, and —
  *  because an author will meet it — that `tool_called` behaves differently. */
 export function tierVacuousMessage(f: TierVacuousFinding, key: TierVacuousKey, context: string): string {
+  if (f.reason !== undefined)
+    return (
+      `${context}: \`${key}: "${f.tool}"\` can never be violated — ` +
+      (f.reason === "device-bridge-off"
+        ? `the harness serves \`${f.tool}\` only when the scenario sets \`device_bridge: true\` (with \`lane: remote\` and ` +
+          `\`fidelity: container\`), so without it the assertion passes vacuously. Set device_bridge, or drop this assertion.`
+        : `the harness serves no such device tool (\`device_bridge: true\` serves device_bash and get_device_info only), so ` +
+          `the assertion passes vacuously. Drop it.`) +
+      `\nThe positive sibling is NOT refused: \`tool_called: "${f.tool}"\` fails normally.`
+    );
   const remedy =
     f.instead === null
       ? `The \`${f.tier}\` tier removes \`${f.tool}\` outright, so there is no replacement to assert — drop this assertion.`

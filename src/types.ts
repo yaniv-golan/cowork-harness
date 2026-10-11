@@ -1586,8 +1586,17 @@ export const ScenarioObject = z.strictObject({
       "which Cowork lane's DELIVERY CONTRACT to hold the run to, orthogonal to fidelity (isolation tier) and execution (where the run happens): " +
         "local (default) — a file under a user-visible root is delivered by LOCATION, and present_files is served | " +
         "remote — location delivers NOTHING (verified: a remote container has no auto-delivering outputs dir), so only an explicit delivery counts, and present_files is NOT served because a local MCP server cannot reach a remote session. " +
-        "Scoped to delivery semantics: the remote device bridge (device_bash/device_commit_files) is deliberately unmodeled — see docs/fidelity-gaps.md. " +
+        "The remote device bridge is modeled only when `device_bridge: true` is also set (see that key and docs/fidelity-gaps.md). " +
         "On remote, every assertion that reads files inside the agent's container is rejected at load, and a semantic judge sees the transcript only",
+    ),
+  device_bridge: z
+    .literal(true)
+    .optional()
+    .describe(
+      "serve the remote lane's device tools (device_bash, get_device_info) the way a cloud task reaches the user's computer: " +
+        "the commands run in a second container that holds the connected folders, and the agent's own container gets none. " +
+        "Valid only with `lane: remote` and `fidelity: container` (refused at load otherwise). Only `true` is valid; omit to leave the bridge unmodeled. " +
+        "A recording that uses it stamps cassette v17. See docs/fidelity-gaps.md for what it does not model",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z
@@ -1696,6 +1705,14 @@ export const ScenarioObject = z.strictObject({
  *  into the generated JSON Schema by hand (see scripts/gen-schema.ts) or editors/CI validating against the
  *  published schema will accept what the loader rejects. */
 export const Scenario = ScenarioObject.superRefine((s, ctx) => {
+  // The device bridge is a remote-lane tool set served beside a VM-loop container; no other pairing has a place to
+  // run it (hostloop and cowork would put the device on the host, which is what the bridge exists to keep out).
+  if (s.device_bridge === true && !(s.lane === "remote" && s.fidelity === "container"))
+    ctx.addIssue({
+      code: "custom",
+      path: ["device_bridge"],
+      message: `device_bridge requires lane: remote and fidelity: container (this scenario has lane: ${s.lane}, fidelity: ${s.fidelity}).`,
+    });
   // Asserting "no delete happened" AND "a delete is acceptable" is a contradiction, and silently
   // letting one win would make the scenario's intent unreadable. Must be checked across the WHOLE
   // `assert:` array — the two keys can sit in separate entries, which an Assertion-level refinement
@@ -1960,10 +1977,39 @@ export interface JudgedDocFingerprint {
   }>;
 }
 
+/** See `RunResult.deviceBridge`. */
+export interface DeviceBridgeRecord {
+  /** The device tools the harness served, by their bare names. */
+  served: string[];
+  /** The served tools registered to load without ToolSearch, as production registers them. */
+  alwaysLoad: string[];
+  /** The Desktop build those registrations and the tool contract were read from. */
+  measuredOn: string;
+  /** What the agent's prompt note rests on: `model-report`, a cloud task's model reporting that its instructions
+   *  name the device tools and give the folders' path. Not the production prompt's text, which is not reproduced. */
+  promptNoteBasis: "model-report";
+  /** Whether the run's prompt carried that note (`included`, the default) or a control run left it out (`omitted`,
+   *  COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off), leaving the model only the tool's own description. */
+  promptNote: "included" | "omitted";
+  /** Which of production's egress branches the device container modeled: the scenario allowlist through the proxy. */
+  egress: "allowlist";
+  folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;
+  /** Known differences from production, by id: `delete-not-refused` (a delete in a connected folder succeeds on the
+   *  device copy; production refuses it until the user allows deletion through `device_request_delete_permission`,
+   *  and the harness reports it only after the run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
+   *  description paraphrases one production branch), `device-paths-tilde` (get_device_info spells folders
+   *  `~/<name>`, not their paths on the Mac), `device-tools-unserved` (device_list_dir, the stage/commit pair and
+   *  the folder and delete requests are not served), `shell-user` (commands run as the image's user, not a per-task
+   *  `rcw-<id>` user), `device-network-shared` (the device container shares the run's internal network with the agent's
+   *  container, so a service device_bash starts is reachable from the agent's own shell; a cloud container has no
+   *  route to the user's machine). */
+  divergences: string[];
+}
+
 /** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
  *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
  *  differently instead of collapsing both into one fatal class. */
-export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar";
+export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar" | "device-container" | "device-exec";
 
 /** See `RunResult.fsDiff`. `findings` are `[fs-diff] output file removed post-run: <path>` strings. */
 export interface OutputsFsDiff {
@@ -2909,6 +2955,10 @@ export interface RunResult {
    *  inventory's `why` gives a count of the sources it could not read) — no path, server name or command. Absent on a
    *  result.json from an older build. */
   hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
+  /** What a `device_bridge` run modeled of the remote lane's device bridge, and where that differs from production
+   *  (`divergences`). Frozen into the cassette, so replay reports what the recording modeled. Folder names and
+   *  modes only, never a path. Absent when the scenario has no bridge. */
+  deviceBridge?: DeviceBridgeRecord;
   /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
    *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */
