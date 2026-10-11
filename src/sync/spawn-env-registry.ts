@@ -25,6 +25,7 @@ export const SPAWN_ENV_CLASSES = [
   "telemetry", // OTEL / tracing configuration
   "3p-only", // only on a third-party deployment; the harness models first-party
   "host-loop-unmodeled", // a host-loop-only Desktop setting the harness does not model yet
+  "deliberately-unset", // observed in real sessions; the harness leaves it unset on purpose (the reason says why)
 ] as const;
 export type SpawnEnvClass = (typeof SPAWN_ENV_CLASSES)[number];
 export type SpawnEnvSite = "window" | "post-write" | "observed";
@@ -105,8 +106,8 @@ const SPAWN_ENV_ALLOWLIST: Record<string, readonly [SpawnEnvClass, string]> = {
   DISABLE_BRIEF_MODE_STOP_HOOK: ["non-cowork-session", "non-chat sessionType + gate 451382573; harness models chat sessions"],
   CLAUDE_CODE_SUBAGENT_MODEL: ["settings-conditional", "user-settings-conditional (default absent)"],
   CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: [
-    "settings-conditional",
-    "server-delivered: the claude.ai account config's enableAdditionalDirectoriesClaudeMd (forced on for third-party and managed deployments); not set by the harness; follow-up",
+    "deliberately-unset",
+    "server-delivered by the claude.ai account config (forced on for third-party and managed deployments) and set in every observed session; the harness leaves it unset because it does not pass connected folders as additional directories",
   ],
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: ["settings-conditional", "user-settings-conditional (default absent)"],
   CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: ["settings-conditional", "user-settings-conditional (default absent)"],
@@ -120,8 +121,8 @@ const SPAWN_ENV_ALLOWLIST: Record<string, readonly [SpawnEnvClass, string]> = {
   // S6d asserts the key stays gated on the SAME predicate as the Artifact tool spread, so this
   // allowlist entry cannot silently start admitting an unconditional or re-keyed construction.
   CLAUDE_CODE_COWORK_FRAME_ARTIFACTS: [
-    "session-conditional",
-    "frameArtifactsEnabled per-account server flag (on for the recording account); deliberately unset because the Artifact tool is not served; shared-predicate conditionality asserted by S6d",
+    "deliberately-unset",
+    "per-account server flag (frameArtifactsEnabled), set in every observed session of the recording account; the harness leaves it unset because the Artifact tool is not served; shared-predicate conditionality asserted by S6d",
   ],
   // Desktop 2.26454.0 moved the construction into a one-key module object, `l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}`,
   // exported with its predicate; W1 spreads it as `...o.Y(a)&&o.J`, and the Code-tab spawn also uses it, under its own

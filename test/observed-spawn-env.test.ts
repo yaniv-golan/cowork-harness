@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -409,12 +409,12 @@ describe("observed spawn-env oracle — review regressions", () => {
       appVersion: "2.31226.1",
       nativeAgentVersions: [],
       sessions: 2,
-      keysAll: ["CLAUDE_CODE_COWORK_FRAME_ARTIFACTS"],
+      keysAll: ["CLAUDE_CODE_HOST_SCHEDULED_RUN"],
       keysSome: [],
       withheld: 0,
     };
     expect(checkObservedAgainstHarness(block, new Set()).notes.join()).toMatch(
-      /CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is classed session-conditional/,
+      /CLAUDE_CODE_HOST_SCHEDULED_RUN is classed session-conditional/,
     );
   });
 });
@@ -475,5 +475,25 @@ describe("readPreviousObservedSpawnEnv", () => {
     expect(readPreviousObservedSpawnEnv(d)).toEqual({ observed: false, appVersion: "2.31226.1", reason: "no-session" });
     writeFileSync(join(d, "desktop-2.31226.2.json"), JSON.stringify({ provenance: { observedSpawnEnv: { observed: true } } }));
     expect(readPreviousObservedSpawnEnv(d)).toBeNull();
+  });
+});
+
+describe("observed spawn-env oracle — the committed 2.31226.1 observation", () => {
+  // A note should mean something new. Both keys below are in every observed session and are left unset on purpose,
+  // so comparing the committed observation with the harness must print nothing about them, and no default-absent note.
+  it("prints no note for a known, triaged key", () => {
+    const b = JSON.parse(readFileSync(join("baselines", "desktop-2.31226.1.json"), "utf8"));
+    const block = ObservedSpawnEnv.parse(b.provenance.observedSpawnEnv);
+    expect(block.observed && block.keysAll).toEqual(
+      expect.arrayContaining(["CLAUDE_CODE_COWORK_FRAME_ARTIFACTS", "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"]),
+    );
+    const r = checkObservedAgainstHarness(block, harnessHostLoopKeys(loadBaseline("desktop-2.31226.1")));
+    expect(r.deltas).toEqual([]);
+    const notes = r.notes.join("\n");
+    expect(notes).not.toMatch(/absent by default/);
+    expect(notes).not.toContain("CLAUDE_CODE_COWORK_FRAME_ARTIFACTS");
+    expect(notes).not.toContain("CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD");
+    for (const k of ["CLAUDE_CODE_COWORK_FRAME_ARTIFACTS", "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"])
+      expect(classifySpawnEnvKey(k, "observed")?.class, k).toBe("deliberately-unset");
   });
 });
