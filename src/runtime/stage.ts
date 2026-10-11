@@ -1,5 +1,5 @@
 import { warn } from "../io.js";
-import { existsSync, mkdirSync, cpSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, cpSync, realpathSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { LaunchPlan } from "../session.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
@@ -38,6 +38,18 @@ export interface StageResult {
  * but cpSync merges and plan.configDir has no projects/ — the session file survives regardless.
  * Skipping it on resume is nonetheless the faithful behavior, so the guard now covers all of it.)
  */
+/** Replace each connected folder under `intoRoot` with the previous leg's post-state of it, found under `fromRoot` at the
+ *  same mount path (a `workdir: cowork-task` leg after the first). Mtimes are kept: a resuming skill may compare them. */
+export function carryLegFolders(plan: LaunchPlan, fromRoot: string, intoRoot: string): void {
+  for (const mt of plan.mounts.filter((m) => m.kind === "folder")) {
+    const src = join(fromRoot, mt.mountPath);
+    const dest = join(intoRoot, mt.mountPath);
+    if (!existsSync(src)) throw new Error(`cowork-harness: the previous leg's ${mt.mountPath} is missing at ${src}; cannot carry it`);
+    rmSync(dest, { recursive: true, force: true });
+    cpSync(src, dest, { recursive: true, dereference: false, preserveTimestamps: true });
+  }
+}
+
 /** `fixtureRoots`: the session root as this tier's agent sees it (file tools / bash) — written in place of a
  *  workspace_fixture's session-path tokens. */
 export function stageWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: SessionRoots): StageResult {
@@ -45,7 +57,13 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: 
   const mcpDest = join(mntHost, ".claude", "mcp.json");
 
   let mcpStaged: boolean;
-  if (!plan.resume) {
+  if (plan.legStage?.workdir === "persistent") {
+    // A later leg of a `workdir: persistent` multi-leg run: the SAME tree the earlier legs used, so nothing is
+    // re-copied (a re-copy would revert what they wrote to a folder or outputs) and the agent config dir stays as they
+    // left it, as on a persistent workspace host. Only MCP follows the current plan, as on a fresh run.
+    mcpStaged = !!plan.mcpConfig && existsSync(plan.mcpConfig);
+    if (mcpStaged) cpSync(plan.mcpConfig!, mcpDest, { dereference: false });
+  } else if (!plan.resume) {
     // managed config dir (settings.json/cowork_settings.json/skills) -> mnt/.claude
     // preserve symlinks as-is during staging; do not copy out-of-tree content
     cpSync(plan.configDir, join(mntHost, ".claude"), { recursive: true, dereference: false });
@@ -104,6 +122,10 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: 
     mcpStaged = !!plan.mcpConfig && existsSync(plan.mcpConfig);
     // preserve symlinks as-is during staging; do not copy out-of-tree content
     if (mcpStaged) cpSync(plan.mcpConfig!, mcpDest, { dereference: false });
+    // A later leg of a `workdir: cowork-task` run: a new task re-mounts the user's connected folders, which hold
+    // whatever the earlier legs wrote there. On the copying tiers the folder is a copy, so carry the previous leg's
+    // post-state of each one over the fresh copy just staged. Outputs are not carried: a new task's outputs start empty.
+    if (plan.legStage?.workdir === "cowork-task") carryLegFolders(plan, plan.legStage.carryFromMnt, mntHost);
   } else {
     // Resume reuses the persisted tree (no re-copy). Advertise the preserved mcp.json only if the
     // current plan still declares one — so dropping MCP between a run and its --resume is honored.

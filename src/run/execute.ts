@@ -80,7 +80,9 @@ import {
   expandUserPath,
   expandHome,
   strippedEnv,
+  workBaseOf,
   type LaunchPlan,
+  type LegStage,
 } from "../session.js";
 import { spawnProtocol, protocolAgentConfigDir, protocolReadsOperatorConfig } from "../runtime/protocol.js";
 import {
@@ -1175,7 +1177,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // directly with no translateRef, and still needs a ctx file for a later `trace --translate-paths`/replay
   // reader). Reusing this one `vmPathContextFromPlan(...)` call (rather than a second, independent one)
   // guarantees the write-site and the live-translator derivations can never drift apart.
-  const vmPathCtx = vmPathContextFromPlan(sessionId, plan, outDir);
+  // The session tree may sit at a multi-leg scenario root (workBase), not under this run dir.
+  const vmPathCtx = vmPathContextFromPlan(sessionId, plan, workBaseOf(plan, outDir));
   writeVmPathContextFile(outDir, vmPathCtx, effectiveFidelity);
   if (opts.translateRef) {
     opts.translateRef.current = makeDisplayTranslator({
@@ -1714,7 +1717,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // tiers have always produced. Must run before `workRoot`-relative code below.
     if (effectiveFidelity === "hostloop") {
       try {
-        snapshotHostLoopWorkspace(plan, join(outDir, "work", "session", "mnt"));
+        snapshotHostLoopWorkspace(plan, join(workBaseOf(plan, outDir), "work", "session", "mnt"));
       } catch (err) {
         // On the unanswered-gate salvage path, a snapshot failure here must not replace the original
         // UnansweredError and skip partial persistence entirely — that would be worse than the folder
@@ -1738,7 +1741,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // salvage semantics as hostloop above.
     if (effectiveFidelity === "microvm") {
       try {
-        snapshotMicroVmWorkspace(sessionId, join(outDir, "work", "session"));
+        snapshotMicroVmWorkspace(sessionId, join(workBaseOf(plan, outDir), "work", "session"));
       } catch (err) {
         if (unansweredErr) {
           warn(
@@ -1759,7 +1762,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // every baseline regardless: the authored no_delete_in_outputs / no_delete_in_mounts keys cover it.
     // Host paths the user supplied (the staged input files, captured on the first turn, and this turn's
     // prompt) are not a leak when the agent quotes them back verbatim.
-    const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity);
+    const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity, workBaseOf(plan, outDir));
     const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus, {
       deviceBridge: scenario.device_bridge === true,
     });
@@ -1789,7 +1792,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       warn(
         `::warning:: [scan] ${scan.malformedLines} malformed line(s) in events.jsonl — scan evidence unreliable, treated as unavailable\n`,
       );
-    const workRoot = effectiveFidelity === "protocol" ? join(outDir, "work") : join(outDir, "work", "session", "mnt");
+    const workBase = workBaseOf(plan, outDir);
+    const workRoot = effectiveFidelity === "protocol" ? join(workBase, "work") : join(workBase, "work", "session", "mnt");
 
     // The runtime tripwire: if a gated tool call completed successfully with no evidence the path-containment
     // gate ever ran on it, the run's real-filesystem safety is unverified — hard-fail rather than pass silently.
@@ -2100,7 +2104,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // this same "live" mode (see assertContextFromRunDir in verify-context.ts).
       linkResolution: {
         mode: "live",
-        hostRoots: [join(resolve(outDir), "work", "session", "mnt"), ...plan.mounts.filter(isConnectedContent).map((m) => m.hostPath)],
+        hostRoots: [
+          join(workBaseOf(plan, outDir), "work", "session", "mnt"),
+          ...plan.mounts.filter(isConnectedContent).map((m) => m.hostPath),
+        ],
       },
       ...budgetFields(record),
       resources,
@@ -4581,8 +4588,14 @@ function outputsDeleteSnippet(cmd: string, mount = "outputs"): string {
  *  `exact`: the vm-work root, the runs root and the run's own parent dir — they hold OTHER sessions, which an input may legitimately
  *  name, so only the root itself is refused. Mount SOURCE paths are deliberately absent: they reach
  *  model-visible text only at hostloop, where the signal is skipped. */
-export function ownHostRoots(outDir: string, sessionId: string, baseline: PlatformBaseline): { subtree: string[]; exact: string[] } {
-  const subtree = [resolve(outDir), join(VM_WORK_HOST, sessionId)];
+export function ownHostRoots(
+  outDir: string,
+  sessionId: string,
+  baseline: PlatformBaseline,
+  workBase: string = outDir,
+): { subtree: string[]; exact: string[] } {
+  // A multi-leg leg's tree can live at the scenario root (workBase), outside its own run dir: still this run's own.
+  const subtree = [...new Set([resolve(outDir), resolve(workBase)]), join(VM_WORK_HOST, sessionId)];
   const staged = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
   if (staged) subtree.push(dirname(dirname(staged)));
   if (process.env.COWORK_AGENT_BINARY) subtree.push(dirname(resolve(process.env.COWORK_AGENT_BINARY)));
@@ -4613,9 +4626,10 @@ export function inputProvenanceCorpus(
   baseline: PlatformBaseline,
   prompt: string | undefined,
   effectiveFidelity: string,
+  workBase: string = outDir,
 ): InputHostPathCorpus | undefined {
   if (effectiveFidelity !== "container" && effectiveFidelity !== "microvm") return undefined;
-  const { subtree, exact } = ownHostRoots(outDir, sessionId, baseline);
+  const { subtree, exact } = ownHostRoots(outDir, sessionId, baseline, workBase);
   return {
     tokens: new Set([...readInputHostPathCorpus(outDir), ...hostPathTokens(prompt ?? "")]),
     neverExemptRoots: subtree,

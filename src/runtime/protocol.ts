@@ -6,7 +6,7 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { SCRUBBED_AGENT_ENV_KEYS, resolveEffort } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS, resolveEffort, workBaseOf } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
@@ -14,6 +14,7 @@ import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { pluginDirArgs } from "./argv.js";
 import { agentSpawnOptions } from "./agent-tree.js";
 import { stageWorkspaceFixture } from "../fixture/workspace.js";
+import { carryLegFolders } from "./stage.js";
 import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 
 /**
@@ -143,12 +144,14 @@ export function spawnProtocol(
   outDir: string,
   opts: { systemPromptAppend?: string; runTag?: string } = {},
 ) {
-  const work = join(outDir, "work");
+  const work = join(workBaseOf(plan, outDir), "work");
   mkdirSync(join(work, "uploads"), { recursive: true });
   mkdirSync(join(work, "outputs"), { recursive: true });
   const workReal = realpathSync(work);
 
-  for (const m of plan.mounts) {
+  // A later leg of a `workdir: persistent` multi-leg run uses the same work dir: re-copying the sources would revert
+  // what the earlier legs wrote into a folder.
+  for (const m of plan.legStage?.workdir === "persistent" ? [] : plan.mounts) {
     const dest = join(work, m.mountPath);
     mkdirSync(dirname(dest), { recursive: true });
     if (!containedRealPath(workReal, dirname(dest)))
@@ -178,6 +181,8 @@ export function spawnProtocol(
   // No session layout here, so no roots: a fixture with session-path tokens is refused (resolveLaunchSources
   // refuses it before spend; this is the backstop).
   if (plan.workspaceFixture && !plan.resume) stageWorkspaceFixture(plan.workspaceFixture, join(work, "outputs"));
+  // A later `workdir: cowork-task` leg: carry each connected folder's post-state from the previous leg's work dir.
+  if (plan.legStage?.workdir === "cowork-task") carryLegFolders(plan, plan.legStage.carryFromMnt, work);
 
   // no_unexpected_files baseline: snapshot the user-visible roots' paths post-staging, pre-spawn.
   capturePreRunManifest(plan, work, outDir, "protocol");

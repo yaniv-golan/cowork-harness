@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { artifactsRootEnv } from "../answer-channel.js";
 import { resolve, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
-import { type LaunchPlan, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent } from "../session.js";
+import { type LaunchPlan, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent, workBaseOf } from "../session.js";
 import { resolveMounts, resolveAgentBinary } from "../baseline.js";
 import { agentArgs, spawnEnv, dockerRunArgv } from "./argv.js";
 import { runtimeAuthEnv } from "./host-env.js";
@@ -98,7 +98,7 @@ export function spawnContainer(
   // --- stage a single writable session tree on the host, bound rw at /sessions/<id> ---
   // Shared staging helper honors plan.resume uniformly (skips re-copy on resume — Cowork reuses the
   // same VM and never re-stages; see stage.ts).
-  const sessionHost = join(resolve(outDir), "work", "session");
+  const sessionHost = join(workBaseOf(plan, outDir), "work", "session");
   const mntHost = join(sessionHost, "mnt");
   const outputsHostDir = join(mntHost, "outputs");
   // One guest tree serves the file tools and bash alike: both fixture tokens get the bind target.

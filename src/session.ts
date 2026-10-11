@@ -408,6 +408,13 @@ export interface Mount {
  * microvm) maps these host paths into its own world and assembles CLI args.
  */
 export interface LaunchPlan {
+  /** The dir holding this run's session tree (`work/`). Absent = the run dir itself. A multi-leg run under
+   *  `workdir: persistent` points every leg at the scenario root's one shared tree. Read through `workBaseOf`, never
+   *  re-derived from the run dir. */
+  workBase?: string;
+  /** How a multi-leg run stages a leg after the first (stage.ts): the session tree already holds the earlier leg's
+   *  files. Absent = an ordinary fresh or `--resume` staging. */
+  legStage?: LegStage;
   /** The scenario's declared Cowork lane. `remote` withholds `present_files`: a local MCP server cannot
    *  reach a remote Cowork session (Anthropic's own architecture doc — "local MCP servers don't run in
    *  remote sessions"), so serving it there would hand the agent a tool production does not have, which is
@@ -1283,6 +1290,16 @@ export function resolveLaunchSources(
   return { pinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders, ...(workspaceFixture ? { workspaceFixture } : {}) };
 }
 
+/** A later leg's staging. `persistent`: the same tree, nothing re-copied, the agent config kept. `cowork-task`: a new
+ *  tree staged fresh, then each connected folder replaced by the previous leg's post-state of it (`carryFromMnt`), and
+ *  outputs not carried. */
+export type LegStage = { workdir: "persistent" } | { workdir: "cowork-task"; carryFromMnt: string };
+
+/** The dir holding a run's `work/` tree: the plan's `workBase`, else the run dir. The one place it is resolved. */
+export function workBaseOf(plan: { workBase?: string }, outDir: string): string {
+  return resolve(plan.workBase ?? outDir);
+}
+
 export function buildLaunchPlan(
   session: SessionConfig,
   baseline: PlatformBaseline,
@@ -1298,12 +1315,15 @@ export function buildLaunchPlan(
   /** The session's sources, already resolved — `executeScenario` resolves them before it creates the run
    *  directory, so a missing source refuses the run with nothing left behind. Computed here when absent. */
   sources: LaunchSources = resolveLaunchSources(session, baseline, tier, resume),
-  /** `deviceBridge`: the scenario's `device_bridge`, which changes the mode an unset `permission_mode` resolves to. */
-  opts: { deviceBridge?: boolean } = {},
+  /** `deviceBridge`: the scenario's `device_bridge`, which changes the mode an unset `permission_mode` resolves to.
+   *  `workBase` / `legStage`: a multi-leg run's shared tree and later-leg staging (see LaunchPlan). */
+  opts: { deviceBridge?: boolean; workBase?: string; legStage?: LegStage } = {},
 ): LaunchPlan {
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
   const { pinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders } = sources;
-  const configDir = pinnedConfigDir ?? join(resolve(outDir), "claude-config");
+  // Beside the session tree: a `workdir: persistent` multi-leg run shares one config dir across legs, as it shares the
+  // tree (protocol's agent reads it directly; the sandbox tiers copy it into mnt/.claude on the first leg only).
+  const configDir = pinnedConfigDir ?? join(resolve(opts.workBase ?? outDir), "claude-config");
   mkdirSync(join(configDir, "skills"), { recursive: true });
   mkdirSync(join(configDir, "plugins"), { recursive: true });
 
@@ -1352,6 +1372,8 @@ export function buildLaunchPlan(
     .map((m) => m.mountPath);
 
   return {
+    ...(opts.workBase !== undefined ? { workBase: resolve(opts.workBase) } : {}),
+    ...(opts.legStage !== undefined ? { legStage: opts.legStage } : {}),
     lane,
     configDir,
     mcpConfig: session.mcp.config ? expand(session.mcp.config) : null,
