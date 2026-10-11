@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.8.0] — 2026-10-11
+
 ### Upgrade notes
 
 - **The session schema's `permission_mode` no longer declares a default.** An unset value resolves at launch:
