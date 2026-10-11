@@ -1,0 +1,293 @@
+import { describe, it, expect, afterEach } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  parseDesktopLogLines,
+  readObservedSpawnEnv,
+  bundleHasSpawnEnvProducer,
+  type ObservedSpawnEnvInput,
+} from "../src/sync/observed-spawn-env.js";
+import { ObservedSpawnEnv } from "../src/types.js";
+
+// Synthetic Desktop main.log text in the shape Desktop's logger writes (util.inspect of the sdkOptions object):
+// several short items per line, a `[length]: N` trailer, a long `plugins` list BEFORE `envKeys` (envKeys sits ~140
+// lines into a real dump), and username-bearing paths in the fields the reader must never read.
+const FAKE_TOKEN = "sk-ant-oat01-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE-R48";
+const FAKE_EMAIL = "someone.r48@example.invalid";
+const ORG_KEY = "ACME_INTERNAL_BILLING_ID";
+const SECRET_SHAPED = "SECRET_SHAPED_VALUE_R48";
+
+const ts = (d: string) => `${d} [info]`;
+const startApp = (when: string, appVersion: string) =>
+  [`${ts(when)} Starting app {`, `  appVersion: '${appVersion}',`, "  isPackaged: true,", "  platform: 'darwin',", "}"].join("\n");
+const session = (when: string) => `${ts(when)} [Lifecycle] Session local_00000000-0000-4000-8000-000000000000: initializing → running`;
+
+interface DumpOpts {
+  when: string;
+  keys: string[];
+  agent?: string;
+  layout?: "flat" | "build";
+  plugins?: number;
+  perLine?: number;
+  trailer?: number | null; // null = omit the trailer (truncated)
+  extraItems?: string[]; // raw item text, e.g. "'x=y'"
+  more?: number; // util.inspect's "... N more items"
+}
+function dump(o: DumpOpts): string {
+  const agent = o.agent ?? "2.1.295";
+  const app = o.layout === "flat" ? `claude-code/${agent}/claude.app` : `claude-code/${agent}/0123456789ab/claude.app`;
+  const lines = [
+    `${ts(o.when)} [HostLoop] sdkOptions after patch: {`,
+    `  cwd: '/Users/someone/${FAKE_TOKEN}',`,
+    "  executable: '/Applications/Claude.app/Contents/Helpers/disclaimer',",
+    "  executableArgs: [",
+    "    '--',",
+    `    '/Users/someone/Library/Application Support/Claude/${app}/Contents/MacOS/claude',`,
+    `    '--email=${FAKE_EMAIL}',`,
+    "    [length]: 3",
+    "  ],",
+    "  plugins: [",
+  ];
+  for (let i = 0; i < (o.plugins ?? 140); i++) lines.push(`    { type: 'local', path: '/Users/someone/plugins/p${i}' },`);
+  lines.push(`    [length]: ${o.plugins ?? 140}`, "  ],");
+  const items = [...o.keys.map((k) => `'${k}'`), ...(o.extraItems ?? [])];
+  if (items.length === 0 && o.trailer !== null) {
+    lines.push("  envKeys: [ [length]: 0 ],");
+  } else {
+    lines.push("  envKeys: [");
+    const per = o.perLine ?? 3;
+    for (let i = 0; i < items.length; i += per) lines.push(`    ${items.slice(i, i + per).join(", ")},`);
+    if (o.more) lines.push(`    ... ${o.more} more items`);
+    if (o.trailer !== null) lines.push(`    [length]: ${o.trailer ?? items.length + (o.more ?? 0)}`, "  ],");
+  }
+  if (o.trailer !== null) {
+    lines.push(`  CLAUDE_CONFIG_DIR: '/Users/someone/${FAKE_TOKEN}',`, `  model: '${SECRET_SHAPED}',`, "  autoMemoryHostDir: null", "}");
+  }
+  return lines.join("\n");
+}
+
+const CORE = ["CLAUDE_CODE_IS_COWORK", "CLAUDE_CODE_TAGS", "PATH", "HOME", "TZ"];
+
+let dirs: string[] = [];
+afterEach(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  dirs = [];
+});
+function logsDir(files: Record<string, string>): string {
+  const d = mkdtempSync(join(tmpdir(), "r48-logs-"));
+  dirs.push(d);
+  mkdirSync(d, { recursive: true });
+  for (const [n, t] of Object.entries(files)) writeFileSync(join(d, n), t + "\n");
+  return d;
+}
+const productNames = new Set([...CORE, "HTTPS_PROXY", "CLAUDE_CODE_SKILL_ATTRIBUTION", "CLAUDE_CODE_WORKSPACE_HOST_PATHS"]);
+const input = (logs: string, over: Partial<ObservedSpawnEnvInput> = {}): ObservedSpawnEnvInput => ({
+  logsDir: logs,
+  appVersion: "2.31226.1",
+  installedAtMs: null,
+  bundle: { hasProducer: true, hasProductName: (n) => productNames.has(n) },
+  previous: null,
+  declare: null,
+  ...over,
+});
+const everything = (r: ReturnType<typeof readObservedSpawnEnv>) => JSON.stringify(r);
+
+describe("observed spawn-env oracle — privacy", () => {
+  it("commits no value, no path, no org-defined name; withholds by COUNT and names only Desktop vocabulary locally", () => {
+    const logs = logsDir({
+      "main1.log": startApp("2026-10-09 22:46:06", "2.31226.1"),
+      "main.log": [
+        session("2026-10-10 11:28:40"),
+        dump({ when: "2026-10-10 11:28:43", keys: [...CORE, ORG_KEY, "HTTPS_PROXY"], extraItems: [`'${FAKE_TOKEN}'`] }),
+      ].join("\n"),
+    });
+    const r = readObservedSpawnEnv(input(logs));
+    const committed = JSON.stringify(r.block);
+    for (const leak of [FAKE_TOKEN, FAKE_EMAIL, ORG_KEY, SECRET_SHAPED, "HTTPS_PROXY", "/Users/"]) expect(committed).not.toContain(leak);
+    for (const leak of [FAKE_TOKEN, FAKE_EMAIL, ORG_KEY, SECRET_SHAPED, "/Users/"]) expect(everything(r)).not.toContain(leak);
+    expect(r.block).toMatchObject({ observed: true, withheld: 1 });
+    // Desktop vocabulary that nobody classified: a LOCAL write-blocking delta that may name it.
+    expect(r.deltas.some((d) => d.includes("HTTPS_PROXY"))).toBe(true);
+    // The fake token as an envKeys item is not key-shaped: a malformed delta, counted, never quoted.
+    expect(r.deltas.some((d) => /malformed/.test(d))).toBe(true);
+    expect(ObservedSpawnEnv.safeParse(r.block).success).toBe(true);
+  });
+
+  it("holds no value: a key-shaped value outside envKeys is never retained", () => {
+    const text = dump({ when: "2026-10-10 11:28:43", keys: CORE });
+    const parsed = parseDesktopLogLines([startApp("2026-10-09 22:46:06", "2.31226.1"), ...text.split("\n")]);
+    const all = JSON.stringify(parsed, (_k, v) => (v instanceof Set ? [...v] : v instanceof Map ? [...v] : v));
+    expect(all).not.toContain(SECRET_SHAPED);
+    expect(all).not.toContain(FAKE_TOKEN);
+    expect(all).not.toContain("/Users/");
+    // Structural: every string the parser keeps is either a key name or a strict version string.
+    const strings: string[] = [];
+    const walk = (v: unknown) => {
+      if (typeof v === "string") strings.push(v);
+      else if (v instanceof Set || Array.isArray(v)) for (const x of v) walk(x);
+      else if (v instanceof Map) for (const [k, x] of v) (walk(k), walk(x));
+      else if (v && typeof v === "object") for (const x of Object.values(v)) walk(x);
+    };
+    walk(parsed);
+    for (const s of strings) expect(s, s).toMatch(/^(?:[A-Z][A-Z0-9_]{0,127}|\d+\.\d+\.\d+|ok|incomplete|empty|malformed)$/);
+  });
+});
+
+describe("observed spawn-env oracle — dump format", () => {
+  it("reads envKeys after a long plugins list (envKeys ~140+ lines into the record)", () => {
+    const logs = logsDir({
+      "main1.log": startApp("2026-10-09 22:46:06", "2.31226.1"),
+      "main.log": dump({ when: "2026-10-10 11:28:43", keys: CORE, plugins: 200 }),
+    });
+    const r = readObservedSpawnEnv(input(logs));
+    expect(r.block).toMatchObject({ observed: true, sessions: 1 });
+    expect(r.block.observed && r.block.keysAll).toEqual([...CORE].sort());
+  });
+
+  it("splits multi-item lines and checks the [length] trailer", () => {
+    const p = parseDesktopLogLines([
+      startApp("2026-10-09 22:46:06", "2.31226.1"),
+      ...dump({ when: "2026-10-10 11:00:00", keys: CORE, perLine: 4 }).split("\n"),
+    ]);
+    expect(p.dumps).toHaveLength(1);
+    expect(p.dumps[0].status).toBe("ok");
+    expect([...p.dumps[0].names].sort()).toEqual([...CORE].sort());
+  });
+
+  it("marks a trailer that disagrees with the item count, '... N more items', an empty list and a truncated record", () => {
+    const lines = [
+      startApp("2026-10-09 22:46:06", "2.31226.1"),
+      dump({ when: "2026-10-10 11:00:00", keys: CORE, trailer: 99 }),
+      dump({ when: "2026-10-10 11:01:00", keys: CORE, more: 30 }),
+      dump({ when: "2026-10-10 11:02:00", keys: [] }),
+      dump({ when: "2026-10-10 11:03:00", keys: CORE, trailer: null }),
+    ].join("\n");
+    const p = parseDesktopLogLines(lines.split("\n"));
+    expect(p.dumps.map((d) => d.status)).toEqual(["incomplete", "incomplete", "empty", "incomplete"]);
+  });
+
+  it("captures the native agent version from both executableArgs layouts", () => {
+    const lines = [
+      startApp("2026-10-09 22:46:06", "2.31226.1"),
+      dump({ when: "2026-10-10 11:00:00", keys: CORE, agent: "2.1.281", layout: "flat" }),
+      dump({ when: "2026-10-10 11:01:00", keys: CORE, agent: "2.1.295", layout: "build" }),
+    ].join("\n");
+    expect(parseDesktopLogLines(lines.split("\n")).dumps.map((d) => d.agentVersion)).toEqual(["2.1.281", "2.1.295"]);
+  });
+});
+
+describe("observed spawn-env oracle — attribution to a Desktop build", () => {
+  it("attributes each dump to the preceding 'Starting app' across rotated files, oldest file first", () => {
+    const logs = logsDir({
+      "main2.log": [
+        startApp("2026-10-07 21:06:19", "2.26454.2"),
+        dump({ when: "2026-10-08 10:00:00", keys: [...CORE, "CLAUDE_CODE_SKILL_ATTRIBUTION"] }),
+      ].join("\n"),
+      "main1.log": startApp("2026-10-09 22:46:06", "2.31226.1"),
+      "main.log": dump({ when: "2026-10-10 11:28:43", keys: CORE }),
+      "main-window.log": dump({ when: "2026-10-10 12:00:00", keys: [...CORE, "CLAUDE_CODE_WORKSPACE_HOST_PATHS"] }),
+    });
+    const r = readObservedSpawnEnv(input(logs));
+    expect(r.block).toMatchObject({ observed: true, sessions: 1 });
+    expect(r.block.observed && r.block.keysAll).toEqual([...CORE].sort());
+  });
+
+  it("splits keys present in every dump from keys in some", () => {
+    const logs = logsDir({
+      "main.log": [
+        startApp("2026-10-09 22:46:06", "2.31226.1"),
+        dump({ when: "2026-10-10 11:00:00", keys: CORE }),
+        dump({ when: "2026-10-10 12:00:00", keys: [...CORE, "CLAUDE_CODE_WORKSPACE_HOST_PATHS"] }),
+      ].join("\n"),
+    });
+    const r = readObservedSpawnEnv(input(logs));
+    expect(r.block.observed && r.block.keysSome).toEqual(["CLAUDE_CODE_WORKSPACE_HOST_PATHS"]);
+  });
+
+  it("falls back to the install time (parsed as LOCAL wall-clock) only when no 'Starting app' precedes the dump", () => {
+    const at = new Date(2026, 9, 10, 11, 0, 0).getTime();
+    const logs = logsDir({
+      "main.log": [dump({ when: "2026-10-10 10:59:59", keys: ["PATH"] }), dump({ when: "2026-10-10 11:00:01", keys: CORE })].join("\n"),
+    });
+    const r = readObservedSpawnEnv(input(logs, { installedAtMs: at }));
+    expect(r.block.observed && r.block.keysAll).toEqual([...CORE].sort());
+    expect(r.notes.some((n) => /install time/.test(n))).toBe(true);
+  });
+});
+
+describe("observed spawn-env oracle — when no dump exists for this build", () => {
+  it("records no-session with a WARNING when nothing ran", () => {
+    const r = readObservedSpawnEnv(input(logsDir({ "main.log": startApp("2026-10-09 22:46:06", "2.31226.1") })));
+    expect(r.block).toEqual({ observed: false, appVersion: "2.31226.1", reason: "no-session" });
+    expect(r.deltas).toEqual([]);
+    expect(r.notes.some((n) => /WARNING/.test(n))).toBe(true);
+  });
+
+  it("is a write-blocking parse failure when dumps exist for the build but none is readable", () => {
+    const logs = logsDir({
+      "main.log": [startApp("2026-10-09 22:46:06", "2.31226.1"), dump({ when: "2026-10-10 11:00:00", keys: CORE, trailer: 99 })].join("\n"),
+    });
+    const r = readObservedSpawnEnv(input(logs));
+    expect(r.deltas.some((d) => /none could be read/.test(d))).toBe(true);
+  });
+
+  it("blocks when Desktop no longer carries the producer log line", () => {
+    const r = readObservedSpawnEnv(input(logsDir({ "main.log": "" }), { bundle: { hasProducer: false, hasProductName: () => true } }));
+    expect(r.deltas.some((d) => /producer/.test(d))).toBe(true);
+  });
+
+  it("records a lane-gone declaration only when no session and no dump exist for the build", () => {
+    const quiet = logsDir({ "main.log": startApp("2026-10-09 22:46:06", "2.31226.1") });
+    expect(readObservedSpawnEnv(input(quiet, { declare: "local-lane-removed" })).block).toEqual({
+      observed: false,
+      appVersion: "2.31226.1",
+      reason: "lane-gone",
+      declared: "local-lane-removed",
+    });
+    const busy = logsDir({ "main.log": [startApp("2026-10-09 22:46:06", "2.31226.1"), session("2026-10-10 11:00:00")].join("\n") });
+    const r = readObservedSpawnEnv(input(busy, { declare: "local-lane-removed" }));
+    expect(r.deltas.some((d) => /refus/.test(d))).toBe(true);
+    const withDump = logsDir({
+      "main.log": [startApp("2026-10-09 22:46:06", "2.31226.1"), dump({ when: "2026-10-10 11:00:00", keys: CORE })].join("\n"),
+    });
+    expect(readObservedSpawnEnv(input(withDump, { declare: "local-lane-removed" })).deltas.some((d) => /refus/.test(d))).toBe(true);
+  });
+
+  it("does not inherit a lane-gone declaration from the previous baseline", () => {
+    const r = readObservedSpawnEnv(
+      input(logsDir({ "main.log": "" }), {
+        previous: { observed: false, appVersion: "2.31226.0", reason: "lane-gone", declared: "local-lane-removed" },
+      }),
+    );
+    expect(r.block).toMatchObject({ observed: false, reason: "no-session" });
+  });
+
+  it("carries an observed block forward for the SAME Desktop build after its logs rotated away", () => {
+    const prev = {
+      observed: true as const,
+      appVersion: "2.31226.1",
+      nativeAgentVersions: ["2.1.295"],
+      sessions: 3,
+      keysAll: [...CORE].sort(),
+      keysSome: [],
+      withheld: 0,
+    };
+    expect(readObservedSpawnEnv(input(logsDir({ "main.log": "" }), { previous: prev })).block).toEqual(prev);
+    expect(
+      readObservedSpawnEnv(input(logsDir({ "main.log": "" }), { previous: { ...prev, appVersion: "2.31226.0" } })).block,
+    ).toMatchObject({
+      observed: false,
+      reason: "no-session",
+    });
+  });
+});
+
+describe("producer check", () => {
+  it("needs the full logged literal with its ': %o' tail and the envKeys construction", () => {
+    const real = 'N.info("[HostLoop] sdkOptions after patch: %o",{...x,envKeys:e.env?Object.keys(e.env).sort():[]})';
+    expect(bundleHasSpawnEnvProducer(real)).toBe(true);
+    expect(bundleHasSpawnEnvProducer(real.replace(": %o", ""))).toBe(false);
+    expect(bundleHasSpawnEnvProducer(real.replace("envKeys:", "keys:"))).toBe(false);
+  });
+});
