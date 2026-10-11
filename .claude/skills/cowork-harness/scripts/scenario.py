@@ -387,6 +387,9 @@ _REMOTE_DEVICE_TOOLS = {
     "update_artifact", "list_artifacts", "list_legacy_live_artifacts", "project_memory_read",
     "project_memory_write",
 }
+# Production's in-process `visualize` server tools (the skill-argument form); keep in sync with
+# src/run/tier-vacuous-tools.ts VISUALIZE_TOOLS. The harness registers no such server.
+_VISUALIZE_TOOLS = {"read_me", "show_widget"}
 
 _EMBEDDED_TOP_LEVEL_KEYS = {
     "name",
@@ -1639,6 +1642,15 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             return None if _bridge else "off"
         return "unserved" if _n in _REMOTE_DEVICE_TOOLS else None
 
+    # The visualize tools: served on no tier. Mirrors tierVacuousTool's visualize rule. Offline, so unlike the
+    # harness this does not read the session's mcp.config: a session server named `visualize` draws a WARN here
+    # that the harness itself does not refuse. When the form stub lands under `argument_form: on | form`, make
+    # this conditional on that key as `_device_vacuous` is on device_bridge.
+    def _visualize_vacuous(t):
+        if fidelity not in _TIER_VACUOUS or not isinstance(t, str) or not t.startswith("mcp__visualize__"):
+            return False
+        return t[len("mcp__visualize__"):] in _VISUALIZE_TOOLS
+
     # BOTH negative tool keys: `subagent_tool_absent` is judged against the tools sub-agents actually
     # USED, not a per-dispatch declared list, so a tool the tier never serves makes it equally vacuous.
     for _key in ("tool_not_called", "subagent_tool_absent"):
@@ -1652,13 +1664,28 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 _tools = [_tools] if isinstance(_tools, str) else _tools
                 if not isinstance(_tools, list) or not _tools or not all(isinstance(t, str) for t in _tools):
                     continue
-                if any("*" in t or "?" in t or (t not in _TIER_VACUOUS.get(fidelity, {}) and not _device_vacuous(t)) for t in _tools):
+                if any(
+                    "*" in t or "?" in t or (t not in _TIER_VACUOUS.get(fidelity, {}) and not _device_vacuous(t) and not _visualize_vacuous(t))
+                    for t in _tools
+                ):
                     continue
                 _v = _tools[0]
             else:
                 _v = _raw
             if not isinstance(_v, str) or "*" in _v or "?" in _v:
                 continue  # a glob is not a literal claim about one tool
+            if _visualize_vacuous(_v):
+                findings.append(
+                    Finding(
+                        "WARN",
+                        "tool-not-called-tier-vacuous",
+                        f"`{_key}: {_v}` can never be violated — the harness never serves the `visualize` server "
+                        "(production's skill-argument form tools), so this verifies nothing.",
+                        "Drop this assertion.",
+                        path,
+                    )
+                )
+                continue
             _dv = _device_vacuous(_v)
             if _dv:
                 findings.append(
