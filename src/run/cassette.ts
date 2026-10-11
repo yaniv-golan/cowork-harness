@@ -3861,7 +3861,7 @@ const CassetteShape = z.looseObject({
         .array(
           z.strictObject({
             folders: z.array(z.string()),
-            answeredBy: z.enum(["script", "policy", "decider", "human", "bypassPermissions"]),
+            answeredBy: z.enum(["script", "decider", "human", "bypassPermissions"]),
             turn: z.number().int(),
           }),
         )

@@ -2402,7 +2402,7 @@
       },
       ".deviceBridge.grants[].answeredBy": {
         "type": "string",
-        "enum": ["script", "policy", "decider", "human", "bypassPermissions"],
+        "enum": ["script", "decider", "human", "bypassPermissions"],
         "required": true
       },
       ".deviceBridge.grants[].folders": {
@@ -4926,7 +4926,7 @@
       },
       ".deviceBridge.grants[].answeredBy": {
         "type": "string",
-        "enum": ["script", "policy", "decider", "human", "bypassPermissions"],
+        "enum": ["script", "decider", "human", "bypassPermissions"],
         "required": true
       },
       ".deviceBridge.grants[].folders": {

@@ -306,9 +306,10 @@ export function writeDeviceGrant(outDir: string, folders: ReadonlyArray<string>)
   renameSync(tmp, file);
 }
 
-/** Who answered a delete grant. `script` is a scenario answer, `policy` the on_unanswered `first` pick, `decider` an
+/** Who answered a delete grant. `script` is a scenario answer, `decider` an
  *  LLM or external decider, `human` an interactive prompt, `bypassPermissions` no card at all (that mode shows none). */
-export type DeleteGrantAnswer = "script" | "policy" | "decider" | "human" | "bypassPermissions";
+// No on_unanswered value grants: `fail` ends the run and `first` declines, so neither ever answers an Allow.
+export type DeleteGrantAnswer = "script" | "decider" | "human" | "bypassPermissions";
 export interface DeleteGrant {
   folders: string[];
   answeredBy: DeleteGrantAnswer;
@@ -316,7 +317,6 @@ export interface DeleteGrant {
 }
 const ANSWERED_BY: Partial<Record<string, DeleteGrantAnswer>> = {
   scripted: "script",
-  first: "policy",
   llm: "decider",
   external: "decider",
   human: "human",

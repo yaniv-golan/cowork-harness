@@ -2038,11 +2038,12 @@ export interface DeviceBridgeRecord {
   permissionMode: string;
   permissionModeSource: "session" | "bridge-default";
   /** Whether a delete in a connected folder is refused in place (`enforced`) or, as in this release, allowed on the
-   *  device copy and reported after the run (`reported`, the `delete-not-refused` divergence). */
-  deleteRefusal: "reported" | "enforced";
-  /** The delete card's grants this turn: the folders, who answered (`script`, `policy` for on_unanswered `first`,
+   *  device copy and reported after the run (`reported`, the `delete-not-refused` divergence). Absent on a replayed
+   *  recording made before the delete card (v17). */
+  deleteRefusal?: "reported" | "enforced";
+  /** The delete card's grants this turn: the folders, who answered (`script`,
    *  `decider`, `human`, or `bypassPermissions` when no card is shown) and the turn. */
-  grants: Array<{ folders: string[]; answeredBy: "script" | "policy" | "decider" | "human" | "bypassPermissions"; turn: number }>;
+  grants?: Array<{ folders: string[]; answeredBy: "script" | "decider" | "human" | "bypassPermissions"; turn: number }>;
   /** Which of production's egress branches the device container modeled: the session allowlist through the proxy
    *  (`allowlist`), or everything through it (`unrestricted`, from `egress.unrestricted: true`). */
   egress: "allowlist" | "unrestricted";
