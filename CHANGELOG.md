@@ -13,16 +13,19 @@ All notable changes to this project are documented here. The format is based on
 - **The session schema's `permission_mode` no longer declares a default.** An unset value resolves at launch:
   `default`, or `acceptEdits` under `device_bridge`. A validator or editor that fills schema defaults no longer
   writes `permission_mode: default` into a session.
-- **`verify-cassettes` may report a recording as unverifiable after upgrading.** A recording whose session sets a
-  non-default `permission_mode` predates the fingerprint's coverage of that field; re-record it to clear the note.
+- **`verify-cassettes` may add a note to a recording after upgrading.** A recording made before 4.8.0 whose session
+  sets a non-default `permission_mode` predates the fingerprint's coverage of that field: it gets a non-failing
+  "predates `permission_mode` coverage" note (exit 0), not drift. Re-record it to clear the note.
 - **Cassette format v17.** A scenario with `device_bridge: true` stamps v17, so an older reader refuses it as too
   new. Every other cassette stamps what it did.
 - **`infraErrors[].source` gains `device-container` and `device-exec`.** A consumer that switches on the source
   should treat `device-container` like `hostloop-sidecar` (the run fails) and `device-exec` like `hostloop-exec`
   (a warning).
-- **A negative assertion on a device tool the run cannot serve is now refused at load.** `tool_not_called` or
-  `subagent_tool_absent` on `mcp__remote-devices__device_bash` / `get_device_info` without `device_bridge: true`,
-  or on any other `mcp__remote-devices__*` tool the harness never serves, used to pass vacuously. Set
+- **A negative assertion on a device tool the run cannot serve is now refused at load** (on the sandbox tiers; the
+  `protocol` tier has its own rule). `tool_not_called` or `subagent_tool_absent` on
+  `mcp__remote-devices__device_bash` / `get_device_info` without `device_bridge: true`, or on one of the device tools
+  the harness never serves (`device_list_dir`, the stage/commit pair, the folder and delete requests and the
+  others production registers), used to pass vacuously. Set
   `device_bridge`, or drop the assertion. `lint` reports it as `tool-not-called-tier-vacuous`.
 - **The critique report gains fields, and its schema still forbids unknown ones.** `schema/critique-report.json`
   keeps `additionalProperties: false`, so a validator pinned to the 4.7 schema rejects a 4.8 report. The report is
@@ -57,7 +60,8 @@ All notable changes to this project are documented here. The format is based on
   `--corpus-only` record `source: {kind, ref, path, commit}`. Refused before any spend: a git filter such as LFS
   (from the commit's `.gitattributes`, `.git/info/attributes` or `core.attributesFile`), a committed symlink whose
   real path leaves the snapshot or that points at nothing, a submodule, a ref that is not a commit. Snapshots are
-  kept under `~/.cowork-harness/critique-snapshots/` (or the new `COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR`); a
+  kept under `~/.cowork-harness/critique-snapshots/` (or the new `COWORK_HARNESS_CRITIQUE_SNAPSHOTS_DIR`, which must not be inside a git work
+  tree); a
   refusal before the graded run removes its snapshot, `--corpus-only` removes its own, and nothing else does.
 - **`critique --summary-out <file>` writes a summary safe for a public repository.** It holds identifiers, hashes,
   enums and counts, and per finding only `findingFingerprint`, `classification`, `source` and `adjudicable`: no
@@ -82,6 +86,7 @@ All notable changes to this project are documented here. The format is based on
   - marked, and refused under `--strict`: mixed evaluator models, hash bases, skill trees (a `scripts/` edit) or
     probes, and a pass-1-only member; marked only: a varying `packagedCorpusHash`, and a member with no probe
     hash (the default for a summary);
+  - `--out <path>` also writes the comparison to a file;
   - exits 0 when compared, 2 on a refusal. Its output carries finding text and says it is not public-safe; its
     payload is described by the new `schema/critique-compare.json`.
 - **The critique report records `harnessVersion`, `label`, `source`, `gradedSkillIdentity` and
@@ -101,21 +106,24 @@ All notable changes to this project are documented here. The format is based on
   gets no folder, as a cloud task's has none. Commands run on the copies, never on your files, through the run's
   egress proxy (`egress.unrestricted: true` matches production's pass-through). The prompt's claims that a folder is
   mounted in the agent's tree give way to a note naming `device_bash` and the folders' path. Assert
-  with `tool_called`. The loader refuses the key with any other lane or tier, and `lint` reports
-  `device-bridge-misplaced`.
+  with `tool_called`. The loader and `schema/scenario.schema.json` refuse the key with any other lane or tier, and
+  `lint` reports `device-bridge-misplaced`. A `lane: remote` refusal on a bridge scenario adds a hint on what the
+  bridge does and does not serve. Under the bridge the prompt's workspace folder is the outputs folder, as with
+  no folder, even when a folder is connected.
 - **A `device_bridge` run whose session sets no `permission_mode` runs in `acceptEdits`**, the mode a production
   cloud task reports under the composer's Manual choice. A `permission_mode` the session sets wins, `default`
   included. A run without the bridge still defaults to `default`. The session schema no longer carries a default for
   the field; an unset value resolves at launch.
 - **`verify-cassettes` notices a changed `permission_mode`.** The session fingerprint now covers it when set to
-  anything but `default`, so a session that says `default` or nothing hashes as before. One change is not seen:
-  under `device_bridge`, unset (`acceptEdits`) and an explicit `default` hash alike. A recording made on a
-  non-default mode before this release is reported as unverifiable, with a note, not as drift; re-record it to gain
-  the coverage.
+  anything but `default`, so a session that says `default` or nothing hashes as before. A recording made with 4.8.0
+  or later reports a changed mode as drift (exit 1). One change is not seen: under `device_bridge`, unset
+  (`acceptEdits`) and an explicit `default` hash alike. A recording made before 4.8.0 on a non-default mode gets a
+  non-failing note, not drift; re-record it to gain the coverage.
 - **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
   (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,
   `device-tools-unserved`, `shell-user`, `device-network-shared`), the egress branch it modeled (`egress`:
-  `allowlist`, or `unrestricted` under `egress.unrestricted: true`, which drops `egress-allowlist`), and whether the prompt note was included
+  `allowlist`, or `unrestricted` when the allowlist is `*`, as `egress.unrestricted: true` makes it, which drops
+  `egress-allowlist`), and whether the prompt note was included
   (`promptNote`; a maintainer control, `COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off`, leaves it out), and the agent's
   permission mode with where it came from (`permissionMode`, `permissionModeSource`: `session` or `bridge-default`).
   The cassette freezes it. See docs/fidelity-gaps.md, "Remote device bridge".

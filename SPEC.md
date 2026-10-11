@@ -1235,7 +1235,7 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   top-level `hookFailureBlocks` lists an event or is unknown stamps **v16**. That field is the run's
   `onFailure: "block"` inventory; a v15 reader ignores it and would read a failed or timed-out hook frame as "no
   decision". An empty `{"events": []}` stamps what the cassette needs otherwise. A scenario with
-  `device_bridge: true` stamps **v17**: a v16 reader rejects the key as unrecognized.
+  `device_bridge: true` stamps **v17**: a v16 reader refuses it as too new.
   The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and

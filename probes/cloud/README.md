@@ -55,15 +55,15 @@ the real hook. The test asserts that none of them reaches the capture, and that 
   (`CLAUDE_CODE_REMOTE=true` and `CLAUDE_CODE_ENTRYPOINT=remote_cowork`). That covers the plugin's account sync:
   local Claude Code sessions and other cloud sessions load it but record nothing.
 
-## The sitting: P0 + P6 (about 60 minutes, 4 tasks)
+## A probe session: the census and the permission probe (about 60 minutes, 4 tasks)
 
 Use one Claude Desktop organisation throughout, one whose tasks run in the cloud: plugin installs are per
 organisation.
 
-**Privacy rules for every sitting** (the kit hooks every tool call of a real task):
+**Privacy rules for every probe session** (the kit hooks every tool call of a real task):
 - a **synthetic folder only** (a throwaway folder with planted files), connected alone; never a real project;
 - turn **off** every connector for the probe tasks where the composer allows it;
-- **uninstall the plugin immediately after the last export** of the sitting (section 5), before any other task;
+- **uninstall the plugin immediately after the last export** of the session (section 5), before any other task;
 - the downloaded files and the verifier's summary **never enter any repository** (the summary prints tool names
   verbatim): only paraphrased facts are written up. `.gitignore` covers `export.jsonl`, `export.sha256` and
   `cwh-cloud-probe*`.
@@ -79,13 +79,13 @@ organisation.
    plugin's hooks load in terminal sessions too: they record nothing there, but cost about a third of a second per
    tool call. To disable it locally, first check its exact id with `/plugin` in Claude Code (expected
    `cwh-cloud-probe@synced`). Then add this to `~/.claude/settings.json` (merge it into an existing
-   `enabledPlugins` block if you have one), and remove it after the sitting:
+   `enabledPlugins` block if you have one), and remove it after the session:
 
    ```json
    { "enabledPlugins": { "cwh-cloud-probe@synced": false } }
    ```
 
-### 2. P0: device-bridge census (one task, about 10 minutes)
+### 2. Device-bridge census, `p0` (one task, about 10 minutes)
 
 1. Start a **new task** with **only** `~/cwh-probe-folder` connected.
 2. Paste:
@@ -98,7 +98,7 @@ organisation.
 3. Approve any card Desktop shows and note which cards appeared.
 4. Run the **export step** (section 4) in the same task, with `--probe p0`.
 
-### 3. P6: permission surface (three tasks, about 10 minutes each)
+### 3. Permission surface, `p6` (three tasks, about 10 minutes each)
 
 The composer's approval setting has three choices: **Manual** (the default), **Auto** and **Skip**. Do one task
 for each. If your build shows a different set, do one task per choice shown and note the names.
@@ -147,7 +147,7 @@ Desktop adds a suffix), then run, with the `wc -l` number from the transcript:
 python3 probes/cloud/verify.py --probe p0 ~/cwh-probe-dl/p0 <lines>
 ```
 
-Use `--probe p6` for the P6 tasks. If the hash file did not arrive, write the hash from the transcript into
+Use `--probe p6` for the permission tasks. If the hash file did not arrive, write the hash from the transcript into
 `export.sha256` in that folder; any form containing the 64 hex characters works.
 
 | Exit | Meaning |
@@ -156,9 +156,9 @@ Use `--probe p6` for the P6 tasks. If the hash file did not arrive, write the ha
 | 1    | the checksum or line count differs from the transcript: void |
 | 2    | a line failed redaction, the folder holds anything but the two export files (a Finder `.DS_Store` is ignored), a symlink, or `export.sha256` is not one line with one sha256: void, delete the folder |
 | 3    | usage: the folder lacks one of the two files |
-| 4    | the capture cannot answer the probe (no device-tool result for P0, no recognised permission mode for P6): void |
+| 4    | the capture cannot answer the probe (no device-tool result for `p0`, no recognised permission mode for `p6`): void |
 
-### 5. After the sitting (about 5 minutes)
+### 5. After the session (about 5 minutes)
 
 1. **Uninstall `cwh-cloud-probe` in Customize > Plugins immediately after the last export**, before starting any
    other task. This is not optional: the plugin is synced to the account and hooks every tool call of every task.
@@ -169,12 +169,12 @@ Use `--probe p6` for the P6 tasks. If the hash file did not arrive, write the ha
 
 ## What each probe decides
 
-- **P0:** whether the served tool names, input field names and result shapes for `get_device_info`,
+- **`p0`:** whether the served tool names, input field names and result shapes for `get_device_info`,
   `device_list_dir` and `device_bash` match the harness's model field for field, plus the shapes of a failing
   shell command. The failing command's record is a `PostToolUseFailure` line: `verify.py --probe p0f` checks a
   capture holds one for `device_bash` with an exit code or a non-empty error (use it for a task that runs only the
   failing step).
-- **P6:** whether the approval choice reaches the agent as its permission mode, and which approvals the user still
+- **`p6`:** whether the approval choice reaches the agent as its permission mode, and which approvals the user still
   sees in each mode, including the delete prompt.
 - **Repeat:** each probe needs a second sample before its facts are relied on. Use a second account if one is
   available; otherwise use a second day.

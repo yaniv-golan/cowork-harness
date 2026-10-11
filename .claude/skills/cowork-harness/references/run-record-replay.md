@@ -132,8 +132,9 @@ current skill") rather than vouch against stale labels, but the trace/inspect pa
 deliberately. (Same fail-closed family: corrupt gate evidence — unparseable `events.jsonl` lines, or fewer
 gates than `trace.json` recorded questions — a structurally invalid `result.json`, a `command:"replay"`
 result (a replay is a re-check of a recorded cassette, not run evidence — verify the original live run dir),
-and a `mode:"chat"` result (chat carries no assertions or verdict by contract) also refuse rather than
-certify.) (A token-free probe of "which gates fire" isn't possible — gates are model-decided per run.)
+a `mode:"chat"` result (chat carries no assertions or verdict by contract), and a `device_bridge` run dir (its
+folders lived in the device container; re-run or replay the cassette, in `regrade` and `refs` too) also refuse
+rather than certify.) (A token-free probe of "which gates fire" isn't possible — gates are model-decided per run.)
 
 Run artifacts are written to `~/.cowork-harness/runs/…` by default — **outside any working tree**, so a run
 launched from a repo root never drops sensitive skill inputs/outputs into it. Pass `--run-dir <path>` (or set
