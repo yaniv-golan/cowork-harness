@@ -185,6 +185,8 @@ export function makeDeviceExec(runner: string, containerName: string, home: stri
 const READ_BUFFER = 8 * 1024 * 1024;
 
 const DEVICE_TREE_FILE = "device-tree-pre-run.json";
+/** How long teardown lets an already-accepted create land before its last removal. */
+const TEARDOWN_SETTLE_MS = 750;
 
 /** Resolves once the container runs, or after `limitMs` (an exec then reports what is wrong). Under load `docker
  *  run` can take seconds to create it, and a command sent before then fails as "No such container". */
@@ -301,17 +303,19 @@ export function startDeviceBridge(p: {
   markTearingDown: () => void;
   deregister: () => void;
   reapNow: () => boolean;
-  /** The run's teardown: mark, remove, stop the `docker run` client, then remove again (a create still in flight
-   *  when the first removal ran finishes after it). True when the container is gone; only then is the signal-time
-   *  reap released. */
-  teardown: () => boolean;
+  /** The run's teardown: mark, remove, stop the `docker run` client, wait for it to exit, then remove again after a
+   *  short settle (a create the daemon already accepted can land after the client is gone). True when the container
+   *  is gone; only then is the signal-time reap released. */
+  teardown: () => Promise<boolean>;
   /** Whether the `docker run` client has been stopped (for tests). */
   clientExited: () => boolean;
 } {
   const deviceHost = join(resolve(p.outDir), "work", "device");
   const folders = deviceFolders(p.mounts);
   if (!p.resume) stageDeviceFolders(folders, deviceHost);
-  else mkdirSync(join(deviceHost, "mnt"), { recursive: true });
+  else if (!existsSync(join(deviceHost, "mnt"))) mkdirSync(join(deviceHost, "mnt"), { recursive: true });
+  // Before anything reads the tree: a refused start must not have walked a link's target.
+  assertDeviceBindSources(deviceHost, folders);
   // Every turn compares against the tree as it found it: a resumed turn must not report the first turn's deletes.
   recordDeviceTree(p.outDir);
   const containerName = `cowork-dev-${p.runToken ?? p.sessionId}`;
@@ -326,7 +330,6 @@ export function startDeviceBridge(p: {
     sessionId: p.sessionId,
     folders,
   });
-  assertDeviceBindSources(deviceHost, folders);
   // A container left under this name (a teardown that ran before a slow create finished) would make the start fail.
   removeContainer(p.runner, containerName);
   const started = startHostLoopSidecar({
@@ -352,9 +355,19 @@ export function startDeviceBridge(p: {
     markTearingDown: started.markTearingDown,
     deregister: started.deregister,
     reapNow: started.reapNow,
-    teardown: () => {
+    teardown: async () => {
       started.markTearingDown();
       started.reapNow();
+      const child = started.child;
+      if (child.exitCode === null && child.signalCode === null)
+        await new Promise<void>((done) => {
+          const t = setTimeout(done, 5_000);
+          child.once("exit", () => {
+            clearTimeout(t);
+            done();
+          });
+        });
+      await new Promise((r) => setTimeout(r, TEARDOWN_SETTLE_MS));
       const gone = removeContainer(p.runner, containerName);
       if (gone) started.deregister();
       return gone;

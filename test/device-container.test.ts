@@ -2,11 +2,12 @@
 // holds COPIES of the connected folders at $HOME/mnt/<folder-name>, where device_bash runs. The one invariant that
 // keeps device_bash off the user's real files is that nothing the container binds is a mount's host path.
 import {
+  existsSync,
   lstatSync,
-  readdirSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -244,13 +245,30 @@ describe("startDeviceBridge", () => {
 });
 
 describe("startDeviceBridge: teardown", () => {
-  // A teardown can run before `docker run` has created the container: an `rm -f` then finds nothing, and the create
-  // finishes after it. So teardown stops the `docker run` client too, and removes again once it is gone.
-  it("marks, removes, stops the docker run client, then removes again, and reports the container gone", async () => {
+  // A teardown can run before `docker run` has created the container. The create request is already with the daemon,
+  // so the container can appear after the client is stopped, and after a removal. Teardown therefore waits for the
+  // client to exit, removes, waits, and removes again, and reports the container gone only after that.
+  it("removes a container whose create lands after the client was stopped", async () => {
     const root = scratch();
     const f = folder(root, "proj");
     const outDir = join(root, "out");
-    const runner = standInRunner(root, join(outDir, "work", "device"));
+    const exists = join(root, "exists");
+    const runner = join(root, "runner.sh");
+    // `run` hands the create to a detached "daemon" that makes the container 300 ms later, whatever happens to the
+    // client; `rm` removes it if it exists.
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'case "$1" in',
+        `  run) ( sleep 0.3; echo created > "${exists}" ) >/dev/null 2>&1 & disown; exec sleep 30;;`,
+        `  rm) rm -f "${exists}"; echo rm >> "${root}/removed"; exit 0;;`,
+        "  inspect) echo true; exit 0;;",
+        "esac",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
     const b = startDeviceBridge({
       runner,
       image: "img",
@@ -263,10 +281,9 @@ describe("startDeviceBridge: teardown", () => {
       appVersion: "2.31226.1",
       resume: false,
     });
-    expect(b.teardown()).toBe(true);
-    // once before the start, twice at teardown
-    expect(readFileSync(join(root, "removed"), "utf8")).toBe("cowork-dev-td\ncowork-dev-td\ncowork-dev-td\n");
-    expect(b.clientExited()).toBe(true);
+    expect(await b.teardown()).toBe(true);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(existsSync(exists), "a container created after teardown was left behind").toBe(false);
     expect(b.infraErrors).toEqual([]);
   });
 });
@@ -371,6 +388,32 @@ describe("startDeviceBridge: a resumed turn never binds what a command left behi
     expect(() => start(true)).toThrow(/device_bridge.*ref.*not a directory inside the device tree/);
     // nothing was started: no `run` reached the runtime after the refusal
     expect(readFileSync(join(root, "removed"), "utf8").trim().split("\n")).toHaveLength(2);
+  });
+  it("a refused start writes nothing about the link's target", () => {
+    const root = scratch();
+    const ref = folder(root, "ref", "r");
+    const outDir = join(root, "out");
+    const deviceHost = join(outDir, "work", "device");
+    mkdirSync(deviceHost, { recursive: true });
+    mkdirSync(join(root, "secret"));
+    writeFileSync(join(root, "secret", "id_rsa"), "x");
+    symlinkSync(join(root, "secret"), join(deviceHost, "mnt"));
+    const runner = standInRunner(root, deviceHost);
+    expect(() =>
+      startDeviceBridge({
+        runner,
+        image: "img",
+        network: "net",
+        egressProxy: "http://p:1",
+        outDir,
+        sessionId: "s",
+        runToken: "n1",
+        mounts: [ref],
+        appVersion: "2.31226.1",
+        resume: true,
+      }),
+    ).toThrow(/not a directory inside the device tree/);
+    expect(existsSync(join(outDir, "device-tree-pre-run.json"))).toBe(false);
   });
   it("refuses when mnt itself was replaced by a link", () => {
     const root = scratch();
@@ -561,7 +604,7 @@ describe("wiring: execute.ts tears the device container down and keeps its infra
     const agentRm = s.indexOf(
       "removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);",
     );
-    const teardown = s.indexOf("!deviceBridge.teardown()");
+    const teardown = s.indexOf("!(await deviceBridge.teardown())");
     const network = s.indexOf("sidecar.teardown();");
     expect(agentRm).toBeGreaterThan(-1);
     expect(teardown).toBeGreaterThan(agentRm);

@@ -1631,7 +1631,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       removeContainerThenRelease(runner, containerName, [deregisterContainerReap, deregisterHostLoopSidecarReap]);
       // The device container (device_bridge): marked first, so its forced exit is not a crash, then removed, its
       // `docker run` client stopped, and removed again, since a create still in flight can finish after a removal.
-      if (deviceBridge && !deviceBridge.teardown())
+      if (deviceBridge && !(await deviceBridge.teardown()))
         warn(
           `::warning:: [cleanup] could not remove container ${deviceBridge.containerName} — it stays registered and is removed on a signal or at exit\n`,
         );
