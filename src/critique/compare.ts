@@ -16,6 +16,15 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { collectSecrets, scrub } from "../secrets.js";
+import {
+  CLUSTER_GATE,
+  LEXICAL_BASIS,
+  LEXICAL_GROUP_THRESHOLD,
+  LEXICAL_SCHEME,
+  type ClusterMode,
+  candidateGroupsOf,
+  lexicalSimilarity,
+} from "./cluster-lexical.js";
 
 /** What compare reads from one input file, whichever shape it came in. */
 export interface CompareMember {
@@ -37,6 +46,8 @@ export interface CompareMember {
   excluded?: string;
   pass1Only: boolean;
   items: Array<{
+    /** The item's index in the report's own `items` (a summary: its index there). */
+    itemIndex: number;
     findingFingerprint: string;
     classification: string;
     source: string;
@@ -123,7 +134,8 @@ export function loadMember(file: string): CompareMember {
                 ? "a corpus file changed during the run (corpusDrift)"
                 : undefined,
       pass1Only: j.selfReportStatus === "unavailable",
-      items: items.map((i) => ({
+      items: items.map((i, itemIndex) => ({
+        itemIndex,
         findingFingerprint: String(i.findingFingerprint),
         classification: String(i.classification),
         source: String(i.source),
@@ -166,8 +178,10 @@ export function loadMember(file: string): CompareMember {
             : undefined,
     pass1Only: j.selfReportStatus === "unavailable",
     items: (j.items as Array<Record<string, unknown>>)
-      .filter((i) => i.citationResolved !== false)
-      .map((i) => ({
+      .map((i, itemIndex) => ({ i, itemIndex }))
+      .filter(({ i }) => i.citationResolved !== false)
+      .map(({ i, itemIndex }) => ({
+        itemIndex,
         findingFingerprint: String(i.findingFingerprint ?? ""),
         classification: String(i.classification),
         source: String(i.source),
@@ -205,8 +219,15 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 export const REWORDING_JACCARD = 0.6;
 export const EXCERPT_MIN = 12;
 
-/** Compare the given members. `strict` refuses a group carrying any mark instead of only marking it. */
-export function compareMembers(input: CompareMember[], opts: { strict?: boolean } = {}): Record<string, unknown> {
+/** Compare the given members. `strict` refuses a group carrying any mark instead of only marking it. `cluster: "lexical"`
+ *  adds candidate groups of findings that read alike (cluster-lexical.ts); the judged mode is held and refused. */
+export function compareMembers(input: CompareMember[], opts: { strict?: boolean; cluster?: ClusterMode } = {}): Record<string, unknown> {
+  const cluster = opts.cluster ?? "none";
+  if ((cluster as string) === "judge")
+    throw new CompareRefusal(
+      "--cluster judge is not available: a model-judged grouping needs a validated labelled set first; use --cluster lexical (candidate groups, a judgement from word overlap)",
+    );
+  if (cluster !== "none" && cluster !== "lexical") throw new CompareRefusal(`--cluster must be lexical (got "${String(cluster)}")`);
   // Deterministic order, whatever order the files were given in.
   const all = [...input].sort(
     (a, b) => byCodePoint(a.label ?? "", b.label ?? "") || byCodePoint(a.sessionId ?? "", b.sessionId ?? "") || byCodePoint(a.file, b.file),
@@ -402,6 +423,49 @@ export function compareMembers(input: CompareMember[], opts: { strict?: boolean 
     }
 
   const fullReports = all.some((m) => m.kind === "report");
+
+  // Candidate groups (lexical mode): over every citation-resolved finding of every full report, across label groups,
+  // in input order (label group, report, item). Summaries carry no finding text and take no part.
+  const clusterItems = cluster === "lexical" ? flat : [];
+  const candidateGroups =
+    cluster === "lexical"
+      ? candidateGroupsOf(lexicalSimilarity(clusterItems.map((x) => x.it)), LEXICAL_GROUP_THRESHOLD).map((g) => ({
+          basis: LEXICAL_BASIS,
+          groups: null,
+          members: g.map((i) => {
+            const x = clusterItems[i]!;
+            const m = groups[x.group]!.members[x.report]!;
+            return {
+              labelGroup: groups[x.group]!.label,
+              report: x.report,
+              sessionId: m.sessionId,
+              itemIndex: x.it.itemIndex,
+              findingFingerprint: x.it.findingFingerprint,
+              classification: x.it.classification,
+              idea: x.it.idea ?? "",
+            };
+          }),
+        }))
+      : undefined;
+  const clustering = {
+    mode: cluster,
+    population: "citation-resolved",
+    ...(cluster === "lexical"
+      ? {
+          similarity: {
+            scheme: LEXICAL_SCHEME,
+            text: "idea || recommendedAction",
+            idf: "fitted over the compared findings",
+            linkage: "complete",
+            threshold: LEXICAL_GROUP_THRESHOLD,
+          },
+          findingsCompared: clusterItems.length,
+          ...(all.some((m) => m.kind === "summary") ? { summariesSkipped: "summaries carry no finding text" } : {}),
+        }
+      : {}),
+    sent: "nothing",
+    validated: CLUSTER_GATE,
+  };
   return {
     mode: "compare",
     publicSafe: false,
@@ -422,6 +486,8 @@ export function compareMembers(input: CompareMember[], opts: { strict?: boolean 
         }
       : { basis: "unavailable: summaries carry no finding text", pairs: [] },
     excluded: excluded.sort((a, b) => byCodePoint(a.file, b.file)),
+    clustering,
+    ...(candidateGroups ? { candidateGroups } : {}),
   };
 }
 
@@ -452,6 +518,18 @@ export function renderCompareText(out: Record<string, unknown>): string {
   }
   const rw = out.possibleRewordings as { basis: string; pairs: unknown[] };
   lines.push("", `possible rewordings (${rw.basis}): ${rw.pairs.length}`);
+  const cg = out.candidateGroups as Array<{ basis: string; members: Array<Record<string, unknown>> }> | undefined;
+  if (cg) {
+    // Input order, never by size: a bigger group is not a more reproduced finding.
+    lines.push("", `candidate groups (${LEXICAL_BASIS}): ${cg.length}`);
+    cg.forEach((g, gi) => {
+      lines.push(`  candidate group ${gi + 1}:`);
+      for (const m of g.members)
+        lines.push(
+          `    ${m.labelGroup !== null ? `${String(m.labelGroup)} ` : ""}[${m.report}] item ${m.itemIndex} ${m.findingFingerprint}  ${norm(String(m.idea)).slice(0, 140)}`,
+        );
+    });
+  }
   for (const e of out.excluded as Array<{ file: string; reason: string }>) lines.push(`excluded ${basename(e.file)}: ${e.reason}`);
   return lines.join("\n") + "\n";
 }
