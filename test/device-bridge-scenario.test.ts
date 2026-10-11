@@ -50,8 +50,8 @@ describe("device_bridge scenario key", () => {
 });
 
 describe("device_bridge cassette stamp", () => {
-  it("a scenario using it stamps v17", () => {
-    expect(requiredVersionFor(Scenario.parse(OK))).toBe(17);
+  it("a scenario using it stamps v18 (v17 before the delete card)", () => {
+    expect(requiredVersionFor(Scenario.parse(OK))).toBe(18);
   });
   it("the same scenario without it stamps exactly what it did", () => {
     const { device_bridge: _drop, ...without } = OK;

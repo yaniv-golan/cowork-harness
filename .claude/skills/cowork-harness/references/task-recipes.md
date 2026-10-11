@@ -58,11 +58,11 @@ what production would do. Two layers of defense:
 
 ### Cassette anatomy (what you're looking at when you open one)
 
-Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v17.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v17.json)):
+Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v18.json`](https://github.com/yaniv-golan/cowork-harness/blob/main/schema/cassette.v18.json)):
 
 | Field | What it is |
 |---|---|
-| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 17 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 unless a key lifts it: 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, 14 for a v14 key such as `include_fork_results` on `semantic_matches`, 15 for a v15 one such as `gates_all_scripted`, a glob `artifact_json`, an `artifact_json` carrying `schema`, any `artifact_json` on `lane: remote`, or a recording under `answer_channel: none`, 16 for a recording whose `hookFailureBlocks` lists an event or is unknown, 17 for a scenario with `device_bridge: true`; the full list is in the cassette docs' version table) |
+| `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 18 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 unless a key lifts it: 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, 14 for a v14 key such as `include_fork_results` on `semantic_matches`, 15 for a v15 one such as `gates_all_scripted`, a glob `artifact_json`, an `artifact_json` carrying `schema`, any `artifact_json` on `lane: remote`, or a recording under `answer_channel: none`, 16 for a recording whose `hookFailureBlocks` lists an event or is unknown, 17 for a scenario with `device_bridge: true`; the full list is in the cassette docs' version table) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |

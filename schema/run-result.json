@@ -130,6 +130,25 @@
             "unrestricted"
           ]
         },
+        "deleteRefusal": {
+          "type": "string",
+          "enum": ["reported", "enforced"],
+          "description": "Whether a delete in a connected folder is refused in place (enforced) or allowed on the device copy and reported after the run (reported, the delete-not-refused divergence). Absent on a recording made before the delete card."
+        },
+        "grants": {
+          "type": "array",
+          "description": "The delete card's grants this turn: the folders, who answered (script, policy for on_unanswered first, decider, human, or bypassPermissions when no card is shown) and the turn. Absent on a recording made before the delete card.",
+          "items": {
+            "type": "object",
+            "required": ["folders", "answeredBy", "turn"],
+            "additionalProperties": false,
+            "properties": {
+              "folders": { "type": "array", "items": { "type": "string" } },
+              "answeredBy": { "type": "string", "enum": ["script", "policy", "decider", "human", "bypassPermissions"] },
+              "turn": { "type": "integer" }
+            }
+          }
+        },
         "folders": {
           "type": "array",
           "items": {

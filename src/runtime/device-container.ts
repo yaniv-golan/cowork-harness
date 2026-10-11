@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { containedRealPath } from "../boundary-paths.js";
@@ -13,6 +13,7 @@ import type { DeviceBridgeRecord, InfraErrorSource } from "../types.js";
 import { makeInfraEmitters, startHostLoopSidecar } from "./hostloop.js";
 import { HARDENING, proxyEnvVars } from "./argv.js";
 import { removeContainer } from "../egress/sidecar.js";
+import { DELETE_GRANT_TOOL } from "../decide/decider.js";
 
 /**
  * The device container behind `device_bridge: true`. Production runs device_bash in the Mac's Cowork VM as a
@@ -274,6 +275,73 @@ export function deniedDeviceFolders(mounts: ReadonlyArray<Mount>): { name: strin
 /** The model-visible names of the tools the bridge serves, advertised and pre-approved (production pre-approves
  *  them: a captured cloud task showed no permission card for a device_bash call). */
 export const DEVICE_BRIDGE_TOOLS = ["mcp__remote-devices__device_bash", "mcp__remote-devices__get_device_info"];
+/** The device tools the bridge advertises but does not pre-approve: production marks the delete card as needing a
+ *  person, so the agent asks first and the scenario's answer decides it. */
+export const DEVICE_BRIDGE_ASK_TOOLS = [DELETE_GRANT_TOOL];
+
+/** Where a run keeps its delete grants: `<outDir>/device-ctl/grants`, one folder name per line, in grant order. A
+ *  resumed turn reads the same file, so a grant lasts the session, as production's does. */
+const grantsFile = (outDir: string): string => join(resolve(outDir), "device-ctl", "grants");
+
+/** The folders granted so far in this run's session. */
+export function readDeviceGrants(outDir: string): string[] {
+  try {
+    return readFileSync(grantsFile(outDir), "utf8")
+      .split("\n")
+      .filter((l) => l !== "");
+  } catch {
+    return [];
+  }
+}
+
+/** Add folders to the grants file. Written to a temp file and renamed inside the same directory, so a reader never
+ *  sees half a file. */
+export function writeDeviceGrant(outDir: string, folders: ReadonlyArray<string>): void {
+  const all = readDeviceGrants(outDir);
+  for (const f of folders) if (!all.includes(f)) all.push(f);
+  const file = grantsFile(outDir);
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  writeFileSync(tmp, all.map((f) => `${f}\n`).join(""));
+  renameSync(tmp, file);
+}
+
+/** Who answered a delete grant. `script` is a scenario answer, `policy` the on_unanswered `first` pick, `decider` an
+ *  LLM or external decider, `human` an interactive prompt, `bypassPermissions` no card at all (that mode shows none). */
+export type DeleteGrantAnswer = "script" | "policy" | "decider" | "human" | "bypassPermissions";
+export interface DeleteGrant {
+  folders: string[];
+  answeredBy: DeleteGrantAnswer;
+  turn: number;
+}
+const ANSWERED_BY: Partial<Record<string, DeleteGrantAnswer>> = {
+  scripted: "script",
+  first: "policy",
+  llm: "decider",
+  external: "decider",
+  human: "human",
+};
+
+/** The grants a turn made, each with who answered it. The agent asks before each call, so the run's allow answers
+ *  for the delete card and the handler's calls line up in order: the n-th allow permitted the n-th call. A call the
+ *  handler refused (a bad path) grants nothing. Under bypassPermissions the agent asks nothing. */
+export function deleteGrantsOf(
+  decisions: ReadonlyArray<{ name?: string; decision?: string; by?: string }>,
+  calls: ReadonlyArray<{ folders: string[]; ok: boolean }>,
+  permissionMode: string,
+  turn: number,
+): DeleteGrant[] {
+  if (permissionMode === "bypassPermissions")
+    return calls.filter((c) => c.ok).map((c) => ({ folders: [...c.folders], answeredBy: "bypassPermissions", turn }));
+  const allows = decisions.filter((d) => d.name === DELETE_GRANT_TOOL && d.decision === "allow");
+  const out: DeleteGrant[] = [];
+  calls.forEach((c, i) => {
+    const by = allows[i]?.by;
+    const answeredBy = by === undefined ? undefined : ANSWERED_BY[by];
+    if (c.ok && answeredBy) out.push({ folders: [...c.folders], answeredBy, turn });
+  });
+  return out;
+}
 
 /**
  * Stage the device tree, start the device container, and build the `remote-devices` bundle that serves against
@@ -296,7 +364,12 @@ export function startDeviceBridge(p: {
 }): {
   containerName: string;
   bundle: { servers: string[]; handle: McpHandler };
+  /** Pre-approved device tools. */
   tools: string[];
+  /** Device tools advertised for the agent to ask about (the delete card). */
+  askTools: string[];
+  /** Every delete-card call this turn, accepted or refused, in order. */
+  grantCalls: () => ReadonlyArray<{ folders: string[]; ok: boolean }>;
   /** The folder copies, for the input host-path corpus: they are the user's input, as the agent's staged mounts are. */
   inputRoots: string[];
   infraErrors: { source: InfraErrorSource; message: string }[];
@@ -340,8 +413,11 @@ export function startDeviceBridge(p: {
     label: "device_bridge container",
   });
   let running: Promise<void> | undefined;
+  const grantCalls: Array<{ folders: string[]; ok: boolean }> = [];
   const handle = makeRemoteDevicesHandler({
-    folderNames: folders.map((f) => f.name),
+    folders: folders.map((f) => ({ name: f.name, mode: f.mode })),
+    onGrant: (granted) => writeDeviceGrant(p.outDir, granted),
+    onGrantCall: (c) => void grantCalls.push(c),
     appVersion: p.appVersion,
     exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId), () => (running ??= waitRunning(p.runner, containerName))),
     onInfraError: logExecInfra,
@@ -350,6 +426,8 @@ export function startDeviceBridge(p: {
     containerName,
     bundle: { servers: ["remote-devices"], handle },
     tools: DEVICE_BRIDGE_TOOLS,
+    askTools: DEVICE_BRIDGE_ASK_TOOLS,
+    grantCalls: () => grantCalls,
     inputRoots: folders.map((f) => join(deviceHost, "mnt", f.name)),
     infraErrors,
     markTearingDown: started.markTearingDown,
@@ -391,6 +469,8 @@ export function deviceBridgeRecord(
     permissionModeSource: "bridge-default",
     egressAllow: [],
   },
+  /** This turn's delete grants (`deleteGrantsOf`). */
+  grants: ReadonlyArray<DeleteGrant> = [],
 ): DeviceBridgeRecord {
   // `egress.unrestricted` resolves to `*`, which the run's proxy passes through: production's pass-through branch.
   const unrestricted = plan.egressAllow.includes("*");
@@ -399,14 +479,18 @@ export function deviceBridgeRecord(
   if (source !== "session" && source !== "bridge-default")
     throw new Error(`deviceBridgeRecord: permissionModeSource ${String(source)} is not a device_bridge plan's`);
   return {
-    served: ["device_bash", "get_device_info"],
-    alwaysLoad: ["device_bash"],
+    served: ["device_bash", "get_device_info", "device_request_delete_permission"],
+    alwaysLoad: ["device_bash", "device_request_delete_permission"],
     measuredOn: "2.31226.1",
     promptNoteBasis: "model-report",
     promptNote,
     permissionMode: plan.permissionMode,
     permissionModeSource: source,
     egress: unrestricted ? "unrestricted" : "allowlist",
+    // Nothing refuses a delete in the device copy yet: a delete is reported after the run, as `delete-not-refused`
+    // says. `enforced` is reserved for the release that refuses it in place.
+    deleteRefusal: "reported",
+    grants: grants.map((g) => ({ ...g, folders: [...g.folders] })),
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [
       "delete-not-refused",
@@ -416,6 +500,10 @@ export function deviceBridgeRecord(
       "device-tools-unserved",
       "shell-user",
       "device-network-shared",
+      // A declined card reaches the agent as the harness's own deny text; production's has not been captured.
+      "decline-text",
+      // A grant no card asked for: bypassPermissions shows none, as production's skip-all-approvals mode may.
+      ...(grants.some((g) => g.answeredBy === "bypassPermissions") ? ["grant-without-prompt"] : []),
     ],
   };
 }

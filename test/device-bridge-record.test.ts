@@ -23,8 +23,8 @@ const mounts: Mount[] = [
 describe("deviceBridgeRecord", () => {
   const r = deviceBridgeRecord(mounts);
   it("names the tools served, which load without ToolSearch, and the Desktop build that was measured on", () => {
-    expect(r.served).toEqual(["device_bash", "get_device_info"]);
-    expect(r.alwaysLoad).toEqual(["device_bash"]);
+    expect(r.served).toEqual(["device_bash", "get_device_info", "device_request_delete_permission"]);
+    expect(r.alwaysLoad).toEqual(["device_bash", "device_request_delete_permission"]);
     expect(r.measuredOn).toBe("2.31226.1");
   });
   it("says the prompt note rests on a model's report of production's instructions, not their text", () => {
@@ -51,6 +51,7 @@ describe("deviceBridgeRecord", () => {
       "device-tools-unserved",
       "shell-user",
       "device-network-shared",
+      "decline-text",
     ]);
   });
 });
@@ -114,7 +115,9 @@ describe("wiring: a live run carries the record", () => {
   const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
   it("both the full and the partial result build it from the launch plan", () => {
     expect(
-      s.match(/deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts, bridgeNote, plan\) : undefined/g),
+      s.match(
+        /deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts, bridgeNote, plan, bridgeGrants\(\)\) : undefined/g,
+      ),
     ).toHaveLength(2);
     expect(s).toMatch(/deviceBridge: args\.deviceBridge,/);
   });
