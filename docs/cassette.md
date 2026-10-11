@@ -889,7 +889,7 @@ possible.
   **except** when the session file was only resolved via a name-lookup fallback (its persisted source path
   was missing, so the cassette may have been relocated onto a tree that doesn't mirror the original layout
   and the match could be an unrelated same-named sibling). In that one case `verify-cassettes` downgrades the
-  mismatch to a non-failing note instead of a hard fail.
+  mismatch to a non-failing note instead of a hard fail. Under `device_bridge` the hash and the mode the agent runs in part ways: an unset `permission_mode` (the agent runs in `acceptEdits`) and an explicit `default` hash alike, so a switch between them passes `verify-cassettes` clean, while a switch from unset to an explicit `acceptEdits` reports drift although the mode did not change.
 
   There is a second downgrade, for a cassette recorded before `projects[]` was part of the shape: its hash
   covers everything *except* `projects[]`, so if the rest matches exactly, the mismatch is reported as
@@ -961,7 +961,7 @@ for the `cowork` → `hostloop`/`container` resolution.
   re-record only if you want that coverage. The reason it matters is that the agent selects part of its
   system prompt by model capability — see [fidelity-gaps.md](./fidelity-gaps.md#model-selection--the-harness-inherits-the-local-cli-default).
   The `permission_mode` form fires only on a recording made before 4.8.0 whose session sets a mode other than
-  `default`; on a later recording a changed mode is drift (exit 1).
+  `default`; on a later recording a changed mode is drift (exit 1). Under `device_bridge` the hash and the mode the agent runs in part ways: an unset `permission_mode` (the agent runs in `acceptEdits`) and an explicit `default` hash alike, so a switch between them passes `verify-cassettes` clean, while a switch from unset to an explicit `acceptEdits` reports drift although the mode did not change.
 
 **The skill-hash boundary (v6+):** by default the hash covers the **git-tracked** files of each skill/plugin
 source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-junk** (`.DS_Store` /

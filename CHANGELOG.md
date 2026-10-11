@@ -117,7 +117,8 @@ All notable changes to this project are documented here. The format is based on
 - **`verify-cassettes` notices a changed `permission_mode`.** The session fingerprint now covers it when set to
   anything but `default`, so a session that says `default` or nothing hashes as before. A recording made with 4.8.0
   or later reports a changed mode as drift (exit 1). One change is not seen: under `device_bridge`, unset
-  (`acceptEdits`) and an explicit `default` hash alike. A recording made before 4.8.0 on a non-default mode gets a
+  (`acceptEdits`) and an explicit `default` hash alike, and unset to an explicit `acceptEdits` reports drift
+  although the mode did not change. A recording made before 4.8.0 on a non-default mode gets a
   non-failing note, not drift; re-record it to gain the coverage.
 - **`RunResult.deviceBridge`** names what a bridge run served and its differences from production, by id
   (`delete-not-refused`, `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`,

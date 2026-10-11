@@ -276,7 +276,7 @@ harness serves that tool from a second container:
 - The device container reaches the network through the run's egress proxy, so the session's allowlist applies.
   Production's device shell can pass all traffic through; `egress.unrestricted: true` in the session matches that.
 - With no `permission_mode` in the session, the agent runs in `acceptEdits`, the mode a production cloud task reports
-  under the composer's Manual choice. A `permission_mode` you set wins, `default` included.
+  under the composer's Manual choice. A `permission_mode` you set wins, `default` included. Under `device_bridge` the hash and the mode the agent runs in part ways: an unset `permission_mode` (the agent runs in `acceptEdits`) and an explicit `default` hash alike, so a switch between them passes `verify-cassettes` clean, while a switch from unset to an explicit `acceptEdits` reports drift although the mode did not change.
 - The tools are pre-approved. Assert on them with `tool_called` / `tool_not_called` (both forms), for example
   `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`.
 - File assertions read the agent's container, which has no folder, so `file_exists` and `input_unmodified` on a
@@ -1150,7 +1150,7 @@ corresponds to the scenario, this path is safe by construction:
   does not move the **replay** verdict — plain, `--strict` or `--assert-from`. The notice says so; re-record
   if the session changed. It *is* fingerprinted, and `verify-cassettes` checks that hash and reports a
   change as staleness (exit 1): `sessionFingerprint` covers the session's pinned `model:` and connected
-  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects`, `agent_env`, `answer_channel` and `agent_env.artifacts_root` when set, and `permission_mode` when not `default`. A model
+  `folders`/`plugins`/`skills`/`mcp`/`egress`/`web_fetch`, plus `projects`, `agent_env`, `answer_channel` and `agent_env.artifacts_root` when set, and `permission_mode` when not `default`. Under `device_bridge` the hash and the mode the agent runs in part ways: an unset `permission_mode` (the agent runs in `acceptEdits`) and an explicit `default` hash alike, so a switch between them passes `verify-cassettes` clean, while a switch from unset to an explicit `acceptEdits` reports drift although the mode did not change. A model
   supplied by `--model` or `COWORK_HARNESS_MODEL` is not in it (`environment.model` records what ran), and a
   cassette recorded before `model` or `permission_mode` joined the hash gets a note, not a failure — re-record to gain that
   coverage. (Skill *content* under the session IS guarded — next bullet.)
