@@ -84,8 +84,10 @@ All notable changes to this project are documented here. The format is based on
 - **A cloud-lane probe kit for maintainers (`probes/cloud/`), not shipped in the npm package.** A throwaway plugin
   whose hooks record the SHAPE of each tool call a real cloud task makes (tool names, input field names, result
   shape, permission mode), with names outside the product's vocabulary fingerprinted and every length bucketed, and
-  `verify.py`, which checks a downloaded capture's integrity, redaction and that it can answer its probe. No harness
-  behaviour changes.
+  `verify.py`, which checks a downloaded capture's integrity, redaction and that it can answer its probe. A failed tool
+  call is recorded too (`PostToolUseFailure`), as its error's type, size class, fingerprint and a leading exit code
+  only, never its text; `verify.py --probe p0f` checks a capture holds a `device_bash` failure. The verifier bounds
+  every number and accepts a shape key only from a fixed schema list or as a fingerprint. No harness behaviour changes.
 - **`device_bridge: true` serves the remote lane's shell on the user's computer.** On `lane: remote` with
   `fidelity: container`, the harness serves `mcp__remote-devices__device_bash` and `get_device_info` from a second
   container that holds copies of the connected folders at `$HOME/mnt/<folder-name>`, and the agent's own container
