@@ -72,3 +72,15 @@ describe("the record's egress follows the session", () => {
     expect(r.divergences).not.toContain("egress-allowlist");
   });
 });
+
+describe("the record refuses a mode source a bridge run cannot have", () => {
+  it.each(["default", undefined])("source %s throws", (source) => {
+    expect(() =>
+      deviceBridgeRecord([], "included", {
+        permissionMode: "default",
+        permissionModeSource: source as "default" | undefined,
+        egressAllow: [],
+      }),
+    ).toThrow(/permissionModeSource/);
+  });
+});

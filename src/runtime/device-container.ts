@@ -394,6 +394,10 @@ export function deviceBridgeRecord(
 ): DeviceBridgeRecord {
   // `egress.unrestricted` resolves to `*`, which the run's proxy passes through: production's pass-through branch.
   const unrestricted = plan.egressAllow.includes("*");
+  // A bridge plan resolves its mode from the session or from the bridge default; anything else is a wiring bug.
+  const source = plan.permissionModeSource;
+  if (source !== "session" && source !== "bridge-default")
+    throw new Error(`deviceBridgeRecord: permissionModeSource ${String(source)} is not a device_bridge plan's`);
   return {
     served: ["device_bash", "get_device_info"],
     alwaysLoad: ["device_bash"],
@@ -401,7 +405,7 @@ export function deviceBridgeRecord(
     promptNoteBasis: "model-report",
     promptNote,
     permissionMode: plan.permissionMode,
-    permissionModeSource: plan.permissionModeSource === "session" ? "session" : "bridge-default",
+    permissionModeSource: source,
     egress: unrestricted ? "unrestricted" : "allowlist",
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [
