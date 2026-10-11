@@ -2,7 +2,7 @@
 // the report (live and `eval report`) together with runs.jsonl.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Assertion } from "../types.js";
+import type { Assertion, ScenarioMetric } from "../types.js";
 import type { Correction } from "./stats.js";
 import type { AgentPin, JudgePins } from "./pins.js";
 
@@ -36,6 +36,9 @@ export interface ManifestScenario {
   heldOut: boolean;
   /** The frozen assertion list the rows come from. */
   assertions: Assertion[];
+  /** The frozen metric declarations the metric rows come from (`better` included), verbatim. Absent in a manifest
+   *  written before metrics were graded: the report then says metrics were not recorded. */
+  metrics?: ScenarioMetric[];
 }
 
 export interface EvalManifest {
@@ -56,6 +59,10 @@ export interface EvalManifest {
     concurrency: number;
     includeUntracked: boolean;
     allowIdenticalArms: boolean;
+    /** The metric family's correction, fixed before spend: Holm at alpha split evenly across the section's
+     *  families by default (and under an explicit `--correction holm`); BH at q, unsplit, under `--correction bh`.
+     *  Absent in a manifest written before metrics were graded. */
+    metricCorrection?: { rule: Correction; split: boolean };
   };
   pins: { agent: AgentPin[]; judge: JudgePins };
   /** The skill whose invocation each rep records, or null when there is no single skill to check. */

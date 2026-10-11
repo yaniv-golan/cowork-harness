@@ -159,6 +159,16 @@ export function buildRunsLine(args: {
             ...(r.cost?.usd !== undefined ? { cost: { usd: r.cost.usd } } : {}),
             ...(r.usage?.turns !== undefined ? { usage: { turns: r.usage.turns } } : {}),
             ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+            // Each declared metric's value or unavailable reason, verbatim: the metric rows are graded from these.
+            ...(r.metrics !== undefined
+              ? {
+                  metrics: r.metrics.map((x) => ({
+                    id: x.id,
+                    ...(x.value !== undefined ? { value: x.value } : {}),
+                    ...(x.unavailable !== undefined ? { unavailable: x.unavailable } : {}),
+                  })),
+                }
+              : {}),
           },
           ...(r.errorSource !== undefined ? { errorSource: r.errorSource } : {}),
           ...(r.resultErrorKind !== undefined ? { resultErrorKind: r.resultErrorKind } : {}),
