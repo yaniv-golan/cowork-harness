@@ -248,6 +248,14 @@ degrade the advice. It is real work to calibrate; these steps are the traps that
    tune against; a scenario you shaped the skill to is weak evidence. Details, labels and exit codes:
    [docs/eval.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/eval.md).
 
+   **A number the skill writes** (a leak count, a checklist score) can be compared too: declare it under the
+   scenario's `metrics:` and `eval` adds a metric row with an exact rank test. At 5 reps a metric row is a real
+   signal only at about 2.4 SD of separation between the arms, so run an A/A first (`--allow-identical-arms`)
+   and read the row's `sd` and `mds`: if `MDS possible` in the metric's units is larger than the change you
+   hope for, raise `--reps` or make the metric discriminate. Count metrics for a targeted defect fix are the
+   good case (a ×3.3 rate change is `possible` at 5 reps). A rep whose scorer or a cap left the number out is
+   excluded and guarded, never ranked worst: read the per-arm count of excluded values before trusting the row.
+
 **Lane note:** `semantic_matches` is **live-only** (the judge is a live model call), so these scenarios
 run on the `run` lane, never token-free `replay` — the linter's "all assertions live-only" warning is
 expected and correct here. It is a WARN (`replay-noop`), so a scenario whose only assertion is

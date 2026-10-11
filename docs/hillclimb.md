@@ -337,6 +337,8 @@ this is inferred, not verified. Put sub-agent settings in `agents/*.md` instead.
 A scenario can declare numbers it measures from an artifact the run writes ([scenario.md](./scenario.md), the
 `metrics:` key). In a flow, each one becomes a `float` grade key `<id>`, plus a binary `<id>_present`.
 `state-template` declares each float with its direction (`better`) and, when bounded, its `scale` and `min`.
+Hillclimb runs no statistical test on them; for a tested before/after comparison of a metric, use
+[`eval`](./eval.md#metric-rows).
 
 - **A number is a secondary climb target, never the headline.** The loop's guide makes the first binary metric
   the report's headline, and `state-template` declares `pass` first. You can still make a number the loop's goal:

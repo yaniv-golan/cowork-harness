@@ -62,7 +62,9 @@ is never refused for real on anything it could have checked. One refusal is the 
 must be outside any git work tree, for the same reason the eval dir must (the snapshots would hash as empty),
 so a TMPDIR inside one, or one git cannot answer for, exits 3 — set TMPDIR to a directory outside any git
 work tree. The plan is the dry run's
-output: `--quiet` does not mute the plan, only the per-arm progress lines before it.
+output: `--quiet` does not mute the plan, only the per-arm progress lines before it. A section that declares
+metrics also gets a line for its metric family (its size, rule and `confirmed` reach; `plan.sections.*.metricFamily`);
+metric rows are not planned, since no rate history describes them.
 
 ```
 cowork-harness eval evals/ --arm before=./skill --arm after=../skill-edit --dry-run --target-effect 30pp
@@ -156,9 +158,9 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is
   not a win-rate distribution, and never compares arm A's output with arm B's directly. A reference that cannot be
   read counts as a refusal, never a fail, and a missing one refuses the whole eval before any run.
 - **Units.** Each rep is one run, graded once ("runs × grades").
-- **Pass rates only.** Every row is a pass or a fail per rep, and `eval` compares how often each arm passes. A
-  scenario's `metrics:` are not graded or compared here; [`hillclimb`](./hillclimb.md#numbers-a-scenario-declares-metrics)
-  is the loop that records and compares them.
+- **Metrics.** Each number a scenario declares under `metrics:` is a *metric row*, compared between the arms with an
+  exact rank test in its own correction family; see [Metric rows](#metric-rows). Every other row is a pass or a fail
+  per rep, and `eval` compares how often each arm passes.
 
 ## Flags
 
@@ -166,7 +168,9 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is
   (which accepts 2 or 3; rows whose exact test cannot reach `--alpha` are then labelled `underpowered`).
 - `--concurrency <n>` — jobs in flight, default 2, 1 to 8. It must be 1 with `--decider-cmd` or
   `--decider-dir`, whose channel is shared by every job.
-- `--alpha`, `--correction bh|holm` — see the labels below. `bh` uses a fixed q = 0.10.
+- `--alpha`, `--correction bh|holm` — see the labels below. `bh` uses a fixed q = 0.10. Pass rows default to `bh`.
+  Metric rows default to Holm at `--alpha` split across the section's families (0.025 beside pass rows); an
+  explicit `--correction bh` grades them with BH at q = 0.10, unsplit ([Metric rows](#metric-rows)).
 - `--holdout <scenario.yaml>` — repeatable; see [Picking scenarios](#picking-scenarios).
 - `--skill <name>` — the skill whose invocation each rep records. A plugin with one skill (or a root
   `SKILL.md`) needs none; for a plugin with several skills, name one. Without a single skill, the
@@ -215,6 +219,8 @@ The header states what every number depends on:
   for example `errored_infra (auth) 5/5` — and a hint that follows the rule (sign-in, quota, start-up,
   network, decider, or read the run dirs). Whether that scenario's rows were compared is stated on the
   line (see [below](#when-every-rep-errored)); `report.json` lists these under `summary.erroredArms`;
+- **per arm, the metric values** ranked worst (by cause) and, loudly, those excluded (by reason) or that broke the
+  comparison (`report.json`: `arms[].metricStates`; see [Metric rows](#metric-rows));
 - per-arm medians of cost, judge cost, turns and duration (descriptive, no test);
 - "no control arm: prior-answerable claims are not flagged".
 
@@ -267,6 +273,96 @@ The rows are checked in that order, and the first that matches decides. Two cons
   successful run whose model list is `<synthetic>`-only (a prompt that starts with `/plugin:skill`) is not
   affected by this rule.
 
+## Metric rows
+
+A scenario's `metrics:` ([Numeric metrics](./scenario.md)) each become one row per scenario: the same id in two
+scenarios gives two rows. The row compares the two arms' per-rep numbers.
+
+**The test** is the exact two-sided Wilcoxon–Mann–Whitney rank-sum test. It is exact with ties (it conditions on
+them), it needs no assumption about the metric's distribution, and a monotone rescale (a log, a square) changes
+nothing, so a skewed count or cost costs nothing. Its direction is read through the metric's `better`: a row is
+`worse` or `better`, never "drop" or "rise", so a cost metric that fell reads as `better`. The row also carries the
+raw `numericDirection` (`up` / `down`). Beside it: each arm's median and n, the Hodges–Lehmann shift (the median of
+every B − A difference) with its distribution-free interval and that interval's **achieved coverage** (96.8% at
+5 v 5, 90.0% at 3 v 3 — never assume 95%), each arm's SD, the pooled SD with its 95% interval, and the minimum
+detectable shift (MDS).
+
+**What it can detect.** The floor (the smallest p any outcome can give) is 0.10 at 3 v 3 (so every metric row is
+`underpowered` at `--reps 3`), 0.0286 at 4 v 4, 0.0079 at 5 v 5 and 0.0022 at 6 v 6. At unequal arms it is higher
+than a pass row's (0.0571 at 3 v 4, 0.0159 at 4 v 5): a metric row is never easier to flag than a pass row. At
+`--reps 4` one lost rep (3 v 4) leaves a metric row `underpowered` while the same scenario's pass rows still test, so
+use `--reps 5` for metrics. Ties raise the floor; a metric whose every value is equal is `underpowered` ("every
+value tied"), never `no detectable change`. **At 5 reps a metric row reliably (80% power) flags only a shift of about
+2.4 SD** — near-complete separation of the two arms; 6 reps bring it to 2.0 SD. That is the price of an exact test
+at n = 5: any test that claims more there does it by giving up its false-positive rate. The row's `mds` field turns
+it into the metric's own units (`2.4 SD ≈ 7.1 [4.8–13.6]`, the range from the SD's own interval); the SD figures are
+estimates from an offline table (n = 4 to 6 only).
+
+**A rep whose number is missing** falls into one of three classes:
+
+| Rep / metric state | Counted as |
+|---|---|
+| a measured value | ranked by value |
+| the agent failed (`errored_agent`: timeout, max turns, crash, an unanswered gate) | **worst rank**, whatever the metric |
+| `missing_artifact`, `missing_path`, `not_json`, `not_a_number`, `pre_run` (the skill did not produce the number) | **worst rank** |
+| `size`, `readonly`, `remote`, or no entry for the id (`metric_unrecorded`) — the scorer, the capture or a cap, not the skill | **excluded**, counted per arm, and guarded (below) |
+| `pruned`, `no_manifest` (a harness defect on a live eval) | the row is **`not compared`**: out of the family, never gates, and the eval exits 1 |
+| infrastructure, drift, pin and judge-prompt mismatches | excluded, as on every row |
+
+A worst-ranked rep ranks strictly below every measured value, including a value at a bounded metric's own worst
+bound, and ties only with other worst-ranked reps: "did not produce the number" is not "produced the worst number".
+Like the 0 a failed rep scores on pass rows (intention to treat), this keeps the test exact, and it makes a metric row
+a sharp crash detector: with the metric unchanged and B failing in 2 or 3 of its 5 reps, the row can flag `worse`
+where no pass row can (P(`possible worse`) = 7.1% at 2 failed reps, 28.6% at 3; a pass row at 5/5 vs 3/5 or 2/5 has
+p 0.44 / 0.17). Every `worse` row says how many of each arm's reps were worst-ranked and why. The mirror blind spot:
+a flaky baseline (A failing) pulls a real B regression toward `no detectable change`, as it does for a pass row.
+
+**No verdict rests on an excluded rep.** An excluded rep's number is unknown, so the row's p is the larger of the
+p over the remaining reps and the p of an *adversarial completion* that places the excluded reps where they would
+hurt the observed direction most. A scorer failure can therefore neither manufacture nor hide a direction, and never
+fires `--fail-on`. When the remaining reps alone reach `--alpha` but the guarded p does not, the row is **`unresolved`**
+(it shows the unguarded p, never gates, and stays in the family). When the candidate's ≥ 2 extra excluded reps took a
+row below the rep threshold, it is **`insufficient_unmeasured`**, a worse-signal `--fail-on possible` gates on — the
+analogue of [`insufficient_refusals`](#when-the-candidate-refuses-more). A candidate whose scorer fails exactly on its
+bad runs still hides a regression behind `unresolved`; the loud per-arm count of excluded values is the signal.
+
+**The correction.** Each section has up to two families: its pass rows, graded exactly as before (`bh` at q = 0.10
+by default, or `holm` at `--alpha`, never split), and its metric rows. By default the metric family is Holm at
+`--alpha` divided by the number of families with a row in the section: 0.025 beside pass rows, 0.05 in a
+metrics-only section. Under an explicit `--correction bh` it is BH at q = 0.10, unsplit; under an explicit `holm`,
+Holm split as by default. `confirmed` also needs p ≤ `--alpha`. At 5 reps a metric row can be `confirmed` beside pass
+rows only when the section declares 3 metrics or fewer; 4 to 11 need `--reps 6`, and `--reps 4` never confirms a
+metric beside pass rows. Every report states, per section and family, the correction, its row count and the chance
+an A/A eval would `confirm` at least one of its rows: exact for a Holm metric family (assuming no ties; ties only
+lower it), at the observed rates for a Holm pass family, and the bound alone under BH. At 5 v 5, three metric rows
+beside pass rows: 2.4%. A line also says when `confirmed` adds no evidence over `possible` in a family at these reps.
+
+| Label | Meaning |
+|---|---|
+| `confirmed worse` / `confirmed better` | significant after the metric family's correction and at `--alpha` |
+| `possible worse` / `possible better` | p ≤ `--alpha`, not confirmed |
+| `no detectable change`, `underpowered`, `insufficient` | as for pass rows (the threshold counts measured and worst-ranked reps, not excluded ones) |
+| `unresolved` | only the excluded reps' absence would make it significant; never gates |
+| `insufficient_unmeasured` | the candidate's excess excluded reps took it below the threshold; `--fail-on possible` gates on it |
+| `not compared` | a broken metric state on some rep; exit 1 |
+
+**Gating.** `--fail-on possible` fails on `possible worse`, `confirmed worse` and `insufficient_unmeasured`;
+`--fail-on confirmed` on `confirmed worse` only. A metric that got worse is the same signal as a pass-rate drop.
+The gate acts on `worse` only, so its false-fail rate per null metric row is half the two-sided figure: 1.59% at
+`--fail-on possible` (4.7% for three rows), and 0.79% at `--fail-on confirmed` for one metric beside pass rows.
+`--fail-on confirmed` is refused before any run only when no family of any section can reach `confirmed`, and when
+some family cannot, the eval says before spending which families the gate can fire on
+(`report.json` `summary.confirmReach`).
+
+**When a metric row is worth it.** Count metrics for a targeted defect fix (leak counts, warning codes, one kind
+of red-team finding): a ×3.3 rate change is detectable (`possible`) at 5 reps, and ×4.1 confirms. Score-rule tuning
+replays for free (`replay`, `regrade`); a metric at its ceiling has no headroom. For anything else, run an A/A
+first and read the rows' `sd` and `mds`: if `MDS possible` in units is larger than the change you hope for, raise
+`--reps` or make the metric discriminate.
+
+An eval dir written before metrics were graded has no frozen declarations: its report says metrics were not recorded,
+grades none, and its exit code is unchanged. Re-run the eval to grade them.
+
 ## What it holds fixed (refused before any run, exit 2)
 
 - **The agent model** (`--model`, else the session's `model:`, else `COWORK_HARNESS_MODEL`) must be a
@@ -304,10 +400,11 @@ A refused eval leaves nothing in its eval dir.
 - `0` — completed. Without `--fail-on` no drop fails the eval; read the report. (An all-`insufficient`
   result, a scenario that compared nothing, or a judge disagreement still exits 1 — see below.)
 - `1` — with `--fail-on possible`, a `possible` or `confirmed` drop (the semantic roll-up rows count, the
-  classification rows do not) or an `insufficient_refusals` row ([below](#when-the-candidate-refuses-more));
-  with `--fail-on confirmed`, a `confirmed` drop only. Also, with or without it: every row `insufficient`
-  (`insufficient_refusals` rows do not count toward this), a scenario that compared nothing (below), or the
-  judge model differed across reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
+  classification rows do not), an `insufficient_refusals` row ([below](#when-the-candidate-refuses-more)), or a
+  metric row that is `possible worse`, `confirmed worse` or `insufficient_unmeasured`; with `--fail-on confirmed`, a
+  `confirmed` drop or a `confirmed worse` metric only. Also, with or without it: every row `insufficient`, metric rows
+  included (`insufficient_refusals` / `insufficient_unmeasured` rows do not count toward this), a scenario that
+  compared nothing (below), a metric row `not compared`, or the judge model differed across reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
 - `2` — usage, or any refusal before the first run (the `--max-budget-usd` refusal included).
 - `3` — an arm snapshot could not be copied, or failed its staging preflight.
 
@@ -385,9 +482,11 @@ local lane.
 ## Files, and `prune`
 
 `<eval-dir>/manifest.json` (everything fixed before the first run: arms, snapshot signatures, scenario and
-session hashes, pins, settings), `arms/`, `runs.jsonl` (one line per finished job, with every field the
-report reads, and a `semantic_pairwise` grade's per-order outcomes under `order: both`, for reading position bias), `report.json` (`schemaVersion: 0`) and `report.md` (host paths outside `$HOME` redacted,
-the count in the header).
+session hashes, each scenario's assertions and metric declarations, pins, settings including the metric family's
+correction), `arms/`, `runs.jsonl` (one line per finished job, with every field the report reads — each rep's
+metric values included — and a `semantic_pairwise` grade's per-order outcomes under `order: both`, for reading position bias), `report.json` (`schemaVersion: 0`; each section's `metricRows`, `metricFamily` and `families`, and
+`summary.metricLabels`, `metricsRecorded`, `families`, `confirmReach` and `notCompared`) and `report.md` (host paths
+outside `$HOME` redacted, the count in the header).
 
 The runs themselves are ordinary run dirs under the runs root, labelled `eval:<eval-id>:<arm>`, so
 `prune`'s `--keep-last` applies to them: at the defaults an eval leaves 10 runs per scenario and a bare
