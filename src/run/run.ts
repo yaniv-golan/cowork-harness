@@ -16,6 +16,8 @@ import {
   UnansweredError,
   DeciderTimeoutError,
   PERMISSIVE_AUTOALLOW_RATIONALE,
+  DELETE_GRANT_OPTIONS,
+  DELETE_GRANT_TOOL,
   type Decider,
   type Decision,
   type RunContext,
@@ -1651,6 +1653,9 @@ export class Run {
     // the shared webfetch:<domain> decision, recorded ONCE (skipRecord suppresses the record for an
     // automatic allow — a provenance hit or an already-approved domain — matching the legacy
     // "records nothing on a repeat fetch" contract).
+    // The device bridge's delete card offers two buttons. They ride off-wire, like web_fetch's grant scopes, so a
+    // decider picks one; the agent receives a plain allow or deny.
+    if (req.kind === "permission" && req.tool === DELETE_GRANT_TOOL && !req.options) req = { ...req, options: [...DELETE_GRANT_OPTIONS] };
     let decided: Decision | typeof ABSTAIN;
     let skipRecord = false;
     if (this.webFetchGate && req.kind === "permission" && req.tool === WORKSPACE_WEB_FETCH_TOOL) {

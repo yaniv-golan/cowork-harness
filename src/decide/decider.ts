@@ -295,6 +295,9 @@ export class PermissionDefaultDecider implements Decider {
     // to the terminal decider (scripted/prompt/llm; fail-closed otherwise) rather than greening it here. The
     // 3P-allowlist / scheduled-task tiers suppress that prompt and proceed, but the modeled baseline is 1p.
     if (req.tool.startsWith("webfetch:")) return ABSTAIN;
+    // The device bridge's delete card is a person's decision, never parity's: an auto-allow here would invent the
+    // user's Allow (and slip past permissiveAutoAllow, which records only what reaches the off-registry branch).
+    if (req.tool === DELETE_GRANT_TOOL) return ABSTAIN;
     if (DEFAULT_ALLOW.has(req.tool))
       return {
         response: { kind: "permission", behavior: "allow", updatedInput: req.input },
@@ -374,6 +377,13 @@ export class FailDecider implements Decider {
         "provide a decider or use --on-unanswered prompt|first",
       );
     }
+    // The delete card must end the run when nothing answers it. An ABSTAIN here would fall to the run's fail-closed
+    // deny, which no verdict reads, so an unscripted card would grade green as a silent Decline.
+    if (req.kind === "permission" && req.tool === DELETE_GRANT_TOOL)
+      throw new UnansweredError(
+        `unscripted delete permission request (on_unanswered=fail): the agent asked to delete files in ${JSON.stringify(req.input.paths ?? [])}`,
+        `script it in the scenario's answers: - when_tool: ${DELETE_GRANT_TOOL}  ->  decide: allow | deny`,
+      );
     return ABSTAIN;
   }
 }
@@ -399,6 +409,16 @@ export class FirstOptionDecider implements Decider {
     if (req.kind === "dialog")
       return { response: { kind: "dialog", behavior: "cancelled" }, by: "first", rationale: "auto-cancel (first)" };
     if (req.kind === "elicit") return { response: { kind: "elicit", action: "decline" }, by: "first", rationale: "auto-decline (first)" };
+    // The delete card's first button is Decline. Every other permission still abstains: `first` picks among offered
+    // options, and an ordinary permission offers none.
+    if (req.kind === "permission" && req.tool === DELETE_GRANT_TOOL) {
+      warn(`::warning:: unscripted delete permission request → picked the first option "Decline" (--on-unanswered first)\n`);
+      return {
+        response: { kind: "permission", behavior: "deny", message: "The user declined." },
+        by: "first",
+        rationale: "first option: Decline (on_unanswered=first)",
+      };
+    }
     return ABSTAIN;
   }
 }
@@ -535,6 +555,26 @@ export function parseIndexReply(raw: string, n: number): number | null {
   return v >= 1 && v <= n ? v : null;
 }
 
+/** The device bridge's delete card: the agent asks the user to allow deletes in connected folders. A person must
+ *  answer it (production registers it as requiring user interaction), so no default ever answers it: permission parity
+ *  abstains, `fail` ends the run as an unanswered gate, and `first` picks Decline, the card's first button. */
+export const DELETE_GRANT_TOOL = "mcp__remote-devices__device_request_delete_permission";
+/** The card's two buttons, in production's order. Off-wire, like web_fetch's grant scopes: the run attaches them so a
+ *  decider picks one; the agent receives a plain allow or deny. */
+export const DELETE_GRANT_OPTIONS: ReadonlyArray<{ label: string }> = [{ label: "Decline" }, { label: "Allow for this session" }];
+
+/** Map a delete-card answer (a label, a shorthand, or a 1-based index) → {behavior}. There is no grant scope to
+ *  pick: production's only allow lasts the session. Throws on anything else, a web_fetch scope included. */
+export function coerceDeleteGrant(answer: string): { behavior: "allow" | "deny"; grant?: undefined } {
+  const a = answer.trim().toLowerCase();
+  if (a === "allow for this session" || a === "allow" || a === "2") return { behavior: "allow" };
+  if (a === "decline" || a === "deny" || a === "1") return { behavior: "deny" };
+  throw new UnansweredError(
+    `delete-card answer "${answer.trim().slice(0, 60)}" is not one of its options`,
+    "expected one of: Decline | Allow for this session",
+  );
+}
+
 /** Map a web_fetch approval answer (a grant-scope label, shorthand, or 1-based index) → {behavior, grant}.
  *  The ONLY label→grant map (off-wire, web_fetch-local). Throws loud on an unknown answer — NEVER a silent
  *  default-allow (the ethos's no-false-green rule). "domain" = "Allow all for website" (per-run host grant). */
@@ -614,13 +654,13 @@ export class LlmDecider implements Decider {
           `LLM decider answer "${raw.trim().slice(0, 60)}" is not one of the options for "${req.tool}"`,
           `options were: ${labels.join(" | ")}`,
         );
-      const { behavior, grant } = coerceWebFetchGrant(pick);
+      const { behavior, grant } = req.tool === DELETE_GRANT_TOOL ? coerceDeleteGrant(pick) : coerceWebFetchGrant(pick);
       process.stderr.write(`[llm-decider] ${req.tool} → "${pick}"${this.intent ? ` (intent: ${this.intent})` : ""}\n`);
       return {
         response: {
           kind: "permission",
           behavior,
-          ...(behavior === "allow" ? { updatedInput: req.input, grant } : { message: "denied (llm)" }),
+          ...(behavior === "allow" ? { updatedInput: req.input, ...(grant ? { grant } : {}) } : { message: "denied (llm)" }),
         },
         by: "llm",
         rationale: this.intent ?? "LLM judgment",
@@ -881,12 +921,13 @@ export class PromptDecider implements Decider {
         if (!coercedPerm.matched)
           process.stderr.write(`Unrecognized input. Please enter a number (1–${labels.length}) or one of: ${labels.join(", ")}\n`);
       } while (!coercedPerm.matched);
-      const { behavior, grant } = coerceWebFetchGrant(coercedPerm.value);
+      const { behavior, grant } =
+        req.tool === DELETE_GRANT_TOOL ? coerceDeleteGrant(coercedPerm.value) : coerceWebFetchGrant(coercedPerm.value);
       return {
         response: {
           kind: "permission",
           behavior,
-          ...(behavior === "allow" ? { updatedInput: req.input, grant } : { message: "denied (human)" }),
+          ...(behavior === "allow" ? { updatedInput: req.input, ...(grant ? { grant } : {}) } : { message: "denied (human)" }),
         },
         by: "human",
       };
@@ -1061,16 +1102,25 @@ export class ExternalDecider implements Decider {
       return { ...base, questions: req.questions, reply_with: `{"id":"${req.id}","answers":{${pairs}}}` };
     }
     if (req.kind === "permission")
-      // web_fetch approval (options present): advertise the grant options so the helper can choose a scope.
-      return req.options
+      // web_fetch approval (options present): advertise the grant options so the helper can choose a scope. The delete
+      // card offers its two buttons and takes a plain behavior.
+      return req.tool === DELETE_GRANT_TOOL
         ? {
             ...base,
             tool: req.tool,
             input: req.input,
-            options: req.options.map((o) => o.label),
-            reply_with: `{"id":"${req.id}","behavior":"allow|deny","grant":"once|domain"}`,
+            options: (req.options ?? DELETE_GRANT_OPTIONS).map((o) => o.label),
+            reply_with: `{"id":"${req.id}","behavior":"allow|deny"}`,
           }
-        : { ...base, tool: req.tool, input: req.input, reply_with: `{"id":"${req.id}","behavior":"allow|deny"}` };
+        : req.options
+          ? {
+              ...base,
+              tool: req.tool,
+              input: req.input,
+              options: req.options.map((o) => o.label),
+              reply_with: `{"id":"${req.id}","behavior":"allow|deny","grant":"once|domain"}`,
+            }
+          : { ...base, tool: req.tool, input: req.input, reply_with: `{"id":"${req.id}","behavior":"allow|deny"}` };
     if (req.kind === "dialog")
       return { ...base, dialogKind: req.dialogKind, payload: req.payload, reply_with: `{"id":"${req.id}","behavior":"ok|cancelled"}` };
     return {
@@ -1211,6 +1261,18 @@ export class ExternalDecider implements Decider {
           `valid behaviors: "allow", "deny"`,
         );
       const allow = parsed.behavior === "allow";
+      // The delete card has no grant scope: production's only allow lasts the session. A scope in the reply is a
+      // helper answering the wrong card, so it fails loud rather than being dropped.
+      if (req.tool === DELETE_GRANT_TOOL) {
+        if (parsed.grant != null)
+          throw new UnansweredError(
+            `external decider sent a grant scope for the delete card`,
+            `reply {"id":"${req.id}","behavior":"allow|deny"}`,
+          );
+        return allow
+          ? { kind: "permission", behavior: "allow", updatedInput: req.input }
+          : { kind: "permission", behavior: "deny", message: parsed.message ?? "denied (external)" };
+      }
       // web_fetch approval (options present): carry the grant scope. Helper may send {behavior, grant?};
       // an allow without an explicit grant defaults to "once" (no host-wide approval).
       if (req.options && allow) {
