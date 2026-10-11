@@ -6739,8 +6739,17 @@ export function scenarioContentDrift(
  *  NOT evidence the tree moved. Omitting `sourceVia` entirely (the unit-level tests below, and any
  *  future caller that hasn't computed it) also keeps the pre-F51 behavior: trust the resolution, hard-fail
  *  on a genuine mismatch. */
+/** Whether a recording's harness version is below `major.minor`. No version (a recording made before 1.11.0, when
+ *  the field was added) or an unreadable one counts as below. */
+function recordedBefore(harnessVersion: string | undefined, [major, minor]: [number, number]): boolean {
+  const m = /^(\d+)\.(\d+)\./.exec(harnessVersion ?? "");
+  if (!m) return true;
+  const [ma, mi] = [Number(m[1]), Number(m[2])];
+  return ma < major || (ma === major && mi < minor);
+}
+
 export function sessionFingerprintDrift(
-  cassette: Pick<Cassette, "sessionFingerprint" | "scenario">,
+  cassette: Pick<Cassette, "sessionFingerprint" | "scenario" | "environment">,
   cassetteDir: string | undefined,
   sourceVia?: "persisted" | "name-lookup" | "none",
   sessionOverride?: string,
@@ -6777,12 +6786,19 @@ export function sessionFingerprintDrift(
   // whose silent drift this coverage was added to catch. Both flags are tried, so a recording that
   // predates BOTH fields still lands here instead of reading as a genuine mismatch.
   // `permission_mode` joined after `model`, so a recording that predates it may predate `model` and `projects` too.
+  // Its probes run only for a recording made before 4.8.0: a later one on an unset or `default` mode hashes without
+  // the key as well, and a mode set since then is a real change, not missing coverage.
+  const prePermissionCoverage = recordedBefore(cassette.environment?.harnessVersion, [4, 8]);
   for (const probe of [
     { omitModel: true },
     { omitProjects: true, omitModel: true },
-    { omitPermissionMode: true },
-    { omitPermissionMode: true, omitModel: true },
-    { omitPermissionMode: true, omitProjects: true, omitModel: true },
+    ...(prePermissionCoverage
+      ? ([
+          { omitPermissionMode: true },
+          { omitPermissionMode: true, omitModel: true },
+          { omitPermissionMode: true, omitProjects: true, omitModel: true },
+        ] as const)
+      : []),
   ] as const) {
     const preModel = buildSessionFingerprint(cassette.scenario.session, cassetteDir, sessionOverride, probe);
     if (preModel !== undefined && preModel === cassette.sessionFingerprint) {

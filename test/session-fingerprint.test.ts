@@ -419,3 +419,24 @@ describe("buildSessionFingerprint — permission_mode", () => {
     expect(r.drifted).toBe(true);
   });
 });
+
+// The pre-coverage probe cannot tell a recording made before the coverage from one made after it on a `default`
+// session: both hash without the key. The recorder's version can, so a 4.8.0+ recording never takes that excuse.
+describe("sessionFingerprintDrift — permission_mode set after a 4.8.0 recording", () => {
+  const run = (harnessVersion: string | undefined) => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-sfp-pmv-"));
+    writeFileSync(join(d, "s.yaml"), "model: m\n");
+    const recorded = buildSessionFingerprint("s.yaml", d)!;
+    writeFileSync(join(d, "s.yaml"), "model: m\npermission_mode: acceptEdits\n");
+    const cassette = {
+      sessionFingerprint: recorded,
+      scenario: { session: "s.yaml" } as Cassette["scenario"],
+      ...(harnessVersion ? { environment: { location: "local" as const, harnessVersion } } : {}),
+    };
+    return sessionFingerprintDrift(cassette, d);
+  };
+  it("a 4.8.0 recording is drift", () => expect(run("4.8.0").drifted).toBe(true));
+  it("a later recording is drift", () => expect(run("4.10.2").drifted).toBe(true));
+  it("a 4.7.1 recording is unverifiable", () => expect(run("4.7.1")).toMatchObject({ drifted: false, unverifiable: true }));
+  it("a recording with no version is unverifiable", () => expect(run(undefined)).toMatchObject({ drifted: false, unverifiable: true }));
+});
