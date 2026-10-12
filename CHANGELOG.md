@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **`sync` now refuses a re-sync under a different organisation from the one this machine last synced under.** It
+  remembers that organisation in `~/.cowork-harness/sync-capture-org.json` (a salted hash, file mode 0600, never
+  committed). The first sync after upgrading records the organisation it runs under, without refusing, so run it
+  under the organisation you mean to keep syncing under. A different organisation from the shipped baseline's only
+  warns. Pass `--allow-org-change` when the organisation you sync under really changed.
+
 - **An unanswered web_fetch approval now fails the run under `on_unanswered: fail`.** When the agent fetches a URL
   that appeared in neither the prompt nor an earlier fetch result, and no `answers:` rule or session
   `web_fetch.approved_domains` covers its domain, the run used to deny the fetch silently and carry on; no verdict
@@ -193,11 +199,13 @@ All notable changes to this project are documented here. The format is based on
   cannot be extracted, or its native build gives different anchors from its VM build, `sync` prints a warning and
   records no anchors; it does not block the write. Nothing reads the block yet.
 - **For maintainers: `sync` records which organisation Desktop's gate cache was captured under, and refuses a
-  re-sync under a different one.** Desktop rewrites its gate cache for the organisation it is signed in to, so a
-  re-sync under another organisation showed gate changes that were not production changes. `sync` now records a
-  salted hash of the organisation (`provenance.captureOrg`, read from Desktop's log; anyone holding the id can confirm
-  it, nobody can reverse it) and refuses to write, `sync --diff` included, when it differs from the previous
-  baseline's or cannot be told when the previous baseline recorded one. `--allow-org-change` writes anyway.
+  re-sync on the same machine under a different one.** Desktop rewrites its gate cache for the organisation it is
+  signed in to, so a re-sync under another organisation showed gate changes that were not production changes. `sync`
+  now records a salted hash of the organisation (`provenance.captureOrg`, read from Desktop's log; anyone holding the
+  id can confirm it, nobody can reverse it), and remembers on this machine the organisation it last synced under
+  (`~/.cowork-harness/sync-capture-org.json`, never committed). It refuses to write, `sync --diff` included, when the
+  organisation differs from that record, cannot be told once the machine has one, or the record is unreadable.
+  `--allow-org-change` writes anyway. A different organisation from the previous baseline's only warns.
 - **For maintainers: `sync` records the agent's own web-search feature values** as `provenance.agentSearchGates`:
   whether the nested search runs on the small/fast model, the fast search profile, and the two request-body
   compression features. They are the agent's features, not Desktop gates, so `sync` reads them from Desktop's
