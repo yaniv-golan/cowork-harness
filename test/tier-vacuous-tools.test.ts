@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { tierVacuousTool, tierVacuousMessage, objectFormTierVacuous } from "../src/run/tier-vacuous-tools";
 
 // `tool_not_called` on a tool the TIER never serves passes vacuously — it can never be violated. This
@@ -243,5 +243,97 @@ describe("the device-tool list is one list", () => {
     expect(ts).toHaveLength(14);
     expect(py).toEqual(ts);
     expect(base).toEqual(ts);
+  });
+});
+
+describe("visualize tools the harness never serves", () => {
+  const SW = "mcp__visualize__show_widget";
+  const RM = "mcp__visualize__read_me";
+  it("show_widget and read_me are vacuous at every judged tier, and protocol stays out", () => {
+    for (const tool of [SW, RM]) {
+      for (const tier of ["container", "hostloop", "microvm"])
+        expect(tierVacuousTool(tool, tier, GATE_OFF), `${tool} ${tier}`).toMatchObject({
+          tool,
+          instead: null,
+          reason: "visualize-unserved",
+        });
+      expect(tierVacuousTool(tool, "protocol", GATE_OFF)).toBeUndefined();
+    }
+  });
+  it("leaves globs and names outside production's two tools alone", () => {
+    expect(tierVacuousTool("mcp__visualize__*", "hostloop", GATE_OFF)).toBeUndefined();
+    expect(tierVacuousTool("mcp__visualize__render_chart", "hostloop", GATE_OFF)).toBeUndefined();
+  });
+  it("is not refused when the session's own MCP config declares a server named visualize", () => {
+    expect(tierVacuousTool(SW, "hostloop", GATE_OFF, false, new Set(["visualize"]))).toBeUndefined();
+    expect(objectFormTierVacuous({ tool: [SW, RM] }, "container", GATE_OFF, false, new Set(["visualize"]))).toBeUndefined();
+  });
+  it("the message says the harness never serves it", () => {
+    const f = tierVacuousTool(SW, "hostloop", GATE_OFF)!;
+    expect(tierVacuousMessage(f, "tool_not_called", "s")).toMatch(/never serves the `visualize` server/);
+  });
+  it("executeScenario refuses it at load, before any spend", async () => {
+    await expect(executePinned(scenarioWith("hostloop", `  - tool_not_called: ${SW}\n`))).rejects.toThrow(/visualize/);
+    await expect(executePinned(scenarioWith("container", `  - subagent_tool_absent: ${RM}\n`))).rejects.toThrow(/visualize/);
+    await expect(executePinned(scenarioWith("hostloop", `  - tool_not_called: {tool: [${SW}, ${RM}]}\n`))).rejects.toThrow(/visualize/);
+  });
+  it("executeScenario does not refuse it when the session's mcp.config defines a visualize server", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-tv-mcp-"));
+    writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: { visualize: { command: "true", args: [] } } }));
+    writeFileSync(join(dir, "s.yaml"), "folders: []\nmcp:\n  config: ./mcp.json\n  enabled: [visualize]\n");
+    const f = join(dir, "sc.yaml");
+    writeFileSync(f, `name: tv\nbaseline: latest\nsession: s.yaml\nfidelity: hostloop\nprompt: hi\nassert:\n  - tool_not_called: ${SW}\n`);
+    // The load passes the vacuity check and fails later for an unrelated reason (no agent/Docker here); what
+    // matters is that the failure is not the visualize refusal.
+    const err = await executePinned(parseScenarioFile(f)).then(
+      () => undefined,
+      (e: Error) => e,
+    );
+    expect(String(err?.message ?? "")).not.toMatch(/never serves the `visualize` server/);
+  }, 60_000);
+  // `enabled` alone would pass the guard above without reading the file, so these declare the server ONLY in
+  // the config file — once by a path relative to the session file, once by a `~/` path (left literal until launch).
+  it.each([
+    ["a relative", "./mcp.json"],
+    ["a home-relative", "~/mcp.json"],
+  ])(
+    "executeScenario reads the server from mcp.config given by %s path",
+    async (_label, configRef) => {
+      const dir = mkdtempSync(join(tmpdir(), "cwh-tv-mcp-"));
+      vi.stubEnv("HOME", dir);
+      try {
+        writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: { visualize: { command: "true", args: [] } } }));
+        writeFileSync(join(dir, "s.yaml"), `folders: []\nmcp:\n  config: ${configRef}\n`);
+        const f = join(dir, "sc.yaml");
+        writeFileSync(
+          f,
+          `name: tv\nbaseline: latest\nsession: s.yaml\nfidelity: hostloop\nprompt: hi\nassert:\n  - tool_not_called: ${SW}\n`,
+        );
+        const err = await executePinned(parseScenarioFile(f)).then(
+          () => undefined,
+          (e: Error) => e,
+        );
+        expect(String(err?.message ?? "")).not.toMatch(/never serves the `visualize` server/);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+    60_000,
+  );
+});
+
+describe("the visualize tool list is one list", () => {
+  it("tier-vacuous-tools.ts and the skill linter name the same tools", async () => {
+    const { readFileSync } = await import("node:fs");
+    const names = (src: string, start: string, end: string) => {
+      const from = src.indexOf(start);
+      expect(from, start).toBeGreaterThan(-1);
+      const block = src.slice(from, src.indexOf(end, from));
+      return [...block.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    };
+    const ts = names(readFileSync("src/run/tier-vacuous-tools.ts", "utf8"), "const VISUALIZE_TOOLS = new Set([", "]);");
+    const py = names(readFileSync(".claude/skills/cowork-harness/scripts/scenario.py", "utf8"), "_VISUALIZE_TOOLS = {", "}");
+    expect(ts).toEqual(["read_me", "show_widget"]);
+    expect(py).toEqual(ts);
   });
 });

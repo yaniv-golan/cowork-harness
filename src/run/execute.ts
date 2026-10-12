@@ -63,6 +63,7 @@ import {
   isConnectedContent,
   applySessionOverrides,
   expandUserPath,
+  expandHome,
   strippedEnv,
   type LaunchPlan,
 } from "../session.js";
@@ -2980,6 +2981,8 @@ export function scenarioInputFindings(
 export function tierVacuityRefusal(scenario: Scenario, baseline: PlatformBaseline): string | undefined {
   const tier = effectiveTier(scenario.fidelity, baseline);
   const viaApi = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false);
+  // Read only when a negative tool assertion exists, since it opens the session and its MCP config.
+  let sessionServers: ReadonlySet<string> | undefined;
   for (const a of scenario.assert) {
     // BOTH negative tool keys. `subagent_tool_absent` reads the tools sub-agents actually USED
     // (assert.ts's `ctx.subagentTools`), not a per-dispatch declared list, so the same tier table applies
@@ -2991,11 +2994,33 @@ export function tierVacuityRefusal(scenario: Scenario, baseline: PlatformBaselin
       // The object form of tool_not_called is refused only when EVERY listed tool is unserved.
       const bridge = scenario.device_bridge === true;
       const finding =
-        typeof pattern === "string" ? tierVacuousTool(pattern, tier, viaApi, bridge) : objectFormTierVacuous(pattern, tier, viaApi, bridge);
+        typeof pattern === "string"
+          ? tierVacuousTool(pattern, tier, viaApi, bridge, (sessionServers ??= sessionMcpServerNames(scenario)))
+          : objectFormTierVacuous(pattern, tier, viaApi, bridge, (sessionServers ??= sessionMcpServerNames(scenario)));
       if (finding) return tierVacuousMessage(finding, key, scenario.name);
     }
   }
   return undefined;
+}
+
+/** Server names the scenario's session declares through its own MCP config (`mcp.config`'s `mcpServers` keys, plus
+ *  `mcp.enabled`). A session server named like a production server the harness does not register serves that
+ *  server's tools, so the tier-vacuity refusal must not fire for it. An unreadable session or config yields none:
+ *  the run's own load reports that file. */
+function sessionMcpServerNames(scenario: Scenario): ReadonlySet<string> {
+  const names = new Set<string>();
+  try {
+    const session = loadSessionFromFile(scenario.session);
+    for (const n of session.mcp.enabled) names.add(n);
+    // Relative paths are already resolved against the session file; a `~/` one stays literal until launch.
+    if (session.mcp.config) {
+      const servers = (JSON.parse(readFileSync(expandHome(session.mcp.config), "utf8")) as { mcpServers?: unknown }).mcpServers;
+      if (servers && typeof servers === "object") for (const n of Object.keys(servers)) names.add(n);
+    }
+  } catch {
+    // Reported by the session load proper.
+  }
+  return names;
 }
 
 /** The pre-spend form of the device_bridge folder-path refusal, for `record --dry-run` and a batch's preflight.

@@ -18,7 +18,8 @@ import { WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloo
  *
  * So this table names ONLY tools the harness itself removes or registers, per tier. It never consults
  * `spawn.tools`, which makes it immune to that hole by construction, independent of the baseline (a
- * `spawn`-less baseline cannot make it misfire), and unable to collide with any MCP name. The cost is
+ * `spawn`-less baseline cannot make it misfire), and unable to collide with any MCP name (the visualize rule below
+ * steps aside when the session's own MCP config declares a server of that name). The cost is
  * that it under-approximates — `REPL` at hostloop is genuinely vacuous too and is not caught — which is
  * the correct side to err on when the verdict is a hard refusal.
  *
@@ -54,8 +55,9 @@ export interface TierVacuousFinding {
   /** The tool to assert instead, or null when the tier removes it with no replacement. */
   instead: string | null;
   /** Set for a remote-devices tool: served only under `device_bridge: true` (`device-bridge-off`), or never served by
-   *  the harness (`device-unserved`). Absent for a tier-table tool. */
-  reason?: "device-bridge-off" | "device-unserved";
+   *  the harness (`device-unserved`); or for a tool of production's `visualize` server, which the harness never
+   *  registers (`visualize-unserved`). Absent for a tier-table tool. */
+  reason?: "device-bridge-off" | "device-unserved" | "visualize-unserved";
 }
 
 const DEVICE_PREFIX = "mcp__remote-devices__";
@@ -80,6 +82,17 @@ const REMOTE_DEVICE_TOOLS = new Set([
   "project_memory_write",
 ]);
 
+const VISUALIZE_SERVER = "visualize";
+const VISUALIZE_PREFIX = `mcp__${VISUALIZE_SERVER}__`;
+/** The tools of production's in-process `visualize` server (Desktop's `getImagineServerDef`: the skill-argument
+ *  form's `read_me` and `show_widget`). The harness registers no such server on any tier, so a negative assertion on
+ *  either passes vacuously. Keep in sync with scenario.py's `_VISUALIZE_TOOLS`.
+ *
+ *  WHEN THE FORM STUB LANDS: the harness will then serve both tools under the planned `argument_form: on | form`
+ *  (hostloop and container), so this refusal must become conditional on that key, the way `DEVICE_BRIDGE_SERVED`
+ *  is on `device_bridge`. Thread the key in as `tierVacuousTool`'s `deviceBridge` flag is, here and in scenario.py. */
+const VISUALIZE_TOOLS = new Set(["read_me", "show_widget"]);
+
 /** Is this EXACT tool name provably unservable at this tier? Literals only — a glob is never rejected,
  *  since `mcp__*` or `Ba*` can match something the tier does serve. */
 export function tierVacuousTool(
@@ -87,9 +100,17 @@ export function tierVacuousTool(
   tier: string,
   webFetchViaApi: boolean,
   deviceBridge = false,
+  /** Server names the session's own `mcp.config` declares. A session server that happens to share a name with
+   *  production's serves its tools, so a name it covers is never refused. */
+  sessionMcpServers: ReadonlySet<string> = new Set(),
 ): TierVacuousFinding | undefined {
   // A pattern with a glob metacharacter is not a literal claim about one tool.
   if (/[*?]/.test(pattern)) return undefined;
+  // The visualize tools are served by no tier. `protocol` stays out, as below.
+  if (pattern.startsWith(VISUALIZE_PREFIX) && tier in TIER_VACUOUS && !sessionMcpServers.has(VISUALIZE_SERVER)) {
+    if (VISUALIZE_TOOLS.has(pattern.slice(VISUALIZE_PREFIX.length)))
+      return { tool: pattern, tier, instead: null, reason: "visualize-unserved" };
+  }
   // The remote-devices tools are served by no tier on their own: two of them under device_bridge, the rest never.
   // `protocol` stays out, as below: its surface is the operator's own CLI registry.
   if (pattern.startsWith(DEVICE_PREFIX) && tier in TIER_VACUOUS) {
@@ -113,9 +134,10 @@ export function objectFormTierVacuous(
   tier: string,
   webFetchViaApi: boolean,
   deviceBridge = false,
+  sessionMcpServers: ReadonlySet<string> = new Set(),
 ): TierVacuousFinding | undefined {
   const tools = Array.isArray(value.tool) ? value.tool : [value.tool];
-  const findings = tools.map((t) => tierVacuousTool(t, tier, webFetchViaApi, deviceBridge));
+  const findings = tools.map((t) => tierVacuousTool(t, tier, webFetchViaApi, deviceBridge, sessionMcpServers));
   if (findings.length === 0 || findings.some((f) => f === undefined)) return undefined;
   return findings[0];
 }
@@ -134,6 +156,12 @@ export type TierVacuousKey = "tool_not_called" | "subagent_tool_absent";
 /** The load-time refusal text. Names what is wrong, why it can never hold, what to write instead, and —
  *  because an author will meet it — that `tool_called` behaves differently. */
 export function tierVacuousMessage(f: TierVacuousFinding, key: TierVacuousKey, context: string): string {
+  if (f.reason === "visualize-unserved")
+    return (
+      `${context}: \`${key}: "${f.tool}"\` can never be violated — the harness never serves the \`visualize\` server ` +
+      `(production's skill-argument form tools), so the assertion passes vacuously. Drop it.` +
+      `\nThe positive sibling is NOT refused: \`tool_called: "${f.tool}"\` fails normally.`
+    );
   if (f.reason !== undefined)
     return (
       `${context}: \`${key}: "${f.tool}"\` can never be violated — ` +

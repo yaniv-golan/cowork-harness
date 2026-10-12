@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **A negative assertion on a `visualize` tool is now refused at load.** `tool_not_called` or `subagent_tool_absent`
+  naming `mcp__visualize__read_me` or `mcp__visualize__show_widget` (production's skill-argument form tools) used to
+  pass vacuously on `hostloop`, `container` and `microvm`, because the harness never serves them. Drop the assertion.
+  A session whose own `mcp.config` declares a server named `visualize` is not refused. `lint` reports it as
+  `tool-not-called-tier-vacuous`; `protocol` is not judged.
+
 ## [4.8.1] — 2026-10-12
 
 ### Upgrade notes

@@ -1259,6 +1259,27 @@ def test_device_tool_negative_assertion_vacuity(tmp_path, extra, flagged):
     assert (len(found) == 1) == flagged, found
 
 
+# The visualize tools (production's skill-argument form server) are served on no tier; protocol stays out.
+_VZ_HEAD = "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\n"
+
+
+@pytest.mark.parametrize(
+    "extra,flagged",
+    [
+        ("fidelity: hostloop\nassert:\n  - tool_not_called: mcp__visualize__show_widget\n", True),
+        ("fidelity: container\nassert:\n  - subagent_tool_absent: mcp__visualize__read_me\n", True),
+        ("fidelity: microvm\nassert:\n  - tool_not_called: {tool: [mcp__visualize__show_widget, mcp__visualize__read_me]}\n", True),
+        ("fidelity: hostloop\nassert:\n  - tool_not_called: {tool: [mcp__visualize__show_widget, mcp__workspace__bash]}\n", False),
+        ("fidelity: protocol\nassert:\n  - tool_not_called: mcp__visualize__show_widget\n", False),
+        ("fidelity: hostloop\nassert:\n  - tool_not_called: mcp__visualize__*\n", False),
+        ("fidelity: hostloop\nassert:\n  - tool_not_called: mcp__visualize__render_chart\n", False),
+    ],
+)
+def test_visualize_tool_negative_assertion_vacuity(tmp_path, extra, flagged):
+    found = _mk(tmp_path, _VZ_HEAD + extra, rule="tool-not-called-tier-vacuous")
+    assert (len(found) == 1) == flagged, found
+
+
 def test_lane_remote_refusal_names_device_bash_under_the_bridge(tmp_path):
     body = _TV_HEAD + "device_bridge: true\nassert:\n  - artifact_text: {path: x, contains: y}\n"
     found = _mk(tmp_path, body, rule="lane-remote-incompatible-key")
