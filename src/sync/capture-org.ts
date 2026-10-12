@@ -11,7 +11,7 @@
  * before the cache is rewritten (two seconds apart in the measured switch). The organisation active when the cache
  * was last written is the one named by the newest such entry at or before the cache's modification time.
  *
- * Only a short one-way hash of the organisation id is recorded: the baseline is public.
+ * Only a salted hash of the organisation id: it cannot be reversed, but anyone who already holds the id can confirm it (the salt is public). The baseline is public.
  */
 
 import { createHash } from "node:crypto";
@@ -22,7 +22,8 @@ const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const TOKEN_ORG = new RegExp(`using cached token for orgId=(${UUID})\\b`);
 const ORG_CHANGED = new RegExp(`Org changed from ${UUID} to (${UUID})\\b`);
 
-/** A short one-way hash of an organisation id. Never the id. */
+/** A short salted hash of an organisation id (a commitment under a public salt): never the id, and not reversible,
+ *  but anyone holding the id can confirm it. */
 export function orgRef(orgId: string): string {
   return createHash("sha256").update(`cowork-harness capture org\0${orgId}`, "utf8").digest("hex").slice(0, 12);
 }
@@ -44,7 +45,10 @@ export function captureOrgAt(lines: Iterable<string>, atMs: number): string | nu
 /** The organisation the gate cache was captured under, from Desktop's rotated logs in `logsDir`. `orgId` is for
  *  in-memory use only (choosing that organisation's other caches); only `record` may be written. */
 export function readCaptureOrg(logsDir: string, cacheMtimeMs: number): { orgId: string | null; record: CaptureOrg } {
-  const org = captureOrgAt(logLines(logsDir, { unreadable: 0, nonEmpty: 0 }), cacheMtimeMs);
+  const counts = { unreadable: 0, nonEmpty: 0 };
+  const found = captureOrgAt(logLines(logsDir, counts), cacheMtimeMs);
+  // An unreadable log file could hold the switch, which would make `found` stale: then the organisation cannot be told.
+  const org = counts.unreadable > 0 ? null : found;
   return { orgId: org, record: org === null ? { observed: false } : { observed: true, orgRef: orgRef(org) } };
 }
 

@@ -25,9 +25,9 @@ All notable changes to this project are documented here. The format is based on
 - **For maintainers: `sync` records which organisation Desktop's gate cache was captured under, and refuses a
   re-sync under a different one.** Desktop rewrites its gate cache for the organisation it is signed in to, so a
   re-sync under another organisation showed gate changes that were not production changes. `sync` now records a
-  one-way hash of the organisation (`provenance.captureOrg`, read from Desktop's log) and refuses to write when it
-  differs from the previous baseline's, or cannot be told when the previous baseline recorded one.
-  `--allow-org-change` writes anyway.
+  salted hash of the organisation (`provenance.captureOrg`, read from Desktop's log; anyone holding the id can confirm
+  it, nobody can reverse it) and refuses to write, `sync --diff` included, when it differs from the previous
+  baseline's or cannot be told when the previous baseline recorded one. `--allow-org-change` writes anyway.
 - **For maintainers: `sync` records the agent's own web-search feature values** as `provenance.agentSearchGates`:
   whether the nested search runs on the small/fast model, the fast search profile, and the two request-body
   compression features. They are the agent's features, not Desktop gates, so `sync` reads them from Desktop's

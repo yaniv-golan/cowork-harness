@@ -40,8 +40,9 @@ export const SearchAnchors = z.strictObject({
 });
 export type SearchAnchors = z.infer<typeof SearchAnchors>;
 
-/** `provenance.captureOrg`: which organisation Desktop's gate cache was captured under, as a short one-way hash of
- *  the organisation id (src/sync/capture-org.ts). Desktop rewrites gates per organisation. */
+/** `provenance.captureOrg`: which organisation Desktop's gate cache was captured under, as a short salted hash of the
+ *  organisation id: not reversible, but confirmable by anyone holding the id (src/sync/capture-org.ts). Desktop
+ *  rewrites gates per organisation. */
 export const CaptureOrg = z.discriminatedUnion("observed", [
   z.strictObject({ observed: z.literal(true), orgRef: z.string().regex(/^[0-9a-f]{12}$/) }),
   z.strictObject({ observed: z.literal(false) }),

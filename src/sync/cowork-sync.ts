@@ -85,7 +85,7 @@ export interface SyncResult {
   /** The agent-side feature values that shape a live WebSearch, from Desktop's per-session GrowthBook cache (see
    *  agent-search-gates.ts). `observed:false` when no cache file exists; a NOTE, never a delta. Never carried forward. */
   agentSearchGates: AgentSearchGates;
-  /** Which organisation the gate cache (fcache) was captured under, as a one-way hash (see capture-org.ts). The CLI
+  /** Which organisation the gate cache (fcache) was captured under, as a salted hash (see capture-org.ts). The CLI
    *  refuses a write captured under a different organisation from the previous baseline's. */
   captureOrg: CaptureOrg;
   /** The `cloud` block (remote-devices tool list + description fingerprints + unreachable features); null when

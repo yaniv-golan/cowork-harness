@@ -3553,7 +3553,7 @@ async function cmdSync(args: string[]) {
         observedSpawnEnv: res.observedSpawnEnv,
         // The agent's web-search feature values, from Desktop's session GrowthBook cache. Never carried forward.
         agentSearchGates: res.agentSearchGates,
-        // The organisation the gate cache was captured under (a one-way hash). Never carried forward.
+        // The organisation the gate cache was captured under (a salted hash, never the id). Never carried forward.
         captureOrg: res.captureOrg,
       },
     },

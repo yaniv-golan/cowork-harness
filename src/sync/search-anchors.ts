@@ -2,10 +2,11 @@
  * Web-search anchors in the staged agent binary, for the frozen search corpus.
  *
  * The agent's WebSearch tool makes a NESTED model request that carries the `web_search_*` server tool, a fixed
- * system sentence, and one user message made of a fixed prefix plus the query. The interceptor recognises that
- * request by those three facts, so `sync` records them per agent version, and a release whose anchors moved or
- * vanished fails the sync like a gate drift (a silent fallback to pass-through would let a live search into a run
- * labelled frozen).
+ * system sentence, and one user message made of a fixed prefix plus the query. A later release's search interceptor
+ * will recognise that request by those three facts, so `sync` records them per agent version. Until something reads
+ * them, anchors that moved or vanished are a sync warning and are not recorded; once the interceptor reads them, that
+ * becomes a write-blocking delta (a silent fallback to pass-through would let a live search into a run labelled
+ * frozen).
  *
  * The two prose literals are agent text, so only their sha256 and UTF-8 byte length are recorded, never the text.
  * The tool type and the CCR route pieces are identifiers and are recorded as they are.

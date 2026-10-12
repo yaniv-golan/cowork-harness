@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureOrgAt, orgRef, readCaptureOrg, checkCaptureOrg } from "../src/sync/capture-org.js";
@@ -44,6 +44,12 @@ describe("readCaptureOrg", () => {
     expect(r).toEqual({ orgId: B, record: { observed: true, orgRef: orgRef(B) } });
     expect(CaptureOrg.safeParse(r.record).success).toBe(true);
     expect(JSON.stringify(r.record)).not.toContain(B);
+  });
+  it("is unobserved when any log file it reaches is unreadable (that file could hold the switch)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-org-"));
+    writeFileSync(join(dir, "main1.log"), log[0] + "\n");
+    mkdirSync(join(dir, "main.log")); // a directory where the newest log should be: unreadable as a file
+    expect(readCaptureOrg(dir, at("09:12:09"))).toEqual({ orgId: null, record: { observed: false } });
   });
   it("is unobserved with no logs or no org entry before the moment", () => {
     expect(readCaptureOrg(join(tmpdir(), "cwh-org-none"), at("10:00:00"))).toEqual({ orgId: null, record: { observed: false } });
