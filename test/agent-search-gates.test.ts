@@ -32,6 +32,7 @@ describe("readAgentSearchGates", () => {
     expect(r).toEqual({
       observed: true,
       files: 2,
+      newestDate: new Date(2000 * 1000).toISOString().slice(0, 10),
       values: { tengu_plum_vx3: true, tengu_sleepy_shore: { enabled: true }, tengu_buzzing_pike: 0 },
       absent: ["tengu_gzip_request_bodies"],
       disagreeing: ["tengu_plum_vx3"],
@@ -41,7 +42,7 @@ describe("readAgentSearchGates", () => {
     expect(JSON.stringify(r)).not.toMatch(/o1|s1|s2/); // no session or org identifiers
   });
 
-  it("names exactly the Q6 and gzip gates", () => {
+  it("names exactly the four search gates", () => {
     expect([...AGENT_SEARCH_GATE_KEYS].sort()).toEqual(
       ["tengu_buzzing_pike", "tengu_gzip_request_bodies", "tengu_plum_vx3", "tengu_sleepy_shore"].sort(),
     );
@@ -66,5 +67,31 @@ describe("readAgentSearchGates", () => {
     expect(r.observed && r.values).not.toHaveProperty("tengu_sleepy_shore");
     expect(r.observed && r.withheld).toEqual(["tengu_sleepy_shore"]);
     expect(AgentSearchGates.safeParse(r).success).toBe(true);
+  });
+
+  it("withholds a string value, and an object holding a string, since either could carry an identifier", () => {
+    const dir = sessionsDir([
+      {
+        org: "o",
+        session: "s",
+        mtime: 1000,
+        features: { tengu_plum_vx3: "org-1234", tengu_sleepy_shore: { id: "abc" }, tengu_buzzing_pike: 3 },
+      },
+    ]);
+    const r = readAgentSearchGates(dir);
+    expect(r.observed && r.values).toEqual({ tengu_buzzing_pike: 3 });
+    expect(r.observed && r.withheld).toEqual(["tengu_plum_vx3", "tengu_sleepy_shore"]);
+    expect(AgentSearchGates.safeParse(r).success).toBe(true);
+    expect(AgentSearchGates.safeParse({ ...r, values: { tengu_plum_vx3: "org-1234" } }).success).toBe(false);
+  });
+
+  it("does not call a key disagreeing when the newest file lacks it", () => {
+    const dir = sessionsDir([
+      { org: "o", session: "old", mtime: 1000, features: { tengu_plum_vx3: true } },
+      { org: "o", session: "new", mtime: 2000, features: {} },
+    ]);
+    const r = readAgentSearchGates(dir);
+    expect(r.observed && r.disagreeing).toBeUndefined();
+    expect(r.observed && r.absent).toContain("tengu_plum_vx3");
   });
 });

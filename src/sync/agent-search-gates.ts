@@ -9,20 +9,24 @@
  * - `tengu_gzip_request_bodies`, `tengu_buzzing_pike`: request-body compression, which a proxy env turns off.
  *
  * Values are recorded raw (their shapes differ: a boolean, an object, a number). The newest file is the source; a
- * key whose value differs in another file that also has it is listed in `disagreeing` (several orgs or a mid-rollout refetch).
+ * key whose value differs in another file that also has it is listed in `disagreeing`; a value that is not a boolean,
+ * a number or a flat object of them is `withheld` (several orgs or a mid-rollout refetch).
  * Nothing that identifies an org or a session is recorded, because the baseline is public.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentSearchGates } from "../types.js";
+import { AGENT_SEARCH_GATE_KEYS, AgentSearchGates } from "../types.js";
 
-export const AGENT_SEARCH_GATE_KEYS = ["tengu_plum_vx3", "tengu_sleepy_shore", "tengu_gzip_request_bodies", "tengu_buzzing_pike"] as const;
+export { AGENT_SEARCH_GATE_KEYS };
 
 /** A value larger than this, as canonical JSON, is withheld rather than published. */
 export const AGENT_SEARCH_GATE_MAX_JSON = 256;
 
 const FILE = "cowork-gb-cache.json";
+
+/** The schema's per-value shape, so the reader withholds exactly what the schema would refuse. */
+const valueSchema = AgentSearchGates.options[0].shape.values.valueType;
 
 function cacheFiles(dir: string): { path: string; mtimeMs: number }[] {
   const out: { path: string; mtimeMs: number }[] = [];
@@ -64,26 +68,30 @@ function features(path: string): Record<string, unknown> | null {
 export function readAgentSearchGates(sessionsDir: string): AgentSearchGates {
   const read = cacheFiles(sessionsDir)
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .map((f) => features(f.path))
-    .filter((f): f is Record<string, unknown> => f !== null);
+    .map((f) => ({ mtimeMs: f.mtimeMs, features: features(f.path) }))
+    .filter((f): f is { mtimeMs: number; features: Record<string, unknown> } => f.features !== null);
   if (read.length === 0) return { observed: false };
-  const [newest, ...others] = read;
+  const newest = read[0]!.features;
+  const others = read.slice(1).map((f) => f.features);
   const values: Record<string, unknown> = {};
   type Key = (typeof AGENT_SEARCH_GATE_KEYS)[number];
   const absent: Key[] = [];
   const withheld: Key[] = [];
   const disagreeing: Key[] = [];
   for (const k of AGENT_SEARCH_GATE_KEYS) {
-    const v = newest![k];
+    const v = newest[k];
     if (v === undefined) absent.push(k);
-    else if (JSON.stringify(v).length > AGENT_SEARCH_GATE_MAX_JSON) withheld.push(k);
+    // Published only as a boolean, a number or a flat object of them (the schema's shape): a payload string could
+    // carry an identifier, and the baseline is public.
+    else if (JSON.stringify(v).length > AGENT_SEARCH_GATE_MAX_JSON || !valueSchema.safeParse(v).success) withheld.push(k);
     else values[k] = v;
-    // A file without the key predates the feature's fetch; only a different value present in both disagrees.
-    if (others.some((o) => o[k] !== undefined && JSON.stringify(o[k]) !== JSON.stringify(v))) disagreeing.push(k);
+    // A key absent from either file predates that file's fetch; only two different values present in both disagree.
+    if (v !== undefined && others.some((o) => o[k] !== undefined && JSON.stringify(o[k]) !== JSON.stringify(v))) disagreeing.push(k);
   }
   return {
     observed: true,
     files: read.length,
+    newestDate: new Date(read[0]!.mtimeMs).toISOString().slice(0, 10),
     values,
     ...(absent.length ? { absent } : {}),
     ...(withheld.length ? { withheld } : {}),

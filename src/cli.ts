@@ -33,7 +33,6 @@ import {
   deriveNativeStagedPath,
   nativeManifestBuild,
   buildNextAgentBinary,
-  parseNativeStagedPath,
 } from "./baseline.js";
 import { searchAnchorsForSync } from "./sync/search-anchors.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
@@ -3282,11 +3281,6 @@ async function cmdSync(args: string[]) {
     );
   let shaFields: { sha256?: string; shaProvenance?: string; manifestChecksumMatch?: boolean | "unknown" } = {};
   let stringSentinels: Record<string, number> | undefined;
-  // Web-search anchors (agentBinary.searchAnchors): the same measure-or-carry lifecycle, except that a staged ELF
-  // whose anchors cannot be extracted BLOCKS the write. A frozen search corpus recognises the nested search request
-  // by them, and a silent fallback would let a live search into a run labelled frozen.
-  const baseSearchAnchors = (baseAgentBinary.searchAnchors ?? undefined) as SearchAnchors | undefined;
-  let searchAnchors: SearchAnchors | undefined;
   // CLI capabilities (agentBinary.cliCapabilities): the same measure-or-carry lifecycle as the sentinels.
   const baseCliCapabilities = (baseAgentBinary.cliCapabilities ?? undefined) as CliCapabilities | undefined;
   let cliCapabilities: CliCapabilities | undefined;
@@ -3294,18 +3288,6 @@ async function cmdSync(args: string[]) {
     const measured = sha256File(resolvedDerived);
     stringSentinels = Object.fromEntries(AGENT_STRING_SENTINELS.map((s) => [s, countStringInFile(resolvedDerived, s)]));
     cliCapabilities = cliCapabilitiesOfFile(resolvedDerived);
-    // hostloop runs the NATIVE agent, so its anchors must match. Compared only when the native build is the same
-    // agent version (the two stage on separate cadences).
-    const nativeResolved = derivedNativeStagedPath.replace(/^~(?=$|\/)/, homeDir);
-    const nativeSameVersion = parseNativeStagedPath(derivedNativeStagedPath)?.version === res.agentVersion && existsSync(nativeResolved);
-    const anchored = searchAnchorsForSync({
-      elf: readFileSync(resolvedDerived),
-      native: nativeSameVersion ? readFileSync(nativeResolved) : null,
-      sameVersionAsBase: (base.agentVersion as string | undefined) === res.agentVersion,
-      base: baseSearchAnchors,
-    });
-    searchAnchors = anchored.anchors;
-    res.unknownDeltas.push(...anchored.deltas);
     shaFields = {
       sha256: measured,
       shaProvenance: "measured-local",
@@ -3325,7 +3307,6 @@ async function cmdSync(args: string[]) {
     if ((base.agentVersion as string | undefined) === res.agentVersion) {
       stringSentinels = baseSentinels;
       cliCapabilities = baseCliCapabilities;
-      searchAnchors = baseSearchAnchors;
     }
   } else if ((base.agentVersion as string | undefined) === res.agentVersion) {
     // offline re-sync of the same version — keep what the base recorded rather than dropping it.
@@ -3336,8 +3317,31 @@ async function cmdSync(args: string[]) {
     };
     stringSentinels = baseSentinels;
     cliCapabilities = baseCliCapabilities;
-    searchAnchors = baseSearchAnchors;
   }
+  // Web-search anchors (agentBinary.searchAnchors). searchAnchorsForSync owns the lifecycle: measured from a staged
+  // ELF, where a failed extraction BLOCKS the write (a silent fallback would later let a live search into a run
+  // labelled frozen); carried from the base only for the same agent version when the ELF is not staged. The native
+  // agent, which hostloop runs, must give the same anchors whatever its version: they have not moved from 2.1.260
+  // through 2.1.295, so a difference is a finding, not a version skew.
+  const nativeResolved = derivedNativeStagedPath.replace(/^~(?=$|\/)/, homeDir);
+  let nativeAgent: Buffer | null = null;
+  if (existsSync(nativeResolved)) {
+    try {
+      nativeAgent = readFileSync(nativeResolved);
+    } catch (e) {
+      res.unknownDeltas.push(
+        `agentBinary.searchAnchors: the native agent could not be read (${(e as NodeJS.ErrnoException).code ?? "error"})`,
+      );
+    }
+  }
+  const anchored = searchAnchorsForSync({
+    elf: existsSync(resolvedDerived) ? readFileSync(resolvedDerived) : null,
+    native: nativeAgent,
+    sameVersionAsBase: (base.agentVersion as string | undefined) === res.agentVersion,
+    base: (baseAgentBinary.searchAnchors ?? undefined) as SearchAnchors | undefined,
+  });
+  const searchAnchors = anchored.anchors;
+  res.unknownDeltas.push(...anchored.deltas);
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
   const nextAgentBinary = buildNextAgentBinary(baseAgentBinary, {

@@ -26,9 +26,10 @@ const WINDOW_BEFORE = 4000;
 const WINDOW_AFTER = 400;
 
 const IDENT = "[A-Za-z_$][\\w$]*";
-/** A single-line string literal in either quote the minifier emits, with no escapes inside (an escape would make
- *  the bytes on the wire differ from the bytes in the binary). */
-const LIT = '(["`])((?:(?!\\1)[^\\\\\\n])*)\\1';
+/** A single-line string literal in either quote the minifier emits, with no escape and no `${` inside: an escape
+ *  would make the bytes on the wire differ from the bytes in the binary, and a template substitution would hash
+ *  text that is never sent. */
+const LIT = '(["`])((?:(?!\\1|\\$\\{)[^\\\\\\n])*)\\1';
 const USER_PREFIX = new RegExp(`\\(\\{content:${LIT}\\+${IDENT}\\}\\)`, "g");
 const SYSTEM_SENTENCE = new RegExp(`systemPrompt:${IDENT}\\(\\[${LIT}\\]\\)`, "g");
 const TOOL_TYPE = /type:(["`])(web_search_[0-9A-Za-z_]+)\1/g;
@@ -82,8 +83,8 @@ export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
 
   const prefix = oneLiteral(window, USER_PREFIX, "userPrefix", defects);
   const sentence = oneLiteral(window, SYSTEM_SENTENCE, "systemSentence", defects);
-  const types = [...new Set([...window.matchAll(TOOL_TYPE)].map((m) => m[2]!))];
-  if (types.length !== 1) defects.push(`toolType: ${types.length} distinct web_search_* types in the call site (expected exactly 1)`);
+  const types = [...window.matchAll(TOOL_TYPE)].map((m) => m[2]!);
+  if (types.length !== 1) defects.push(`toolType: ${types.length} web_search_* type matches in the call site (expected exactly 1)`);
 
   for (const [name, spec] of Object.entries(CCR)) {
     const needles = "needles" in spec ? spec.needles : [spec.needle];
@@ -111,10 +112,10 @@ export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
 }
 
 /** `sync`'s decision for `agentBinary.searchAnchors`. Pure: the caller reads the binaries.
- *  - `elf` present: extract; a failure is a delta (blocks the write, Q5).
- *  - `native` present (same agent version as the ELF): its anchors must equal the ELF's, since hostloop runs it.
+ *  - `elf` present: extract; a failure is a delta, which blocks the write.
+ *  - `native` present: its anchors must equal the ELF's, since hostloop runs it.
  *  - `elf` absent: carry the base's anchors only for the same agent version (the ELF is immutable per version),
- *    else record nothing (absent = unknown; a search corpus refuses on unknown). */
+ *    else record nothing (absent means unknown). */
 export function searchAnchorsForSync(a: {
   elf: Buffer | null;
   native: Buffer | null;

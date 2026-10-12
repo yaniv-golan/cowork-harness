@@ -40,11 +40,14 @@ export const SearchAnchors = z.strictObject({
 });
 export type SearchAnchors = z.infer<typeof SearchAnchors>;
 
-const AgentSearchGateKey = z.enum(["tengu_plum_vx3", "tengu_sleepy_shore", "tengu_gzip_request_bodies", "tengu_buzzing_pike"]);
-const sortedKeys = z.array(AgentSearchGateKey).refine(isSortedUniqueKeys, "must be duplicate-free");
-function isSortedUniqueKeys(xs: string[]): boolean {
-  return new Set(xs).size === xs.length;
-}
+/** The four agent feature values `sync` records (src/sync/agent-search-gates.ts). One list, used by the reader too. */
+export const AGENT_SEARCH_GATE_KEYS = ["tengu_plum_vx3", "tengu_sleepy_shore", "tengu_gzip_request_bodies", "tengu_buzzing_pike"] as const;
+const AgentSearchGateKey = z.enum(AGENT_SEARCH_GATE_KEYS);
+const uniqueKeys = z.array(AgentSearchGateKey).refine((xs) => new Set(xs).size === xs.length, "must be duplicate-free");
+/** A published value: a boolean, a number, or a flat object of booleans and numbers. Strings are never published,
+ *  since a feature payload string could carry an identifier. */
+const GateScalar = z.union([z.boolean(), z.number()]);
+const GateValue = z.union([GateScalar, z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/), GateScalar)]);
 
 /** `provenance.agentSearchGates`: the agent-side feature values that shape a live WebSearch, from Desktop's
  *  per-session GrowthBook cache (src/sync/agent-search-gates.ts). Raw values, size-capped; no org or session id. */
@@ -52,10 +55,12 @@ export const AgentSearchGates = z.discriminatedUnion("observed", [
   z.strictObject({
     observed: z.literal(true),
     files: z.number().int().positive(),
-    values: z.partialRecord(AgentSearchGateKey, z.json()),
-    absent: sortedKeys.optional(),
-    withheld: sortedKeys.optional(),
-    disagreeing: sortedKeys.optional(),
+    values: z.partialRecord(AgentSearchGateKey, GateValue),
+    absent: uniqueKeys.optional(),
+    withheld: uniqueKeys.optional(),
+    disagreeing: uniqueKeys.optional(),
+    /** The newest cache file's modification date (YYYY-MM-DD), so a stale cache is visible. */
+    newestDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   }),
   z.strictObject({ observed: z.literal(false) }),
 ]);
@@ -137,7 +142,7 @@ export const PlatformBaseline = z.looseObject({
     cliCapabilities: z.strictObject({ permissionPrompts: z.boolean() }).optional(),
     // The web-search anchors the frozen search corpus recognises the agent's nested search request by
     // (src/sync/search-anchors.ts). Same lifecycle as `stringSentinels`. ABSENT means unknown, and a search corpus
-    // refuses to run on unknown anchors rather than guess.
+    // will refuse to run on unknown anchors rather than guess (nothing reads the block yet).
     searchAnchors: SearchAnchors.optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),

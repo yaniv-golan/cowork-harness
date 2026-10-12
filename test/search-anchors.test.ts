@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { extractSearchAnchors, searchAnchorsForSync, SEARCH_ANCHOR_CALL_SITE } from "../src/sync/search-anchors.js";
-import { PlatformBaseline, SearchAnchors } from "../src/types.js";
+import { AgentSearchGates, PlatformBaseline, SearchAnchors } from "../src/types.js";
 import { buildNextAgentBinary, loadBaseline } from "../src/baseline.js";
 import { readdirSync } from "node:fs";
 
@@ -77,6 +77,28 @@ describe("extractSearchAnchors", () => {
     if (!moved.ok) expect(moved.defects.join("\n")).toMatch(/ccr\.sessionsPath/);
   });
 
+  it("fails when the search route vanishes or appears twice, in either quote", () => {
+    const gone = extractSearchAnchors(Buffer.from(bundle().toString().replace('"web-search"', '"web-find"')));
+    expect(gone.ok).toBe(false);
+    if (!gone.ok) expect(gone.defects.join("\n")).toMatch(/ccr\.searchRoute: 0/);
+    const twice = extractSearchAnchors(Buffer.from(bundle().toString() + "`web-search`"));
+    expect(twice.ok).toBe(false);
+    if (!twice.ok) expect(twice.defects.join("\n")).toMatch(/ccr\.searchRoute: 2/);
+  });
+
+  it("fails when the tool type appears twice in the call site, even with the same value", () => {
+    const r = extractSearchAnchors(bundle(callSite().replace("max_uses:8}", 'max_uses:8,x:{type:"web_search_20250305"}}')));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.defects.join("\n")).toMatch(/toolType: 2/);
+  });
+
+  it("never captures a template literal with a substitution", () => {
+    const site = callSite().replace(`["${SENTENCE}"]`, "[`Search for ${x} now please`]");
+    const r = extractSearchAnchors(bundle(site));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.defects.join("\n")).toMatch(/systemSentence: 0/);
+  });
+
   it("fails when a CCR anchor vanishes", () => {
     const r = extractSearchAnchors(Buffer.from(bundle().toString().replace("/worker/${n}", "/w/${n}")));
     expect(r.ok).toBe(false);
@@ -125,6 +147,42 @@ describe("searchAnchorsForSync — sync's decision", () => {
       anchors: undefined,
       deltas: [],
     });
+  });
+});
+
+describe("committed baselines: the search blocks parse strictly (non-vacuous on the newest)", () => {
+  const dir = join(process.cwd(), "baselines");
+  const files = readdirSync(dir).filter((f) => /^desktop-.*\.json$/.test(f));
+  it.each(files)("%s", (f) => {
+    const b = JSON.parse(readFileSync(join(dir, f), "utf8")) as {
+      agentBinary?: { searchAnchors?: unknown };
+      provenance?: { agentSearchGates?: unknown };
+    };
+    if (b.agentBinary?.searchAnchors !== undefined) expect(SearchAnchors.safeParse(b.agentBinary.searchAnchors).success).toBe(true);
+    if (b.provenance?.agentSearchGates !== undefined) expect(AgentSearchGates.safeParse(b.provenance.agentSearchGates).success).toBe(true);
+  });
+  it("the newest baseline carries both blocks", () => {
+    const newest = loadBaseline("latest") as unknown as {
+      agentBinary?: { searchAnchors?: unknown };
+      provenance?: { agentSearchGates?: unknown };
+    };
+    expect(newest.agentBinary?.searchAnchors).toBeDefined();
+    expect(newest.provenance?.agentSearchGates).toBeDefined();
+  });
+});
+
+describe("sync wiring (source text): every anchor path goes through searchAnchorsForSync, and its deltas block", () => {
+  const cli = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+  it("pushes the helper's deltas into the write-blocking list", () => {
+    expect(cli).toContain("res.unknownDeltas.push(...anchored.deltas);");
+  });
+  it("never assigns the base's anchors outside the helper", () => {
+    expect(cli).not.toMatch(/searchAnchors = baseSearchAnchors/);
+    expect(cli.match(/searchAnchorsForSync\(/g)?.length).toBe(1);
+  });
+  it("writes the helper's anchors", () => {
+    expect(cli).toMatch(/const searchAnchors = anchored\.anchors;/);
+    expect(cli).toMatch(/buildNextAgentBinary\([\s\S]{0,800}searchAnchors,\n/);
   });
 });
 

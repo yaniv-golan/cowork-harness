@@ -465,11 +465,12 @@ committed baseline and say why in that baseline's `$comment`.
    **`agentBinary.searchAnchors` → how the agent's WebSearch tool asks for a search.** The agent's WebSearch tool
    makes its own nested model request, and `sync` records, from the staged agent, the facts that identify that
    request: the server tool type, the system sentence and the user-message prefix (as `sha256` and UTF-8 byte
-   length only, never the text), and the cloud search route's path pieces. Each literal is located by code shape
-   inside the one call site that names the nested search, because the binary also holds string-table copies.
+   length only, never the text), and the cloud search route's path pieces. The tool type and the two literals are
+   located by code shape inside the one call site that names the nested search, because the binary also holds
+   string-table copies. The cloud route pieces are only checked to be present exactly once; they are constants.
    Nothing in the harness reads the block yet; it exists so a later release can recognise the nested request.
    - **Blocking.** A staged agent whose anchors cannot be extracted, or whose native build (the one hostloop runs)
-     disagrees with the VM ELF, refuses the write. Same lifecycle as `stringSentinels` otherwise: carried from the
+     gives different anchors from the VM ELF, refuses the write, whatever the two builds' versions. Same lifecycle as `stringSentinels` otherwise: carried from the
      base only on a re-sync of the same agent version when the ELF is not staged.
    - **Measured.** Every backed-up agent from 2.1.260 through 2.1.295 gives the same anchors.
 
@@ -478,8 +479,9 @@ committed baseline and say why in that baseline's `$comment`.
    `local-agent-mode-sessions/*/*/cowork-gb-cache.json`, and `sync` records four of them from the newest file, as
    raw values: whether the nested search runs on the small/fast model, the fast search profile, and the two
    request-body compression features. A key another cache file holds with a different value is listed in
-   `disagreeing`; a value over 256 characters is `withheld`. No org or session identifier is written. No cache
-   file is a `NOTE` (`observed: false`), never a blocker.
+   `disagreeing`. Only a boolean, a number or a flat object of them is published; any other value (a string could
+   carry an identifier) is `withheld`. `newestDate` is the newest cache file's date, so a stale cache shows. No org
+   or session identifier is written. No cache file is a `NOTE` (`observed: false`), never a blocker.
 
    `sync --diff` renders these as distinct lines — content changed, refetched-only, feature count moved —
    and separately reports a gate that starts or stops **serving** a key, which matters because an unserved
