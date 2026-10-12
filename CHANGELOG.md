@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`critique --compare --cluster lexical`: candidate groups of findings that read alike.** Citation-resolved findings
+  of full reports, across every report and label group, grouped by character 3–5-gram TF-IDF similarity of their idea
+  and recommended action, complete linkage at a fixed cut of 0.20 (every pair in a group clears it). A judgement from
+  word overlap, not a match: a group carries no k/N, an ungrouped finding is not a claim that it did not recur, and
+  groups are listed in input order. Local; nothing is sent. The payload gains `clustering` (always) and
+  `candidateGroups` (lexical mode); `schema/critique-compare.json` describes both. `--cluster judge` is refused.
+
 ### Upgrade notes
 
 - **A negative assertion on a `visualize` tool is now refused at load.** `tool_not_called` or `subagent_tool_absent`

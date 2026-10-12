@@ -16,7 +16,10 @@
 export const CLUSTER_GATE: null = null;
 /** Whether `--cluster judge` is offered to users. Held: lexical candidate groups only. */
 export const USER_FACING_CLUSTER_JUDGE = false;
-/** Complete-linkage cut: every pair inside a candidate group has similarity ≥ this. */
+/** Complete-linkage cut: every pair inside a candidate group has similarity ≥ this. A precision/recall choice, made on
+ *  a measured tradeoff over repeated critiques of one probe skill: at 0.20 a little over half the grouped pairs were the
+ *  same finding and a little over half the same-finding pairs were grouped; a low cut (0.06) grouped nearly every
+ *  same-finding pair but mostly with unrelated ones. Hence "candidate", and no claim from an ungrouped finding. */
 export const LEXICAL_GROUP_THRESHOLD = 0.2;
 export const LEXICAL_SCHEME = "char_wb-3-5-tfidf/1";
 export const LEXICAL_BASIS = "lexical-similarity (a judgement, not a match)";

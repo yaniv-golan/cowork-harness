@@ -2847,6 +2847,108 @@
         "type": "object",
         "closed": true
       },
+      ".candidateGroups": {
+        "type": "array"
+      },
+      ".candidateGroups[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".candidateGroups[].basis": {
+        "const": "lexical-similarity (a judgement, not a match)",
+        "required": true
+      },
+      ".candidateGroups[].groups": {
+        "type": "null",
+        "required": true
+      },
+      ".candidateGroups[].members": {
+        "type": "array",
+        "required": true
+      },
+      ".candidateGroups[].members[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".candidateGroups[].members[].classification": {
+        "type": "string",
+        "required": true
+      },
+      ".candidateGroups[].members[].findingFingerprint": {
+        "type": "string",
+        "required": true
+      },
+      ".candidateGroups[].members[].idea": {
+        "type": "string",
+        "required": true
+      },
+      ".candidateGroups[].members[].itemIndex": {
+        "type": "integer",
+        "required": true
+      },
+      ".candidateGroups[].members[].labelGroup": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".candidateGroups[].members[].report": {
+        "type": "integer",
+        "required": true
+      },
+      ".candidateGroups[].members[].sessionId": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".clustering": {
+        "type": "object",
+        "closed": true,
+        "required": true
+      },
+      ".clustering.findingsCompared": {
+        "type": "integer"
+      },
+      ".clustering.mode": {
+        "enum": ["none", "lexical"],
+        "required": true
+      },
+      ".clustering.population": {
+        "const": "citation-resolved",
+        "required": true
+      },
+      ".clustering.sent": {
+        "const": "nothing",
+        "required": true
+      },
+      ".clustering.similarity": {
+        "type": "object",
+        "closed": true
+      },
+      ".clustering.similarity.idf": {
+        "type": "string",
+        "required": true
+      },
+      ".clustering.similarity.linkage": {
+        "const": "complete",
+        "required": true
+      },
+      ".clustering.similarity.scheme": {
+        "const": "char_wb-3-5-tfidf/1",
+        "required": true
+      },
+      ".clustering.similarity.text": {
+        "type": "string",
+        "required": true
+      },
+      ".clustering.similarity.threshold": {
+        "type": "number",
+        "required": true
+      },
+      ".clustering.summariesSkipped": {
+        "type": "string"
+      },
+      ".clustering.validated": {
+        "type": "null",
+        "required": true
+      },
       ".excluded": {
         "type": "array",
         "required": true

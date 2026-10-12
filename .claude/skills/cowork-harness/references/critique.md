@@ -224,6 +224,9 @@ harness majors, mixed `corpusHash` within a group, the same critique twice, a su
 field, a pre-4.8 report. Marked, and refused
 by `--strict`: mixed evaluator models / hash bases / skill trees / probes, a pass-1-only member. Marked only:
 `mixedPackagedCorpus`, `probeUnverified` (no prompt hash — the summary default).
+`--cluster lexical` adds `candidateGroups`: citation-resolved findings of full reports whose wording is close
+(complete linkage, every pair over a fixed cut). A judgement from word overlap, not a match: no k/N, input order, a
+finding in no group may still have recurred in other words. Local, nothing sent; `--cluster judge` is refused.
 Its output carries finding text — not public-safe. Details: [`docs/critique.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/critique.md) (repo-only).
 
 ## An untracked skill file is not graded
