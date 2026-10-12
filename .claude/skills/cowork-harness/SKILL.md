@@ -35,13 +35,13 @@ Read them.
 The 10-second inner loop, once the CLI is on PATH:
 
 ```bash
-cowork-harness doctor                       # prerequisites OK? (Docker, agent, token, baseline)
+cowork-harness doctor                       # prerequisites OK? (Docker, agent, token, baseline, device image)
 cowork-harness skill ./my-skill "do X" --model claude-sonnet-5   # run once (or set COWORK_HARNESS_MODEL)
 ```
 
 Before the first command, confirm the CLI is reachable and **fail loud** (never fake a pass) when a tier's dependencies are missing:
 
-- **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, and the baseline in one pass. The bullets below explain each thing it checks (and how to fix it).
+- **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, the baseline and the `device_bridge` image (built, or built on the first bridge run) in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
 - **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 4.9.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^4.9.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^4.9.0"`. **Pin `@^4.9.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
@@ -161,7 +161,7 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/measurement.md`](references/measurement.md) | `--repeat`, `--ablate-skill`, measurement hygiene |
 | [`references/debugging.md`](references/debugging.md) | triage, `result.json` fields and `trace` views, `chat` |
 | [`references/gotchas.md`](references/gotchas.md) | the full "✓ passed ≠ correct" landmine catalog |
-| [`references/task-recipes.md`](references/task-recipes.md) | start here for "how do I X": evolve `assert:`, audit tier drift, redaction, budgets, answer quality, and goals with no flag (force a compaction, ablate a section, a form reply, resume in a new conversation, hook JSON decisions, schema checks, unattended runs) |
+| [`references/task-recipes.md`](references/task-recipes.md) | start here for "how do I X": evolve `assert:`, audit tier drift, redaction, budgets, answer quality, and goals with no flag (force a compaction, ablate a section, a form reply, resume in a new conversation, hook JSON decisions, schema checks, unattended runs), keeping a skill's web searches (`search-pool`), and a skill that parks and resumes in a later session (`legs:`) |
 | [`references/assertion-catalog.md`](references/assertion-catalog.md) | the assertion catalog's index: conventions shared by every key, the verdict-signal table, and links to the per-family files below |
 | [`references/assertion-catalog-outcome-files-tools.md`](references/assertion-catalog-outcome-files-tools.md) | per-key rows: outcome, transcript, files and artifacts, tools |
 | [`references/assertion-catalog-agents-skills-budgets.md`](references/assertion-catalog-agents-skills-budgets.md) | per-key rows: sub-agents, skills and connectors, budgets, tasks, delivery |
@@ -171,7 +171,7 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/fidelity-and-answers.md`](references/fidelity-and-answers.md) | tier semantics, answer paths, the determinism contract |
 | [`references/ci-recipe.md`](references/ci-recipe.md) | the GitHub Action, replay-vs-live lanes, the four-stage pipeline |
 | [`references/critique.md`](references/critique.md) | `critique` report and evidence-package shapes |
-| [`references/eval.md`](references/eval.md) | `eval`: paired before/after of two plugin versions — labels, refusals, exit codes, files |
+| [`references/eval.md`](references/eval.md) | `eval`: paired before/after of two plugin versions — labels, metric rows, refusals, exit codes, files |
 | [`references/hillclimb.md`](references/hillclimb.md) | `hillclimb run` / `check` / `state-template` / `freeze-ref` / `regrade` for a `/claude-api hillclimb` loop — pass `--flow` to each, the harness gate, resume, pairwise references, re-grading, refusals, exit codes |
 | [`references/hillclimb-recipe.md`](references/hillclimb-recipe.md) | Recipe 7: the `/claude-api hillclimb` loop with the harness as its runner, step by step — the runner command, Step 0.5 checks, metrics, spend, rounds, stalls |
 | `scripts/scenario.py` | `scaffold`, `lint`, `lint-skill`, `resolve-agent-types <plugin-dir>` (validates a pinned `subagent_type` against `plugin.json` + `agents/*.md`) |

@@ -2206,9 +2206,9 @@ export interface DeviceBridgeRecord {
    *  (`bridge-default`: `acceptEdits`, what a production cloud task reports under the Manual choice). */
   permissionMode: string;
   permissionModeSource: "session" | "bridge-default";
-  /** Whether a delete in a connected folder is refused in place (`enforced`) or, as in this release, allowed on the
-   *  device copy and reported after the run (`reported`, the `delete-not-refused` divergence). Absent on a replayed
-   *  recording made before the delete card (v17). */
+  /** Whether a delete in a connected folder is refused in place (`enforced`) or, when the bridge's canary did not
+   *  prove the refusal, allowed on the device copy and reported after the run (`reported`, the `delete-not-refused`
+   *  divergence). Absent on a replayed recording made before the delete card (v17). */
   deleteRefusal?: "reported" | "enforced";
   /** The delete card's grants this turn: the folders, who answered (`script`,
    *  `decider`, `human`, or `bypassPermissions` when no card is shown) and the turn. */

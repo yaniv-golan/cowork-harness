@@ -82,9 +82,12 @@ files: `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: 
 agent's container). A delete in an `rw` folder is refused until the user allows it through the delete card,
 `mcp__remote-devices__device_request_delete_permission`, as in production: a skill that deletes there needs a
 scripted answer for the card (`when_tool:` it, `decide: allow` or `deny`) or the run fails as unanswered; an `rwd`
-folder allows deletes from the start. `no_delete_in_mounts` covers the folders, an allowed delete included. A delete
+folder allows deletes from the start. A move between connected folders copies and cannot remove its source, and git
+leaves its lock files so the next commit fails on `HEAD.lock`, as in production; a rename within one folder
+succeeds. `no_delete_in_mounts` covers the folders, an allowed delete included. A delete
 that gets past the refusal fails the run (`device_delete_bypassed`). The first bridge run builds the device image
-locally (needs Docker Hub).
+locally (the agent image plus the delete library; needs Docker Hub and apt, takes a few minutes) and rebuilds it when
+the agent image changes.
 `tool_not_called` on `device_bash`/`get_device_info`/`device_request_delete_permission` without the bridge, or on a device tool the harness never serves
 (with it or without), is refused as vacuous. Egress follows the session allowlist;
 `egress.unrestricted: true` matches production's pass-through. With no `permission_mode` in the session the agent
@@ -223,8 +226,10 @@ your gate actually has a label called `"first"`.
   **not consulted**.
 - **Not provenanced** → raises a per-domain approval gate (`webfetch:<domain>`) that is never
   auto-allowed. Unanswered, it **ends the run as an unanswered gate** under `on_unanswered: fail`
-  (the `run` default); `--on-unanswered first` denies it. Answer it with a scripted rule
-  (`when_tool: "webfetch:<domain>"` + `grant: domain|once`), a session
+  (the `run` and `record` default), naming the domain, the URL and the rule to add; `--on-unanswered first` denies
+  it, and `llm` picks one of its three buttons (`Allow once`, `Allow all for website`, `Deny`). Answer it with a
+  scripted rule (`when_tool: "webfetch:<domain>"` + `decide: allow` and `grant: once|domain`, or `decide: deny`), a
+  session
   `web_fetch.approved_domains`, or a live decider.
 
 Surprise to remember: adding a host to `egress.extra_allow` is a **no-op** for a provenanced fetch.

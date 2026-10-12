@@ -62,7 +62,8 @@ const FROZEN_NUMBERED_ITEMS = [
   "5. **`subagent_declared_but_unused` fires on declared-but-didn't-use-THAT-tool**, even if the",
   "6. **`dispatch_count_max` is your author-chosen budget UNDER Cowork's production cap, not a",
   "7. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary",
-  "8. **Read-only mounts are enforced; delete-deny is a HARNESS gap — production DOES enforce it.**",
+  // Reworded when the device bridge started refusing deletes: the harness enforces delete-deny there.
+  "8. **Read-only mounts are enforced; delete-deny is enforced only under `device_bridge` — production enforces it everywhere.**",
   "9. **Keep `.env` out of any mounted folder** — it is copied into the sandbox and the token could",
   "10. **A base64 artifact that was scrubbed at record time will fail artifact assertions at replay.**",
   '11. **An external decider returning `"first"` does not select option 1.** The `"first"` keyword',

@@ -69,9 +69,10 @@ authorable). Reach for this list when debugging a run's behavior, that one while
 7. **`protocol` is rejected (not silently passed) if the scenario asserts egress** — boundary
    assertions need a sandboxed tier (`container`+). Good: this one fails loud by design.
 
-8. **Read-only mounts are enforced; delete-deny is a HARNESS gap — production DOES enforce it.**
-   Production enforces it on `rw` mounts; which mounts are `rw` is below. `mode:r` mounts get a real `:ro` bind (a write fails in-guest). But `rw` vs `rwd`
-   (write-but-no-delete) is *not* mount-enforced **in the harness** — `rm` succeeds and is only caught
+8. **Read-only mounts are enforced; delete-deny is enforced only under `device_bridge` — production enforces it everywhere.**
+   Production enforces it on `rw` mounts; which mounts are `rw` is below. `mode:r` mounts get a real `:ro` bind (a write fails in-guest). On the local lane
+   (every tier without `device_bridge`) `rw` vs `rwd` (write-but-no-delete) is *not* mount-enforced — `rm` succeeds
+   and is only caught
    post-hoc. **Real Cowork enforces it live on a `rw` mount:** a FUSE mount where `unlink`/`rmdir` fail
    `Operation not permitted`; a skill must request approval via `allow_cowork_file_delete` (which
    re-mounts the folder `rwd` mid-session) to delete. **Which mounts are `rw` depends on the release:** a
@@ -87,8 +88,8 @@ authorable). Reach for this list when debugging a run's behavior, that one while
    (`EXDEV`, then `EPERM` on the copy-then-unlink fallback), so that stays a delete; on an `rwd` outputs
    mount the fallback's unlink should succeed, but that is not probed. Consequences on a `rw` mount: a
    skill should not stage disposable scratch there (cleanup costs an approval prompt), and a skill's
-   "catch-EPERM-then-request-approval" branch cannot be exercised at any harness tier (the `rm` just
-   succeeds here). On an older `rw` baseline, if a scenario's deletion IS intended, assert
+   "catch-EPERM-then-request-approval" branch can be exercised only under `device_bridge`, where the device refuses
+   the delete and serves the delete card; on the local-lane tiers the `rm` just succeeds. On an older `rw` baseline, if a scenario's deletion IS intended, assert
    `allow_outputs_delete: true` rather than dropping `no_delete_in_outputs` (on `rwd` it is a no-op unless
    `no_delete_in_mounts` arms the outputs check, where it waives that check as on `rw`).
 
