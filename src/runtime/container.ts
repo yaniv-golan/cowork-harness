@@ -16,7 +16,7 @@ import { combineSdkMcp } from "../agent/session.js";
 import { listMountedSkills } from "../run/skill-metadata.js";
 import type { McpHandler } from "../hostloop/workspace-handler.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
-import { agentPlanFor, startDeviceBridge } from "./device-container.js";
+import { agentPlanFor, deviceToolSurface, startDeviceBridge } from "./device-container.js";
 
 /** The VM loop's web_fetch surface, as three coupled answers derived from ONE gate reading.
  *
@@ -141,6 +141,7 @@ export function spawnContainer(
   // user supplied from one the sandbox leaked. First turn only (a no-op on resume). Under device_bridge the
   // folders' copies are in the device tree, so they are visited there.
   captureInputHostPathCorpus(plan, mntHost, outDir, device?.inputRoots);
+  const deviceSurface = deviceToolSurface(device);
 
   // NOTE: local marketplaces are resolved to --plugin-dir in buildLaunchPlan (the in-VM
   // agent loads via --plugin-dir; the `claude plugin marketplace add` registry is inert
@@ -170,10 +171,10 @@ export function spawnContainer(
     // off-registry-auto-allow reason present_files is.
     disallowed: webFetchDisallowed,
     // The delete card (device?.askTools) is advertised but not pre-approved: production marks it as needing a person.
-    extraTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? []), ...(device?.askTools ?? [])],
+    extraTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...deviceSurface.advertised],
     // web_fetch is absent here ON PURPOSE — see webFetchTools above. It is the one registered tool this
     // tier does not pre-approve, because production gates it at can_use_tool.
-    extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? [])],
+    extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...deviceSurface.preApproved],
   });
   const dockerArgs = dockerRunArgv({
     network,

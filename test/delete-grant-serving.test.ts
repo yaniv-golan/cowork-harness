@@ -12,6 +12,7 @@ import {
   DEVICE_BRIDGE_TOOLS,
   deleteGrantsOf,
   deviceBridgeRecord,
+  deviceToolSurface,
   readDeviceGrants,
   writeDeviceGrant,
 } from "../src/runtime/device-container.js";
@@ -55,11 +56,11 @@ describe("the delete card's tool definition", () => {
   it("is advertised but not pre-approved: the agent asks, so a person answers", () => {
     expect(DEVICE_BRIDGE_ASK_TOOLS).toEqual([DELETE_GRANT_TOOL]);
     expect(DEVICE_BRIDGE_TOOLS).not.toContain(DELETE_GRANT_TOOL);
-    const src = readFileSync(new URL("../src/runtime/container.ts", import.meta.url), "utf8");
-    const allowed = src.slice(src.indexOf("extraAllowedTools:"), src.indexOf("\n", src.indexOf("extraAllowedTools:")));
-    const advertised = src.slice(src.indexOf("extraTools:"), src.indexOf("\n", src.indexOf("extraTools:")));
-    expect(advertised).toContain("device?.askTools");
-    expect(allowed).not.toContain("askTools");
+    const surface = deviceToolSurface({ tools: DEVICE_BRIDGE_TOOLS, askTools: DEVICE_BRIDGE_ASK_TOOLS });
+    expect(surface.advertised).toContain(DELETE_GRANT_TOOL);
+    expect(surface.preApproved).not.toContain(DELETE_GRANT_TOOL);
+    expect(surface.preApproved).toEqual(DEVICE_BRIDGE_TOOLS);
+    expect(deviceToolSurface(undefined)).toEqual({ advertised: [], preApproved: [] });
   });
 });
 

@@ -624,8 +624,10 @@ describe("wiring: spawnContainer", () => {
     expect(s).toMatch(/stageWorkspace\(plan, mntHost, /);
   });
   it("advertises, pre-approves and serves the bridge's tools", () => {
-    expect(s).toMatch(/extraTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\), \.\.\.\(device\?\.askTools \?\? \[\]\)\]/);
-    expect(s).toMatch(/extraAllowedTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\)\]/);
+    // What each list holds is deviceToolSurface's (delete-grant-serving.test.ts); here, that both lists use it.
+    expect(s).toMatch(/const deviceSurface = deviceToolSurface\(device\);/);
+    expect(s).toMatch(/extraTools: \[[^\]]*\.\.\.deviceSurface\.advertised\]/);
+    expect(s).toMatch(/extraAllowedTools: \[[^\]]*\.\.\.deviceSurface\.preApproved\]/);
     expect(s).toMatch(/\.\.\.\(device \? \[device\.bundle\] : \[\]\)/);
   });
 });

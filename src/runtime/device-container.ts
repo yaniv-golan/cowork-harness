@@ -500,7 +500,10 @@ const ANSWERED_BY: Partial<Record<string, DeleteGrantAnswer>> = {
 
 /** The grants a turn made, each with who answered it. The agent asks before each call, so the run's allow answers
  *  for the delete card and the handler's calls line up in order: the n-th allow permitted the n-th call. A call the
- *  handler refused (a bad path) grants nothing. Under bypassPermissions the agent asks nothing. */
+ *  handler refused (a bad path) grants nothing. Under bypassPermissions the agent asks nothing.
+ *  Limit: the decision record and the handler call share no id, so two cards in flight at once, answered by
+ *  different answerers, can swap their `answeredBy`. The folders granted are right either way (the grants file is
+ *  written by the handler, not from this pairing). */
 export function deleteGrantsOf(
   decisions: ReadonlyArray<{ name?: string; decision?: string; by?: string }>,
   calls: ReadonlyArray<{ folders: string[]; ok: boolean }>,
@@ -517,6 +520,17 @@ export function deleteGrantsOf(
     if (c.ok && answeredBy) out.push({ folders: [...c.folders], answeredBy, turn });
   });
   return out;
+}
+
+/** The device tools the agent sees (`advertised`) and those it may call without asking (`preApproved`). The delete
+ *  card is advertised but never pre-approved: the agent then asks (`can_use_tool`), so a person answers it, as in
+ *  production. */
+export function deviceToolSurface(device: { tools: string[]; askTools: string[] } | undefined): {
+  advertised: string[];
+  preApproved: string[];
+} {
+  if (!device) return { advertised: [], preApproved: [] };
+  return { advertised: [...device.tools, ...device.askTools], preApproved: [...device.tools] };
 }
 
 /**

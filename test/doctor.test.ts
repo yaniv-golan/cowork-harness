@@ -1045,3 +1045,15 @@ describe("authFailureHint — what a run the agent could not authenticate says",
     expect(h).toContain("Check with: cowork-harness doctor --tier container");
   });
 });
+
+describe("doctor — the device_bridge image row", () => {
+  it("is informational: current, or absent and built on the first bridge run; never blocking", () => {
+    const tag = "cowork-device:1-abcdef012345";
+    const current = get(runDoctorChecks("container", probe({ deviceImage: () => ({ state: "current", tag }) })), "device-image");
+    expect(current).toMatchObject({ status: "ok", required: false });
+    expect(current.detail).toContain(tag);
+    const absent = get(runDoctorChecks("container", probe({ deviceImage: () => ({ state: "absent", tag }) })), "device-image");
+    expect(absent).toMatchObject({ status: "skip", required: false });
+    expect(absent.detail).toMatch(/first device_bridge run/);
+  });
+});
