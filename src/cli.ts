@@ -688,7 +688,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   // ${TRACE_VIEWS.join("|")} call on its own physical line, apart from the per-view rows below that
   // mention "result.json", keeps this out of the per-turn-artifact-addressing scan's blind spot (it
   // flags any physical line naming an artifact next to something that looks like a path-join call).
-  trace: `usage: trace <run-id | run-dir | events.jsonl> [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--scope main|subagent|any] [--per-call] [--output-format json]
+  trace: `usage: trace <run-id | run-dir | events.jsonl> [--leg <id>] [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--scope main|subagent|any] [--per-call] [--output-format json]
+       --leg <id>                one prompt leg of a multi-leg run dir (the same as trace <run-dir>/legs/<id>); a multi-leg run dir without it is refused, since each leg is its own agent session
        --view tools              tool call / result rows
        --view questions          gate lifecycle (question → offered options, incl. each option's description → answer → delivered)
        --view dispatches         sub-agent dispatch tree + dispatch_count_max
@@ -743,7 +744,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "search-pool": SEARCH_POOL_USAGE,
   ref: REF_USAGE,
   "verify-run":
-    "usage: verify-run <run-dir> <scenario.yaml> [--allow-metric-commands] [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent; a command metric is carried forward from the run unless --allow-metric-commands re-runs it)",
+    "usage: verify-run <run-dir> <scenario.yaml> [--leg <id>] [--allow-metric-commands] [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent; a command metric is carried forward from the run unless --allow-metric-commands re-runs it)",
+    "       --leg <id>: with a multi-leg (`legs:`) scenario, re-evaluate that prompt leg's assert: against its legs/<id> dir (or name the leg dir itself). Refused when the leg's tree changed after it ended (a later leg or host action wrote to it; under workdir: persistent every leg but the last), and for a host-action leg.",
   inspect:
     "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run PRODUCED: artifacts + a shallow preview of each JSON artifact's fields; for what HAPPENED — tools/decisions — use `trace`)",
   diff:
@@ -5012,7 +5014,7 @@ const FILE_FAMILY = new Set([
 
 function cmdTrace(args: string[]) {
   // --dotenv / --run-dir after the subcommand: applied and removed before this command's own flag scans.
-  args = stripCommandGlobals("trace", args, ["--view", "--output-format", "--scope"], isJsonOutput(args));
+  args = stripCommandGlobals("trace", args, ["--view", "--output-format", "--scope", "--leg"], isJsonOutput(args));
   ensureOutputFormat("trace", args);
   const json = isJsonOutput(args);
 
@@ -5052,6 +5054,7 @@ function cmdTrace(args: string[]) {
       "--full-results",
       "--scope",
       "--per-call",
+      "--leg",
     ],
     json,
   );
@@ -5073,7 +5076,7 @@ function cmdTrace(args: string[]) {
     fail("trace", "usage", `--scope: expected one of ${TOOL_DURATION_SCOPES.join("|")}, got "${scopeArg ?? ""}"`, undefined, json);
 
   // skip the `--output-format`, `--view` and `--scope` values so they don't get treated as the target path.
-  const allPositionals = positionals(args, ["--output-format", "--view", "--scope"]);
+  const allPositionals = positionals(args, ["--output-format", "--view", "--scope", "--leg"]);
   const target = allPositionals[0];
   // trace takes exactly one target; reject stray positionals rather than silently using the first.
   if (allPositionals.length > 1)
@@ -5088,14 +5091,27 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      `usage: trace <run-id | run-dir | events.jsonl> [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--scope main|subagent|any] [--per-call] [--output-format json]`,
+      `usage: trace <run-id | run-dir | events.jsonl> [--leg <id>] [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--scope main|subagent|any] [--per-call] [--output-format json]`,
       undefined,
       json,
     );
+  // --leg <id>: one leg of a multi-leg run dir, as `trace <dir>/legs/<id>`.
+  const legIdx = args.indexOf("--leg");
+  const legArg = legIdx >= 0 ? args[legIdx + 1] : undefined;
+  if (legIdx >= 0 && (legArg === undefined || legArg.startsWith("--"))) fail("trace", "usage", "--leg requires a leg id", undefined, json);
+  let traceTarget = target!;
+  if (legArg !== undefined) {
+    const legDir = join(target!, "legs", legArg);
+    if (classifyRunDir(target!).kind !== "legs" || !existsSync(join(legDir, "leg.json")))
+      return fail("trace", "usage", `trace --leg: ${target} is not a multi-leg run dir with a leg "${legArg}"`, undefined, json);
+    traceTarget = legDir;
+  }
   let file: string;
   try {
-    file = resolveEventsFile(target!);
+    file = resolveEventsFile(traceTarget);
   } catch (e) {
+    // A multi-leg root or an action leg is a refused shape (`runtime`), not a bad argument.
+    if (e instanceof RunDirShapeError) return fail("trace", "runtime", e.message, undefined, json);
     return fail("trace", "usage", String((e as Error).message), undefined, json);
   }
   if (view === "questions") {

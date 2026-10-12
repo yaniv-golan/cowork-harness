@@ -2659,3 +2659,30 @@ def test_replay_noop_advice_names_only_keys_the_lane_allows(tmp_path):
         assert len(found) == 1, lane
         assert ("artifact_json" in found[0].fix) is offered, lane
         assert "file_exists" in found[0].fix
+
+
+# --- multi-leg (`legs:`) scenarios ------------------------------------------------
+# A legs: scenario has its own top-level keys; each PROMPT leg is linted as the single-prompt scenario it runs as.
+_ML = (
+    "fidelity: container\nworkdir: persistent\nlegs:\n"
+    "  - id: ask\n    prompt: run it\n    assert:\n      - artifact_json: { artifact: outputs/s.json, path: status, equals: waiting }\n"
+    "  - id: apply\n    host_action: { run: ['true'] }\n"
+    "  - id: resume\n    prompt: run it again\n    assert:\n      - artifact_json: { artifact: outputs/s.json, path: status, equals: complete }\n"
+)
+
+
+def test_multi_leg_known_keys_are_clean(tmp_path):
+    assert _mk(tmp_path, _ML, rule="unknown-top-key") == []
+    assert _mk(tmp_path, _ML, rule="fidelity-missing") == []
+
+
+def test_multi_leg_unknown_top_key_and_per_leg_rules(tmp_path):
+    found = _mk(tmp_path, _ML + "prompt: x\n", rule="unknown-top-key")
+    assert len(found) == 1 and "`prompt`" in found[0].message
+    bad = _ML.replace("equals: complete }", "equals: complete }\n      - file_not_empty: outputs/s.json")
+    keys = _mk(tmp_path, bad, rule="unknown-assert-key")
+    assert len(keys) == 1 and keys[0].message.startswith("leg resume: ")
+
+
+def test_multi_leg_without_fidelity_is_an_error(tmp_path):
+    assert len(_mk(tmp_path, _ML.replace("fidelity: container\n", ""), rule="fidelity-missing")) == 1

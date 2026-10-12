@@ -324,6 +324,11 @@ describe.runIf(can)("verify-run --leg (stub agent, protocol, $0)", () => {
       // so it stops there with no spend); an earlier leg is refused for the same reason verify-run refuses it.
       const rg = await cli(f, ["regrade", root, "--scenario", p, "--leg", "resume", "--output-format", "json"]);
       expect(rg.stdout + rg.stderr).toMatch(/no_semantic_asserts/);
+      const tr = await cli(f, ["trace", root, "--leg", "resume", "--output-format", "json"]);
+      expect(tr.code, tr.stderr).toBe(0);
+      const trRoot = await cli(f, ["trace", root, "--output-format", "json"]);
+      expect(trRoot.code).toBe(2);
+      expect(trRoot.stdout).toMatch(/"category":"runtime".*multi-leg run/);
       const rg1 = await cli(f, ["regrade", root, "--scenario", p, "--leg", "ask", "--output-format", "json"]);
       expect(rg1.stdout + rg1.stderr).toMatch(/its session tree is shared and was changed by later legs/);
     } finally {
