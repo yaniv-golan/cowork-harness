@@ -6,37 +6,37 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.9.0] — 2026-10-12
+
 ### Upgrade notes
 
-- **`sync` now refuses a re-sync under a different organisation from the one this machine last synced under.** It
-  remembers that organisation in `~/.cowork-harness/sync-capture-org.json` (a salted hash, file mode 0600, never
-  committed). The first sync after upgrading records the organisation it runs under, without refusing, so run it
-  under the organisation you mean to keep syncing under. A different organisation from the shipped baseline's only
-  warns. Pass `--allow-org-change` when the organisation you sync under really changed.
-
-- **An unanswered web_fetch approval now fails the run under `on_unanswered: fail`.** When the agent fetches a URL
-  that appeared in neither the prompt nor an earlier fetch result, and no `answers:` rule or session
+- **Cassettes: no re-record needed, except a `device_bridge` recording.** The shipped `desktop-2.31226.1` baseline's
+  pinned gates, spawn env, prompts, egress allowlist and agent version are unchanged (its re-sync added provenance
+  blocks only), and the agent's spawn and tool surface are unchanged outside `device_bridge`. A `device_bridge`
+  recording made on 4.8 still replays as recorded, but it has no delete card and no delete refusal; re-record it to
+  capture them.
+- **An unanswered web_fetch approval now fails the run under `on_unanswered: fail` (exit 2).** When the agent fetches
+  a URL that appeared in neither the prompt nor an earlier fetch result, and no `answers:` rule or session
   `web_fetch.approved_domains` covers its domain, the run used to deny the fetch silently and carry on; no verdict
   read that deny. Under `fail` (the `run` and `record` default) it now ends the run as an unanswered gate, as an
   unscripted AskUserQuestion does, naming the domain, the URL and the rule to add (`when_tool: "webfetch:<domain>"`
   with `decide: allow` and `grant: once` or `domain`, or `decide: deny`). Production asks the user and waits; it
-  never denies on its own. `--on-unanswered first` and `llm` still deny it. A scenario that passed with the fetch
-  silently denied: script the answer it should get.
-
+  never denies on its own. `--on-unanswered first` still denies it; `llm` chooses among the three buttons (Allow
+  once, Allow all for website, Deny). A scenario that passed with the fetch silently denied: script the answer it
+  should get.
 - **A negative assertion on a `visualize` tool is now refused at load.** `tool_not_called` or `subagent_tool_absent`
   naming `mcp__visualize__read_me` or `mcp__visualize__show_widget` (production's skill-argument form tools) used to
   pass vacuously on `hostloop`, `container` and `microvm`, because the harness never serves them. Drop the assertion.
-  A session whose own `mcp.config` declares a server named `visualize` is not refused. `lint` reports it as
-  `tool-not-called-tier-vacuous`; `protocol` is not judged.
-- **Cassette format v18.** A scenario with `device_bridge: true` now stamps v18: its frozen `deviceBridge` carries
-  the delete card's fields, which a v17 reader rejects, so an older reader refuses it as too new. A v17 bridge
-  recording still reads and replays as recorded. Every other cassette stamps what it did.
+  A session that declares a server named `visualize` in its own `mcp.config` or `mcp.enabled` is not refused.
+  `lint` reports it as `tool-not-called-tier-vacuous`, and, since it does not read the session, warns even when the
+  session declares a `visualize` server; `protocol` is not judged.
 - **Under `device_bridge`, a delete in an `rw` connected folder is now refused** ("Operation not permitted") until
   the user allows it through the delete card, `device_request_delete_permission`, as production refuses it. A skill
   that deletes there now meets the card, which only a person answers: unscripted, it fails the run as an unanswered
   gate under the default `on_unanswered: fail` (exit 2). Script it with
   `when_tool: mcp__remote-devices__device_request_delete_permission` and `decide: allow` or `deny`, or mount the folder
-  `rwd`. A move between connected folders now copies and cannot remove its source, as in production.
+  `rwd`. A move between connected folders now copies and cannot remove its source, as in production. Answering
+  Allow does not waive `no_delete_in_mounts`; only `allow_delete_in` does.
 - **The first `device_bridge` run builds a device image locally** (the agent image plus the delete library; it needs
   Docker Hub and apt, and takes a few minutes), and rebuilds it when the agent image changes. A run whose device
   image is missing the library fails as an infrastructure error (`device-shim`); one whose image cannot be built
@@ -44,34 +44,129 @@ All notable changes to this project are documented here. The format is based on
 - **A delete that gets past the refusal fails the run** (`device_delete_bypassed`, not waivable by
   `allow_delete_in`): a static binary or a raw system call that deletes a file, or moves it out of its folder, caught
   by comparing the device copy before and after. If the device shell replaces the refusal's log, the run warns
-  (`device_audit_unreadable`) and the record leaves the refusal count out.
-  Where the run directory's filesystem can reuse a deleted file's identity, it is the warning
-  `device_delete_unconfirmed` instead: a rename followed by an edit reads the same there.
+  (`device_audit_unreadable`) and the record leaves the refusal count out. Where the run directory's filesystem can
+  reuse a deleted file's identity, it is the warning `device_delete_unconfirmed` instead: a rename followed by an
+  edit reads the same there.
 - **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal`
-  (`enforced`), `grants`, `refusedDeletes` and `bypassedDeletes`. `divergences` replaces `delete-not-refused` with
-  `delete-refusal-libc`, drops `shell-user` (commands run under production's per-session name and home), and gains
-  `decline-text`, `grant-without-prompt` when a grant came with no card, and `rename-reads-as-delete` when the run
-  directory's filesystem can reuse a deleted file's identity.
+  (`enforced`), `grants`, `refusedDeletes` and `bypassedDeletes`. `divergences` names
+  `delete-refusal-libc` where it named `delete-not-refused` (a run whose shim canary did not pass still records
+  `reported` and `delete-not-refused`), drops `shell-user` (commands run under production's per-session name and home), and gains
+  `decline-text` on every bridge run (a declined card reaches the agent as the harness's own deny text),
+  `grant-without-prompt` when a grant came with no card, and `rename-reads-as-delete` when the run directory's
+  filesystem can reuse a deleted file's identity.
 - **Under an enforced `device_bridge`, a connected-folder delete no longer raises `mount_delete`**: one that remains
   is one the user allowed. `no_delete_in_mounts` still fails on it.
-- **`tool_not_called` / `subagent_tool_absent` on the delete card are no longer refused under `device_bridge`**; without
-  it they still are, as for `device_bash`.
+- **The device bridge's delete check now reports deletes that 4.8 missed, so `no_delete_in_mounts` can fail where it
+  passed.** The pre-run listing records each file's size and sha256, lists directories, and records whether the run
+  directory's filesystem can give a new file a just-deleted file's identity (checked five times before each turn).
+  A removed directory is now reported as a delete, an empty one included, so `mountDeletes` gains an entry per
+  removed directory as well as its files. Where identities can be reused, as on some Linux filesystems and CI
+  runners, a file under another path counts as a rename only when its bytes match, and a directory only when a file
+  inside it moved with it: a file renamed and then edited is reported as a delete, and a delete whose identity was
+  reused is no longer read as a rename. Live device_bridge runs only; `regrade` reads the frozen scan.
+- **Cassette format v18, and what an older reader does with it.** Three things stamp v18; every other cassette
+  stamps the version its contents need, as before. A 4.8 (v17) reader refuses each of them; the remedy is to
+  upgrade, not to re-record:
+  - a scenario with `device_bridge: true`: its frozen `deviceBridge` carries the delete card's fields, which 4.8's
+    shape check rejects, so 4.8 reads it as "invalid cassette shape" (`--best-effort-future-cassette` does not get
+    past it);
+  - a multi-leg cassette: it has no top-level `prompt` or `events`, so 4.8 also reads it as "invalid cassette
+    shape" rather than grading its first leg as the whole run;
+  - a scenario that declares a command metric: the cassette freezes `commandMetrics`, and 4.8 reads it as too new
+    (`replay` has `--best-effort-future-cassette`; `verify-cassettes` does not).
+  A v17 recording still reads and replays as recorded on 4.9. `replay --reassert` or `--write` on 4.9 that adds a
+  command metric to a v17 cassette restamps it as v18.
+- **Breaking, in a minor release: covered surfaces that change.** `eval` and `hillclimb check` gain exit-1 paths on
+  exit codes SPEC §12 lists as covered, so the same command can now exit 1 where 4.8 exited 0, and the scenario
+  schema's metric fields loosen.
+  - **`eval`**, triggered by a scenario that declares `metrics:`. A 4.8 `eval` never read them; 4.9 compares them.
+    - Any metric row `not compared` exits 1, with or without `--fail-on`. A row is not compared when a rep was
+      `pruned`, had `no_manifest`, or completed with no entry for a declared metric (`metric_unrecorded`), or when a
+      rep was scored by another script than the one the eval froze.
+    - Under `--fail-on possible` or `confirmed`, a metric that got worse at that level exits 1, and under `possible`
+      so does a row that is `insufficient_unmeasured`.
+    - The "every row is `insufficient`" exit 1 now counts metric rows too: an eval whose pass rows are all
+      insufficient but which tested a metric no longer exits 1 on that ground, and a metrics-only eval whose every
+      row is insufficient does.
+
+    No flag turns metric grading off. To get back to exit 0, remove `metrics:` from the scenarios, or re-run the
+    eval into a fresh directory so every rep records each declared metric under one scorer (a not-compared row usually
+    comes from pruned, pre-4.9 or re-scored reps); a worse metric under `--fail-on` is the gate working as asked,
+    and an all-insufficient eval needs more `--reps`. An eval dir written before this release reports metrics as
+    not recorded, grades none, and keeps its exit code.
+  - **`hillclimb check`**, triggered by a flow whose rows for one metric carry two declaration signatures: it now
+    exits 1 with `metrics.sig_mixed`, for any metric, not only a command metric. Only a hand-edited flow, or one with
+    rows from before signatures were recorded, can hold one: `hillclimb run` and `regrade` refuse a changed
+    declaration first. There is no flag to downgrade it; start a fresh flow, or give the metric a new id so its
+    rows start a new column.
+  - **The scenario schema**: a metric's `artifact` and `path` are no longer required, because a command metric has
+    neither. Every 4.8 scenario still validates, but a tool that reads scenarios can no longer assume every metric
+    has `artifact` and `path`.
+- **`sync` now refuses a re-sync under a different organisation from the one this machine last synced under.** It
+  remembers that organisation in `~/.cowork-harness/sync-capture-org.json` (a salted hash, file mode 0600, never
+  committed). The first sync after upgrading records the organisation it runs under, without refusing, so run it
+  under the organisation you mean to keep syncing under. A different organisation from the shipped baseline's only
+  warns. Pass `--allow-org-change` when the organisation you sync under really changed.
 
 ### Added
 
-- **`critique --compare --cluster lexical`: candidate groups of findings that read alike.** Citation-resolved findings
-  with text, from full reports, across every report and label group (a group spans at least two reports), grouped by character 3–5-gram TF-IDF similarity of their idea
-  and recommended action, complete linkage at a fixed cut of 0.20 (every pair in a group at or above it). A judgement from
-  word overlap, not a match: a group carries no k/N, an ungrouped finding is not a claim that it did not recur, and
-  groups are listed in input order. Local; nothing is sent. The payload gains `clustering` (always) and
-  `candidateGroups` (lexical mode); `schema/critique-compare.json` describes both. `--cluster judge` is refused.
-
+- **Command metrics: a scenario metric computed by a script over the run's own events.** A metric may declare
+  `command: [script, args…]` (with optional `deps` and `timeout_ms`, default 30 s) in place of `artifact` / `path`.
+  The script — a `.py` run under `python3` 3.9 or later with the standard library only, or a `.mjs` / `.js` / `.cjs`
+  run under Node's permission model — reads this turn's scrubbed slice of `events.jsonl` and prints one JSON number.
+  **It runs the scenario repo's code as you**: the script and its deps must be regular, git-tracked files inside the
+  scenario's repository, at most 1 MiB each (`COWORK_HARNESS_GITSET=0` accepts untracked files); only those exact
+  bytes run, copied out of the repo, with a fixed environment (no credential is passed), a 4 KiB stdout cap and a
+  process-group timeout, twice, and a value is reported only when both runs agree. It is not a sandbox, and the
+  Python audit hook is a tripwire, not a security boundary.
+  - Live runs (`run`, `record`, `eval`, `hillclimb run`) run it after a notice before spending; replay and
+    `verify-cassettes` never do — the cassette freezes each command metric's record-time value; `verify-run`,
+    `regrade` and `hillclimb regrade` carry the recorded value forward unless `--allow-metric-commands` re-runs the
+    script. `skill` builds its scenario from flags and cannot declare one.
+  - `lint` and every command that loads a scenario to run it refuse a command metric whose script or dep is
+    untracked, outside the scenario's repository, a symlink inside it or hard-linked; the commands that run it also
+    refuse a Python command metric when `python3` is older than 3.9. `record --rerecord-stale` from a cassette's
+    embedded scenario copy refuses one before spending (the copy has no script to run).
+  - Eight new `unavailable` reasons (`command_failed`, `command_timeout`, `command_output`, `command_changed`,
+    `command_missing`, `command_not_allowed`, `nondeterministic`, `no_events`), and `RunResult.metrics[].command`
+    records the signature, the script, the events read, the interpreter and whether the value was `carried` or
+    `frozen`. `replay --reassert` / `--write` drops a frozen value whose declaration the new block changed, so a
+    later replay reads `command_changed` rather than the old scorer's number.
+  - On `eval` a scorer failure is excluded and guarded, and a rep scored by another script than the one the eval
+    froze is not compared. `eval` and `hillclimb` refuse, before spending, a scenario whose scripts sit in a folder
+    the agent can see, and the scripts join the `hillclimb` harness gate.
+  - `hillclimb check`, and the end of every `hillclimb run` pass, warn on a scorer that failed on a row the agent did
+    not fail and call a metric incomparable when its variants measured it on different shares of their rows.
+    `hillclimb run` and `regrade` note two command metrics that run the same script under different ids (separate
+    columns, never a delta).
+  - A worked example ships as `examples/scenarios/csv-metrics-command.yaml` with
+    `examples/scenarios/metrics/count_bash_calls.py`.
+- **`eval` compares each scenario's declared `metrics:` between the arms.** Each metric is a row tested with an exact
+  two-sided rank test (Wilcoxon–Mann–Whitney), with a Hodges–Lehmann shift and its interval's achieved coverage,
+  each arm's SD, the pooled SD with its interval, and the minimum detectable shift. Rows are labelled `possible` /
+  `confirmed` `worse` or `better` through the metric's `better`, in their own correction family, and `--fail-on`
+  gates on a metric that got worse as it does on a pass-rate drop. A rep where the agent failed, or where the skill
+  did not write the number, ranks worst. A rep whose number is missing because of the scorer, the capture or a cap is
+  left out, and no verdict may rest on its absence: such a row is `unresolved` and never gates, and a candidate whose
+  extra left-out reps took a row below the rep threshold is `insufficient_unmeasured`. A rep state that breaks the
+  comparison leaves the row `not compared` (see the upgrade note). A scenario set whose only comparison is a
+  declared metric is no longer refused as having nothing to compare. The JSON `summary` gains `metricLabels`,
+  `metricsRecorded`, `families`, `confirmReach` and `notCompared`.
+- **Metric rows use Holm at `--alpha`, split evenly with the pass-rate rows when a section has both** (0.025 by
+  default); an explicit `--correction bh` grades them with Benjamini–Hochberg at q = 0.10, unsplit. Pass-rate rows are
+  graded exactly as before. Every report now states, per section and family, its correction, its number of rows, and
+  the false-confirm rate an A/A eval would have, or under BH a bound on it. `eval --dry-run` states each section's
+  metric family beside its pass rows (`plan` gains `metricFamily`), and under `--fail-on confirmed` the eval
+  says before spending which families it can fire on.
+- **`runs.jsonl` records each rep's metrics, and `manifest.json` freezes each scenario's metric declarations and the
+  metric correction.**
 - **`device_bridge` serves the delete card, `device_request_delete_permission`.** Production's schema (1 to 8 connected
   folder roots, an optional reason), registered to load without ToolSearch and not pre-approved, so the agent asks
   first. The handler refuses a path that is not a connected folder root, a read-only folder, or a malformed request,
   as production does. A scenario answers the card like any tool permission; permission parity never answers it,
   `on_unanswered: fail` ends the run, `first` declines it, and `llm`, the prompt and `--decider-cmd` choose between
-  its two buttons (`Decline`, `Allow for this session`), shown the folders requested and the agent's reason. Under
+  its two buttons (`Decline`, `Allow for this session`), shown the folders requested and the agent's reason. A
+  `--decider-cmd` helper replies `{"id","behavior"}`; a `grant` scope in its reply fails the run as unanswered. Under
   `bypassPermissions` the grant is immediate. Each grant is recorded in `RunResult.deviceBridge.grants` with who
   answered it, and takes effect from the next device_bash call.
 - **The device container refuses deletes as production does.** A library preloaded into every process refuses
@@ -82,80 +177,18 @@ All notable changes to this project are documented here. The format is based on
   refusal on a probe file before the first command. The device shell runs as the host user under production's
   per-session name and home.
 - **`doctor` reports the device_bridge image** (built, or built on the first bridge run).
-
-- **`search-pool build|export|import`: collect the WebSearch results recorded in kept runs into a pool.** One record
-  per search (its query, links and prose summary) with the source run's skill, skill commit, skill snapshot signature,
-  agent and Desktop versions, model and start time. A pool holds one skill unless built `--mixed`; a record containing
-  a known secret refuses the build; records that name or quote an upload are listed for `--exclude`. Pools live under
-  `~/.cowork-harness/search-pools/` (`0700`/`0600`) and are refused inside a git work tree unless `--allow-in-repo`.
-  `export` writes one JSON file (not a tarball) that `import` re-verifies. Nothing serves a pool yet.
-
-### Fixed
-
-- **The device bridge's delete check no longer reads a reused inode as a rename.** The pre-run listing records each
-  file's size and sha256, lists directories, and records whether the run directory's filesystem can give a new file
-  a just-deleted file's identity (checked five times before each turn). Where it can, as on some Linux filesystems,
-  a file under another path counts as a rename only when its bytes match, and a directory only when a file inside it
-  moved with it; a file renamed and then edited is then reported as a delete. A removed empty directory is now
-  reported as a delete.
-
-### Added
-
-- **Command metrics: a scenario metric computed by a script over the run's own events.** A metric may declare
-  `command: [script, args…]` (with optional `deps` and `timeout_ms`) in place of `artifact` / `path`. The script — a
-  `.py` run under `python3` 3.9 or later with the standard library only, or a `.mjs` / `.js` / `.cjs` run under Node's
-  permission model — reads this turn's scrubbed slice of `events.jsonl` and prints one JSON number. **It runs the
-  scenario repo's code as you**: the script and its deps must be regular, git-tracked files inside the scenario's
-  repository; only those exact bytes run, copied out of the repo, with a fixed environment (no credential is passed),
-  a 4 KiB stdout cap and a process-group timeout, twice, and a value is reported only when both runs agree. It is
-  not a sandbox, and the Python audit hook is a tripwire, not a security boundary. Live runs (`run`, `skill`,
-  `record`, `eval`, `hillclimb run`) run it after a notice before spending; replay and `verify-cassettes` never do —
-  the cassette freezes each command metric's record-time value; `verify-run`, `regrade` and `hillclimb regrade`
-  carry the recorded value forward unless `--allow-metric-commands` re-runs the script. Eight new `unavailable`
-  reasons (`command_failed`, `command_timeout`, `command_output`, `command_changed`, `command_missing`,
-  `command_not_allowed`, `nondeterministic`, `no_events`), and `RunResult.metrics[].command` records the signature,
-  the script, the events read, the interpreter and whether the value was `carried` or `frozen`. On `eval` a
-  scorer failure is excluded and guarded, and a rep scored by another script than the one the eval froze is not
-  compared. The scripts are kept out of every folder the agent can see, and join the `hillclimb` harness gate.
-  `hillclimb check`, and the end of every `hillclimb run` pass, warn on a scorer that failed on a row the agent did not
-  fail and call a metric incomparable when its variants measured it on different shares of their rows; `check` errors
-  when one column holds two signatures. `hillclimb run` and `regrade` note two command metrics that run the same
-  script under different ids (separate columns, never a delta). `lint` and every command that loads a scenario to
-  run it refuse a command metric whose script or dep is untracked, outside the scenario's repository, a symlink inside
-  it or hard-linked, and a Python command metric when `python3` is older than 3.9.
-- **Cassette v18**: a scenario declaring a command metric stamps v18 and freezes `commandMetrics`; a cassette that
-  uses no v18 feature stamps exactly what it did.
-- **`eval` compares each scenario's declared `metrics:` between the arms.** Each metric is a row tested with an exact
-  two-sided rank test (Wilcoxon–Mann–Whitney), with a Hodges–Lehmann shift and its interval's achieved coverage,
-  each arm's SD, the pooled SD with its interval, and the minimum detectable shift. Rows are labelled `possible` /
-  `confirmed` `worse` or `better` through the metric's `better`, in their own correction family, and `--fail-on`
-  gates on a metric that got worse as it does on a pass-rate drop. A rep where the agent failed, or where the skill
-  did not write the number, ranks worst. A rep whose number is missing because of the scorer, the capture or a cap is
-  left out, and no verdict may rest on its absence: such a row is `unresolved` and never gates, and a candidate whose
-  extra left-out reps took a row below the rep threshold is `insufficient_unmeasured`, which `--fail-on possible`
-  gates on. A rep state that breaks the comparison (`pruned`, `no_manifest`, or a completed rep with no entry for a
-  declared metric, `metric_unrecorded`) leaves the row `not compared`, and the eval exits 1.
-- **Metric rows use Holm at `--alpha`, split evenly with the pass-rate rows when a section has both** (0.025 by
-  default); an explicit `--correction bh` grades them with Benjamini–Hochberg at q = 0.10, unsplit. Pass-rate rows are
-  graded exactly as before. Every report now states, per section and family, its correction, its number of rows, and
-  the false-confirm rate an A/A eval would have. `--fail-on confirmed` is refused only when no family can reach
-  `confirmed`, and the eval says before spending which families it can fire on. `eval --dry-run` states each
-  section's metric family beside its pass rows.
-- **`runs.jsonl` records each rep's metrics, and `manifest.json` freezes each scenario's metric declarations and the
-  metric correction.** An eval dir written before this release reports metrics as not recorded, grades none, and
-  keeps its exit code.
-
 - **Multi-leg scenarios (`legs:`).** A scenario can run a list of legs strictly in order: a **prompt leg** is a fresh
   agent session (its own session id, never resumed), and a **host action** runs one argv command between legs in the
   runtime of the leg before it (a one-shot container of the agent image, the same microvm guest, or — on `protocol`
-  — a host subprocess), with the agent's environment minus its Anthropic credentials (on `protocol`, the rest of your shell's environment
-  reaches it, as it reaches the agent) and no tokens spent. A leg that fails
-  stops the scenario; later legs are reported `skipped`. Built for skills that park at a question and resume in a
-  later session. See [docs/scenario.md → Multi-leg scenarios](./docs/scenario.md#multi-leg-scenarios-legs).
+  — a host subprocess), with the agent's environment minus its Anthropic credentials (on `protocol`, the rest of your
+  shell's environment reaches it, as it reaches the agent) and no tokens spent. A leg that fails stops the scenario;
+  later legs are reported `skipped`. Built for skills that park at a question and resume in a later session. See
+  [docs/scenario.md → Multi-leg scenarios](./docs/scenario.md#multi-leg-scenarios-legs).
   - `workdir: persistent` (the default) runs every leg in one session tree with a shared agent config dir (a
     persistent workspace — not Cowork); `workdir: cowork-task` gives each prompt leg a new tree, carrying connected
     folders but not outputs or the agent config dir (a model of a new local Cowork task, unverified against Cowork).
-  - A leg's `session:` may set `answer_channel`, `permission_mode` and `agent_env` (not `artifacts_root`). A skill
+  - A leg's `session:` may set `answer_channel`, `permission_mode` and `agent_env` (only `subagent_model`, `tool_search` and
+    `disable_experimental_betas`). A skill
     tree that changes between legs fails the scenario. Under `answer_channel: none`, a later leg needs a positive
     file assertion that cannot already hold on the earlier legs' files.
   - A host action reads an optional JSON status file (`{status.<field>}` fills argv elements, each checked: no
@@ -163,26 +196,34 @@ All notable changes to this project are documented here. The format is based on
     unasserted), `stdout_matches` and `stdout_not_matches`. `legs/<id>/action.json` records it.
   - Runs on `container`, `microvm` and `protocol`; the host loop (`hostloop`, and `cowork`, which can resolve
     there) and `lane: remote` are refused.
+  - The top level refuses `prompt`, `assert`, `timeout_ms` (each is per leg), `device_bridge`, `allow_host_writes`
+    and `metrics` (whether a metric is per leg or summed is not decided).
   - The run dir is one scenario root with `legs/<id>/` per leg and `scenario-result.json` (its `verdict` has the
     same shape as a run's). It is ONE index row (`multiLeg: true`) in `stats`, and `status --latest-for` ranks it by
-    when it ended. `trace`, `verify-run` and `regrade` take `--leg <id>`; every reader of run dirs either reads a
-    leg or refuses a multi-leg root by name, and `prune` ranks an unfinished one as a real run (not an empty dir).
-    `stats --reindex` indexes a finished one as its one row and counts an unfinished one separately ("multi-leg run
-    not finished"), never half-indexed.
-  - The `--output-format json` envelope of `run` carries `multiLeg` (the scenario result: each leg's id, kind, status
-    and verdict, and the scenario verdict); `replay` carries `multiLegs`, one per multi-leg cassette.
-  - Refused with a multi-leg scenario: `run` in a directory batch, with `--matrix`, `--repeat` or `--ablate-skill`;
-    `record --max-budget-usd` and a live decider (`--decider-dir`, `--decider-llm`); `replay --assert-from`,
-    `--reassert`, `--write`, `--mutate` and `--session`.
+    when it ended. `trace`, `verify-run` and `regrade` take `--leg <id>` (a host-action leg has no session to
+    re-grade and is refused; `trace --leg` on a run that is not multi-leg is a usage error). Every reader of run
+    dirs either reads a leg or refuses a multi-leg root by name, and `prune` ranks an unfinished one as a real run
+    (not an empty dir). `stats --reindex` indexes a finished one as its one row and counts an unfinished one
+    separately ("multi-leg run not finished"), never half-indexed.
+  - The `--output-format json` envelope of `run` carries `multiLeg` (the scenario result: each leg's id, kind,
+    status and verdict, and the scenario verdict); `record` carries `results` (one per prompt leg), `multiLeg` and
+    `cassette`, and `record --dry-run` runs the multi-leg preflight and reports `multiLeg: true`; `replay` carries
+    `multiLegs`, one per multi-leg cassette.
+  - Only `run` and `record` take a `legs:` file. `eval`, `hillclimb`, `ref freeze`, and `verify-run` / `regrade`
+    without `--leg` refuse one by name. In a directory batch, `run <dir>` fails as a usage error and `record <dir>`
+    reports the file as broken: each runs it on its own. Also refused with a multi-leg scenario: `run --matrix`,
+    `--repeat` and `--ablate-skill`; `record --max-budget-usd` and a live decider (`--decider-dir`,
+    `--decider-llm`); `replay --assert-from`, `--reassert`, `--write`, `--mutate` and `--session`.
+  - `lint` reads a multi-leg scenario: the loader prepass uses the multi-leg loader, and the Python checks run on each
+    prompt leg (findings name the leg).
   - The skill's `scripts/assertion-keys.json` gains `multiLeg` (the form's top-level, leg, host-action and
-    host-action assert keys), generated from the schemas.
-- **Cassette v18: the multi-leg cassette.** `record <legs.yaml>` writes one cassette for the scenario: each prompt
-  leg nests a complete single-prompt cassette, frozen when that leg ends, and each host action its record. `replay`
-  re-drives the prompt legs and re-grades each action from its record (it never re-runs it); `verify-cassettes`
-  scans, staleness-checks and drift-checks every leg; `record --rerecord-stale` re-records one from its scenario
-  file. A multi-leg cassette has no top-level `prompt` or `events`, so an older reader refuses it instead of
-  grading its first leg as the whole run. `schema/cassette.v18.json`, and `schema/scenario-multi-leg.schema.json`
-  for the scenario form.
+    host-action assert keys), generated from the schemas, and `schema/scenario-multi-leg.schema.json` describes the
+    form.
+- **The multi-leg cassette.** `record <legs.yaml>` writes one cassette for the scenario: each prompt leg nests a
+  complete single-prompt cassette, frozen when that leg ends, and each host action its record. `replay` re-drives the
+  prompt legs and re-grades each action from its record (it never re-runs it); `verify-cassettes` scans,
+  staleness-checks and drift-checks every leg; `record --rerecord-stale` re-records one from its scenario file.
+  `schema/cassette.v18.json` describes it.
 - **`verify-run --leg <id>` and `regrade --leg <id>`** re-grade one prompt leg of a multi-leg run, against its own
   dir, at no cost. Each prompt leg snapshots its user-visible files when it ends (`legs/<id>/snapshot/`, a
   copy-on-write clone where the filesystem supports one — macOS APFS through `cp -c`, Linux btrfs and XFS with
@@ -190,16 +231,37 @@ All notable changes to this project are documented here. The format is based on
   CI disk — a full copy of the leg's outputs and connected folders, per prompt leg; `snapshot.json` records which as
   `method`), with their hashes (`leg-post-manifest.json`) proving the snapshot is the leg's own; `inspect` and `fixture
   export` of a leg read it too. A leg with no usable snapshot (over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES`, default
-  512 MiB) falls back to its session tree and is refused when that tree changed after the leg ended.
+  512 MiB; a malformed value is refused before the run starts) falls back to its session tree and is refused when
+  that tree changed after the leg ended.
+- **`critique --compare --cluster lexical`: candidate groups of findings that read alike.** Citation-resolved findings
+  with text, from full reports, across every report and label group (a group spans at least two reports), grouped by
+  character 3–5-gram TF-IDF similarity of their idea and recommended action, complete linkage at a fixed cut of 0.20
+  (every pair in a group at or above it). A judgement from word overlap, not a match: a group carries no k/N, an
+  ungrouped finding is not a claim that it did not recur, and groups are listed in input order. Local; nothing is
+  sent. The payload gains `clustering` (always) and `candidateGroups` (lexical mode); `schema/critique-compare.json`
+  describes both. `--cluster judge` is refused.
+- **`search-pool build|export|import`: collect the WebSearch results recorded in kept runs into a pool.** `build` reads
+  the run dirs or runs trees named by `--from` (repeatable). One record per search (its query, links and prose summary) with the source run's skill, skill commit, skill snapshot signature,
+  agent and Desktop versions, model and start time. A pool holds one skill unless built `--mixed` (`--skill <name>`
+  names it for runs that record none); a record containing a known secret refuses the build; records that name or
+  quote an upload are listed for `--exclude`. `--min-score <n>` sets the relevance floor a query must clear (default
+  0.4, part of the pool hash). Pools live under `~/.cowork-harness/search-pools/` (`0700`/`0600`) and are refused
+  inside a git work tree unless `--allow-in-repo`. `export` writes one JSON file (not a tarball) that `import`
+  re-verifies. Nothing serves a pool yet.
 
 ### Changed
 
+- **`tool_not_called` / `subagent_tool_absent` on the delete card are no longer refused under `device_bridge`**;
+  without it they still are, as for `device_bash`.
+- **`eval --fail-on confirmed` is refused only when no family can reach `confirmed`** (it used to be refused whenever
+  the pass rows could not).
 - **For maintainers: `sync` records how the agent's WebSearch tool asks for a search.** The agent's WebSearch tool
   makes its own nested model request. `sync` now records, from the staged agent, the facts that identify that
   request, as `agentBinary.searchAnchors`: the server tool type, the cloud search route's path pieces, and the
   system sentence and user-message prefix as a hash and byte length (never the text). When a staged agent's anchors
   cannot be extracted, or its native build gives different anchors from its VM build, `sync` prints a warning and
-  records no anchors; it does not block the write. Nothing reads the block yet.
+  records no anchors: an extraction failure does not block the write. An anchors block that fails its own schema (an
+  extractor bug) does refuse it, exit 1. Nothing reads the block yet.
 - **For maintainers: `sync` records which organisation Desktop's gate cache was captured under, and refuses a
   re-sync on the same machine under a different one.** Desktop rewrites its gate cache for the organisation it is
   signed in to, so a re-sync under another organisation showed gate changes that were not production changes. `sync`
@@ -211,12 +273,17 @@ All notable changes to this project are documented here. The format is based on
 - **For maintainers: `sync` records the agent's own web-search feature values** as `provenance.agentSearchGates`:
   whether the nested search runs on the small/fast model, the fast search profile, and the two request-body
   compression features. They are the agent's features, not Desktop gates, so `sync` reads them from Desktop's
-  cache for the same organisation rather than the fcache. Only booleans, numbers and flat objects of them are published, with no
-  org or session identifier. A missing cache is a note, never a blocker.
+  cache for the same organisation rather than the fcache. Only booleans, numbers and flat objects of them are
+  published, with no org or session identifier. A missing cache is a note, never a blocker.
+- **For maintainers: the shipped `desktop-2.31226.1` baseline was re-synced** and carries `agentBinary.searchAnchors`,
+  `provenance.agentSearchGates` and `provenance.captureOrg`.
+- **For maintainers: CI gains a `metric-runtimes` job** that runs command metrics on the floor interpreters (Python
+  3.9, Node 22.12); `ci-green` requires it.
+
+### Fixed
+
 - **A cassette this build cannot parse because it is newer reads as "too new; upgrade"**, not "invalid cassette
   shape", whose remedy (a broken file) was the wrong one.
-- **`lint` reads a multi-leg scenario**: the loader prepass uses the multi-leg loader, and the Python checks run on
-  each prompt leg (findings name the leg).
 
 ## [4.8.1] — 2026-10-12
 

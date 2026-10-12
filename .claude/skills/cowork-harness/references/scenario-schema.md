@@ -1,6 +1,6 @@
 # Scenario & session schema, replay class, web_fetch, authoring gotchas
 
-Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.8.1`
+Self-contained reference for authoring `cowork-harness` scenarios. Tracks `cowork-harness 4.9.0`
 (baseline `desktop-2.31226.1`). If your checkout is newer, prefer the live [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md),
 [`docs/session.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md), and `SPEC.md`.
 
@@ -223,7 +223,11 @@ legs:
 ```
 
 - Top-level keys (generated list: `multiLeg.topLevelKeys` in `scripts/assertion-keys.json`): no `prompt` or `assert`
-  at the top; each leg carries its own `assert:`.
+  at the top; each leg carries its own `assert:`. The top level also refuses `timeout_ms` (per leg), `device_bridge`,
+  `allow_host_writes` and `metrics` (whether a metric is per leg or summed is not decided).
+- Runs on `container`, `microvm` and `protocol`; the host loop (`hostloop`, and `cowork`, which can resolve there) and
+  `lane: remote` are refused. Only `run` and `record` take a `legs:` file: `eval`, `hillclimb`, `ref freeze`, and
+  `verify-run` / `regrade` without `--leg` refuse it by name.
 - A leg after the first under `answer_channel: none` needs a positive file assertion that cannot already hold on the
   earlier legs' files (a value assertion, or a presence one with `authored: true`); one whose block already passes
   before it runs fails as `vacuous_positive_assertion` without spending.
@@ -373,7 +377,8 @@ under `.remote-plugins/plugin_<id>` — and set no `-maxdepth` that stops short 
 Details: [docs/plugin-root.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/plugin-root.md#in-vm-bash--what-the-shell-receives).
 
 **Mount enforcement:** `mode:r` mounts get a real per-mount `:ro` bind (a write fails in-guest). The
-`rw` vs `rwd` (write-but-no-delete) distinction is **not** mount-enforced — a delete in `outputs/` or a
+`rw` vs `rwd` (write-but-no-delete) distinction is **not** mount-enforced on the local lane (under `device_bridge`
+an `rw` connected folder refuses a delete until the delete card is answered) — a delete in `outputs/` or a
 connected folder succeeds and is only caught post-hoc (`no_delete_in_outputs`, `no_delete_in_mounts`, and by
 default the `outputs_delete` signal on a baseline that records outputs `rw`; from Desktop 2.16120.0 outputs is
 `rwd` and Cowork allows the delete, so nothing fails it by default there). A missing
@@ -530,10 +535,10 @@ on a manifest-less cassette those are skipped, so the gate can't see the deliver
 - **Path B (no provenance enforced):** the per-hop gate is the full egress allowlist + scheme +
   private-address check.
 - **The approval gate (`webfetch:<domain>`):** raised on a provenance miss; it is *not* auto-allowed
-  like other unscripted tools. Unanswered under `on_unanswered: fail` (the `run` default) it **ends
+  like other unscripted tools. Unanswered under `on_unanswered: fail` (the `run` and `record` default) it **ends
   the run as an unanswered gate**, naming the domain, the URL and the rule to add (production asks
-  the user and waits; it never denies on its own). Under `--on-unanswered first` or `llm` it is
-  denied. Answer it three ways: a scripted rule (`when_tool: "webfetch:<domain>"` +
+  the user and waits; it never denies on its own). Under `--on-unanswered first` it is denied; under
+  `llm` a model picks one of its three buttons (`Allow once`, `Allow all for website`, `Deny`). Answer it three ways: a scripted rule (`when_tool: "webfetch:<domain>"` +
   `grant: domain|once`), a session `web_fetch.approved_domains: [host]` (test convenience, per-run),
   or a live terminal decider (`--decider-llm` / `--decider-cmd` / `--decider-dir`).
 - **`egress_*` observes web_fetch on both paths** (an egress allow/deny event fires on the terminal
@@ -633,7 +638,8 @@ debugging a run's behavior. The two are **numbered independently**: a bare "gotc
 14. **`transcript_no_host_path` scans wide** (assistant + system + thinking blocks) and catches
     `file://` URI forms — stricter than it once was; pin the harness version when teaching it.
 
-15. **Read-only mounts are enforced; delete-deny is not.** `mode:r` → real `:ro` bind; `rw`/`rwd`
+15. **Read-only mounts are enforced; delete-deny is enforced only under `device_bridge`.** `mode:r` → real `:ro`
+    bind; under `device_bridge` an `rw` folder refuses deletes until the delete card is answered; elsewhere `rw`/`rwd`
     delete-deny is post-hoc only (`no_delete_in_outputs`; outputs is `rwd`, delete-allowed, from Desktop 2.16120.0).
 
 16. **Keep `.env` out of any mounted folder** — it's copied into the sandbox; the token could leak.

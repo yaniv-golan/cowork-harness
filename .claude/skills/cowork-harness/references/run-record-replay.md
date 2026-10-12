@@ -1,6 +1,6 @@
 # Run, record and lock
 
-Tracks `cowork-harness 4.8.1` (baseline `desktop-2.31226.1`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
+Tracks `cowork-harness 4.9.0` (baseline `desktop-2.31226.1`). Read it when running a scenario, recording or placing a cassette, reading verdict signals, checking a background run, or choosing CI lanes.
 
 ## Part II — RUN, RECORD & LOCK
 
@@ -422,20 +422,28 @@ with the ordinary commands, one scenario at a time:
 - `run <legs.yaml>` runs every leg in order and stops at the first failed leg (later legs are `skipped`). It writes
   one scenario root: `legs/<id>/` per leg (a prompt leg is an ordinary run dir; a host-action leg holds
   `action.json`) and `scenario-result.json`, with one index row. The `--output-format json` envelope carries
-  `multiLeg` (one run) or `multiLegs`. Refused: a directory batch, `--matrix`, `--repeat`, `--ablate-skill`.
+  `multiLeg` (each leg's id, kind, status and verdict, and the scenario verdict). Refused: `--matrix`, `--repeat`,
+  `--ablate-skill`; in a directory batch, `run <dir>` fails as a usage error and `record <dir>` reports the file as
+  broken (each runs it on its own).
 - `record <legs.yaml> --out <file>` writes ONE v18 cassette that nests a full cassette per prompt leg, each frozen
   when that leg ended, plus each action's record. Refused: `--max-budget-usd` and a live decider
   (`--decider-dir`, `--decider-llm`). Record it where it will live (beside the scenario): its paths are relative to
   the cassette, and a cassette recorded into a temp dir carries a path through your home directory, which
   `verify-cassettes` flags.
-- `replay <cassette>` replays leg by leg and re-grades each action from its record. Refused: `--assert-from`,
+- `replay <cassette>` replays leg by leg and re-grades each action from its record (never re-running it); its JSON
+  envelope carries `multiLegs`, one per multi-leg cassette. Refused: `--assert-from`,
   `--reassert`, `--write`, `--mutate`, `--session`.
 - `verify-cassettes` privacy-scans every leg and the cassette's own top level, checks staleness per leg, and reports
   drift of the frozen legs against the scenario file.
 - One leg at a time: `verify-run <root> <legs.yaml> --leg <id>`, `regrade <root> --scenario <legs.yaml> --leg <id>`,
   `trace <root | run-id> --leg <id>`, `inspect <root>/legs/<id>`. A prompt leg is read from its snapshot
-  (`legs/<id>/snapshot/`, its files as they were when it ended), so every leg of a kept run re-grades at no cost; a
-  leg with no usable snapshot falls back to its session tree and is refused when a later leg changed that tree. A
+  (`legs/<id>/snapshot/`, its files as they were when it ended), so every prompt leg of a kept run re-grades at no
+  cost (a host-action leg has no session and is refused). The snapshot is a copy-on-write clone where the filesystem
+  supports one (APFS, btrfs, XFS with reflink), costing almost no disk until a later leg changes a file, and
+  otherwise (ext4, the usual Linux and CI disk) a full copy of the leg's outputs and connected folders, per prompt
+  leg; `snapshot.json` records which as `method` (`clone`, `copy`, `mixed` or `none`), and `leg-post-manifest.json`
+  holds the hashes that prove it is the leg's own. A leg over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES` (default
+  512 MiB; a malformed value is refused before the run) gets no snapshot. A leg with no usable snapshot falls back to its session tree and is refused when a later leg changed that tree. A
   multi-leg root without `--leg` is refused, naming the legs.
 
 Full rules: [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#multi-leg-scenarios-legs).
