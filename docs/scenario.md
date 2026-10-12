@@ -291,12 +291,17 @@ harness serves that tool from a second container:
   - permission parity never answers it, under either parity;
   - under `permission_mode: bypassPermissions` no card is shown and the grant is immediate (recorded as
     `grant-without-prompt`).
-  The run's `deviceBridge.grants` lists each grant, its folders and who answered it. In this release nothing refuses a
-  delete on the device copy (`deviceBridge.deleteRefusal: "reported"`): a delete succeeds and is reported after the
-  run, so a model rarely needs to ask.
+  The run's `deviceBridge.grants` lists each grant, its folders and who answered it.
+- **A delete in an `rw` folder is refused** ("Operation not permitted") until the user allows it through the card, as
+  in production (`deviceBridge.deleteRefusal: "enforced"`); an `rwd` folder allows deletes from the start. So a skill
+  that deletes in a connected folder now meets the card: script its answer, or the run fails as unanswered. A rename
+  inside a folder works; a move between folders cannot remove its source. A delete that gets past the refusal (a
+  static binary, a raw system call) fails the run as `device_delete_bypassed`. The first bridge run builds the device
+  image locally (it needs Docker Hub). See [fidelity-gaps.md](./fidelity-gaps.md), `delete-refusal-libc`.
 - File assertions read the agent's container, which has no folder, so `file_exists` and `input_unmodified` on a
-  connected folder's path are refused before the run. `no_delete_in_mounts` does cover the folders: it reads
-  `device_bash` commands and compares the device copy before and after the run.
+  connected folder's path are refused before the run. `no_delete_in_mounts` does cover the folders: it compares the
+  device copy before and after the run, so a delete the user allowed fails it too (`allow_delete_in` waives a
+  folder).
 
 Valid only with `lane: remote` and `fidelity: container`; the loader refuses any other pairing (and `lint` reports
 `device-bridge-misplaced`). Only `true` is valid. A recording that uses it stamps cassette v18, and its result
