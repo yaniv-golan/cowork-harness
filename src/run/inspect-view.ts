@@ -1,8 +1,9 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { RunResult } from "../types.js";
-import { requireTurns, turnArtifactPath } from "./turn-layout.js";
+import { legTreeRoot, readLegMarker, requireTurns, turnArtifactPath } from "./turn-layout.js";
 import { decideRunDir, noteRelocation } from "./run-dir-identity.js";
+import { legSnapshotRoot } from "./leg-snapshot.js";
 import { warn } from "../io.js";
 
 /** A compact, depth-1 preview of a JSON artifact: scalars kept inline, arrays shown as a count, nested
@@ -68,11 +69,16 @@ function digestFor(runDir: string): InspectDigest {
   // Where the run's evidence is read from (run-dir-identity.ts). inspect is a view of the run's own record (header,
   // manifest), so a dir the graders refuse — a copy beside its original, an evidence path outside the run dir — is
   // still shown, with a warning and no previews: they would read another dir's bytes under this run's name.
-  const placed = decideRunDir(runDir, result, "inspect");
+  // A multi-leg leg's tree may live at its scenario root (persistent): its evidence is still its own.
+  // A leg with a usable snapshot reads it (its files as they were when it ended), so its tree is never the question:
+  // decided first, as verify-run does, since legTreeRoot refuses a non-final persistent leg.
+  const snap = readLegMarker(runDir) ? legSnapshotRoot(runDir) : undefined;
+  const leg = snap ? { root: join(runDir, "..", "..") } : legTreeRoot(runDir, "inspect");
+  const placed = decideRunDir(runDir, result, "inspect", readLegMarker(runDir) && "root" in leg ? leg.root : undefined);
   if (placed.kind === "refuse")
     warn(`::warning:: ${placed.message.replace(/ \(can't verify ⇒ not green\)$/, "")} — artifact previews skipped.\n`);
   else noteRelocation(placed);
-  const workDir = placed.kind === "refuse" ? "" : (placed.paths.workDir ?? "");
+  const workDir = placed.kind === "refuse" ? "" : (snap ?? placed.paths.workDir ?? "");
   const workDirAvailable = !!workDir && existsSync(workDir);
   // artifacts === undefined means evidence-unavailable (replay, or a run whose root was missing at
   // collection), NOT a genuine zero-artifact run. Distinguish it from [] so `inspect` can't present

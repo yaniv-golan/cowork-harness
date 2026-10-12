@@ -16,7 +16,7 @@ reads it back.
   `stats`/`trace`/`scaffold` too — see [docs/cli.md → Commands at a glance](./cli.md#commands-at-a-glance).
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
-runLabel?, answerChannel?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
+runLabel?, answerChannel?, multiLeg?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
 cacheReadTokens?, modelCostUsd?, judgeCostUsd?, deciderCostUsd?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
 
 `costUsd` is the run's `cost.usd`: the agent session's own SDK-reported spend. It does **not** include
@@ -31,6 +31,12 @@ that threw is not counted, so it is a floor), absent when
 no LLM decider answered or none of its calls was priced. `stats --runs` prints both beside each run's cost
 (`judge=$…`, `decider=$…`), and its JSON `runs[]` entries carry `judgeCostUsd`/`deciderCostUsd`; neither is
 added to `costUsd`, `totalUsd` or the cost percentiles.
+
+**A multi-leg run is ONE row.** A [`legs:` scenario](./scenario.md#multi-leg-scenarios-legs) writes a single row
+with `multiLeg: true` for the whole scenario: its `pass` is the scenario verdict, its `costUsd`/`tokens` are summed
+over the prompt legs, and the legs get no rows of their own, so a two-leg pass counts once. `stats --reindex`
+re-derives the same row from the run's `scenario-result.json`; a multi-leg run that has not finished gets no row
+until it does.
 
 **Summing a critique's cost: use the roll-up row, not the turns.** A `critique` is FOUR model workloads,
 but only two of them produce a run — the graded turn and the reflection turn each write a row via the inner

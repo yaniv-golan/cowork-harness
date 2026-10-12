@@ -38,7 +38,8 @@ import type { Assertion, JudgedDocFingerprint, RunResult, Scenario } from "../ty
 import { DEFAULT_AUTHORED_TOTAL_BYTES, parseAuthoredTotalBytes } from "./artifacts.js";
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { fail, isJsonOutput, jsonError, jsonPayloadEnvelope, pkgVersion } from "./envelope.js";
-import { parseScenarioFile } from "./execute.js";
+import { parseScenarioFile, isMultiLegFile } from "./execute.js";
+import { resolveLegTarget } from "./multi-leg.js";
 import { turnArtifactPath, turnWriteDir } from "./turn-layout.js";
 import { assertContextFromRunDir } from "./verify-context.js";
 import { isConcreteModelId } from "./model-provenance.js";
@@ -224,6 +225,8 @@ export interface RegradeOptions {
   /** `--allow-metric-commands`: re-run each command metric over the kept events. Without it a command metric carries
    *  the run's own measurement forward (stamped `carried`), or is `command_not_allowed` with nothing recorded. */
   allowMetricCommands?: boolean;
+  /** How to load the scenario, when not `parseScenarioFile(scenarioFile)`: one leg of a multi-leg scenario. */
+  loadScenario?: () => Scenario;
   /** Grade every semantic_matches assert with this model (a per-assert `judge_model` is then inert). */
   judgeModel?: string;
   /** Capture budget for a run that did not persist `authoredCapture`. */
@@ -920,7 +923,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     );
 
   let scenario: Scenario | undefined;
-  const loadScenario = (): Scenario => (scenario ??= parseScenarioFile(opts.scenarioFile));
+  const loadScenario = (): Scenario => (scenario ??= opts.loadScenario ? opts.loadScenario() : parseScenarioFile(opts.scenarioFile));
   let scenarioSha256: string | undefined;
   const prepared: Prepared[] = [];
   // The evidence refusals (drift, unchecked content) are collected over EVERY run dir, so one refusal lists them
@@ -1514,9 +1517,24 @@ export async function cmdRegrade(args: string[]): Promise<never> {
   // as a run of invalid judge replies.
   const refusal = isolationRefusal();
   if (refusal) return fail(CMD, "usage", scrub(refusal, secrets), undefined, json);
+  // A multi-leg scenario re-grades ONE prompt leg: every run dir resolves to that leg's dir (resolveLegTarget).
+  let runDirs = p.positionals;
+  let loadScenario: (() => Scenario) | undefined;
+  if (isMultiLegFile(scenarioFile) || p.options["--leg"] !== undefined) {
+    const targets = p.positionals.map((d) => resolveLegTarget(d, scenarioFile, p.options["--leg"], CMD));
+    const bad = targets.find((t) => !t.ok);
+    if (bad && !bad.ok) return fail(CMD, "usage", scrub(bad.message, secrets), undefined, json);
+    const ok = targets as Array<Extract<(typeof targets)[number], { ok: true }>>;
+    const legIds = new Set(ok.map((t) => basename(t.runDir)));
+    if (legIds.size > 1)
+      return fail(CMD, "usage", `${CMD}: re-grade one leg at a time (got ${[...legIds].join(", ")}); pass --leg <id>`, undefined, json);
+    runDirs = ok.map((t) => t.runDir);
+    loadScenario = ok[0]!.load;
+  }
   const outcome = await regradeRuns({
     secrets,
-    runDirs: p.positionals,
+    runDirs,
+    ...(loadScenario ? { loadScenario } : {}),
     scenarioFile,
     judgeModel: p.options["--judge-model"],
     authoredTotalBytes,

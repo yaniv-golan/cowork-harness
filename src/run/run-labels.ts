@@ -3,7 +3,8 @@
 // loading the planner or the hillclimb runner.
 import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { latestTurn, turnArtifactPath } from "./turn-layout.js";
+import { classifyRunDir, latestTurn, turnArtifactPath } from "./turn-layout.js";
+import { readScenarioResult } from "./scenario-result.js";
 
 /** `runLabel` prefix of runs a hillclimb flow made. Any run whose label starts with it counts as a hillclimb
  *  run, including one a user labelled `--label hillclimb:…` by hand. */
@@ -62,6 +63,9 @@ export function runLabelOf(dir: string): string | undefined {
   if (isSymlink(dir)) return undefined;
   const status = readSmallJson(join(dir, "status.json"));
   if (status !== undefined) return labelIn(status);
+  // A multi-leg root has no turns of its own (latestTurn throws there) and prune calls this, so it must never
+  // throw: the label comes from scenario-result.json, or there is none yet.
+  if (classifyRunDir(dir).kind === "legs") return readScenarioResult(dir)?.runLabel;
   const turn = latestTurn(dir);
   return turn === undefined ? undefined : labelIn(readSmallJson(turnArtifactPath(dir, turn, "result.json")));
 }

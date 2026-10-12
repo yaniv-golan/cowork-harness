@@ -18,6 +18,7 @@ verdict-signal table — starts at [`assertion-catalog.md`](./assertion-catalog.
 
 ## Table of contents
 - [Scenario YAML](#scenario-yaml)
+- [Multi-leg scenario YAML (`legs:`)](#multi-leg-scenario-yaml-legs)
 - [Session YAML](#session-yaml)
 - [Scripted answers](#scripted-answers)
 - [Assertion catalog](./assertion-catalog.md) (its own file)
@@ -170,6 +171,46 @@ cassette stores such a `session:` as written).
 > `git mv`, a copy into another repo — leaves them unresolvable and `verify-cassettes` reports
 > `unverifiable-skill` ("can't verify ⇒ not green", exit 3) until you re-record at the new location, or pass `--session <file>`.
 > Decide where a cassette will live *before* you record it.
+
+## Multi-leg scenario YAML (`legs:`)
+
+A scenario with `legs:` in place of `prompt:` runs several agent sessions in order, with optional host steps between
+them, and has one verdict. Use it for a skill that parks (writes a status file and stops) and is resumed by a NEW
+session. Full rules: [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#multi-leg-scenarios-legs).
+
+```yaml
+name: resumable-probe
+baseline: latest
+session: ../sessions/resumable-probe.yaml
+fidelity: container            # container | microvm | protocol (not hostloop/cowork)
+workdir: persistent            # persistent (default): one session tree across legs — a persistent workspace, NOT Cowork
+                               # cowork-task: each prompt leg gets a new tree; connected folders carry, outputs do not
+expect_denied: []              # scenario-wide: graded once over every leg's and action's egress
+legs:
+  - id: ask                    # [a-z0-9_-], 1-64 chars; unique
+    prompt: Run the probe.     # a prompt leg: a fresh agent session (never a --resume)
+    session: { ... }           # OPTIONAL per-leg session overlay
+    timeout_ms: 600000         # OPTIONAL
+    assert: [...]              # the ordinary assert keys
+  - id: apply
+    host_action:               # a host-action leg: an argv command in the previous leg's runtime; no agent, no tokens
+      status:                  # OPTIONAL: read a JSON status file first (work-root relative) and check fields
+        artifact: outputs/artifacts/runs/r1/run_status.json
+        expect: { status: waiting }
+      run: ["python3", "{status.scripts_dir_shell}/apply.py"]   # argv, never a shell string; argv[0] is not templated
+      timeout: 60              # seconds
+    assert:                    # ONLY exit_code, stdout_matches, stdout_not_matches + file_exists/file_absent/artifact_json/artifact_text
+      - exit_code: 0
+      - stdout_matches: "applied \\d+"
+```
+
+- Top-level keys (generated list: `multiLeg.topLevelKeys` in `scripts/assertion-keys.json`): no `prompt` or `assert`
+  at the top; each leg carries its own `assert:`.
+- A leg after the first under `answer_channel: none` needs a positive file assertion that cannot already hold on the
+  earlier legs' files (a value assertion, or a presence one with `authored: true`); one whose block already passes
+  before it runs fails as `vacuous_positive_assertion` without spending.
+- A staged plugin tree that differs between legs fails the scenario as `plugin_identity_changed`.
+- The run dir is `<root>/legs/<id>/` per leg plus `<root>/scenario-result.json`; one index row.
 
 ## Session YAML
 

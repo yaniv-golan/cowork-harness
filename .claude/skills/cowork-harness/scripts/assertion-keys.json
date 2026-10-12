@@ -533,5 +533,46 @@
       "llm",
       "first"
     ]
+  },
+  "multiLeg": {
+    "topLevelKeys": [
+      "allow_host_hooks",
+      "answers",
+      "baseline",
+      "execution",
+      "expect_denied",
+      "fidelity",
+      "lane",
+      "legs",
+      "name",
+      "on_unanswered",
+      "requires_capabilities",
+      "session",
+      "skills",
+      "workdir",
+      "workspace_fixture"
+    ],
+    "legKeys": [
+      "assert",
+      "host_action",
+      "id",
+      "prompt",
+      "session",
+      "timeout_ms"
+    ],
+    "hostActionKeys": [
+      "run",
+      "status",
+      "timeout"
+    ],
+    "hostActionAssertKeys": [
+      "artifact_json",
+      "artifact_text",
+      "exit_code",
+      "file_absent",
+      "file_exists",
+      "stdout_matches",
+      "stdout_not_matches"
+    ]
   }
 }

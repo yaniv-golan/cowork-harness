@@ -2527,8 +2527,7 @@
         "type": "string"
       },
       ".events": {
-        "type": "array",
-        "required": true
+        "type": "array"
       },
       ".events[]": {
         "type": "string"
@@ -2640,6 +2639,30 @@
         "type": "string",
         "required": true
       },
+      ".legs": {
+        "type": "array"
+      },
+      ".legs[]": {
+        "type": "object"
+      },
+      ".legs[].action": {
+        "type": "object"
+      },
+      ".legs[].cassette": {
+        "type": "object"
+      },
+      ".legs[].id": {
+        "type": "string",
+        "required": true
+      },
+      ".legs[].kind": {
+        "enum": ["prompt", "action"],
+        "required": true
+      },
+      ".legs[].status": {
+        "enum": ["passed", "failed", "skipped"],
+        "required": true
+      },
       ".preRunHashes": {
         "type": "object"
       },
@@ -2657,8 +2680,7 @@
         "type": "string"
       },
       ".scenario": {
-        "type": "object",
-        "required": true
+        "type": "object"
       },
       ".scenarioSource": {
         "type": "string"
@@ -2721,6 +2743,13 @@
       },
       ".userVisibleRoots[]": {
         "type": "string"
+      },
+      ".verdict": {
+        "type": "object"
+      },
+      ".verdict.pass": {
+        "type": "boolean",
+        "required": true
       }
     },
     "cassette.v9.json": {
@@ -6428,6 +6457,178 @@
         "type": "string"
       }
     },
+    "scenario-multi-leg.schema.json": {
+      "": {
+        "type": "object",
+        "closed": true
+      },
+      ".allow_host_hooks": {
+        "type": "boolean"
+      },
+      ".answers": {
+        "type": "array"
+      },
+      ".answers[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".answers[].allow_if": {
+        "type": "string"
+      },
+      ".answers[].answer": {
+        "type": "string"
+      },
+      ".answers[].choose<anyOf:0>": {
+        "type": "string"
+      },
+      ".answers[].choose<anyOf:1>": {
+        "type": "array"
+      },
+      ".answers[].choose<anyOf:1>[]": {
+        "type": "string"
+      },
+      ".answers[].decide": {
+        "type": "string",
+        "enum": ["allow", "deny"]
+      },
+      ".answers[].else": {
+        "type": "string",
+        "enum": ["allow", "deny"]
+      },
+      ".answers[].grant": {
+        "type": "string",
+        "enum": ["once", "domain"]
+      },
+      ".answers[].when_question": {
+        "type": "string"
+      },
+      ".answers[].when_tool": {
+        "type": "string"
+      },
+      ".baseline": {
+        "type": "string"
+      },
+      ".execution": {
+        "type": "string",
+        "enum": ["local"]
+      },
+      ".expect_denied": {
+        "type": "array"
+      },
+      ".expect_denied[]": {
+        "type": "string"
+      },
+      ".fidelity": {
+        "type": "string",
+        "enum": ["protocol", "container", "microvm", "hostloop", "cowork"],
+        "required": true
+      },
+      ".lane": {
+        "type": "string",
+        "enum": ["local"]
+      },
+      ".legs": {
+        "type": "array",
+        "required": true
+      },
+      ".legs[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".legs[].assert": {
+        "type": "array"
+      },
+      ".legs[].host_action": {
+        "type": "object",
+        "closed": true
+      },
+      ".legs[].host_action.run": {
+        "type": "array",
+        "required": true
+      },
+      ".legs[].host_action.run[]": {
+        "type": "string"
+      },
+      ".legs[].host_action.status": {
+        "type": "object",
+        "closed": true
+      },
+      ".legs[].host_action.status.artifact": {
+        "type": "string",
+        "required": true
+      },
+      ".legs[].host_action.status.expect": {
+        "type": "object"
+      },
+      ".legs[].host_action.timeout": {
+        "type": "integer"
+      },
+      ".legs[].id": {
+        "type": "string",
+        "required": true
+      },
+      ".legs[].prompt": {
+        "type": "string"
+      },
+      ".legs[].session": {
+        "type": "object",
+        "closed": true
+      },
+      ".legs[].session.agent_env": {
+        "type": "object",
+        "closed": true
+      },
+      ".legs[].session.agent_env.disable_experimental_betas": {
+        "type": "boolean"
+      },
+      ".legs[].session.agent_env.subagent_model": {
+        "type": "string"
+      },
+      ".legs[].session.agent_env.tool_search": {
+        "type": "string",
+        "enum": ["auto", "off"]
+      },
+      ".legs[].session.answer_channel": {
+        "type": "string",
+        "enum": ["none"]
+      },
+      ".legs[].session.permission_mode": {
+        "type": "string",
+        "enum": ["default", "acceptEdits", "plan", "bypassPermissions"]
+      },
+      ".legs[].timeout_ms": {
+        "type": "integer"
+      },
+      ".name": {
+        "type": "string"
+      },
+      ".on_unanswered": {
+        "type": "string",
+        "enum": ["fail", "prompt", "llm", "first"]
+      },
+      ".requires_capabilities": {
+        "type": "array"
+      },
+      ".requires_capabilities[]": {
+        "type": "string"
+      },
+      ".session": {
+        "type": "string"
+      },
+      ".skills": {
+        "type": "array"
+      },
+      ".skills[]": {
+        "type": "string"
+      },
+      ".workdir": {
+        "type": "string",
+        "enum": ["persistent", "cowork-task"]
+      },
+      ".workspace_fixture": {
+        "type": "string"
+      }
+    },
     "scenario.schema.json": {
       "": {
         "type": "object",
@@ -8067,6 +8268,7 @@
       "COWORK_HARNESS_HEARTBEAT_MS",
       "COWORK_HARNESS_HILLCLIMB_SNAPSHOTS",
       "COWORK_HARNESS_JUDGE_MODEL",
+      "COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES",
       "COWORK_HARNESS_LINT_EXTRA_FINDINGS",
       "COWORK_HARNESS_LLM_MAX_BYTES",
       "COWORK_HARNESS_LLM_RETRIES",

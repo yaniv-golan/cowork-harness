@@ -336,6 +336,15 @@ export function assessRunDir(outDir: string): Assessment {
 
   const shape = classifyRunDir(outDir);
   if (shape.kind === "none") return { kind: "skip", reason: "aborted stub — no per-turn artifacts to migrate" };
+  // A multi-leg root (or one of its action legs) is a current layout with no turns/ of its own: nothing to move,
+  // and listTurns below would throw on it. Branch before any turn read.
+  if (shape.kind === "legs" || shape.kind === "action-leg")
+    return { kind: "noop", reason: `${outDir} is a current-layout multi-leg run; nothing to migrate` };
+  if (shape.kind === "mixed" && shape.markers.includes("legs/"))
+    return {
+      kind: "refuse",
+      reason: `${outDir} holds legs/ AND per-turn files at its root — not a layout any writer produces; refusing to guess`,
+    };
 
   const archives = archivesIn(outDir);
   const rootArtifacts = PER_TURN_ARTIFACTS.filter((a) => existsSync(join(outDir, a)));

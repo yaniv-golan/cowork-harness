@@ -15,7 +15,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { loadBaseline as realLoadBaseline } from "../baseline.js";
 import { UsageError, renderIssuePath } from "../errors.js";
-import { loadScenarioPure } from "./execute.js";
+import { loadScenarioPure, isMultiLegFile, loadMultiLegScenario } from "./execute.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { resolveCommandMetrics } from "../metric-command/resolve.js";
 import type { Scenario } from "../types.js";
@@ -261,15 +261,26 @@ export function loaderFindings(files: string[], deps: LoaderDeps = {}): LintFind
   const out: LintFinding[] = [];
   for (const file of files) {
     try {
-      let scenario: Scenario;
-      try {
-        scenario = load(file);
-      } catch (e) {
-        out.push(...loadRefusalFindings(file, e));
-        continue;
+      let scenario: Scenario | undefined;
+      let name: string;
+      // A multi-leg scenario has its own loader (and refusals); the fixture check is single-scenario and does not apply.
+      if (!deps.load && isMultiLegFile(file)) {
+        try {
+          name = loadMultiLegScenario(file).baseline;
+        } catch (e) {
+          out.push(...loadRefusalFindings(file, e));
+          continue;
+        }
+      } else {
+        try {
+          scenario = load(file);
+        } catch (e) {
+          out.push(...loadRefusalFindings(file, e));
+          continue;
+        }
+        out.push(...fixtureFindings(file, scenario));
+        name = scenario.baseline;
       }
-      out.push(...fixtureFindings(file, scenario));
-      const name = scenario.baseline;
       // `latest` always resolves on a packaged install; an absolute path is a file on some machine, which the
       // lint lane may not be. Only a committed NAME is a property of the scenario plus this install.
       // An absolute path is machine-dependent: one that does not exist HERE is not checked (it may exist on

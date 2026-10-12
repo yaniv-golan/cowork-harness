@@ -40,6 +40,8 @@ import { checkCaptureOrg } from "./sync/capture-org.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
   executeScenario,
+  isMultiLegFile,
+  loadMultiLegScenario,
   parseScenarioFile,
   loadRunnableScenario,
   loadSessionFromFile,
@@ -51,9 +53,12 @@ import {
   UsageError,
   SessionFileError,
   LegacyRunDirError,
+  MultiLegRunDirError,
+  RunDirShapeError,
   effectiveTier,
   type ExecuteOptions,
 } from "./run/execute.js";
+import { executeMultiLeg, resolveLegTarget } from "./run/multi-leg.js";
 import { unresolvedModelRefusal, envModelDefault } from "./run/model-provenance.js";
 import {
   ScriptedDecider,
@@ -683,7 +688,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   // ${TRACE_VIEWS.join("|")} call on its own physical line, apart from the per-view rows below that
   // mention "result.json", keeps this out of the per-turn-artifact-addressing scan's blind spot (it
   // flags any physical line naming an artifact next to something that looks like a path-join call).
-  trace: `usage: trace <run-id | run-dir | events.jsonl> [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--scope main|subagent|any] [--per-call] [--output-format json]
+  trace: `usage: trace <run-id | run-dir | events.jsonl> [--leg <id>] [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--scope main|subagent|any] [--per-call] [--output-format json]
+       --leg <id>                one prompt leg of a multi-leg run dir (the same as trace <run-dir>/legs/<id>); a multi-leg run dir without it is refused, since each leg is its own agent session
        --view tools              tool call / result rows
        --view questions          gate lifecycle (question → offered options, incl. each option's description → answer → delivered)
        --view dispatches         sub-agent dispatch tree + dispatch_count_max
@@ -738,7 +744,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "search-pool": SEARCH_POOL_USAGE,
   ref: REF_USAGE,
   "verify-run":
-    "usage: verify-run <run-dir> <scenario.yaml> [--allow-metric-commands] [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent; a command metric is carried forward from the run unless --allow-metric-commands re-runs it)",
+    "usage: verify-run <run-dir> <scenario.yaml> [--leg <id>] [--allow-metric-commands] [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent; a command metric is carried forward from the run unless --allow-metric-commands re-runs it)\n" +
+    "       --leg <id>: with a multi-leg (`legs:`) scenario, re-evaluate that prompt leg's assert: against its legs/<id> dir (or name the leg dir itself). Its files are read from the leg's snapshot (taken when it ended), so every leg verifies; a leg with no usable snapshot (over COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES) is refused when its session tree changed after it ended. Refused for a host-action leg.",
   inspect:
     "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run PRODUCED: artifacts + a shallow preview of each JSON artifact's fields; for what HAPPENED — tools/decisions — use `trace`)",
   diff:
@@ -1635,6 +1642,56 @@ async function runRepeatBatch(opts: {
   return { iterationResults, rollup };
 }
 
+/** `run <legs.yaml>`: load, run every leg in order, report each leg and the scenario verdict. Exit 0 when the scenario
+ *  passed, 1 when it did not. */
+async function runMultiLegFile(
+  file: string,
+  p: {
+    flags: CommonFlags;
+    policy: OnUnanswered;
+    externalChannel: ReturnType<typeof resolveExternal>;
+    o: ReturnType<typeof resolveOutput>;
+    modelFlag: string | undefined;
+    deciderModel: string | undefined;
+  },
+): Promise<void> {
+  const { flags, policy, externalChannel, o, modelFlag, deciderModel } = p;
+  const ms = loadMultiLegScenario(file);
+  if (ms.on_unanswered === "prompt")
+    fail("run", "usage", `scenario "${ms.name}" sets on_unanswered: prompt — rejected on \`run\``, undefined, o.json);
+  let outcome: Awaited<ReturnType<typeof executeMultiLeg>>;
+  try {
+    outcome = await executeMultiLeg(ms, {
+      command: "run",
+      onUnanswered: policy,
+      onUnansweredFlag: flags.onUnanswered,
+      externalChannel,
+      compact: !!(flags.compact || flags.demo),
+      runLabel: flags.label,
+      ...(modelFlag !== undefined ? { modelOverride: modelFlag } : {}),
+      ...(deciderModel !== undefined ? { llmModel: deciderModel } : {}),
+      // Passed through so executeMultiLeg refuses it: a negative control must never quietly run with the skill.
+      ...(flags.ablateSkill ? { ablateSkill: true } : {}),
+    });
+  } catch (e) {
+    if (e instanceof UnansweredError)
+      fail("run", "unanswered", `${ms.name}: unanswered question (on_unanswered=${policy})`, e.hint, o.json);
+    throw e;
+  } finally {
+    externalChannel?.close?.();
+  }
+  const sr = outcome.scenarioResult;
+  if (o.json) out(jsonEnvelope("run", [...outcome.legResults.values()], { multiLeg: sr as unknown as { verdict: { pass: boolean } } }));
+  else {
+    for (const leg of sr.legs) {
+      const why = leg.verdict && !leg.verdict.pass ? ` — ${(leg.verdict.failures ?? []).map((f) => f.message).join("; ")}` : "";
+      log(`  leg ${leg.id} (${leg.kind}): ${leg.status}${why}`);
+    }
+    log(`${sr.verdict.pass ? "PASS" : "FAIL"} ${ms.name} (${sr.legs.length} legs) — ${outcome.outDir}`);
+  }
+  process.exit(sr.verdict.pass ? 0 : 1);
+}
+
 async function cmdRun(rawArgs: string[]) {
   if (hasHelp(rawArgs)) return void log(RUN_HELP);
   // --decider-model overrides the LLM decider's answering model for scenarios that use `on_unanswered: llm`
@@ -1827,6 +1884,19 @@ async function cmdRun(rawArgs: string[]) {
   const policy = externalChannel ? "fail" : resolvePolicy("run", flags);
   const o = resolveOutput("run", flags);
   noteRunsLocation({ json: o.json, quiet: !!flags.quiet, suppress: !!flags.demo });
+
+  // A multi-leg (`legs:`) scenario is its own mode: one scenario root, its legs in order, one verdict.
+  if (files.some((f) => isMultiLegFile(f))) {
+    if (files.length !== 1 || matrixFile !== undefined || repeatN !== undefined)
+      fail(
+        "run",
+        "usage",
+        "a multi-leg scenario (`legs:`) runs on its own: `run <file.yaml>`, not in a directory batch, and without --matrix or --repeat",
+        undefined,
+        o.json,
+      );
+    return void (await runMultiLegFile(files[0], { flags, policy, externalChannel, o, modelFlag, deciderModel }));
+  }
 
   // --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
   // cells, not "N files each run once or N times" — so it's handled as its own early branch and exits.
@@ -3877,13 +3947,14 @@ function cmdStats(args: string[]) {
 
   const root = runsRoot();
   if (reindex) {
-    const { written, skipped, skippedReplay, skippedUnsafe, skippedLegacy } = reindexFromRunsTree(root);
+    const { written, skipped, skippedReplay, skippedUnsafe, skippedLegacy, skippedInFlightLegs } = reindexFromRunsTree(root);
     const notes = [
       skipped ? `${skipped} skipped — missing/corrupt result.json` : "",
       skippedReplay ? `${skippedReplay} skipped — replay re-check, not evidence` : "",
       // Naming the remedy matters: a bare count reads as "nothing I can do about it".
       skippedLegacy ? `${skippedLegacy} skipped — pre-layout, run: cowork-harness migrate-run-dir` : "",
       skippedUnsafe ? `${skippedUnsafe} skipped — symlinked run dir/result.json rejected` : "",
+      skippedInFlightLegs ? `${skippedInFlightLegs} skipped — multi-leg run not finished (no scenario-result.json)` : "",
     ].filter(Boolean);
     log(`stats: reindexed ${written} run(s) from ${root}${notes.length ? ` (${notes.join("; ")})` : ""}`);
   }
@@ -4195,6 +4266,8 @@ async function cmdStatus(args: string[]) {
     // it so `status <run-dir>` works — not only the exact outDir printed at run start.
     dir = resolveStatusTarget(p.positionals[0]);
   } catch (e) {
+    // A multi-leg candidate is a refused shape (`runtime`), not a bad argument.
+    if (e instanceof RunDirShapeError) return fail("status", "runtime", e.message, undefined, isJsonOutput(args));
     return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   if (p.flags["--follow"]) {
@@ -4547,6 +4620,7 @@ function cmdScaffold(args: string[]) {
   try {
     file = resolveEventsFile(target);
   } catch (e) {
+    if (e instanceof RunDirShapeError) return void fail("scaffold", "runtime", e.message, undefined, json);
     return void fail("scaffold", "usage", String((e as Error).message), undefined, json);
   }
   let yaml: string;
@@ -4600,7 +4674,7 @@ async function cmdVerifyRun(args: string[]) {
       args,
       withCommandGlobals({
         booleans: ["--allow-metric-commands"],
-        values: ["--output-format"],
+        values: ["--output-format", "--leg"],
         enums: { "--output-format": ["text", "json"] },
       }),
     );
@@ -4614,7 +4688,7 @@ async function cmdVerifyRun(args: string[]) {
     return fail(
       "verify-run",
       "usage",
-      "usage: verify-run <run-dir> <scenario.yaml> [--allow-metric-commands] [--output-format json]",
+      "usage: verify-run <run-dir> <scenario.yaml> [--leg <id>] [--allow-metric-commands] [--output-format json]",
       undefined,
       isJsonOutput(args),
     );
@@ -4631,7 +4705,11 @@ async function cmdVerifyRun(args: string[]) {
   // Evidence loading (run-dir refusals, the scenario load, the AssertContext rebuild), the recorded-fixture refusal,
   // the evaluation (`evaluate` + `expandExpectDenied`) and the metrics re-measure are shared with every other
   // consumer that re-evaluates a kept run; see `reevaluateRun` in src/run/verify-context.ts.
-  const loaded = reevaluateRun(runDir, () => parseScenarioFile(scenarioFile));
+  // A multi-leg scenario re-grades ONE prompt leg (`--leg <id>`, or the leg dir itself): that leg as a single-prompt
+  // scenario, against its own run dir, reading its snapshot (verify-context.ts).
+  const target = resolveLegTarget(runDir, scenarioFile, p.options["--leg"], "verify-run");
+  if (!target.ok) return fail("verify-run", "usage", target.message, undefined, isJsonOutput(args));
+  const loaded = reevaluateRun(target.runDir, target.load);
   if (!loaded.ok) {
     if (loaded.kind === "scenario") {
       // The scenario file is the caller's input: absent or not loadable is a usage error, as it is for `run`.
@@ -4652,8 +4730,8 @@ async function cmdVerifyRun(args: string[]) {
     loaded.metrics,
     await remeasureCommandMetrics(scenario.metrics ?? [], {
       scenarioPath: scenarioFile,
-      outDir: runDir,
-      turn: latestTurn(runDir) ?? 1,
+      outDir: target.runDir,
+      turn: latestTurn(target.runDir) ?? 1,
       recorded: result.metrics,
       allow: p.flags["--allow-metric-commands"] === true,
       secrets: collectSecrets(),
@@ -4702,12 +4780,12 @@ async function cmdVerifyRun(args: string[]) {
         isJsonOutput(args),
       );
     }
-    const parsed = parseGatesFromEvents(join(runDir, "events.jsonl"));
+    const parsed = parseGatesFromEvents(join(target.runDir, "events.jsonl"));
     if (parsed === null) {
       return fail(
         "verify-run",
         "runtime",
-        `verify-run: scenario declares answers but ${runDir} has no events.jsonl — cannot verify answer coverage ` +
+        `verify-run: scenario declares answers but ${target.runDir} has no events.jsonl — cannot verify answer coverage ` +
           `(re-keep the run with the gates, or drop answers). (can't verify ⇒ not green)`,
         undefined,
         isJsonOutput(args),
@@ -4717,7 +4795,7 @@ async function cmdVerifyRun(args: string[]) {
       return fail(
         "verify-run",
         "runtime",
-        `verify-run: events.jsonl under ${runDir} has ${parsed.corruptLines} unparseable line(s) — ` +
+        `verify-run: events.jsonl under ${target.runDir} has ${parsed.corruptLines} unparseable line(s) — ` +
           `truncation, a hand edit, or raw agent-stdout noise in the stream; either way gate evidence ` +
           `is untrustworthy and answer coverage cannot be certified; re-record. (can't verify ⇒ not green)`,
         undefined,
@@ -4943,7 +5021,7 @@ const FILE_FAMILY = new Set([
 
 function cmdTrace(args: string[]) {
   // --dotenv / --run-dir after the subcommand: applied and removed before this command's own flag scans.
-  args = stripCommandGlobals("trace", args, ["--view", "--output-format", "--scope"], isJsonOutput(args));
+  args = stripCommandGlobals("trace", args, ["--view", "--output-format", "--scope", "--leg"], isJsonOutput(args));
   ensureOutputFormat("trace", args);
   const json = isJsonOutput(args);
 
@@ -4983,6 +5061,7 @@ function cmdTrace(args: string[]) {
       "--full-results",
       "--scope",
       "--per-call",
+      "--leg",
     ],
     json,
   );
@@ -5004,7 +5083,7 @@ function cmdTrace(args: string[]) {
     fail("trace", "usage", `--scope: expected one of ${TOOL_DURATION_SCOPES.join("|")}, got "${scopeArg ?? ""}"`, undefined, json);
 
   // skip the `--output-format`, `--view` and `--scope` values so they don't get treated as the target path.
-  const allPositionals = positionals(args, ["--output-format", "--view", "--scope"]);
+  const allPositionals = positionals(args, ["--output-format", "--view", "--scope", "--leg"]);
   const target = allPositionals[0];
   // trace takes exactly one target; reject stray positionals rather than silently using the first.
   if (allPositionals.length > 1)
@@ -5019,14 +5098,35 @@ function cmdTrace(args: string[]) {
     fail(
       "trace",
       "usage",
-      `usage: trace <run-id | run-dir | events.jsonl> [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--scope main|subagent|any] [--per-call] [--output-format json]`,
+      `usage: trace <run-id | run-dir | events.jsonl> [--leg <id>] [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results] [--scope main|subagent|any] [--per-call] [--output-format json]`,
       undefined,
       json,
     );
+  // --leg <id>: one leg of a multi-leg run dir, as `trace <dir>/legs/<id>`.
+  const legIdx = args.indexOf("--leg");
+  const legArg = legIdx >= 0 ? args[legIdx + 1] : undefined;
+  if (legIdx >= 0 && (legArg === undefined || legArg.startsWith("--"))) fail("trace", "usage", "--leg requires a leg id", undefined, json);
+  let traceTarget = target!;
+  if (legArg !== undefined) {
+    // A run id or fragment resolves to its multi-leg root first (the resolver refuses a root without --leg, naming it).
+    let rootDir = target!;
+    if (!existsSync(rootDir))
+      try {
+        resolveEventsFile(rootDir);
+      } catch (e) {
+        if (e instanceof MultiLegRunDirError && e.runDir !== undefined) rootDir = e.runDir;
+      }
+    const legDir = join(rootDir, "legs", legArg);
+    if (classifyRunDir(rootDir).kind !== "legs" || !existsSync(join(legDir, "leg.json")))
+      return fail("trace", "usage", `trace --leg: ${target} is not a multi-leg run dir with a leg "${legArg}"`, undefined, json);
+    traceTarget = legDir;
+  }
   let file: string;
   try {
-    file = resolveEventsFile(target!);
+    file = resolveEventsFile(traceTarget);
   } catch (e) {
+    // A multi-leg root or an action leg is a refused shape (`runtime`), not a bad argument.
+    if (e instanceof RunDirShapeError) return fail("trace", "runtime", e.message, undefined, json);
     return fail("trace", "usage", String((e as Error).message), undefined, json);
   }
   if (view === "questions") {
@@ -5160,6 +5260,9 @@ function detectDiffKind(arg: string): DiffKind {
     }
     if (whole && typeof whole === "object") {
       const w = whole as Record<string, unknown>;
+      // A multi-leg cassette has no top-level events (each leg nests its own): refused by name, never read as a baseline.
+      if (Array.isArray(w.legs) && w.scenario)
+        throw new UsageError(`diff: ${arg} is a multi-leg cassette; diff takes a single-prompt cassette, run or baseline`);
       if (Array.isArray(w.events) && w.scenario) return "cassette";
       if (typeof w.type === "string" && SDK_MESSAGE_TYPES.has(w.type)) return "run";
       return "baseline";
@@ -5169,7 +5272,9 @@ function detectDiffKind(arg: string): DiffKind {
   try {
     resolveEventsFile(arg);
     return "run";
-  } catch {
+  } catch (e) {
+    // A multi-leg run resolved fine and is a refused shape: never retried as a baseline name.
+    if (e instanceof RunDirShapeError) throw e;
     /* not a resolvable run either — fall through */
   }
   return "baseline"; // validated for real by loadBaseline() at load time; unresolvable throws there
@@ -5202,6 +5307,9 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   const diffShape = classifyRunDir(runDir);
   if (diffShape.kind === "legacy" || diffShape.kind === "mixed")
     throw new LegacyRunDirError(`diff: ${preLayoutMessage(diffShape, runDir)}`);
+  // A multi-leg root has no turns of its own; a leg dir (legs/<id>) diffs as an ordinary run.
+  if (diffShape.kind === "legs" || diffShape.kind === "action-leg")
+    throw new MultiLegRunDirError(`diff: ${preLayoutMessage(diffShape, runDir, "diff")}`);
   // Same seam, same turn, same reason for both: a root read here silently produced an EMPTY transcript
   // (transcriptDiffers:false regardless of real drift) and, for meta, a guard-invisible root read of
   // `result.json` (`join(runDir, …)` — no PER_TURN_ARTIFACTS literal on the line) that silently emptied
@@ -5476,8 +5584,12 @@ function cmdInspect(args: string[]) {
   const target = allPositionals[0];
   let runDir: string;
   try {
+    // A multi-leg root or an action leg: refused with inspect's own name (requireTurns), routed as runtime below.
+    if (existsSync(target) && ["legs", "action-leg"].includes(classifyRunDir(target).kind)) requireTurns(target, "inspect");
     runDir = hasTurnDirs(target) ? target : dirname(resolveEventsFile(target));
   } catch (e) {
+    // A multi-leg root or an action leg resolved fine; it is a refused shape (`runtime`), not a bad argument.
+    if (e instanceof RunDirShapeError) return void fail("inspect", "runtime", e.message, undefined, json);
     return void fail("inspect", "usage", String((e as Error).message), undefined, json);
   }
   // A legacy/mixed/pre-completion dir is refused HERE, before buildInspectView ever tries to load a
@@ -5512,7 +5624,8 @@ main().catch((e) => {
   // well-formed-invocation refusal, not an internal harness bug — route it the same clean, no-stack way as
   // BoundaryError/UsageError rather than falling through to the `internal` branch below, which prints a
   // stack trace for what is actually the expected "this dir predates the layout" message.
-  if (e instanceof LegacyRunDirError) fail(command, "runtime", e.message, undefined, json);
+  // RunDirShapeError covers LegacyRunDirError and MultiLegRunDirError (a multi-leg root or a host-action leg).
+  if (e instanceof RunDirShapeError) fail(command, "runtime", e.message, undefined, json);
   // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
   if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
   else log(String(e?.stack ?? e));

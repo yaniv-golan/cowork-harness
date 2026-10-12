@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { parse as parseYaml } from "yaml";
 import { Scenario, PlatformBaseline } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
+import { loadMultiLegScenario } from "../src/run/execute.js";
 
 // Guards against schema drift: every shipped example/self-test must validate.
 const YAML = (f: string) => f.endsWith(".yaml") || f.endsWith(".yml");
@@ -39,7 +40,10 @@ describe("shipped scenarios validate", () => {
   for (const dir of SCENARIO_DIRS)
     for (const f of readdirSync(dir).filter(YAML)) {
       it(`${dir}/${f}`, () => {
-        expect(() => Scenario.parse(parseYaml(readFileSync(join(dir, f), "utf8")))).not.toThrow();
+        const doc = parseYaml(readFileSync(join(dir, f), "utf8")) as Record<string, unknown>;
+        // A multi-leg (`legs:`) scenario is the other form, validated by its own loader (schema + per-leg checks).
+        if ("legs" in doc) expect(() => loadMultiLegScenario(join(dir, f))).not.toThrow();
+        else expect(() => Scenario.parse(doc)).not.toThrow();
       });
     }
 });

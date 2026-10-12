@@ -17,6 +17,7 @@ import {
   METRIC_ARTIFACT_REFUSED_PATTERNS,
 } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
+import { HOST_ACTION_FILE_KEYS, HOST_ACTION_OWN_KEYS, HostAction, Leg, MultiLegScenarioObject } from "../src/run/multi-leg-scenario.js";
 import {
   SERVED_HOOK_EVENTS,
   KNOWN_HOOK_EVENTS,
@@ -126,6 +127,14 @@ export function buildAssertionKeys(): string {
         // by a stable dotted field id. See collectEnums/buildEnumMap above. scenario.py's
         // `enum-value-invalid` rule keeps an embedded fallback parity-tested against this.
         enums: buildEnumMap(),
+        // A multi-leg (`legs:`) scenario: its top-level keys, a leg's keys, a host_action's keys, and the assert keys
+        // a host_action leg takes (its own exit/stdout keys plus the file keys; it has no transcript).
+        multiLeg: {
+          topLevelKeys: Object.keys(MultiLegScenarioObject.shape).sort(),
+          legKeys: Object.keys(Leg.shape).sort(),
+          hostActionKeys: Object.keys(HostAction.shape).sort(),
+          hostActionAssertKeys: [...HOST_ACTION_OWN_KEYS, ...HOST_ACTION_FILE_KEYS].sort(),
+        },
       },
       null,
       2,
@@ -151,6 +160,17 @@ const TARGETS = [
       "keys are rejected on `lane: remote`. Run `cowork-harness lint <file>` — it runs the real loader as " +
       "well as the authoring checks — and `cowork-harness record <file> --dry-run` for the pre-spend " +
       "refusals on top. See docs/scenario.md.",
+  },
+  {
+    file: "scenario-multi-leg.schema.json",
+    schema: MultiLegScenarioObject,
+    description:
+      "cowork-harness MULTI-LEG scenario YAML — `legs:` in place of `prompt:`: each leg a prompt (a fresh agent session) " +
+      "or a host_action (argv run in the leg runtime). STRUCTURAL validation only: a leg's `assert:` is checked by the " +
+      "loader (a prompt leg takes the ordinary assertion keys, a host_action leg files only plus exit_code / " +
+      "stdout_matches / stdout_not_matches), as are the cross-leg rules (the first leg is a prompt leg, at least two " +
+      "prompt legs, unique ids). Run `cowork-harness lint <file>` and `cowork-harness record <file> --dry-run`. See " +
+      'docs/scenario.md, "Multi-leg scenarios".',
   },
   {
     file: "session.schema.json",

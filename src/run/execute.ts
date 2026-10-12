@@ -6,7 +6,16 @@ import { metricsFor } from "../metrics.js";
 import { resolveCommandMetrics, resolvedCommand } from "../metric-command/resolve.js";
 import { resolvePython } from "../metric-command/interpreters.js";
 import { asOutcomes, commandMetricNotice, measureCommandMetrics } from "../metric-command/live.js";
-import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
+import {
+  BoundaryError,
+  UsageError,
+  LegacyRunDirError,
+  MultiLegRunDirError,
+  RunDirShapeError,
+  SessionFileError,
+  ScenarioFileError,
+  compactSchemaError,
+} from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
 import { currentTurnEventLines, TURN_START_MARKER } from "./turn-events.js";
@@ -24,6 +33,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { MultiLegScenario, REFUSED_TOP_LEVEL, hostActionAsserts, promptLegAsserts, type Leg } from "./multi-leg-scenario.js";
 import { Scenario } from "../types.js";
 import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline, DeviceBridgeRecord } from "../types.js";
 import {
@@ -70,7 +80,9 @@ import {
   expandUserPath,
   expandHome,
   strippedEnv,
+  workBaseOf,
   type LaunchPlan,
+  type LegStage,
 } from "../session.js";
 import { spawnProtocol, protocolAgentConfigDir, protocolReadsOperatorConfig } from "../runtime/protocol.js";
 import {
@@ -180,7 +192,21 @@ export { collectArtifacts, collectArtifactPaths } from "./artifacts.js";
 
 const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/run-result.json";
 
+/** One prompt leg of a multi-leg run (src/run/multi-leg.ts), run as an ordinary single-prompt execution with these
+ *  differences: its run dir is the leg dir, its agent-visible session id is the scenario's (`persistent`) or the
+ *  leg's own (`cowork-task`), its session tree may live at the scenario root (`workBase`), a later leg stages per
+ *  `legStage`, its agent session id is fresh and never resumed, and it appends no index row (the scenario appends one). */
+export interface LegRunContext {
+  outDir: string;
+  sessionId: string;
+  workBase: string;
+  legStage?: LegStage;
+  agentSessionId: string;
+}
+
 export interface ExecuteOptions {
+  /** Internal: this execution is one prompt leg of a multi-leg run. */
+  leg?: LegRunContext;
   session?: ReturnType<typeof loadSession>;
   /** `--model <id>`: a one-off pin that overrides the session file's `model:`. Applied to whichever
    *  session this run ends up using, so `run`/`record` gain the flag the `skill`/`chat` lanes already had.
@@ -842,11 +868,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (opts.sessionId !== undefined || opts.resume)
       throw new UsageError("a pre-assigned run id cannot be combined with --session-id or --resume");
   }
+  if (opts.leg && (opts.sessionId !== undefined || opts.resume || opts.runId !== undefined))
+    throw new UsageError("a multi-leg run cannot be combined with --session-id, --resume or a pre-assigned run id");
   const stable = opts.sessionId ? `sess-${opts.sessionId}` : undefined;
-  const sessionId = stable ?? opts.runId ?? `local_${process.hrtime.bigint().toString(36)}`;
+  const sessionId = opts.leg?.sessionId ?? stable ?? opts.runId ?? `local_${process.hrtime.bigint().toString(36)}`;
   // the scenario name (YAML or filename-derived) is a PATH component — slugify so a name like
   // "../x" can't place run artifacts outside runs/. The display name (scenario.name) is unchanged.
-  const outDir = runOutDir(scenario.name, sessionId);
+  // A multi-leg leg runs in its own leg dir under the scenario root, which the multi-leg driver chose.
+  const outDir = opts.leg?.outDir ?? runOutDir(scenario.name, sessionId);
   if (opts.runId !== undefined && existsSync(outDir))
     throw new UsageError(`run id ${opts.runId} is already used by ${outDir}; a pre-assigned run id is never reused`);
   // The marker lives at outDir/.origin — ABOVE workRoot (outDir/work/...), so it's invisible to
@@ -1100,7 +1129,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane, launchSources, {
     deviceBridge: scenario.device_bridge === true,
+    ...(opts.leg ? { workBase: opts.leg.workBase, ...(opts.leg.legStage ? { legStage: opts.leg.legStage } : {}) } : {}),
   });
+  // A leg is a NEW agent session (its own id, never --resume): the next task, not the next turn of this one.
+  if (opts.leg) {
+    plan.agentSessionId = opts.leg.agentSessionId;
+    plan.resume = false;
+  }
   // A maintainer control run leaves the device_bridge prompt note out (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off). Read once:
   // the render, both fingerprints and the record must agree on it.
   const bridgeNote = deviceBridgeNoteMode();
@@ -1153,7 +1188,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // diff does NOT depend on this: it reads its own outputs-only snapshot, taken on every turn.
   // Skipping keeps the pre-spawn walk (potentially a large live connected folder on hostloop) off runs
   // that never look at it; absence stays loud.
-  plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record" || opts.armPreRunManifest === true);
+  // Every leg of a multi-leg run takes one: `authored` on a leg means "this leg wrote it", against the earlier legs' files.
+  plan.capturePreRun = scenarioArmsPreRunManifest(scenario, opts.command === "record" || opts.armPreRunManifest === true || !!opts.leg);
 
   // Fill in the caller's display-translate ref (see ExecuteOptions.translateRef) now that plan +
   // effectiveFidelity exist — well before the child spawns, so the renderer never sees a stale identity
@@ -1165,7 +1201,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // directly with no translateRef, and still needs a ctx file for a later `trace --translate-paths`/replay
   // reader). Reusing this one `vmPathContextFromPlan(...)` call (rather than a second, independent one)
   // guarantees the write-site and the live-translator derivations can never drift apart.
-  const vmPathCtx = vmPathContextFromPlan(sessionId, plan, outDir);
+  // The session tree may sit at a multi-leg scenario root (workBase), not under this run dir.
+  const vmPathCtx = vmPathContextFromPlan(sessionId, plan, workBaseOf(plan, outDir));
   writeVmPathContextFile(outDir, vmPathCtx, effectiveFidelity);
   if (opts.translateRef) {
     opts.translateRef.current = makeDisplayTranslator({
@@ -1704,7 +1741,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // tiers have always produced. Must run before `workRoot`-relative code below.
     if (effectiveFidelity === "hostloop") {
       try {
-        snapshotHostLoopWorkspace(plan, join(outDir, "work", "session", "mnt"));
+        snapshotHostLoopWorkspace(plan, join(workBaseOf(plan, outDir), "work", "session", "mnt"));
       } catch (err) {
         // On the unanswered-gate salvage path, a snapshot failure here must not replace the original
         // UnansweredError and skip partial persistence entirely — that would be worse than the folder
@@ -1728,7 +1765,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // salvage semantics as hostloop above.
     if (effectiveFidelity === "microvm") {
       try {
-        snapshotMicroVmWorkspace(sessionId, join(outDir, "work", "session"));
+        snapshotMicroVmWorkspace(sessionId, join(workBaseOf(plan, outDir), "work", "session"));
       } catch (err) {
         if (unansweredErr) {
           warn(
@@ -1749,7 +1786,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // every baseline regardless: the authored no_delete_in_outputs / no_delete_in_mounts keys cover it.
     // Host paths the user supplied (the staged input files, captured on the first turn, and this turn's
     // prompt) are not a leak when the agent quotes them back verbatim.
-    const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity);
+    const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity, workBaseOf(plan, outDir));
     const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus, {
       deviceBridge: scenario.device_bridge === true,
     });
@@ -1779,7 +1816,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       warn(
         `::warning:: [scan] ${scan.malformedLines} malformed line(s) in events.jsonl — scan evidence unreliable, treated as unavailable\n`,
       );
-    const workRoot = effectiveFidelity === "protocol" ? join(outDir, "work") : join(outDir, "work", "session", "mnt");
+    const workBase = workBaseOf(plan, outDir);
+    const workRoot = effectiveFidelity === "protocol" ? join(workBase, "work") : join(workBase, "work", "session", "mnt");
 
     // The runtime tripwire: if a gated tool call completed successfully with no evidence the path-containment
     // gate ever ran on it, the run's real-filesystem safety is unverified — hard-fail rather than pass silently.
@@ -1903,7 +1941,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const partialText = scrub(JSON.stringify(partialResult, null, 2), secrets);
       writeTextAtomic(join(tDirPartial, "result.json"), partialText);
 
-      appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
+      // A leg's row is the scenario's one roll-up (multi-leg.ts), never its own.
+      if (!opts.leg) appendIndexRow(runsWriteRoot(), indexRowFromResult(partialResult, { command: opts.command ?? "run", partial: true }));
       writeTrace(tDirPartial, record, egress, secrets, partialResult.durationMs);
       // Loud PARTIAL marker so the populated artifacts are never misread as success (the no-false-green rule).
       warn(
@@ -2090,7 +2129,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // this same "live" mode (see assertContextFromRunDir in verify-context.ts).
       linkResolution: {
         mode: "live",
-        hostRoots: [join(resolve(outDir), "work", "session", "mnt"), ...plan.mounts.filter(isConnectedContent).map((m) => m.hostPath)],
+        hostRoots: [
+          join(workBaseOf(plan, outDir), "work", "session", "mnt"),
+          ...plan.mounts.filter(isConnectedContent).map((m) => m.hostPath),
+        ],
       },
       ...budgetFields(record),
       resources,
@@ -2524,7 +2566,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Atomic: a crash mid-write must never leave a torn result.json — see writeTextAtomic's doc comment.
     const resultText = scrub(JSON.stringify(result, null, 2), secrets);
     writeTextAtomic(join(tDir, "result.json"), resultText);
-    appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
+    if (!opts.leg) appendIndexRow(runsWriteRoot(), indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
     writeTrace(tDir, record, egress, secrets, result.durationMs);
     return result;
   } finally {
@@ -2689,6 +2731,12 @@ export function loadScenarioPure(path: string): Scenario {
   let rawDoc: unknown;
   try {
     rawDoc = readYamlFile(path, "scenario", (message, _hint, syntax) => new ScenarioFileError(message, syntax === true));
+    // A `legs:` file is a different scenario form. Refuse it by name: Zod would say only "unrecognized key", and a
+    // reader that took its first leg as the whole run would grade a resume flow on its first half.
+    if (isMultiLegDoc(rawDoc))
+      throw new UsageError(
+        `${path} is a multi-leg scenario (\`legs:\`): only \`run\` and \`record\` take one; this command grades a single prompt`,
+      );
     scenario = Scenario.parse(rawDoc);
   } catch (e) {
     // A schema violation is a USER mistake (a typo'd/retired key like `profile:`, a bad enum value),
@@ -2744,6 +2792,95 @@ export function loadScenarioPure(path: string): Scenario {
 }
 
 export { assertSpawnAllowed } from "../spawn-guard.js";
+
+const isMultiLegDoc = (doc: unknown): boolean => typeof doc === "object" && doc !== null && "legs" in (doc as Record<string, unknown>);
+
+/** Is this scenario file the multi-leg form? A YAML read, no schema: callers pick a loader by it. False for a file that
+ *  cannot be read or parsed, which the chosen loader then reports. */
+export function isMultiLegFile(path: string): boolean {
+  try {
+    return isMultiLegDoc(parseYaml(readFileSync(path, "utf8")));
+  } catch {
+    return false;
+  }
+}
+
+/** Load a `legs:` scenario: the schema (MultiLegScenario), the keys it refuses by name, the filename-derived name, the
+ *  file-relative `session:` and `workspace_fixture:`, and the regex checks each prompt leg's block gets as a single
+ *  scenario would. Throws UsageError. */
+export function loadMultiLegScenario(path: string): MultiLegScenario {
+  const rawDoc = readYamlFile(path, "scenario", (message, _hint, syntax) => new ScenarioFileError(message, syntax === true));
+  if (typeof rawDoc === "object" && rawDoc !== null)
+    for (const [k, why] of Object.entries(REFUSED_TOP_LEVEL))
+      if (k in (rawDoc as Record<string, unknown>))
+        throw new UsageError(`invalid scenario ${path}: \`${k}\` is refused with \`legs:\`: ${why}`);
+  const r = MultiLegScenario.safeParse(rawDoc);
+  if (!r.success)
+    throw new UsageError(`invalid scenario ${path}: ${compactSchemaError(r.error.issues)}`, JSON.stringify(r.error.issues, null, 2));
+  const s = r.data as MultiLegScenario;
+  if (!s.name) s.name = basename(path).replace(/\.ya?ml$/i, "");
+  if (isFileRelative(s.session)) s.session = resolve(dirname(path), s.session);
+  if (s.workspace_fixture !== undefined)
+    try {
+      const asWritten = s.workspace_fixture;
+      s.workspace_fixture = expandUserPath(asWritten, dirname(resolve(path)));
+      setWorkspaceFixtureAsWritten(s as unknown as Scenario, asWritten);
+    } catch (e) {
+      throw new UsageError(`invalid scenario ${path}: workspace_fixture: ${(e as Error).message}`);
+    }
+  for (const leg of s.legs) {
+    try {
+      // `artifact_json.schema: {file}` resolves relative to the scenario file, inlined in place as a single
+      // scenario's is (parseScenarioFile), so the frozen form and every leg read the same schema.
+      inlineSchemaFiles({ assert: leg.assert } as unknown as Scenario, path);
+      if (leg.prompt !== undefined) validateScenarioRegexes(legScenario(s, leg), path);
+      else
+        for (const a of hostActionAsserts(leg))
+          for (const k of ["stdout_matches", "stdout_not_matches"] as const) {
+            const pat = (a as Record<string, unknown>)[k];
+            if (typeof pat !== "string") continue;
+            const c = compileUserRegex(pat);
+            if ("error" in c) throw new Error(`bad regex in ${k}: ${c.error}`);
+          }
+    } catch (e) {
+      throw new UsageError(`invalid scenario ${path}: leg "${leg.id}": ${(e as Error).message}`);
+    }
+  }
+  return s;
+}
+
+/** One PROMPT leg as the single-prompt scenario the executor runs: the leg's prompt, assertions and time limit, plus
+ *  the scenario-wide keys. `workspace_fixture` stages into the first leg only; a later leg starts from the previous
+ *  leg's end state. */
+export function legScenario(s: MultiLegScenario, leg: Leg): Scenario {
+  if (leg.prompt === undefined) throw new Error(`leg "${leg.id}" is a host_action leg, not a prompt leg`);
+  const first = s.legs[0]?.id === leg.id;
+  const scn: Scenario = {
+    name: s.name,
+    baseline: s.baseline,
+    session: s.session,
+    fidelity: s.fidelity,
+    execution: "local",
+    lane: "local",
+    prompt: leg.prompt,
+    ...(leg.timeout_ms !== undefined ? { timeout_ms: leg.timeout_ms } : {}),
+    answers: s.answers,
+    ...(s.on_unanswered !== undefined ? { on_unanswered: s.on_unanswered } : {}),
+    // Scenario-wide: graded once over the union of every leg's egress (multi-leg.ts), never per leg — a leg that made
+    // no request to the host would otherwise fail a check about the scenario.
+    expect_denied: [],
+    assert: promptLegAsserts(leg),
+    skills: s.skills,
+    requires_capabilities: s.requires_capabilities,
+    ...(s.allow_host_hooks !== undefined ? { allow_host_hooks: s.allow_host_hooks } : {}),
+    ...(first && s.workspace_fixture !== undefined ? { workspace_fixture: s.workspace_fixture } : {}),
+  } as Scenario;
+  if (first && s.workspace_fixture !== undefined) {
+    const asWritten = workspaceFixtureAsWritten(s as unknown as Scenario);
+    if (asWritten !== undefined) setWorkspaceFixtureAsWritten(scn, asWritten);
+  }
+  return scn;
+}
 
 /** Every nested `{ …: <regex> }` leaf in the Assertion schema, derived from zod rather than enumerated.
  *
@@ -4481,8 +4618,14 @@ function outputsDeleteSnippet(cmd: string, mount = "outputs"): string {
  *  `exact`: the vm-work root, the runs root and the run's own parent dir — they hold OTHER sessions, which an input may legitimately
  *  name, so only the root itself is refused. Mount SOURCE paths are deliberately absent: they reach
  *  model-visible text only at hostloop, where the signal is skipped. */
-export function ownHostRoots(outDir: string, sessionId: string, baseline: PlatformBaseline): { subtree: string[]; exact: string[] } {
-  const subtree = [resolve(outDir), join(VM_WORK_HOST, sessionId)];
+export function ownHostRoots(
+  outDir: string,
+  sessionId: string,
+  baseline: PlatformBaseline,
+  workBase: string = outDir,
+): { subtree: string[]; exact: string[] } {
+  // A multi-leg leg's tree can live at the scenario root (workBase), outside its own run dir: still this run's own.
+  const subtree = [...new Set([resolve(outDir), resolve(workBase)]), join(VM_WORK_HOST, sessionId)];
   const staged = (baseline.agentBinary?.stagedPath ?? "").replace(/^~(?=$|\/)/, homedir());
   if (staged) subtree.push(dirname(dirname(staged)));
   if (process.env.COWORK_AGENT_BINARY) subtree.push(dirname(resolve(process.env.COWORK_AGENT_BINARY)));
@@ -4513,9 +4656,10 @@ export function inputProvenanceCorpus(
   baseline: PlatformBaseline,
   prompt: string | undefined,
   effectiveFidelity: string,
+  workBase: string = outDir,
 ): InputHostPathCorpus | undefined {
   if (effectiveFidelity !== "container" && effectiveFidelity !== "microvm") return undefined;
-  const { subtree, exact } = ownHostRoots(outDir, sessionId, baseline);
+  const { subtree, exact } = ownHostRoots(outDir, sessionId, baseline, workBase);
   return {
     tokens: new Set([...readInputHostPathCorpus(outDir), ...hostPathTokens(prompt ?? "")]),
     neverExemptRoots: subtree,
@@ -4819,7 +4963,16 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
   return id;
 }
 
-export { UnansweredError, BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError };
+export {
+  UnansweredError,
+  BoundaryError,
+  UsageError,
+  LegacyRunDirError,
+  MultiLegRunDirError,
+  RunDirShapeError,
+  SessionFileError,
+  ScenarioFileError,
+};
 
 /** The judges `executeScenario` grades with: `ExecuteOptions` mapped onto `judgesForRun`. Exported so the
  *  option wiring itself is under test, not only the helper it calls. */

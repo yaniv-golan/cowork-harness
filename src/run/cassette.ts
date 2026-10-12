@@ -73,7 +73,17 @@ import {
   loadSessionFromFile,
   deviceBridgeFolderPreflight,
   sessionOriginSources,
+  isMultiLegFile,
+  loadMultiLegScenario,
 } from "./execute.js";
+import {
+  recordMultiLeg,
+  isMultiLegCassetteFile,
+  readMultiLegCassette,
+  replayMultiLegCassette,
+  multiLegScenarioDrift,
+  preflightMultiLegRecord,
+} from "./multi-leg-cassette.js";
 import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
 import { unresolvedModelRefusal } from "./model-provenance.js";
 import { UsageError, UnknownBaselineError, BaselineFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
@@ -317,7 +327,7 @@ export function imageProvenanceMismatch(recorded: AgentImageProvenance | undefin
 /** Write a committed cassette atomically — a mid-write crash must never leave a partial/corrupt file at
  *  the real path. Write to a same-dir temp (pid-suffixed so two concurrent writers can't collide) then
  *  `renameSync` over the target (atomic on POSIX). Mirrors the external-channel.ts temp+rename pattern. */
-function writeFileAtomic(path: string, data: string): void {
+export function writeFileAtomic(path: string, data: string): void {
   const tmp = `${path}.tmp.${process.pid}`;
   writeFileSync(tmp, data);
   renameSync(tmp, path);
@@ -528,10 +538,15 @@ export interface Cassette {
 //  No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
 // v17: a frozen scenario with `device_bridge: true` (the remote lane's device tools). Stamped per cassette only
 //  then. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
-// v18: a device_bridge recording's frozen record carries the delete card (`deleteRefusal`, `grants`, the card among
-//  `served`). A v17 reader's strict record shape rejects those fields as unrecognized, so a bridge recording stamps
-//  v18 and such a reader refuses it as too new. A v17 bridge recording, without them, still reads. Shared by the
-//  4.9.0 changes that need a v18 reader. No hashing change; HASH_FORMAT_EPOCH stays at 12.
+// v18: ONE bump shared by the 4.9.0 features that need a newer reader, each stamping it only when used:
+//  - a device_bridge recording's frozen record carries the delete card (`deleteRefusal`, `grants`, the card among
+//    `served`). A v17 reader's strict record shape rejects those fields as unrecognized, so a bridge recording stamps
+//    v18 and such a reader refuses it as too new. A v17 bridge recording, without them, still reads.
+//  - the multi-leg cassette (a SHAPE change — `legs[]`, each prompt leg a complete nested single-prompt cassette, each
+//    host action its record; no top-level `prompt` or `events`, so an older reader fails the shape parse instead of
+//    grading leg 1 as the run; see multi-leg-cassette.ts). Stamped only on such a cassette (the `legs` term in
+//    requiredVersionFor).
+//  Every other scenario stamps exactly what it did. No hashing change; HASH_FORMAT_EPOCH stays at 12.
 export const CASSETTE_VERSION = 18;
 
 /** One command metric's record-time measurement, frozen in a cassette (`commandMetrics`). */
@@ -725,11 +740,15 @@ export function requiredVersionFor(scenario: unknown, frozen?: { answerChannel?:
   // and can pass. `artifact_text` refused there from the start, so it needs nothing.
   const remoteJson =
     s.lane === "remote" && Array.isArray(s.assert) && s.assert.some((a) => !!a && typeof a === "object" && "artifact_json" in a) ? 15 : 0;
+  // A multi-leg scenario: the frozen form has `legs` and no `prompt`. A term, not a KEY_REQUIRED_VERSION entry: `legs`
+  // is not a key of the single-prompt ScenarioObject that map covers one-to-one.
+  const multiLeg = Array.isArray(s.legs) ? 18 : 0;
   return Math.max(
     BASE,
     channel,
     failureBlocks,
     remoteJson,
+    multiLeg,
     ...Object.entries(KEY_REQUIRED_VERSION).map(([key, required]) => required(s[key])),
   );
 }
@@ -3791,6 +3810,14 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
       out.broken.push({ file: f, error: compactSchemaError(`YAML parse error: ${(e as Error).message}`) });
       continue;
     }
+    // A multi-leg scenario records (and runs) on its own: in a batch it is reported, never skipped as "not a scenario".
+    if (raw !== null && typeof raw === "object" && "legs" in (raw as Record<string, unknown>)) {
+      out.broken.push({
+        file: f,
+        error: "a multi-leg scenario (`legs:`) is recorded on its own: `record <this file>`, not in a directory batch",
+      });
+      continue;
+    }
     const hasPrompt = raw !== null && typeof raw === "object" && "prompt" in (raw as Record<string, unknown>);
     if (!hasPrompt) {
       out.skipped.push(f); // no prompt → a session/other doc; announced skip, not a failure
@@ -4186,11 +4213,31 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   } catch (e) {
     return { error: `unreadable / invalid cassette JSON: ${(e as Error).message}` };
   }
+  // A multi-leg cassette (v18+) is its own form, read by replay and verify-cassettes. Every other reader refuses it by
+  // name rather than reading a part of it (or, below, calling it "invalid").
+  if (raw !== null && typeof raw === "object" && Array.isArray((raw as { legs?: unknown }).legs))
+    return {
+      error:
+        `${path} is a multi-leg cassette (\`legs:\`): this command reads single-prompt cassettes. \`replay\` and ` +
+        `\`verify-cassettes\` take it; re-record it with \`record <its legs scenario>\``,
+    };
+  return parseCassetteObject(raw);
+}
+
+/** Validate an already-parsed single-prompt cassette object — readCassette's checks without the file read. A
+ *  multi-leg cassette nests one per prompt leg and validates each through here. Never throws. */
+export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { error: string } {
   const parsed = CassetteShape.safeParse(raw);
-  if (!parsed.success)
+  if (!parsed.success) {
+    // A NEWER format can fail this build's shape for reasons this build cannot know: say "too new", not "invalid",
+    // whose remedy (a broken file) is the wrong one.
+    const v = raw !== null && typeof raw === "object" ? (raw as { cassetteVersion?: unknown }).cassetteVersion : undefined;
+    if (typeof v === "number" && v > CASSETTE_VERSION)
+      return { error: `cassette format too new: v${v} > this harness's v${CASSETTE_VERSION} — upgrade cowork-harness to read it` };
     return {
       error: `invalid cassette shape: ${parsed.error.issues.map((i) => `${i.path.join(".") || "<root>"}: ${i.message}`).join("; ")}`,
     };
+  }
   const cassette = raw as Cassette;
   // `assert` is optional in an old/truncated cassette (the schema tolerates its absence) but downstream
   // (replayCassette/redact) iterates it unconditionally — normalize to [] here, at the one parse boundary,
@@ -4275,6 +4322,17 @@ export function selectStaleCassettes(dir: string): { path: string; staleness: st
     .sort()
     .map((f) => join(dir, f))
     .map((path) => {
+      // A multi-leg cassette is stale when any leg's nested cassette is.
+      if (isMultiLegCassetteFile(path)) {
+        const m = readMultiLegCassette(path);
+        if ("error" in m) return { path, staleness: [m.error] };
+        return {
+          path,
+          staleness: m.cassette.legs.flatMap((l) =>
+            "cassette" in l ? checkStaleness((l as { cassette: Cassette }).cassette, dirname(path)).map((x) => `leg ${l.id}: ${x}`) : [],
+          ),
+        };
+      }
       const r = readCassette(path);
       return "error" in r ? { path, staleness: [r.error] } : { path, staleness: checkStaleness(r.cassette, dirname(path)) };
     })
@@ -4984,6 +5042,78 @@ export async function cmdRecord(args: string[]) {
   if (isDir && p.options["--out"] !== undefined) {
     return fail("record", "usage", "record: --out names a single cassette file and is not valid for a directory batch", undefined, asJson);
   }
+  // A multi-leg (`legs:`) scenario: its own recorder, one cassette for the whole scenario (multi-leg-cassette.ts).
+  if (!isDir && !rerecordStale && existsSync(target) && isMultiLegFile(target)) {
+    if (deciderDir !== undefined || deciderLlm)
+      return fail(
+        "record",
+        "usage",
+        "record: a multi-leg scenario takes no live decider (--decider-dir / --decider-llm)",
+        undefined,
+        asJson,
+      );
+    // No per-scenario cost estimate exists for a multi-leg run yet: refused rather than parsed and ignored.
+    if (maxBudgetUsd !== undefined)
+      return fail("record", "usage", "record: --max-budget-usd is not supported for a multi-leg scenario yet", undefined, asJson);
+    if (p.flags["--dry-run"]) {
+      try {
+        // The loader and every pre-spend refusal the real record runs, with nothing run.
+        preflightMultiLegRecord(target, {
+          ...(p.options["--out"] !== undefined ? { cassettePath: p.options["--out"] } : {}),
+          force,
+          allowHostInventoryFixture,
+          noRedact,
+        });
+      } catch (e) {
+        if (e instanceof UsageError) return fail("record", "usage", e.message, undefined, asJson);
+        throw e;
+      }
+      if (asJson)
+        out(
+          jsonPayloadEnvelope("record", true, {
+            dryRun: true,
+            target,
+            multiLeg: true,
+            cassette: p.options["--out"] ?? defaultCassettePath(loadMultiLegScenario(target).name),
+          }),
+        );
+      else
+        log(
+          `record --dry-run: ${target} is a valid multi-leg scenario; it would be recorded to ${p.options["--out"] ?? defaultCassettePath(loadMultiLegScenario(target).name)}`,
+        );
+      return process.exit(0);
+    }
+    try {
+      const { outcome, cassettePath } = await recordMultiLeg(target, {
+        ...(p.options["--out"] !== undefined ? { cassettePath: p.options["--out"] } : {}),
+        allowFailing,
+        noRedact,
+        force,
+        allowHostInventoryFixture,
+        allowHostInventoryFindings,
+        ...(maxArtifactBytes !== undefined ? { maxArtifactBytes } : {}),
+        ...(modelOverride !== undefined ? { modelOverride } : {}),
+        ...(onUnansweredOpt !== undefined ? { onUnanswered: onUnansweredOpt } : {}),
+      });
+      const sr = outcome.scenarioResult;
+      // Like single-file record, `ok` is "the cassette was written" (a failing scenario only gets here under
+      // --allow-failing); the scenario verdict rides in `multiLeg`.
+      if (asJson)
+        out(
+          jsonPayloadEnvelope("record", true, {
+            results: [...outcome.legResults.values()].map((r) => publishedResult(r)),
+            multiLeg: sr,
+            cassette: cassettePath,
+          }),
+        );
+      else log(`${sr.verdict.pass ? "✓" : "✗"} recorded ${sr.legs.length}-leg scenario → ${cassettePath}`);
+      return process.exit(0);
+    } catch (e) {
+      if (e instanceof RecordPostRunRefusalError || e instanceof UsageError)
+        return fail("record", e instanceof UsageError ? "usage" : "runtime", (e as Error).message, undefined, asJson);
+      throw e;
+    }
+  }
   // `--case` narrows a directory of scenarios to the named ones, so every check and the budget pre-flight cover only
   // those. Refused here, before the dry-run branch, so each combination gets this reason and not a later one.
   const caseSelectors = p.repeated["--case"] ?? [];
@@ -5591,6 +5721,40 @@ export async function cmdRecord(args: string[]) {
         // batch unless --allow-budget-stop, a record batch stopped by its cap still exits 0.
         return true;
       }
+      // A multi-leg cassette re-records from the legs: scenario it names, into the same file.
+      if (isMultiLegCassetteFile(cp)) {
+        const m = readMultiLegCassette(cp);
+        const srcPath = "error" in m || !m.cassette.scenarioSource ? undefined : join(dirname(cp), m.cassette.scenarioSource);
+        if (!srcPath || !existsSync(srcPath)) {
+          const why = "error" in m ? m.error : `its scenario source ${srcPath ?? "(none recorded)"} is not there`;
+          log(`  ✗ ${tag} ${cp}: ${why} — cannot re-record`);
+          staleItems[i] = { cassette: cp, status: "failed", error: `${why} — cannot re-record` };
+          return false;
+        }
+        if (maxBudgetUsd !== undefined) {
+          const why = "--max-budget-usd is not supported for a multi-leg scenario yet";
+          log(`  ✗ ${tag} ${cp}: ${why} — not re-recorded`);
+          staleItems[i] = { cassette: cp, status: "failed", error: why };
+          return false;
+        }
+        log(`${tag} ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
+        try {
+          await recordMultiLeg(srcPath, {
+            cassettePath: cp,
+            allowFailing: false,
+            noRedact,
+            allowHostInventoryFixture,
+            allowHostInventoryFindings,
+            ...(modelOverride !== undefined ? { modelOverride } : {}),
+          });
+          staleItems[i] = { cassette: cp, status: "recorded" };
+          return true;
+        } catch (e) {
+          log(`  ✗ ${tag} ${cp}: ${(e as Error).message}`);
+          staleItems[i] = { cassette: cp, status: "failed", error: (e as Error).message };
+          return false;
+        }
+      }
       const rc = readCassette(cp);
       if ("error" in rc) {
         log(`  ✗ ${tag} ${cp}: ${rc.error} — cannot re-record`);
@@ -6144,7 +6308,10 @@ export async function freezeRecordedRun(
   opts: RecordOpts,
   extraPolicyDirs: string[],
   result: RunResult,
-): Promise<{ result: RunResult; cassettePath: string; artifacts: number; delta?: string }> {
+  /** `build`: stop once the cassette is scrubbed, redacted and verified, and return it unwritten — a multi-leg
+   *  record nests one per prompt leg and writes the composed file itself (multi-leg-cassette.ts). */
+  mode: "write" | "build" = "write",
+): Promise<{ result: RunResult; cassettePath: string; artifacts: number; delta?: string; cassette?: Cassette }> {
   // Provenance: stamp from the RESULT, not the flag. result.nonDeterministic (execute.ts) is
   // usage-based — true only if a decision actually came back by:"llm"|"external"|"human"|"first". So a
   // present-but-unused --decider-dir (scripted answers covered every gate) stays deterministic and is NOT
@@ -6439,6 +6606,7 @@ export async function freezeRecordedRun(
     await assertRedactionVerdictPreserved(menuScrubbed, redacted, dirname(cassettePath));
     cassette = redacted;
   }
+  if (mode === "build") return { result, cassettePath, artifacts: artifacts.length, cassette };
   // The slug-collision refusal used to live HERE, after the paid run. It moved into `preSpendVerdicts`
   // (pre-spawn) — it is a pure function of (path, --force, the existing cassette's scenario name), so
   // paying for a run and only then refusing to write it was the exact failure `hostInventoryPreflight`'s
@@ -7417,7 +7585,47 @@ export async function cmdReplay(args: string[]) {
       notesByKind.set(kind, { count: (prev?.count ?? 0) + 1, exemplar: prev?.exemplar ?? n });
     }
   };
+  const multiLegs: Array<{ file: string; verdict: { pass: boolean }; legs: unknown[] }> = [];
   for (const f of resolved.files) {
+    // A multi-leg cassette replays leg by leg (multi-leg-cassette.ts). The assertion-editing and --mutate modes are
+    // single-cassette tools; refused here rather than applied to one leg.
+    if (isMultiLegCassetteFile(f)) {
+      if (assertFrom !== undefined || reassert || write || mutate || sessionOverride !== undefined)
+        return fail(
+          "replay",
+          "usage",
+          `replay: ${f} is a multi-leg cassette; --assert-from, --reassert, --write, --mutate and --session are not supported for it`,
+          undefined,
+          asJson,
+        );
+      const rm = readMultiLegCassette(f);
+      if ("error" in rm) {
+        log(`replay: ${f}: ${rm.error}`);
+        results.push(replayErrorResult(f));
+        worst = Math.max(worst, 2);
+        continue;
+      }
+      const r = await replayMultiLegCassette(rm.cassette, [], {
+        strict,
+        failOnSkillDrift,
+        bestEffortFutureCassette,
+        cassetteDir: dirname(f),
+      });
+      results.push(...r.results);
+      const stale = (strict || failOnSkillDrift) && r.staleness.length > 0;
+      const pass = r.verdict.pass && !stale;
+      multiLegs.push({ file: f, verdict: { pass }, legs: r.legs });
+      collectNotes(f, r.staleness);
+      if (!json) {
+        for (const l of r.legs)
+          log(
+            `  leg ${l.id} (${l.kind}): ${l.status}${l.verdict && !l.verdict.pass ? ` — ${(l.verdict.failures ?? []).map((x) => x.message).join("; ")}` : ""}`,
+          );
+        log(`${pass ? "✓" : "✗"} ${f} (multi-leg, ${r.legs.length} legs)${stale ? " — stale (--strict)" : ""}`);
+      }
+      worst = Math.max(worst, pass ? 0 : 1);
+      continue;
+    }
     const rc = readCassette(f); // safe parse + lenient Zod — never throws
     // `--session` names a session FILE, and an inline scenario has none. Refuse rather than accept,
     // announce "override in effect", and then silently ignore it — three lines that contradict each other,
@@ -7656,7 +7864,7 @@ export async function cmdReplay(args: string[]) {
   for (const { file, kind, note } of perFileNotes)
     warn(`::notice:: [replay] ${file} — ${note.replace(new RegExp(`^${kind}:\\s*`), "")} [${kind}]\n`);
 
-  if (json) out(jsonEnvelope("replay", results));
+  if (json) out(jsonEnvelope("replay", results, multiLegs.length ? { multiLegs } : {}));
   return process.exit(worst);
 }
 
@@ -8036,7 +8244,7 @@ export async function cmdVerifyCassettes(args: string[]) {
   }
   const results = files.map((f) => {
     try {
-      return verifyOneCassette(f);
+      return isMultiLegCassetteFile(f) ? verifyOneMultiLeg(f) : verifyOneCassette(f);
     } catch (e) {
       // A per-file crash must be TALLIED as that file's error, never abort the batch (results:[] reads
       // as "nothing to report" — a false-green by abort). Mirrors cmdReplay's per-file catch. A crash
@@ -8055,6 +8263,72 @@ export async function cmdVerifyCassettes(args: string[]) {
       };
     }
   });
+  /** A multi-leg cassette: the privacy scan over each nested cassette and each action record, staleness per prompt
+   *  leg (prefixed with the leg), the version gate, and drift of the frozen legs against the scenario file. */
+  function verifyOneMultiLeg(f: string) {
+    const rm = readMultiLegCassette(f);
+    const empty = {
+      file: f,
+      findings: [] as ScanFinding[],
+      staleness: [] as string[],
+      unverifiable: [] as string[],
+      notes: [] as string[],
+      version: [] as string[],
+      scenarioDrift: [] as string[],
+    };
+    if ("error" in rm) return { ...empty, error: rm.error, privacyScanned: false };
+    const c = rm.cassette;
+    const out = { ...empty, error: undefined as string | undefined, privacyScanned: doPrivacy };
+    for (const leg of c.legs) {
+      if ("cassette" in leg) {
+        const nested = (leg as { cassette: Cassette }).cassette;
+        // The session file shapes every leg: its drift reds the cassette as it reds a single one.
+        if (doStaleness) {
+          const sfd = sessionFingerprintDrift(nested, dirname(f), "none", vcSessionOverride);
+          if (sfd.drifted) out.staleness.push(`leg ${leg.id}: session-shape fingerprint differs from the current session file — re-record`);
+          // One session file: the same note for every leg, recorded once.
+          if (sfd.note && !out.notes.includes(sfd.note)) out.notes.push(sfd.note);
+        }
+        if (doPrivacy) out.findings.push(...scanCassette(nested, allow).map((x) => ({ ...x, where: `leg ${leg.id}: ${x.where}` })));
+        if (doStaleness) {
+          const st = computeStaleness(nested, dirname(f), vcSessionOverride);
+          for (const x of st.findings)
+            (x.class.startsWith("unverifiable-") ? out.unverifiable : out.staleness).push(`leg ${leg.id}: ${x.message}`);
+          out.notes.push(...st.notes.map((n) => `${n} (leg ${leg.id})`));
+        }
+      } else if ("action" in leg && doPrivacy) {
+        const a = (leg as { action: { argv: string[]; stdout: { head: string }; stderr: { head: string } } }).action;
+        const stand = {
+          scenario: { prompt: a.argv.join(" "), session: "", assert: [] },
+          events: [a.stdout.head, a.stderr.head],
+        } as unknown as Cassette;
+        out.findings.push(...scanCassette(stand, allow).map((x) => ({ ...x, where: `leg ${leg.id} (host action): ${x.where}` })));
+      }
+    }
+    // The cassette's own top level is committed too: the frozen scenario (every leg's prompt, argv and asserts, the
+    // answers), the paths it was recorded from, and the verdict's failure messages. Scanned as a single cassette's are.
+    if (doPrivacy) {
+      const { name, session, ...rest } = c.scenario as { name?: string; session?: string } & Record<string, unknown>;
+      const src = (c as { scenarioSource?: string }).scenarioSource ?? "";
+      out.findings.push(
+        ...[
+          ...scanText(name ?? "", "metadata:scenario.name", allow, DEFAULT_SCAN_PATTERNS),
+          ...scanText(session ?? "", "metadata:scenario.session", allow, DEFAULT_SCAN_PATTERNS),
+          ...scanClimbOutHomePath(session ?? "", "metadata:scenario.session", allow),
+          ...scanText(src, "metadata:scenarioSource", allow, DEFAULT_SCAN_PATTERNS),
+          ...scanClimbOutHomePath(src, "metadata:scenarioSource", allow),
+          ...scanText(JSON.stringify(rest), "scenario", allow, DEFAULT_SCAN_PATTERNS),
+          ...scanText(JSON.stringify((c as { verdict?: unknown }).verdict ?? null), "verdict", allow, DEFAULT_SCAN_PATTERNS),
+        ].map((x) => ({ ...x, where: `scenario: ${x.where}` })),
+      );
+    }
+    if ((c.cassetteVersion ?? 0) > CASSETTE_VERSION)
+      out.version.push(
+        `cassette format v${c.cassetteVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
+      );
+    if (doScenarioDrift) out.scenarioDrift.push(...multiLegScenarioDrift(c, f));
+    return out;
+  }
   function verifyOneCassette(f: string) {
     const rc = readCassette(f);
     // `--session` names a session FILE, and an inline scenario has none. Refuse rather than accept it,

@@ -76,7 +76,8 @@ describe("artifactsRootEnv", () => {
   ])("%s passes its staged tree's outputs dir", (_tier, file, root, binding) => {
     const src = readFileSync(join(process.cwd(), file), "utf8");
     expect(src).toContain(binding);
-    expect(src).toContain(`...artifactsRootEnv(plan.artifactsRoot, \`\${${root}}/outputs\`)`);
+    // The env is built by the shared sandboxAgentEnv (argv.ts), handed this tier's outputs path.
+    expect(src).toContain(`outputsGuest: \`\${${root}}/outputs\``);
   });
 });
 

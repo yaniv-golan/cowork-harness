@@ -19,7 +19,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { InterruptedError } from "../termination.js";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { UsageError } from "../errors.js";
+import { MultiLegRunDirError, UsageError } from "../errors.js";
 import { tildeify } from "../io.js";
 import { classifyRep } from "../eval/classify.js";
 import { pkgVersion } from "../run/envelope.js";
@@ -365,12 +365,15 @@ const regradeModel = (report: RegradeRunReport): string | undefined => {
 /** A core message as the flow, the JSON envelope and stderr show it: no secret, no host path. */
 const shownMessage = (m: string, secrets: readonly string[]): string => redactDeep(m, secrets);
 
-function readResult(runDir: string): RunResult | undefined {
+export function readResult(runDir: string): RunResult | undefined {
   try {
     const turn = latestTurn(runDir);
     if (turn === undefined) return undefined;
     return JSON.parse(NoFollowRoot.existing(runDir).readFile(turnArtifactPath(runDir, turn, "result.json"))) as RunResult;
-  } catch {
+  } catch (e) {
+    // A multi-leg root is a refused shape, not "unreadable": never let it read as a missing result.
+    if (e instanceof MultiLegRunDirError)
+      throw new MultiLegRunDirError(`regrade: multi-leg runs are not hillclimb rows (hillclimb refuses \`legs\`): ${runDir}`);
     return undefined;
   }
 }
@@ -500,7 +503,7 @@ const REGRADE_FILE_RE = /^[A-Za-z0-9._-]+\.json$/;
 /** The judged entries a row is graded with now: those of the re-grade that last rewrote it (`meta.regrade_file` — a
  *  re-grade never touches result.json, so after one the run's own judged entries are no longer the row's), else the
  *  run's own. `undefined` when the row names a regrade file that cannot be read: what it was graded with is unknown. */
-function gradedSource(row: Row, runDir: string, result: RunResult): { entries: Entry[]; at: number[]; file: boolean } | undefined {
+export function gradedSource(row: Row, runDir: string, result: RunResult): { entries: Entry[]; at: number[]; file: boolean } | undefined {
   const named = row.meta?.regrade_file;
   if (typeof named !== "string" || named === "") {
     const judged = authoredOf(result).flatMap((e, i) => (judgedOpts(e.assertion) !== undefined ? [{ e, i }] : []));
@@ -514,7 +517,10 @@ function gradedSource(row: Row, runDir: string, result: RunResult): { entries: E
     const doc = JSON.parse(NoFollowRoot.existing(runDir).readFile(file)) as { assertions?: RegradeRunReport["assertions"] };
     if (!Array.isArray(doc.assertions)) return undefined;
     return { entries: doc.assertions.map(reportEntry), at: doc.assertions.map((a) => a.assertionIndex), file: true };
-  } catch {
+  } catch (e) {
+    // A multi-leg root is a refused shape, not "unreadable": never let it read as a missing result.
+    if (e instanceof MultiLegRunDirError)
+      throw new MultiLegRunDirError(`regrade: multi-leg runs are not hillclimb rows (hillclimb refuses \`legs\`): ${runDir}`);
     return undefined;
   }
 }

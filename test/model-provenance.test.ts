@@ -255,7 +255,7 @@ describe("the refusal is wired before the agent is driven", () => {
   it("executeScenario throws it before the run dir is chosen and before run.drive(", () => {
     const src = read("src/run/execute.ts");
     const refuseAt = src.indexOf("throw new ModelUnresolvedError(");
-    const outDirAt = src.indexOf("const outDir = runOutDir(");
+    const outDirAt = src.indexOf("const outDir = opts.leg?.outDir ?? runOutDir(");
     const driveAt = src.indexOf("run.drive(");
     expect(refuseAt).toBeGreaterThan(-1);
     expect(outDirAt).toBeGreaterThan(-1);

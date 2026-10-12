@@ -245,6 +245,9 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
     .filter((r) => {
       if (!isRun(r)) return (void ex.notRun++, false);
       if (!REP_COMMANDS.has(r.command)) return (void ex.command++, false);
+      // A multi-leg run is not a single-prompt rep (eval refuses `legs`), and its root has no turns/1 to read:
+      // excluded like a non-rep command, never read as "pruned".
+      if (r.multiLeg === true) return (void ex.command++, false);
       if (tierOf(r) !== o.tier) return (void ex.tier++, false);
       if (r.baseline !== o.baseline) return (void ex.baseline++, false);
       if (!isFirstTurn(r)) return (void ex.turn++, false);

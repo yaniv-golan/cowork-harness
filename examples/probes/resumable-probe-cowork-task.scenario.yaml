@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=../../schema/scenario-multi-leg.schema.json
+# The same probe under `workdir: cowork-task`: the second leg is a NEW task with a new session tree whose outputs
+# start empty (a model of a new local Cowork task, unverified against Cowork). The skill therefore finds no waiting
+# run and starts a fresh one: invocation 1 again, and leg 1's files are absent.
+name: resumable-probe-cowork-task
+baseline: latest
+session: ../sessions/resumable-probe.yaml
+fidelity: container
+workdir: cowork-task
+legs:
+  - id: ask
+    prompt: Run the resumable probe.
+    assert:
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: waiting }
+  - id: resume
+    prompt: |
+      Run the resumable probe.
+      ANSWER g1=a
+    assert:
+      # a fresh run, not a resume: this task cannot see the first task's outputs
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: invocation, equals: 1 }
+      - file_exists: { path: outputs/artifacts/runs/r1/step1.json, authored: true }
+      - file_absent: outputs/artifacts/runs/r1/report.json

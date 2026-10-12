@@ -95,7 +95,14 @@ function remedy(cmd: string, outDir: string): string {
  * Decide where a kept run's evidence is read from (see the rule above). `runDir` is the dir as the caller gave it
  * (echoed that way); `cmd` leads every message.
  */
-export function decideRunDir(runDir: string, result: RecordedRunPaths, cmd: string): RunDirDecision {
+export function decideRunDir(
+  runDir: string,
+  result: RecordedRunPaths,
+  cmd: string,
+  /** A multi-leg leg's session tree root (legTreeRoot): its evidence may live there, at the scenario root, outside the
+   *  leg's own run dir. */
+  treeRoot?: string,
+): RunDirDecision {
   const recorded = RECORDED_PATH_FIELDS.flatMap((k) => {
     const v = (result as Record<string, unknown>)[k];
     return typeof v === "string" && v !== "" ? [[k, v] as const] : [];
@@ -127,8 +134,9 @@ export function decideRunDir(runDir: string, result: RecordedRunPaths, cmd: stri
   // (A) the run's own dir.
   const ownDir = canonical(outDir);
   if (ownDir === given) {
+    const tree = treeRoot !== undefined ? canonical(treeRoot) : undefined;
     for (const [k, v] of evidence) {
-      if (!within(ownDir, canonical(v)))
+      if (!within(ownDir, canonical(v)) && !(tree !== undefined && within(tree, canonical(v))))
         return {
           kind: "refuse",
           message: `${cmd}: ${runDir}'s result.json records ${k} ${v}, outside the run dir ${outDir}; refusing to read another dir's evidence. ${NOT_GREEN}`,

@@ -1482,8 +1482,90 @@ def _hook_block_contradictions(items):
     return out
 
 
+# A multi-leg (`legs:`) scenario: these top-level keys, and per-leg prompt/host_action/session/assert. Kept equal to
+# MultiLegScenarioObject (src/run/multi-leg-scenario.ts); the harness loader is the authority and runs first under
+# the `cowork-harness lint` wrapper.
+_MULTI_LEG_TOP_KEYS = {
+    "name",
+    "baseline",
+    "session",
+    "fidelity",
+    "execution",
+    "lane",
+    "workdir",
+    "legs",
+    "answers",
+    "on_unanswered",
+    "expect_denied",
+    "skills",
+    "requires_capabilities",
+    "allow_host_hooks",
+    "workspace_fixture",
+}
+# The scenario-wide keys a prompt leg runs with (legScenario in src/run/execute.ts).
+_LEG_SHARED_KEYS = (
+    "name",
+    "baseline",
+    "session",
+    "fidelity",
+    "execution",
+    "lane",
+    "answers",
+    "on_unanswered",
+    "expect_denied",
+    "skills",
+    "requires_capabilities",
+    "allow_host_hooks",
+)
+
+
+def _lint_multi_leg_doc(doc, path, raw_lines, cassette_records=None):
+    """Lint a multi-leg scenario: its own top-level keys, then each PROMPT leg as the single-prompt scenario it runs as,
+    through the ordinary rules, so every assertion rule applies per leg. Host-action legs are left to the harness
+    loader (files-only asserts, argv, status), which the wrapper runs first."""
+    findings = []
+    if "fidelity" not in doc:
+        findings.append(
+            Finding("ERROR", "fidelity-missing", "no `fidelity:` — the key is required.", "Add a tier: container, microvm or protocol.", path)
+        )
+    for k in doc:
+        if k not in _MULTI_LEG_TOP_KEYS:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "unknown-top-key",
+                    f"unknown multi-leg scenario key `{k}` — a `legs:` scenario takes only these top-level keys "
+                    "(prompt, assert, timeout_ms and metrics are per leg or refused).",
+                    f"Valid top-level keys: {', '.join(sorted(_MULTI_LEG_TOP_KEYS))}.",
+                    path,
+                )
+            )
+    legs = doc.get("legs")
+    if not isinstance(legs, list):
+        return findings
+    for i, leg in enumerate(legs):
+        if not isinstance(leg, dict) or "prompt" not in leg:
+            continue
+        sub = {k: doc[k] for k in _LEG_SHARED_KEYS if k in doc}
+        if i == 0 and "workspace_fixture" in doc:
+            sub["workspace_fixture"] = doc["workspace_fixture"]
+        sub["prompt"] = leg.get("prompt")
+        if "assert" in leg:
+            sub["assert"] = leg.get("assert")
+        if "timeout_ms" in leg:
+            sub["timeout_ms"] = leg.get("timeout_ms")
+        for f in lint_doc(sub, path, raw_lines, cassette_records):
+            if f.rule == "fidelity-missing":
+                continue  # a scenario-level key, reported once above
+            f.message = f"leg {leg.get('id', i)}: {f.message}"
+            findings.append(f)
+    return findings
+
+
 def lint_doc(doc, path, raw_lines, cassette_records=None):
     findings = []
+    if isinstance(doc, dict) and "legs" in doc:
+        return _lint_multi_leg_doc(doc, path, raw_lines, cassette_records)
     if not isinstance(doc, dict):
         findings.append(
             Finding(

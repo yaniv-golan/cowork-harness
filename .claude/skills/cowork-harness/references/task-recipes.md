@@ -65,6 +65,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v18.json`](htt
 | `$schema`, `generator`, `cassetteVersion` | Provenance: schema URL, producing tool, format version — the MINIMUM a reader needs for this scenario, not the recorder's version (current max: 18 — the hash-format epoch floors every stamp at 12, so a fresh recording stamps 12 unless a key lifts it: 13 when its `assert:` uses the object form of `tool_called` / `tool_not_called`, 14 for a v14 key such as `include_fork_results` on `semantic_matches`, 15 for a v15 one such as `gates_all_scripted`, a glob `artifact_json`, an `artifact_json` carrying `schema`, any `artifact_json` on `lane: remote`, or a recording under `answer_channel: none`, 16 for a recording whose `hookFailureBlocks` lists an event or is unknown, 17 for a scenario with `device_bridge: true`, 18 for a bridge recording that carries the delete card or a scenario declaring a command metric (its record-time values frozen in `commandMetrics`); the full list is in the cassette docs' version table) |
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
+| `legs`, `verdict` | Multi-leg form only (a `legs:` scenario, v18), in place of `events`: `legs[]` holds one entry per leg in order — a prompt leg nests its own complete single-prompt cassette under `cassette`, a host action its record under `action`, a leg after a failing one `status: "skipped"` — and `verdict.pass` is the scenario verdict at record time. `replay` and `verify-cassettes` read this form; other cassette readers refuse it by name |
 | `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
 | `effectiveFidelity` | The tier the live record actually resolved to (the drift-audit key above) |
 | `artifacts` | Output-file manifest (paths + hashes + small inlined bodies) — unlocks `file_exists`/`artifact_json` on replay. Each entry carries `truncationReason` (`"size"`\|`"readonly"`\|`"unreadable"`\|`"input"`\|`"fixture"`, v8+; `"fixture"` v14 — an untouched binary `workspace_fixture` file, or an untouched one staging wrote session paths into, recorded hash-only) naming WHY a body is absent, and — v10+ — `linkKind` (`"symlink"`\|`"hardlink"`) for a body-less link entry, never dereferenced. |
@@ -525,3 +526,20 @@ cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy  
   git work tree is refused unless `--allow-in-repo`.
 - **`--min-score <n>`** sets the relevance floor a query must clear to be served (default `0.4`). It is part of the pool
   hash, so two pools with different floors are different pools.
+
+## Recipe 10 — A skill that parks and resumes in a later session (`legs:`)
+
+When a skill stops at a question, writes a status file and is resumed by a NEW session (after a host step), test the
+whole loop as one multi-leg scenario: `legs:` in place of `prompt:`, each leg a prompt (a fresh agent session) or a
+`host_action` (an argv command in the leg runtime, no agent). Judge completion from the skill's status file
+(`artifact_json`), and prove the resume did not redo work from the skill's own ledger, never from the agent's prose.
+Copy [the resumable-probe scenario](https://github.com/yaniv-golan/cowork-harness/blob/main/examples/probes/resumable-probe.scenario.yaml). Rules and limits: [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#multi-leg-scenarios-legs).
+
+- `workdir: persistent` (default) keeps one session tree across legs (a persistent workspace — not Cowork);
+  `workdir: cowork-task` gives each prompt leg a new tree with connected folders carried (a model of a new Cowork
+  task, unverified).
+- Runs on `container`, `microvm` or `protocol` (a host action on `protocol` runs on your host). `record` writes one
+  v18 cassette; `replay` and `verify-cassettes` take it.
+- Re-grade or read one leg with `--leg <id>`: `verify-run <run-dir> <legs.yaml> --leg <id>`,
+  `regrade <run-dir> --scenario <legs.yaml> --leg <id>`, `trace <run-dir | run-id> --leg <id>`. Each leg is read from its
+  own snapshot (its files as they stood when it ended), so every leg of a kept run re-grades at no cost.

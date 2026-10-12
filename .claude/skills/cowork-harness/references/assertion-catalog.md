@@ -23,6 +23,18 @@ The per-key table is split by assertion family so each file stays well within wh
 - [`assertion-catalog-agents-skills-budgets.md`](./assertion-catalog-agents-skills-budgets.md): subagent_*, dispatch, skills and connectors, cost / token / turn / tool-error budgets, tasks, scratchpad and present_files delivery.
 - [`assertion-catalog-gates-hooks-modifiers.md`](./assertion-catalog-gates-hooks-modifiers.md): AskUserQuestion gates, hooks, path denial, allow_* verdict modifiers, host-path leaks, egress, MCP, RSS, semantic judging, artifact_json, computer:// links.
 
+**A multi-leg scenario's `host_action` leg** takes its own keys plus the file keys only (it has no transcript):
+
+| key | passes when |
+|---|---|
+| `exit_code: <0-255>` | the action exited with that code (with no `exit_code` item, 0 is expected) |
+| `stdout_matches: <regex>` | the action's stdout (capped, secret-scrubbed) matches; a no-hit on a truncated stdout is evidence-unavailable, not a fail |
+| `stdout_not_matches: <regex>` | the action's stdout does not match |
+| `file_exists`, `file_absent`, `artifact_json`, `artifact_text` | as below, against the leg's tree after the action |
+
+A prompt leg takes every key in the per-family files. The generated lists are `multiLeg.*` in
+`scripts/assertion-keys.json`; the form is in [`scenario-schema.md`](./scenario-schema.md#multi-leg-scenario-yaml-legs).
+
 **Name-matching styles differ by key (don't mix them up):** `tool_called`, `tool_not_called`,
 `subagent_tool_used`, `subagent_tool_absent` are **glob** (anchored, case-sensitive, `*`/`?`). `tool_available`,
 `skill_triggered`/`no_skill_triggered`, `skill_available`, `connector_available`, `skill_tool_used`,

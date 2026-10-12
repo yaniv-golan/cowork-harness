@@ -1,0 +1,271 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "name": {
+      "default": "",
+      "type": "string"
+    },
+    "baseline": {
+      "default": "latest",
+      "type": "string"
+    },
+    "session": {
+      "default": "(inline)",
+      "type": "string"
+    },
+    "fidelity": {
+      "type": "string",
+      "enum": [
+        "protocol",
+        "container",
+        "microvm",
+        "hostloop",
+        "cowork"
+      ]
+    },
+    "execution": {
+      "default": "local",
+      "type": "string",
+      "enum": [
+        "local"
+      ]
+    },
+    "lane": {
+      "default": "local",
+      "type": "string",
+      "enum": [
+        "local"
+      ]
+    },
+    "workdir": {
+      "default": "persistent",
+      "description": "persistent (default): every leg runs in the same session tree, so a leg sees earlier legs' files at the same paths — a persistent workspace, not Cowork. cowork-task: each prompt leg gets a new session root; connected folders carry over, outputs do not (a model of a new local Cowork task, unverified)",
+      "type": "string",
+      "enum": [
+        "persistent",
+        "cowork-task"
+      ]
+    },
+    "legs": {
+      "minItems": 2,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+          },
+          "prompt": {
+            "description": "the user turn of this leg's fresh agent session",
+            "type": "string"
+          },
+          "host_action": {
+            "description": "a command run in the leg runtime; no agent, no tokens",
+            "type": "object",
+            "properties": {
+              "status": {
+                "description": "a status file read before the action; its string fields fill `{status.<field>}` in `run`",
+                "type": "object",
+                "properties": {
+                  "artifact": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "a JSON status file to read before the action, relative to the work root as assertion paths are (`outputs/…`)"
+                  },
+                  "expect": {
+                    "description": "top-level fields the status file must have (`{field: {not_null: true}}` requires a non-null value)",
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "artifact"
+                ],
+                "additionalProperties": false
+              },
+              "run": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "argv, one element per argument; `{status.<field>}` is substituted per element. Never a shell string"
+              },
+              "timeout": {
+                "default": 120,
+                "description": "seconds (default 120, max 600)",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 600
+              }
+            },
+            "required": [
+              "run"
+            ],
+            "additionalProperties": false
+          },
+          "session": {
+            "description": "this leg's overlay on the scenario session",
+            "type": "object",
+            "properties": {
+              "answer_channel": {
+                "type": "string",
+                "enum": [
+                  "none"
+                ]
+              },
+              "permission_mode": {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "acceptEdits",
+                  "plan",
+                  "bypassPermissions"
+                ]
+              },
+              "agent_env": {
+                "type": "object",
+                "properties": {
+                  "subagent_model": {
+                    "type": "string"
+                  },
+                  "tool_search": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "off"
+                    ]
+                  },
+                  "disable_experimental_betas": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "assert": {
+            "default": [],
+            "description": "this leg's assertions",
+            "type": "array",
+            "items": {}
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "answers": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "when_question": {
+            "type": "string"
+          },
+          "choose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "answer": {
+            "type": "string"
+          },
+          "when_tool": {
+            "type": "string"
+          },
+          "decide": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "allow_if": {
+            "type": "string"
+          },
+          "else": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "deny"
+            ]
+          },
+          "grant": {
+            "type": "string",
+            "enum": [
+              "once",
+              "domain"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "on_unanswered": {
+      "type": "string",
+      "enum": [
+        "fail",
+        "prompt",
+        "llm",
+        "first"
+      ]
+    },
+    "expect_denied": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "skills": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "requires_capabilities": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "allow_host_hooks": {
+      "type": "boolean"
+    },
+    "workspace_fixture": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "fidelity",
+    "legs"
+  ],
+  "additionalProperties": false,
+  "description": "cowork-harness MULTI-LEG scenario YAML — `legs:` in place of `prompt:`: each leg a prompt (a fresh agent session) or a host_action (argv run in the leg runtime). STRUCTURAL validation only: a leg's `assert:` is checked by the loader (a prompt leg takes the ordinary assertion keys, a host_action leg files only plus exit_code / stdout_matches / stdout_not_matches), as are the cross-leg rules (the first leg is a prompt leg, at least two prompt legs, unique ids). Run `cowork-harness lint <file>` and `cowork-harness record <file> --dry-run`. See docs/scenario.md, \"Multi-leg scenarios\"."
+}

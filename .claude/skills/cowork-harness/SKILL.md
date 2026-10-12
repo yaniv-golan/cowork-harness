@@ -155,9 +155,9 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 
 | File | Read it for |
 |---|---|
-| [`references/authoring.md`](references/authoring.md) | session vs scenario, discovery, fidelity tier, the answer-channel decision tree, `web_fetch`, scaffold + lint |
+| [`references/authoring.md`](references/authoring.md) | session vs scenario, discovery, fidelity tier, the answer-channel decision tree, `web_fetch`, a skill that resumes in a later session (`legs:`), scaffold + lint |
 | [`references/assertions-guide.md`](references/assertions-guide.md) | the two assertion axes, the goal → key map |
-| [`references/run-record-replay.md`](references/run-record-replay.md) | run / `verify-run`, recording and cassette placement, real-document validation, verdict signals (incl. where a relative or `outputs/` path lands per tier), background-run liveness, CI lanes |
+| [`references/run-record-replay.md`](references/run-record-replay.md) | run / `verify-run`, multi-leg runs and `--leg`, recording and cassette placement, real-document validation, verdict signals (incl. where a relative or `outputs/` path lands per tier), background-run liveness, CI lanes |
 | [`references/measurement.md`](references/measurement.md) | `--repeat`, `--ablate-skill`, measurement hygiene |
 | [`references/debugging.md`](references/debugging.md) | triage, `result.json` fields and `trace` views, `chat` |
 | [`references/gotchas.md`](references/gotchas.md) | the full "✓ passed ≠ correct" landmine catalog |
@@ -167,7 +167,7 @@ behind each, is [`references/gotchas.md`](references/gotchas.md).
 | [`references/assertion-catalog-agents-skills-budgets.md`](references/assertion-catalog-agents-skills-budgets.md) | per-key rows: sub-agents, skills and connectors, budgets, tasks, delivery |
 | [`references/assertion-catalog-gates-hooks-modifiers.md`](references/assertion-catalog-gates-hooks-modifiers.md) | per-key rows: gates, hooks, path denial, verdict modifiers, egress, judged keys |
 | [`references/semantic-judging.md`](references/semantic-judging.md) | `semantic_matches` in full: what the judge reads, fork results, refusal reasons, provenance |
-| [`references/scenario-schema.md`](references/scenario-schema.md) | every YAML field, which keys survive `replay`, the `web_fetch` model |
+| [`references/scenario-schema.md`](references/scenario-schema.md) | every YAML field, the multi-leg (`legs:`, `host_action`, `workdir`) form, which keys survive `replay`, the `web_fetch` model |
 | [`references/fidelity-and-answers.md`](references/fidelity-and-answers.md) | tier semantics, answer paths, the determinism contract |
 | [`references/ci-recipe.md`](references/ci-recipe.md) | the GitHub Action, replay-vs-live lanes, the four-stage pipeline |
 | [`references/critique.md`](references/critique.md) | `critique` report and evidence-package shapes |

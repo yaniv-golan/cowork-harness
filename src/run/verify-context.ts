@@ -20,7 +20,9 @@ import { captureAuthoredFilesWithHealth, authoredFilesHealthNonEmpty } from "./a
 import { readPreRunManifestOrigin } from "./pre-run-manifest.js";
 import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { unionReferenceAccesses } from "./run.js";
-import { requireTurns, turnArtifactPath } from "./turn-layout.js";
+import { legTreeRoot, readLegMarker, requireTurns, turnArtifactPath } from "./turn-layout.js";
+import { legTreeDrift } from "./leg-manifest.js";
+import { legSnapshotRoot } from "./leg-snapshot.js";
 import { decideRunDir, noteRelocation, withDecidedPaths } from "./run-dir-identity.js";
 import { recordedSlashInvokedSkills } from "../critique/skill-invocation.js";
 
@@ -173,6 +175,14 @@ export function assertContextFromRunDir(
   } catch (e) {
     return refuse("runtime", (e as Error).message);
   }
+  // A leg of a multi-leg run: its filesystem evidence is the recorded workDir, which under `workdir: persistent` is the
+  // scenario's SHARED tree. Only the last leg's post-state still matches it; grading any other persistent leg there
+  // would silently use a later leg's files.
+  // A leg of a multi-leg run is re-graded from its snapshot (its own files as they stood when it ended) when it has a
+  // usable one; otherwise from its session tree, under the rules that tree allows (legTreeRoot, and the drift check).
+  const snap = readLegMarker(runDir) ? legSnapshotRoot(runDir) : undefined;
+  const tree = snap ? { root: join(runDir, "..", "..") } : legTreeRoot(runDir, cmd);
+  if ("refused" in tree) return refuse("runtime", tree.refused);
   // A MULTI-TURN run dir addresses more than one completion, and this command cannot tell which one the
   // caller's scenario describes. Checked on the TURN COUNT (before loading any result), not a `result.turn`
   // field read off whichever turn we'd otherwise load — RunResult.turn is documented absent on some lanes,
@@ -269,7 +279,7 @@ export function assertContextFromRunDir(
   // evidence paths still name the original, so everything below would read the original's tree while reporting the
   // given dir. One whose recorded dir is gone (moved, downloaded) is read from the dir given. From here on the
   // result's paths are the decided ones (run-dir-identity.ts) — nothing below reads a recorded path directly.
-  const placed = decideRunDir(runDir, result, cmd);
+  const placed = decideRunDir(runDir, result, cmd, readLegMarker(runDir) ? tree.root : undefined);
   if (placed.kind === "refuse") return refuse("runtime", placed.message);
   noteRelocation(placed);
   result = withDecidedPaths(result, placed);
@@ -284,7 +294,23 @@ export function assertContextFromRunDir(
     scenario = scenarioOrLoader;
   }
 
+  if (snap) result = { ...result, workDir: snap };
   const workRoot = result.workDir ?? "";
+  // A leg of a multi-leg run: its files are read from a tree a later leg or host action may have changed. Re-grade
+  // only when the tree still matches the leg's own post-run manifest.
+  if (readLegMarker(runDir) && !snap) {
+    const drift = legTreeDrift(runDir, workRoot);
+    if (drift === undefined)
+      return refuse(
+        "runtime",
+        `${cmd}: ${runDir} has no complete post-run manifest of its files, so whether its tree is still the leg's own cannot be told`,
+      );
+    if (drift.length)
+      return refuse(
+        "runtime",
+        `${cmd}: ${runDir}'s tree changed after the leg ended (${drift.slice(0, 5).join(", ")}${drift.length > 5 ? `, +${drift.length - 5} more` : ""}): a later leg or host action wrote to it, so these are not this leg's files`,
+      );
+  }
   const scan = result.scan ?? { outputsDeletes: [], hostPathLeaked: false, selfHealRan: false };
   // FS-class assertions resolve under workRoot; if it's gone we can't faithfully re-check them — refuse
   // rather than report a false fail. Content-only re-asserts stay valid without it. no_unexpected_files
