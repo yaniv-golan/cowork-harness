@@ -173,7 +173,7 @@ For the `hostloop` tier's separate **native macOS** binary (`claude-code/<ver>/c
 
 At `hostloop`, the staged **Linux/arm64 ELF** gets the same patch tolerance: there it is bind-mounted into the bash sidecar only for parity and is not run by any harness-spawned process, so a same-major.minor patch-newer sibling is auto-accepted (loud stderr note, advisory sha) via `resolveAgentBinary(baseline, { parityMount: true })` — matching the native binary's policy above. `cowork` gets this same tolerance **only when the synced baseline gate resolves it to host-loop** (`decideLoopFromBaseline(baseline) === "host"`, mirroring `execute.ts`'s dispatch); `doctor --tier cowork` checks that resolution before deciding whether to ask for the tolerant or strict form, so it never reports the ELF `ok` when the real run would hard-fail. On a `cowork` baseline that resolves to **VM-loop**, the ELF is executed directly — same as `container`/`microvm`, which always keep the strict sha-pinned exact-version requirement described earlier in this section, because the ELF is the executed agent there. By the same resolved-loop logic, `doctor --tier cowork` requires the separate **native macOS** binary only when `cowork` resolves to host-loop (where it's the executed agent); a VM-loop-resolving `cowork` runs the ELF instead, so a missing native binary no longer blocks that rig (the mirror of the ELF case — doctor neither false-greens nor false-not-readies on either resolution).
 
-`sync` refuses to write a baseline in **three** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set). Since `allowDomains` is **pinned** (carried forward from the newest committed baseline, never re-derived), empty here means that baseline was missing, unparseable, or carried no allowlist; (b) `⚠ unknown deltas` (see below); and (c) a gate cache captured under a different organisation from the previous baseline's, or one whose organisation Desktop's logs cannot tell when the previous baseline recorded one (`provenance.captureOrg`, below). `--allow-empty` (alias `--force`) overrides (a) and (b) and force-writes the baseline anyway — use it only when you understand the impact. Only `--allow-org-change` overrides (c), and the check runs before `--diff`, so `sync --diff` is refused too:
+`sync` refuses to write a baseline in **three** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set). Since `allowDomains` is **pinned** (carried forward from the newest committed baseline, never re-derived), empty here means that baseline was missing, unparseable, or carried no allowlist; (b) `⚠ unknown deltas` (see below); and (c) a gate cache captured under a different organisation from the one this machine last synced under, one whose organisation Desktop's logs cannot tell once this machine has synced, or an unreadable record of that organisation (`provenance.captureOrg`, below). `--allow-empty` (alias `--force`) overrides (a) and (b) and force-writes the baseline anyway — use it only when you understand the impact. Only `--allow-org-change` overrides (c), and the check runs before `--diff`, so `sync --diff` is refused too:
 
 ```bash
 cowork-harness sync --allow-empty   # force-write past an empty allowlist or unknown deltas
@@ -482,10 +482,18 @@ committed baseline and say why in that baseline's `$comment`.
    from Desktop's log (the newest org-naming entry at or before the cache was written) and records a short salted
    hash of it, never the id. The hash cannot be reversed, but the salt is public, so anyone who already holds the
    organisation id can confirm it. If any log file `sync` reaches is unreadable, the organisation counts as unknown.
-   - **Refusing.** A capture under a different organisation from the previous baseline's, or one whose organisation
-     the logs cannot tell when the previous baseline recorded one, refuses the write. Switch Desktop to the
-     organisation the baseline is captured under and re-run `sync`; `--allow-org-change` writes anyway, for when that
-     organisation really changed. A baseline with no recorded organisation records the first one with a note.
+   - **This machine's record.** After each written sync, `sync` remembers the organisation it synced under in
+     `~/.cowork-harness/sync-capture-org.json` (the hash only, file mode 0600; local, never committed). A capture
+     whose organisation the logs cannot tell never writes or resets it, and `sync --diff` never writes it.
+   - **Refusing.** A capture under a different organisation from the one this machine last synced under, one whose
+     organisation the logs cannot tell once this machine has a record, or an unreadable record refuses the write.
+     Switch Desktop back to that organisation and re-run `sync`; `--allow-org-change` writes anyway, for when the
+     organisation you sync under really changed (the record then follows the new one).
+   - **Warning only.** The first sync on a machine records its organisation without refusing. A capture under a
+     different organisation from the previous baseline's warns on every sync and never refuses: anyone outside the
+     organisation the shipped baselines are captured under re-syncs under their own, and gate changes against the
+     shipped baseline may then be that organisation, not production. Maintainers: run the first sync after upgrading
+     under the organisation the committed baselines are captured under, since that sync is what the record starts from.
 
    **`provenance.agentSearchGates` → the agent's own web-search feature values.** These are the agent's
    features, not Desktop gates, so they are not in the fcache. Desktop caches them per account and organisation in

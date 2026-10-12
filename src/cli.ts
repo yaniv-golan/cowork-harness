@@ -36,7 +36,7 @@ import {
   buildNextAgentBinary,
 } from "./baseline.js";
 import { searchAnchorsForSync } from "./sync/search-anchors.js";
-import { checkCaptureOrg } from "./sync/capture-org.js";
+import { checkCaptureOrg, LOCAL_ORG_RECORD, readLocalOrg, recordCaptureOrg } from "./sync/capture-org.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
   executeScenario,
@@ -667,7 +667,7 @@ function hasHelp(args: string[]): boolean {
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
 
 const SUBCOMMAND_USAGE: Record<string, string> = {
-  sync: "usage: sync [--diff] [--allow-empty|--force] [--allow-org-change] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --allow-org-change: write even though Desktop's gate cache was captured under a different organisation from the previous baseline's (Desktop rewrites gates per organisation)\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
+  sync: "usage: sync [--diff] [--allow-empty|--force] [--allow-org-change] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --allow-org-change: write even though Desktop's gate cache was captured under a different organisation from the one this machine last synced under, or that organisation cannot be told (Desktop rewrites gates per organisation)\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [<baseline>] [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove the VM\n  prune   drop all orphaned VMs\n  <baseline> (default: latest) is a baseline name like desktop-<version>, not a VM name — each acts on that baseline's VM",
@@ -3461,10 +3461,16 @@ async function cmdSync(args: string[]) {
       1,
     );
   }
-  // Desktop rewrites the gate cache per organisation: a capture under another organisation would read as gate flips.
+  // Desktop rewrites the gate cache per organisation: a capture under another organisation from the one this machine
+  // last synced under would read as gate flips. Another organisation from the baseline's only warns.
   {
     const prevOrg = CaptureOrg.safeParse((baseProvenance as Record<string, unknown>).captureOrg);
-    const org = checkCaptureOrg(prevOrg.success ? prevOrg.data : undefined, res.captureOrg, !!syncParsed.flags["--allow-org-change"]);
+    const org = checkCaptureOrg(
+      readLocalOrg(LOCAL_ORG_RECORD),
+      prevOrg.success ? prevOrg.data : undefined,
+      res.captureOrg,
+      !!syncParsed.flags["--allow-org-change"],
+    );
     res.notes.push(...org.notes);
     if (org.refuse) return fail("sync", "runtime", `ERROR: ${org.refuse}`, undefined, isJsonOutput(normalizedArgs), 1);
   }
@@ -3619,6 +3625,9 @@ async function cmdSync(args: string[]) {
     mkdirSync(BASELINES_DIR, { recursive: true });
     writeFileSync(baselinePath, JSON.stringify(next, null, 2));
     log(`wrote ${baselinePath}`);
+    // Only after a written baseline, and only an observed organisation: an unobserved capture never resets the record.
+    const recordWarning = recordCaptureOrg(LOCAL_ORG_RECORD, res.captureOrg);
+    if (recordWarning) log(recordWarning);
     // The host-loop prompt asset is hand-authored (not extracted), so a new LEGACY baseline silently
     // lands WITHOUT it — and every host-loop record then runs with an EMPTY shell-access section. Warn loudly
     // here, tying the missing asset to the baseline just synced (mirrors the agentBinary.stagedPath warn).
