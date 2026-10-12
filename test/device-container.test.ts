@@ -27,6 +27,7 @@ import {
   agentPlanFor,
   deniedDeviceFolders,
   deviceTreeDeletes,
+  deviceTreeIdentityReliable,
   makeDeviceExec,
   recordDeviceTree,
   stageDeviceFolders,
@@ -672,6 +673,19 @@ describe("deviceTreeDeletes: the recorded listing", () => {
     expect(deviceTreeDeletes(outDir, PROJ)).toEqual([]);
     writeFileSync(join(copy, "moved.txt"), "edited\n");
     expect(deviceTreeDeletes(outDir, PROJ).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
+  });
+  it("deviceTreeIdentityReliable reads the recorded verdict; a flat listing is unreliable, no listing is unknown", () => {
+    const { outDir } = staged();
+    const file = join(outDir, "device-tree-pre-run.json");
+    const recorded = JSON.parse(readFileSync(file, "utf8"));
+    expect(deviceTreeIdentityReliable(outDir)).toBe(recorded.identityReliable);
+    writeFileSync(file, JSON.stringify({ ...recorded, identityReliable: false }));
+    expect(deviceTreeIdentityReliable(outDir)).toBe(false);
+    writeFileSync(file, JSON.stringify({ ...recorded, identityReliable: true }));
+    expect(deviceTreeIdentityReliable(outDir)).toBe(true);
+    writeFileSync(file, JSON.stringify(recorded.entries));
+    expect(deviceTreeIdentityReliable(outDir)).toBe(false);
+    expect(deviceTreeIdentityReliable(scratch())).toBeUndefined();
   });
   it("a listing written before the probe (a flat map) counts as unreliable", () => {
     const { outDir, copy } = staged();

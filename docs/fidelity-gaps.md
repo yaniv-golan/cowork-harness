@@ -1896,6 +1896,10 @@ a simulated session.
 - **`grant-without-prompt`.** Present only when a grant was given with no card shown: under
   `permission_mode: bypassPermissions` the agent asks nothing, so the harness grants at once. Production's
   skip-all-approvals mode may do the same; that has not been measured.
+- **`rename-reads-as-delete`.** Present only when the run directory's filesystem can give a new file a deleted
+  file's identity (see `delete-not-refused`). There a moved file counts as a rename only with unchanged bytes, so a
+  file renamed and then edited, or an empty directory renamed, is reported as a delete that production would not
+  have refused.
 
 Two more limits, not differences in what the agent sees. A command that outlives its limit is stopped inside the
 device container, and the result ends `Command timed out after <n>s`; production's exact wording there is not

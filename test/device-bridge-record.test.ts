@@ -116,7 +116,7 @@ describe("wiring: a live run carries the record", () => {
   it("both the full and the partial result build it from the launch plan", () => {
     expect(
       s.match(
-        /deviceBridge: scenario\.device_bridge === true \? deviceBridgeRecord\(plan\.mounts, bridgeNote, plan, bridgeGrants\(\)\) : undefined/g,
+        /deviceBridge:\s+scenario\.device_bridge === true\s+\? deviceBridgeRecord\(plan\.mounts, bridgeNote, plan, bridgeGrants\(\), deviceTreeIdentityReliable\(outDir\)\)\s+: undefined/g,
       ),
     ).toHaveLength(2);
     expect(s).toMatch(/deviceBridge: args\.deviceBridge,/);

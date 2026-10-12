@@ -136,6 +136,11 @@ describe("RunResult.deviceBridge in this release", () => {
     expect(r.divergences).toContain("decline-text");
     expect(r.divergences).not.toContain("grant-without-prompt");
   });
+  it("a tree listed on a filesystem that can reuse identities adds rename-reads-as-delete; a reliable one does not", () => {
+    expect(deviceBridgeRecord(mounts, "included", plan, [], false).divergences).toContain("rename-reads-as-delete");
+    expect(deviceBridgeRecord(mounts, "included", plan, [], true).divergences).not.toContain("rename-reads-as-delete");
+    expect(deviceBridgeRecord(mounts, "included", plan, []).divergences).not.toContain("rename-reads-as-delete");
+  });
   it("a grant given with no card shown adds grant-without-prompt", () => {
     const r = deviceBridgeRecord(mounts, "included", plan, [{ folders: ["notes"], answeredBy: "bypassPermissions", turn: 1 }]);
     expect(r.divergences).toContain("grant-without-prompt");

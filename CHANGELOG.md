@@ -21,7 +21,8 @@ All notable changes to this project are documented here. The format is based on
   under the default `on_unanswered: fail` (exit 2), where a 4.8 run never saw the card. Script it with
   `when_tool: mcp__remote-devices__device_request_delete_permission` and `decide: allow` or `deny`.
 - **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal` and `grants`;
-  `divergences` gains `decline-text`, and `grant-without-prompt` when a grant came with no card.
+  `divergences` gains `decline-text`, `grant-without-prompt` when a grant came with no card, and
+  `rename-reads-as-delete` when the run directory's filesystem can reuse a deleted file's identity.
 - **`tool_not_called` / `subagent_tool_absent` on the delete card are no longer refused under `device_bridge`**; without
   it they still are, as for `device_bash`.
 

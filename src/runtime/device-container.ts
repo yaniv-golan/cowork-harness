@@ -217,6 +217,22 @@ export function recordDeviceTree(outDir: string): void {
 /** The recorded listing. A listing written before the probe (a flat map) counts as unreliable. */
 type DeviceTreeFile = { identityReliable: boolean; entries: Record<string, TreeEntry | string> };
 
+/** The recorded listing's verdict on whether its filesystem keeps identities apart: false for a listing written
+ *  before the probe, undefined without a listing. */
+export function deviceTreeIdentityReliable(outDir: string): boolean | undefined {
+  const recorded = readDeviceTree(outDir);
+  return recorded?.identityReliable;
+}
+
+function readDeviceTree(outDir: string): DeviceTreeFile | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
+    return typeof raw.identityReliable === "boolean" && raw.entries ? raw : { identityReliable: false, entries: raw };
+  } catch {
+    return undefined;
+  }
+}
+
 /** Entries the run removed from a folder copy, by any means (`rm`, `find -delete`, `rmdir`, a script): the staged
  *  listing compared with the tree after the run (`treeDeletes`). Production refuses each of these until the user allows
  *  deletion. Nothing without a recorded listing: no evidence, no claim. */
@@ -225,13 +241,8 @@ export function deviceTreeDeletes(
   /** The delete-denied (`rw`) folders (deniedDeviceFolders): a folder that allows deletes (`rwd`) is not counted. */
   denied: ReadonlyArray<{ name: string; mountPath: string }>,
 ): { mount: string; command: string }[] {
-  let recorded: DeviceTreeFile;
-  try {
-    const raw = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
-    recorded = typeof raw.identityReliable === "boolean" && raw.entries ? raw : { identityReliable: false, entries: raw };
-  } catch {
-    return [];
-  }
+  const recorded = readDeviceTree(outDir);
+  if (!recorded) return [];
   return treeDeletes(recorded.entries, deviceTreeListing(join(resolve(outDir), "work", "device")), denied, recorded.identityReliable);
 }
 
@@ -442,6 +453,8 @@ export function deviceBridgeRecord(
   },
   /** This turn's delete grants (`deleteGrantsOf`). */
   grants: ReadonlyArray<DeleteGrant> = [],
+  /** The probe's verdict on the device tree's filesystem (`deviceTreeIdentityReliable`); undefined without a listing. */
+  identityReliable?: boolean,
 ): DeviceBridgeRecord {
   // `egress.unrestricted` resolves to `*`, which the run's proxy passes through: production's pass-through branch.
   const unrestricted = plan.egressAllow.includes("*");
@@ -475,6 +488,9 @@ export function deviceBridgeRecord(
       "decline-text",
       // A grant no card asked for: bypassPermissions shows none, as production's skip-all-approvals mode may.
       ...(grants.some((g) => g.answeredBy === "bypassPermissions") ? ["grant-without-prompt"] : []),
+      // The tree's filesystem can give a new file a deleted one's identity, so a rename counts only with unchanged
+      // bytes: a rename followed by an edit is reported as a delete.
+      ...(identityReliable === false ? ["rename-reads-as-delete"] : []),
     ],
   };
 }
