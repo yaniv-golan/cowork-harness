@@ -2214,11 +2214,11 @@ export interface DeviceBridgeRecord {
    *  `decider`, `human`, or `bypassPermissions` when no card is shown) and the turn. */
   grants?: Array<{ folders: string[]; answeredBy: "script" | "decider" | "human" | "bypassPermissions"; turn: number }>;
   /** Enforced runs only: deletes the shim refused this turn, from its audit log (evidence that refusals happened,
-   *  never of their absence). */
+   *  never of their absence). Absent when the log could not be read (`auditUnreadable`). */
   refusedDeletes?: number;
-  /** Enforced runs only: `<folder>/<path>` gone from a folder deletion was never allowed in. The shim did not see
-   *  the delete (a static binary, a raw system call), or, under `rename-reads-as-delete`, a file was renamed and then
-   *  edited. Fails the run where the filesystem keeps identities apart; warns otherwise. */
+  /** Enforced runs only: `<folder>/<path>` gone from a folder deletion was never allowed in, deleted or moved out of
+   *  the folder. The shim did not see it (a static binary, a raw system call), or, under `rename-reads-as-delete`, a
+   *  file was renamed and then edited. Fails the run where the filesystem keeps identities apart; warns otherwise. */
   bypassedDeletes?: string[];
   /** Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts, or naming
    *  a path outside their folder; ignored. */

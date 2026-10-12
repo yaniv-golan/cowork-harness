@@ -228,8 +228,11 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
   // to another spelling of its name. The shim must place a path by what it is, not how it is spelled.
   it("another spelling of a folder's name on a case-insensitive filesystem is still that folder", () => {
     writeFileSync(join(host, "mnt", "proj", "cs"), "cs");
-    const ci = sh("test -e mnt/PROJ/cs && echo ci || echo cs").out.trim();
-    if (ci !== "ci") {
+    const probe = sh("test -e mnt/PROJ/cs && echo ci || echo cs");
+    // A failed exec (a dead container, a timeout) must fail here, never read as "case-sensitive".
+    expect(probe.code, probe.out).toBe(0);
+    expect(["ci", "cs"]).toContain(probe.out.trim());
+    if (probe.out.trim() === "cs") {
       process.stderr.write("::notice:: device-shim: case-sensitive filesystem here, so the other-spelling case is not exercised\n");
       return;
     }

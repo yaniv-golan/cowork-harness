@@ -1882,7 +1882,8 @@ a simulated session.
   (`device_delete_bypassed`). A file the session made and deleted that way leaves no trace and is not caught. The
   library's log of refused and allowed deletes is writable by the device shell, so its counts (`refusedDeletes`, and
   the allowed deletes of files the session made) can be understated by a command that edits it; a line in it can add
-  a delete to the record, never excuse one.
+  a delete to the record, never excuse one. A log the shell replaced (a link, a FIFO) is not read: the record says
+  why in `auditUnreadable`, leaves `refusedDeletes` out, and the run warns (`device_audit_unreadable`).
   Before the first `device_bash` call the bridge checks the library works by trying to delete a probe file; if it
   is not refused, the run fails as an infrastructure error (`device-shim`), so a bridge run never goes unenforced
   without saying so. A device image that cannot be built stops the run the same way, before the agent starts.

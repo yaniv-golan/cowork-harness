@@ -308,7 +308,9 @@ static int delete_allowed(const char *op, enum del_kind kind, int dirfd, const c
     return 1;
   }
   if (!c || !c->ok) {
-    /* No control file: refuse every delete under a session's mnt rather than enforce nothing. */
+    /* No control file: refuse every delete under a session's mnt rather than enforce nothing. This fallback places by
+     * spelling, not identity; it is a last resort only, since the bridge always writes the control file and its
+     * canary fails the run when deletes are not refused. */
     if (resolve_path(dirfd, path, full, PATH_MAX) != 0 || !(strncmp(full, "/sessions/", 10) == 0 && strstr(full, "/mnt/"))) {
       errno = saved;
       return 1;
@@ -457,7 +459,8 @@ static int rename_allowed(int olddirfd, const char *oldpath, int newdirfd, const
   struct ctl *c = load_ctl();
   int verdict = 1;
   if (!c || !c->ok) {
-    /* No control file: keep every rename under a session's mnt from leaving where it is, as deletes there are
+    /* (Placed by spelling, as the delete fallback is: a last resort the bridge's control file and canary make moot.)
+     * No control file: keep every rename under a session's mnt from leaving where it is, as deletes there are
      * refused, rather than enforce nothing. */
     char from[PATH_MAX], to[PATH_MAX];
     int in_from = resolve_path(olddirfd, oldpath, from, sizeof from) == 0 && strncmp(from, "/sessions/", 10) == 0 && strstr(from, "/mnt/");
