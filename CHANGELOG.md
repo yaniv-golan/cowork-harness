@@ -66,24 +66,28 @@ All notable changes to this project are documented here. The format is based on
     its first leg as the whole run.
   A v17 recording still reads and replays as recorded on 4.9. `replay --reassert` or `--write` on 4.9 that adds a
   command metric to a v17 cassette restamps it as v18.
-- **`eval` grades declared `metrics:` and can now exit 1 on them.** A 4.8 `eval` ignored the artifact `metrics:` a
-  scenario declared; 4.9 compares them, so the same inputs can exit differently:
-  - any metric row `not compared` (a rep `pruned`, `no_manifest`, or a completed rep with no entry for a declared
-    metric, `metric_unrecorded`; or a rep scored by another script than the one the eval froze) exits 1, with or
-    without `--fail-on`;
-  - under `--fail-on possible` or `confirmed`, a metric that got worse at that level exits 1, and under `possible`
-    so does a row that is `insufficient_unmeasured`;
-  - the "every row is `insufficient`" exit 1 now counts metric rows too: an eval whose pass rows are all
-    insufficient but which tested a metric no longer exits 1 on that ground, and a metrics-only eval whose every row
-    is insufficient does.
-  An eval dir written before this release reports metrics as not recorded, grades none, and keeps its exit code.
-  `eval`'s exit codes are listed in SPEC §11 and covered by §12; the report, its row labels and thresholds are
-  EXPERIMENTAL. These exit paths are the new metric comparison's, reached only by a scenario that declares
-  `metrics:`.
-- **`hillclimb check` errors (exit 1) on a metric column whose rows carry two declaration signatures**
-  (`metrics.sig_mixed`), for any metric, not only a command metric. Only a hand-edited flow, or one with rows from
-  before signatures were recorded, can hold one: `hillclimb run` and `regrade` refuse a changed declaration first.
-  Start a fresh flow or give the metric a new id.
+- **Breaking, in a minor release: `eval` and `hillclimb check` gain exit-1 paths on exit codes SPEC §12 lists as
+  covered.** The same command can now exit 1 where 4.8 exited 0.
+  - **`eval`**, triggered by a scenario that declares `metrics:`. A 4.8 `eval` never read them; 4.9 compares them.
+    - Any metric row `not compared` exits 1, with or without `--fail-on`. A row is not compared when a rep was
+      `pruned`, had `no_manifest`, or completed with no entry for a declared metric (`metric_unrecorded`), or when a
+      rep was scored by another script than the one the eval froze.
+    - Under `--fail-on possible` or `confirmed`, a metric that got worse at that level exits 1, and under `possible`
+      so does a row that is `insufficient_unmeasured`.
+    - The "every row is `insufficient`" exit 1 now counts metric rows too: an eval whose pass rows are all
+      insufficient but which tested a metric no longer exits 1 on that ground, and a metrics-only eval whose every
+      row is insufficient does.
+
+    No flag turns metric grading off. To get back to exit 0, remove `metrics:` from the scenarios, or re-run the
+    eval into a fresh directory so every rep records each declared metric under one scorer (a not-compared row usually
+    comes from pruned, pre-4.9 or re-scored reps); a worse metric under `--fail-on` is the gate working as asked,
+    and an all-insufficient eval needs more `--reps`. An eval dir written before this release reports metrics as
+    not recorded, grades none, and keeps its exit code.
+  - **`hillclimb check`**, triggered by a flow whose rows for one metric carry two declaration signatures: it now
+    exits 1 with `metrics.sig_mixed`, for any metric, not only a command metric. Only a hand-edited flow, or one with
+    rows from before signatures were recorded, can hold one: `hillclimb run` and `regrade` refuse a changed
+    declaration first. There is no flag to downgrade it; start a fresh flow, or give the metric a new id so its
+    rows start a new column.
 - **`sync` now refuses a re-sync under a different organisation from the one this machine last synced under.** It
   remembers that organisation in `~/.cowork-harness/sync-capture-org.json` (a salted hash, file mode 0600, never
   committed). The first sync after upgrading records the organisation it runs under, without refusing, so run it
