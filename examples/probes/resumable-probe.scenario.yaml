@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=../../schema/scenario-multi-leg.schema.json
+# A skill that parks at a gate and resumes in a LATER session (multi-leg, workdir: persistent):
+#   ask    — a fresh session runs the skill; its script records `waiting` at g1 and the agent stops without asking;
+#   apply  — a host action runs the skill's own apply_corrections.py in the leg runtime (no agent, no tokens);
+#   resume — a NEW session carries the answer; the script resumes from g1 and the run completes.
+# Completion is judged only from the skill's status file and its resume ledger, never from the agent's prose.
+name: resumable-probe
+baseline: latest
+session: ../sessions/resumable-probe.yaml
+fidelity: container
+workdir: persistent
+legs:
+  - id: ask
+    prompt: Run the resumable probe.
+    assert:
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: waiting }
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: invocation, equals: 1 }
+      # the skill's script wrote it (not the model writing the file itself)
+      - tool_called: { tool: Bash, input: { command: "run\\.py" } }
+
+  - id: apply
+    host_action:
+      status:
+        artifact: outputs/artifacts/runs/r1/run_status.json
+        expect: { status: waiting, scripts_dir_shell: { not_null: true } }
+      run: ["python3", "{status.scripts_dir_shell}/apply_corrections.py", "--run", "r1"]
+      timeout: 60
+    assert:
+      - exit_code: 0
+      - stdout_matches: "applied \\d+ corrections"
+      - file_exists: { path: outputs/artifacts/runs/r1/corrections.json, authored: true }
+
+  - id: resume
+    prompt: |
+      Run the resumable probe.
+      ANSWER g1=a
+    assert:
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: complete }
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: invocation, equals: 2 }
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: resumed_from.gate, equals: g1 }
+      # the resume did not redo step 1 (the skill's own ledger)
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: invocations.1.untouched_since_resume.step1_json, equals: true }
+      - file_exists: { path: outputs/artifacts/runs/r1/report.json, authored: true }

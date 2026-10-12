@@ -1,0 +1,10 @@
+# Session for the resumable probe's multi-leg scenarios: no answer channel (the skill never asks), and the skill's
+# status file under <outputs>/artifacts. `answer_channel: none` requires bypassPermissions.
+model: claude-sonnet-5
+answer_channel: none
+permission_mode: bypassPermissions
+agent_env:
+  artifacts_root: artifacts
+plugins:
+  local_plugins:
+    - ../probes/resumable-probe
