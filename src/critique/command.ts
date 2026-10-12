@@ -18,6 +18,7 @@
 import { isolationRefusal, transportIdentity } from "../decide/llm-transport.js";
 import { InterruptedError } from "../termination.js";
 import { spawn } from "node:child_process";
+import { boundedSpawnBuffers, outstandingChildPids } from "../bounded-spawn.js";
 import { fileURLToPath } from "node:url";
 import { lookupSkillFlag } from "../run/skill-flag-surface.js";
 import { describeSubagentUsageLimit } from "../usage-limit.js";
@@ -897,7 +898,7 @@ const TURN_MAX_BYTES = 16 * 1024 * 1024;
 // entry-path signal handler can kill them all before this process actually exits. Exported for a unit test
 // of the tracking set itself — reliably simulating a real SIGINT/SIGTERM against a live child in a test
 // harness is environment-dependent, so the set's add/remove lifecycle is what's verified directly.
-export const outstandingChildPids = new Set<number>();
+export { outstandingChildPids };
 
 function killAllOutstandingChildGroups(): void {
   for (const pid of outstandingChildPids) {
@@ -933,69 +934,17 @@ export function installOrphanCleanupHandlers(): void {
  *  `cmd`/`args`) so the unit test can drive the REAL timeout/byte-cap kill mechanism against a trivial
  *  `node -e ...` child in milliseconds, instead of only exercising it indirectly through a slow real CLI
  *  spawn or a fake 10-minute hang. */
-export function boundedSpawn(cmd: string, args: string[], timeoutMs: number, maxBytes: number): Promise<TurnOutcome> {
-  return new Promise((resolvePromise) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], detached: true });
-    if (child.pid) outstandingChildPids.add(child.pid); // F23/F36 residual: tracked until settled, below
-    let stdout = "";
-    let stderr = "";
-    // ONE combined stdout+stderr byte budget — the cap the comment above promises. Previously two
-    // independent per-stream counters, so a child splitting output across both streams could buffer
-    // ~2x `maxBytes` before either tripped (F4: the documented memory bound on a looping/hostile child).
-    let outBytes = 0;
-    let timedOut = false;
-    let truncated = false;
-    let settled = false;
-
-    const killGroup = () => {
-      try {
-        if (child.pid) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch {
-        try {
-          child.kill("SIGKILL"); // fallback: not our own group leader (e.g. already reaped, or non-POSIX)
-        } catch {
-          /* already gone */
-        }
-      }
-    };
-    const finish = (code: number | null) => {
-      if (settled) return; // a killed child can still emit a trailing close/error; only the first result counts
-      settled = true;
-      clearTimeout(timer);
-      if (child.pid) outstandingChildPids.delete(child.pid);
-      resolvePromise({ stdout, stderr, code, timedOut, truncated });
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killGroup();
-      finish(null);
-    }, timeoutMs);
-
-    // Charge every chunk against the SHARED budget; on overflow keep exactly the bytes that still fit
-    // (slice the terminal chunk to the remaining room) so the captured output never exceeds `maxBytes`.
-    const onChunk = (d: Buffer, append: (s: string) => void) => {
-      if (settled) return;
-      const before = outBytes;
-      outBytes += d.length;
-      if (outBytes > maxBytes) {
-        const room = maxBytes - before; // bytes from THIS chunk that still fit under the combined cap
-        if (room > 0) append(d.subarray(0, room).toString());
-        truncated = true;
-        killGroup();
-        finish(null);
-        return;
-      }
-      append(d.toString());
-    };
-    child.stdout.on("data", (d: Buffer) => onChunk(d, (s) => (stdout += s)));
-    child.stderr.on("data", (d: Buffer) => onChunk(d, (s) => (stderr += s)));
-    child.on("close", (code) => finish(code));
-    child.on("error", (e) => {
-      stderr += `\n[spawn error] ${String(e)}`;
-      finish(null);
-    });
-  });
+export async function boundedSpawn(cmd: string, args: string[], timeoutMs: number, maxBytes: number): Promise<TurnOutcome> {
+  // ONE combined stdout+stderr byte budget — the cap the comment above promises (two per-stream counters would let a
+  // child splitting output across both streams buffer ~2x `maxBytes` before either tripped).
+  const r = await boundedSpawnBuffers(cmd, args, { timeoutMs, combinedMax: maxBytes });
+  return {
+    stdout: r.stdout.toString(),
+    stderr: r.stderr.toString() + (r.spawnError !== undefined ? `\n[spawn error] ${r.spawnError}` : ""),
+    code: r.code,
+    timedOut: r.timedOut,
+    truncated: r.truncated !== false,
+  };
 }
 
 /** One `npx tsx src/cli.ts skill ...` spawn — this script's actual use of `boundedSpawn` above. */

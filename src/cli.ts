@@ -41,6 +41,7 @@ import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchS
 import {
   executeScenario,
   parseScenarioFile,
+  loadRunnableScenario,
   loadSessionFromFile,
   firstLine,
   unresolvedModelPreflight,
@@ -114,6 +115,9 @@ import { cmdDoctor, tokenCheck } from "./run/doctor.js";
 import { readRunStatus, hasRunStatus, followRunStatus, isStatusStale } from "./run/run-status.js";
 import { findLatestRunForScenario } from "./run/latest-run.js";
 import { resolveStatusTarget } from "./run/status-target.js";
+import { collectSecrets } from "./secrets.js";
+import { mergeCommandOutcomes } from "./metrics.js";
+import { remeasureCommandMetrics } from "./metric-command/live.js";
 import { classifyRunDir, hasTurnDirs, latestTurn, preLayoutMessage, requireTurns, turnArtifactPath } from "./run/turn-layout.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
@@ -734,7 +738,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "search-pool": SEARCH_POOL_USAGE,
   ref: REF_USAGE,
   "verify-run":
-    "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
+    "usage: verify-run <run-dir> <scenario.yaml> [--allow-metric-commands] [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent; a command metric is carried forward from the run unless --allow-metric-commands re-runs it)",
   inspect:
     "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run PRODUCED: artifacts + a shallow preview of each JSON artifact's fields; for what HAPPENED — tools/decisions — use `trace`)",
   diff:
@@ -1836,7 +1840,7 @@ async function cmdRun(rawArgs: string[]) {
         o.json,
       );
     if (!existsSync(matrixFile)) fail("run", "usage", `matrix file not found: ${matrixFile}`, undefined, o.json);
-    const scenario = parseScenarioFile(files[0]);
+    const scenario = loadRunnableScenario(files[0]);
     if (scenario.on_unanswered === "prompt")
       fail(
         "run",
@@ -2024,7 +2028,7 @@ async function cmdRun(rawArgs: string[]) {
   // `fidelity:` — a smuggled `on_unanswered: prompt`, or the budget cap) would fire only after 1 and 2 had
   // already been paid for, and the refusal exits — so those completed results would never reach the JSON
   // envelope either. A pre-flight that spends money before refusing is not a pre-flight.
-  const loaded = files.map((f) => parseScenarioFile(f));
+  const loaded = files.map((f) => loadRunnableScenario(f));
   for (const scenario of loaded) {
     // The CLI flag guard (resolvePolicy) rejects --on-unanswered prompt on `run`, but a committed
     // scenario could smuggle it via its YAML and silently block/hang in non-TTY CI. Reject it here too.
@@ -4592,7 +4596,14 @@ function gateQuestionLabel(req: DecisionRequest): string {
 async function cmdVerifyRun(args: string[]) {
   let p;
   try {
-    p = parseArgs(args, withCommandGlobals({ values: ["--output-format"], enums: { "--output-format": ["text", "json"] } }));
+    p = parseArgs(
+      args,
+      withCommandGlobals({
+        booleans: ["--allow-metric-commands"],
+        values: ["--output-format"],
+        enums: { "--output-format": ["text", "json"] },
+      }),
+    );
   } catch (e) {
     return fail("verify-run", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
@@ -4600,7 +4611,13 @@ async function cmdVerifyRun(args: string[]) {
   const json = isJsonOutput(args);
   const [runDir, scenarioFile] = p.positionals;
   if (!runDir || !scenarioFile) {
-    return fail("verify-run", "usage", "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]", undefined, isJsonOutput(args));
+    return fail(
+      "verify-run",
+      "usage",
+      "usage: verify-run <run-dir> <scenario.yaml> [--allow-metric-commands] [--output-format json]",
+      undefined,
+      isJsonOutput(args),
+    );
   }
   if (p.positionals.length > 2) {
     return fail(
@@ -4628,7 +4645,24 @@ async function cmdVerifyRun(args: string[]) {
     }
     return fail("verify-run", loaded.kind, loaded.message, undefined, isJsonOutput(args));
   }
-  const { ctx, result, scenario, sidecarTranscript, sidecarQuestions, metrics } = loaded;
+  const { ctx, result, scenario, sidecarTranscript, sidecarQuestions } = loaded;
+  // Command metrics: carried forward from the run's own measurement, or re-run only with --allow-metric-commands
+  // (a grading path never executes scenario code silently).
+  const metrics = mergeCommandOutcomes(
+    loaded.metrics,
+    await remeasureCommandMetrics(scenario.metrics ?? [], {
+      scenarioPath: scenarioFile,
+      outDir: runDir,
+      turn: latestTurn(runDir) ?? 1,
+      recorded: result.metrics,
+      allow: p.flags["--allow-metric-commands"] === true,
+      secrets: collectSecrets(),
+      // verify-run writes nothing into the run dir: a re-run's stderr is not kept (its reason carries the first
+      // sandbox line).
+      stderrDir: null,
+      warn: (line) => process.stderr.write(`::warning:: verify-run: ${line}\n`),
+    }),
+  );
   const assertions = loaded.deterministic;
 
   // Answer-COVERAGE check — does the scenario's scripted `answers` actually match the gates the

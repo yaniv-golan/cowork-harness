@@ -2,6 +2,7 @@
 // tunes, the model pins, and the tier the trace needs. It composes the existing pieces (the session loader,
 // eval's pin resolvers, the protocol tier's managed-config rule); nothing here is a second copy of them.
 
+import { commandMetricFiles } from "../metric-command/resolve.js";
 import { closeSync, openSync, realpathSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { UsageError } from "../errors.js";
@@ -183,6 +184,8 @@ export function prepareCases(
             // A session that does not parse names no uploads: its own bytes are still hashed.
             ...(x?.uploads ?? []).map((u) => resolve(expandHome(u))),
             ...(fixture ? fixture.files.map((f) => join(fixture.dir, ...f.path.split("/"))) : []),
+            // A command metric's script and deps: editing one changes what a column means, so it moves the gate.
+            ...commandMetricFiles(c.scenario.metrics),
           ];
           // An unselected case's input the digest cannot read (missing, a directory, unreadable) is left out: a pass that
           // selects the case refuses it, and the gate would refuse an unreadable derived file. The digest hashes each
@@ -198,7 +201,11 @@ export function prepareCases(
           return fixture ? [[`workspace-fixture:${c.id}`, fixture.sig]] : [];
         }),
       ),
-    hiddenPaths: (cs) => [...new Set(cs.flatMap((c) => [resolve(c.file), fileOf(c)]))].filter((p): p is string => p !== undefined),
+    // A command metric's script and deps stay out of every mount too: the agent must not read (or game) its scorer.
+    hiddenPaths: (cs) =>
+      [...new Set(cs.flatMap((c) => [resolve(c.file), fileOf(c), ...commandMetricFiles(c.scenario.metrics)]))].filter(
+        (p): p is string => p !== undefined,
+      ),
     mountRoots: (cs) => [
       ...new Set(
         cs.flatMap((c) => {

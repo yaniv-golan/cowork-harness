@@ -18,6 +18,9 @@ import {
   assertSigWarnings,
   headroom,
   metricRangeWarnings,
+  metricSigFindings,
+  scorerRobustnessWarnings,
+  incomparableMetricWarnings,
   pairwiseHints,
   pairwiseRefFindings,
   staleAssertSigWarnings,
@@ -48,7 +51,7 @@ import { flowHasPairwise } from "./grade-keys.js";
 import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
 import { flowMetricUnion, rowAssertSigs } from "./metric-keys.js";
 import { pathSafeId } from "./ids.js";
-import { parseScenarioFile } from "../run/execute.js";
+import { parseScenarioFile, loadRunnableScenario } from "../run/execute.js";
 import type { Scenario } from "../types.js";
 import type { FlowSnapshot } from "./schema-check.js";
 
@@ -149,7 +152,7 @@ function assertSigScenarios(
       continue;
     }
     try {
-      cases.push({ id, scenario: parseScenarioFile(resolve(cwd, mine[0]!)) });
+      cases.push({ id, scenario: loadRunnableScenario(resolve(cwd, mine[0]!)) });
       fileOf.set(id, mine[0]!);
     } catch (e) {
       notes.push(
@@ -211,7 +214,7 @@ export function checkReport(
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
   const base = checkFlowDir(flowAbs, { profile: "harness" });
   const snap = loadFlowSnapshot(flowAbs);
-  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap)];
+  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap), ...metricSigFindings(snap)];
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
   const flowShown = normalizeRootArg(flowArg);
   const sig = assertSigScenarios(snap, cwd, flowShown, target);
@@ -220,6 +223,8 @@ export function checkReport(
     warnings: [
       ...headroom(snap, sig.cases).warnings,
       ...metricRangeWarnings(snap),
+      ...incomparableMetricWarnings(snap),
+      ...scorerRobustnessWarnings(snap),
       ...assertSigWarnings(snap, flowShown, sig.targetOf),
       ...staleAssertSigWarnings(snap, sig.cases, flowShown, sig.targetOf),
       ...sig.notes,
@@ -531,6 +536,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         allowDocDrift: p.flags["--allow-doc-drift"] === true,
         allowUnchecked: p.flags["--allow-unchecked"] === true,
         allowScrubChange: p.flags["--allow-scrub-change"] === true,
+        allowMetricCommands: p.flags["--allow-metric-commands"] === true,
       },
       {
         cwd: process.cwd(),

@@ -25,6 +25,10 @@ export interface ManifestArm {
   sigs: Record<string, string>;
 }
 
+/** A metric declaration as the manifest freezes it: verbatim, plus — for a command metric — its signature and
+ *  script, so each rep's recorded signature can be checked against the scorer the eval froze before spend. */
+export type FrozenMetric = ScenarioMetric & { sig?: string; commandFiles?: { script: string; scriptSha256: string } };
+
 export interface ManifestScenario {
   name: string;
   /** `~`-relative. */
@@ -38,7 +42,7 @@ export interface ManifestScenario {
   assertions: Assertion[];
   /** The frozen metric declarations the metric rows come from (`better` included), verbatim. Absent in a manifest
    *  written before metrics were graded: the report then says metrics were not recorded. */
-  metrics?: ScenarioMetric[];
+  metrics?: FrozenMetric[];
 }
 
 export interface EvalManifest {

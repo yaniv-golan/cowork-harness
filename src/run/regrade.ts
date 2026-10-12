@@ -16,7 +16,8 @@
  * `result.json` is never modified and no run-index row is added — a re-grade is not a run, and indexing it
  * would count the run twice in `stats`.
  */
-import { remeasureMetrics } from "../metrics.js";
+import { mergeCommandOutcomes, remeasureMetrics } from "../metrics.js";
+import { remeasureCommandMetrics } from "../metric-command/live.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -220,6 +221,9 @@ export interface RegradeCheckPassed {
 export interface RegradeOptions {
   runDirs: string[];
   scenarioFile: string;
+  /** `--allow-metric-commands`: re-run each command metric over the kept events. Without it a command metric carries
+   *  the run's own measurement forward (stamped `carried`), or is `command_not_allowed` with nothing recorded. */
+  allowMetricCommands?: boolean;
   /** Grade every semantic_matches assert with this model (a per-assert `judge_model` is then inert). */
   judgeModel?: string;
   /** Capture budget for a run that did not persist `authoredCapture`. */
@@ -740,6 +744,8 @@ interface Prepared {
   /** The run's own post-run file record: a metric is read only from bytes that still match it (none recorded ⇒
    *  every metric is `pruned`). */
   workspaceFiles: RunResult["workspaceFiles"];
+  /** The run's own metric measurements (a command metric's carry-forward source). */
+  recordedMetrics: RunResult["metrics"];
   /** The live result's assertion entries, by scenario index (a fill-mode re-grade keeps the ones it does not redo). */
   liveEntries: RunResult["assertions"];
   /** A part of the judge's input was not proven covered and was accepted by `allowScrubChange`. */
@@ -1113,6 +1119,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       budget,
       live,
       workspaceFiles: second.result.workspaceFiles,
+      recordedMetrics: second.result.metrics,
     });
   }
 
@@ -1259,7 +1266,20 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       }
       return e;
     });
-    const metrics = remeasureMetrics(p.ctx, { workspaceFiles: p.workspaceFiles }, sc.metrics);
+    const metrics = mergeCommandOutcomes(
+      remeasureMetrics(p.ctx, { workspaceFiles: p.workspaceFiles }, sc.metrics),
+      await remeasureCommandMetrics(sc.metrics ?? [], {
+        scenarioPath: opts.scenarioFile,
+        outDir: p.runDir,
+        turn: p.turn,
+        recorded: p.recordedMetrics,
+        allow: opts.allowMetricCommands === true,
+        secrets,
+        // Beside this regrade's own file, never over the live run's turns/<N>/metrics/ logs.
+        stderrDir: join(turnWriteDir(p.runDir, p.turn), "regrade", "metrics"),
+        warn: (line) => process.stderr.write(`::warning:: ${CMD}: ${line}\n`),
+      }),
+    );
 
     const differing: DifferingSection[] = [];
     // A section the accepted drift touched (kind and path): an assert whose document carries one read drifted bytes.
@@ -1503,6 +1523,7 @@ export async function cmdRegrade(args: string[]): Promise<never> {
     allowDocDrift: p.flags["--allow-doc-drift"] === true,
     allowUnchecked: p.flags["--allow-unchecked"] === true,
     allowScrubChange: p.flags["--allow-scrub-change"] === true,
+    allowMetricCommands: p.flags["--allow-metric-commands"] === true,
   });
   if (!outcome.ok) {
     if (json) {

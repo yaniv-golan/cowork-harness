@@ -5,6 +5,7 @@
 // never 0 (a 0 would be a fabricated failure, or a win for a lower-is-better metric). Why a metric was not measured
 // is returned apart, keyed by id, for the row's meta: a reason is not a grade.
 
+import { resolvedCommand } from "../metric-command/resolve.js";
 import type { MetricUnavailable, RunResult, ScenarioMetric } from "../types.js";
 import { UsageError } from "../errors.js";
 import { assertSig, metricSig, metricUnion } from "./grade-keys.js";
@@ -132,4 +133,20 @@ export function undeclaredRowMetrics(snap: FlowSnapshot, stateMetrics: unknown):
       out.set(id, vs);
     }
   return out;
+}
+
+/** Two declared command metrics that run the same script under different ids are two honest columns (a successor,
+ *  after a mid-flow edit), never comparable: name the relationship once, and print no delta. */
+export function successorColumnNotes(union: readonly ScenarioMetric[]): string[] {
+  const byScript = new Map<string, string[]>();
+  for (const m of union) {
+    const r = m.command !== undefined ? resolvedCommand(m) : undefined;
+    if (r) byScript.set(r.scriptRel, [...(byScript.get(r.scriptRel) ?? []), m.id]);
+  }
+  return [...byScript]
+    .filter(([, ids]) => ids.length > 1)
+    .map(
+      ([script, ids]) =>
+        `note: metrics ${ids.map((i) => `\`${i}\``).join(", ")} run the same script (${script}) under different declarations: separate columns, not comparable — read them side by side, never as a delta`,
+    );
 }

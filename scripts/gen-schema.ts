@@ -239,7 +239,8 @@ function addScenarioCrossKeyRules(json: Record<string, unknown>): void {
   addMetricRules(json);
 }
 
-/** Mirror `ScenarioMetric`'s per-item refinements (src/types.ts): exactly one of `scale` / `unbounded`, and an id
+/** Mirror `ScenarioMetric`'s per-item refinements (src/types.ts): exactly one of `scale` / `unbounded`, exactly one of
+ *  an artifact source or a command (the command's extension and path-shape rules stay loader-only), and an id
  *  that is neither all dots nor reserved. A duplicate id (compared case-insensitively) has no JSON Schema form and
  *  stays loader-only; the key's description says so. */
 function addMetricRules(json: Record<string, unknown>): void {
@@ -251,6 +252,18 @@ function addMetricRules(json: Record<string, unknown>): void {
   items.oneOf = [
     { ...has("scale"), not: has("unbounded") },
     { ...has("unbounded"), not: has("scale") },
+  ];
+  // Exactly one source: an artifact metric (`artifact` + `path`, no command fields) or a command metric (`command`,
+  // with no `artifact`/`path`). `deps` and `timeout_ms` belong to a command metric only.
+  const hasAll = (...ks: string[]) => ({ type: "object", required: ks, properties: Object.fromEntries(ks.map((k) => [k, {}])) });
+  const hasAny = (...ks: string[]) => ({ anyOf: ks.map((k) => has(k)) });
+  items.allOf = [
+    {
+      oneOf: [
+        { ...hasAll("artifact", "path"), not: hasAny("command", "deps", "timeout_ms") },
+        { ...has("command"), not: hasAny("artifact", "path") },
+      ],
+    },
   ];
   const itemProps = items.properties as Record<string, Record<string, unknown>>;
   // The artifact path stays under the work root: not blank, not absolute (POSIX, drive letter, UNC), no `..`.

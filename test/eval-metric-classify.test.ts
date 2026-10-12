@@ -31,6 +31,14 @@ describe("METRIC_STATE_CLASS", () => {
       remote: "X",
       pruned: "N",
       no_manifest: "N",
+      command_failed: "X",
+      command_timeout: "X",
+      command_output: "X",
+      nondeterministic: "X",
+      no_events: "X",
+      command_changed: "N",
+      command_missing: "N",
+      command_not_allowed: "N",
     });
   });
 });
@@ -93,5 +101,34 @@ describe("runs.jsonl keeps each rep's metrics", () => {
       { id: "w", unavailable: "size" },
     ]);
     expect(repEvidenceOf(line).result?.metrics).toEqual(line.result?.metrics);
+  });
+});
+
+describe("command metrics in eval", () => {
+  const cmdDecl = { id: "c", command: ["../m.mjs"], better: "lower", unbounded: true, sig: "aaaa" } as ScenarioMetric & { sig: string };
+  const rec = (sig: string) => ({ sig, script: "m.mjs", scriptSha256: "e".repeat(64) });
+  it("a rep scored by a different scorer than the manifest froze is not compared (command_changed)", () => {
+    expect(repMetricValues([cmdDecl], rep("valid"), result([{ id: "c", value: 1, command: rec("bbbb") } as never]))[0].v).toEqual({
+      notCompared: "command_changed",
+    });
+  });
+  it("the same scorer reads the value", () => {
+    expect(repMetricValues([cmdDecl], rep("valid"), result([{ id: "c", value: 1, command: rec("aaaa") } as never]))[0].v).toEqual({
+      value: 1,
+    });
+  });
+  it("runs.jsonl keeps the command record", () => {
+    const line = buildRunsLine({
+      index: 0,
+      arm: "a",
+      scenario: "s",
+      rep: 1,
+      runId: "local_x",
+      runDir: undefined,
+      result: { scenario: "s", result: "success", assertions: [], metrics: [{ id: "c", value: 2, command: rec("aaaa") }] } as never,
+      thrown: undefined,
+      evidence: undefined,
+    });
+    expect(line.result?.metrics?.[0]).toEqual({ id: "c", value: 2, command: rec("aaaa") });
   });
 });

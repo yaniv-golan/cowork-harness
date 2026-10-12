@@ -29,6 +29,7 @@ export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = [
   "--allow-doc-drift",
   "--allow-unchecked",
   "--allow-scrub-change",
+  "--allow-metric-commands",
 ] as const;
 
 export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--effort LEVEL] [--reps N]
@@ -89,9 +90,11 @@ export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario
 
 export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml | dir/> [--flow DIR] [--variant all|baseline|vN] [--case ID]...
        [--judge-model ID] [--fill-refs | --rejudge] [--approve-harness] [--allow-doc-drift] [--allow-unchecked]
-       [--allow-scrub-change] [--output-format text|json] [--dotenv FILE] [--run-dir DIR]
+       [--allow-scrub-change] [--allow-metric-commands] [--output-format text|json] [--dotenv FILE] [--run-dir DIR]
        Rebuilds a flow's scored rows from the scenario as it is now and their kept run dirs (no agent run), rewriting
        results.jsonl atomically (the prior file kept as regrade-<sha>.bak.jsonl, a before/after in <variant>/regrade.md).
+       A command metric (a script over the run's events) is never re-run without --allow-metric-commands: a row keeps
+       its own value or reason while its signature is current; with the flag a re-run that differs is nondeterministic.
        Every row is re-evaluated first, with no judge call: its deterministic asserts and expect_denied hosts with
        verify-run's evaluation (an assert unchanged since the run keeps its live outcome), its metrics re-measured from
        the kept work dir. Default: a judged assert is re-judged only when its judge's inputs changed (the assert, the

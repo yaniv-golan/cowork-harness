@@ -97,11 +97,13 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
   A metric whose every value is equal is `underpowered`, never "no change".
 - A rep where the agent failed, or the skill did not produce the number (`missing_artifact`, `missing_path`,
   `not_json`, `not_a_number`, `pre_run`), ranks WORST, below every measured value. A rep whose number is missing
-  because of the scorer, the capture or a cap (`size`, `readonly`, `remote`) is EXCLUDED and
+  because of the scorer, the capture or a cap (`size`, `readonly`, `remote`, and a command metric's
+  `command_failed` / `command_timeout` / `command_output` / `nondeterministic` / `no_events`) is EXCLUDED and
   guarded: no verdict may rest on it, so a row that would flag only while those reps stay unknown is `unresolved`
   (never gates). The candidate's ≥ 2 extra excluded reps that took a row below the threshold: `insufficient_unmeasured`
-  (`--fail-on possible` gates). `pruned` / `no_manifest`, or a completed rep with no entry for the id
-  (`metric_unrecorded`): `not compared`, exit 1.
+  (`--fail-on possible` gates). `pruned` / `no_manifest`, a completed rep with no entry for the id
+  (`metric_unrecorded`), or a command metric's `command_changed` / `command_missing` / `command_not_allowed` (a rep
+  scored by another script than the manifest froze): `not compared`, exit 1.
 - At 5 reps a metric can be `confirmed` beside pass rows only when the section declares 3 metrics or fewer; 4–11
   need `--reps 6`. Every report states each family's correction, row count and A/A false-confirm rate.
 - Worth it for count metrics on a targeted defect fix (a ×3.3 rate change is `possible` at 5 reps, ×4.1

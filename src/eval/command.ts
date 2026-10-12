@@ -17,7 +17,14 @@ import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { applySessionOverrides, expandHome } from "../session.js";
 import { loadBaseline } from "../baseline.js";
-import { parseScenarioFile, loadSessionFromFile, scenarioInputFindings, sessionOriginSources, effectiveTier } from "../run/execute.js";
+import {
+  parseScenarioFile,
+  loadRunnableScenario,
+  loadSessionFromFile,
+  scenarioInputFindings,
+  sessionOriginSources,
+  effectiveTier,
+} from "../run/execute.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
@@ -31,6 +38,8 @@ import { recordBudgetStatus, type BudgetStatus } from "../run/budget-status.js";
 import { resolveCritiquedSkillDir, gradedSkillNameFor } from "../critique/command.js";
 import { scenarioRows } from "./classify.js";
 import { type Correction } from "./stats.js";
+import { commandMetricFiles, resolvedCommand } from "../metric-command/resolve.js";
+import { metricSig } from "../metric-sig.js";
 import { familyReach, metricCorrectionFor, sectionFamilies, type FamilyReach, type MetricCorrection } from "./families.js";
 import {
   parseArmSpec,
@@ -356,7 +365,7 @@ function loadScenarios(args: EvalArgs, say: (s: string) => void): LoadedScenario
     const file = resolved.files[i];
     let scenario: Scenario;
     try {
-      scenario = parseScenarioFile(file);
+      scenario = loadRunnableScenario(file);
     } catch (e) {
       throw new UsageError(`${file}: ${(e as Error).message}`);
     }
@@ -531,7 +540,8 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
     );
 
   // Answer-key guard — before the signatures, whose walk would otherwise warn about the very links it refuses.
-  const evalFiles = [...new Set(scenarios.flatMap((s) => [resolve(s.file), s.sessionFile]))];
+  // A command metric's script and deps are answer-key files too: the agent must not read its scorer through a mount.
+  const evalFiles = [...new Set(scenarios.flatMap((s) => [resolve(s.file), s.sessionFile, ...commandMetricFiles(s.scenario.metrics)]))];
   const findings = answerKeyFindings(
     evalFiles,
     snaps.map((s) => ({ label: s.spec.label, snapshotDir: s.dir, ...(s.sourceDir ? { sourceDir: s.sourceDir } : {}) })),
@@ -886,7 +896,10 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
       baseline: loadBaseline(s.scenario.baseline).appVersion,
       heldOut: s.heldOut,
       assertions: s.scenario.assert ?? [],
-      metrics: s.scenario.metrics ?? [],
+      metrics: (s.scenario.metrics ?? []).map((m) => {
+        const r = m.command !== undefined ? resolvedCommand(m) : undefined;
+        return r ? { ...m, sig: metricSig(m), commandFiles: { script: r.scriptRel, scriptSha256: r.scriptSha256 } } : m;
+      }),
     }));
     const arms = snaps.map((s, i): ManifestArm => ({
       label: s.spec.label,

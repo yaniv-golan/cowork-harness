@@ -173,7 +173,7 @@ describe.runIf(can)("(B) a run dir copied beside its original is refused by ever
   it("hillclimb regrade: the row is listed as refused, with the runs-root remedy", async () => {
     const { f, copy } = await runAndCopy();
     try {
-      const re = reevaluateFromRun(copy, hcCase(f));
+      const re = await reevaluateFromRun(copy, hcCase(f));
       expect(re).toMatchObject({
         listed: expect.stringMatching(/^refused: hillclimb regrade: .* was copied from .* point --run-dir at the runs root/),
       });

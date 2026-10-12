@@ -166,6 +166,8 @@ export function buildRunsLine(args: {
                     id: x.id,
                     ...(x.value !== undefined ? { value: x.value } : {}),
                     ...(x.unavailable !== undefined ? { unavailable: x.unavailable } : {}),
+                    // A command metric's record: the report checks its signature against the manifest's.
+                    ...(x.command !== undefined ? { command: x.command } : {}),
                   })),
                 }
               : {}),

@@ -309,7 +309,17 @@ every climb there is finished.
 
 Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant with rows), `--case ID`
 (repeatable), `--judge-model ID`, `--fill-refs`, `--rejudge`, `--approve-harness`, `--allow-doc-drift`, `--allow-unchecked`,
-`--allow-scrub-change`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
+`--allow-scrub-change`, `--allow-metric-commands`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
+
+- **A command metric is never re-run without `--allow-metric-commands`.** Without it each row keeps its own value
+  or its reason while its signature is current; a row that predates the metric reads `command_not_allowed`. With it
+  the script re-runs over the kept events, and a value that differs from the row's is `nondeterministic`, which no
+  later regrade clears. Editing a command metric's script, deps, args or timeout mid-flow changes its signature, so
+  the pass is refused. To re-score the flow with the edited script: rename the metric (`leak_scan` →
+  `leak_scan_v2`) and drop the old declaration, approve the scenario change, merge the new `state-template` entry,
+  then `hillclimb regrade <scenarios> --flow <dir> --variant all --allow-metric-commands`: every row of every variant
+  gets the new column from its kept run's events, with no agent spend. Do it before `prune` removes those runs (a
+  pruned row reads `command_not_allowed`).
 
 - **Everything that can refuse does so before the first judge call**, and then writes nothing: a host `claude`
   that cannot run the judge isolated (asked only when a judge would be called — again under the locks when a

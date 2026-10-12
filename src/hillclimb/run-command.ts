@@ -44,11 +44,12 @@ import type { FidelityTier, Scenario } from "../types.js";
 import { authFailureHint, type DoctorCheck } from "../run/doctor.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
-import { refuseChangedMetrics } from "./metric-keys.js";
+import { refuseChangedMetrics, successorColumnNotes } from "./metric-keys.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
 import { makeHillclimbJobRunner } from "./job.js";
+import { incomparableMetricWarnings, scorerRobustnessWarnings } from "./check.js";
 import { existingFlowSnapshot, readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
 import { trackedSkill } from "./skill.js";
 import { SNAPSHOT_ROOT_ENV, variantSnapshot } from "./snapshot.js";
@@ -133,6 +134,12 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   }
   // --skill by any spelling it accepts is one selection: the gate and `harness_skill` see its registered name.
   const outcome = await runHillclimb(skill !== undefined ? { ...args, skill } : args, runner);
+  // End of a real pass: a float measured on different shares of each variant's rows is incomparable, and a scorer that
+  // failed on a row the agent did not fail is a defect in the script — both said here, not only by `hillclimb check`.
+  if (!args.dryRun) {
+    const snap = existingFlowSnapshot(normalizeRootArg(args.flow), deps.cwd);
+    if (snap) for (const w of [...incomparableMetricWarnings(snap), ...scorerRobustnessWarnings(snap)]) say(w);
+  }
   if (!args.dryRun || outcome.remaining === undefined) return outcome;
   const cost = price(outcome.remaining);
   say(`[${args.variant}] ${scheduleCostLine(cost)}`);
@@ -164,6 +171,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   // ...and a metric re-declared since the flow's rows were written (the runner repeats this too).
   const existing = existingFlowSnapshot(normalizeRootArg(args.flow), deps.cwd);
   if (existing) refuseChangedMetrics(existing, union);
+  for (const n of successorColumnNotes(union)) say(n);
   const selected = selectCases(cases, args.cases);
   const prep = prepareCases(
     cases,

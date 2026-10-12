@@ -62,6 +62,30 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Command metrics: a scenario metric computed by a script over the run's own events.** A metric may declare
+  `command: [script, args…]` (with optional `deps` and `timeout_ms`) in place of `artifact` / `path`. The script — a
+  `.py` run under `python3` 3.9 or later with the standard library only, or a `.mjs` / `.js` / `.cjs` run under Node's
+  permission model — reads this turn's scrubbed slice of `events.jsonl` and prints one JSON number. **It runs the
+  scenario repo's code as you**: the script and its deps must be regular, git-tracked files inside the scenario's
+  repository; only those exact bytes run, copied out of the repo, with a fixed environment (no credential is passed),
+  a 4 KiB stdout cap and a process-group timeout, twice, and a value is reported only when both runs agree. It is
+  not a sandbox, and the Python audit hook is a tripwire, not a security boundary. Live runs (`run`, `skill`,
+  `record`, `eval`, `hillclimb run`) run it after a notice before spending; replay and `verify-cassettes` never do —
+  the cassette freezes each command metric's record-time value; `verify-run`, `regrade` and `hillclimb regrade`
+  carry the recorded value forward unless `--allow-metric-commands` re-runs the script. Eight new `unavailable`
+  reasons (`command_failed`, `command_timeout`, `command_output`, `command_changed`, `command_missing`,
+  `command_not_allowed`, `nondeterministic`, `no_events`), and `RunResult.metrics[].command` records the signature,
+  the script, the events read, the interpreter and whether the value was `carried` or `frozen`. On `eval` a
+  scorer failure is excluded and guarded, and a rep scored by another script than the one the eval froze is not
+  compared. The scripts are kept out of every folder the agent can see, and join the `hillclimb` harness gate.
+  `hillclimb check`, and the end of every `hillclimb run` pass, warn on a scorer that failed on a row the agent did not
+  fail and call a metric incomparable when its variants measured it on different shares of their rows; `check` errors
+  when one column holds two signatures. `hillclimb run` and `regrade` note two command metrics that run the same
+  script under different ids (separate columns, never a delta). `lint` and every command that loads a scenario to
+  run it refuse a command metric whose script or dep is untracked, outside the scenario's repository, a symlink inside
+  it or hard-linked, and a Python command metric when `python3` is older than 3.9.
+- **Cassette v18**: a scenario declaring a command metric stamps v18 and freezes `commandMetrics`; a cassette that
+  uses no v18 feature stamps exactly what it did.
 - **`eval` compares each scenario's declared `metrics:` between the arms.** Each metric is a row tested with an exact
   two-sided rank test (Wilcoxon–Mann–Whitney), with a Hodges–Lehmann shift and its interval's achieved coverage,
   each arm's SD, the pooled SD with its interval, and the minimum detectable shift. Rows are labelled `possible` /

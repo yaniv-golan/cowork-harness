@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { ARTIFACT_BODY_CAP, artifactBodyGate, authorshipOf, resolveDotPath, type AssertContext } from "./assert.js";
-import type { MetricUnavailable, RunResult, ScenarioMetric } from "./types.js";
+import type { MetricCommandRecord, MetricUnavailable, RunResult, ScenarioMetric } from "./types.js";
 
 /** What the extractor reads. An `AssertContext` is one. */
 export type MetricsContext = Pick<
@@ -57,7 +57,7 @@ function canonicalRel(workRoot: string, abs: string): string | undefined {
 
 const sha256 = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
-function measure(ctx: MetricsContext, m: ScenarioMetric): MetricMeasurement {
+function measure(ctx: MetricsContext, m: ScenarioMetric & { artifact: string; path: string }): MetricMeasurement {
   const off = (unavailable: MetricUnavailable, why: string, evidenceLimited = false, remedy?: string): MetricMeasurement => ({
     id: m.id,
     unavailable,
@@ -157,16 +157,44 @@ function undecidableMetric(
   return off("pre_run", who.why, who.evidence);
 }
 
-/** One measurement per declared metric, in declaration order. */
-export function measureMetrics(ctx: MetricsContext, decls: readonly ScenarioMetric[]): MetricMeasurement[] {
-  return decls.map((m) => measure(ctx, m));
+/** A command metric's outcome, decided by its producer (a live run, a consented re-measure, a carry-forward, a
+ *  replay's frozen value); this module only places it among the artifact metrics. */
+export type CommandOutcomes = ReadonlyMap<string, MetricMeasurement & { command?: CommandRecord }>;
+
+export type CommandRecord = MetricCommandRecord;
+
+export const isCommandMetric = (m: ScenarioMetric): m is ScenarioMetric & { command: string[] } => m.command !== undefined;
+
+/** One measurement per declared metric, in declaration order. A command metric takes its producer's outcome; with
+ *  none, it was not executed here (`command_not_allowed`). */
+export function measureMetrics(
+  ctx: MetricsContext,
+  decls: readonly ScenarioMetric[],
+  commands: CommandOutcomes = new Map(),
+): Array<MetricMeasurement & { command?: CommandRecord }> {
+  return decls.map((m) =>
+    isCommandMetric(m)
+      ? (commands.get(m.id) ?? {
+          id: m.id,
+          unavailable: "command_not_allowed",
+          why: "a command metric is executed only on a live run, or with --allow-metric-commands",
+        })
+      : measure(ctx, m as ScenarioMetric & { artifact: string; path: string }),
+  );
 }
 
-/** `RunResult.metrics` for the declared metrics: `{id, value}` or `{id, unavailable}`, one per declaration, in order. */
-export function extractMetrics(ctx: MetricsContext, decls: readonly ScenarioMetric[]): NonNullable<RunResult["metrics"]> {
-  return measureMetrics(ctx, decls).map((x) =>
-    x.value !== undefined ? { id: x.id, value: x.value } : { id: x.id, unavailable: x.unavailable! },
-  );
+/** `RunResult.metrics` for the declared metrics: `{id, value}` or `{id, unavailable}` (plus a command metric's
+ *  `command` record), one per declaration, in order. */
+export function extractMetrics(
+  ctx: MetricsContext,
+  decls: readonly ScenarioMetric[],
+  commands?: CommandOutcomes,
+): NonNullable<RunResult["metrics"]> {
+  return measureMetrics(ctx, decls, commands).map((x) => ({
+    id: x.id,
+    ...(x.value !== undefined ? { value: x.value } : { unavailable: x.unavailable! }),
+    ...(x.command !== undefined ? { command: x.command } : {}),
+  }));
 }
 
 /** The run's own post-run sha256 per work-root-relative path (`RunResult.workspaceFiles`), the anchor a re-measure
@@ -181,12 +209,31 @@ export function remeasureMetrics(
   ctx: MetricsContext,
   result: Pick<RunResult, "workspaceFiles">,
   decls: readonly ScenarioMetric[] | undefined,
+  commands?: CommandOutcomes,
 ): RunResult["metrics"] {
-  return metricsFor({ ...ctx, recordedPostRunHashes: recordedPostRunHashesOf(result) }, decls);
+  return metricsFor({ ...ctx, recordedPostRunHashes: recordedPostRunHashesOf(result) }, decls, commands);
 }
 
 /** The one rule every producer applies: metrics are extracted only when the scenario declares at least one;
  *  otherwise `RunResult.metrics` is absent (an empty list is the same as none). */
-export function metricsFor(ctx: MetricsContext, decls: readonly ScenarioMetric[] | undefined): RunResult["metrics"] {
-  return decls !== undefined && decls.length > 0 ? extractMetrics(ctx, decls) : undefined;
+export function metricsFor(
+  ctx: MetricsContext,
+  decls: readonly ScenarioMetric[] | undefined,
+  commands?: CommandOutcomes,
+): RunResult["metrics"] {
+  return decls !== undefined && decls.length > 0 ? extractMetrics(ctx, decls, commands) : undefined;
+}
+
+/** Replace each command metric's entry in `metrics` with its producer's outcome (same id, same position). */
+export function mergeCommandOutcomes(metrics: RunResult["metrics"], outcomes: CommandOutcomes): RunResult["metrics"] {
+  if (metrics === undefined || outcomes.size === 0) return metrics;
+  return metrics.map((e) => {
+    const o = outcomes.get(e.id);
+    if (o === undefined) return e;
+    return {
+      id: e.id,
+      ...(o.value !== undefined ? { value: o.value } : { unavailable: o.unavailable! }),
+      ...(o.command ? { command: o.command } : {}),
+    };
+  });
 }

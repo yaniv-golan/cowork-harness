@@ -286,3 +286,70 @@ export function pairwiseRefFindings(snap: FlowSnapshot): SchemaFinding[] {
     }
   return out;
 }
+
+/** A column's rows must all carry ONE signature for it (`meta.metric_sigs`): two mean the column holds two scorers (a
+ *  hand-edited or legacy flow — `run` and `regrade` refuse a changed declaration first), and no mean of it means
+ *  anything. */
+export function metricSigFindings(snap: FlowSnapshot): SchemaFinding[] {
+  const seen = new Map<string, Set<string>>();
+  for (const vs of Object.values(snap.variants))
+    for (const r of parseRows(vs.results)) {
+      const sigs = (r.meta as Record<string, unknown> | undefined)?.metric_sigs;
+      if (!sigs || typeof sigs !== "object") continue;
+      for (const [id, sig] of Object.entries(sigs as Record<string, unknown>))
+        if (typeof sig === "string") seen.set(id, (seen.get(id) ?? new Set()).add(sig));
+    }
+  return [...seen]
+    .filter(([, s]) => s.size > 1)
+    .map(([id, s]) => ({
+      level: "error" as const,
+      rule: "metrics.sig_mixed",
+      file: "results.jsonl",
+      message: `metric ${id}: its rows carry ${s.size} different declaration signatures (${[...s].sort().join(", ")}) — one column holds two scorers, so no mean of it is comparable; start a fresh flow or use a new metric id`,
+    }));
+}
+
+const SCORER_FAILURES = new Set(["command_failed", "command_timeout", "command_output", "nondeterministic"]);
+
+/** Scorer failures are findings, not omissions: a command metric that failed, stalled, printed junk or disagreed with
+ *  itself on a row the agent did NOT fail is a defect in the script (the fix is the script, not the variant). */
+export function scorerRobustnessWarnings(snap: FlowSnapshot): string[] {
+  const by = new Map<string, string[]>();
+  for (const [v, vs] of Object.entries(snap.variants))
+    for (const r of parseRows(vs.results)) {
+      const meta = r.meta as Record<string, unknown> | undefined;
+      if (meta?.failure_class === "errored_agent") continue;
+      const un = meta?.metrics_unavailable;
+      if (!un || typeof un !== "object") continue;
+      for (const [id, why] of Object.entries(un as Record<string, unknown>))
+        if (typeof why === "string" && SCORER_FAILURES.has(why))
+          by.set(id, [...(by.get(id) ?? []), `${v}/${String(r.prompt_id)} rep ${String(r.rep)} (${why})`]);
+    }
+  return [...by].map(
+    ([id, rows]) =>
+      `warning: metric ${id}'s scorer failed on ${rows.length} row(s) the agent did not fail: ${rows.slice(0, 6).join(", ")}${rows.length > 6 ? ", …" : ""} — a scorer-robustness defect: fix the script (its stderr is under turns/<N>/metrics/ in each run dir), not the variant`,
+  );
+}
+
+/** A float's mean across variants compares only when every variant measured it on the same share of its rows: a
+ *  variant whose bad runs crash or stall the scorer drops exactly those runs from its mean. Unequal presence ⇒ the
+ *  means are not comparable, and the check says so instead of letting them be read side by side. */
+export function incomparableMetricWarnings(snap: FlowSnapshot): string[] {
+  const out: string[] = [];
+  for (const m of declaredMetrics(snap).filter((x) => x.kind === "float")) {
+    const per: Array<[string, number, number]> = [];
+    for (const [v, vs] of Object.entries(snap.variants)) {
+      const rows = parseRows(vs.results).filter((r) => r.status == null || r.status === "ok");
+      const withKey = rows.filter((r) => (r.grade as Record<string, unknown> | undefined)?.[`${m.id}_present`] !== undefined);
+      if (!withKey.length) continue;
+      const measured = withKey.filter((r) => (r.grade as Record<string, unknown>)[`${m.id}_present`] === 1).length;
+      per.push([v, measured, withKey.length]);
+    }
+    const shares = new Set(per.map(([, k, n]) => (k * 1e6) / n));
+    if (per.length > 1 && shares.size > 1)
+      out.push(
+        `warning: metric ${m.id} is incomparable across variants (${per.map(([v, k, n]) => `${v} ${k}/${n}`).join(" vs ")} measured) — a mean over measured rows only rewards a variant whose bad runs went unmeasured; do not optimise it while presence differs`,
+      );
+  }
+  return out;
+}

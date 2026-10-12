@@ -178,7 +178,8 @@
             "properties": {
               "id": { "type": "string" },
               "value": { "type": "number" },
-              "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run", "no_manifest"] }
+              "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run", "no_manifest", "command_failed", "command_timeout", "command_output", "command_changed", "command_missing", "command_not_allowed", "nondeterministic", "no_events"] },
+              "command": { "type": "object", "additionalProperties": false, "required": ["sig", "script", "scriptSha256"], "properties": { "sig": { "type": "string" }, "script": { "type": "string" }, "scriptSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "eventsSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "interpreter": { "type": "string" }, "durationMs": { "type": "number" }, "carried": { "const": true }, "frozen": { "const": true } } }
             },
             "oneOf": [
               { "required": ["value"], "properties": { "value": {} }, "not": { "required": ["unavailable"], "properties": { "unavailable": {} } } },

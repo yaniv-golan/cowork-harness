@@ -210,6 +210,14 @@ describe("the reason list", () => {
       "pruned",
       "pre_run",
       "no_manifest",
+      "command_failed",
+      "command_timeout",
+      "command_output",
+      "command_changed",
+      "command_missing",
+      "command_not_allowed",
+      "nondeterministic",
+      "no_events",
     ]));
 });
 

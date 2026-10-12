@@ -517,6 +517,18 @@ export const METRIC_STATE_CLASS: Record<MetricUnavailable, "W" | "X" | "N"> = {
   // A live eval arms the manifest, so either of these means a harness defect.
   pruned: "N",
   no_manifest: "N",
+  // A command metric's scorer or capture, not the skill: excluded and guarded, never worst-ranked — a script that
+  // fails, stalls, prints junk or wobbles on one arm must not manufacture `worse`.
+  command_failed: "X",
+  command_timeout: "X",
+  command_output: "X",
+  nondeterministic: "X",
+  no_events: "X",
+  // The comparison itself is broken: the arm would mix scorers, or the scorer is gone, or (on a live eval, which runs
+  // commands without a flag) a state that should never arise.
+  command_changed: "N",
+  command_missing: "N",
+  command_not_allowed: "N",
 };
 
 /** One rep's contribution to one metric row. */
@@ -545,6 +557,10 @@ export function repMetricValues(
     if (c.bucket !== "valid" && c.bucket !== "judge_invalid") return { id: d.id, v: { dropped: c.bucket } };
     const entry = result?.metrics?.find((m) => m.id === d.id);
     if (entry === undefined) return { id: d.id, v: { notCompared: "metric_unrecorded" } };
+    // A command metric: the rep must have been scored by the scorer the eval froze, or an arm would mix scorers.
+    const frozenSig = (d as { sig?: string }).sig;
+    if (d.command !== undefined && frozenSig !== undefined && entry.command?.sig !== undefined && entry.command.sig !== frozenSig)
+      return { id: d.id, v: { notCompared: "command_changed" } };
     if (typeof entry.value === "number" && Number.isFinite(entry.value)) return { id: d.id, v: { value: entry.value } };
     const reason = entry.unavailable;
     if (reason === undefined) return { id: d.id, v: { notCompared: "metric_unrecorded" } };

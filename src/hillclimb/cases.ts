@@ -8,7 +8,7 @@ import { basename } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { UsageError } from "../errors.js";
 import { resolveInputs } from "../run/inputs.js";
-import { parseScenarioFile } from "../run/execute.js";
+import { loadRunnableScenario } from "../run/execute.js";
 import type { Scenario } from "../types.js";
 import { scenarioRows } from "../eval/classify.js";
 import { findDuplicateCaseIds, pathSafeId, unusableCaseIds } from "./ids.js";
@@ -60,7 +60,7 @@ export function loadCases(target: string): { cases: HillclimbCase[]; skipped: st
     // The lite report refuses an all-dot id (build-report-lite.mjs l.342) and an empty one names no file — the shared rule.
     if (unusableCaseIds([stem]).length)
       throw new UsageError(`hillclimb: ${basename(file)}: "${stem}" is not a usable case id (rename the file)`);
-    const scenario = parseScenarioFile(file);
+    const scenario = loadRunnableScenario(file);
     // The row keys are built from the scenario; a scenario they cannot be built from (two claims that
     // normalize alike) would fail every attempt AFTER its spend — refuse it now, as eval does.
     try {
