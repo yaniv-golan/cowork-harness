@@ -143,7 +143,22 @@
             "required": ["folders", "answeredBy", "turn"],
             "additionalProperties": false,
             "properties": {
-              "folders": { "type": "array", "items": { "type": "string" } },
+              "refusedDeletes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Enforced runs only: deletes the device shim refused this turn, from its audit log (evidence that refusals happened, never of their absence)."
+        },
+        "bypassedDeletes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Enforced runs only: <folder>/<path> gone from a connected folder deletion was never allowed in. The shim did not see the delete (a static binary or raw system call), or, under rename-reads-as-delete, a file was renamed and then edited."
+        },
+        "auditInconsistent": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts; ignored."
+        },
+        "folders": { "type": "array", "items": { "type": "string" } },
               "answeredBy": { "type": "string", "enum": ["script", "decider", "human", "bypassPermissions"] },
               "turn": { "type": "integer" }
             }
@@ -772,6 +787,7 @@
                   "permissive_auto_allow",
                   "outputs_delete",
                   "mount_delete",
+                  "device_delete_bypassed",
                   "host_path_leak",
                   "non_deterministic",
                   "model_fallback",

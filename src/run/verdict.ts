@@ -17,6 +17,7 @@ export interface VerdictSignal {
     | "outputs_delete_unconfirmed"
     | "outputs_diff_unavailable"
     | "mount_delete"
+    | "device_delete_bypassed"
     | "host_path_leak"
     | "non_deterministic"
     | "model_fallback"
@@ -588,7 +589,12 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // when the scenario authored `no_delete_in_mounts` (it fails there instead).
     const waivedMounts = new Set(authored.flatMap((a) => a.allow_delete_in ?? []));
     const authoredMountDeny = authored.some((a) => a.no_delete_in_mounts !== undefined);
-    const unwaived = (result.scan?.mountDeletes ?? []).filter((d) => d.mount !== "outputs" && !waivedMounts.has(d.mount));
+    // Under an enforced device bridge every connected-folder delete left is one the user allowed (the shim refused
+    // the rest, and what got past it is device_delete_bypassed below): production allowed it too.
+    const deviceEnforced = result.deviceBridge?.deleteRefusal === "enforced";
+    const unwaived = (result.scan?.mountDeletes ?? []).filter(
+      (d) => d.mount !== "outputs" && !waivedMounts.has(d.mount) && !deviceEnforced,
+    );
     if (unwaived.length && !authoredMountDeny)
       signals.push({
         code: "mount_delete",
@@ -598,6 +604,25 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
           `production denies unlink/rmdir there until per-mount approval, so this run diverged ` +
           `(assert no_delete_in_mounts to hard-fail on it, or allow_delete_in if the deletion is intended)`,
       });
+
+    // A delete in a connected folder deletion was never allowed in, which the device shim did not see: production
+    // would have refused it, so the run is not faithful. Not waivable by allow_delete_in (that names a delete the
+    // author meant, not a way around the refusal). Where the filesystem can reuse a deleted file's identity, a file
+    // renamed and then edited reads the same, so there it only warns.
+    const bypassed = result.deviceBridge?.bypassedDeletes ?? [];
+    if (bypassed.length) {
+      const unreliable = (result.deviceBridge?.divergences ?? []).includes("rename-reads-as-delete");
+      signals.push({
+        code: "device_delete_bypassed",
+        severity: unreliable ? "warn" : "fail",
+        message: unreliable
+          ? `${bypassed.length} file(s) gone from a connected folder deletion was never allowed in (${bypassed.slice(0, 5).join(", ")}): ` +
+            `a bypass delete (a static binary or raw system call past the device's refusal), or a rename followed by an edit, ` +
+            `which this filesystem cannot tell apart (rename-reads-as-delete)`
+          : `${bypassed.length} file(s) deleted from a connected folder deletion was never allowed in (${bypassed.slice(0, 5).join(", ")}), ` +
+            `past the device's refusal (a static binary or raw system call): production would have refused it`,
+      });
+    }
 
     // hostloop AND protocol (L0) run the agent's native file tools on the REAL host cwd — neither
     // seals the filesystem — so a run at either fidelity is EXPECTED to see /Users/... paths; the scan

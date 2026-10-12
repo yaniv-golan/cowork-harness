@@ -49,7 +49,6 @@ describe("deviceBridgeRecord", () => {
       "description-paraphrase",
       "device-paths-tilde",
       "device-tools-unserved",
-      "shell-user",
       "device-network-shared",
       "decline-text",
     ]);
@@ -116,7 +115,7 @@ describe("wiring: a live run carries the record", () => {
   it("both the full and the partial result build it from the launch plan", () => {
     expect(s.match(/deviceBridge: scenario\.device_bridge === true \? bridgeRecord\(\) : undefined/g)).toHaveLength(2);
     expect(s).toContain(
-      "const bridgeRecord = () => deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir));",
+      "deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir), bridgeFindings());",
     );
     expect(s).toMatch(/deviceBridge: args\.deviceBridge,/);
   });

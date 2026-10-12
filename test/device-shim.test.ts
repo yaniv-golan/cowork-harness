@@ -15,13 +15,19 @@ import {
   deviceContainerArgv,
   deviceFolders,
   deviceHome,
+  deviceBridgeRecord,
+  deviceTreeIdentityReliable,
+  deviceTurnFindings,
   prepareDeviceControl,
   readDeviceAudit,
+  recordDeviceTree,
   stageDeviceFolders,
   startDeviceBridge,
   writeDeviceGrant,
 } from "../src/runtime/device-container.js";
 import type { Mount } from "../src/session.js";
+import { computeVerdict } from "../src/run/verdict.js";
+import type { RunResult } from "../src/types.js";
 
 const BASE = "cowork-agent-base:2";
 const REQUIRE = process.env.CWH_REQUIRE_DOCKER === "1";
@@ -46,6 +52,7 @@ let root = "";
 let outDir = "";
 let host = "";
 let name = "";
+let mounts: Mount[] = [];
 
 function sh(cmd: string): { code: number; out: string } {
   const r = spawnSync("docker", ["exec", "-w", HOME, name, "bash", "-c", cmd], { encoding: "utf8", timeout: 30_000 });
@@ -66,15 +73,17 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
     if ("error" in built) throw new Error(built.error);
     image = built.imageId;
     root = realpathSync(mkdtempSync(join(tmpdir(), "device-shim-")));
-    const mounts = [mount("proj", "rw"), mount("other", "rw"), mount("free", "rwd"), mount("ref", "r")];
+    mounts = [mount("proj", "rw"), mount("other", "rw"), mount("free", "rwd"), mount("ref", "r")];
     writeFileSync(join(root, "user", "proj", "keep.txt"), "keep\n");
     writeFileSync(join(root, "user", "proj", "existing.txt"), "one\n");
     writeFileSync(join(root, "user", "proj", "other.txt"), "two\n");
     writeFileSync(join(root, "user", "free", "f.txt"), "f\n");
+    writeFileSync(join(root, "user", "other", "pre.txt"), "pre\n");
     outDir = join(root, "out");
     host = join(outDir, "work", "device");
     const folders = deviceFolders(mounts);
     stageDeviceFolders(folders, host);
+    recordDeviceTree(outDir);
     const { uid, gid } = userInfo();
     prepareDeviceControl(outDir, SESSION, folders, { uid, gid });
     name = `cwh-shim-test-${process.pid}`;
@@ -199,6 +208,37 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
     // Another folder stays denied.
     writeFileSync(join(host, "mnt", "other", "o"), "o");
     expect(sh("rm mnt/other/o").code).toBe(1);
+  });
+
+  it("a raw system call gets past the shim; the device tree catches it and the run fails (end to end)", () => {
+    // aarch64 unlinkat is syscall 35; AT_FDCWD is -100.
+    const r = sh(`python3 -c 'import ctypes; l=ctypes.CDLL(None); print(l.syscall(35, -100, b"mnt/other/pre.txt", 0))'`);
+    expect(r.out.trim()).toBe("0");
+    expect(existsSync(join(host, "mnt", "other", "pre.txt"))).toBe(false);
+    const findings = deviceTurnFindings(outDir, mounts, { shimEnforced: () => true });
+    expect(findings.bypassedDeletes).toContain("other/pre.txt");
+    expect(findings.refusedDeletes).toBeGreaterThan(0);
+    const reliable = deviceTreeIdentityReliable(outDir);
+    const plan = { permissionMode: "acceptEdits", permissionModeSource: "bridge-default" as const, egressAllow: [] };
+    const deviceBridge = deviceBridgeRecord(mounts, "included", plan, [], reliable, findings);
+    const v = computeVerdict(
+      {
+        scenario: "t",
+        fidelity: "container",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir,
+        scan: { outputsDeletes: [], mountDeletes: findings.mountDeletes, hostPathLeaked: false, selfHealRan: false },
+        deviceBridge,
+      } as unknown as RunResult,
+      "live",
+    );
+    const sig = v.signals.find((x) => x.code === "device_delete_bypassed");
+    expect(sig?.severity).toBe(reliable === false ? "warn" : "fail");
+    expect(v.pass).toBe(reliable === false);
   });
 
   it("the canary's control name can never be a connected folder's", () => {

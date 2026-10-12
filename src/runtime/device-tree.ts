@@ -128,14 +128,20 @@ export function treeDeletes(
   denied: ReadonlyArray<{ name: string; mountPath: string }>,
   identityReliable: boolean,
 ): { mount: string; command: string }[] {
-  const afterById = new Map<string, string[]>();
-  for (const [k, e] of Object.entries(after)) afterById.set(e.id, [...(afterById.get(e.id) ?? []), k]);
   // Named by mount path, as the command-text scan names a mount, so allow_delete_in waives both alike.
   const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
+  return treeLosses(before, after, denied, identityReliable).map((path) => ({
+    mount: mountOf.get(path.split("/")[0]!)!,
+    command: `(removed from the device copy) ${path}`,
+  }));
+}
+
+/** treeDeletes' entries as `<folder>/<path>`, sorted. */
+export function treeLosses(before: Before, after: After, denied: ReadonlyArray<{ name: string }>, identityReliable: boolean): string[] {
+  const afterById = new Map<string, string[]>();
+  for (const [k, e] of Object.entries(after)) afterById.set(e.id, [...(afterById.get(e.id) ?? []), k]);
+  const names = new Set(denied.map((f) => f.name));
   return Object.keys(before)
-    .filter(
-      (path) => mountOf.has(path.split("/")[0]!) && !(path in after) && !renamedAfter(path, before, after, afterById, identityReliable),
-    )
-    .sort()
-    .map((path) => ({ mount: mountOf.get(path.split("/")[0]!)!, command: `(removed from the device copy) ${path}` }));
+    .filter((path) => names.has(path.split("/")[0]!) && !(path in after) && !renamedAfter(path, before, after, afterById, identityReliable))
+    .sort();
 }

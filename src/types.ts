@@ -2213,17 +2213,26 @@ export interface DeviceBridgeRecord {
   /** The delete card's grants this turn: the folders, who answered (`script`,
    *  `decider`, `human`, or `bypassPermissions` when no card is shown) and the turn. */
   grants?: Array<{ folders: string[]; answeredBy: "script" | "decider" | "human" | "bypassPermissions"; turn: number }>;
+  /** Enforced runs only: deletes the shim refused this turn, from its audit log (evidence that refusals happened,
+   *  never of their absence). */
+  refusedDeletes?: number;
+  /** Enforced runs only: `<folder>/<path>` gone from a folder deletion was never allowed in. The shim did not see
+   *  the delete (a static binary, a raw system call), or, under `rename-reads-as-delete`, a file was renamed and then
+   *  edited. Fails the run where the filesystem keeps identities apart; warns otherwise. */
+  bypassedDeletes?: string[];
+  /** Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts; ignored. */
+  auditInconsistent?: number;
   /** Which of production's egress branches the device container modeled: the session allowlist through the proxy
    *  (`allowlist`), or everything through it (`unrestricted`, from `egress.unrestricted: true`). */
   egress: "allowlist" | "unrestricted";
   folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;
-  /** Known differences from production, by id: `delete-not-refused` (a delete in a connected folder succeeds on the
-   *  device copy; production refuses it until the user allows deletion through `device_request_delete_permission`,
-   *  and the harness reports it only after the run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
+  /** Known differences from production, by id: `delete-not-refused` (no shim: a delete in a connected folder
+   *  succeeds on the device copy, where production refuses it until the user allows deletion, and the harness
+   *  reports it only after the run), `delete-refusal-libc` (the shim refuses deletes made through libc; a static
+   *  binary or raw system call is caught only after the run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
    *  description paraphrases one production branch), `device-paths-tilde` (get_device_info spells folders
    *  `~/<name>`, not their paths on the Mac), `device-tools-unserved` (device_list_dir, the stage/commit pair and
-   *  the folder and delete requests are not served), `shell-user` (commands run as the image's user, not a per-task
-   *  `rcw-<id>` user), `device-network-shared` (the device container shares the run's internal network with the agent's
+   *  the folder request is not served), `device-network-shared` (the device container shares the run's internal network with the agent's
    *  container, so a service device_bash starts is reachable from the agent's own shell; a cloud container has no
    *  route to the user's machine). */
   divergences: string[];
@@ -2709,6 +2718,7 @@ export interface RunResult {
         | "outputs_delete_unconfirmed"
         | "outputs_diff_unavailable"
         | "mount_delete"
+        | "device_delete_bypassed"
         | "host_path_leak"
         | "non_deterministic"
         | "model_fallback"

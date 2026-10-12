@@ -658,9 +658,7 @@ describe("wiring: the review fixes reach the run", () => {
   });
   it("execute.ts adds device-tree deletes to the scan and refuses folder-path file assertions", () => {
     const s = read("run/execute.ts");
-    expect(s).toMatch(
-      /if \(scenario\.device_bridge === true\) scan\.mountDeletes\.push\(\.\.\.deviceTreeDeletes\(outDir, deniedDeviceFolders\(plan\.mounts\)\)\);/,
-    );
+    expect(s).toMatch(/if \(scenario\.device_bridge === true\) scan\.mountDeletes\.push\(\.\.\.bridgeFindings\(\)\.mountDeletes\);/);
     expect(s).toMatch(/deviceBridgeFolderAssertRefusal\(\s*scenario,\s*deviceFolders\(plan\.mounts\)/);
   });
 });

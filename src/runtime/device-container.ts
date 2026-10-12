@@ -31,7 +31,7 @@ import { HARDENING, proxyEnvVars } from "./argv.js";
 import { removeContainer } from "../egress/sidecar.js";
 import { DELETE_GRANT_TOOL } from "../decide/decider.js";
 import { ensureDeviceImage } from "./device-image.js";
-import { deviceTreeListing, probeIdentityReliable, treeDeletes, type TreeEntry } from "./device-tree.js";
+import { deviceTreeListing, probeIdentityReliable, treeDeletes, treeLosses, type TreeEntry } from "./device-tree.js";
 export { treeDeletes, type TreeEntry } from "./device-tree.js";
 
 /**
@@ -280,6 +280,74 @@ export function deviceTreeDeletes(
   const recorded = readDeviceTree(outDir);
   if (!recorded) return [];
   return treeDeletes(recorded.entries, deviceTreeListing(join(resolve(outDir), "work", "device")), denied, recorded.identityReliable);
+}
+
+export interface DeviceDeleteFindings {
+  /** Deletes production would have allowed too: in a folder the user allowed deletion in. Named by mount path. */
+  mountDeletes: { mount: string; command: string }[];
+  /** `<folder>/<path>` gone from a folder never allowed: the shim did not see the delete (a static binary, a raw
+   *  system call), or, where identity is unreliable, a file renamed and then edited. */
+  bypassedDeletes: string[];
+  /** Deletes the shim refused (its audit log; evidence that refusals happened, never of their absence). */
+  refusedDeletes: number;
+  /** Audit lines claiming a granted delete the tree contradicts (the file is still there): ignored. */
+  auditInconsistent: number;
+}
+
+/** The deletes a device_bridge run made in the connected folders. With the shim enforcing (`enforced`), a loss in
+ *  a folder the user allowed is a delete and a loss elsewhere got past the shim; a session-made file the shim logged
+ *  as deleted after a grant counts too (the tree never listed it). The log adds, never removes or excuses. Without
+ *  the shim, every loss is a reported delete, as before. */
+export function deviceDeleteFindings(
+  outDir: string,
+  denied: ReadonlyArray<{ name: string; mountPath: string }>,
+  enforced: boolean,
+): DeviceDeleteFindings {
+  const none: DeviceDeleteFindings = { mountDeletes: [], bypassedDeletes: [], refusedDeletes: 0, auditInconsistent: 0 };
+  if (!enforced) return { ...none, mountDeletes: deviceTreeDeletes(outDir, denied) };
+  const recorded = readDeviceTree(outDir);
+  const deviceHost = join(resolve(outDir), "work", "device");
+  const after = deviceTreeListing(deviceHost);
+  const grants = new Set(readDeviceGrants(outDir));
+  const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
+  const allowed = (path: string) => `(removed from the device copy after deletion was allowed) ${path}`;
+  const out: DeviceDeleteFindings = { ...none, mountDeletes: [], bypassedDeletes: [] };
+  if (recorded)
+    for (const path of treeLosses(recorded.entries, after, denied, recorded.identityReliable)) {
+      const folder = path.split("/")[0]!;
+      if (grants.has(folder)) out.mountDeletes.push({ mount: mountOf.get(folder)!, command: allowed(path) });
+      else out.bypassedDeletes.push(path);
+    }
+  const audit = readDeviceAudit(outDir);
+  const seen = new Set(out.mountDeletes.map((d) => d.command));
+  for (const l of audit.lines) {
+    if (!mountOf.has(l.folder)) continue;
+    if (l.result === "refused") {
+      out.refusedDeletes++;
+      continue;
+    }
+    if (l.result !== "granted") continue;
+    const path = l.rel ? `${l.folder}/${l.rel}` : l.folder;
+    if (existsSync(join(deviceHost, "mnt", path))) {
+      out.auditInconsistent++;
+      continue;
+    }
+    if (recorded && (path in recorded.entries || `${path}/` in recorded.entries)) continue; // the tree already counts it
+    if (seen.has(allowed(path))) continue;
+    seen.add(allowed(path));
+    out.mountDeletes.push({ mount: mountOf.get(l.folder)!, command: allowed(path) });
+  }
+  return out;
+}
+
+/** This turn's delete findings for a bridge run: enforced only once the bridge's canary passed. */
+export function deviceTurnFindings(
+  outDir: string,
+  mounts: ReadonlyArray<Mount>,
+  bridge: { shimEnforced: () => boolean } | undefined,
+): DeviceDeleteFindings & { enforced: boolean } {
+  const enforced = bridge?.shimEnforced() === true;
+  return { ...deviceDeleteFindings(outDir, deniedDeviceFolders(mounts), enforced), enforced };
 }
 
 /** The folders production refuses deletes in until the user allows them: mode `rw` (`rwd` is delete-approved,
@@ -631,7 +699,10 @@ export function deviceBridgeRecord(
   grants: ReadonlyArray<DeleteGrant> = [],
   /** The probe's verdict on the device tree's filesystem (`deviceTreeIdentityReliable`); undefined without a listing. */
   identityReliable?: boolean,
+  /** The shim's outcome: `enforced` once the canary passed, with this turn's findings (deviceDeleteFindings). */
+  shim?: { enforced: boolean } & Omit<DeviceDeleteFindings, "mountDeletes">,
 ): DeviceBridgeRecord {
+  const enforced = shim?.enforced === true;
   // `egress.unrestricted` resolves to `*`, which the run's proxy passes through: production's pass-through branch.
   const unrestricted = plan.egressAllow.includes("*");
   // A bridge plan resolves its mode from the session or from the bridge default; anything else is a wiring bug.
@@ -647,18 +718,26 @@ export function deviceBridgeRecord(
     permissionMode: plan.permissionMode,
     permissionModeSource: source,
     egress: unrestricted ? "unrestricted" : "allowlist",
-    // Nothing refuses a delete in the device copy yet: a delete is reported after the run, as `delete-not-refused`
-    // says. `enforced` is reserved for the release that refuses it in place.
-    deleteRefusal: "reported",
+    // `enforced` once the canary proved the shim refuses a delete in place; otherwise a delete succeeds on the device
+    // copy and is reported after the run, as `delete-not-refused` says.
+    deleteRefusal: enforced ? "enforced" : "reported",
     grants: grants.map((g) => ({ ...g, folders: [...g.folders] })),
+    ...(enforced && shim
+      ? {
+          refusedDeletes: shim.refusedDeletes,
+          bypassedDeletes: [...shim.bypassedDeletes],
+          ...(shim.auditInconsistent ? { auditInconsistent: shim.auditInconsistent } : {}),
+        }
+      : {}),
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [
-      "delete-not-refused",
+      // The shim refuses deletes made through libc; a static binary or a raw system call is caught only after the
+      // run, from the device tree, and a session-made file deleted so is not seen at all.
+      enforced ? "delete-refusal-libc" : "delete-not-refused",
       ...(unrestricted ? [] : ["egress-allowlist"]),
       "description-paraphrase",
       "device-paths-tilde",
       "device-tools-unserved",
-      "shell-user",
       "device-network-shared",
       // A declined card reaches the agent as the harness's own deny text; production's has not been captured.
       "decline-text",

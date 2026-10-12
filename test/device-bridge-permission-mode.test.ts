@@ -57,7 +57,7 @@ describe("wiring", () => {
   });
   it("both result sites record the plan's mode", () => {
     expect(src).toContain(
-      "const bridgeRecord = () => deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir));",
+      "deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir), bridgeFindings());",
     );
     expect(src.split("deviceBridge: scenario.device_bridge === true ? bridgeRecord() : undefined").length - 1).toBe(2);
   });
