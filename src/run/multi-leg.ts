@@ -119,7 +119,13 @@ export function vacuousLegBlockRefusal(leg: Leg, asserts: Assertion[]): string |
 
 /** Run-time half: does this leg's positive file block already pass on the tree as it stands before the leg? `skipOutputs`
  *  (cowork-task) treats every `outputs/…` path as absent, since a new task's outputs start empty. */
-function blockPassesBefore(asserts: Assertion[], workRoot: string, skipOutputs: boolean, tier: string): Assertion | undefined {
+function blockPassesBefore(
+  asserts: Assertion[],
+  workRoot: string,
+  userVisibleRoots: readonly string[],
+  skipOutputs: boolean,
+  tier: string,
+): Assertion | undefined {
   const block = asserts.filter((a) => FILE_EVIDENCE_KEYS.some((k) => hasKey(a, k)) && !authoredFlag(a));
   if (!block.length) return undefined;
   const pathOf = (a: Assertion): string => {
@@ -131,7 +137,15 @@ function blockPassesBefore(asserts: Assertion[], workRoot: string, skipOutputs: 
     return String(aj?.artifact ?? "");
   };
   if (skipOutputs && block.some((a) => /^outputs(\/|$)/.test(pathOf(a)))) return undefined;
-  const ctx = { transcript: "", workRoot, effectiveFidelity: tier, lane: "local" } as unknown as Parameters<typeof evaluate>[1];
+  // The user-visible roots the previous leg ran with (outputs plus each connected folder's mount): a glob artifact_json
+  // walks them, exactly as the leg's own grade will.
+  const ctx = {
+    transcript: "",
+    workRoot,
+    userVisiblePrefixes: [...userVisibleRoots],
+    effectiveFidelity: tier,
+    lane: "local",
+  } as unknown as Parameters<typeof evaluate>[1];
   const results = evaluate(block, ctx, { quietSharedCapture: true });
   return results.every((r) => r.pass) ? block[0] : undefined;
 }
@@ -388,6 +402,7 @@ export async function executeMultiLeg(
   let unanswered: UnansweredError | undefined;
   let prevWorkBase: string | undefined;
   let prevSessionId: string | undefined;
+  let prevVisibleRoots: string[] = ["outputs"];
   const actionEgress: NonNullable<ActionRecord["egress"]> = [];
   let skillHash: string | undefined;
   const identityFailures: MultiLegSignal[] = [];
@@ -430,7 +445,7 @@ export async function executeMultiLeg(
       // The run-time half of the vacuity rule: a `none` leg whose file block already passes on the earlier legs' tree
       // proves nothing. Checked before the leg spends.
       if (prevWorkBase !== undefined && session.answer_channel === "none") {
-        const hit = blockPassesBefore(scn.assert, workRootOf(prevWorkBase, tier), !persistent, tier);
+        const hit = blockPassesBefore(scn.assert, workRootOf(prevWorkBase, tier), prevVisibleRoots, !persistent, tier);
         if (hit) {
           const message = `leg ${leg.id}: vacuous_positive_assertion: its positive file assertions already pass on the earlier legs' files (${JSON.stringify(hit)}), so they cannot show this leg did anything`;
           legEntries.push({
@@ -476,6 +491,7 @@ export async function executeMultiLeg(
         continue;
       }
       legResults.set(leg.id, result);
+      prevVisibleRoots = result.userVisibleRoots ?? ["outputs"];
       // The leg's files as they stand NOW, before a later leg or action can change them: what a later re-grade of
       // this leg compares the tree with (leg-manifest.ts).
       if (result.workDir) {

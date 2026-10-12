@@ -165,6 +165,57 @@ describe.runIf(can)("multi-leg run (stub agent, protocol)", () => {
   });
 });
 
+describe.runIf(can)("multi-leg run-time vacuity (stub agent, protocol)", () => {
+  // Leg 2 asserts what leg 1 already left on the shared tree, so its block passes before it runs: it proves nothing,
+  // fails as vacuous_positive_assertion naming the leg, and never spends. The glob form walks the previous leg's
+  // user-visible roots, as the leg's own grade would.
+  const twoLeg = (f: StubFixture, name: string, assertLine: string): string => {
+    const p = join(f.cwd, `${name}.yaml`);
+    writeFileSync(
+      p,
+      [
+        `name: ${name}`,
+        "baseline: latest",
+        "session: ./s.yaml",
+        "fidelity: protocol",
+        "workdir: persistent",
+        "legs:",
+        "  - id: ask",
+        "    prompt: run the gated probe",
+        "    assert:",
+        `      - artifact_json: { artifact: ${STATUS}, path: status, equals: waiting }`,
+        "  - id: again",
+        "    prompt: run the gated probe again",
+        "    assert:",
+        assertLine,
+      ].join("\n") + "\n",
+    );
+    return p;
+  };
+  for (const [label, line] of [
+    ["a literal path", `      - artifact_json: { artifact: ${STATUS}, path: status, equals: waiting }`],
+    ["a glob", "      - artifact_json: { artifact: outputs/artifacts/runs/*/run_status.json, match: any, path: status, equals: waiting }"],
+  ] as const) {
+    it(`${label}: leg 2's block already passes on leg 1's tree ⇒ vacuous_positive_assertion, and leg 2 never runs`, async () => {
+      const f = fixture();
+      try {
+        const name = label === "a glob" ? "vacg" : "vacl";
+        const r = await cli(f, ["run", twoLeg(f, name, line), "--output-format", "json"]);
+        expect(r.code, r.stdout + r.stderr).toBe(1);
+        const env = JSON.parse(r.stdout);
+        expect(legStatus(env)).toEqual(["ask:passed", "again:failed"]);
+        const again = env.multiLeg.legs.find((l: { id: string }) => l.id === "again");
+        expect(again.verdict.signals.map((s: { code: string }) => s.code)).toEqual(["vacuous_positive_assertion"]);
+        expect(again.verdict.failures[0].message).toMatch(/^leg again: vacuous_positive_assertion/);
+        const root = join(f.runsDir, name, readdirSync(join(f.runsDir, name)).filter((x) => !x.startsWith("."))[0]!);
+        expect(existsSync(join(root, "legs", "again", "turns"))).toBe(false); // no agent session was started
+      } finally {
+        f.cleanup();
+      }
+    });
+  }
+});
+
 describe.runIf(can)("multi-leg host actions (stub agent, protocol)", () => {
   const WRITE = 'mkdir -p artifacts/runs/r1 && printf "{\\"n\\":2}" > artifacts/runs/r1/corrections.json && echo applied 2 corrections';
   it("runs between the legs in the leg's tree, records what it wrote, and the resume leg completes", async () => {
