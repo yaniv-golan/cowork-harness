@@ -1881,7 +1881,8 @@ a simulated session.
   folder-request tool) and names no tool the harness does not serve. A test fails when the newest baseline no
   longer carries that branch.
 - **`device-paths-tilde`.** `get_device_info` spells each folder `~/<folder-name>`; production gives its path on
-  the Mac.
+  the Mac. The delete card takes the same spelling: its `paths` must name a connected folder as `~/<folder-name>`,
+  and a grant in the record names the folder by that name.
 - **`device-tools-unserved`.** `device_list_dir`, `device_stage_files`, `device_commit_files`, and the folder-access
   request are not served. A skill that tells the agent to call one gets an unknown-tool error
   here.

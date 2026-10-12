@@ -298,7 +298,7 @@ harness serves that tool from a second container:
   `device_bash` commands and compares the device copy before and after the run.
 
 Valid only with `lane: remote` and `fidelity: container`; the loader refuses any other pairing (and `lint` reports
-`device-bridge-misplaced`). Only `true` is valid. A recording that uses it stamps cassette v17, and its result
+`device-bridge-misplaced`). Only `true` is valid. A recording that uses it stamps cassette v18, and its result
 carries `deviceBridge`: what was served and every known difference from production. The differences, and what is
 not served, are in [fidelity-gaps.md](./fidelity-gaps.md#remote-device-bridge--mcp__remote-devices__-modeled-in-part-by-device_bridge).
 

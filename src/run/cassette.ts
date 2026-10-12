@@ -438,7 +438,7 @@ export interface Cassette {
   // a failed frame as "no decision". ABSENT (an older recording): replay decides from the recorded agent version.
   hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
   // v17: what a device_bridge run modeled (RunResult.deviceBridge). FROZEN so replay reports what the recording
-  // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v17 by itself.
+  // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v18 by itself (v17 before the delete card).
   deviceBridge?: DeviceBridgeRecord;
   // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
   // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS

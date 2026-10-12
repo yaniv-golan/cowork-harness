@@ -1635,10 +1635,10 @@ export const ScenarioObject = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "serve the remote lane's device tools (device_bash, get_device_info) the way a cloud task reaches the user's computer: " +
+      "serve the remote lane's device tools (device_bash, get_device_info, device_request_delete_permission) the way a cloud task reaches the user's computer: " +
         "the commands run in a second container that holds the connected folders, and the agent's own container gets none. " +
         "Valid only with `lane: remote` and `fidelity: container` (refused at load otherwise). Only `true` is valid; omit to leave the bridge unmodeled. " +
-        "A recording that uses it stamps cassette v17. See docs/fidelity-gaps.md for what it does not model",
+        "A recording that uses it stamps cassette v18. See docs/fidelity-gaps.md for what it does not model",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z
