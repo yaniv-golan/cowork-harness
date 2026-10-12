@@ -96,6 +96,14 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage", ()
   }
 });
 
+describe.skipIf(!can)("cli --help: sync names its organisation override", () => {
+  it("`sync --help` documents --allow-org-change", () => {
+    const { code, text } = help("sync");
+    expect(code).toBe(0);
+    expect(text).toContain("--allow-org-change");
+  });
+});
+
 // Which STREAM carries what is load-bearing for anyone scripting a poll, and it is invisible from the
 // output itself: `status <dir>` prints its summary to stderr and leaves stdout EMPTY, so the obvious
 // `until ! status "$D" | grep -q running` loop matches nothing, exits 1, and returns instantly against a

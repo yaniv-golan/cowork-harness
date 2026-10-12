@@ -12,6 +12,9 @@ import {
   FIDELITY_TIERS,
   DesktopInitSurface,
   ObservedSpawnEnv,
+  SearchAnchors,
+  AgentSearchGates,
+  CaptureOrg,
   ObservedSpawnEnvDeclaration,
   type RunResult,
   type RunStatus,
@@ -32,6 +35,8 @@ import {
   nativeManifestBuild,
   buildNextAgentBinary,
 } from "./baseline.js";
+import { searchAnchorsForSync } from "./sync/search-anchors.js";
+import { checkCaptureOrg } from "./sync/capture-org.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
   executeScenario,
@@ -404,7 +409,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       answer it with 'gates'/'answer' above (the one path here that waits — that is the rehearsal)
 
 ── Platform admin ─────────────────────────────────────────────────────────────
-  sync [--diff] [--allow-empty|--force] [--spawn-env-unobservable <reason>]  derive/refresh a platform baseline from the live Desktop install (macOS only)
+  sync [--diff] [--allow-empty|--force] [--allow-org-change] [--spawn-env-unobservable <reason>]  derive/refresh a platform baseline from the live Desktop install (macOS only)
   list                         list available platform baselines
   boundary-check [baseline] [--session <file>]   prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); macOS arm64 only
@@ -653,7 +658,7 @@ function hasHelp(args: string[]): boolean {
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
 
 const SUBCOMMAND_USAGE: Record<string, string> = {
-  sync: "usage: sync [--diff] [--allow-empty|--force] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
+  sync: "usage: sync [--diff] [--allow-empty|--force] [--allow-org-change] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --allow-org-change: write even though Desktop's gate cache was captured under a different organisation from the previous baseline's (Desktop rewrites gates per organisation)\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [<baseline>] [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove the VM\n  prune   drop all orphaned VMs\n  <baseline> (default: latest) is a baseline name like desktop-<version>, not a VM name — each acts on that baseline's VM",
@@ -3133,7 +3138,7 @@ async function cmdSync(args: string[]) {
     syncParsed = parseArgs(
       normalizedArgs,
       withCommandGlobals({
-        booleans: ["--diff", "--allow-empty"],
+        booleans: ["--diff", "--allow-empty", "--allow-org-change"],
         values: ["--spawn-env-unobservable"],
         enums: { "--spawn-env-unobservable": [...ObservedSpawnEnvDeclaration.options] },
       }),
@@ -3315,6 +3320,28 @@ async function cmdSync(args: string[]) {
     stringSentinels = baseSentinels;
     cliCapabilities = baseCliCapabilities;
   }
+  // Web-search anchors (agentBinary.searchAnchors). searchAnchorsForSync owns the lifecycle: measured from a staged
+  // ELF, carried from the base only for the same agent version when the ELF is not staged. The native agent, which
+  // hostloop runs, must give the same anchors whatever its version: they have not moved from 2.1.260 through 2.1.295,
+  // so a difference is a finding, not a version skew. Any failure records no anchors and prints a WARNING; it does not
+  // block the write while nothing reads the anchors.
+  const nativeResolved = derivedNativeStagedPath.replace(/^~(?=$|\/)/, homeDir);
+  let nativeAgent: Buffer | { unreadable: string } | null = null;
+  if (existsSync(nativeResolved)) {
+    try {
+      nativeAgent = readFileSync(nativeResolved);
+    } catch (e) {
+      nativeAgent = { unreadable: (e as NodeJS.ErrnoException).code ?? "error" };
+    }
+  }
+  const anchored = searchAnchorsForSync({
+    elf: existsSync(resolvedDerived) ? readFileSync(resolvedDerived) : null,
+    native: nativeAgent,
+    sameVersionAsBase: (base.agentVersion as string | undefined) === res.agentVersion,
+    base: (baseAgentBinary.searchAnchors ?? undefined) as SearchAnchors | undefined,
+  });
+  const searchAnchors = anchored.anchors;
+  res.notes.push(...anchored.warnings.map((w) => `WARNING: ${w}`));
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
   const nextAgentBinary = buildNextAgentBinary(baseAgentBinary, {
@@ -3327,6 +3354,7 @@ async function cmdSync(args: string[]) {
     manifestChecksumMatch: shaFields.manifestChecksumMatch,
     stringSentinels,
     cliCapabilities,
+    searchAnchors,
   });
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
@@ -3420,6 +3448,28 @@ async function cmdSync(args: string[]) {
       1,
     );
   }
+  // Desktop rewrites the gate cache per organisation: a capture under another organisation would read as gate flips.
+  {
+    const prevOrg = CaptureOrg.safeParse((baseProvenance as Record<string, unknown>).captureOrg);
+    const org = checkCaptureOrg(prevOrg.success ? prevOrg.data : undefined, res.captureOrg, !!syncParsed.flags["--allow-org-change"]);
+    res.notes.push(...org.notes);
+    if (org.refuse) return fail("sync", "runtime", `ERROR: ${org.refuse}`, undefined, isJsonOutput(normalizedArgs), 1);
+  }
+  for (const [field, check] of [
+    ["provenance.captureOrg", CaptureOrg.safeParse(res.captureOrg)],
+    ["agentBinary.searchAnchors", searchAnchors === undefined ? null : SearchAnchors.safeParse(searchAnchors)],
+    ["provenance.agentSearchGates", AgentSearchGates.safeParse(res.agentSearchGates)],
+  ] as const) {
+    if (check && !check.success)
+      fail(
+        "sync",
+        "runtime",
+        `ERROR: ${field} failed its schema — refusing to write baseline (issue paths: ${check.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")})`,
+        "This is an extractor bug in src/sync/search-anchors.ts or src/sync/agent-search-gates.ts, not a Desktop change.",
+        isJsonOutput(normalizedArgs),
+        1,
+      );
+  }
   const observedCheck = ObservedSpawnEnv.safeParse(res.observedSpawnEnv);
   if (!observedCheck.success) {
     fail(
@@ -3501,6 +3551,10 @@ async function cmdSync(args: string[]) {
         // The env key NAMES Desktop's own host-loop spawn carried on THIS build, from its local log. Carried forward
         // by the reader only for the same build (log rotation); never from a previous release.
         observedSpawnEnv: res.observedSpawnEnv,
+        // The agent's web-search feature values, from Desktop's session GrowthBook cache. Never carried forward.
+        agentSearchGates: res.agentSearchGates,
+        // The organisation the gate cache was captured under (a salted hash, never the id). Never carried forward.
+        captureOrg: res.captureOrg,
       },
     },
     res.cloud,

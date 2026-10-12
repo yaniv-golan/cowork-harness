@@ -19,6 +19,62 @@ const MountSpec = z.object({
   purpose: z.string().optional(),
 });
 
+/** A prose literal from the agent binary, recorded without its text: sha256 and UTF-8 byte length (both over the
+ *  same ASCII bytes, so the predicate can hash a fixed-length span of a request body). */
+const HashedLiteral = z.strictObject({
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  bytes: z.number().int().positive(),
+});
+
+/** `agentBinary.searchAnchors`: the facts the frozen search corpus recognises the agent's nested WebSearch request
+ *  by (src/sync/search-anchors.ts). STRICT: the baseline is public, and nothing but these fields may be written. */
+export const SearchAnchors = z.strictObject({
+  toolType: z.string().regex(/^web_search_[0-9A-Za-z_]+$/),
+  systemSentence: HashedLiteral,
+  userPrefix: HashedLiteral,
+  ccr: z.strictObject({
+    sessionsPath: z.literal("/v1/code/sessions/"),
+    workerPath: z.literal("/worker/"),
+    searchRoute: z.literal("web-search"),
+  }),
+});
+export type SearchAnchors = z.infer<typeof SearchAnchors>;
+
+/** `provenance.captureOrg`: which organisation Desktop's gate cache was captured under, as a short salted hash of the
+ *  organisation id: not reversible, but confirmable by anyone holding the id (src/sync/capture-org.ts). Desktop
+ *  rewrites gates per organisation. */
+export const CaptureOrg = z.discriminatedUnion("observed", [
+  z.strictObject({ observed: z.literal(true), orgRef: z.string().regex(/^[0-9a-f]{12}$/) }),
+  z.strictObject({ observed: z.literal(false) }),
+]);
+export type CaptureOrg = z.infer<typeof CaptureOrg>;
+
+/** The four agent feature values `sync` records (src/sync/agent-search-gates.ts). One list, used by the reader too. */
+export const AGENT_SEARCH_GATE_KEYS = ["tengu_plum_vx3", "tengu_sleepy_shore", "tengu_gzip_request_bodies", "tengu_buzzing_pike"] as const;
+const AgentSearchGateKey = z.enum(AGENT_SEARCH_GATE_KEYS);
+const uniqueKeys = z.array(AgentSearchGateKey).refine((xs) => new Set(xs).size === xs.length, "must be duplicate-free");
+/** A published value: a boolean, a number, or a flat object of booleans and numbers. Strings are never published,
+ *  since a feature payload string could carry an identifier. */
+const GateScalar = z.union([z.boolean(), z.number()]);
+const GateValue = z.union([GateScalar, z.record(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/), GateScalar)]);
+
+/** `provenance.agentSearchGates`: the agent-side feature values that shape a live WebSearch, from Desktop's
+ *  per-session GrowthBook cache (src/sync/agent-search-gates.ts). Raw values, size-capped; no org or session id. */
+export const AgentSearchGates = z.discriminatedUnion("observed", [
+  z.strictObject({
+    observed: z.literal(true),
+    files: z.number().int().positive(),
+    values: z.partialRecord(AgentSearchGateKey, GateValue),
+    absent: uniqueKeys.optional(),
+    withheld: uniqueKeys.optional(),
+    disagreeing: uniqueKeys.optional(),
+    /** The newest cache file's modification date (YYYY-MM-DD), so a stale cache is visible. */
+    newestDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }),
+  z.strictObject({ observed: z.literal(false) }),
+]);
+export type AgentSearchGates = z.infer<typeof AgentSearchGates>;
+
 export const PlatformBaseline = z.looseObject({
   baselineVersion: z.number(),
   appVersion: z.string(),
@@ -93,6 +149,10 @@ export const PlatformBaseline = z.looseObject({
     // strings (`cliCapabilitiesOfBuffer`). Same lifecycle as `stringSentinels`. ABSENT means unknown (a baseline
     // synced before the field existed), and a feature that needs a capability refuses on unknown — never assumes it.
     cliCapabilities: z.strictObject({ permissionPrompts: z.boolean() }).optional(),
+    // The web-search anchors the frozen search corpus recognises the agent's nested search request by
+    // (src/sync/search-anchors.ts). Same lifecycle as `stringSentinels`. ABSENT means unknown, and a search corpus
+    // will refuse to run on unknown anchors rather than guess (nothing reads the block yet).
+    searchAnchors: SearchAnchors.optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z

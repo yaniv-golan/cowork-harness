@@ -7,12 +7,21 @@ import { gunzipSync } from "node:zlib";
 import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
-import { ObservedSpawnEnv, type CloudBlock, type DesktopInitSurface, type ObservedSpawnEnvDeclaration } from "../types.js";
+import {
+  ObservedSpawnEnv,
+  type AgentSearchGates,
+  type CaptureOrg,
+  type CloudBlock,
+  type DesktopInitSurface,
+  type ObservedSpawnEnvDeclaration,
+} from "../types.js";
 import { safeCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
 import { classifySpawnEnvKey, windowAllowlistedNames, postWriteOnlyNames } from "./spawn-env-registry.js";
 import { scanSpawnEnvPostWrites } from "./spawn-env-post-writes.js";
 import { readObservedSpawnEnv, bundleHasSpawnEnvProducer } from "./observed-spawn-env.js";
+import { readAgentSearchGates } from "./agent-search-gates.js";
+import { readCaptureOrg } from "./capture-org.js";
 
 /**
  * cowork-sync — derive a VOLATILE parity baseline from the live Claude Desktop
@@ -73,6 +82,12 @@ export interface SyncResult {
    *  observed-spawn-env.ts). `observed:false` with a reason when no dump exists. Carried forward only for the
    *  SAME build, after its log entries rotated away. */
   observedSpawnEnv: ObservedSpawnEnv;
+  /** The agent-side feature values that shape a live WebSearch, from Desktop's per-session GrowthBook cache (see
+   *  agent-search-gates.ts). `observed:false` when no cache file exists; a NOTE, never a delta. Never carried forward. */
+  agentSearchGates: AgentSearchGates;
+  /** Which organisation the gate cache (fcache) was captured under, as a salted hash (see capture-org.ts). The CLI
+   *  refuses a write captured under a different organisation from the previous baseline's. */
+  captureOrg: CaptureOrg;
   /** The `cloud` block (remote-devices tool list + description fingerprints + unreachable features); null when
    *  the asar could not be read or the extraction failed (a delta says which). Never carried forward. */
   cloud: CloudBlock | null;
@@ -896,6 +911,16 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
   // corresponding spawn.env value diff.
   const gates = decodeFcacheGates();
   const fcacheProv = decodeFcacheProvenance();
+  // Desktop rewrites the fcache per signed-in organisation, so record which one this cache belongs to.
+  let captureOrg: CaptureOrg = { observed: false };
+  let captureOrgId: string | null = null; // in memory only: picks the organisation's agent cache below
+  try {
+    const read = readCaptureOrg(join(homedir(), "Library/Logs/Claude"), statSync(join(SUPPORT, "fcache")).mtimeMs);
+    captureOrg = read.record;
+    captureOrgId = read.orgId;
+  } catch {
+    // no fcache: the gates block already records that
+  }
 
   // 5. Spawn contract + fingerprints from the asar. The egress allowlist is NOT among them: on the
   // first-party deployment the harness models, the VM allowlist is server-delivered per session and
@@ -946,6 +971,19 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
   for (const d of observedSpawnEnv.deltas) flag(unknown, d);
   notes.push(...observedSpawnEnv.notes);
 
+  // 8. The agent's own web-search feature values (not Desktop gates, so not in the fcache). Informational: a live
+  // run does not depend on them, and a frozen-versus-live comparison reads them to know what live search did.
+  // Read from the same organisation's cache as the gates, never another organisation's.
+  const agentSearchGates = readAgentSearchGates(join(SUPPORT, "local-agent-mode-sessions"), captureOrgId);
+  if (!agentSearchGates.observed)
+    notes.push(
+      "agentSearchGates: no cowork-gb-cache.json for the gate cache's organisation (or the organisation could not be told) — provenance.agentSearchGates records observed:false",
+    );
+  else if (agentSearchGates.disagreeing?.length)
+    notes.push(
+      `agentSearchGates: ${agentSearchGates.disagreeing.join(", ")} differ across Desktop's session caches — recorded from the newest`,
+    );
+
   // network.allowDomains is a PINNED, hand-curated list carried forward from the newest committed
   // baseline — never re-derived from the bundle. See checkEgressContractFacts for why deriving it is
   // unsound in both directions. The operator's own coworkEgressAllowedHosts are still merged, matching
@@ -992,6 +1030,8 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     agentReleaseChannel,
     desktopInitSurface: initSurface.surface,
     observedSpawnEnv: observedSpawnEnv.block,
+    agentSearchGates,
+    captureOrg,
     cloud,
     unknownDeltas: unknown,
     notes,

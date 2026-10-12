@@ -3,7 +3,7 @@ import { join, resolve, isAbsolute, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { PlatformBaseline } from "./types.js";
+import { PlatformBaseline, type SearchAnchors } from "./types.js";
 import { safeNamedBaseline } from "./boundary-paths.js";
 import { UnknownBaselineError, BaselineFileError, compactSchemaError } from "./errors.js";
 import { ZodError } from "zod";
@@ -746,6 +746,7 @@ export function buildNextAgentBinary(
     manifestChecksumMatch?: boolean | "unknown";
     stringSentinels?: Record<string, number>;
     cliCapabilities?: CliCapabilities;
+    searchAnchors?: SearchAnchors;
   },
 ): Record<string, unknown> {
   return {
@@ -759,6 +760,7 @@ export function buildNextAgentBinary(
     manifestChecksumMatch: d.manifestChecksumMatch,
     stringSentinels: d.stringSentinels,
     cliCapabilities: d.cliCapabilities,
+    searchAnchors: d.searchAnchors,
   };
 }
 

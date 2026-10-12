@@ -19,6 +19,22 @@
     },
     "cliCapabilities": {
       "permissionPrompts": true
+    },
+    "searchAnchors": {
+      "toolType": "web_search_20250305",
+      "systemSentence": {
+        "sha256": "756ad293b04e10350601308c0caf28820dfe9b9c80350926949e0e51ca422e50",
+        "bytes": 57
+      },
+      "userPrefix": {
+        "sha256": "a4508cedaa5b94db5e307c1f5102fd28be4b79c48d9a094df23448f8541bb084",
+        "bytes": 36
+      },
+      "ccr": {
+        "sessionsPath": "/v1/code/sessions/",
+        "workerPath": "/worker/",
+        "searchRoute": "web-search"
+      }
     }
   },
   "guest": {
@@ -341,8 +357,8 @@
       "CLAUDE_CODE_SESSION_LOG"
     ]
   },
-  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-10-10 on macOS arm64.",
-  "capturedAt": "2026-10-10",
+  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-10-12 on macOS arm64.",
+  "capturedAt": "2026-10-12",
   "platform": "darwin-arm64",
   "settings": {
     "autoMountFolders": {
@@ -626,9 +642,9 @@
     ],
     "spawnEnvSpreadCount": 38,
     "fcache": {
-      "content16": "689f6baf25e19965",
-      "embeddedTimestamp": 1791620861101,
-      "featureCount": 415
+      "content16": "0e6640d37bfb99f5",
+      "embeddedTimestamp": 1791785528963,
+      "featureCount": 417
     },
     "asarGateIds": [
       "17519066",
@@ -1247,7 +1263,7 @@
       "nativeAgentVersions": [
         "2.1.295"
       ],
-      "sessions": 26,
+      "sessions": 42,
       "keysAll": [
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_CUSTOM_HEADERS",
@@ -1321,6 +1337,23 @@
         "CLAUDE_CODE_WORKSPACE_HOST_PATHS"
       ],
       "withheld": 0
+    },
+    "agentSearchGates": {
+      "observed": true,
+      "files": 1,
+      "newestDate": "2026-10-12",
+      "values": {
+        "tengu_plum_vx3": true
+      },
+      "absent": [
+        "tengu_sleepy_shore",
+        "tengu_gzip_request_bodies",
+        "tengu_buzzing_pike"
+      ]
+    },
+    "captureOrg": {
+      "observed": true,
+      "orgRef": "448f4a2960d8"
     }
   },
   "requireFullVmSandbox": null,

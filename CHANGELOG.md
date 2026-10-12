@@ -68,6 +68,26 @@ All notable changes to this project are documented here. The format is based on
   metric correction.** An eval dir written before this release reports metrics as not recorded, grades none, and
   keeps its exit code.
 
+### Changed
+
+- **For maintainers: `sync` records how the agent's WebSearch tool asks for a search.** The agent's WebSearch tool
+  makes its own nested model request. `sync` now records, from the staged agent, the facts that identify that
+  request, as `agentBinary.searchAnchors`: the server tool type, the cloud search route's path pieces, and the
+  system sentence and user-message prefix as a hash and byte length (never the text). When a staged agent's anchors
+  cannot be extracted, or its native build gives different anchors from its VM build, `sync` prints a warning and
+  records no anchors; it does not block the write. Nothing reads the block yet.
+- **For maintainers: `sync` records which organisation Desktop's gate cache was captured under, and refuses a
+  re-sync under a different one.** Desktop rewrites its gate cache for the organisation it is signed in to, so a
+  re-sync under another organisation showed gate changes that were not production changes. `sync` now records a
+  salted hash of the organisation (`provenance.captureOrg`, read from Desktop's log; anyone holding the id can confirm
+  it, nobody can reverse it) and refuses to write, `sync --diff` included, when it differs from the previous
+  baseline's or cannot be told when the previous baseline recorded one. `--allow-org-change` writes anyway.
+- **For maintainers: `sync` records the agent's own web-search feature values** as `provenance.agentSearchGates`:
+  whether the nested search runs on the small/fast model, the fast search profile, and the two request-body
+  compression features. They are the agent's features, not Desktop gates, so `sync` reads them from Desktop's
+  cache for the same organisation rather than the fcache. Only booleans, numbers and flat objects of them are published, with no
+  org or session identifier. A missing cache is a note, never a blocker.
+
 ## [4.8.1] — 2026-10-12
 
 ### Upgrade notes
