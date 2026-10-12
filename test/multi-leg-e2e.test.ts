@@ -388,6 +388,29 @@ describe.runIf(can)("multi-leg record → replay → verify-cassettes (stub agen
     }
   });
 
+  it("redaction reaches every leg: a scrub-set value in leg 2's prompt is absent from the whole cassette, and it replays green", async () => {
+    const f = fixture();
+    try {
+      const p = join(f.cwd, "red.yaml");
+      writeFileSync(
+        p,
+        readFileSync(scenario(f, "persistent"), "utf8").replace("FS_HOST_ANSWER g1=a", "FS_HOST_ANSWER g1=a for Zyxwacme Holdings"),
+      );
+      const cass = join(f.cwd, "red.cassette.json");
+      const env = { COWORK_HARNESS_REDACT_PATTERNS: "Zyxwacme" };
+      const c = spawnCli(f, ["record", p, "--out", cass, "--output-format", "json"], env);
+      const r = await exited(c, 120_000);
+      expect(r.code, c.stdoutText() + c.stderrText()).toBe(0);
+      const text = readFileSync(cass, "utf8");
+      expect(JSON.parse(text).scenario.legs[1].prompt).toMatch(/for .* Holdings/); // the leg is there, its value scrubbed
+      expect(text).not.toContain("Zyxwacme");
+      const rep = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(rep.code, rep.stderr).toBe(0);
+    } finally {
+      f.cleanup();
+    }
+  });
+
   it("a single-prompt reader refuses a multi-leg cassette by name; a dir batch names a legs scenario instead of skipping it", async () => {
     const f = fixture();
     try {
