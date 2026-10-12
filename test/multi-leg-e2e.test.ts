@@ -216,6 +216,41 @@ describe.runIf(can)("multi-leg run-time vacuity (stub agent, protocol)", () => {
   }
 });
 
+describe.runIf(can)("multi-leg plugin identity (stub agent, protocol)", () => {
+  // Every leg stages the session's plugins afresh. Two real staged trees that differ by one plugin file (the host
+  // action edits the plugin's source between the legs) are not the scenario the author wrote: plugin_identity_changed.
+  it("a plugin file edited between legs fails the later leg as plugin_identity_changed; an untouched plugin passes", async () => {
+    const f = fixture();
+    try {
+      const plug = join(f.cwd, "plug");
+      mkdirSync(join(plug, ".claude-plugin"), { recursive: true });
+      mkdirSync(join(plug, "skills", "x"), { recursive: true });
+      writeFileSync(join(plug, ".claude-plugin", "plugin.json"), '{ "name": "plug", "version": "0.1.0" }\n');
+      const skill = join(plug, "skills", "x", "SKILL.md");
+      writeFileSync(skill, "---\nname: x\ndescription: a synthetic skill\n---\nDo nothing.\n");
+      writeFileSync(join(f.cwd, "s.yaml"), readFileSync(join(f.cwd, "s.yaml"), "utf8") + "plugins:\n  local_plugins:\n    - ./plug\n");
+
+      const same = await cli(f, ["run", threeLeg(f, "idsame", ["sh", "-c", "true"]), "--output-format", "json"]);
+      expect(same.code, same.stdout + same.stderr).toBe(0);
+      expect(legStatus(JSON.parse(same.stdout))).toEqual(["ask:passed", "apply:passed", "resume:passed"]);
+
+      const edit = await cli(f, [
+        "run",
+        threeLeg(f, "idedit", ["sh", "-c", `echo one more line >> '${skill}'`]),
+        "--output-format",
+        "json",
+      ]);
+      expect(edit.code, edit.stdout + edit.stderr).toBe(1);
+      const env = JSON.parse(edit.stdout);
+      expect(legStatus(env)).toEqual(["ask:passed", "apply:passed", "resume:failed"]);
+      expect(env.multiLeg.verdict.signals.map((s: { code: string }) => s.code)).toContain("plugin_identity_changed");
+      expect(JSON.stringify(env.multiLeg.verdict.failures)).toMatch(/leg resume: the staged skill\/plugin tree changed between legs/);
+    } finally {
+      f.cleanup();
+    }
+  });
+});
+
 describe.runIf(can)("multi-leg host actions (stub agent, protocol)", () => {
   const WRITE = 'mkdir -p artifacts/runs/r1 && printf "{\\"n\\":2}" > artifacts/runs/r1/corrections.json && echo applied 2 corrections';
   it("runs between the legs in the leg's tree, records what it wrote, and the resume leg completes", async () => {
