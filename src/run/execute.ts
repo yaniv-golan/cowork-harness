@@ -41,10 +41,9 @@ import {
   deviceBridgeNoteMode,
   deviceBridgeRecord,
   deleteGrantsOf,
-  deniedDeviceFolders,
   deviceFolders,
-  deviceTreeDeletes,
   deviceTreeIdentityReliable,
+  deviceTurnFindings,
   type startDeviceBridge,
 } from "../runtime/device-container.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
@@ -1141,7 +1140,11 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const bridgeNote = deviceBridgeNoteMode();
   // This turn's delete grants, each with who answered it: the run's recorded answers paired with the bridge's calls.
   const bridgeGrants = () => deleteGrantsOf(record.decisions, deviceBridge?.grantCalls() ?? [], plan.permissionMode, turnNumber);
-  const bridgeRecord = () => deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir));
+  // Read once, after the agent is done: the device tree and the shim's log, split by the user's grants.
+  let deviceFindings: ReturnType<typeof deviceTurnFindings> | undefined;
+  const bridgeFindings = () => (deviceFindings ??= deviceTurnFindings(outDir, plan.mounts, deviceBridge));
+  const bridgeRecord = () =>
+    deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir), bridgeFindings());
   if (scenario.device_bridge === true && bridgeNote === "omitted")
     warn(
       `::notice:: [device_bridge] prompt note OMITTED (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off): a maintainer control run; the model sees only the device tools' own descriptions. Recorded as deviceBridge.promptNote: "omitted".\n`,
@@ -1787,27 +1790,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Host paths the user supplied (the staged input files, captured on the first turn, and this turn's
     // prompt) are not a leak when the agent quotes them back verbatim.
     const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity, workBaseOf(plan, outDir));
-    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus, {
-      deviceBridge: scenario.device_bridge === true,
-    });
-    // device_bridge: a delete on the device copy by any means (`find -delete`, a glob, a script), read off the
-    // device tree before and after the run, since the command text alone cannot see every one.
-    if (scenario.device_bridge === true) scan.mountDeletes.push(...deviceTreeDeletes(outDir, deniedDeviceFolders(plan.mounts)));
-    // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
-    // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
-    const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
-    // A delete outside `outputs` used to produce NO signal whatsoever, because detection was scoped to
-    // the literal `outputs`. Production denies unlink/rmdir on every delete-denied mount, so this is a
-    // real divergence: the agent proceeded where production would have returned EPERM. Reported as a
-    // warning rather than a verdict signal — the harness DETECTS what production ENFORCES, and promoting
-    // it to a failure would silently re-verdict existing runs.
-    if (!scanUnavailable) {
-      const nonOutputs = scan.mountDeletes.filter((d) => d.mount !== "outputs");
-      for (const d of nonOutputs)
-        warn(
-          `::warning:: [scan] delete detected in mount "${d.mount}" — production denies unlink/rmdir there until approved: ${d.command}\n`,
-        );
-    }
+    const { scan, scanUnavailable, warnDeletes } = scanTurn(
+      join(outDir, "events.jsonl"),
+      deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"),
+      inputCorpus,
+      scenario.device_bridge === true ? { findings: bridgeFindings() } : undefined,
+    );
+    for (const d of warnDeletes)
+      warn(
+        `::warning:: [scan] delete detected in mount "${d.mount}" — production denies unlink/rmdir there until approved: ${d.command}\n`,
+      );
     if (scan.sidecarMissing)
       warn(
         `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / outputs-delete text scan / self-heal cannot be verified; the outputs filesystem diff still runs)\n`,
@@ -4668,6 +4660,28 @@ export function inputProvenanceCorpus(
   };
 }
 
+/** The turn's event scan as the run grades it. Under device_bridge the device findings are folded in: a delete on
+ *  the device copy by any means (`find -delete`, a glob, a script), read off the device tree before and after the
+ *  run, since the command text alone cannot see every one; under the shim, only the deletes the user allowed are
+ *  left there (what got past it is the record's bypassedDeletes), and a device_bash command's text no longer counts.
+ *  `warnDeletes`: the connected-folder deletes to warn about. A delete outside `outputs` is a divergence (production
+ *  denies unlink/rmdir on every delete-denied mount), warned rather than failed because the harness detects what
+ *  production enforces; under an enforced bridge a delete left is one the user allowed, so none. A missing or
+ *  corrupt events.jsonl leaves the scan without trustworthy evidence (`scanUnavailable`), never a clean scan. */
+export function scanTurn(
+  eventsPath: string,
+  rwMounts: string[],
+  inputCorpus: InputHostPathCorpus | undefined,
+  device?: { findings: { enforced: boolean; mountDeletes: { mount: string; command: string }[] } },
+): { scan: ReturnType<typeof scanEvents>; scanUnavailable: boolean; warnDeletes: { mount: string; command: string }[] } {
+  const enforced = device?.findings.enforced === true;
+  const scan = scanEvents(eventsPath, rwMounts, inputCorpus, { deviceBridge: !!device, deviceEnforced: enforced });
+  if (device) scan.mountDeletes.push(...device.findings.mountDeletes);
+  const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
+  const warnDeletes = scanUnavailable || enforced ? [] : scan.mountDeletes.filter((d) => d.mount !== "outputs");
+  return { scan, scanUnavailable, warnDeletes };
+}
+
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */
 export function scanEvents(
   file: string,
@@ -4678,8 +4692,9 @@ export function scanEvents(
    *  token found here verbatim is not a leak; omitted ⇒ every match leaks, as before. */
   inputCorpus?: InputHostPathCorpus,
   /** device_bridge: the connected folders live in the device container, so only device_bash can touch them, and the
-   *  agent's own shell can touch only `outputs`. */
-  opts: { deviceBridge?: boolean } = {},
+   *  agent's own shell can touch only `outputs`. `deviceEnforced`: the device container's shim refuses deletes, so
+   *  a device_bash command's text is no evidence of one (a refused `rm` deleted nothing); the device tree is. */
+  opts: { deviceBridge?: boolean; deviceEnforced?: boolean } = {},
 ): {
   outputsDeletes: string[];
   /** POSITIONAL companion of `outputsDeletes` — same length, same order — saying why each entry was
@@ -4782,7 +4797,9 @@ export function scanEvents(
         // The device holds only the connected folders, so a device_bash command never touches `outputs`.
         const scope =
           block.name === "mcp__remote-devices__device_bash"
-            ? mounts.filter((m) => m !== "outputs")
+            ? opts.deviceEnforced
+              ? []
+              : mounts.filter((m) => m !== "outputs")
             : opts.deviceBridge
               ? mounts.filter((m) => m === "outputs")
               : mounts;

@@ -110,7 +110,8 @@ export function makeRemoteDevicesHandler(opts: {
   onInfraError?: (message: string) => void;
   /** A delete grant the handler accepted, by folder name. Called only for a valid request; the agent asks for the
    *  card first, so a call here means the card was answered Allow (or no card is shown, under bypassPermissions). */
-  onGrant?: (folders: string[]) => void;
+  /** Records a grant; the card's answer returns once it settles (a grant applies from the next device_bash call). */
+  onGrant?: (folders: string[]) => void | Promise<void>;
   /** Every delete-card call, accepted or refused, in order: the run pairs them with its recorded answers. */
   onGrantCall?: (call: { folders: string[]; ok: boolean }) => void;
 }): McpHandler {
@@ -183,7 +184,7 @@ export function makeRemoteDevicesHandler(opts: {
         if (folder.mode === "r") return refuse(`${p} is connected read-only, so file deletion can't be enabled there.`);
         if (!asked.includes(folder.name)) asked.push(folder.name);
       }
-      onGrant?.(asked);
+      await onGrant?.(asked);
       onGrantCall?.({ folders: asked, ok: true });
       const listed = asked.map((n) => JSON.stringify(`~/${n}`)).join(", ");
       return text(

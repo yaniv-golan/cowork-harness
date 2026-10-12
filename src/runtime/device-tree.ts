@@ -6,9 +6,9 @@ import { join, relative, sep } from "node:path";
 // on another filesystem.
 
 /** One entry of a device-tree listing, keyed `<folder>/<path>` (a directory with a trailing `/`). `id` is
- *  identityOf's `<inode>:<birth time>`. A file also carries its size and sha256, and a link the hash of its target
- *  (never followed), for the filesystems where an identity can be reused (probeIdentityReliable). */
-export type TreeEntry = { id: string; type: "f" | "d" | "l"; size?: number; sha256?: string };
+ *  identityOf's `<inode>:<birth time>`. `o` is any other type (FIFO, socket, device), never opened. A file also
+ *  carries its size and sha256, and a link the hash of its target (never followed), for the filesystems where an identity can be reused (probeIdentityReliable). */
+export type TreeEntry = { id: string; type: "f" | "d" | "l" | "o"; size?: number; sha256?: string };
 
 /** A file's identity: its inode and nanosecond birth time. An inode alone is not one: Linux reuses a freed inode
  *  for the next file created. */
@@ -80,6 +80,12 @@ export function deviceTreeListing(deviceHost: string): Record<string, TreeEntry>
       out[rel] = { id, type: "l", sha256: createHash("sha256").update(target).digest("hex") };
       return;
     }
+    // A FIFO, socket or device file: listed by identity and type, never opened (opening a FIFO blocks until a
+    // writer comes, which would hang the run).
+    if (!st.isFile()) {
+      out[rel] = { id, type: "o" };
+      return;
+    }
     let sha256: string | undefined;
     try {
       sha256 = createHash("sha256").update(readFileSync(p)).digest("hex");
@@ -105,7 +111,11 @@ const sameBytes = (a: TreeEntry, b: TreeEntry) => a.type === b.type && a.size ==
 function renamedAfter(path: string, before: Before, after: After, afterById: ReadonlyMap<string, string[]>, reliable: boolean): boolean {
   const b = before[path]!;
   if (typeof b === "string") return false;
+  // All folder copies share one tree, so a raw system call can carry a file out of its folder; production's folders
+  // are separate mounts, where that is impossible. A rename stays inside its folder.
+  const folder = path.split("/")[0]!;
   return (afterById.get(b.id) ?? []).some((q) => {
+    if (q.split("/")[0] !== folder || !q.includes("/")) return false;
     const a = after[q]!;
     if (a.type !== b.type) return false;
     if (reliable) return true;
@@ -128,14 +138,20 @@ export function treeDeletes(
   denied: ReadonlyArray<{ name: string; mountPath: string }>,
   identityReliable: boolean,
 ): { mount: string; command: string }[] {
-  const afterById = new Map<string, string[]>();
-  for (const [k, e] of Object.entries(after)) afterById.set(e.id, [...(afterById.get(e.id) ?? []), k]);
   // Named by mount path, as the command-text scan names a mount, so allow_delete_in waives both alike.
   const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
+  return treeLosses(before, after, denied, identityReliable).map((path) => ({
+    mount: mountOf.get(path.split("/")[0]!)!,
+    command: `(removed from the device copy) ${path}`,
+  }));
+}
+
+/** treeDeletes' entries as `<folder>/<path>`, sorted. */
+export function treeLosses(before: Before, after: After, denied: ReadonlyArray<{ name: string }>, identityReliable: boolean): string[] {
+  const afterById = new Map<string, string[]>();
+  for (const [k, e] of Object.entries(after)) afterById.set(e.id, [...(afterById.get(e.id) ?? []), k]);
+  const names = new Set(denied.map((f) => f.name));
   return Object.keys(before)
-    .filter(
-      (path) => mountOf.has(path.split("/")[0]!) && !(path in after) && !renamedAfter(path, before, after, afterById, identityReliable),
-    )
-    .sort()
-    .map((path) => ({ mount: mountOf.get(path.split("/")[0]!)!, command: `(removed from the device copy) ${path}` }));
+    .filter((path) => names.has(path.split("/")[0]!) && !(path in after) && !renamedAfter(path, before, after, afterById, identityReliable))
+    .sort();
 }

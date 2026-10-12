@@ -2213,17 +2213,30 @@ export interface DeviceBridgeRecord {
   /** The delete card's grants this turn: the folders, who answered (`script`,
    *  `decider`, `human`, or `bypassPermissions` when no card is shown) and the turn. */
   grants?: Array<{ folders: string[]; answeredBy: "script" | "decider" | "human" | "bypassPermissions"; turn: number }>;
+  /** Enforced runs only: deletes the shim refused this turn, from its audit log (evidence that refusals happened,
+   *  never of their absence). Absent when the log could not be read (`auditUnreadable`). */
+  refusedDeletes?: number;
+  /** Enforced runs only: `<folder>/<path>` gone from a folder deletion was never allowed in, deleted or moved out of
+   *  the folder. The shim did not see it (a static binary, a raw system call), or, under `rename-reads-as-delete`, a
+   *  file was renamed and then edited. Fails the run where the filesystem keeps identities apart; warns otherwise. */
+  bypassedDeletes?: string[];
+  /** Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts, or naming
+   *  a path outside their folder; ignored. */
+  auditInconsistent?: number;
+  /** Enforced runs only: why the shim's audit log could not be read (the device shell replaced it), so its counts
+   *  are unknown rather than zero. */
+  auditUnreadable?: string;
   /** Which of production's egress branches the device container modeled: the session allowlist through the proxy
    *  (`allowlist`), or everything through it (`unrestricted`, from `egress.unrestricted: true`). */
   egress: "allowlist" | "unrestricted";
   folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;
-  /** Known differences from production, by id: `delete-not-refused` (a delete in a connected folder succeeds on the
-   *  device copy; production refuses it until the user allows deletion through `device_request_delete_permission`,
-   *  and the harness reports it only after the run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
+  /** Known differences from production, by id: `delete-not-refused` (no shim: a delete in a connected folder
+   *  succeeds on the device copy, where production refuses it until the user allows deletion, and the harness
+   *  reports it only after the run), `delete-refusal-libc` (the shim refuses deletes made through libc; a static
+   *  binary or raw system call is caught only after the run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool
    *  description paraphrases one production branch), `device-paths-tilde` (get_device_info spells folders
    *  `~/<name>`, not their paths on the Mac), `device-tools-unserved` (device_list_dir, the stage/commit pair and
-   *  the folder and delete requests are not served), `shell-user` (commands run as the image's user, not a per-task
-   *  `rcw-<id>` user), `device-network-shared` (the device container shares the run's internal network with the agent's
+   *  the folder request is not served), `device-network-shared` (the device container shares the run's internal network with the agent's
    *  container, so a service device_bash starts is reachable from the agent's own shell; a cloud container has no
    *  route to the user's machine). */
   divergences: string[];
@@ -2232,7 +2245,7 @@ export interface DeviceBridgeRecord {
 /** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
  *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
  *  differently instead of collapsing both into one fatal class. */
-export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar" | "device-container" | "device-exec";
+export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar" | "device-container" | "device-shim" | "device-exec";
 
 /** See `RunResult.fsDiff`. `findings` are `[fs-diff] output file removed post-run: <path>` strings. */
 export interface OutputsFsDiff {
@@ -2709,6 +2722,9 @@ export interface RunResult {
         | "outputs_delete_unconfirmed"
         | "outputs_diff_unavailable"
         | "mount_delete"
+        | "device_delete_bypassed"
+        | "device_delete_unconfirmed"
+        | "device_audit_unreadable"
         | "host_path_leak"
         | "non_deterministic"
         | "model_fallback"

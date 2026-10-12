@@ -3994,6 +3994,11 @@ const CassetteShape = z.looseObject({
           }),
         )
         .optional(),
+      // v18, enforced runs only: the device shim's refusals and what got past it.
+      refusedDeletes: z.number().int().nonnegative().optional(),
+      bypassedDeletes: z.array(z.string()).optional(),
+      auditInconsistent: z.number().int().positive().optional(),
+      auditUnreadable: z.string().optional(),
       folders: z.array(z.strictObject({ name: z.string(), mode: z.enum(["r", "rw", "rwd"]) })),
       divergences: z.array(z.string()),
     })

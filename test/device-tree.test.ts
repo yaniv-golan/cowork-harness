@@ -170,3 +170,51 @@ console.log(JSON.stringify({ collisions, reliable, deletes }));
     expect(r.deletes).toEqual(["(removed from the device copy) proj/a.txt"]);
   }, 90_000);
 });
+
+describe("deviceTreeListing never reads a file that could block", () => {
+  it("a FIFO (or socket, device) in a folder is listed by identity and type, never opened", async () => {
+    const root = scratch();
+    mkdirSync(join(root, "mnt", "proj"), { recursive: true });
+    execFileSync("mkfifo", [join(root, "mnt", "proj", "fifo")]);
+    // In a child process with a deadline: a blocking open would hang this test's own event loop otherwise.
+    const script = `import("${join(import.meta.dirname, "..", "src", "runtime", "device-tree.ts")}").then((m) => console.log(JSON.stringify(m.deviceTreeListing(${JSON.stringify(root)}))))`;
+    const out = execFileSync(process.execPath, ["--import", "tsx", "-e", script], { encoding: "utf8", timeout: 20_000 });
+    const listing = JSON.parse(out) as Record<string, TreeEntry>;
+    expect(listing["proj/fifo"]).toMatchObject({ type: "o" });
+    expect(listing["proj/fifo"]!.sha256).toBeUndefined();
+  });
+});
+
+// All folder copies share one tree, so a raw system call can move a file out of its folder without a delete. Production
+// cannot (each folder is its own mount): the file is gone from the folder, so it is a loss, never a rename.
+describe("treeDeletes: a rename stays inside its folder", () => {
+  const DENIED2 = [
+    { name: "proj", mountPath: "proj" },
+    { name: "other", mountPath: "other" },
+  ];
+  for (const reliable of [true, false]) {
+    it(`a move to the folders' parent, to another folder, or of the whole folder is a loss (identity ${reliable ? "reliable" : "unreliable"})`, () => {
+      const before = { "proj/a.txt": f("7:1", "aa"), "proj/sub/": d("9:1"), "proj/sub/x": f("8:1", "xx") };
+      expect(
+        cmds(treeDeletes(before, { "a.txt": f("7:1", "aa"), "proj/sub/": d("9:1"), "proj/sub/x": f("8:1", "xx") }, DENIED2, reliable)),
+      ).toEqual(["(removed from the device copy) proj/a.txt"]);
+      expect(
+        cmds(
+          treeDeletes(before, { "other/a.txt": f("7:1", "aa"), "proj/sub/": d("9:1"), "proj/sub/x": f("8:1", "xx") }, DENIED2, reliable),
+        ),
+      ).toEqual(["(removed from the device copy) proj/a.txt"]);
+      expect(
+        cmds(
+          treeDeletes(before, { "stash/a.txt": f("7:1", "aa"), "stash/sub/": d("9:1"), "stash/sub/x": f("8:1", "xx") }, DENIED2, reliable),
+        ),
+      ).toEqual([
+        "(removed from the device copy) proj/a.txt",
+        "(removed from the device copy) proj/sub/",
+        "(removed from the device copy) proj/sub/x",
+      ]);
+    });
+  }
+  it("a move within the folder is still a rename", () => {
+    expect(treeDeletes({ "proj/a.txt": f("7:1", "aa") }, { "proj/deep/a.txt": f("7:1", "aa") }, PROJ, true)).toEqual([]);
+  });
+});

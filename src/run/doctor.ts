@@ -22,6 +22,7 @@ import { limaPath, vmStatus, instanceName, vmProvisioned } from "../runtime/lima
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 import { writeAllSync } from "../io.js";
 import { pinnedDigestFor, resolveAgentImage, resolveContainerRuntime, resolveProxyImage } from "../runtime/agent-image.js";
+import { deviceImageStatus, dockerImageId } from "../runtime/device-image.js";
 
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr. A `process.stdout.write` +
 // `process.exit()` pair truncates on a PIPE (async tail dropped at exit past the ~64KB buffer);
@@ -120,6 +121,9 @@ export interface DoctorProbe {
   imagePresent(): boolean;
   proxyImageName(): string;
   proxyImagePresent(): boolean;
+  /** device_bridge's image (the agent image plus the delete shim), built on first use; absent from a probe that
+   *  does not report it. */
+  deviceImage?(): ReturnType<typeof deviceImageStatus>;
   // `opts.parityMount` mirrors `hostAgentBinary`'s patch tolerance — passed by the hostloop/cowork tiers
   // ONLY, where this ELF is a non-executed parity mount into the bash sidecar (the binary actually
   // executed there is the native one, via `hostAgentBinary`). `note` is set only for a genuine parity-patch
@@ -313,6 +317,9 @@ export const realProbe: DoctorProbe = {
   imagePresent() {
     const r = spawnSync(this.runtimeName(), ["image", "inspect", this.imageName()], { stdio: "ignore", timeout: 5000 });
     return !r.error && r.status === 0;
+  },
+  deviceImage() {
+    return deviceImageStatus(this.imageName(), dockerImageId(this.runtimeName()));
   },
   proxyImageName: () => resolveProxyImage(),
   proxyImagePresent() {
@@ -802,6 +809,23 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
           : `${proxy} absent — built automatically on first run`,
       required: false,
     });
+
+    // device_bridge's image — informational, never blocking: a bridge run builds it, and a run whose canary finds
+    // deletes not refused fails, so an absent or stale image costs a build, not a wrong result.
+    const device = up && probe.deviceImage ? probe.deviceImage() : undefined;
+    if (device)
+      checks.push({
+        id: "device-image",
+        title: "device_bridge image",
+        status: device.state === "current" ? "ok" : "skip",
+        detail:
+          device.state === "current"
+            ? `${device.tag} present`
+            : device.state === "absent"
+              ? `${device.tag} absent — built on the first device_bridge run (needs Docker Hub and apt)`
+              : `the agent image is absent, so the device image cannot be built yet`,
+        required: false,
+      });
   }
 
   checks.push(tokenCheck(tier, probe));

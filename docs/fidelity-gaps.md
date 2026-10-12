@@ -1858,21 +1858,48 @@ a simulated session.
 
 **Where it differs from production.** A run's `deviceBridge` record lists these by id:
 
-- **`delete-not-refused`.** Production mounts a connected folder read-write without delete: the first `rm` in it
-  fails, and the model then calls `device_request_delete_permission` (input `paths`, `reason`). That shows the user
-  a card ("Allow Claude to permanently delete files in this folder on your computer?", for the rest of the session,
-  subfolders included). Once allowed, the folder is remounted with delete and the `rm` succeeds. The harness serves
-  that request, but nothing refuses the delete yet: on the device copy it succeeds at once, so a model rarely has a
-  reason to ask (`deleteRefusal: "reported"`). The harness reports the delete after the run instead,
-  two ways: from the text of each `device_bash` command, and by comparing the device copy before and after the run,
-  which catches a delete by any means (`find -delete`, a glob, a script). A rename within a folder is not a delete.
-  Some Linux filesystems give a new file the identity (inode and birth time) of one just deleted, so the run first
-  checks whether the run directory's filesystem does. Where it does, a moved file counts as a rename only when its
-  bytes are unchanged, and a moved directory only when a file inside it moved with it: a file renamed and then
-  edited, or an empty directory renamed, is reported as a delete. That errs toward a false failure, never toward a
-  missed delete. macOS keeps identities apart, so there a rename followed by an edit stays a rename.
-  A skill that deletes passes the command in the harness where production would have asked the user first, so
-  assert `no_delete_in_mounts` when that matters.
+- **`delete-refusal-libc`.** Production mounts a connected folder read-write without delete: the first `rm` in it
+  fails with "Operation not permitted", and the model then calls `device_request_delete_permission` (input `paths`,
+  `reason`). That shows the user a card ("Allow Claude to permanently delete files in this folder on your
+  computer?", for the rest of the session, subfolders included). Once allowed, the folder allows deletes and the
+  `rm` succeeds. The device container does the same through a library preloaded into every process
+  (`deleteRefusal: "enforced"`):
+  - `unlink`, `rmdir` and `remove` in an `rw` folder fail with "Operation not permitted" until the folder is
+    granted, for a file the session made too; deleting a missing file still reports it missing (`rm -f` exits 0);
+  - a rename inside one folder works, also over an existing file (so `sed -i` and editors that save by renaming
+    work); a move out of a folder, into another one or to the folders' parent is cross-device, so `mv` copies and
+    then cannot remove the source; renaming a folder itself is refused;
+  - git behaves as production's does: a commit lands but leaves its lock files, and the next commit fails with
+    "File exists" on `.git/HEAD.lock`.
+
+  The library places each path by what it is (device and inode, walking up from its directory), not by how it is
+  spelled, so another spelling of a folder's name on a case-insensitive filesystem is still that folder. Only calls
+  through the C library are refused. A static binary or a raw system call deletes, or moves a file out of its folder,
+  anyway, as it could not in production, where each folder is its own mount; so does an io_uring unlink on a
+  container runtime whose seccomp profile allows io_uring (Docker's default profile does not). The device copy is
+  compared before and after the run to catch that: a file gone from a folder deletion was never allowed in, whether
+  deleted or carried out of the folder, is listed in `deviceBridge.bypassedDeletes` and fails the run
+  (`device_delete_bypassed`). A file the session made and deleted that way leaves no trace and is not caught. The
+  library's log of refused and allowed deletes is writable by the device shell, so its counts (`refusedDeletes`, and
+  the allowed deletes of files the session made) can be understated by a command that edits it; a line in it can add
+  a delete to the record, never excuse one. A log the shell replaced (a link, a FIFO) is not read: the record says
+  why in `auditUnreadable`, leaves `refusedDeletes` out, and the run warns (`device_audit_unreadable`).
+  Before the first `device_bash` call the bridge checks the library works by trying to delete a probe file; if it
+  is not refused, the run fails as an infrastructure error (`device-shim`), so a bridge run never goes unenforced
+  without saying so. A device image that cannot be built stops the run the same way, before the agent starts.
+
+  The device image is the agent image plus that library, built locally on the first bridge run (it needs Docker Hub
+  and apt; a few minutes) and rebuilt when either changes. `doctor` reports whether it is built. Earlier builds are
+  left in place: `docker images cowork-device` lists them, and `docker rmi` removes one built for an agent image you have since replaced.
+
+  A rename within a folder is not a delete. Some Linux filesystems give a new file the identity (inode and birth
+  time) of one just deleted, so the run first checks whether the run directory's filesystem does. Where it does, a
+  moved file counts as a rename only when its bytes are unchanged, and a moved directory only when a file inside it
+  moved with it; see `rename-reads-as-delete`. macOS keeps identities apart, so there a rename followed by an edit
+  stays a rename.
+- **`delete-not-refused`.** On a recording made before the device library, or a run that ended before the bridge
+  could prove the refusal (`deleteRefusal: "reported"`): a delete succeeded on the device copy, or may have, and was
+  reported after the run, from the `device_bash` command text and the before-and-after comparison.
 - **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
   applies. Production's device shell follows the account's egress policy, which can pass all traffic through. A
   fetch the allowlist blocks fails here and may succeed in production. A session with `egress.unrestricted: true`
@@ -1886,8 +1913,6 @@ a simulated session.
 - **`device-tools-unserved`.** `device_list_dir`, `device_stage_files`, `device_commit_files`, and the folder-access
   request are not served. A skill that tells the agent to call one gets an unknown-tool error
   here.
-- **`shell-user`.** Commands run as the image's own user. Production runs them as a per-task user named
-  `rcw-<id>`; `$HOME` matches it (`/sessions/rcw-<id>`).
 - **`device-network-shared`.** The device container and the agent's own container share the run's internal network,
   so a service started through `device_bash` is reachable from the agent's own shell. A cloud container has no route
   to the user's machine.
@@ -1897,9 +1922,13 @@ a simulated session.
   `permission_mode: bypassPermissions` the agent asks nothing, so the harness grants at once. Production's
   skip-all-approvals mode may do the same; that has not been measured.
 - **`rename-reads-as-delete`.** Present only when the run directory's filesystem can give a new file a deleted
-  file's identity (see `delete-not-refused`). There a moved file counts as a rename only with unchanged bytes, so a
-  file renamed and then edited, or an empty directory renamed, is reported as a delete that production would not
-  have refused.
+  file's identity (see `delete-refusal-libc`). There a moved file counts as a rename only with unchanged bytes, so a
+  file renamed and then edited, or an empty directory renamed, reads as gone. In a folder deletion was never allowed
+  in, the run then gets the warning `device_delete_unconfirmed`, naming both possibilities (a delete past the
+  library, or a rename followed by an edit), instead of the failure `device_delete_bypassed`.
+
+Commands run as the host user's uid under production's per-session name and home (`rcw-<id>`,
+`/sessions/rcw-<id>`), so every staged file is the shell's own.
 
 Two more limits, not differences in what the agent sees. A command that outlives its limit is stopped inside the
 device container, and the result ends `Command timed out after <n>s`; production's exact wording there is not

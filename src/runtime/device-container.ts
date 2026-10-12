@@ -1,5 +1,22 @@
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  constants as fsConstants,
+  cpSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { containedRealPath } from "../boundary-paths.js";
@@ -14,7 +31,8 @@ import { makeInfraEmitters, startHostLoopSidecar } from "./hostloop.js";
 import { HARDENING, proxyEnvVars } from "./argv.js";
 import { removeContainer } from "../egress/sidecar.js";
 import { DELETE_GRANT_TOOL } from "../decide/decider.js";
-import { deviceTreeListing, probeIdentityReliable, treeDeletes, type TreeEntry } from "./device-tree.js";
+import { ensureDeviceImage } from "./device-image.js";
+import { deviceTreeListing, probeIdentityReliable, treeDeletes, treeLosses, type TreeEntry } from "./device-tree.js";
 export { treeDeletes, type TreeEntry } from "./device-tree.js";
 
 /**
@@ -118,8 +136,12 @@ export function deviceContainerArgv(i: {
   egressProxy: string;
   /** The device tree under the run's work directory; staged by stageDeviceFolders. */
   deviceHost: string;
+  /** The run directory holding the shim's control, audit, canary and user files (prepareDeviceControl). */
+  controlHost: string;
   sessionId: string;
   folders: ReadonlyArray<DeviceFolder>;
+  /** The host user: every staged file is then the shell's own, as production's per-session user owns its tree. */
+  user: { uid: number; gid: number };
 }): string[] {
   const home = deviceHome(i.sessionId);
   const env: Record<string, string> = {
@@ -138,6 +160,8 @@ export function deviceContainerArgv(i: {
     "--network",
     i.network,
     ...HARDENING,
+    "--user",
+    `${i.user.uid}:${i.user.gid}`,
     "-w",
     home,
     ...Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
@@ -148,6 +172,19 @@ export function deviceContainerArgv(i: {
     "-v",
     `${i.deviceHost}/mnt:${home}/mnt`,
     ...i.folders.filter((f) => f.mode === "r").flatMap((f) => ["-v", `${i.deviceHost}/mnt/${f.name}:${home}/mnt/${f.name}:ro`]),
+    // The shim's control files (read-only: the device user cannot grant itself), its audit log and the canary.
+    // A directory bind, not a file bind, so a grants file replaced on the host is seen inside.
+    "-v",
+    `${i.controlHost}/${CTL_DIR}:${CTL_MOUNT}:ro`,
+    "-v",
+    `${i.controlHost}/${AUDIT_DIR}:/run/cwh-device/audit`,
+    "-v",
+    `${i.controlHost}/${CANARY_DIR}:${CANARY_MOUNT}`,
+    // Production's per-session user, by name and home, for the host uid the shell runs as.
+    "-v",
+    `${i.controlHost}/${ETC_DIR}/passwd:/etc/passwd:ro`,
+    "-v",
+    `${i.controlHost}/${ETC_DIR}/group:/etc/group:ro`,
     i.image,
     "sleep",
     "infinity",
@@ -193,9 +230,9 @@ const TEARDOWN_SETTLE_MS = 750;
 
 /** Resolves once the container runs, or after `limitMs` (an exec then reports what is wrong). Under load `docker
  *  run` can take seconds to create it, and a command sent before then fails as "No such container". */
-async function waitRunning(runner: string, containerName: string, limitMs = 60_000): Promise<void> {
+async function waitRunning(runner: string, containerName: string, limitMs = 60_000, stop: () => boolean = () => false): Promise<void> {
   const until = Date.now() + limitMs;
-  while (Date.now() < until) {
+  while (Date.now() < until && !stop()) {
     try {
       const { stdout } = await pexec(runner, ["inspect", "-f", "{{.State.Running}}", containerName], { encoding: "utf8" });
       if (stdout.trim() === "true") return;
@@ -246,6 +283,89 @@ export function deviceTreeDeletes(
   return treeDeletes(recorded.entries, deviceTreeListing(join(resolve(outDir), "work", "device")), denied, recorded.identityReliable);
 }
 
+export interface DeviceDeleteFindings {
+  /** Deletes production would have allowed too: in a folder the user allowed deletion in. Named by mount path. */
+  mountDeletes: { mount: string; command: string }[];
+  /** `<folder>/<path>` gone from a folder never allowed: the shim did not see the delete (a static binary, a raw
+   *  system call), or, where identity is unreliable, a file renamed and then edited. */
+  bypassedDeletes: string[];
+  /** Deletes the shim refused (its audit log; evidence that refusals happened, never of their absence). */
+  refusedDeletes: number;
+  /** Audit lines claiming a granted delete the tree contradicts (the file is still there), or naming a path outside
+   *  its folder: ignored. */
+  auditInconsistent: number;
+  /** Why the audit log could not be read (the device user replaced it), when it could not: its counts are then
+   *  unknown, not zero. */
+  auditUnreadable?: string;
+}
+
+/** The deletes a device_bridge run made in the connected folders. With the shim enforcing (`enforced`), a loss in
+ *  a folder the user allowed is a delete and a loss elsewhere got past the shim; a session-made file the shim logged
+ *  as deleted after a grant counts too (the tree never listed it). The log adds, never removes or excuses. Without
+ *  the shim, every loss is a reported delete, as before. */
+export function deviceDeleteFindings(
+  outDir: string,
+  denied: ReadonlyArray<{ name: string; mountPath: string }>,
+  enforced: boolean,
+): DeviceDeleteFindings {
+  const none: DeviceDeleteFindings = { mountDeletes: [], bypassedDeletes: [], refusedDeletes: 0, auditInconsistent: 0 };
+  if (!enforced) return { ...none, mountDeletes: deviceTreeDeletes(outDir, denied) };
+  const recorded = readDeviceTree(outDir);
+  const deviceHost = join(resolve(outDir), "work", "device");
+  const after = deviceTreeListing(deviceHost);
+  const grants = new Set(readDeviceGrants(outDir));
+  const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
+  const allowed = (path: string) => `(removed from the device copy after deletion was allowed) ${path}`;
+  const out: DeviceDeleteFindings = { ...none, mountDeletes: [], bypassedDeletes: [] };
+  if (recorded)
+    for (const path of treeLosses(recorded.entries, after, denied, recorded.identityReliable)) {
+      const folder = path.split("/")[0]!;
+      if (grants.has(folder)) out.mountDeletes.push({ mount: mountOf.get(folder)!, command: allowed(path) });
+      else out.bypassedDeletes.push(path);
+    }
+  const audit = readDeviceAudit(outDir);
+  if (audit.refusedReason) out.auditUnreadable = audit.refusedReason;
+  const seen = new Set(out.mountDeletes.map((d) => d.command));
+  for (const l of audit.lines) {
+    if (!mountOf.has(l.folder)) continue;
+    if (l.result === "refused") {
+      out.refusedDeletes++;
+      continue;
+    }
+    if (l.result !== "granted") continue;
+    // A granted delete in a folder the user never allowed cannot have happened through the shim: a forged line.
+    if (!grants.has(l.folder)) {
+      out.auditInconsistent++;
+      continue;
+    }
+    // A line the device user wrote could name any path: only one inside its folder is looked up.
+    if (l.rel.startsWith("/") || l.rel.split("/").some((seg) => seg === ".." || seg === ".")) {
+      out.auditInconsistent++;
+      continue;
+    }
+    const path = l.rel ? `${l.folder}/${l.rel}` : l.folder;
+    if (existsSync(join(deviceHost, "mnt", path))) {
+      out.auditInconsistent++;
+      continue;
+    }
+    if (recorded && (path in recorded.entries || `${path}/` in recorded.entries)) continue; // the tree already counts it
+    if (seen.has(allowed(path))) continue;
+    seen.add(allowed(path));
+    out.mountDeletes.push({ mount: mountOf.get(l.folder)!, command: allowed(path) });
+  }
+  return out;
+}
+
+/** This turn's delete findings for a bridge run: enforced only once the bridge's canary passed. */
+export function deviceTurnFindings(
+  outDir: string,
+  mounts: ReadonlyArray<Mount>,
+  bridge: { shimEnforced: () => boolean } | undefined,
+): DeviceDeleteFindings & { enforced: boolean } {
+  const enforced = bridge?.shimEnforced() === true;
+  return { ...deviceDeleteFindings(outDir, deniedDeviceFolders(mounts), enforced), enforced };
+}
+
 /** The folders production refuses deletes in until the user allows them: mode `rw` (`rwd` is delete-approved,
  *  `r` is read-only and mounted so). Matches deleteDeniedRootsFromPlan's folder rule. */
 export function deniedDeviceFolders(mounts: ReadonlyArray<Mount>): { name: string; mountPath: string }[] {
@@ -263,29 +383,132 @@ export const DEVICE_BRIDGE_ASK_TOOLS = [DELETE_GRANT_TOOL];
 
 /** Where a run keeps its delete grants: `<outDir>/device-ctl/grants`, one folder name per line, in grant order. A
  *  resumed turn reads the same file, so a grant lasts the session, as production's does. */
-const grantsFile = (outDir: string): string => join(resolve(outDir), "device-ctl", "grants");
+const CTL_DIR = "device-ctl";
+const AUDIT_DIR = "device-audit";
+const CANARY_DIR = "device-canary";
+const ETC_DIR = "device-etc";
+const CTL_MOUNT = "/run/cwh-device/ctl";
+const CANARY_MOUNT = "/run/cwh-device/canary";
+/** The canary's folder name in the control file. It holds a slash, which no connected folder's name can. */
+export const DEVICE_CANARY_NAME = "/canary";
+const AUDIT_CAP = 4 * 1024 * 1024;
+
+const grantsFile = (outDir: string): string => join(resolve(outDir), CTL_DIR, "grants");
+
+/** Write what the device container's shim reads, before the container starts: every connected folder by name, mode
+ *  and its path inside the container (only `rw` refuses deletes), the canary's folder, an empty grants file (kept
+ *  on a resumed turn: production's grant lasts the session), the canary's probe file, and production's per-session
+ *  user for the host uid. */
+/** The host user the device shell runs as (uid 1000 where the platform has no uid, as on Windows). */
+export function deviceUser(): { uid: number; gid: number } {
+  return { uid: process.getuid?.() ?? 1000, gid: process.getgid?.() ?? 1000 };
+}
+
+export function prepareDeviceControl(
+  outDir: string,
+  sessionId: string,
+  folders: ReadonlyArray<DeviceFolder>,
+  user: { uid: number; gid: number },
+): void {
+  const root = resolve(outDir);
+  const home = deviceHome(sessionId);
+  for (const f of folders)
+    if (/[\t\n\r]/.test(f.name))
+      throw new BoundaryError(`device_bridge: the folder name ${JSON.stringify(f.name)} cannot be listed for the device`);
+  // The device user can write the audit and canary dirs, so on a resumed turn either may hold a link it planted:
+  // both are recreated, never written through. A fresh audit log also makes each turn report only its own deletes.
+  for (const d of [AUDIT_DIR, CANARY_DIR]) rmSync(join(root, d), { recursive: true, force: true });
+  for (const d of [CTL_DIR, AUDIT_DIR, CANARY_DIR, ETC_DIR]) mkdirSync(join(root, d), { recursive: true });
+  const lines = [
+    `/mnt\t-\t${home}/mnt`,
+    ...folders.map((f) => `${f.name}\t${f.mode}\t${home}/mnt/${f.name}`),
+    `${DEVICE_CANARY_NAME}\trw\t${CANARY_MOUNT}`,
+  ];
+  writeFileSync(join(root, CTL_DIR, "folders"), lines.join("\n") + "\n");
+  if (!existsSync(grantsFile(outDir))) writeFileSync(grantsFile(outDir), "");
+  writeFileSync(join(root, CANARY_DIR, "probe"), "the device container's delete refusal is checked against this file\n", { flag: "wx" });
+  const name = deviceVmUser(sessionId);
+  writeFileSync(
+    join(root, ETC_DIR, "passwd"),
+    `root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n${name}:x:${user.uid}:${user.gid}::${home}:/bin/bash\n`,
+  );
+  writeFileSync(join(root, ETC_DIR, "group"), `root:x:0:\nnogroup:x:65534:\n${name}:x:${user.gid}:\n`);
+}
+
+export type DeviceAuditLine = { op: string; folder: string; rel: string; result: string; pid: number };
+
+/** The shim's audit log. The device user can write it, so it is read as untrusted: never through a link, only a
+ *  regular file, at most AUDIT_CAP bytes, malformed lines counted and skipped. Evidence that refusals happened,
+ *  never of their absence. */
+export function readDeviceAudit(outDir: string): { lines: DeviceAuditLine[]; malformed: number; refusedReason?: string } {
+  const file = join(resolve(outDir), AUDIT_DIR, "audit.jsonl");
+  try {
+    // Before the open: a FIFO would block an open forever.
+    if (!lstatSync(file).isFile()) return { lines: [], malformed: 0, refusedReason: "not a regular file" };
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return { lines: [], malformed: 0 };
+    return { lines: [], malformed: 0, refusedReason: String(e?.code ?? e) };
+  }
+  let fd: number;
+  try {
+    fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return { lines: [], malformed: 0 };
+    return { lines: [], malformed: 0, refusedReason: e?.code === "ELOOP" ? "not a regular file" : String(e?.code ?? e) };
+  }
+  let text: string;
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { lines: [], malformed: 0, refusedReason: "not a regular file" };
+    const buf = Buffer.alloc(Math.min(st.size, AUDIT_CAP));
+    readSync(fd, buf, 0, buf.length, 0);
+    text = buf.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+  const lines: DeviceAuditLine[] = [];
+  let malformed = 0;
+  for (const l of text.split("\n")) {
+    if (!l) continue;
+    try {
+      const o = JSON.parse(l);
+      if (
+        typeof o?.op === "string" &&
+        typeof o.folder === "string" &&
+        typeof o.rel === "string" &&
+        typeof o.result === "string" &&
+        typeof o.pid === "number"
+      )
+        lines.push({ op: o.op, folder: o.folder, rel: o.rel, result: o.result, pid: o.pid });
+      else malformed++;
+    } catch {
+      malformed++;
+    }
+  }
+  return { lines, malformed };
+}
 
 /** The folders granted so far in this run's session. */
 export function readDeviceGrants(outDir: string): string[] {
   try {
-    return readFileSync(grantsFile(outDir), "utf8")
-      .split("\n")
-      .filter((l) => l !== "");
+    return [
+      ...new Set(
+        readFileSync(grantsFile(outDir), "utf8")
+          .split("\n")
+          .filter((l) => l !== ""),
+      ),
+    ];
   } catch {
     return [];
   }
 }
 
-/** Add folders to the grants file. Written to a temp file and renamed inside the same directory, so a reader never
- *  sees half a file. */
+/** Add folders to the grants file with one append each, so two cards answered together cannot lose a folder (a
+ *  read-modify-write would). The shim reads it on every would-be refusal; readers de-duplicate. */
 export function writeDeviceGrant(outDir: string, folders: ReadonlyArray<string>): void {
-  const all = readDeviceGrants(outDir);
-  for (const f of folders) if (!all.includes(f)) all.push(f);
   const file = grantsFile(outDir);
   mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, all.map((f) => `${f}\n`).join(""));
-  renameSync(tmp, file);
+  appendFileSync(file, folders.map((f) => `${f}\n`).join(""));
 }
 
 /** Who answered a delete grant. `script` is a scenario answer, `decider` an
@@ -306,7 +529,10 @@ const ANSWERED_BY: Partial<Record<string, DeleteGrantAnswer>> = {
 
 /** The grants a turn made, each with who answered it. The agent asks before each call, so the run's allow answers
  *  for the delete card and the handler's calls line up in order: the n-th allow permitted the n-th call. A call the
- *  handler refused (a bad path) grants nothing. Under bypassPermissions the agent asks nothing. */
+ *  handler refused (a bad path) grants nothing. Under bypassPermissions the agent asks nothing.
+ *  Limit: the decision record and the handler call share no id, so two cards in flight at once, answered by
+ *  different answerers, can swap their `answeredBy`. The folders granted are right either way (the grants file is
+ *  written by the handler, not from this pairing). */
 export function deleteGrantsOf(
   decisions: ReadonlyArray<{ name?: string; decision?: string; by?: string }>,
   calls: ReadonlyArray<{ folders: string[]; ok: boolean }>,
@@ -323,6 +549,17 @@ export function deleteGrantsOf(
     if (c.ok && answeredBy) out.push({ folders: [...c.folders], answeredBy, turn });
   });
   return out;
+}
+
+/** The device tools the agent sees (`advertised`) and those it may call without asking (`preApproved`). The delete
+ *  card is advertised but never pre-approved: the agent then asks (`can_use_tool`), so a person answers it, as in
+ *  production. */
+export function deviceToolSurface(device: { tools: string[]; askTools: string[] } | undefined): {
+  advertised: string[];
+  preApproved: string[];
+} {
+  if (!device) return { advertised: [], preApproved: [] };
+  return { advertised: [...device.tools, ...device.askTools], preApproved: [...device.tools] };
 }
 
 /**
@@ -343,6 +580,12 @@ export function startDeviceBridge(p: {
   appVersion: string;
   /** A resumed turn reuses the device tree as the first turn left it, as the agent's own tree is reused. */
   resume: boolean;
+  /** Builds or finds the device image on `image` (ensureDeviceImage); injectable for tests. */
+  ensureImage?: (runner: string, baseRef: string) => { imageId: string } | { error: string };
+  /** How long teardown waits for a canary still running (a container slow to come up). */
+  shimWaitMs?: number;
+  /** How long the delete card's answer waits for the container to see a grant (grantVisible). */
+  grantWaitMs?: number;
 }): {
   containerName: string;
   bundle: { servers: string[]; handle: McpHandler };
@@ -364,6 +607,13 @@ export function startDeviceBridge(p: {
   teardown: () => Promise<boolean>;
   /** Whether the `docker run` client has been stopped (for tests). */
   clientExited: () => boolean;
+  /** Resolves once the canary has run: true when the shim refused its delete. A failure is a `device-shim` infra
+   *  error, which fails the run. */
+  shimCheck: Promise<boolean>;
+  /** The canary's outcome so far: true only once it passed. */
+  shimEnforced: () => boolean;
+  /** Why the device image could not be prepared, when it could not (assertDeviceImageReady). */
+  imageError?: string;
 } {
   const deviceHost = join(resolve(p.outDir), "work", "device");
   const folders = deviceFolders(p.mounts);
@@ -376,14 +626,24 @@ export function startDeviceBridge(p: {
   const containerName = `cowork-dev-${p.runToken ?? p.sessionId}`;
   const infraErrors: { source: InfraErrorSource; message: string }[] = [];
   const { logSidecarInfra, logExecInfra } = makeInfraEmitters(p.outDir, infraErrors, { sidecar: "device-container", exec: "device-exec" });
+  const { logSidecarInfra: logShimInfra } = makeInfraEmitters(p.outDir, infraErrors, { sidecar: "device-shim", exec: "device-exec" });
+  // The device image: the agent image plus the shim. Without it the container still starts on the plain agent
+  // image, so device_bash works, and the canary below fails the run.
+  const built = (p.ensureImage ?? ensureDeviceImage)(p.runner, p.image);
+  if ("error" in built) logShimInfra(`the device image could not be prepared: ${built.error}`);
+  const deviceImage = "imageId" in built ? built.imageId : p.image;
+  const user = deviceUser();
+  prepareDeviceControl(p.outDir, p.sessionId, folders, user);
   const argv = deviceContainerArgv({
     name: containerName,
-    image: p.image,
+    image: deviceImage,
     network: p.network,
     egressProxy: p.egressProxy,
     deviceHost,
+    controlHost: resolve(p.outDir),
     sessionId: p.sessionId,
     folders,
+    user,
   });
   // A container left under this name (a teardown that ran before a slow create finished) would make the start fail.
   removeContainer(p.runner, containerName);
@@ -394,14 +654,34 @@ export function startDeviceBridge(p: {
     logInfra: logSidecarInfra,
     label: "device_bridge container",
   });
+  let enforced = false;
+  // Set once teardown begins: a canary still pending then stops without reporting, since the run's errors have been
+  // collected (or are about to be) and a container being removed fails any check.
+  let tearingDown = false;
+  const shimCheck = waitRunning(p.runner, containerName, 60_000, () => tearingDown).then(async () => {
+    if (tearingDown) return false;
+    const ok = await deviceCanary(p.runner, containerName, p.outDir);
+    if (tearingDown) return false;
+    if (ok === true) enforced = true;
+    else if (!("error" in built)) logShimInfra(`the device container does not refuse deletes: ${ok}`);
+    return ok === true;
+  });
   let running: Promise<void> | undefined;
   const grantCalls: Array<{ folders: string[]; ok: boolean }> = [];
   const handle = makeRemoteDevicesHandler({
     folders: folders.map((f) => ({ name: f.name, mode: f.mode })),
-    onGrant: (granted) => writeDeviceGrant(p.outDir, granted),
+    onGrant: async (granted) => {
+      writeDeviceGrant(p.outDir, granted);
+      // The card still answers (the grant is recorded and the agent was allowed); a next rm the container refuses
+      // anyway is then explained on the record rather than silent.
+      if (!(await grantVisible(p.runner, containerName, granted, p.grantWaitMs)))
+        logExecInfra(
+          `the device container did not see the delete grant for ${granted.join(", ")} within ${(p.grantWaitMs ?? 5_000) / 1000} s`,
+        );
+    },
     onGrantCall: (c) => void grantCalls.push(c),
     appVersion: p.appVersion,
-    exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId), () => (running ??= waitRunning(p.runner, containerName))),
+    exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId), () => (running ??= shimCheck.then(() => undefined))),
     onInfraError: logExecInfra,
   });
   return {
@@ -412,10 +692,17 @@ export function startDeviceBridge(p: {
     grantCalls: () => grantCalls,
     inputRoots: folders.map((f) => join(deviceHost, "mnt", f.name)),
     infraErrors,
-    markTearingDown: started.markTearingDown,
+    markTearingDown: () => {
+      tearingDown = true;
+      started.markTearingDown();
+    },
     deregister: started.deregister,
     reapNow: started.reapNow,
     teardown: async () => {
+      // A run that never called device_bash can end before the canary did: wait for it (bounded), so the record
+      // says whether the refusal was proven.
+      await Promise.race([shimCheck, new Promise((r) => setTimeout(r, p.shimWaitMs ?? 60_000).unref())]);
+      tearingDown = true;
       started.markTearingDown();
       started.reapNow();
       const child = started.child;
@@ -433,7 +720,63 @@ export function startDeviceBridge(p: {
       return gone;
     },
     clientExited: () => started.child.killed || started.child.exitCode !== null || started.child.signalCode !== null,
+    shimCheck,
+    shimEnforced: () => enforced,
+    ...("error" in built ? { imageError: built.error } : {}),
   };
+}
+
+/** Waits (up to `limitMs`) until the container reads every granted folder back from its grants file. The file
+ *  reaches the container through the runtime's file sharing, which can serve a stale copy for a moment; production's
+ *  grant applies from the next device_bash call, so the card's answer waits for it. */
+export async function grantVisible(
+  runner: string,
+  containerName: string,
+  folders: ReadonlyArray<string>,
+  limitMs = 5_000,
+): Promise<boolean> {
+  const until = Date.now() + limitMs;
+  while (Date.now() < until) {
+    try {
+      const { stdout } = await pexec(runner, ["exec", containerName, "cat", `${CTL_MOUNT}/grants`], { encoding: "utf8", timeout: 5_000 });
+      const seen = new Set(stdout.split("\n"));
+      if (folders.every((f) => seen.has(f))) return true;
+    } catch {
+      /* not readable yet */
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+}
+
+/** Stop before the agent starts when the device image could not be prepared: the run would fail on its canary
+ *  anyway, after spending the agent's tokens. The infra error is already on the bridge's record. */
+export function assertDeviceImageReady(device: { imageError?: string }): void {
+  if (device.imageError) throw new Error(`device_bridge: the device image could not be prepared: ${device.imageError}`);
+}
+
+/** The canary: `rm` of a probe file in a folder that refuses deletes, as the device user. True when the rm failed
+ *  with "Operation not permitted" and the file is still there on the host; otherwise what went wrong. */
+async function deviceCanary(runner: string, containerName: string, outDir: string): Promise<true | string> {
+  const probe = join(resolve(outDir), CANARY_DIR, "probe");
+  let out = "";
+  let code: number | null = 0;
+  try {
+    await pexec(runner, ["exec", containerName, "rm", `${CANARY_MOUNT}/probe`], { encoding: "utf8", timeout: 30_000 });
+  } catch (e: any) {
+    code = typeof e?.code === "number" ? e.code : null;
+    out = `${e?.stdout ?? ""}${e?.stderr ?? ""}`;
+  }
+  let present = false;
+  try {
+    present = lstatSync(probe).isFile();
+  } catch {
+    present = false;
+  }
+  if (code !== 0 && /Operation not permitted/.test(out) && present) return true;
+  return code === 0 || !present
+    ? "its canary file was deleted (no shim loaded)"
+    : `the canary rm failed otherwise (exit ${code}): ${out.trim().slice(0, 200)}`;
 }
 
 /** The record a device_bridge run carries (`RunResult.deviceBridge`): what it served and how, and every known
@@ -455,7 +798,10 @@ export function deviceBridgeRecord(
   grants: ReadonlyArray<DeleteGrant> = [],
   /** The probe's verdict on the device tree's filesystem (`deviceTreeIdentityReliable`); undefined without a listing. */
   identityReliable?: boolean,
+  /** The shim's outcome: `enforced` once the canary passed, with this turn's findings (deviceDeleteFindings). */
+  shim?: { enforced: boolean } & Omit<DeviceDeleteFindings, "mountDeletes">,
 ): DeviceBridgeRecord {
+  const enforced = shim?.enforced === true;
   // `egress.unrestricted` resolves to `*`, which the run's proxy passes through: production's pass-through branch.
   const unrestricted = plan.egressAllow.includes("*");
   // A bridge plan resolves its mode from the session or from the bridge default; anything else is a wiring bug.
@@ -471,18 +817,28 @@ export function deviceBridgeRecord(
     permissionMode: plan.permissionMode,
     permissionModeSource: source,
     egress: unrestricted ? "unrestricted" : "allowlist",
-    // Nothing refuses a delete in the device copy yet: a delete is reported after the run, as `delete-not-refused`
-    // says. `enforced` is reserved for the release that refuses it in place.
-    deleteRefusal: "reported",
+    // `enforced` once the canary proved the shim refuses a delete in place; otherwise a delete succeeds on the device
+    // copy and is reported after the run, as `delete-not-refused` says.
+    deleteRefusal: enforced ? "enforced" : "reported",
     grants: grants.map((g) => ({ ...g, folders: [...g.folders] })),
+    ...(enforced && shim
+      ? {
+          // Unknown, not zero, when the log could not be read.
+          ...(shim.auditUnreadable ? {} : { refusedDeletes: shim.refusedDeletes }),
+          bypassedDeletes: [...shim.bypassedDeletes],
+          ...(shim.auditInconsistent ? { auditInconsistent: shim.auditInconsistent } : {}),
+          ...(shim.auditUnreadable ? { auditUnreadable: shim.auditUnreadable } : {}),
+        }
+      : {}),
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [
-      "delete-not-refused",
+      // The shim refuses deletes made through libc; a static binary or a raw system call is caught only after the
+      // run, from the device tree, and a session-made file deleted so is not seen at all.
+      enforced ? "delete-refusal-libc" : "delete-not-refused",
       ...(unrestricted ? [] : ["egress-allowlist"]),
       "description-paraphrase",
       "device-paths-tilde",
       "device-tools-unserved",
-      "shell-user",
       "device-network-shared",
       // A declined card reaches the agent as the harness's own deny text; production's has not been captured.
       "decline-text",

@@ -8,7 +8,14 @@ import { SKILL_RESULT_ASSERT_CAP } from "../types.js";
 /** A frozen cassette row's `source` is untrusted text — narrow it before it reaches the typed record,
  *  so an unrecognized value falls back to the fatal class rather than silently minting a new severity. */
 function isInfraErrorSource(s: unknown): s is InfraErrorSource {
-  return s === "hostloop-sidecar" || s === "hostloop-exec" || s === "egress-sidecar" || s === "device-container" || s === "device-exec";
+  return (
+    s === "hostloop-sidecar" ||
+    s === "hostloop-exec" ||
+    s === "egress-sidecar" ||
+    s === "device-container" ||
+    s === "device-shim" ||
+    s === "device-exec"
+  );
 }
 import { questionKey, questionLabel, canon } from "../agent/session.js";
 import {

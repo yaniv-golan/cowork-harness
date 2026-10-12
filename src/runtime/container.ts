@@ -16,7 +16,7 @@ import { combineSdkMcp } from "../agent/session.js";
 import { listMountedSkills } from "../run/skill-metadata.js";
 import type { McpHandler } from "../hostloop/workspace-handler.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
-import { agentPlanFor, startDeviceBridge } from "./device-container.js";
+import { agentPlanFor, assertDeviceImageReady, deviceToolSurface, startDeviceBridge } from "./device-container.js";
 
 /** The VM loop's web_fetch surface, as three coupled answers derived from ONE gate reading.
  *
@@ -34,6 +34,20 @@ import { agentPlanFor, startDeviceBridge } from "./device-container.js";
 export function vmLoopWebFetchSurface(webFetchViaApi: boolean): { advertised: string[]; preApproved: string[]; disallowed: string[] } {
   if (!webFetchViaApi) return { advertised: [], preApproved: [], disallowed: [] };
   return { advertised: ["mcp__workspace__web_fetch"], preApproved: [], disallowed: ["WebFetch"] };
+}
+
+/** The tools the agent is spawned with (`extraTools`) and those it may call without asking (`extraAllowedTools`).
+ *  web_fetch is advertised but not pre-approved: production gates it at can_use_tool (see vmLoopWebFetchSurface). The
+ *  device_bridge delete card likewise: production marks it as needing a person (deviceToolSurface). */
+export function containerToolLists(
+  base: { cowork: string[]; webFetch: string[] },
+  device: { tools: string[]; askTools: string[] } | undefined,
+): { extraTools: string[]; extraAllowedTools: string[] } {
+  const deviceSurface = deviceToolSurface(device);
+  return {
+    extraTools: [...base.cowork, ...base.webFetch, ...SKILLS_PLUGINS_TOOL_NAMES, ...deviceSurface.advertised],
+    extraAllowedTools: [...base.cowork, ...SKILLS_PLUGINS_TOOL_NAMES, ...deviceSurface.preApproved],
+  };
 }
 
 /**
@@ -137,6 +151,7 @@ export function spawnContainer(
     : undefined;
   // Handed to the caller at once, so its teardown removes the container even if something below throws.
   if (device) opts.onDeviceStarted?.(device);
+  if (device) assertDeviceImageReady(device);
   // Host-path tokens in the user's staged inputs, so the post-run host_path_leak scan can tell a path the
   // user supplied from one the sandbox leaked. First turn only (a no-op on resume). Under device_bridge the
   // folders' copies are in the device tree, so they are visited there.
@@ -156,6 +171,7 @@ export function spawnContainer(
   // `spawnHostLoop` splits extraTools/extraAllowedTools for exactly this reason; pre-approving here
   // would make a scripted `webfetch:<domain>` answer, and a `decide: deny` on it, silently inert.
   const { advertised: webFetchTools, disallowed: webFetchDisallowed } = vmLoopWebFetchSurface(!!opts.webFetchViaApi);
+  const toolLists = containerToolLists({ cowork: coworkTools, webFetch: webFetchTools }, device);
   const claudeArgs = agentArgs(baseline, plan, {
     mntRoot,
     systemPromptAppend: opts.systemPromptAppend,
@@ -169,11 +185,8 @@ export function spawnContainer(
     // §3: `isEnabled` = `sessionType==="cowork"`, which container satisfies) — pre-approved for the same
     // off-registry-auto-allow reason present_files is.
     disallowed: webFetchDisallowed,
-    // The delete card (device?.askTools) is advertised but not pre-approved: production marks it as needing a person.
-    extraTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? []), ...(device?.askTools ?? [])],
-    // web_fetch is absent here ON PURPOSE — see webFetchTools above. It is the one registered tool this
-    // tier does not pre-approve, because production gates it at can_use_tool.
-    extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? [])],
+    extraTools: toolLists.extraTools,
+    extraAllowedTools: toolLists.extraAllowedTools,
   });
   const dockerArgs = dockerRunArgv({
     network,

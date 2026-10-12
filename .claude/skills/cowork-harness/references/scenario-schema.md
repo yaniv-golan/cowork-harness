@@ -73,8 +73,9 @@ lane: local                         # OPTIONAL — which Cowork lane's DELIVERY 
                                     # delete card device_request_delete_permission) from a second container
                                     # holding COPIES of the connected folders at $HOME/mnt/<folder-name>;
                                     # the agent's own container gets no folder.
-                                    # Assert with tool_called. A delete there succeeds where production
-                                    # refuses it: assert no_delete_in_mounts. Stamps cassette v18.
+                                    # Assert with tool_called. A delete in an rw folder is refused until the
+                                    # delete card is answered: script it (when_tool: ...delete_permission).
+                                    # Stamps cassette v18.
 on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm — run rejects prompt
                                     # ("agent" is retired — no longer a valid value)
 

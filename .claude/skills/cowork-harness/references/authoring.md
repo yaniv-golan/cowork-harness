@@ -79,7 +79,12 @@ computer, `mcp__remote-devices__device_bash`, from a second container holding CO
 `$HOME/mnt/<folder-name>`; the agent's own container gets no folder. Assert on that call, never on the folder's
 files: `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`, plus `transcript_matches`.
 `file_exists` / `input_unmodified` on a connected folder's path are refused under the bridge (they would read the
-agent's container). `no_delete_in_mounts` covers the folders (the device copy allows a delete production refuses).
+agent's container). A delete in an `rw` folder is refused until the user allows it through the delete card,
+`mcp__remote-devices__device_request_delete_permission`, as in production: a skill that deletes there needs a
+scripted answer for the card (`when_tool:` it, `decide: allow` or `deny`) or the run fails as unanswered; an `rwd`
+folder allows deletes from the start. `no_delete_in_mounts` covers the folders, an allowed delete included. A delete
+that gets past the refusal fails the run (`device_delete_bypassed`). The first bridge run builds the device image
+locally (needs Docker Hub).
 `tool_not_called` on `device_bash`/`get_device_info`/`device_request_delete_permission` without the bridge, or on a device tool the harness never serves
 (with it or without), is refused as vacuous. Egress follows the session allowlist;
 `egress.unrestricted: true` matches production's pass-through. With no `permission_mode` in the session the agent

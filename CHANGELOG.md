@@ -25,13 +25,29 @@ All notable changes to this project are documented here. The format is based on
 - **Cassette format v18.** A scenario with `device_bridge: true` now stamps v18: its frozen `deviceBridge` carries
   the delete card's fields, which a v17 reader rejects, so an older reader refuses it as too new. A v17 bridge
   recording still reads and replays as recorded. Every other cassette stamps what it did.
-- **A device_bridge run can now end on an unanswered delete card.** The bridge serves
-  `device_request_delete_permission`, which only a person answers. Unscripted, it fails the run as an unanswered gate
-  under the default `on_unanswered: fail` (exit 2), where a 4.8 run never saw the card. Script it with
-  `when_tool: mcp__remote-devices__device_request_delete_permission` and `decide: allow` or `deny`.
-- **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal` and `grants`;
-  `divergences` gains `decline-text`, `grant-without-prompt` when a grant came with no card, and
-  `rename-reads-as-delete` when the run directory's filesystem can reuse a deleted file's identity.
+- **Under `device_bridge`, a delete in an `rw` connected folder is now refused** ("Operation not permitted") until
+  the user allows it through the delete card, `device_request_delete_permission`, as production refuses it. A skill
+  that deletes there now meets the card, which only a person answers: unscripted, it fails the run as an unanswered
+  gate under the default `on_unanswered: fail` (exit 2). Script it with
+  `when_tool: mcp__remote-devices__device_request_delete_permission` and `decide: allow` or `deny`, or mount the folder
+  `rwd`. A move between connected folders now copies and cannot remove its source, as in production.
+- **The first `device_bridge` run builds a device image locally** (the agent image plus the delete library; it needs
+  Docker Hub and apt, and takes a few minutes), and rebuilds it when the agent image changes. A run whose device
+  image is missing the library fails as an infrastructure error (`device-shim`); one whose image cannot be built
+  stops before the agent starts.
+- **A delete that gets past the refusal fails the run** (`device_delete_bypassed`, not waivable by
+  `allow_delete_in`): a static binary or a raw system call that deletes a file, or moves it out of its folder, caught
+  by comparing the device copy before and after. If the device shell replaces the refusal's log, the run warns
+  (`device_audit_unreadable`) and the record leaves the refusal count out.
+  Where the run directory's filesystem can reuse a deleted file's identity, it is the warning
+  `device_delete_unconfirmed` instead: a rename followed by an edit reads the same there.
+- **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal`
+  (`enforced`), `grants`, `refusedDeletes` and `bypassedDeletes`. `divergences` replaces `delete-not-refused` with
+  `delete-refusal-libc`, drops `shell-user` (commands run under production's per-session name and home), and gains
+  `decline-text`, `grant-without-prompt` when a grant came with no card, and `rename-reads-as-delete` when the run
+  directory's filesystem can reuse a deleted file's identity.
+- **Under an enforced `device_bridge`, a connected-folder delete no longer raises `mount_delete`**: one that remains
+  is one the user allowed. `no_delete_in_mounts` still fails on it.
 - **`tool_not_called` / `subagent_tool_absent` on the delete card are no longer refused under `device_bridge`**; without
   it they still are, as for `device_bash`.
 
@@ -49,9 +65,17 @@ All notable changes to this project are documented here. The format is based on
   first. The handler refuses a path that is not a connected folder root, a read-only folder, or a malformed request,
   as production does. A scenario answers the card like any tool permission; permission parity never answers it,
   `on_unanswered: fail` ends the run, `first` declines it, and `llm`, the prompt and `--decider-cmd` choose between
-  its two buttons (`Decline`, `Allow for this session`), shown the folders requested and the agent's reason. Under `bypassPermissions` the grant is immediate. Each grant is
-  recorded in `RunResult.deviceBridge.grants` with who answered it. Nothing refuses a delete on the device copy yet:
-  `deleteRefusal: "reported"`, and `delete-not-refused` stays.
+  its two buttons (`Decline`, `Allow for this session`), shown the folders requested and the agent's reason. Under
+  `bypassPermissions` the grant is immediate. Each grant is recorded in `RunResult.deviceBridge.grants` with who
+  answered it, and takes effect from the next device_bash call.
+- **The device container refuses deletes as production does.** A library preloaded into every process refuses
+  `unlink`, `rmdir` and `remove` in an `rw` folder until it is granted (a missing file still reports missing; a
+  folder is recognized by its identity, so another spelling of its name on a case-insensitive filesystem is too), keeps
+  a rename within a folder, also over an existing file, and makes a move across folders cross-device; git leaves
+  its lock files and the next commit fails on `HEAD.lock`, production's measured behaviour. The bridge proves the
+  refusal on a probe file before the first command. The device shell runs as the host user under production's
+  per-session name and home.
+- **`doctor` reports the device_bridge image** (built, or built on the first bridge run).
 
 - **`search-pool build|export|import`: collect the WebSearch results recorded in kept runs into a pool.** One record
   per search (its query, links and prose summary) with the source run's skill, skill commit, skill snapshot signature,

@@ -26,6 +26,9 @@ import {
   deviceVmUser,
   agentPlanFor,
   deniedDeviceFolders,
+  DEVICE_BRIDGE_ASK_TOOLS,
+  assertDeviceImageReady,
+  DEVICE_BRIDGE_TOOLS,
   deviceTreeDeletes,
   deviceTreeIdentityReliable,
   makeDeviceExec,
@@ -89,15 +92,17 @@ describe("deviceContainerArgv", () => {
     network: "cowork-int-t",
     egressProxy: "http://proxy:8080",
     deviceHost,
+    controlHost: join(root, "out"),
     sessionId: "session_t1",
     folders: deviceFolders(mounts),
+    user: { uid: 501, gid: 20 },
   });
 
-  it("binds only paths under the run's device tree, never a mount's host path", () => {
+  it("binds only paths under the run directory, never a mount's host path", () => {
     const sources = binds(argv).map((b) => b.split(":")[0]);
     expect(sources.length).toBeGreaterThan(0);
     for (const s of sources) {
-      expect(s.startsWith(deviceHost), s).toBe(true);
+      expect(s.startsWith(join(root, "out")), s).toBe(true);
       for (const m of mounts) expect(s.startsWith(m.hostPath), s).toBe(false);
     }
     expect(argv.join(" ")).not.toContain(join(root, "user"));
@@ -106,11 +111,17 @@ describe("deviceContainerArgv", () => {
   it("mounts the device tree as $HOME and each folder at $HOME/mnt/<name>, read-only folders :ro", () => {
     // mnt is a mount point of its own, so a command cannot rename or replace it (and with it a read-only folder's
     // bind source) for a later turn to bind.
-    expect(binds(argv)).toEqual([
+    expect(binds(argv).slice(0, 3)).toEqual([
       `${deviceHost}:/sessions/rcw-t1`,
       `${deviceHost}/mnt:/sessions/rcw-t1/mnt`,
       `${deviceHost}/mnt/ref:/sessions/rcw-t1/mnt/ref:ro`,
     ]);
+    // The rest are the shim's control files (device-control.test.ts).
+    expect(
+      binds(argv)
+        .slice(3)
+        .every((b) => b.startsWith(join(root, "out", "device-"))),
+    ).toBe(true);
     expect(argv[argv.indexOf("-w") + 1]).toBe("/sessions/rcw-t1");
   });
 
@@ -132,8 +143,10 @@ describe("deviceContainerArgv", () => {
       network: "net",
       egressProxy: "http://proxy:8080",
       deviceHost,
+      controlHost: join(root, "out"),
       sessionId: "s",
       folders: deviceFolders([mounts[1]]),
+      user: { uid: 501, gid: 20 },
     });
     expect(roOnly.some((a) => a.startsWith("GIT_"))).toBe(false);
   });
@@ -143,12 +156,17 @@ describe("deviceContainerArgv", () => {
 // bash -c <command>` runs the command locally (in `cwd`, standing in for $HOME), with `timeout`'s own exit 124 when it
 // outlives its limit; a missing container answers as the daemon does (exit 1). `run` stays alive like the keep-alive
 // container and `rm` records the name it removed.
+/** The stand-in runner has no images: the device image is the agent image as given. */
+const STAND_IN_IMAGE = (_runner: string, base: string) => ({ imageId: base });
+
 function standInRunner(root: string, cwd = "/"): string {
   const runner = join(root, "runner.sh");
   writeFileSync(
     runner,
     [
       "#!/bin/bash",
+      // The canary's rm, answered as the shim answers it.
+      'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
       'case "$1" in',
       "  run) exec sleep 30;;",
       `  rm) echo "$3" >> "${root}/removed"; exit 0;;`,
@@ -215,6 +233,7 @@ describe("startDeviceBridge", () => {
     const outDir = join(root, "out");
     const runner = standInRunner(root, join(outDir, "work", "device"));
     const bridge = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
       runner,
       image: "img",
       network: "net",
@@ -262,6 +281,8 @@ describe("startDeviceBridge: teardown", () => {
       runner,
       [
         "#!/bin/bash",
+        // The canary's rm, answered as the shim answers it.
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
         'case "$1" in',
         `  run) ( sleep 0.3; echo created > "${exists}" ) >/dev/null 2>&1 & disown; exec sleep 30;;`,
         `  rm) rm -f "${exists}"; echo rm >> "${root}/removed"; exit 0;;`,
@@ -272,6 +293,7 @@ describe("startDeviceBridge: teardown", () => {
       { mode: 0o755 },
     );
     const b = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
       runner,
       image: "img",
       network: "net",
@@ -305,6 +327,8 @@ describe("startDeviceBridge: a container that is slow to come up", () => {
       runner,
       [
         "#!/bin/bash",
+        // The canary's rm, answered as the shim answers it.
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
         `echo "$1" >> "${log}"`,
         'case "$1" in',
         "  run) exec sleep 30;;",
@@ -318,6 +342,7 @@ describe("startDeviceBridge: a container that is slow to come up", () => {
       { mode: 0o755 },
     );
     const bridge = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
       runner,
       image: "img",
       network: "net",
@@ -369,6 +394,7 @@ describe("startDeviceBridge: a resumed turn never binds what a command left behi
     const runner = standInRunner(root, join(outDir, "work", "device"));
     const start = (resume: boolean) =>
       startDeviceBridge({
+        ensureImage: STAND_IN_IMAGE,
         runner,
         image: "img",
         network: "net",
@@ -403,6 +429,7 @@ describe("startDeviceBridge: a resumed turn never binds what a command left behi
     const runner = standInRunner(root, deviceHost);
     expect(() =>
       startDeviceBridge({
+        ensureImage: STAND_IN_IMAGE,
         runner,
         image: "img",
         network: "net",
@@ -424,6 +451,7 @@ describe("startDeviceBridge: a resumed turn never binds what a command left behi
     const runner = standInRunner(root, join(outDir, "work", "device"));
     const start = (resume: boolean) =>
       startDeviceBridge({
+        ensureImage: STAND_IN_IMAGE,
         runner,
         image: "img",
         network: "net",
@@ -500,6 +528,7 @@ describe("deviceTreeDeletes", () => {
     const runner = standInRunner(root, join(outDir, "work", "device"));
     const start = (resume: boolean) =>
       startDeviceBridge({
+        ensureImage: STAND_IN_IMAGE,
         runner,
         image: "img",
         network: "net",
@@ -597,9 +626,19 @@ describe("wiring: spawnContainer", () => {
     expect(s).toMatch(/startDeviceBridge\(\{[\s\S]{0,400}mounts: launchPlan\.mounts,/);
     expect(s).toMatch(/stageWorkspace\(plan, mntHost, /);
   });
-  it("advertises, pre-approves and serves the bridge's tools", () => {
-    expect(s).toMatch(/extraTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\), \.\.\.\(device\?\.askTools \?\? \[\]\)\]/);
-    expect(s).toMatch(/extraAllowedTools: \[[^\]]*\.\.\.\(device\?\.tools \?\? \[\]\)\]/);
+  it("advertises the delete card and pre-approves only the other device tools (the lists the agent is spawned with)", async () => {
+    const { containerToolLists } = await import("../src/runtime/container.js");
+    const lists = containerToolLists({ cowork: ["c"], webFetch: ["w"] }, { tools: DEVICE_BRIDGE_TOOLS, askTools: DEVICE_BRIDGE_ASK_TOOLS });
+    expect(lists.extraTools).toEqual(expect.arrayContaining([...DEVICE_BRIDGE_TOOLS, ...DEVICE_BRIDGE_ASK_TOOLS, "c", "w"]));
+    expect(lists.extraAllowedTools).toEqual(expect.arrayContaining([...DEVICE_BRIDGE_TOOLS, "c"]));
+    for (const t of [...DEVICE_BRIDGE_ASK_TOOLS, "w"]) expect(lists.extraAllowedTools).not.toContain(t);
+    expect(containerToolLists({ cowork: [], webFetch: [] }, undefined).extraTools.some((t) => t.startsWith("mcp__remote-devices__"))).toBe(
+      false,
+    );
+    // The spawn uses these lists as they are, and serves the bridge's bundle.
+    expect(s).toMatch(/const toolLists = containerToolLists\(\{ cowork: coworkTools, webFetch: webFetchTools \}, device\);/);
+    expect(s).toMatch(/extraTools: toolLists\.extraTools,/);
+    expect(s).toMatch(/extraAllowedTools: toolLists\.extraAllowedTools,/);
     expect(s).toMatch(/\.\.\.\(device \? \[device\.bundle\] : \[\]\)/);
   });
 });
@@ -627,14 +666,13 @@ describe("wiring: the review fixes reach the run", () => {
   it("container.ts hands the device over at once and feeds its folder copies to the input corpus", () => {
     const s = read("runtime/container.ts");
     expect(s).toMatch(
-      /if \(device\) opts\.onDeviceStarted\?\.\(device\);\s*\n(\s*\/\/[^\n]*\n)*\s*captureInputHostPathCorpus\(plan, mntHost, outDir, device\?\.inputRoots\);/,
+      /if \(device\) opts\.onDeviceStarted\?\.\(device\);\s*\n\s*if \(device\) assertDeviceImageReady\(device\);\s*\n(\s*\/\/[^\n]*\n)*\s*captureInputHostPathCorpus\(plan, mntHost, outDir, device\?\.inputRoots\);/,
     );
   });
   it("execute.ts adds device-tree deletes to the scan and refuses folder-path file assertions", () => {
     const s = read("run/execute.ts");
-    expect(s).toMatch(
-      /if \(scenario\.device_bridge === true\) scan\.mountDeletes\.push\(\.\.\.deviceTreeDeletes\(outDir, deniedDeviceFolders\(plan\.mounts\)\)\);/,
-    );
+    // scanTurn folds the findings in (device-delete-findings.test.ts runs it); here, that the run hands them over.
+    expect(s).toMatch(/scenario\.device_bridge === true \? \{ findings: bridgeFindings\(\) \} : undefined,/);
     expect(s).toMatch(/deviceBridgeFolderAssertRefusal\(\s*scenario,\s*deviceFolders\(plan\.mounts\)/);
   });
 });
@@ -707,5 +745,232 @@ describe("deviceTreeDeletes: the recorded listing", () => {
     );
     renameSync(join(copy, "a.txt"), join(copy, "moved.txt"));
     expect(deviceTreeDeletes(outDir, PROJ).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
+  });
+});
+
+// The canary runs as the container comes up. A run that never calls device_bash can end first, so teardown waits for
+// it (bounded): the record then says whether the refusal was proven, and a canary still pending when teardown gives
+// up cannot report an infra error after the run's errors were collected.
+describe("startDeviceBridge: teardown and the canary", () => {
+  function bridge(root: string, runner: string, shimWaitMs?: number) {
+    const f = folder(root, "proj");
+    return startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out"),
+      sessionId: "s",
+      runToken: `t${Math.random().toString(36).slice(2)}`,
+      mounts: [f],
+      appVersion: "2.31226.1",
+      resume: false,
+      ...(shimWaitMs !== undefined ? { shimWaitMs } : {}),
+    });
+  }
+  it("a run that never called device_bash still records the canary's outcome", async () => {
+    const root = scratch();
+    // The container takes 8 s to come up, longer than teardown takes on its own.
+    const runner = join(root, "slow.sh");
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        "  inspect) sleep 8; echo true; exit 0;;",
+        "esac",
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const b = bridge(root, runner, 30_000);
+    await b.teardown();
+    expect(b.shimEnforced()).toBe(true);
+    expect(b.infraErrors).toEqual([]);
+  });
+  it("a container that never comes up: teardown gives up on the canary within its bound, and nothing is reported after", async () => {
+    const root = scratch();
+    const runner = join(root, "never.sh");
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        "  inspect) echo false; exit 0;;",
+        "esac",
+        "exit 1",
+        "",
+      ].join("\n"),
+      {
+        mode: 0o755,
+      },
+    );
+    const b = bridge(root, runner, 300);
+    const t0 = Date.now();
+    await b.teardown();
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    const errorsAtTeardown = b.infraErrors.length;
+    // The pending canary stops with the teardown rather than polling on for a minute.
+    const settled = await Promise.race([b.shimCheck.then(() => true), new Promise((r) => setTimeout(() => r(false), 3000))]);
+    expect(settled).toBe(true);
+    expect(b.infraErrors.length).toBe(errorsAtTeardown);
+    expect(b.shimEnforced()).toBe(false);
+  });
+});
+
+describe("a device image that cannot be built stops the run before the agent starts", () => {
+  it("assertDeviceImageReady throws for a bridge whose image failed, and spawnContainer calls it before launching", () => {
+    const root = scratch();
+    const b = startDeviceBridge({
+      ensureImage: () => ({ error: "no network" }),
+      runner: standInRunner(root),
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out"),
+      sessionId: "s",
+      runToken: "img-fail",
+      mounts: [folder(root, "proj")],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    try {
+      expect(() => assertDeviceImageReady(b)).toThrow(/no network/);
+      expect(b.infraErrors.map((e) => e.source)).toContain("device-shim");
+    } finally {
+      b.markTearingDown();
+      b.reapNow();
+    }
+    const ok = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
+      runner: standInRunner(root),
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out2"),
+      sessionId: "s",
+      runToken: "img-ok",
+      mounts: [folder(root, "proj2")],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    try {
+      expect(() => assertDeviceImageReady(ok)).not.toThrow();
+    } finally {
+      ok.markTearingDown();
+      ok.reapNow();
+    }
+    const s = readFileSync(join(import.meta.dirname, "..", "src", "runtime", "container.ts"), "utf8");
+    expect(s).toMatch(
+      /if \(device\) opts\.onDeviceStarted\?\.\(device\);\s*\n(\s*\/\/[^\n]*\n)*\s*if \(device\) assertDeviceImageReady\(device\);/,
+    );
+  });
+});
+
+// A grant takes effect from the next device_bash call. The grants file reaches the container through the runtime's
+// file sharing, which can serve a stale copy for a moment, so the bridge answers the card only once the container
+// sees the grant.
+describe("a delete grant is visible in the container before the card's answer returns", () => {
+  it("waits until the container reads the granted folder back", async () => {
+    const root = scratch();
+    const reads = join(root, "reads");
+    const runner = join(root, "lag.sh");
+    // `exec <ctr> cat <grants>`: the first read is stale (empty), later ones show the file.
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
+        `if [ "$1" = exec ] && [ "$3" = cat ]; then echo x >> "${reads}"; [ "$(wc -l < "${reads}")" -lt 2 ] && exit 0; cat "${join(root, "out", "device-ctl", "grants")}"; exit 0; fi`,
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        "  inspect) echo true; exit 0;;",
+        "esac",
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const b = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out"),
+      sessionId: "s",
+      runToken: "grant-lag",
+      mounts: [folder(root, "proj")],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    try {
+      await b.shimCheck;
+      const r = (await b.bundle.handle("remote-devices", {
+        method: "tools/call",
+        params: { name: "device_request_delete_permission", arguments: { paths: ["~/proj"] } },
+      })) as any;
+      expect(r.result.isError).toBeFalsy();
+      expect(readFileSync(reads, "utf8").trim().split("\n").length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await b.teardown();
+    }
+  });
+});
+
+describe("a grant the container never sees", () => {
+  it("still answers the card, but records a device-exec infra warning naming the folders", async () => {
+    const root = scratch();
+    const runner = join(root, "blind.sh");
+    // The container never shows the grant: `cat` of the grants file always reads empty.
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
+        'if [ "$1" = exec ] && [ "$3" = cat ]; then exit 0; fi',
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        "  inspect) echo true; exit 0;;",
+        "esac",
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const b = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out"),
+      sessionId: "s",
+      runToken: "grant-blind",
+      mounts: [folder(root, "proj")],
+      appVersion: "2.31226.1",
+      resume: false,
+      grantWaitMs: 300,
+    });
+    try {
+      await b.shimCheck;
+      const r = (await b.bundle.handle("remote-devices", {
+        method: "tools/call",
+        params: { name: "device_request_delete_permission", arguments: { paths: ["~/proj"] } },
+      })) as any;
+      expect(r.result.isError).toBeFalsy();
+      expect(b.infraErrors).toEqual([expect.objectContaining({ source: "device-exec", message: expect.stringMatching(/proj/) })]);
+    } finally {
+      await b.teardown();
+    }
   });
 });

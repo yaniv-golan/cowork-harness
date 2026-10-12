@@ -166,11 +166,23 @@ describe("verdict-signals docs ↔ code", () => {
   // the `first`/`llm` fallbacks it co-occurs with `non_deterministic`, and on `fail` the run is already red.
   // 13 as of `parked_at_question`. It fires only under `answer_channel: none`, and only where `stalled` (a fail) would
   // otherwise have fired, so no run gains a signal it did not have.
-  it('the docs\' "only thirteen warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 14 as of `device_delete_unconfirmed`: it fires only under an enforced device_bridge, where a file is gone from a
+  // folder never granted on a filesystem that cannot tell that from a rename followed by an edit.
+  // 15 as of `device_audit_unreadable`: the device shell replaced the shim's delete log.
+  it('the docs\' "only fifteen warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(13);
-    expect(scenarioMdText).toMatch(/Only thirteen codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(15);
+    expect(scenarioMdText).toMatch(/Only fifteen codes are \*\*warn\*\*-severity/);
+  });
+  // 12 as of `device_delete_bypassed`: a delete in a connected folder past the device's refusal, under an enforced
+  // device_bridge only.
+  it('the docs\' "twelve fail-severity signals" claim matches the actual count in verdict.ts', () => {
+    const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
+    // Distinct codes: some fail codes are pushed from more than one site.
+    const failCodes = new Set([...verdictSrc.matchAll(/code:\s*"([a-z0-9_]+)",\s*\n?\s*severity:\s*"fail"/g)].map((m) => m[1]));
+    expect(failCodes.size).toBe(12);
+    expect(scenarioMdText).toMatch(/Twelve are \*\*fail\*\*-severity/);
   });
 });
 
