@@ -41,7 +41,7 @@ const sig = () => metricSig(c.scenario.metrics![0]);
 const result = (value: number) =>
   ({ metrics: [{ id: "n", value, command: { sig: sig(), script: "metrics/count.mjs", scriptSha256: "x" } }] }) as unknown as RunResult;
 const row = (o: { value?: number; reason?: string; withSig?: boolean }) => ({
-  grade: o.value !== undefined ? { n: o.value, n_present: 1 } : { n_present: 0 },
+  grade: (o.value !== undefined ? { n: o.value, n_present: 1 } : { n_present: 0 }) as Record<string, number>,
   meta: { ...(o.withSig === false ? {} : { metric_sigs: { n: sig() } }), ...(o.reason ? { metrics_unavailable: { n: o.reason } } : {}) },
 });
 
