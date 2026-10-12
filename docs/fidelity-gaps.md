@@ -1915,8 +1915,8 @@ a simulated session.
 - **`rename-reads-as-delete`.** Present only when the run directory's filesystem can give a new file a deleted
   file's identity (see `delete-refusal-libc`). There a moved file counts as a rename only with unchanged bytes, so a
   file renamed and then edited, or an empty directory renamed, reads as gone. In a folder deletion was never allowed
-  in, `device_delete_bypassed` then only warns, naming both possibilities: a delete past the library, or a rename
-  followed by an edit.
+  in, the run then gets the warning `device_delete_unconfirmed`, naming both possibilities (a delete past the
+  library, or a rename followed by an edit), instead of the failure `device_delete_bypassed`.
 
 Commands run as the host user's uid under production's per-session name and home (`rcw-<id>`,
 `/sessions/rcw-<id>`), so every staged file is the shell's own.

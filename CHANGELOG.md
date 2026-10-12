@@ -36,7 +36,8 @@ All notable changes to this project are documented here. The format is based on
   image is missing the library, or cannot be built, fails as an infrastructure error (`device-shim`).
 - **A delete that gets past the refusal fails the run** (`device_delete_bypassed`, not waivable by
   `allow_delete_in`): a static binary or a raw system call, caught by comparing the device copy before and after.
-  Where the run directory's filesystem can reuse a deleted file's identity, it only warns.
+  Where the run directory's filesystem can reuse a deleted file's identity, it is the warning
+  `device_delete_unconfirmed` instead: a rename followed by an edit reads the same there.
 - **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal`
   (`enforced`), `grants`, `refusedDeletes` and `bypassedDeletes`. `divergences` replaces `delete-not-refused` with
   `delete-refusal-libc`, drops `shell-user` (commands run under production's per-session name and home), and gains
