@@ -90,7 +90,7 @@ describe("cowork-harness SKILL.md structural tripwire", () => {
   });
 
   it("retains the web_fetch provenance section marker (in references/authoring.md)", () => {
-    expect(read("references/authoring.md")).toContain("### web_fetch (fail-closed, two-path)");
+    expect(read("references/authoring.md")).toContain("### web_fetch (never auto-allowed, two-path)");
   });
 
   it.each(SPLIT_REFERENCES)("%s exists and SKILL.md links it", (rel) => {

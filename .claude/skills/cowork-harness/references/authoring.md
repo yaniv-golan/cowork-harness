@@ -206,7 +206,7 @@ The `"first"` shorthand remains active only for the built-in `--on-unanswered fi
 write an external helper, return a label name or option index — never the bare word `"first"` unless
 your gate actually has a label called `"first"`.
 
-### web_fetch (fail-closed, two-path)
+### web_fetch (never auto-allowed, two-path)
 
 `web_fetch` behaves unlike `curl`. A URL is gated by **provenance**, not the egress allowlist:
 
@@ -214,9 +214,10 @@ your gate actually has a label called `"first"`.
   make a fetch succeed, put the URL in the prompt.
 - **Provenanced** → fetches (still SSRF-guarded per redirect hop); the egress hostname allowlist is
   **not consulted**.
-- **Not provenanced** → raises a per-domain approval gate (`webfetch:<domain>`) that is
-  **fail-closed** (it is *not* auto-allowed; `--on-unanswered first` won't allow it). Answer it with
-  a scripted rule (`when_tool: "webfetch:<domain>"` + `grant: domain|once`), a session
+- **Not provenanced** → raises a per-domain approval gate (`webfetch:<domain>`) that is never
+  auto-allowed. Unanswered, it **ends the run as an unanswered gate** under `on_unanswered: fail`
+  (the `run` default); `--on-unanswered first` denies it. Answer it with a scripted rule
+  (`when_tool: "webfetch:<domain>"` + `grant: domain|once`), a session
   `web_fetch.approved_domains`, or a live decider.
 
 Surprise to remember: adding a host to `egress.extra_allow` is a **no-op** for a provenanced fetch.

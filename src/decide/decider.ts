@@ -384,6 +384,16 @@ export class FailDecider implements Decider {
         `unscripted delete permission request (on_unanswered=fail): the agent asked to delete files in ${JSON.stringify(req.input.paths ?? [])}`,
         `script it in the scenario's answers: - when_tool: ${DELETE_GRANT_TOOL}  ->  decide: allow | deny`,
       );
+    // A web_fetch to a URL with no provenance: production asks the user and waits, and never denies on its own. An
+    // ABSTAIN here would fall to the run's fail-closed deny, which no verdict reads, so under `fail` it ends the run.
+    if (req.kind === "permission" && req.tool.startsWith("webfetch:")) {
+      const domain = req.tool.slice("webfetch:".length);
+      throw new UnansweredError(
+        `unscripted web_fetch approval (on_unanswered=fail): ${req.tool} for ${String(req.input.url ?? "(no url)")}`,
+        `script it in the scenario's answers: - when_tool: "webfetch:${domain}"  ->  decide: allow, grant: once | domain ` +
+          `(or deny); or approve the domain in the session's web_fetch.approved_domains`,
+      );
+    }
     return ABSTAIN;
   }
 }

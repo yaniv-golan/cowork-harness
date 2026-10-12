@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **An unanswered web_fetch approval now fails the run under `on_unanswered: fail`.** When the agent fetches a URL
+  that appeared in neither the prompt nor an earlier fetch result, and no `answers:` rule or session
+  `web_fetch.approved_domains` covers its domain, the run used to deny the fetch silently and carry on; no verdict
+  read that deny. Under `fail` (the `run` and `record` default) it now ends the run as an unanswered gate, as an
+  unscripted AskUserQuestion does, naming the domain, the URL and the rule to add (`when_tool: "webfetch:<domain>"`
+  with `decide: allow` and `grant: once` or `domain`, or `decide: deny`). Production asks the user and waits; it
+  never denies on its own. `--on-unanswered first` and `llm` still deny it. A scenario that passed with the fetch
+  silently denied: script the answer it should get.
+
 - **A negative assertion on a `visualize` tool is now refused at load.** `tool_not_called` or `subagent_tool_absent`
   naming `mcp__visualize__read_me` or `mcp__visualize__show_widget` (production's skill-argument form tools) used to
   pass vacuously on `hostloop`, `container` and `microvm`, because the harness never serves them. Drop the assertion.
