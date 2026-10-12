@@ -17,7 +17,7 @@ type Call = { command: string; timeoutMs: number };
 function handler(exec: DeviceExec = async () => ({ exitCode: 0, output: "ok\n" }), folders = ["proj"]) {
   const calls: Call[] = [];
   const h = makeRemoteDevicesHandler({
-    folderNames: folders,
+    folders: folders.map((name) => ({ name, mode: "rw" as const })),
     appVersion: "2.31226.1",
     exec: async (command, timeoutMs) => {
       calls.push({ command, timeoutMs });
@@ -30,11 +30,11 @@ const call = async (h: ReturnType<typeof handler>["h"], name: string, args: unkn
   (await h("remote-devices", { method: "tools/call", params: { name, arguments: args } })) as any;
 
 describe("remote-devices: tools/list", () => {
-  it("serves device_bash (alwaysLoad) and get_device_info (deferred, as production registers it)", async () => {
+  it("serves device_bash (alwaysLoad), get_device_info (deferred, as production registers it) and the delete card", async () => {
     const { h } = handler();
     const { result } = (await h("remote-devices", { method: "tools/list" })) as any;
     const byName = Object.fromEntries(result.tools.map((t: any) => [t.name, t]));
-    expect(Object.keys(byName).sort()).toEqual(["device_bash", "get_device_info"]);
+    expect(Object.keys(byName).sort()).toEqual(["device_bash", "device_request_delete_permission", "get_device_info"]);
     expect(byName.device_bash._meta).toEqual({ "anthropic/alwaysLoad": true });
     expect(byName.get_device_info._meta).toBeUndefined();
     expect(byName.get_device_info.inputSchema).toEqual({ type: "object", properties: {} });
@@ -96,7 +96,7 @@ describe("remote-devices: device_bash results", () => {
   it("an infrastructure failure never reads as the command's exit", async () => {
     const infra: string[] = [];
     const h = makeRemoteDevicesHandler({
-      folderNames: ["proj"],
+      folders: [{ name: "proj", mode: "rw" }],
       appVersion: "2.31226.1",
       exec: async () => ({ infraError: "Error response from daemon: No such container: x" }),
       onInfraError: (m) => infra.push(m),

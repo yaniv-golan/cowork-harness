@@ -193,8 +193,8 @@ describe("a bad regex nested in the object form is a load-time error, not a post
 // assertion on one the run cannot serve passes vacuously, whatever the tier.
 describe("device tools the run does not serve", () => {
   const DB = "mcp__remote-devices__device_bash";
-  it("device_bash and get_device_info are vacuous without device_bridge, and served with it", () => {
-    for (const tool of [DB, "mcp__remote-devices__get_device_info"]) {
+  it("device_bash, get_device_info and the delete card are vacuous without device_bridge, and served with it", () => {
+    for (const tool of [DB, "mcp__remote-devices__get_device_info", "mcp__remote-devices__device_request_delete_permission"]) {
       for (const tier of ["container", "hostloop", "microvm"])
         expect(tierVacuousTool(tool, tier, GATE_OFF), `${tool} ${tier}`).toMatchObject({ tool, reason: "device-bridge-off" });
       expect(tierVacuousTool(tool, "container", GATE_OFF, true)).toBeUndefined();

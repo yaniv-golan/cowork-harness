@@ -909,8 +909,8 @@ export function checkVersions(): {
             .filter((f) => /^cassette\.v\d+\.json$/.test(f))
             .map((f) => ({ path: `schema/${f}`, text: r(`schema/${f}`) })),
         ],
-        // 6 prose sites + 2 in schema/cassette.v17.json; v9-v16 are frozen history (see FP_FROZEN).
-        minSites: 8,
+        // 6 prose sites + 2 each in schema/cassette.v17.json and v18.json; v9-v16 are frozen history (see FP_FROZEN).
+        minSites: 10,
       }),
     );
 

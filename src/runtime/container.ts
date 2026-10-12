@@ -177,7 +177,8 @@ export function spawnContainer(
     // §3: `isEnabled` = `sessionType==="cowork"`, which container satisfies) — pre-approved for the same
     // off-registry-auto-allow reason present_files is.
     disallowed: webFetchDisallowed,
-    extraTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? [])],
+    // The delete card (device?.askTools) is advertised but not pre-approved: production marks it as needing a person.
+    extraTools: [...coworkTools, ...webFetchTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? []), ...(device?.askTools ?? [])],
     // web_fetch is absent here ON PURPOSE — see webFetchTools above. It is the one registered tool this
     // tier does not pre-approve, because production gates it at can_use_tool.
     extraAllowedTools: [...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES, ...(device?.tools ?? [])],

@@ -438,7 +438,7 @@ export interface Cassette {
   // a failed frame as "no decision". ABSENT (an older recording): replay decides from the recorded agent version.
   hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
   // v17: what a device_bridge run modeled (RunResult.deviceBridge). FROZEN so replay reports what the recording
-  // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v17 by itself.
+  // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v18 by itself (v17 before the delete card).
   deviceBridge?: DeviceBridgeRecord;
   // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
   // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS
@@ -521,7 +521,11 @@ export interface Cassette {
 //  No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
 // v17: a frozen scenario with `device_bridge: true` (the remote lane's device tools). Stamped per cassette only
 //  then. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 17;
+// v18: a device_bridge recording's frozen record carries the delete card (`deleteRefusal`, `grants`, the card among
+//  `served`). A v17 reader's strict record shape rejects those fields as unrecognized, so a bridge recording stamps
+//  v18 and such a reader refuses it as too new. A v17 bridge recording, without them, still reads. Shared by the
+//  4.9.0 changes that need a v18 reader. No hashing change; HASH_FORMAT_EPOCH stays at 12.
+export const CASSETTE_VERSION = 18;
 
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
@@ -575,7 +579,7 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // the only behavior a pre-lane reader has ever had) needs no bump.
   lane: (v) => (v === "remote" ? 11 : 0),
   // A v16 reader's strict scenario schema rejects the key as unrecognized ("re-record"); v17 makes it "too new".
-  device_bridge: (v) => (v === true ? 17 : 0),
+  device_bridge: (v) => (v === true ? 18 : 0),
   prompt: () => 0,
   timeout_ms: () => 0,
   answers: () => 0,
@@ -3851,6 +3855,17 @@ const CassetteShape = z.looseObject({
       permissionMode: z.string(),
       permissionModeSource: z.enum(["session", "bridge-default"]),
       egress: z.enum(["allowlist", "unrestricted"]),
+      // v18. Absent on a v17 recording, which predates the delete card.
+      deleteRefusal: z.enum(["reported", "enforced"]).optional(),
+      grants: z
+        .array(
+          z.strictObject({
+            folders: z.array(z.string()),
+            answeredBy: z.enum(["script", "decider", "human", "bypassPermissions"]),
+            turn: z.number().int(),
+          }),
+        )
+        .optional(),
       folders: z.array(z.strictObject({ name: z.string(), mode: z.enum(["r", "rw", "rwd"]) })),
       divergences: z.array(z.string()),
     })

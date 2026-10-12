@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
@@ -13,6 +13,9 @@ import type { DeviceBridgeRecord, InfraErrorSource } from "../types.js";
 import { makeInfraEmitters, startHostLoopSidecar } from "./hostloop.js";
 import { HARDENING, proxyEnvVars } from "./argv.js";
 import { removeContainer } from "../egress/sidecar.js";
+import { DELETE_GRANT_TOOL } from "../decide/decider.js";
+import { deviceTreeListing, probeIdentityReliable, treeDeletes, type TreeEntry } from "./device-tree.js";
+export { treeDeletes, type TreeEntry } from "./device-tree.js";
 
 /**
  * The device container behind `device_bridge: true`. Production runs device_bash in the Mac's Cowork VM as a
@@ -203,64 +206,44 @@ async function waitRunning(runner: string, containerName: string, limitMs = 60_0
   }
 }
 
-/** Every file and link under the device tree's folders, as `<folder>/<path>` with its identity `<inode>:<birth
- *  time>`. Birth time as well as the inode: Linux reuses a freed inode for the next file created, so an inode alone
- *  would read a delete-then-create as a rename. A rename keeps both. */
-function deviceTreeListing(deviceHost: string): Record<string, string> {
-  const mnt = join(deviceHost, "mnt");
-  const out: Record<string, string> = {};
-  const visit = (p: string): void => {
-    let st;
-    try {
-      st = lstatSync(p);
-    } catch {
-      return;
-    }
-    if (st.isDirectory()) {
-      let names: string[] = [];
-      try {
-        names = readdirSync(p);
-      } catch {
-        return;
-      }
-      for (const n of names) visit(join(p, n));
-      return;
-    }
-    // Nanoseconds: a delete and the next create can fall within the same millisecond.
-    const ns = lstatSync(p, { bigint: true });
-    out[relative(mnt, p).split(sep).join("/")] = `${ns.ino}:${ns.birthtimeNs}`;
-  };
-  if (existsSync(mnt)) for (const n of readdirSync(mnt)) visit(join(mnt, n));
-  return out;
-}
-
-/** Record the device tree as staged, before the run, for deviceTreeDeletes. */
+/** Record the device tree as staged, before the run, for deviceTreeDeletes, with the probe's verdict on whether its
+ *  filesystem keeps identities apart. Probed beside `mnt`, never in it, so the probe file is not listed. */
 export function recordDeviceTree(outDir: string): void {
-  writeFileSync(join(outDir, DEVICE_TREE_FILE), JSON.stringify(deviceTreeListing(join(resolve(outDir), "work", "device"))));
+  const deviceHost = join(resolve(outDir), "work", "device");
+  const listing: DeviceTreeFile = { identityReliable: probeIdentityReliable(deviceHost), entries: deviceTreeListing(deviceHost) };
+  writeFileSync(join(outDir, DEVICE_TREE_FILE), JSON.stringify(listing));
 }
 
-/** Files the run removed from a folder copy, by any means (`rm`, `find -delete`, a script): in the staged listing,
- *  gone afterwards, and not renamed within the tree (a rename keeps its inode and birth time). Production refuses each of these
- *  until the user allows deletion. Nothing without a recorded listing: no evidence, no claim. */
+/** The recorded listing. A listing written before the probe (a flat map) counts as unreliable. */
+type DeviceTreeFile = { identityReliable: boolean; entries: Record<string, TreeEntry | string> };
+
+/** The recorded listing's verdict on whether its filesystem keeps identities apart: false for a listing written
+ *  before the probe, undefined without a listing. */
+export function deviceTreeIdentityReliable(outDir: string): boolean | undefined {
+  const recorded = readDeviceTree(outDir);
+  return recorded?.identityReliable;
+}
+
+function readDeviceTree(outDir: string): DeviceTreeFile | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
+    return typeof raw.identityReliable === "boolean" && raw.entries ? raw : { identityReliable: false, entries: raw };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Entries the run removed from a folder copy, by any means (`rm`, `find -delete`, `rmdir`, a script): the staged
+ *  listing compared with the tree after the run (`treeDeletes`). Production refuses each of these until the user allows
+ *  deletion. Nothing without a recorded listing: no evidence, no claim. */
 export function deviceTreeDeletes(
   outDir: string,
   /** The delete-denied (`rw`) folders (deniedDeviceFolders): a folder that allows deletes (`rwd`) is not counted. */
   denied: ReadonlyArray<{ name: string; mountPath: string }>,
 ): { mount: string; command: string }[] {
-  let before: Record<string, string>;
-  try {
-    before = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
-  } catch {
-    return [];
-  }
-  const after = deviceTreeListing(join(resolve(outDir), "work", "device"));
-  const identitiesAfter = new Set(Object.values(after));
-  // Named by mount path, as the command-text scan names a mount, so allow_delete_in waives both alike.
-  const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
-  return Object.keys(before)
-    .filter((path) => mountOf.has(path.split("/")[0]) && !(path in after) && !identitiesAfter.has(before[path]))
-    .sort()
-    .map((path) => ({ mount: mountOf.get(path.split("/")[0])!, command: `(removed from the device copy) ${path}` }));
+  const recorded = readDeviceTree(outDir);
+  if (!recorded) return [];
+  return treeDeletes(recorded.entries, deviceTreeListing(join(resolve(outDir), "work", "device")), denied, recorded.identityReliable);
 }
 
 /** The folders production refuses deletes in until the user allows them: mode `rw` (`rwd` is delete-approved,
@@ -274,6 +257,73 @@ export function deniedDeviceFolders(mounts: ReadonlyArray<Mount>): { name: strin
 /** The model-visible names of the tools the bridge serves, advertised and pre-approved (production pre-approves
  *  them: a captured cloud task showed no permission card for a device_bash call). */
 export const DEVICE_BRIDGE_TOOLS = ["mcp__remote-devices__device_bash", "mcp__remote-devices__get_device_info"];
+/** The device tools the bridge advertises but does not pre-approve: production marks the delete card as needing a
+ *  person, so the agent asks first and the scenario's answer decides it. */
+export const DEVICE_BRIDGE_ASK_TOOLS = [DELETE_GRANT_TOOL];
+
+/** Where a run keeps its delete grants: `<outDir>/device-ctl/grants`, one folder name per line, in grant order. A
+ *  resumed turn reads the same file, so a grant lasts the session, as production's does. */
+const grantsFile = (outDir: string): string => join(resolve(outDir), "device-ctl", "grants");
+
+/** The folders granted so far in this run's session. */
+export function readDeviceGrants(outDir: string): string[] {
+  try {
+    return readFileSync(grantsFile(outDir), "utf8")
+      .split("\n")
+      .filter((l) => l !== "");
+  } catch {
+    return [];
+  }
+}
+
+/** Add folders to the grants file. Written to a temp file and renamed inside the same directory, so a reader never
+ *  sees half a file. */
+export function writeDeviceGrant(outDir: string, folders: ReadonlyArray<string>): void {
+  const all = readDeviceGrants(outDir);
+  for (const f of folders) if (!all.includes(f)) all.push(f);
+  const file = grantsFile(outDir);
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.tmp-${process.pid}`;
+  writeFileSync(tmp, all.map((f) => `${f}\n`).join(""));
+  renameSync(tmp, file);
+}
+
+/** Who answered a delete grant. `script` is a scenario answer, `decider` an
+ *  LLM or external decider, `human` an interactive prompt, `bypassPermissions` no card at all (that mode shows none). */
+// No on_unanswered value grants: `fail` ends the run and `first` declines, so neither ever answers an Allow.
+export type DeleteGrantAnswer = "script" | "decider" | "human" | "bypassPermissions";
+export interface DeleteGrant {
+  folders: string[];
+  answeredBy: DeleteGrantAnswer;
+  turn: number;
+}
+const ANSWERED_BY: Partial<Record<string, DeleteGrantAnswer>> = {
+  scripted: "script",
+  llm: "decider",
+  external: "decider",
+  human: "human",
+};
+
+/** The grants a turn made, each with who answered it. The agent asks before each call, so the run's allow answers
+ *  for the delete card and the handler's calls line up in order: the n-th allow permitted the n-th call. A call the
+ *  handler refused (a bad path) grants nothing. Under bypassPermissions the agent asks nothing. */
+export function deleteGrantsOf(
+  decisions: ReadonlyArray<{ name?: string; decision?: string; by?: string }>,
+  calls: ReadonlyArray<{ folders: string[]; ok: boolean }>,
+  permissionMode: string,
+  turn: number,
+): DeleteGrant[] {
+  if (permissionMode === "bypassPermissions")
+    return calls.filter((c) => c.ok).map((c) => ({ folders: [...c.folders], answeredBy: "bypassPermissions", turn }));
+  const allows = decisions.filter((d) => d.name === DELETE_GRANT_TOOL && d.decision === "allow");
+  const out: DeleteGrant[] = [];
+  calls.forEach((c, i) => {
+    const by = allows[i]?.by;
+    const answeredBy = by === undefined ? undefined : ANSWERED_BY[by];
+    if (c.ok && answeredBy) out.push({ folders: [...c.folders], answeredBy, turn });
+  });
+  return out;
+}
 
 /**
  * Stage the device tree, start the device container, and build the `remote-devices` bundle that serves against
@@ -296,7 +346,12 @@ export function startDeviceBridge(p: {
 }): {
   containerName: string;
   bundle: { servers: string[]; handle: McpHandler };
+  /** Pre-approved device tools. */
   tools: string[];
+  /** Device tools advertised for the agent to ask about (the delete card). */
+  askTools: string[];
+  /** Every delete-card call this turn, accepted or refused, in order. */
+  grantCalls: () => ReadonlyArray<{ folders: string[]; ok: boolean }>;
   /** The folder copies, for the input host-path corpus: they are the user's input, as the agent's staged mounts are. */
   inputRoots: string[];
   infraErrors: { source: InfraErrorSource; message: string }[];
@@ -340,8 +395,11 @@ export function startDeviceBridge(p: {
     label: "device_bridge container",
   });
   let running: Promise<void> | undefined;
+  const grantCalls: Array<{ folders: string[]; ok: boolean }> = [];
   const handle = makeRemoteDevicesHandler({
-    folderNames: folders.map((f) => f.name),
+    folders: folders.map((f) => ({ name: f.name, mode: f.mode })),
+    onGrant: (granted) => writeDeviceGrant(p.outDir, granted),
+    onGrantCall: (c) => void grantCalls.push(c),
     appVersion: p.appVersion,
     exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId), () => (running ??= waitRunning(p.runner, containerName))),
     onInfraError: logExecInfra,
@@ -350,6 +408,8 @@ export function startDeviceBridge(p: {
     containerName,
     bundle: { servers: ["remote-devices"], handle },
     tools: DEVICE_BRIDGE_TOOLS,
+    askTools: DEVICE_BRIDGE_ASK_TOOLS,
+    grantCalls: () => grantCalls,
     inputRoots: folders.map((f) => join(deviceHost, "mnt", f.name)),
     infraErrors,
     markTearingDown: started.markTearingDown,
@@ -391,6 +451,10 @@ export function deviceBridgeRecord(
     permissionModeSource: "bridge-default",
     egressAllow: [],
   },
+  /** This turn's delete grants (`deleteGrantsOf`). */
+  grants: ReadonlyArray<DeleteGrant> = [],
+  /** The probe's verdict on the device tree's filesystem (`deviceTreeIdentityReliable`); undefined without a listing. */
+  identityReliable?: boolean,
 ): DeviceBridgeRecord {
   // `egress.unrestricted` resolves to `*`, which the run's proxy passes through: production's pass-through branch.
   const unrestricted = plan.egressAllow.includes("*");
@@ -399,14 +463,18 @@ export function deviceBridgeRecord(
   if (source !== "session" && source !== "bridge-default")
     throw new Error(`deviceBridgeRecord: permissionModeSource ${String(source)} is not a device_bridge plan's`);
   return {
-    served: ["device_bash", "get_device_info"],
-    alwaysLoad: ["device_bash"],
+    served: ["device_bash", "get_device_info", "device_request_delete_permission"],
+    alwaysLoad: ["device_bash", "device_request_delete_permission"],
     measuredOn: "2.31226.1",
     promptNoteBasis: "model-report",
     promptNote,
     permissionMode: plan.permissionMode,
     permissionModeSource: source,
     egress: unrestricted ? "unrestricted" : "allowlist",
+    // Nothing refuses a delete in the device copy yet: a delete is reported after the run, as `delete-not-refused`
+    // says. `enforced` is reserved for the release that refuses it in place.
+    deleteRefusal: "reported",
+    grants: grants.map((g) => ({ ...g, folders: [...g.folders] })),
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),
     divergences: [
       "delete-not-refused",
@@ -416,6 +484,13 @@ export function deviceBridgeRecord(
       "device-tools-unserved",
       "shell-user",
       "device-network-shared",
+      // A declined card reaches the agent as the harness's own deny text; production's has not been captured.
+      "decline-text",
+      // A grant no card asked for: bypassPermissions shows none, as production's skip-all-approvals mode may.
+      ...(grants.some((g) => g.answeredBy === "bypassPermissions") ? ["grant-without-prompt"] : []),
+      // The tree's filesystem can give a new file a deleted one's identity, so a rename counts only with unchanged
+      // bytes: a rename followed by an edit is reported as a delete.
+      ...(identityReliable === false ? ["rename-reads-as-delete"] : []),
     ],
   };
 }

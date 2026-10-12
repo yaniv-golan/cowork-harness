@@ -1635,10 +1635,10 @@ export const ScenarioObject = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "serve the remote lane's device tools (device_bash, get_device_info) the way a cloud task reaches the user's computer: " +
+      "serve the remote lane's device tools (device_bash, get_device_info, device_request_delete_permission) the way a cloud task reaches the user's computer: " +
         "the commands run in a second container that holds the connected folders, and the agent's own container gets none. " +
         "Valid only with `lane: remote` and `fidelity: container` (refused at load otherwise). Only `true` is valid; omit to leave the bridge unmodeled. " +
-        "A recording that uses it stamps cassette v17. See docs/fidelity-gaps.md for what it does not model",
+        "A recording that uses it stamps cassette v18. See docs/fidelity-gaps.md for what it does not model",
     ),
   prompt: z.string().describe("the user turn sent to the agent"),
   timeout_ms: z
@@ -2037,6 +2037,13 @@ export interface DeviceBridgeRecord {
    *  (`bridge-default`: `acceptEdits`, what a production cloud task reports under the Manual choice). */
   permissionMode: string;
   permissionModeSource: "session" | "bridge-default";
+  /** Whether a delete in a connected folder is refused in place (`enforced`) or, as in this release, allowed on the
+   *  device copy and reported after the run (`reported`, the `delete-not-refused` divergence). Absent on a replayed
+   *  recording made before the delete card (v17). */
+  deleteRefusal?: "reported" | "enforced";
+  /** The delete card's grants this turn: the folders, who answered (`script`,
+   *  `decider`, `human`, or `bypassPermissions` when no card is shown) and the turn. */
+  grants?: Array<{ folders: string[]; answeredBy: "script" | "decider" | "human" | "bypassPermissions"; turn: number }>;
   /** Which of production's egress branches the device container modeled: the session allowlist through the proxy
    *  (`allowlist`), or everything through it (`unrestricted`, from `egress.unrestricted: true`). */
   egress: "allowlist" | "unrestricted";

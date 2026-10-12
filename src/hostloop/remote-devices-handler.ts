@@ -61,6 +61,39 @@ const GET_DEVICE_INFO_DESC =
 
 /** What the device container reported for one command: its exit and combined output, or an infrastructure
  *  failure (the container or Docker itself), which must never read as the command's own exit. */
+/** device_request_delete_permission's input, as production's schema states it: 1–8 connected folder roots, and an
+ *  optional one-sentence reason shown with the prompt. */
+export const DELETE_GRANT_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    paths: {
+      type: "array",
+      items: { type: "string" },
+      minItems: 1,
+      maxItems: 8,
+      description:
+        "Connected folder roots on this device (from get_device_info.connectedFolders) to enable file deletion in, granted together by one user approval. Deletion applies to each folder's whole subtree for the rest of this session. List only the folders the task needs.",
+    },
+    reason: {
+      type: "string",
+      maxLength: 500,
+      description: "One short sentence shown to the user with the permission prompt, explaining why deletion is needed.",
+    },
+  },
+  required: ["paths"],
+} as const;
+
+/** A paraphrase of production's description: when to ask, what a grant covers, and what to do after a decline. */
+export const DELETE_GRANT_DESC =
+  "Ask the user for permission to delete files in one or more of this session's connected folders on this device. " +
+  "Call this when a delete (rm, rmdir, unlink) in device_bash fails with 'Operation not permitted', instead of telling " +
+  "the user deletion is impossible. The user sees a permission prompt listing the folders, and only a person's answer " +
+  "grants it. A grant enables deletion in each listed folder's whole subtree for the rest of this session, from your " +
+  "next device_bash call. Pass the connected folder roots exactly as get_device_info.connectedFolders lists them, not " +
+  "files or subfolders. Ask once, for the fewest folders the task needs, and pass `reason`. If the user declines, " +
+  "don't ask again: move the files into a _to_delete/ subfolder of the same folder and tell the user, so they can " +
+  "delete it themselves.";
+
 export type DeviceExecResult = { exitCode: number; output: string } | { infraError: string };
 export type DeviceExec = (command: string, timeoutMs: number) => Promise<DeviceExecResult>;
 
@@ -69,14 +102,20 @@ const text = (t: string, isError = false): McpResult => ({
 });
 
 export function makeRemoteDevicesHandler(opts: {
-  /** The connected folders' mount names, as they appear under `$HOME/mnt/` in the device container. */
-  folderNames: string[];
+  /** The connected folders, by their mount names under `$HOME/mnt/` in the device container, and their modes. */
+  folders: ReadonlyArray<{ name: string; mode: "r" | "rw" | "rwd" }>;
   /** The baseline's Desktop version, reported as get_device_info's appVersion. */
   appVersion: string;
   exec: DeviceExec;
   onInfraError?: (message: string) => void;
+  /** A delete grant the handler accepted, by folder name. Called only for a valid request; the agent asks for the
+   *  card first, so a call here means the card was answered Allow (or no card is shown, under bypassPermissions). */
+  onGrant?: (folders: string[]) => void;
+  /** Every delete-card call, accepted or refused, in order: the run pairs them with its recorded answers. */
+  onGrantCall?: (call: { folders: string[]; ok: boolean }) => void;
 }): McpHandler {
-  const { folderNames, appVersion, exec, onInfraError } = opts;
+  const { folders, appVersion, exec, onInfraError, onGrant, onGrantCall } = opts;
+  const folderNames = folders.map((f) => f.name);
   const tools = [
     {
       name: "get_device_info",
@@ -88,6 +127,12 @@ export function makeRemoteDevicesHandler(opts: {
       description: DEVICE_BASH_DESC,
       inputSchema: DEVICE_BASH_INPUT_SCHEMA,
       _meta: { "anthropic/alwaysLoad": true },
+    },
+    {
+      name: "device_request_delete_permission",
+      description: DELETE_GRANT_DESC,
+      inputSchema: DELETE_GRANT_INPUT_SCHEMA,
+      _meta: { "anthropic/requiresUserInteraction": true, "anthropic/alwaysLoad": true },
     },
   ];
 
@@ -115,6 +160,35 @@ export function makeRemoteDevicesHandler(opts: {
         timestamp: new Date().toISOString(),
       };
       return text(JSON.stringify(info, null, 2));
+    }
+    if (name === "device_request_delete_permission") {
+      // Production's checks, paraphrased: a request names whole connected folders, 1–8 of them, none read-only.
+      const paths: unknown = args.paths;
+      const refuse = (why: string, asked: string[] = []): McpResult => {
+        onGrantCall?.({ folders: asked, ok: false });
+        return text(why, true);
+      };
+      if (!Array.isArray(paths) || paths.length < 1 || paths.length > 8 || !paths.every((p) => typeof p === "string"))
+        return refuse("device_request_delete_permission input invalid: paths: 1 to 8 connected folder roots are required.");
+      if (args.reason !== undefined && (typeof args.reason !== "string" || args.reason.length > 500))
+        return refuse("device_request_delete_permission input invalid: reason: one sentence of at most 500 characters.");
+      const asked: string[] = [];
+      for (const p of paths as string[]) {
+        const m = /^~\/([^/]+)\/?$/.exec(p);
+        const folder = m ? folders.find((f) => f.name === m[1]) : undefined;
+        if (!folder)
+          return refuse(
+            `${p} is not one of this session's connected folder roots on this device. Pass the exact connected folder roots (see get_device_info.connectedFolders); delete permission applies to a whole connected folder.`,
+          );
+        if (folder.mode === "r") return refuse(`${p} is connected read-only, so file deletion can't be enabled there.`);
+        if (!asked.includes(folder.name)) asked.push(folder.name);
+      }
+      onGrant?.(asked);
+      onGrantCall?.({ folders: asked, ok: true });
+      const listed = asked.map((n) => JSON.stringify(`~/${n}`)).join(", ");
+      return text(
+        `File deletion is now enabled for the rest of this session in ${asked.length === 1 ? "this folder" : "these folders"} (including subfolders): ${listed}. device_bash picks this up on your next call, so rm, rmdir and unlink will work there. Deleted files can't be restored; delete only what the user asked for.`,
+      );
     }
     if (name !== "device_bash") return text(`Unknown tool: ${name}`, true);
 

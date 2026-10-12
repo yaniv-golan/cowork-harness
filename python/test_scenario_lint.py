@@ -828,7 +828,7 @@ def test_unreadable_cassette_is_visible_and_keeps_advice_with_healthy_sibling(tm
         ("[]", "top level is not a JSON object"),
         ('{"cassetteVersion": 13}', "missing or empty scenarioSource"),
         ('{"cassetteVersion": 13, "scenarioSource": "/tmp/authored.yaml"}', "scenarioSource is absolute"),
-        ('{"cassetteVersion": 18, "scenarioSource": "../scenarios/authored.yaml"}', "outside the supported range"),
+        ('{"cassetteVersion": 19, "scenarioSource": "../scenarios/authored.yaml"}', "outside the supported range"),
     ],
 )
 def test_skipped_cassette_names_why_and_never_suppresses(tmp_path, cassette_body, reason):
@@ -1250,6 +1250,8 @@ _TV_HEAD = "name: t\nbaseline: latest\nsession: (inline)\nprompt: hi\nfidelity: 
         ("assert:\n  - tool_not_called: {tool: mcp__remote-devices__device_bash}\n", True),
         ("device_bridge: true\nassert:\n  - tool_not_called: mcp__remote-devices__device_bash\n", False),
         ("device_bridge: true\nassert:\n  - tool_not_called: mcp__remote-devices__device_list_dir\n", True),
+        ("device_bridge: true\nassert:\n  - tool_not_called: mcp__remote-devices__device_request_delete_permission\n", False),
+        ("assert:\n  - tool_not_called: mcp__remote-devices__device_request_delete_permission\n", True),
         ("assert:\n  - tool_not_called: mcp__remote-devices__acme__lookup\n", False),
         ("assert:\n  - tool_not_called: mcp__remote-devices__*\n", False),
     ],

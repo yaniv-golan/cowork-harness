@@ -62,7 +62,7 @@ export interface TierVacuousFinding {
 
 const DEVICE_PREFIX = "mcp__remote-devices__";
 /** What `device_bridge: true` serves (src/hostloop/remote-devices-handler.ts). */
-const DEVICE_BRIDGE_SERVED = new Set(["device_bash", "get_device_info"]);
+const DEVICE_BRIDGE_SERVED = new Set(["device_bash", "get_device_info", "device_request_delete_permission"]);
 /** Production's remote-devices tools (the baseline `cloud.remoteDevicesTools` list). A bridged host server's tool
  *  nests one level deeper (`<server>__<tool>`) and is not in this list, so it is never refused. */
 const REMOTE_DEVICE_TOOLS = new Set([
@@ -111,7 +111,7 @@ export function tierVacuousTool(
     if (VISUALIZE_TOOLS.has(pattern.slice(VISUALIZE_PREFIX.length)))
       return { tool: pattern, tier, instead: null, reason: "visualize-unserved" };
   }
-  // The remote-devices tools are served by no tier on their own: two of them under device_bridge, the rest never.
+  // The remote-devices tools are served by no tier on their own: three of them under device_bridge, the rest never.
   // `protocol` stays out, as below: its surface is the operator's own CLI registry.
   if (pattern.startsWith(DEVICE_PREFIX) && tier in TIER_VACUOUS) {
     const name = pattern.slice(DEVICE_PREFIX.length);
@@ -168,7 +168,7 @@ export function tierVacuousMessage(f: TierVacuousFinding, key: TierVacuousKey, c
       (f.reason === "device-bridge-off"
         ? `the harness serves \`${f.tool}\` only when the scenario sets \`device_bridge: true\` (with \`lane: remote\` and ` +
           `\`fidelity: container\`), so without it the assertion passes vacuously. Set device_bridge, or drop this assertion.`
-        : `the harness serves no such device tool (\`device_bridge: true\` serves device_bash and get_device_info only), so ` +
+        : `the harness serves no such device tool (\`device_bridge: true\` serves device_bash, get_device_info and device_request_delete_permission only), so ` +
           `the assertion passes vacuously. Drop it.`) +
       `\nThe positive sibling is NOT refused: \`tool_called: "${f.tool}"\` fails normally.`
     );

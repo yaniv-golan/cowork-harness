@@ -27,9 +27,11 @@ import {
   deviceBridgeFolderAssertRefusal,
   deviceBridgeNoteMode,
   deviceBridgeRecord,
+  deleteGrantsOf,
   deniedDeviceFolders,
   deviceFolders,
   deviceTreeDeletes,
+  deviceTreeIdentityReliable,
   type startDeviceBridge,
 } from "../runtime/device-container.js";
 import { writeRunningStatus, startStatusTicker, registerRunForCrashSafety, statusLine, type RunStatusMeta } from "./run-status.js";
@@ -1089,6 +1091,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // A maintainer control run leaves the device_bridge prompt note out (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off). Read once:
   // the render, both fingerprints and the record must agree on it.
   const bridgeNote = deviceBridgeNoteMode();
+  // This turn's delete grants, each with who answered it: the run's recorded answers paired with the bridge's calls.
+  const bridgeGrants = () => deleteGrantsOf(record.decisions, deviceBridge?.grantCalls() ?? [], plan.permissionMode, turnNumber);
+  const bridgeRecord = () => deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir));
   if (scenario.device_bridge === true && bridgeNote === "omitted")
     warn(
       `::notice:: [device_bridge] prompt note OMITTED (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off): a maintainer control run; the model sees only the device tools' own descriptions. Recorded as deviceBridge.promptNote: "omitted".\n`,
@@ -1828,7 +1833,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
         hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir),
-        deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts, bridgeNote, plan) : undefined,
+        deviceBridge: scenario.device_bridge === true ? bridgeRecord() : undefined,
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         outputsMountMode,
         turn,
@@ -2400,7 +2405,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       workspaceFiles, // Working folder panel's canonical file model (output/mount/input) — see comment above
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       hookFailureBlocks, // the onFailure: "block" inventory the hook keys read failed frames by
-      deviceBridge: scenario.device_bridge === true ? deviceBridgeRecord(plan.mounts, bridgeNote, plan) : undefined, // what the bridge modeled, and how it differs
+      deviceBridge: scenario.device_bridge === true ? bridgeRecord() : undefined, // what the bridge modeled, and how it differs
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
       fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above

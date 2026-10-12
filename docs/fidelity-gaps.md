@@ -1849,7 +1849,10 @@ local VM (process namespace `rcw-<session>`, which the disk janitor's orphan cle
 holds copies of the connected folders at `$HOME/mnt/<folder-name>`. The agent's own container gets no folder, as a
 cloud task's has none. `device_bash` takes `command` and an optional `timeout_ms` capped at 45 s, and returns one
 text item: the output, cut at 262,144 characters, or `Exit code N` and the output when the command fails.
-`device_bash` loads without ToolSearch and `get_device_info` does not, as Desktop 2.31226.1 registers them. Running
+`device_bash` loads without ToolSearch and `get_device_info` does not, as Desktop 2.31226.1 registers them. The
+delete card, `device_request_delete_permission`, is served too, as production registers it: it loads without
+ToolSearch and is not pre-approved, so the agent asks first and the scenario's answer decides it (see
+[scenario.md](./scenario.md), "The delete card"). Running
 on copies is deliberate: a faithful bridge would run commands and write files on the operator's machine on behalf of
 a simulated session.
 
@@ -1858,10 +1861,16 @@ a simulated session.
 - **`delete-not-refused`.** Production mounts a connected folder read-write without delete: the first `rm` in it
   fails, and the model then calls `device_request_delete_permission` (input `paths`, `reason`). That shows the user
   a card ("Allow Claude to permanently delete files in this folder on your computer?", for the rest of the session,
-  subfolders included). Once allowed, the folder is remounted with delete and the `rm` succeeds. That request is
-  not served here, and on the device copy a delete succeeds at once. The harness reports it after the run instead,
+  subfolders included). Once allowed, the folder is remounted with delete and the `rm` succeeds. The harness serves
+  that request, but nothing refuses the delete yet: on the device copy it succeeds at once, so a model rarely has a
+  reason to ask (`deleteRefusal: "reported"`). The harness reports the delete after the run instead,
   two ways: from the text of each `device_bash` command, and by comparing the device copy before and after the run,
   which catches a delete by any means (`find -delete`, a glob, a script). A rename within a folder is not a delete.
+  Some Linux filesystems give a new file the identity (inode and birth time) of one just deleted, so the run first
+  checks whether the run directory's filesystem does. Where it does, a moved file counts as a rename only when its
+  bytes are unchanged, and a moved directory only when a file inside it moved with it: a file renamed and then
+  edited, or an empty directory renamed, is reported as a delete. That errs toward a false failure, never toward a
+  missed delete. macOS keeps identities apart, so there a rename followed by an edit stays a rename.
   A skill that deletes passes the command in the harness where production would have asked the user first, so
   assert `no_delete_in_mounts` when that matters.
 - **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
@@ -1872,15 +1881,25 @@ a simulated session.
   folder-request tool) and names no tool the harness does not serve. A test fails when the newest baseline no
   longer carries that branch.
 - **`device-paths-tilde`.** `get_device_info` spells each folder `~/<folder-name>`; production gives its path on
-  the Mac.
+  the Mac. The delete card takes the same spelling: its `paths` must name a connected folder as `~/<folder-name>`,
+  and a grant in the record names the folder by that name.
 - **`device-tools-unserved`.** `device_list_dir`, `device_stage_files`, `device_commit_files`, and the folder-access
-  and delete-permission requests are not served. A skill that tells the agent to call one gets an unknown-tool error
+  request are not served. A skill that tells the agent to call one gets an unknown-tool error
   here.
 - **`shell-user`.** Commands run as the image's own user. Production runs them as a per-task user named
   `rcw-<id>`; `$HOME` matches it (`/sessions/rcw-<id>`).
 - **`device-network-shared`.** The device container and the agent's own container share the run's internal network,
   so a service started through `device_bash` is reachable from the agent's own shell. A cloud container has no route
   to the user's machine.
+- **`decline-text`.** A declined delete card reaches the agent as the harness's deny text. Production's text for a
+  declined card has not been captured.
+- **`grant-without-prompt`.** Present only when a grant was given with no card shown: under
+  `permission_mode: bypassPermissions` the agent asks nothing, so the harness grants at once. Production's
+  skip-all-approvals mode may do the same; that has not been measured.
+- **`rename-reads-as-delete`.** Present only when the run directory's filesystem can give a new file a deleted
+  file's identity (see `delete-not-refused`). There a moved file counts as a rename only with unchanged bytes, so a
+  file renamed and then edited, or an empty directory renamed, is reported as a delete that production would not
+  have refused.
 
 Two more limits, not differences in what the agent sees. A command that outlives its limit is stopped inside the
 device container, and the result ends `Command timed out after <n>s`; production's exact wording there is not

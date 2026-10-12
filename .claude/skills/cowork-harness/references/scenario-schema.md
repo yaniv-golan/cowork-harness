@@ -68,11 +68,12 @@ lane: local                         # OPTIONAL — which Cowork lane's DELIVERY 
                                     # key (`rehash` re-stamps it). `lane: local` means what an older CLI
                                     # already does, so it lifts nothing.
 # device_bridge: true                # OPTIONAL — lane: remote + fidelity: container only (refused otherwise).
-                                    # Serves mcp__remote-devices__device_bash (and get_device_info) from a
-                                    # second container holding COPIES of the connected folders at
-                                    # $HOME/mnt/<folder-name>; the agent's own container gets no folder.
+                                    # Serves mcp__remote-devices__device_bash (and get_device_info and the
+                                    # delete card device_request_delete_permission) from a second container
+                                    # holding COPIES of the connected folders at $HOME/mnt/<folder-name>;
+                                    # the agent's own container gets no folder.
                                     # Assert with tool_called. A delete there succeeds where production
-                                    # refuses it: assert no_delete_in_mounts. Stamps cassette v17.
+                                    # refuses it: assert no_delete_in_mounts. Stamps cassette v18.
 on_unanswered: fail                 # policy for unscripted gates: fail | prompt | first | llm — run rejects prompt
                                     # ("agent" is retired — no longer a valid value)
 

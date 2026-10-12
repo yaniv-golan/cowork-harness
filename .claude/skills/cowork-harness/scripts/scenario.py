@@ -674,7 +674,7 @@ _MISSING = object()
 
 # Keep these values in sync with src/run/cassette.ts. The sync test below makes a format-range change
 # fail loudly instead of allowing lint to suppress an advisory from a cassette replay would refuse.
-CASSETTE_VERSION = 17
+CASSETTE_VERSION = 18
 MIN_SUPPORTED_CASSETTE_VERSION = 9
 
 
@@ -1630,7 +1630,8 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
         # `protocol` absent on purpose: it passes no tool flags, so its surface is the operator's own
         # host CLI registry — machine-dependent and about a different product.
     }
-    # The remote-devices tools: device_bash and get_device_info are served only under `device_bridge: true`, the
+    # The remote-devices tools: device_bash, get_device_info and the delete card are served only under
+    # `device_bridge: true`, the
     # rest of production's list never. `protocol` stays out, as above. Mirrors tierVacuousTool's device rule.
     _bridge = doc.get("device_bridge") is True
 
@@ -1638,7 +1639,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
         if fidelity not in _TIER_VACUOUS or not isinstance(t, str) or not t.startswith("mcp__remote-devices__"):
             return None
         _n = t[len("mcp__remote-devices__"):]
-        if _n in ("device_bash", "get_device_info"):
+        if _n in ("device_bash", "get_device_info", "device_request_delete_permission"):
             return None if _bridge else "off"
         return "unserved" if _n in _REMOTE_DEVICE_TOOLS else None
 
@@ -1696,7 +1697,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                         + (
                             "the harness serves it only with `device_bridge: true`, so without it this verifies nothing."
                             if _dv == "off"
-                            else "the harness serves no such device tool (device_bridge serves device_bash and get_device_info only)."
+                            else "the harness serves no such device tool (device_bridge serves device_bash, get_device_info and device_request_delete_permission only)."
                         ),
                         "Set `device_bridge: true` (lane: remote, fidelity: container), or drop this assertion."
                         if _dv == "off"
