@@ -423,8 +423,8 @@ with the ordinary commands, one scenario at a time:
   one scenario root: `legs/<id>/` per leg (a prompt leg is an ordinary run dir; a host-action leg holds
   `action.json`) and `scenario-result.json`, with one index row. The `--output-format json` envelope carries
   `multiLeg` (each leg's id, kind, status and verdict, and the scenario verdict). Refused: `--matrix`, `--repeat`,
-  `--ablate-skill`, `--session-id`, `--resume`; a directory batch (`run <dir>`) reports it as a scenario to run on its
-  own.
+  `--ablate-skill`; in a directory batch, `run <dir>` fails as a usage error and `record <dir>` reports the file as
+  broken (each runs it on its own).
 - `record <legs.yaml> --out <file>` writes ONE v18 cassette that nests a full cassette per prompt leg, each frozen
   when that leg ended, plus each action's record. Refused: `--max-budget-usd` and a live decider
   (`--decider-dir`, `--decider-llm`). Record it where it will live (beside the scenario): its paths are relative to

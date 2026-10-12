@@ -28,8 +28,8 @@ All notable changes to this project are documented here. The format is based on
   naming `mcp__visualize__read_me` or `mcp__visualize__show_widget` (production's skill-argument form tools) used to
   pass vacuously on `hostloop`, `container` and `microvm`, because the harness never serves them. Drop the assertion.
   A session that declares a server named `visualize` in its own `mcp.config` or `mcp.enabled` is not refused.
-  `lint` reports it as `tool-not-called-tier-vacuous` (the companion skill's offline check, which does not read the
-  session, warns regardless); `protocol` is not judged.
+  `lint` reports it as `tool-not-called-tier-vacuous`, and, since it does not read the session, warns even when the
+  session declares a `visualize` server; `protocol` is not judged.
 - **Under `device_bridge`, a delete in an `rw` connected folder is now refused** ("Operation not permitted") until
   the user allows it through the delete card, `device_request_delete_permission`, as production refuses it. A skill
   that deletes there now meets the card, which only a person answers: unscripted, it fails the run as an unanswered
@@ -48,8 +48,9 @@ All notable changes to this project are documented here. The format is based on
   reuse a deleted file's identity, it is the warning `device_delete_unconfirmed` instead: a rename followed by an
   edit reads the same there.
 - **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal`
-  (`enforced`), `grants`, `refusedDeletes` and `bypassedDeletes`. `divergences` replaces `delete-not-refused` with
-  `delete-refusal-libc`, drops `shell-user` (commands run under production's per-session name and home), and gains
+  (`enforced`), `grants`, `refusedDeletes` and `bypassedDeletes`. `divergences` names
+  `delete-refusal-libc` where it named `delete-not-refused` (a run whose shim canary did not pass still records
+  `reported` and `delete-not-refused`), drops `shell-user` (commands run under production's per-session name and home), and gains
   `decline-text` on every bridge run (a declined card reaches the agent as the harness's own deny text),
   `grant-without-prompt` when a grant came with no card, and `rename-reads-as-delete` when the run directory's
   filesystem can reuse a deleted file's identity.
@@ -64,13 +65,15 @@ All notable changes to this project are documented here. The format is based on
   inside it moved with it: a file renamed and then edited is reported as a delete, and a delete whose identity was
   reused is no longer read as a rename. Live device_bridge runs only; `regrade` reads the frozen scan.
 - **Cassette format v18, and what an older reader does with it.** Three things stamp v18; every other cassette
-  stamps the version its contents need, as before. A 4.8 (v17) reader refuses each of these as too new (`replay`
-  has `--best-effort-future-cassette`; `verify-cassettes` does not):
-  - a scenario with `device_bridge: true`: its frozen `deviceBridge` carries the delete card's fields;
-  - a scenario that declares a command metric: the cassette freezes `commandMetrics`, and a metric record carries
-    `command`;
-  - a multi-leg cassette: it has no top-level `prompt` or `events`, so an older reader refuses it instead of grading
-    its first leg as the whole run.
+  stamps the version its contents need, as before. A 4.8 (v17) reader refuses each of them; the remedy is to
+  upgrade, not to re-record:
+  - a scenario with `device_bridge: true`: its frozen `deviceBridge` carries the delete card's fields, which 4.8's
+    shape check rejects, so 4.8 reads it as "invalid cassette shape" (`--best-effort-future-cassette` does not get
+    past it);
+  - a multi-leg cassette: it has no top-level `prompt` or `events`, so 4.8 also reads it as "invalid cassette
+    shape" rather than grading its first leg as the whole run;
+  - a scenario that declares a command metric: the cassette freezes `commandMetrics`, and 4.8 reads it as too new
+    (`replay` has `--best-effort-future-cassette`; `verify-cassettes` does not).
   A v17 recording still reads and replays as recorded on 4.9. `replay --reassert` or `--write` on 4.9 that adds a
   command metric to a v17 cassette restamps it as v18.
 - **Breaking, in a minor release: covered surfaces that change.** `eval` and `hillclimb check` gain exit-1 paths on
@@ -184,7 +187,8 @@ All notable changes to this project are documented here. The format is based on
   - `workdir: persistent` (the default) runs every leg in one session tree with a shared agent config dir (a
     persistent workspace — not Cowork); `workdir: cowork-task` gives each prompt leg a new tree, carrying connected
     folders but not outputs or the agent config dir (a model of a new local Cowork task, unverified against Cowork).
-  - A leg's `session:` may set `answer_channel`, `permission_mode` and `agent_env` (not `artifacts_root`). A skill
+  - A leg's `session:` may set `answer_channel`, `permission_mode` and `agent_env` (only `subagent_model`, `tool_search` and
+    `disable_experimental_betas`). A skill
     tree that changes between legs fails the scenario. Under `answer_channel: none`, a later leg needs a positive
     file assertion that cannot already hold on the earlier legs' files.
   - A host action reads an optional JSON status file (`{status.<field>}` fills argv elements, each checked: no
@@ -206,9 +210,9 @@ All notable changes to this project are documented here. The format is based on
     `cassette`, and `record --dry-run` runs the multi-leg preflight and reports `multiLeg: true`; `replay` carries
     `multiLegs`, one per multi-leg cassette.
   - Only `run` and `record` take a `legs:` file. `eval`, `hillclimb`, `ref freeze`, and `verify-run` / `regrade`
-    without `--leg` refuse one by name, and a directory batch (`run <dir>`, `record <dir>`) reports it as a scenario
-    to record on its own. Also refused with a multi-leg scenario: `run --matrix`, `--repeat`, `--ablate-skill`,
-    `--session-id` and `--resume`; `record --max-budget-usd` and a live decider (`--decider-dir`,
+    without `--leg` refuse one by name. In a directory batch, `run <dir>` fails as a usage error and `record <dir>`
+    reports the file as broken: each runs it on its own. Also refused with a multi-leg scenario: `run --matrix`,
+    `--repeat` and `--ablate-skill`; `record --max-budget-usd` and a live decider (`--decider-dir`,
     `--decider-llm`); `replay --assert-from`, `--reassert`, `--write`, `--mutate` and `--session`.
   - `lint` reads a multi-leg scenario: the loader prepass uses the multi-leg loader, and the Python checks run on each
     prompt leg (findings name the leg).
@@ -236,8 +240,8 @@ All notable changes to this project are documented here. The format is based on
   ungrouped finding is not a claim that it did not recur, and groups are listed in input order. Local; nothing is
   sent. The payload gains `clustering` (always) and `candidateGroups` (lexical mode); `schema/critique-compare.json`
   describes both. `--cluster judge` is refused.
-- **`search-pool build|export|import`: collect the WebSearch results recorded in kept runs into a pool.** One record
-  per search (its query, links and prose summary) with the source run's skill, skill commit, skill snapshot signature,
+- **`search-pool build|export|import`: collect the WebSearch results recorded in kept runs into a pool.** `build` reads
+  the run dirs or runs trees named by `--from` (repeatable). One record per search (its query, links and prose summary) with the source run's skill, skill commit, skill snapshot signature,
   agent and Desktop versions, model and start time. A pool holds one skill unless built `--mixed` (`--skill <name>`
   names it for runs that record none); a record containing a known secret refuses the build; records that name or
   quote an upload are listed for `--exclude`. `--min-score <n>` sets the relevance floor a query must clear (default

@@ -535,7 +535,7 @@ on a manifest-less cassette those are skipped, so the gate can't see the deliver
 - **Path B (no provenance enforced):** the per-hop gate is the full egress allowlist + scheme +
   private-address check.
 - **The approval gate (`webfetch:<domain>`):** raised on a provenance miss; it is *not* auto-allowed
-  like other unscripted tools. Unanswered under `on_unanswered: fail` (the `run` default) it **ends
+  like other unscripted tools. Unanswered under `on_unanswered: fail` (the `run` and `record` default) it **ends
   the run as an unanswered gate**, naming the domain, the URL and the rule to add (production asks
   the user and waits; it never denies on its own). Under `--on-unanswered first` it is denied; under
   `llm` a model picks one of its three buttons (`Allow once`, `Allow all for website`, `Deny`). Answer it three ways: a scripted rule (`when_tool: "webfetch:<domain>"` +
