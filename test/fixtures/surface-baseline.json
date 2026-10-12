@@ -4699,6 +4699,37 @@
         "type": "object",
         "closed": true
       },
+      "definitions.Run.metrics[].command": {
+        "type": "object",
+        "closed": true
+      },
+      "definitions.Run.metrics[].command.carried": {
+        "const": true
+      },
+      "definitions.Run.metrics[].command.durationMs": {
+        "type": "number"
+      },
+      "definitions.Run.metrics[].command.eventsSha256": {
+        "type": "string"
+      },
+      "definitions.Run.metrics[].command.frozen": {
+        "const": true
+      },
+      "definitions.Run.metrics[].command.interpreter": {
+        "type": "string"
+      },
+      "definitions.Run.metrics[].command.script": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.Run.metrics[].command.scriptSha256": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.Run.metrics[].command.sig": {
+        "type": "string",
+        "required": true
+      },
       "definitions.Run.metrics[].id": {
         "type": "string",
         "required": true
@@ -4715,7 +4746,15 @@
           "remote",
           "pruned",
           "pre_run",
-          "no_manifest"
+          "no_manifest",
+          "command_failed",
+          "command_timeout",
+          "command_output",
+          "command_changed",
+          "command_missing",
+          "command_not_allowed",
+          "nondeterministic",
+          "no_events"
         ]
       },
       "definitions.Run.metrics[].value": {
@@ -5399,6 +5438,37 @@
         "type": "object",
         "closed": true
       },
+      ".metrics[].command": {
+        "type": "object",
+        "closed": true
+      },
+      ".metrics[].command.carried": {
+        "const": true
+      },
+      ".metrics[].command.durationMs": {
+        "type": "number"
+      },
+      ".metrics[].command.eventsSha256": {
+        "type": "string"
+      },
+      ".metrics[].command.frozen": {
+        "const": true
+      },
+      ".metrics[].command.interpreter": {
+        "type": "string"
+      },
+      ".metrics[].command.script": {
+        "type": "string",
+        "required": true
+      },
+      ".metrics[].command.scriptSha256": {
+        "type": "string",
+        "required": true
+      },
+      ".metrics[].command.sig": {
+        "type": "string",
+        "required": true
+      },
       ".metrics[].id": {
         "type": "string",
         "required": true
@@ -5415,7 +5485,15 @@
           "remote",
           "pruned",
           "pre_run",
-          "no_manifest"
+          "no_manifest",
+          "command_failed",
+          "command_timeout",
+          "command_output",
+          "command_changed",
+          "command_missing",
+          "command_not_allowed",
+          "nondeterministic",
+          "no_events"
         ]
       },
       ".metrics[].value": {
@@ -7449,13 +7527,24 @@
         "closed": true
       },
       ".metrics[].artifact": {
-        "type": "string",
-        "required": true
+        "type": "string"
       },
       ".metrics[].better": {
         "type": "string",
         "enum": ["higher", "lower"],
         "required": true
+      },
+      ".metrics[].command": {
+        "type": "array"
+      },
+      ".metrics[].command[]": {
+        "type": "string"
+      },
+      ".metrics[].deps": {
+        "type": "array"
+      },
+      ".metrics[].deps[]": {
+        "type": "string"
       },
       ".metrics[].id": {
         "type": "string",
@@ -7465,15 +7554,32 @@
         "type": "number"
       },
       ".metrics[].path": {
-        "type": "string",
-        "required": true
+        "type": "string"
       },
       ".metrics[].scale": {
         "type": "number"
       },
+      ".metrics[].timeout_ms": {
+        "type": "integer"
+      },
       ".metrics[].unbounded": {
         "type": "boolean",
         "const": true
+      },
+      ".metrics[]<allOf:0><oneOf:0>": {
+        "type": "object"
+      },
+      ".metrics[]<allOf:0><oneOf:0>.artifact": {
+        "required": true
+      },
+      ".metrics[]<allOf:0><oneOf:0>.path": {
+        "required": true
+      },
+      ".metrics[]<allOf:0><oneOf:1>": {
+        "type": "object"
+      },
+      ".metrics[]<allOf:0><oneOf:1>.command": {
+        "required": true
       },
       ".metrics[]<oneOf:0>": {
         "type": "object"
