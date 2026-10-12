@@ -109,7 +109,9 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   to check a skill's delivery survives the cloud lane, where new Pro and Max tasks run from 2026-10-06. Orthogonal to `fidelity` — a `lane: remote`
   scenario still runs locally. Add `device_bridge: true` (with `fidelity: container`) to serve `device_bash`, the
   cloud task's shell on the user's computer; a red there reads from the `device_bash` tool calls and the run's
-  `deviceBridge` record, and a `device-container` / `device-exec` infra error is that second container.
+  `deviceBridge` record, and a `device-container` / `device-exec` infra error is that second container. The bridge
+  also serves the delete card (`device_request_delete_permission`): an unscripted one ends the run as an unanswered
+  gate, so script it (`when_tool: … decide: allow|deny`).
 - **`cowork-harness stats [--metric <m>]`** — aggregate across the run index: `cost`, `duration`,
   `tokens`, `cache-tokens`, `model-cost`, `turns`, `pass-rate`. Filters: `--since`/`--baseline`/`--branch`,
   plus `--skill-hash <prefix>`/`--label <tag>` to narrow to ONE skill generation and

@@ -80,12 +80,14 @@ computer, `mcp__remote-devices__device_bash`, from a second container holding CO
 files: `tool_called: {tool: mcp__remote-devices__device_bash, result: {matches: <text>}}`, plus `transcript_matches`.
 `file_exists` / `input_unmodified` on a connected folder's path are refused under the bridge (they would read the
 agent's container). `no_delete_in_mounts` covers the folders (the device copy allows a delete production refuses).
-`tool_not_called` on `device_bash`/`get_device_info` without the bridge, or on a device tool the harness never serves
+`tool_not_called` on `device_bash`/`get_device_info`/`device_request_delete_permission` without the bridge, or on a device tool the harness never serves
 (with it or without), is refused as vacuous. Egress follows the session allowlist;
 `egress.unrestricted: true` matches production's pass-through. With no `permission_mode` in the session the agent
 runs in `acceptEdits` (a production cloud task's mode under Manual); a mode you set wins. The delete card
 (`mcp__remote-devices__device_request_delete_permission`) is served and never answered by the harness: script it with
-`when_tool: … decide: allow|deny`, or an unscripted card fails the run as an unanswered gate (`first` declines it). The
+`when_tool: … decide: allow|deny`, or an unscripted card fails the run as an unanswered gate (`first` declines it).
+Under `permission_mode: bypassPermissions` a delete is granted at once with no card (`answeredBy: bypassPermissions`).
+A `--decider-cmd` reply to the card is `{behavior}` only; a `grant` scope in it fails the run. The
 run's `deviceBridge` lists every known difference from production, and `grants` who allowed what.
 
 ### Choose an answer path (gates: AskUserQuestion + tool-permission)

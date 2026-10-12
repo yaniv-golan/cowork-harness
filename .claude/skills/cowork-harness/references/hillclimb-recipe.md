@@ -125,9 +125,10 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   outside the gate, and a sub-agent's model and effort live in the plugin's `agents/*.md`. Cowork's system prompt
   is not tunable.
 - **`harness_paths`** = what `state-template` printed. A path inside the plugin is refused.
-- **Never have the skill compute its own score.** A metric is read from a file the run writes, so an edit can move
-  it without improving the work; ground truth belongs in the scenario (`artifact_json` expected values, rubric
-  claims).
+- **Never have the skill compute its own score.** An artifact metric is read from a file the run writes, so an edit
+  can move it without improving the work; ground truth belongs in the scenario (`artifact_json` expected values,
+  rubric claims). To score what the agent *did* without trusting the skill, declare a command metric: a script over
+  the run's events, kept out of the agent's view (see scenario-schema.md, *Writing a scorer*).
 
 ## Step 2 — stopping condition and budget
 

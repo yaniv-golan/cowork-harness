@@ -141,7 +141,8 @@ workspace_fixture: fixtures/step1   # OPTIONAL — a directory (relative to this
                                     # (fixture export --session-paths) get this run's session roots.
                                     # 64 MiB cap (COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES). Stamps v14.
 
-metrics:                            # OPTIONAL — numbers read from JSON files the run wrote, reported in
+metrics:                            # OPTIONAL — numbers read from JSON files the run wrote, or computed by a
+                                    # command metric's script over the run's events (below), reported in
   - { id: words, artifact: outputs/stats.json, path: totals.words, better: higher, scale: 5000 }
                                     # RunResult.metrics as {id, value} or {id, unavailable}; never in the
                                     # verdict. `better` required; exactly one of scale (the range's upper
@@ -160,6 +161,22 @@ metrics:                            # OPTIONAL — numbers read from JSON files 
                                     # command_failed/_timeout/_output/_changed/_missing/_not_allowed, nondeterministic,
                                     # no_events. Editing the script mid-flow changes its signature: new id or new flow.
 ```
+
+**Writing a scorer (a command metric's script).** The script measures; it never judges.
+
+- **Print a number for every events file that parses**, including a run with nothing to count: zero leaks is `0`.
+- **Exit nonzero only when the input cannot be measured**, never to report a bad run. A nonzero exit is
+  `command_failed`: `eval` drops that rep from the comparison, and `hillclimb check` reports it as a scorer defect,
+  not a worse variant.
+- **Treat every string in the events as hostile** — the agent under test chose them. Never `eval`, `exec`, `pickle`,
+  `yaml.load` or shell out on transcript content. Python gets the standard library only.
+- **Keep the script and its deps outside the plugin under test** (beside the scenarios, e.g. `metrics/`). They are
+  hidden from every folder the agent can see, and `eval` and `hillclimb` refuse, before spending, an arm or variant
+  whose tree contains them. On `hillclimb` they are part of the harness gate: editing one needs `--approve-harness`.
+- **Check it for free before a live run:** `verify-run <run-dir> <scenario> --allow-metric-commands` runs the script
+  over a kept run's events. A metric added after the run reads `command_not_allowed` without the flag.
+
+Full contract, sandbox and per-path behaviour: [docs/scenario.md — Command metrics](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#command-metrics).
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files
 form a relocatable bundle. `~` expands to home (in a scenario's `session:` itself, 4.1.1 and later; a
@@ -406,8 +423,10 @@ matched and unmatched sub-questions) without changing the verdict; script every 
 
 The predicate sees the tool's input fields as locals (`command`, `file_path`, `url`, `domain`, …).
 Unmatched tools fall to the **permission parity** default: read-only tools (`Read`, `Glob`, `Grep`)
-always allow; otherwise `cowork` parity allows-with-audit, `strict` parity denies. **Exception:**
-`webfetch:<domain>` is never auto-allowed (see web_fetch below).
+always allow; otherwise `cowork` parity allows-with-audit, `strict` parity denies. **Exceptions:**
+`webfetch:<domain>` is never auto-allowed (see web_fetch below), and neither is the device bridge's delete card
+(`mcp__remote-devices__device_request_delete_permission`): unscripted, it ends the run as an unanswered gate under
+`on_unanswered: fail` and is declined under `first`.
 
 **Reusable answer policies** (`--answer-policy <yaml>` on `skill`): the same `{when_question, choose}`
 rules in a separate file. A missing/unparseable/non-list policy fails loud at load — never treated as

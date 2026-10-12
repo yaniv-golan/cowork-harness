@@ -15,6 +15,8 @@ the echoed `--answer "<q>=<choice>"` footer lines back into the scenario's `answ
 deterministic re-run. Use `cowork-harness trace <id>` to digest a run. If only an *assertion* is wrong (the
 run itself was fine), `cowork-harness verify-run <run-dir> <scenario.yaml>` re-checks the `assert:` block against
 a **kept** run dir (`--keep`, or a `--session-id` run) with no live re-record — tokens-free, ~1s per iteration.
+A command metric is carried forward from the run's own measurement, never re-run, unless `--allow-metric-commands`
+(on `verify-run`, `regrade` and `hillclimb regrade`); one added after the run reads `command_not_allowed` without it.
 When the scenario declares `answers:`, verify-run **also** checks they still match the run's actual gates (a
 reworded gate or a `choose:` the run never offered fails here in ~1s instead of on a paid re-record). It reports the
 stall signals (`stalled`, `parked_at_question`) from the flag recorded in the run's `result.json` and does not re-run
@@ -433,7 +435,8 @@ Full rules: [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yani
 - `run --matrix`: `--max-cells <n>` caps the cross-product (default 16), and a truncated matrix fails unless
   `--allow-truncated-matrix` judges only the cells that ran.
 - `record`: `--max-artifact-bytes <n>` caps an inlined artifact body (default 65536); `--rerecord-stale
-  --from-embedded` re-records from the cassette's embedded scenario when no source file resolves.
+  --from-embedded` re-records from the cassette's embedded scenario when no source file resolves (refused for a
+  scenario with a command metric: the embedded copy has no script to run, so re-record from the scenario file).
 - `replay --mutate`: `--mutate-include` / `--mutate-exclude <glob>` scope which artifact paths are perturbed, and
   `--mutate-max-per-file` / `--mutate-max-total` raise the sample caps (default 10 / 50).
 - `probe-dispatch --expect-write <suffix>` counts only a sub-agent write whose path ends with the suffix as delivered.

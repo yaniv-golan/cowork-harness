@@ -55,8 +55,14 @@ time:
   approved), or a target holds no scenario for a case. The remedy names a `regrade` target that hashes exactly the files
   the flow was approved over (the scenarios' directory, else the case's own file), so it runs as printed. No
   warning changes the exit code.
-  Exit `1` is an error finding (a malformed row or `_state.json`, or a float metric declared with no `better`):
-  fix it before the loop reads the flow.
+  Exit `1` is an error finding (a malformed row or `_state.json`, a float metric declared with no `better`, or a
+  metric column whose rows carry two declaration signatures, `metrics.sig_mixed`: one column holds two scorers, so
+  start a fresh flow or use a new metric id): fix it before the loop reads the flow.
+  `check` (and the end of every `hillclimb run --flow <dir>` pass) also warns when a float metric is **incomparable** — measured
+  on different shares of each variant's rows, so a mean over measured rows rewards the variant whose bad runs went
+  unmeasured; do not optimise it while presence differs — and when a command metric's **scorer failed**
+  (`command_failed`, `command_timeout`, `command_output`, `nondeterministic`) on rows the agent did not fail: fix the
+  script (its stderr is under `turns/<N>/metrics/` in each run dir), not the variant.
 
 A case is one scenario file. Its id is the file stem, made path-safe; `--case <id>` (repeatable) runs one case
 by its stem or its scenario `name:` (a name two cases share is refused: use the stem). In a directory, YAML
@@ -472,7 +478,7 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
     goes by where the rows that lack it sit among those that carry it (variants in order, then file order): before
     the last carrier they predate it; after it, either no scenario declares it any more or a partial re-measure (a
     regrade limited by `--variant`/`--case`, or rows it listed) left them behind; with no carrier, it cannot tell.
-  - Changing a declaration is refused (artifact, path, direction, `scale`, `unbounded` or `min`; an omitted `min` is `min: 0`). Start a new flow,
+  - Changing a declaration is refused (artifact, path, direction, `scale`, `unbounded` or `min`; an omitted `min` is `min: 0`; for a command metric, its script, deps by path and content, args or `timeout_ms`). Start a new flow,
     or give the metric a new id.
   - Removing a metric is allowed. Also remove its entries from `_state.json`.
   - The headline stays the pass rate. A number is never the headline; the metric columns sit beside it.

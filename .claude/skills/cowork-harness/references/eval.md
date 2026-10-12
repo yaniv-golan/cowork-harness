@@ -75,8 +75,8 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
 - a model or judge that is an alias (`opus`, `best`) rather than a concrete id;
 - an eval dir inside any git work tree (the snapshots would mount empty);
 - identical arms (unless `--allow-identical-arms`);
-- an arm that contains the eval's own scenario or session files (by location, copy or symlink), an
-  `evals.json`, or a symlink resolving outside it;
+- an arm that contains the eval's own scenario or session files, or a command metric's script or deps (by location,
+  copy or symlink), an `evals.json`, or a symlink resolving outside it;
 - a scenario input a run would refuse (a missing path, a `tool_not_called` the tier can never violate);
 - `--fail-on confirmed` when no family (pass rows or metric rows, in any section) could reach `confirmed` at this
   `--reps`; when only some can, the start-up line names the families the gate can fire on;
