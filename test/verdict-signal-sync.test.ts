@@ -154,7 +154,24 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
   // reference's TABLE was guarded (above) and stayed correct, while the two prose sentences wrapping it
   // and the skill's pointer to it drifted to "four", "five" and "17" against an actual 11/9/20. A count
   // stated in prose beside a guarded table is not covered by the table's guard — pin it explicitly.
-  const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen"];
+  const WORDS = [
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+  ];
 
   it("the schema reference's prose fail/warn counts match the table it introduces", () => {
     const warnCount = [...SEVERITY].filter(([, s]) => s === "warn").length;
@@ -167,7 +184,16 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
 
   // Two more counts that sat outside every check above and would have rotted on the next new code.
   it("the total-count prose in docs/scenario.md and the schema reference states the real code count", () => {
-    const WORDS_TOTAL: Record<number, string> = { 20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three", 24: "twenty-four" };
+    const WORDS_TOTAL: Record<number, string> = {
+      20: "twenty",
+      21: "twenty-one",
+      22: "twenty-two",
+      23: "twenty-three",
+      24: "twenty-four",
+      25: "twenty-five",
+      26: "twenty-six",
+      27: "twenty-seven",
+    };
     const total = WORDS_TOTAL[CODES.length];
     expect(total, `no word for ${CODES.length} — extend WORDS_TOTAL`).toBeDefined();
     expect(scenarioMd, "docs/scenario.md total-count prose").toContain(`are ${total} codes`);
@@ -185,7 +211,24 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
       expect(scenarioMd, `docs/scenario.md should document the warn signal ${code}`).toContain(`\`${code}\``);
     }
     // the prose states the count in words; keep it honest as the set grows
-    const WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen"];
+    const WORDS = [
+      "zero",
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+      "seven",
+      "eight",
+      "nine",
+      "ten",
+      "eleven",
+      "twelve",
+      "thirteen",
+      "fourteen",
+      "fifteen",
+    ];
     expect(scenarioMd).toContain(`Only ${WORDS[warnCodes.length]} codes are **warn**-severity`);
   });
 });

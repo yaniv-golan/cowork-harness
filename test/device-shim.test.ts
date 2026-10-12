@@ -236,7 +236,7 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
       } as unknown as RunResult,
       "live",
     );
-    const sig = v.signals.find((x) => x.code === "device_delete_bypassed");
+    const sig = v.signals.find((x) => x.code === (reliable === false ? "device_delete_unconfirmed" : "device_delete_bypassed"));
     expect(sig?.severity).toBe(reliable === false ? "warn" : "fail");
     expect(v.pass).toBe(reliable === false);
   });

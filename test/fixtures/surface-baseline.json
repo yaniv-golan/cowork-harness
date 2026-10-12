@@ -2398,6 +2398,15 @@
       ".deviceBridge.alwaysLoad[]": {
         "type": "string"
       },
+      ".deviceBridge.auditInconsistent": {
+        "type": "integer"
+      },
+      ".deviceBridge.bypassedDeletes": {
+        "type": "array"
+      },
+      ".deviceBridge.bypassedDeletes[]": {
+        "type": "string"
+      },
       ".deviceBridge.deleteRefusal": {
         "type": "string",
         "enum": ["reported", "enforced"]
@@ -2476,6 +2485,9 @@
         "type": "string",
         "enum": ["model-report"],
         "required": true
+      },
+      ".deviceBridge.refusedDeletes": {
+        "type": "integer"
       },
       ".deviceBridge.served": {
         "type": "array",
@@ -5092,6 +5104,15 @@
       ".deviceBridge.alwaysLoad[]": {
         "type": "string"
       },
+      ".deviceBridge.auditInconsistent": {
+        "type": "integer"
+      },
+      ".deviceBridge.bypassedDeletes": {
+        "type": "array"
+      },
+      ".deviceBridge.bypassedDeletes[]": {
+        "type": "string"
+      },
       ".deviceBridge.deleteRefusal": {
         "type": "string",
         "enum": ["reported", "enforced"]
@@ -5170,6 +5191,9 @@
         "type": "string",
         "enum": ["model-report"],
         "required": true
+      },
+      ".deviceBridge.refusedDeletes": {
+        "type": "integer"
       },
       ".deviceBridge.served": {
         "type": "array",
@@ -5444,7 +5468,7 @@
       },
       ".infraErrors[].source": {
         "type": "string",
-        "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-exec"],
+        "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-shim", "device-exec"],
         "required": true
       },
       ".l0HostConfigContamination": {
@@ -6366,6 +6390,8 @@
           "permissive_auto_allow",
           "outputs_delete",
           "mount_delete",
+          "device_delete_bypassed",
+          "device_delete_unconfirmed",
           "host_path_leak",
           "non_deterministic",
           "model_fallback",

@@ -774,10 +774,10 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 #### Verdict signals
 
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
-are twenty-four codes. Eleven are **fail**-severity — they flip the run's pass/exit code even though
+are twenty-six codes. Twelve are **fail**-severity — they flip the run's pass/exit code even though
 `result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
 `result.verdict.signals[].severity` or the run's exit code instead.
-Only thirteen codes are **warn**-severity (informational, never flip pass/fail):
+Only fourteen codes are **warn**-severity (informational, never flip pass/fail):
 
 - `outputs_delete_unconfirmed` (**warn**, live lane) — a delete-shaped command near `mnt/outputs` that
   nothing confirms: no output present at turn start was deleted, and no flagged delete has an outputs path as
@@ -811,7 +811,13 @@ Only thirteen codes are **warn**-severity (informational, never flip pass/fail):
   approval, so the run diverged from what production would have permitted. Warns rather than fails
   because the harness detects post-hoc what production enforces — the agent already proceeded where it
   would have hit `EPERM`. Assert `no_delete_in_mounts: true` to hard-fail on it, or
-  `allow_delete_in: ["<mount>"]` to waive that mount.
+  `allow_delete_in: ["<mount>"]` to waive that mount. Not raised under `device_bridge` once the device refuses
+  deletes itself (`deleteRefusal: "enforced"`): a delete left there is one the user allowed.
+- `device_delete_unconfirmed` (**warn**, `device_bridge`) — files are gone from a connected folder deletion was
+  never allowed in, on a run directory whose filesystem can give a new file a deleted file's identity
+  (`rename-reads-as-delete`). Either a delete got past the device's refusal (a static binary, a raw system call), or
+  a file was renamed and then edited, which that filesystem cannot tell apart. Where it can, the same loss is the
+  **fail** signal `device_delete_bypassed`, which `allow_delete_in` does not waive.
 - `exec_infra_error` (**warn**, host-loop, or `device_bash` under `device_bridge`) — one or more container `exec` calls failed for infrastructure
   reasons (daemon/container-level), so those tool calls returned an error to the agent. The run's other
   evidence is intact, which is why this warns rather than fails — unlike a `hostloop-sidecar` /

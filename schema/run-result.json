@@ -143,7 +143,13 @@
             "required": ["folders", "answeredBy", "turn"],
             "additionalProperties": false,
             "properties": {
-              "refusedDeletes": {
+              "folders": { "type": "array", "items": { "type": "string" } },
+              "answeredBy": { "type": "string", "enum": ["script", "decider", "human", "bypassPermissions"] },
+              "turn": { "type": "integer" }
+            }
+          }
+        },
+        "refusedDeletes": {
           "type": "integer",
           "minimum": 0,
           "description": "Enforced runs only: deletes the device shim refused this turn, from its audit log (evidence that refusals happened, never of their absence)."
@@ -157,12 +163,6 @@
           "type": "integer",
           "minimum": 1,
           "description": "Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts; ignored."
-        },
-        "folders": { "type": "array", "items": { "type": "string" } },
-              "answeredBy": { "type": "string", "enum": ["script", "decider", "human", "bypassPermissions"] },
-              "turn": { "type": "integer" }
-            }
-          }
         },
         "folders": {
           "type": "array",
@@ -788,6 +788,7 @@
                   "outputs_delete",
                   "mount_delete",
                   "device_delete_bypassed",
+                  "device_delete_unconfirmed",
                   "host_path_leak",
                   "non_deterministic",
                   "model_fallback",

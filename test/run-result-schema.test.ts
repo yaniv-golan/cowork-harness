@@ -310,3 +310,24 @@ describe("toolDurations basis + unpaired (schema)", () => {
     expect(props.toolDurationsBasis.enum).toEqual(["wall_gap"]);
   });
 });
+
+describe("a device_bridge record validates against the published schema", () => {
+  it("an enforced record, with grants, refusals and bypasses, and an older reported one", async () => {
+    const { deviceBridgeRecord } = await import("../src/runtime/device-container.js");
+    const mounts = [{ hostPath: "/x/p", mountPath: "proj", mode: "rw", kind: "folder" }] as Parameters<typeof deviceBridgeRecord>[0];
+    const plan = { permissionMode: "acceptEdits", permissionModeSource: "bridge-default" as const, egressAllow: [] };
+    const grants = [{ folders: ["proj"], answeredBy: "script" as const, turn: 1 }];
+    const enforced = deviceBridgeRecord(mounts, "included", plan, grants, false, {
+      enforced: true,
+      refusedDeletes: 2,
+      bypassedDeletes: ["proj/a.txt"],
+      auditInconsistent: 1,
+    });
+    const reported = deviceBridgeRecord(mounts, "included", plan, grants, true);
+    for (const deviceBridge of [enforced, reported]) {
+      const r = { ...full, deviceBridge };
+      expect(validatePublished(r), JSON.stringify(validatePublished.errors)).toBe(true);
+      expect(validateStrict(r), JSON.stringify(validateStrict.errors)).toBe(true);
+    }
+  });
+});

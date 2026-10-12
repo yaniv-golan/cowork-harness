@@ -2719,6 +2719,7 @@ export interface RunResult {
         | "outputs_diff_unavailable"
         | "mount_delete"
         | "device_delete_bypassed"
+        | "device_delete_unconfirmed"
         | "host_path_leak"
         | "non_deterministic"
         | "model_fallback"

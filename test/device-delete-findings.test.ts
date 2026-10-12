@@ -182,7 +182,8 @@ describe("the record and the verdict", () => {
   it("where identity is unreliable it warns, naming both a bypass and a rename followed by an edit", () => {
     const deviceBridge = deviceBridgeRecord(mounts, "included", plan, [], false, shim(["proj/a.txt"]));
     const v = computeVerdict(rr({ scan, deviceBridge } as Partial<RunResult>), "live");
-    const s = v.signals.find((x) => x.code === "device_delete_bypassed")!;
+    expect(v.signals.some((x) => x.code === "device_delete_bypassed")).toBe(false);
+    const s = v.signals.find((x) => x.code === "device_delete_unconfirmed")!;
     expect(s.severity).toBe("warn");
     expect(s.message).toMatch(/bypass/);
     expect(s.message).toMatch(/renamed and then edited|rename followed by an edit/);
