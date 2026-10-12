@@ -2343,6 +2343,44 @@
       ".cassetteVersion": {
         "type": "integer"
       },
+      ".commandMetrics": {
+        "type": "array"
+      },
+      ".commandMetrics[]": {
+        "type": "object"
+      },
+      ".commandMetrics[].decl": {
+        "type": "string",
+        "required": true
+      },
+      ".commandMetrics[].eventsSha256": {
+        "type": "string"
+      },
+      ".commandMetrics[].id": {
+        "type": "string",
+        "required": true
+      },
+      ".commandMetrics[].interpreter": {
+        "type": "string"
+      },
+      ".commandMetrics[].script": {
+        "type": "string",
+        "required": true
+      },
+      ".commandMetrics[].scriptSha256": {
+        "type": "string",
+        "required": true
+      },
+      ".commandMetrics[].sig": {
+        "type": "string",
+        "required": true
+      },
+      ".commandMetrics[].unavailable": {
+        "type": "string"
+      },
+      ".commandMetrics[].value": {
+        "type": "number"
+      },
       ".controlOut": {
         "type": "array"
       },

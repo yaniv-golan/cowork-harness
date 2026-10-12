@@ -1,7 +1,9 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { hasHookFailureBlocks, resolveHookFailureBlocks, type HookFailureBlocks } from "./hook-failure-blocks.js";
 import { initAgentVersion, initAgentVersions } from "./recorded-agent-version.js";
-import { measureMetrics, type MetricsContext } from "../metrics.js";
+import { measureMetrics, type CommandOutcomes, type MetricMeasurement, type MetricsContext } from "../metrics.js";
+import { declTuple } from "../metric-sig.js";
+import type { MetricCommandRecord, MetricUnavailable, ScenarioMetric } from "../types.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
@@ -441,6 +443,10 @@ export interface Cassette {
   // v17: what a device_bridge run modeled (RunResult.deviceBridge). FROZEN so replay reports what the recording
   // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v18 by itself (v17 before the delete card).
   deviceBridge?: DeviceBridgeRecord;
+  // v18: each command metric's record-time measurement, FROZEN: replay never executes a command metric (the cassette's
+  // events are redacted and re-serialized, so a re-run could read different bytes, and CI would become a code-execution
+  // path). `decl` is the declaration's tuple without its content hash, compared at replay without reading disk.
+  commandMetrics?: FrozenCommandMetric[];
   // v9: the record-time connected-folder host-path -> resolved-mount-name correspondence (Finding 24),
   // persisted so `computer_links_resolve` on replay normalizes a host-shaped link against THIS
   // (guaranteed record-time-accurate) map instead of re-deriving it from the session file on disk AT
@@ -528,6 +534,20 @@ export interface Cassette {
 //  4.9.0 changes that need a v18 reader. No hashing change; HASH_FORMAT_EPOCH stays at 12.
 export const CASSETTE_VERSION = 18;
 
+/** One command metric's record-time measurement, frozen in a cassette (`commandMetrics`). */
+export interface FrozenCommandMetric {
+  id: string;
+  value?: number;
+  unavailable?: string;
+  sig: string;
+  /** `declTuple(m, { withContent: false })` of the declaration the value was measured under. */
+  decl: string;
+  script: string;
+  scriptSha256: string;
+  eventsSha256?: string;
+  interpreter?: string;
+}
+
 /** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
  *  this floor is how the pre-v9 legacy-reconstruction branches (buildFolderPrefixMap, cmdRehash's
@@ -611,10 +631,12 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   // A fixture cassette replays from its manifest (the fixture files are recorded pre-run), but an older reader
   // would skip the `workspaceFixtureSig` staleness check — a fixture edit would replay as current. Present ⇒ v14.
   workspace_fixture: (v) => (v !== undefined ? 14 : 0),
-  // Metrics are reported beside the verdict and never change it, so an older reader (its cassette reader keeps
-  // unknown scenario keys — `CassetteShape.scenario` is a loose object) replays to the same verdict and only lacks
-  // `RunResult.metrics`.
-  metrics: () => 0,
+  // An artifact metric is reported beside the verdict and never changes it, so an older reader (its cassette reader
+  // keeps unknown scenario keys — `CassetteShape.scenario` is a loose object) replays to the same verdict and only
+  // lacks `RunResult.metrics`.
+  // A command metric (a script over the run's events, its record-time value frozen in `commandMetrics`): a v17 reader's
+  // strict metric schema rejects `command` as unrecognized ("re-record"); v18 makes it "too new; upgrade".
+  metrics: (v) => (Array.isArray(v) && v.some((m) => !!m && typeof m === "object" && "command" in (m as object)) ? 18 : 0),
 };
 
 /** The assertion-level features that need a v14 reader. Closed: a new key appends to V15_ASSERT_FEATURES instead.
@@ -3817,7 +3839,75 @@ export function selectDiscovered(disc: ScenarioDiscovery, selectors: readonly st
  *  an invalid one is skipped loudly (absent). A metric the RECORDING cannot support — no artifact manifest, a body it
  *  did not keep, a link placeholder, a missing pre- or post-run hash — is said once, aggregated; a metric that reads
  *  what the run did (no file, an untouched file, not a number) is the recorded truth and is not warned about. */
-export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["metrics"] {
+/** `commandMetrics` for a recording: each command metric's own measurement, with its declaration tuple. */
+export function freezeCommandMetrics(
+  decls: Scenario["metrics"],
+  measured: RunResult["metrics"],
+): { commandMetrics?: FrozenCommandMetric[] } {
+  const out: FrozenCommandMetric[] = [];
+  for (const m of decls ?? []) {
+    if (m.command === undefined) continue;
+    const e = measured?.find((x) => x.id === m.id);
+    if (e?.command === undefined) continue;
+    out.push({
+      id: m.id,
+      ...(e.value !== undefined ? { value: e.value } : { unavailable: e.unavailable }),
+      sig: e.command.sig,
+      decl: declTuple(m, { withContent: false }),
+      script: e.command.script,
+      scriptSha256: e.command.scriptSha256,
+      ...(e.command.eventsSha256 !== undefined ? { eventsSha256: e.command.eventsSha256 } : {}),
+      ...(e.command.interpreter !== undefined ? { interpreter: e.command.interpreter } : {}),
+    });
+  }
+  return out.length ? { commandMetrics: out } : {};
+}
+
+/** A command metric on replay: its record-time value, frozen — never executed, never read from disk. Served only
+ *  when the declaration being measured (the frozen one, or the on-disk one under --assert-from) is the one the value
+ *  was measured under (compared without the content hash); otherwise `command_changed`. No frozen entry (a recording
+ *  made before command metrics, or one with no measurement) reads `command_not_allowed`: not executed here. */
+export function frozenCommandOutcomes(decls: readonly ScenarioMetric[], frozen: unknown): CommandOutcomes {
+  const entries = Array.isArray(frozen) ? (frozen as FrozenCommandMetric[]) : [];
+  const out = new Map<string, MetricMeasurement & { command?: MetricCommandRecord }>();
+  for (const m of decls) {
+    if (m.command === undefined) continue;
+    const e = entries.find((x) => x && x.id === m.id);
+    if (e === undefined) {
+      out.set(m.id, {
+        id: m.id,
+        unavailable: "command_not_allowed",
+        why: "the cassette froze no measurement of this command metric (replay never runs one)",
+      });
+      continue;
+    }
+    if (e.decl !== declTuple(m, { withContent: false })) {
+      out.set(m.id, {
+        id: m.id,
+        unavailable: "command_changed",
+        why: "the declaration differs from the one the frozen value was measured under — re-record to measure it",
+      });
+      continue;
+    }
+    out.set(m.id, {
+      id: m.id,
+      ...(typeof e.value === "number"
+        ? { value: e.value }
+        : { unavailable: (e.unavailable ?? "command_not_allowed") as MetricUnavailable }),
+      command: {
+        sig: e.sig,
+        script: e.script,
+        scriptSha256: e.scriptSha256,
+        ...(e.eventsSha256 !== undefined ? { eventsSha256: e.eventsSha256 } : {}),
+        ...(e.interpreter !== undefined ? { interpreter: e.interpreter } : {}),
+        frozen: true,
+      },
+    });
+  }
+  return out;
+}
+
+export function replayMetrics(ctx: MetricsContext, frozen: unknown, frozenCommands?: unknown): RunResult["metrics"] {
   if (frozen === undefined) return undefined;
   const parsed = ScenarioObject.shape.metrics.safeParse(frozen);
   if (!parsed.success) {
@@ -3828,7 +3918,13 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["
   }
   const decls = parsed.data ?? [];
   if (decls.length === 0) return undefined;
-  const measured = measureMetrics(ctx, decls);
+  const commands = frozenCommandOutcomes(decls, frozenCommands);
+  const measured = measureMetrics(ctx, decls, commands);
+  const served = [...commands.values()].filter((x) => x.command?.frozen).length;
+  if (served)
+    warn(
+      `::notice:: [replay] metrics: ${served} command metric(s) report the value frozen at record time — replay never runs a command metric\n`,
+    );
   const limited = measured.filter((x) => x.evidenceLimited);
   if (limited.length)
     warn(
@@ -3836,7 +3932,11 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown): RunResult["
         limited.map((x) => `${x.id}: ${x.unavailable} — ${x.why}${x.remedy ? `; ${x.remedy}` : ""}`).join("; ") +
         `)\n`,
     );
-  return measured.map((x) => (x.value !== undefined ? { id: x.id, value: x.value } : { id: x.id, unavailable: x.unavailable! }));
+  return measured.map((x) => ({
+    id: x.id,
+    ...(x.value !== undefined ? { value: x.value } : { unavailable: x.unavailable! }),
+    ...(x.command !== undefined ? { command: x.command } : {}),
+  }));
 }
 
 /** LENIENT structural schema for a cassette — guards exactly the fields the replay/scan/staleness paths
@@ -6276,6 +6376,7 @@ export async function freezeRecordedRun(
     ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
     ...(result.hookFailureBlocks ? { hookFailureBlocks: result.hookFailureBlocks } : {}),
     ...(result.deviceBridge ? { deviceBridge: result.deviceBridge } : {}),
+    ...freezeCommandMetrics(scenario.metrics, result.metrics),
     // v9: record-time connected-folder host-path -> mount-name map (Finding 24) — undefined when the
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
     // replay then treats this as a v9 cassette that unexpectedly lacks the map (Finding 25).
@@ -7037,6 +7138,18 @@ async function writeReassertedAssertBlock(
   if (nextExpectDenied.length || scn.expect_denied !== undefined) scn.expect_denied = nextExpectDenied;
   if (nextMetrics !== undefined) scn.metrics = nextMetrics;
   else delete scn.metrics;
+  // A frozen command-metric value belongs to the declaration it was measured under: one the new block changed (or
+  // dropped) goes, so a later replay reads `command_changed` / nothing rather than the old scorer's number.
+  const rc = rawCassette as { commandMetrics?: FrozenCommandMetric[] };
+  if (rc.commandMetrics) {
+    const now = ScenarioObject.shape.metrics.safeParse(nextMetrics);
+    const keep = rc.commandMetrics.filter((e) => {
+      const d = now.success ? (now.data ?? []).find((m) => m.id === e.id && m.command !== undefined) : undefined;
+      return d !== undefined && declTuple(d, { withContent: false }) === e.decl;
+    });
+    if (keep.length) rc.commandMetrics = keep;
+    else delete rc.commandMetrics;
+  }
   // A new assert block can need a newer READER (the object form of tool_called → v13): restamp exactly as
   // record does, or an older CLI meets a v12-stamped cassette carrying v13 semantics and says "re-record"
   // instead of "too new". Never LOWER the stamp: the rest of the cassette was written for the old one.
@@ -9317,7 +9430,7 @@ export async function replayCassette(
     };
     const assertions = evaluate(replayable, assertCtx);
     // Metrics, measured from the materialized manifest before anything below (--mutate) touches it.
-    const metrics = replayMetrics(assertCtx, cassette.scenario.metrics);
+    const metrics = replayMetrics(assertCtx, cassette.scenario.metrics, cassette.commandMetrics);
 
     // MUTATION COVERAGE (--mutate). A green replay says the assertions passed; it cannot say whether they
     // would have FAILED had the output been wrong. A real 21-cassette corpus turned out to contain seven
