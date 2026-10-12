@@ -579,6 +579,8 @@ export function startDeviceBridge(p: {
   ensureImage?: (runner: string, baseRef: string) => { imageId: string } | { error: string };
   /** How long teardown waits for a canary still running (a container slow to come up). */
   shimWaitMs?: number;
+  /** How long the delete card's answer waits for the container to see a grant (grantVisible). */
+  grantWaitMs?: number;
 }): {
   containerName: string;
   bundle: { servers: string[]; handle: McpHandler };
@@ -665,7 +667,12 @@ export function startDeviceBridge(p: {
     folders: folders.map((f) => ({ name: f.name, mode: f.mode })),
     onGrant: async (granted) => {
       writeDeviceGrant(p.outDir, granted);
-      await grantVisible(p.runner, containerName, granted);
+      // The card still answers (the grant is recorded and the agent was allowed); a next rm the container refuses
+      // anyway is then explained on the record rather than silent.
+      if (!(await grantVisible(p.runner, containerName, granted, p.grantWaitMs)))
+        logExecInfra(
+          `the device container did not see the delete grant for ${granted.join(", ")} within ${(p.grantWaitMs ?? 5_000) / 1000} s`,
+        );
     },
     onGrantCall: (c) => void grantCalls.push(c),
     appVersion: p.appVersion,
@@ -717,18 +724,24 @@ export function startDeviceBridge(p: {
 /** Waits (up to `limitMs`) until the container reads every granted folder back from its grants file. The file
  *  reaches the container through the runtime's file sharing, which can serve a stale copy for a moment; production's
  *  grant applies from the next device_bash call, so the card's answer waits for it. */
-export async function grantVisible(runner: string, containerName: string, folders: ReadonlyArray<string>, limitMs = 5_000): Promise<void> {
+export async function grantVisible(
+  runner: string,
+  containerName: string,
+  folders: ReadonlyArray<string>,
+  limitMs = 5_000,
+): Promise<boolean> {
   const until = Date.now() + limitMs;
   while (Date.now() < until) {
     try {
       const { stdout } = await pexec(runner, ["exec", containerName, "cat", `${CTL_MOUNT}/grants`], { encoding: "utf8", timeout: 5_000 });
       const seen = new Set(stdout.split("\n"));
-      if (folders.every((f) => seen.has(f))) return;
+      if (folders.every((f) => seen.has(f))) return true;
     } catch {
       /* not readable yet */
     }
     await new Promise((r) => setTimeout(r, 100));
   }
+  return false;
 }
 
 /** Stop before the agent starts when the device image could not be prepared: the run would fail on its canary

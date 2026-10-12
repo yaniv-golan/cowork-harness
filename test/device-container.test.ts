@@ -925,3 +925,52 @@ describe("a delete grant is visible in the container before the card's answer re
     }
   });
 });
+
+describe("a grant the container never sees", () => {
+  it("still answers the card, but records a device-exec infra warning naming the folders", async () => {
+    const root = scratch();
+    const runner = join(root, "blind.sh");
+    // The container never shows the grant: `cat` of the grants file always reads empty.
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
+        'if [ "$1" = exec ] && [ "$3" = cat ]; then exit 0; fi',
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        "  inspect) echo true; exit 0;;",
+        "esac",
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const b = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out"),
+      sessionId: "s",
+      runToken: "grant-blind",
+      mounts: [folder(root, "proj")],
+      appVersion: "2.31226.1",
+      resume: false,
+      grantWaitMs: 300,
+    });
+    try {
+      await b.shimCheck;
+      const r = (await b.bundle.handle("remote-devices", {
+        method: "tools/call",
+        params: { name: "device_request_delete_permission", arguments: { paths: ["~/proj"] } },
+      })) as any;
+      expect(r.result.isError).toBeFalsy();
+      expect(b.infraErrors).toEqual([expect.objectContaining({ source: "device-exec", message: expect.stringMatching(/proj/) })]);
+    } finally {
+      await b.teardown();
+    }
+  });
+});
