@@ -562,6 +562,35 @@ jobs:
           COWORK_HARNESS_CONTRACT_FETCH: required
         run: npm run ci
 
+  # ── Command-metric runtimes at their floors ─────────────────────────────────────────────
+  # A command metric runs Python scripts through python/metric-runner.py and Node scripts under the permission
+  # model. The claimed Python floor is 3.9 (macOS's system python3), and Node picks `--permission` (22.13+) or
+  # `--experimental-permission` (22.0–22.12) by feature detection: each branch must be exercised where it applies.
+  metric-runtimes:
+    name: command-metric runtimes (python 3.9, node 22.12)
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: "24", cache: npm }
+      - run: npm ci
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with: { python-version: "3.9" }
+      - name: Every shipped Python metric file compiles on 3.9
+        run: python3 -m py_compile python/metric-runner.py examples/scenarios/metrics/*.py
+      - name: The runner's audit hook and the Python command-metric closure on 3.9
+        env:
+          COWORK_TEST_PYTHON: python3
+        run: npx vitest run test/metric-command-run.test.ts -t "Python command metrics"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: "22.12.0" }
+      - name: Node's --experimental-permission branch (22.12 rejects --permission)
+        run: npx vitest run test/metric-command-run.test.ts test/metric-command-interpreters.test.ts -t "Node"
+
   # ── Stage 2: agent image recipe — COMPILE it, on every PR ──────────────────────────
   # `boundary` PULLS the published image (deliberately: it exercises the consumer path) and hard-fails
   # rather than falling back on the canonical repo, and the only other build lives in `scenarios`, which
@@ -612,7 +641,7 @@ jobs:
   ci-green:
     name: typecheck · test · build
     runs-on: ubuntu-latest
-    needs: [build, test, floor, image-recipe]
+    needs: [build, test, floor, image-recipe, metric-runtimes]
     if: ${{ always() }}
     permissions:
       contents: read
@@ -632,4 +661,4 @@ jobs:
             echo "::error::prerequisite job(s) did not succeed: $bad"
             exit 1
           fi
-          echo "build gate + all unit-test shards + the node-22 floor check + the image recipe passed"
+          echo "build gate + all unit-test shards + the node-22 floor check + the image recipe + the command-metric runtimes passed"

@@ -148,14 +148,23 @@ describe("Node command metrics", () => {
   });
 });
 
-const pythons = ["/usr/bin/python3", join(process.env.HOME ?? "", ".pyenv/versions/3.11.4/bin/python3")].filter((p) => {
-  try {
-    execFileSync(p, ["-c", "import sys; assert sys.version_info >= (3, 9)"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-});
+// CI names its floor interpreter (3.9) in COWORK_TEST_PYTHON; locally, every interpreter found here runs the suite.
+const pythons = [
+  ...(process.env.COWORK_TEST_PYTHON
+    ? [execFileSync(process.env.COWORK_TEST_PYTHON, ["-c", "import sys;print(sys.executable)"]).toString().trim()]
+    : []),
+  "/usr/bin/python3",
+  join(process.env.HOME ?? "", ".pyenv/versions/3.11.4/bin/python3"),
+]
+  .filter((p, i, all) => all.indexOf(p) === i)
+  .filter((p) => {
+    try {
+      execFileSync(p, ["-c", "import sys; assert sys.version_info >= (3, 9)"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  });
 
 describe.each(pythons)("Python command metrics under %s", (py) => {
   const savedPath = process.env.PATH;

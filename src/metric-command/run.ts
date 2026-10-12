@@ -186,9 +186,11 @@ export async function runCommandMetric(input: CommandRunInput): Promise<CommandM
     interpreter = `${py.executable} ${py.version}`;
   } else {
     const flag = nodePermissionFlag();
+    // 22.0–22.12 announce the experimental permission model on stderr: keep the script's stderr its own.
+    const quiet = flag === "--experimental-permission" ? ["--disable-warning=ExperimentalWarning"] : [];
     interp = {
       cmd: process.execPath,
-      args: (tmp, rel, ev) => [flag, `--allow-fs-read=${tmp}`, join(tmp, "stage", ...rel.split("/")), ev, ...m.command.slice(1)],
+      args: (tmp, rel, ev) => [...quiet, flag, `--allow-fs-read=${tmp}`, join(tmp, "stage", ...rel.split("/")), ev, ...m.command.slice(1)],
     };
     interpreter = `${process.execPath} ${process.version}`;
   }
