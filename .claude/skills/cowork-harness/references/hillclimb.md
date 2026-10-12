@@ -58,7 +58,7 @@ time:
   Exit `1` is an error finding (a malformed row or `_state.json`, a float metric declared with no `better`, or a
   metric column whose rows carry two declaration signatures, `metrics.sig_mixed`: one column holds two scorers, so
   start a fresh flow or use a new metric id): fix it before the loop reads the flow.
-  `check` (and the end of every `hillclimb run` pass) also warns when a float metric is **incomparable** — measured
+  `check` (and the end of every `hillclimb run --flow <dir>` pass) also warns when a float metric is **incomparable** — measured
   on different shares of each variant's rows, so a mean over measured rows rewards the variant whose bad runs went
   unmeasured; do not optimise it while presence differs — and when a command metric's **scorer failed**
   (`command_failed`, `command_timeout`, `command_output`, `nondeterministic`) on rows the agent did not fail: fix the
