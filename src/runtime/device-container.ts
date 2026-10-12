@@ -1,18 +1,6 @@
 import { execFile } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  realpathSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { createHash } from "node:crypto";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
@@ -26,6 +14,8 @@ import { makeInfraEmitters, startHostLoopSidecar } from "./hostloop.js";
 import { HARDENING, proxyEnvVars } from "./argv.js";
 import { removeContainer } from "../egress/sidecar.js";
 import { DELETE_GRANT_TOOL } from "../decide/decider.js";
+import { deviceTreeListing, probeIdentityReliable, treeDeletes, type TreeEntry } from "./device-tree.js";
+export { treeDeletes, type TreeEntry } from "./device-tree.js";
 
 /**
  * The device container behind `device_bridge: true`. Production runs device_bash in the Mac's Cowork VM as a
@@ -216,96 +206,16 @@ async function waitRunning(runner: string, containerName: string, limitMs = 60_0
   }
 }
 
-/** One entry of a device-tree listing, keyed `<folder>/<path>` (a directory with a trailing `/`). `id` is
- *  `<inode>:<birth time>`: Linux reuses a freed inode for the next file created, so an inode alone would read a
- *  delete-then-create as a rename. Birth times can be coarse too, so a file also carries its size and sha256, and a
- *  link the hash of its target (never followed): a reappearing identity is a rename only when its bytes match. */
-export type TreeEntry = { id: string; type: "f" | "d" | "l"; size?: number; sha256?: string };
-
-function deviceTreeListing(deviceHost: string): Record<string, TreeEntry> {
-  const mnt = join(deviceHost, "mnt");
-  const out: Record<string, TreeEntry> = {};
-  const visit = (p: string, top: boolean): void => {
-    let st;
-    try {
-      // Nanoseconds: a delete and the next create can fall within the same millisecond.
-      st = lstatSync(p, { bigint: true });
-    } catch {
-      return;
-    }
-    const rel = relative(mnt, p).split(sep).join("/");
-    const id = `${st.ino}:${st.birthtimeNs}`;
-    if (st.isDirectory()) {
-      // A folder root is the folder itself: its removal is not something the device shell can do.
-      if (!top) out[`${rel}/`] = { id, type: "d" };
-      let names: string[] = [];
-      try {
-        names = readdirSync(p);
-      } catch {
-        return;
-      }
-      for (const n of names) visit(join(p, n), false);
-      return;
-    }
-    if (st.isSymbolicLink()) {
-      let target = "";
-      try {
-        target = readlinkSync(p);
-      } catch {
-        /* unreadable: hashed as empty */
-      }
-      out[rel] = { id, type: "l", sha256: createHash("sha256").update(target).digest("hex") };
-      return;
-    }
-    let sha256: string | undefined;
-    try {
-      sha256 = createHash("sha256").update(readFileSync(p)).digest("hex");
-    } catch {
-      sha256 = undefined; // unreadable: no rename can be proven for it
-    }
-    out[rel] = { id, type: "f", size: Number(st.size), ...(sha256 ? { sha256 } : {}) };
-  };
-  if (existsSync(mnt)) for (const n of readdirSync(mnt)) visit(join(mnt, n), true);
-  return out;
-}
-
-/** Record the device tree as staged, before the run, for deviceTreeDeletes. */
+/** Record the device tree as staged, before the run, for deviceTreeDeletes, with the probe's verdict on whether its
+ *  filesystem keeps identities apart. Probed beside `mnt`, never in it, so the probe file is not listed. */
 export function recordDeviceTree(outDir: string): void {
-  writeFileSync(join(outDir, DEVICE_TREE_FILE), JSON.stringify(deviceTreeListing(join(resolve(outDir), "work", "device"))));
+  const deviceHost = join(resolve(outDir), "work", "device");
+  const listing: DeviceTreeFile = { identityReliable: probeIdentityReliable(deviceHost), entries: deviceTreeListing(deviceHost) };
+  writeFileSync(join(outDir, DEVICE_TREE_FILE), JSON.stringify(listing));
 }
 
-/** Whether a staged entry's identity reappears after the run as a rename. A directory: the same identity as a
- *  directory. A file or link whose filesystem records a birth time: the same `inode:birth time`, so a rename followed by
- *  an edit is still a rename. Where the filesystem reports no birth time (0), the identity is only the inode, which Linux
- *  reuses at once for the next file created: there the size and sha256 must match too, so a delete followed by a new
- *  file cannot pass as a rename (an edit after a rename then reads as a delete, the safe side). A listing written
- *  before entries carried bytes proves no rename. */
-function renamedAfter(b: TreeEntry | string, afterById: ReadonlyMap<string, TreeEntry[]>): boolean {
-  if (typeof b === "string") return false;
-  const birthKnown = b.id.split(":")[1] !== "0";
-  return (afterById.get(b.id) ?? []).some((a) =>
-    b.type === "d"
-      ? a.type === "d"
-      : a.type === b.type && (birthKnown || (a.size === b.size && a.sha256 !== undefined && a.sha256 === b.sha256)),
-  );
-}
-
-/** The staged entries gone after the run and not renamed (`renamedAfter`), in the delete-denied folders, named by
- *  mount path. Pure: the listings in, the deletes out. */
-export function treeDeletes(
-  before: Readonly<Record<string, TreeEntry | string>>,
-  after: Readonly<Record<string, TreeEntry>>,
-  denied: ReadonlyArray<{ name: string; mountPath: string }>,
-): { mount: string; command: string }[] {
-  const afterById = new Map<string, TreeEntry[]>();
-  for (const e of Object.values(after)) afterById.set(e.id, [...(afterById.get(e.id) ?? []), e]);
-  // Named by mount path, as the command-text scan names a mount, so allow_delete_in waives both alike.
-  const mountOf = new Map(denied.map((f) => [f.name, f.mountPath]));
-  return Object.keys(before)
-    .filter((path) => mountOf.has(path.split("/")[0]!) && !(path in after) && !renamedAfter(before[path]!, afterById))
-    .sort()
-    .map((path) => ({ mount: mountOf.get(path.split("/")[0]!)!, command: `(removed from the device copy) ${path}` }));
-}
+/** The recorded listing. A listing written before the probe (a flat map) counts as unreliable. */
+type DeviceTreeFile = { identityReliable: boolean; entries: Record<string, TreeEntry | string> };
 
 /** Entries the run removed from a folder copy, by any means (`rm`, `find -delete`, `rmdir`, a script): the staged
  *  listing compared with the tree after the run (`treeDeletes`). Production refuses each of these until the user allows
@@ -315,13 +225,14 @@ export function deviceTreeDeletes(
   /** The delete-denied (`rw`) folders (deniedDeviceFolders): a folder that allows deletes (`rwd`) is not counted. */
   denied: ReadonlyArray<{ name: string; mountPath: string }>,
 ): { mount: string; command: string }[] {
-  let before: Record<string, TreeEntry | string>;
+  let recorded: DeviceTreeFile;
   try {
-    before = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
+    const raw = JSON.parse(readFileSync(join(outDir, DEVICE_TREE_FILE), "utf8"));
+    recorded = typeof raw.identityReliable === "boolean" && raw.entries ? raw : { identityReliable: false, entries: raw };
   } catch {
     return [];
   }
-  return treeDeletes(before, deviceTreeListing(join(resolve(outDir), "work", "device")), denied);
+  return treeDeletes(recorded.entries, deviceTreeListing(join(resolve(outDir), "work", "device")), denied, recorded.identityReliable);
 }
 
 /** The folders production refuses deletes in until the user allows them: mode `rw` (`rwd` is delete-approved,

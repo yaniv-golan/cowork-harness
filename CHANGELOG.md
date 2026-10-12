@@ -39,9 +39,11 @@ All notable changes to this project are documented here. The format is based on
 ### Fixed
 
 - **The device bridge's delete check no longer reads a reused inode as a rename.** The pre-run listing records each
-  file's size and sha256 and lists directories. Where the filesystem reports no birth time, a file that reappears
-  under another path counts as a rename only when its bytes match; a removed empty directory is now reported as a
-  delete.
+  file's size and sha256, lists directories, and records whether the run directory's filesystem can give a new file
+  a just-deleted file's identity (checked five times before each turn). Where it can, as on some Linux filesystems,
+  a file under another path counts as a rename only when its bytes match, and a directory only when a file inside it
+  moved with it; a file renamed and then edited is then reported as a delete. A removed empty directory is now
+  reported as a delete.
 
 ## [4.8.1] — 2026-10-12
 

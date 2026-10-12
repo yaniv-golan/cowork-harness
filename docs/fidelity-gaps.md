@@ -1866,6 +1866,11 @@ a simulated session.
   reason to ask (`deleteRefusal: "reported"`). The harness reports the delete after the run instead,
   two ways: from the text of each `device_bash` command, and by comparing the device copy before and after the run,
   which catches a delete by any means (`find -delete`, a glob, a script). A rename within a folder is not a delete.
+  Some Linux filesystems give a new file the identity (inode and birth time) of one just deleted, so the run first
+  checks whether the run directory's filesystem does. Where it does, a moved file counts as a rename only when its
+  bytes are unchanged, and a moved directory only when a file inside it moved with it: a file renamed and then
+  edited, or an empty directory renamed, is reported as a delete. That errs toward a false failure, never toward a
+  missed delete. macOS keeps identities apart, so there a rename followed by an edit stays a rename.
   A skill that deletes passes the command in the harness where production would have asked the user first, so
   assert `no_delete_in_mounts` when that matters.
 - **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
