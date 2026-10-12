@@ -73,8 +73,9 @@ All notable changes to this project are documented here. The format is based on
     its first leg as the whole run.
   A v17 recording still reads and replays as recorded on 4.9. `replay --reassert` or `--write` on 4.9 that adds a
   command metric to a v17 cassette restamps it as v18.
-- **Breaking, in a minor release: `eval` and `hillclimb check` gain exit-1 paths on exit codes SPEC §12 lists as
-  covered.** The same command can now exit 1 where 4.8 exited 0.
+- **Breaking, in a minor release: covered surfaces that change.** `eval` and `hillclimb check` gain exit-1 paths on
+  exit codes SPEC §12 lists as covered, so the same command can now exit 1 where 4.8 exited 0, and the scenario
+  schema's metric fields loosen.
   - **`eval`**, triggered by a scenario that declares `metrics:`. A 4.8 `eval` never read them; 4.9 compares them.
     - Any metric row `not compared` exits 1, with or without `--fail-on`. A row is not compared when a rep was
       `pruned`, had `no_manifest`, or completed with no entry for a declared metric (`metric_unrecorded`), or when a
@@ -95,6 +96,9 @@ All notable changes to this project are documented here. The format is based on
     rows from before signatures were recorded, can hold one: `hillclimb run` and `regrade` refuse a changed
     declaration first. There is no flag to downgrade it; start a fresh flow, or give the metric a new id so its
     rows start a new column.
+  - **The scenario schema**: a metric's `artifact` and `path` are no longer required, because a command metric has
+    neither. Every 4.8 scenario still validates, but a tool that reads scenarios can no longer assume every metric
+    has `artifact` and `path`.
 - **`sync` now refuses a re-sync under a different organisation from the one this machine last synced under.** It
   remembers that organisation in `~/.cowork-harness/sync-capture-org.json` (a salted hash, file mode 0600, never
   committed). The first sync after upgrading records the organisation it runs under, without refusing, so run it
