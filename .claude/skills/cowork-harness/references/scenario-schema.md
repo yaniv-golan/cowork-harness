@@ -148,6 +148,16 @@ metrics:                            # OPTIONAL — numbers read from JSON files 
                                     # A file the run did not write (incl. one rewritten with identical
                                     # bytes) is unavailable: pre_run; a kept run recorded with no
                                     # pre-run manifest, no_manifest. Arms the pre-run manifest.
+  - { id: bash_calls, command: [metrics/count.py, --strict], deps: [metrics/_ev.py], better: lower, unbounded: true }
+                                    # A COMMAND metric: a script (.py on python3 >= 3.9, stdlib only; or .mjs/.js/.cjs)
+                                    # run as `<script> <events-file> [args]` over this turn's scrubbed slice of
+                                    # events.jsonl; it must print exactly one JSON number. Script + deps: regular,
+                                    # git-tracked files inside the scenario's repo (no symlink, no hard link, <= 1 MiB).
+                                    # RUNS THE REPO'S CODE AS YOU (only repos you would `npm test`). Live runs run it;
+                                    # replay reports the frozen record-time value (cassette v18); verify-run / regrade /
+                                    # hillclimb regrade carry it forward unless --allow-metric-commands. Its own reasons:
+                                    # command_failed/_timeout/_output/_changed/_missing/_not_allowed, nondeterministic,
+                                    # no_events. Editing the script mid-flow changes its signature: new id or new flow.
 ```
 
 Relative paths resolve from the file's own directory, so a scenario + session + referenced files

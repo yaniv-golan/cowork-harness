@@ -306,8 +306,8 @@ estimates from an offline table (n = 4 to 6 only).
 | a measured value | ranked by value |
 | the agent failed (`errored_agent`: timeout, max turns, crash, an unanswered gate) | **worst rank**, whatever the metric |
 | `missing_artifact`, `missing_path`, `not_json`, `not_a_number`, `pre_run` (the skill did not produce the number) | **worst rank** |
-| `size`, `readonly`, `remote` — the scorer, the capture or a cap, not the skill | **excluded**, counted per arm, and guarded (below) |
-| `pruned`, `no_manifest`, or a completed rep with no entry for the id (`metric_unrecorded`) — a harness defect on a live eval | the row is **`not compared`**: out of the family, never gates, and the eval exits 1 |
+| `size`, `readonly`, `remote`, and a command metric's `command_failed`, `command_timeout`, `command_output`, `nondeterministic` and `no_events` — the scorer, the capture or a cap, not the skill | **excluded**, counted per arm, and guarded (below) |
+| `pruned`, `no_manifest`, a completed rep with no entry for the id (`metric_unrecorded`), and a command metric's `command_changed` (the rep was scored by another script than the one the manifest froze), `command_missing` and `command_not_allowed` — the comparison itself is broken | the row is **`not compared`**: out of the family, never gates, and the eval exits 1 |
 | infrastructure, drift, pin and judge-prompt mismatches | excluded, as on every row |
 
 A worst-ranked rep ranks strictly below every measured value, including a value at a bounded metric's own worst

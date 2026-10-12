@@ -1427,6 +1427,79 @@ run's recorded post-run hash; otherwise `pruned` (a file under `uploads/` has no
 `pruned` there). `verify-run` needs no judge, so it is the way to re-measure a scenario with no `semantic_matches`
 or `semantic_pairwise` assert, which `regrade` refuses (`no_semantic_asserts`).
 
+### Command metrics
+
+A metric can instead be computed by a script over the run's own events: `command` in place of `artifact` and `path`.
+
+```yaml
+metrics:
+  - id: bash_calls
+    command: [metrics/count_bash_calls.py, --strict]   # the script, then literal args; relative to the scenario file
+    deps: [metrics/_events.py]                         # OPTIONAL: other files the script imports, hashed with it
+    timeout_ms: 30000                                  # OPTIONAL: per run, default 30000, at most 300000
+    better: lower
+    unbounded: true                                    # scale | unbounded and min exactly as above
+```
+
+**A command metric runs the scenario repo's code as you. Only run scenarios from repos you would run `npm test` in.**
+
+The script is run as `<interpreter> <script> <events-file> [args…]`: the events path is always the first argument,
+the author's args follow it literally, and no shell is involved. The events file is this turn's slice of the run's
+`events.jsonl` (turn 1 is everything before the first `turn_start` marker; a later turn with no marker has none),
+with the run's secrets already scrubbed. The script must print exactly one JSON number on stdout (ASCII whitespace
+around it is fine; `1e3` and `-0.5` are numbers; `+1`, `01`, `.5`, `NaN`, `1,000` and a second line are not). See
+[`examples/scenarios/csv-metrics-command.yaml`](../examples/scenarios/csv-metrics-command.yaml).
+
+**Where the script may live.** The script and every dep must be regular files inside the scenario's repository (its
+git work tree, or the scenario's own directory outside one), named by their real paths: a symlink inside the repo, a
+hard link, a file over 1 MiB and, in git mode (the default; `COWORK_HARNESS_GITSET=0` opts out), an untracked file
+are refused at load and by `lint`. `..` is allowed in the path, since a script usually sits beside the scenarios
+directory. The extension picks the interpreter: `.py` runs under `python3` 3.9 or later, `.mjs` / `.js` / `.cjs` under
+this Node. The script and its deps are kept out of every folder the agent can see (refused before spend on `eval` and
+`hillclimb`), and on `hillclimb` they join the harness gate, so editing one needs `--approve-harness`.
+
+**What runs, and what is promised.** Each file is read once; those bytes are hashed into the metric's signature and
+copied into a fresh temp dir, and only that copy runs, so an undeclared helper or a `__pycache__` file beside the
+script never does. The script gets a fixed environment (`PATH=/usr/bin:/bin`, `HOME` and `TMPDIR` in its temp dir,
+`LANG`/`LC_ALL=C.UTF-8`, `TZ=UTC`, `PYTHONHASHSEED=0`, and `COWORK_HARNESS_METRIC_ID`): no credential, no
+`COWORK_HARNESS_*` setting and no `NODE_OPTIONS` or `PYTHONPATH` is passed. stdin is closed, stdout is capped at
+4 KiB, stderr never fails a measurement (its first 4 KiB, scrubbed, is kept at
+`turns/<N>/metrics/<id>.stderr.txt`), and the timeout kills the script's whole process group. Python runs with no
+site packages (standard library only) under the harness's runner, whose audit hook refuses reads outside the temp
+dir and the standard library, writes outside the temp dir, process creation, native loading and sockets. Node runs
+under its permission model with read access to the temp dir only. A live run runs the script twice, each in its own
+temp dir, and reports a value only when both print the same number. **Not promised:** the Python hook is a
+tripwire, not a sandbox, and a determined script can get around it; neither language is cut off from the network; a
+grandchild that leaves the process group can outlive the timeout.
+
+**The author contract.** Print a number for every events file that parses (zero leaks is `0`); exit nonzero only for
+input that cannot be measured, never to report a bad run; and treat every string in the events as hostile — the
+agent under test chose them — so never `eval`, `exec`, `pickle`, `yaml.load` or shell out on transcript content.
+
+| `unavailable` | meaning |
+|---|---|
+| `command_failed` | a nonzero exit, a signal, a spawn error, or an operation the runner blocked (the reason names it) |
+| `command_timeout` | no result within `timeout_ms` |
+| `command_output` | stdout is not exactly one finite JSON number, or is over 4 KiB |
+| `command_changed` | the declaration's signature (script and deps by path and content, args, timeout) differs from the one recorded |
+| `command_missing` | the script or a dep is gone, outside the repo, untracked or hard-linked when it is re-measured |
+| `command_not_allowed` | not executed on this path, with nothing recorded to carry forward |
+| `nondeterministic` | two runs over the same events disagreed, or a re-measure disagrees with the recorded value |
+| `no_events` | the run has no `events.jsonl`, or no slice for this turn |
+
+**Where it runs.** `run`, `skill`, `record`, `eval` and `hillclimb run` run it on every live run, after printing one
+notice per command metric (its script, root-relative path and content hash) before anything is spent. `replay`,
+`verify-cassettes` and CI never run it: the cassette freezes each command metric's record-time value
+(`commandMetrics`, cassette v18), and replay reports it marked `frozen`, only while the declaration being measured is
+the one the value was measured under (`command_changed` otherwise, as under `replay --assert-from` after an edit).
+`verify-run`, `regrade` and `hillclimb regrade` never run it without `--allow-metric-commands`: they carry the run's
+own measurement forward, marked `carried`, while its signature and the events it read still match (`command_changed`
+or `pruned` otherwise), and read `command_not_allowed` when nothing was recorded. With the flag the script re-runs,
+and a value that differs from the recorded one is `nondeterministic`. In a hillclimb flow the row is what is carried,
+and a `nondeterministic` row stays so on later regrades. Editing a command metric's script, deps, args or timeout
+mid-flow changes its signature, which `hillclimb run` and `regrade` refuse: give the changed metric a new id, or
+start a new flow.
+
 ## Output
 
 Each run writes to `~/.cowork-harness/runs/<name>/<sessionId>/` (relocate with `--run-dir <path>` or `COWORK_HARNESS_RUNS_DIR`):

@@ -632,7 +632,12 @@ A row is listed instead of re-graded when, among other cases (see the reference)
 when the evidence its judge read has changed since it was graded (an edited kept run, or a harness change to how
 the document is composed or scrubbed); `--rejudge` grades the latter, unless the current evidence would be less
 redacted than the graded one (that row stays listed until the run's scrub settings are set, or
-`--rejudge --allow-scrub-change`). Each row records `meta.assert_sig`, the assertions it was graded under: `hillclimb
+`--rejudge --allow-scrub-change`). A command metric (a script over the run's own events,
+[scenario.md → Command metrics](./scenario.md#command-metrics)) is never re-run by a regrade without
+`--allow-metric-commands`: a row keeps its own value or reason while its signature is current, and with the flag a
+re-run value that differs from the row's is `nondeterministic`, which no later regrade clears. `hillclimb check` warns
+on a command scorer that failed on a row the agent did not fail, calls a float incomparable when its variants measured
+it on different shares of their rows, and errors when one column's rows carry two signatures. Each row records `meta.assert_sig`, the assertions it was graded under: `hillclimb
 run` warns when a resumed pass would mix them, and `hillclimb check` flags a case whose rows carry more than one,
 and a case whose rows were graded under another assertion set than its scenario's now — compared with the scenario
 target when one is passed (`hillclimb check evals/ --flow <dir>`), else with the scenario files the last

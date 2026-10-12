@@ -210,7 +210,10 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 - **A new metric.** Add `metrics:` to the scenario, have the user approve the sha, re-run
   `cowork-harness hillclimb state-template T --flow F` and merge only the new `metrics` entries into
   `_state.json`. Rows written before it lack the key (`check` notes them); `hillclimb regrade T --flow F` fills it
-  from their kept runs at no agent cost (every hillclimb run records the pre-run manifest; a row reading `no_manifest` needs a re-run). Changing a declared metric is refused (new flow or new id); removing one warns.
+  from their kept runs at no agent cost (every hillclimb run records the pre-run manifest; a row reading `no_manifest` needs a re-run). Changing a declared metric is refused (new flow or new id); removing one warns. A command metric (a script over
+  the run's events) is the same, and its script, deps, args and timeout are part of its declaration: editing the
+  script mid-flow needs a new metric id or a new flow. `hillclimb regrade` fills a new command metric only with
+  `--allow-metric-commands` (it runs the script over each kept run's events).
 - **Pairwise saturation.** When `check` notes a variant scoring 0.9 or more against the newest reference:
   `cowork-harness hillclimb freeze-ref T --flow F --variant vN`, then
   `cowork-harness hillclimb regrade T --flow F --fill-refs` (no `--case`: rows of cases with no pairwise
