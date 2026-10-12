@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { tierVacuousTool, tierVacuousMessage, objectFormTierVacuous } from "../src/run/tier-vacuous-tools";
 
 // `tool_not_called` on a tool the TIER never serves passes vacuously — it can never be violated. This
@@ -291,6 +291,35 @@ describe("visualize tools the harness never serves", () => {
     );
     expect(String(err?.message ?? "")).not.toMatch(/never serves the `visualize` server/);
   }, 60_000);
+  // `enabled` alone would pass the guard above without reading the file, so these declare the server ONLY in
+  // the config file — once by a path relative to the session file, once by a `~/` path (left literal until launch).
+  it.each([
+    ["a relative", "./mcp.json"],
+    ["a home-relative", "~/mcp.json"],
+  ])(
+    "executeScenario reads the server from mcp.config given by %s path",
+    async (_label, configRef) => {
+      const dir = mkdtempSync(join(tmpdir(), "cwh-tv-mcp-"));
+      vi.stubEnv("HOME", dir);
+      try {
+        writeFileSync(join(dir, "mcp.json"), JSON.stringify({ mcpServers: { visualize: { command: "true", args: [] } } }));
+        writeFileSync(join(dir, "s.yaml"), `folders: []\nmcp:\n  config: ${configRef}\n`);
+        const f = join(dir, "sc.yaml");
+        writeFileSync(
+          f,
+          `name: tv\nbaseline: latest\nsession: s.yaml\nfidelity: hostloop\nprompt: hi\nassert:\n  - tool_not_called: ${SW}\n`,
+        );
+        const err = await executePinned(parseScenarioFile(f)).then(
+          () => undefined,
+          (e: Error) => e,
+        );
+        expect(String(err?.message ?? "")).not.toMatch(/never serves the `visualize` server/);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+    60_000,
+  );
 });
 
 describe("the visualize tool list is one list", () => {

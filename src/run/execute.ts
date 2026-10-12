@@ -63,6 +63,7 @@ import {
   isConnectedContent,
   applySessionOverrides,
   expandUserPath,
+  expandHome,
   strippedEnv,
   type LaunchPlan,
 } from "../session.js";
@@ -3011,8 +3012,9 @@ function sessionMcpServerNames(scenario: Scenario): ReadonlySet<string> {
   try {
     const session = loadSessionFromFile(scenario.session);
     for (const n of session.mcp.enabled) names.add(n);
+    // Relative paths are already resolved against the session file; a `~/` one stays literal until launch.
     if (session.mcp.config) {
-      const servers = (JSON.parse(readFileSync(session.mcp.config, "utf8")) as { mcpServers?: unknown }).mcpServers;
+      const servers = (JSON.parse(readFileSync(expandHome(session.mcp.config), "utf8")) as { mcpServers?: unknown }).mcpServers;
       if (servers && typeof servers === "object") for (const n of Object.keys(servers)) names.add(n);
     }
   } catch {
