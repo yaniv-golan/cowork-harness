@@ -1885,7 +1885,7 @@ a simulated session.
 
   The device image is the agent image plus that library, built locally on the first bridge run (it needs Docker Hub
   and apt; a few minutes) and rebuilt when either changes. `doctor` reports whether it is built. Earlier builds are
-  left in place: `docker images cowork-device` lists them, and `docker rmi` removes one no longer needed.
+  left in place: `docker images cowork-device` lists them, and `docker rmi` removes one built for an agent image you have since replaced.
 
   A rename within a folder is not a delete. Some Linux filesystems give a new file the identity (inode and birth
   time) of one just deleted, so the run first checks whether the run directory's filesystem does. Where it does, a
