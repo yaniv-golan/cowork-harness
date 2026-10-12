@@ -41,7 +41,7 @@ import { hasRedactionToken, REDACTION_TOKEN_RE } from "../redactable-literal.js"
 import { runsWriteRoot } from "../run/trace-view.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import { computeVerdict } from "../run/verdict.js";
-import type { RunResult } from "../types.js";
+import type { MetricCommandRecord, MetricUnavailable, RunResult } from "../types.js";
 import type { AssertContext } from "../assert.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { prepareCases } from "./command.js";
@@ -57,6 +57,9 @@ import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
 import { judgedOpts, sharedCaptureWarning } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
 import { flowMetricUnion, metricSigs, refuseChangedMetrics } from "./metric-keys.js";
+import { metricSig } from "../metric-sig.js";
+import { mergeCommandOutcomes, type CommandOutcomes, type MetricMeasurement } from "../metrics.js";
+import { remeasureCommandMetrics } from "../metric-command/live.js";
 import { existingFlowSnapshot, readStateIfPresent, readVariantFileIfPresent, writeCostSummary } from "./runner.js";
 import { compareVariants, VARIANT_DIR_RE } from "./schema-check.js";
 
@@ -77,6 +80,9 @@ export interface HillclimbRegradeArgs {
   /** `--allow-scrub-change`: re-judge a row even when a part of its judge input cannot be proven scrubbed with a set
    *  covering the run's (otherwise the row is listed). Never implied by `rejudge` or `allowDocDrift`. */
   allowScrubChange?: boolean;
+  /** `--allow-metric-commands`: re-run each command metric over the kept events. Without it a command metric keeps the
+   *  ROW's own state (its value, or its reason) whenever the row's signature for it is the current one. */
+  allowMetricCommands?: boolean;
 }
 
 export interface RegradeFlowDeps {
@@ -212,16 +218,94 @@ export interface Reevaluation {
  *  value) when the run cannot be re-evaluated — a run dir the builder refuses (multi-turn, partial, replay, chat, no
  *  result, a work dir a filesystem assert needs gone), an assert the recorded fixture would satisfy on its own — or
  *  when the case declares a metric and the kept work dir it would be read from is gone. */
-export function reevaluateFromRun(runDir: string, c: HillclimbCase): Reevaluation | { listed: string } {
+export async function reevaluateFromRun(
+  runDir: string,
+  c: HillclimbCase,
+  o: { row?: { grade?: Record<string, number>; meta?: Record<string, unknown> }; allowMetricCommands?: boolean; secrets?: string[] } = {},
+): Promise<Reevaluation | { listed: string }> {
   // The shared-capture warning is the regrade's to say, once per case (`regradeFlow`), never once per row.
   const built = reevaluateRun(runDir, c.scenario, { command: "hillclimb regrade", quietSharedCapture: true });
   if (!built.ok) {
     if (built.kind === "scenario") throw new Error("unreachable: the scenario was passed as an object");
     return { listed: `refused: ${built.message.split("\n")[0]}` };
   }
-  if (c.scenario.metrics?.length && !existsSync(built.ctx.workRoot))
+  if (c.scenario.metrics?.some((m) => m.command === undefined) && !existsSync(built.ctx.workRoot))
     return { listed: `its kept work dir is gone (${built.ctx.workRoot || "<unset>"}) — its metrics cannot be re-measured` };
-  return { ctx: built.ctx, deterministic: built.deterministic, ...(built.metrics !== undefined ? { metrics: built.metrics } : {}) };
+  const metrics = mergeCommandOutcomes(built.metrics, await rowCommandOutcomes(runDir, c, built.result, o));
+  return { ctx: built.ctx, deterministic: built.deterministic, ...(metrics !== undefined ? { metrics } : {}) };
+}
+
+/** A command metric's outcome for one hillclimb row. The ROW is the source of truth, never result.json:
+ *  - without consent, the row keeps its own state — its value, or its `metrics_unavailable` reason — whenever its
+ *    `meta.metric_sigs` entry is the current signature (a changed declaration is refused for the whole pass first,
+ *    by `refuseChangedMetrics`); a row that predates the metric reads `command_not_allowed`;
+ *  - `nondeterministic` is sticky: no regrade, flagged or not, brings a value back;
+ *  - with consent it re-runs (against the run's recorded entry for the events check), and a fresh value that differs
+ *    from the row's value is `nondeterministic`. */
+export async function rowCommandOutcomes(
+  runDir: string,
+  c: HillclimbCase,
+  result: RunResult,
+  o: { row?: { grade?: Record<string, number>; meta?: Record<string, unknown> }; allowMetricCommands?: boolean; secrets?: string[] },
+): Promise<CommandOutcomes> {
+  const cmds = (c.scenario.metrics ?? []).filter((m) => m.command !== undefined);
+  const out = new Map<string, MetricMeasurement & { command?: MetricCommandRecord }>();
+  if (cmds.length === 0) return out;
+  const sigs = (o.row?.meta?.metric_sigs ?? {}) as Record<string, unknown>;
+  const reasons = (o.row?.meta?.metrics_unavailable ?? {}) as Record<string, unknown>;
+  const grade = o.row?.grade ?? {};
+  const fresh = o.allowMetricCommands
+    ? await remeasureCommandMetrics(cmds, {
+        scenarioPath: c.file,
+        outDir: runDir,
+        turn: 1,
+        recorded: result.metrics,
+        allow: true,
+        secrets: o.secrets ?? [],
+      })
+    : undefined;
+  for (const m of cmds) {
+    let sig: string;
+    try {
+      sig = metricSig(m);
+    } catch (e) {
+      out.set(m.id, { id: m.id, unavailable: "command_missing", why: (e as Error).message });
+      continue;
+    }
+    const rowValue = grade[`${m.id}_present`] === 1 && typeof grade[m.id] === "number" ? grade[m.id] : undefined;
+    const rowReason = typeof reasons[m.id] === "string" ? (reasons[m.id] as MetricUnavailable) : undefined;
+    if (rowReason === "nondeterministic") {
+      out.set(m.id, { id: m.id, unavailable: "nondeterministic", why: "marked nondeterministic by an earlier regrade (sticky)" });
+      continue;
+    }
+    if (fresh !== undefined) {
+      const f = fresh.get(m.id)!;
+      if (typeof f.value === "number" && rowValue !== undefined && f.value !== rowValue)
+        out.set(m.id, {
+          id: m.id,
+          unavailable: "nondeterministic",
+          why: `re-measured ${f.value} where the row holds ${rowValue}`,
+          ...(f.command ? { command: f.command } : {}),
+        });
+      else out.set(m.id, f);
+      continue;
+    }
+    if (sigs[m.id] !== sig) {
+      out.set(m.id, {
+        id: m.id,
+        unavailable: "command_not_allowed",
+        why: "the row holds no measurement of this metric; pass --allow-metric-commands to run it",
+      });
+      continue;
+    }
+    out.set(
+      m.id,
+      rowValue !== undefined
+        ? { id: m.id, value: rowValue, why: "kept from the row (not re-run)" }
+        : { id: m.id, unavailable: rowReason ?? "command_not_allowed", why: "kept from the row (not re-run)" },
+    );
+  }
+  return out;
 }
 
 /** The row's `meta.metrics_unavailable` reasons for the declared ids only. */
@@ -769,14 +853,18 @@ const declaresMetrics = (c: HillclimbCase): boolean => (c.scenario.metrics?.leng
 const withVerdict = (r: RunResult): RunResult => ({ ...r, verdict: computeVerdict(r, "live") as RunResult["verdict"] });
 
 /** The result with its metrics as a re-measure measured them, id by id: a re-measure with no finite value (a pruned or
- *  changed file) never replaces a value the run measured. One rule for a re-graded row and a re-measured-only one. */
-function withRemeasured(live: RunResult, re: Remeasure): RunResult {
+ *  changed file) never replaces a value the run measured — except a command metric's, whose outcome the row decides.
+ *  One rule for a re-graded row and a re-measured-only one. */
+export function withRemeasured(live: RunResult, re: Remeasure, c: HillclimbCase): RunResult {
   if (re.metrics === undefined) return live;
+  // A command metric's re-measure is decided by the row (`rowCommandOutcomes`): every outcome replaces, an
+  // unavailable one included — a regrade that marked it `nondeterministic` must not leave the old value standing.
+  const commandIds = new Set((c.scenario.metrics ?? []).filter((m) => m.command !== undefined).map((m) => m.id));
   const byId = new Map((live.metrics ?? []).map((m) => [m.id, m]));
   for (const m of re.metrics) {
     const prev = byId.get(m.id);
     const fresh = typeof (m as { value?: unknown }).value === "number" && Number.isFinite((m as { value: number }).value);
-    if (fresh || prev === undefined || typeof (prev as { value?: unknown }).value !== "number") byId.set(m.id, m);
+    if (commandIds.has(m.id) || fresh || prev === undefined || typeof (prev as { value?: unknown }).value !== "number") byId.set(m.id, m);
   }
   return { ...live, metrics: [...byId.values()] as RunResult["metrics"] };
 }
@@ -1315,7 +1403,11 @@ async function regradeFlowInner(
         }
         // Every selected row is re-evaluated from its kept run here, before any judge call: a row whose context cannot be
         // rebuilt is listed, never re-measured as unavailable.
-        const re = reevaluateFromRun(runDir, c);
+        const re = await reevaluateFromRun(runDir, c, {
+          row,
+          allowMetricCommands: args.allowMetricCommands === true,
+          secrets: [...deps.secrets],
+        });
         if ("listed" in re) {
           // An agent failure scores 0 whatever its asserts say: a run that cannot be re-evaluated changes nothing a row
           // grades, so only the row's meta is brought current — never listed (no command would clear it).
@@ -1688,7 +1780,12 @@ async function regradeFlowInner(
           vr.listed.push({ prompt_id: b.c.id, rep, why: built.why });
           continue;
         }
-        const remeasured = withRemeasured(built.result, report);
+        // The report's command-metric entries come from the run's result.json; the row decides them (`t.re`).
+        const commandIds = new Set((b.c.scenario.metrics ?? []).filter((m) => m.command !== undefined).map((m) => m.id));
+        const rowDecided: Remeasure = {
+          metrics: report.metrics?.map((x) => (commandIds.has(x.id) ? (t.re.metrics?.find((y) => y.id === x.id) ?? x) : x)),
+        };
+        const remeasured = withRemeasured(built.result, rowDecided, b.c);
         // A fill re-judged no gating comparison and moved no deterministic outcome from the one the row was GRADED with
         // (`deterministicCheck`): the live verdict stands when its authored entries are still the run's, else it is
         // recomputed over the entries the row was graded with — either way `pass` is the graded row's. A full re-grade
@@ -1716,7 +1813,7 @@ async function regradeFlowInner(
             ...(regradeModel(report) !== undefined ? { regrade_judge_model: regradeModel(report) } : {}),
           },
           args.fillRefs ? undefined : copy,
-          report,
+          rowDecided,
         );
         if ("why" in got) {
           vr.listed.push({ prompt_id: b.c.id, rep, why: got.why });
@@ -1773,7 +1870,7 @@ async function regradeFlowInner(
       }
       // Its re-evaluation's metrics, when the flow declares any (a flow that declares none carries no metric column).
       const re: Remeasure | undefined = shape.metrics.length ? t.re : undefined;
-      const remeasured = re ? withRemeasured(built.result, re) : built.result;
+      const remeasured = re ? withRemeasured(built.result, re, t.c) : built.result;
       // The verdict moves only when an authored entry is not the run's own (an assert changed, added or removed since
       // the run): otherwise the persisted verdict stands (as in a fill, which never moves it).
       const live = sameAuthored(remeasured, t.result) ? remeasured : withVerdict(remeasured);

@@ -531,6 +531,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         allowDocDrift: p.flags["--allow-doc-drift"] === true,
         allowUnchecked: p.flags["--allow-unchecked"] === true,
         allowScrubChange: p.flags["--allow-scrub-change"] === true,
+        allowMetricCommands: p.flags["--allow-metric-commands"] === true,
       },
       {
         cwd: process.cwd(),

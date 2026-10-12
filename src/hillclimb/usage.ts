@@ -29,6 +29,7 @@ export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = [
   "--allow-doc-drift",
   "--allow-unchecked",
   "--allow-scrub-change",
+  "--allow-metric-commands",
 ] as const;
 
 export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--effort LEVEL] [--reps N]
