@@ -83,11 +83,21 @@ describe.runIf(POSIX && PY)("a closed terminal (SIGHUP on a real pty)", () => {
     const r = hangUp(`
       import { installTerminationHandler, registerAgent, childProcessAgent } from ${TERMINATION};
       import { spawn } from "node:child_process";
-      import { appendFileSync } from "node:fs";
+      import { appendFileSync, existsSync } from "node:fs";
+      import { join } from "node:path";
       const L = (s) => appendFileSync(process.argv[2], s + "\\n");
       installTerminationHandler();
-      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: "ignore", detached: true });
+      // The child must be IGNORING SIGTERM before the hangup, or a SIGTERM that lands first kills it and the stop
+      // sequence rightly skips the SIGKILL. It writes a marker once its trap is set, and "ready" waits for it. The
+      // sleep before the trap holds that window open on every run, so a test that stopped waiting fails every time
+      // rather than only under load.
+      const trapped = join($DIR, "trapped"); // a mkdtemp path: no spaces, so the shell needs no quoting
+      const child = spawn("sh", ["-c", "sleep 0.3; trap '' TERM; : > $1; while :; do sleep 1; done", "sh", trapped], { stdio: "ignore", detached: true });
       L("child " + child.pid);
+      for (const until = Date.now() + 10_000; !existsSync(trapped); ) {
+        if (Date.now() > until) throw new Error("the child never set its SIGTERM trap");
+        await new Promise((r) => setTimeout(r, 20));
+      }
       const orig = child.kill.bind(child);
       child.kill = (s) => { L("kill " + s); return orig(s); };
       registerAgent(() => childProcessAgent(child));

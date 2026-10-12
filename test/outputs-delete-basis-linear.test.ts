@@ -12,8 +12,9 @@ import { BASIS_STATEMENT_CAP, BASIS_COMMAND_CAP } from "../src/run/execute.js";
  *
  * Two budgets. The hang class — inputs that once took seconds to forever — must finish under 1 s. The
  * quadratic class — single 40–80k-character statements — must finish under 50 ms (best of 3 runs in the
- * child, so one scheduler hiccup does not fail it); the classifier caps what it scans per statement to get
- * there. Earlier in-process units (`x=1 sudo -u a nice -n 1`, `xargs -n 1 -I {}`, `2>a 1>b`) were measured
+ * child); the classifier caps what it scans per statement to get there. Every budget is CPU time, not wall time:
+ * under load the worst probe's wall time tripled (~8 to ~32 ms) while its CPU time stayed ~10 ms, so a wall budget
+ * failed whenever the machine was busy. Earlier in-process units (`x=1 sudo -u a nice -n 1`, `xargs -n 1 -I {}`, `2>a 1>b`) were measured
  * to stay fast even with the atomic prefix match removed, so they guarded nothing and are not kept.
  */
 const PROBE = join(process.cwd(), "test/helpers/outputs-delete-basis-probe.ts");
