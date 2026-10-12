@@ -154,3 +154,25 @@ describe("resolveCommandMetrics", () => {
     expect(() => resolveOne({ command: ["../metrics/count.py"] })).toThrow(/outside the scenario's directory/);
   });
 });
+
+describe("commandMetricFiles (the answer-key guard's and the hillclimb gate's view of a command metric)", () => {
+  it("lists a resolved command metric's script and deps by absolute path, and nothing for an unresolved one", async () => {
+    const { commandMetricFiles } = await import("../src/metric-command/resolve.js");
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "cmdfiles-")));
+    try {
+      mkdirSync(join(root, "scenarios"), { recursive: true });
+      mkdirSync(join(root, "metrics"), { recursive: true });
+      writeFileSync(join(root, "scenarios", "s.yaml"), "x: 1\n");
+      writeFileSync(join(root, "metrics", "c.mjs"), "console.log(1)");
+      writeFileSync(join(root, "metrics", "d.mjs"), "export const D = 1");
+      execFileSync("git", ["init", "-q"], { cwd: root });
+      execFileSync("git", ["add", "-A"], { cwd: root });
+      const d = ScenarioMetric.parse({ ...base, command: ["../metrics/c.mjs"], deps: ["../metrics/d.mjs"] });
+      expect(commandMetricFiles([d])).toEqual([]);
+      resolveCommandMetrics({ metrics: [d] }, join(root, "scenarios", "s.yaml"));
+      expect(commandMetricFiles([d])).toEqual([join(root, "metrics", "c.mjs"), join(root, "metrics", "d.mjs")]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
