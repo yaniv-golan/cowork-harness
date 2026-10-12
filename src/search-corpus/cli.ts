@@ -23,7 +23,7 @@ export const SEARCH_POOL_USAGE =
   "usage: search-pool build <pool> --from <run-dir|runs-dir> [--from …]... [--skill <name>] [--mixed] [--exclude <record-id>]...\n" +
   "         [--min-score <n>] [--allow-in-repo] [--output-format text|json]\n" +
   "       search-pool export <pool> --out <file> [--allow-in-repo]\n" +
-  "       search-pool import <file> <pool>\n" +
+  "       search-pool import <file> <pool> [--allow-in-repo]\n" +
   "       Builds a pool of the WebSearch results recorded in kept runs: one record per search (its query, links and the\n" +
   "       search's prose summary) with the source run's skill and versions. Nothing serves a pool yet.\n" +
   "       <pool> is a name under ~/.cowork-harness/search-pools/, or a path. Dirs are 0700, files 0600; a path inside a\n" +
@@ -32,7 +32,7 @@ export const SEARCH_POOL_USAGE =
   "       is skipped).\n" +
   "       --mixed: allow searches from more than one skill, or from runs naming none (a measured variant, never a baseline).\n" +
   "       --skill: declare the pool's skill for runs that name no single skill under test (a run naming another skill is\n" +
-  "       refused). A run's skill is its graded skill, else its one scoped skill, else its one invoked skill.\n" +
+  "       refused unless --mixed). A run's skill is its graded skill, else its one scoped skill, else its one invoked skill.\n" +
   "       --exclude: drop one record by id (repeatable); the build summary lists records that name an upload or repeat\n" +
   "       its text. A record containing a known secret (the credentials, COWORK_HARNESS_SCRUB_KEYS / _VALUES, and their\n" +
   "       encoded forms) refuses the build, naming it.\n" +
@@ -95,7 +95,7 @@ export async function cmdSearchPool(args: string[]): Promise<never> {
         return fail(
           CMD,
           "usage",
-          `${dir} is inside a git work tree; a pool holds web text and model summaries that can quote an upload, so it is kept out of repositories. Pass --allow-in-repo to write it there anyway.`,
+          `${dir} is inside a git work tree (or git could not tell); a pool holds web text and model summaries that can quote an upload, so it is kept out of repositories. Pass --allow-in-repo to write it there anyway.`,
           undefined,
           json,
         );
@@ -122,7 +122,13 @@ export async function cmdSearchPool(args: string[]): Promise<never> {
       const out = p.options["--out"];
       if (!a1 || a2 || extra.length || !out) return usage("search-pool export takes one <pool> and --out <file>");
       if (!p.flags["--allow-in-repo"] && insideGitWorkTree(out))
-        return fail(CMD, "usage", `${out} is inside a git work tree; pass --allow-in-repo to export a pool there anyway.`, undefined, json);
+        return fail(
+          CMD,
+          "usage",
+          `${out} is inside a git work tree (or git could not tell); pass --allow-in-repo to export a pool there anyway.`,
+          undefined,
+          json,
+        );
       exportPool(resolvePoolDir(a1), out);
       if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, true, { out }), secrets) + "\n");
       else writeAllSync(2, scrub(`wrote ${out}`, secrets) + "\n");
@@ -132,7 +138,13 @@ export async function cmdSearchPool(args: string[]): Promise<never> {
       if (!a1 || !a2 || extra.length) return usage("search-pool import takes <file> <pool>");
       const dir = resolvePoolDir(a2);
       if (!p.flags["--allow-in-repo"] && insideGitWorkTree(dir))
-        return fail(CMD, "usage", `${dir} is inside a git work tree; pass --allow-in-repo to write a pool there anyway.`, undefined, json);
+        return fail(
+          CMD,
+          "usage",
+          `${dir} is inside a git work tree (or git could not tell); pass --allow-in-repo to write a pool there anyway.`,
+          undefined,
+          json,
+        );
       const m = importPool(a1, dir, secrets);
       if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, true, { dir, manifest: m }), secrets) + "\n");
       else writeAllSync(2, scrub(`wrote ${dir}: pool ${m.poolId}@${m.sha256.slice(0, 8)}, ${m.counts.records} record(s)`, secrets) + "\n");

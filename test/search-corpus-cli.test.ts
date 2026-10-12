@@ -51,10 +51,18 @@ describe.skipIf(!existsSync(CLI))("search-pool CLI end to end", () => {
   });
 
   it("refuses a pool or export path inside a git work tree unless --allow-in-repo", () => {
-    const inRepo = resolve("test", "fixtures-never-written-pool");
-    const r = cli(["search-pool", "build", inRepo, "--from", keptRun()]);
+    // A throwaway repo, so a guard that failed open could never write into this one.
+    const repo = mkdtempSync(join(tmpdir(), "cwh-sp-repo-"));
+    expect(spawnSync("git", ["init", "-q", repo]).status).toBe(0);
+    const r = cli(["search-pool", "build", join(repo, "pool"), "--from", keptRun()]);
     expect(r.code).toBe(2);
     expect(r.err).toMatch(/inside a git work tree/);
-    expect(existsSync(inRepo)).toBe(false);
+    expect(existsSync(join(repo, "pool"))).toBe(false);
+    const pool = join(mkdtempSync(join(tmpdir(), "cwh-sp-out-")), "pool");
+    expect(cli(["search-pool", "build", pool, "--from", keptRun()]).code).toBe(0);
+    const ex = cli(["search-pool", "export", pool, "--out", join(repo, "p.json")]);
+    expect(ex.code).toBe(2);
+    expect(existsSync(join(repo, "p.json"))).toBe(false);
+    expect(cli(["search-pool", "export", pool, "--out", join(repo, "p.json"), "--allow-in-repo"]).code).toBe(0);
   });
 });

@@ -370,8 +370,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   fixture export <run-dir> --out <dir>   copy a kept run's outputs tree into a directory a scenario can start from
       [--allow-host-paths] [--output-format json]
   search-pool build <pool> --from <run-dir|runs-dir> [--from …]   build a pool of the WebSearch results recorded in kept runs
-      [--mixed] [--exclude <record-id>]… [--min-score <n>] [--allow-in-repo] [--output-format json]
+      [--skill <name>] [--mixed] [--exclude <record-id>]… [--min-score <n>] [--allow-in-repo] [--output-format json]
   search-pool export <pool> --out <file> | search-pool import <file> <pool>   move a pool between machines (hash re-verified)
+      [--allow-in-repo] [--output-format json]
   ref freeze <run-dir> --scenario <yaml> --out <store>   freeze a kept run's judged document as a semantic_pairwise reference
       [--case-id <id>] [--allow-unchecked] [--output-format json]
   ref verify <store>…   re-hash every frozen reference document in a store [--output-format json]

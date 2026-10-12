@@ -289,3 +289,49 @@ describe("review fixes", () => {
     expect(() => assemblePool({ ...base, poolId: "", runDirs: [d] })).toThrow(/empty/);
   });
 });
+
+describe("final-review fixes", () => {
+  it("insideGitWorkTree answers the same under a non-English locale", () => {
+    const outside = mkdtempSync(join(tmpdir(), "cwh-nogit-"));
+    for (const env of [
+      { ...process.env, LC_ALL: "de_DE.UTF-8" },
+      { ...process.env, LANG: "fr_FR.UTF-8", LANGUAGE: "fr" },
+    ])
+      expect(insideGitWorkTree(outside, env)).toBe(false);
+  });
+  it("insideGitWorkTree fails closed when git cannot be run", () => {
+    expect(insideGitWorkTree(mkdtempSync(join(tmpdir(), "cwh-nogit-")), { ...process.env, PATH: "/nonexistent" })).toBe(true);
+  });
+  it("insideGitWorkTree uses the directory when the nearest existing ancestor is a file", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-nogit-"));
+    writeFileSync(join(d, "f.json"), "{}");
+    expect(insideGitWorkTree(join(d, "f.json", "sub"))).toBe(false);
+  });
+  it("a --mixed pool of runs naming no skill is marked mixed", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-"));
+    const d = run(root, { skill: "none", searches: [["q", "https://a", "x"]] });
+    expect(assemblePool({ ...base, runDirs: [d], mixed: true }).manifest).toMatchObject({ mixed: true, skills: ["(unknown)"] });
+  });
+  it("readPool refuses another schema version, a record with an extra key, or a link field of the wrong type", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-"));
+    const { manifest, records } = assemblePool({ ...base, runDirs: [run(root, { skill: "ms", searches: [["q", "https://a", "x"]] })] });
+    const fresh = () => {
+      const dir = join(mkdtempSync(join(tmpdir(), "cwh-pool-out-")), "pool");
+      writePool(dir, manifest, records);
+      return dir;
+    };
+    const v2 = fresh();
+    const m = JSON.parse(readFileSync(join(v2, "pool.json"), "utf8"));
+    m.schemaVersion = 2;
+    writeFileSync(join(v2, "pool.json"), JSON.stringify(m));
+    expect(() => readPool(v2)).toThrow(/schema version 2/);
+    for (const forge of [(r: Record<string, unknown>) => (r.extra = 1), (r: { links: { url: unknown }[] }) => (r.links[0]!.url = {})]) {
+      const dir = fresh();
+      const p = join(dir, "records.jsonl");
+      const r = JSON.parse(readFileSync(p, "utf8"));
+      forge(r);
+      writeFileSync(p, JSON.stringify(r) + "\n");
+      expect(() => readPool(dir)).toThrow(/unexpected shape/);
+    }
+  });
+});

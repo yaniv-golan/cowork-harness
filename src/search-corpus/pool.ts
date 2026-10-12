@@ -52,7 +52,9 @@ export function resolvePoolDir(arg: string): string {
 function canon(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v);
   if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
+  // An undefined value is dropped, as JSON does, so a hash taken before a disk round-trip equals one taken after.
   return `{${Object.keys(v as object)
+    .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
     .sort()
     .map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`)
     .join(",")}}`;
@@ -79,12 +81,22 @@ function validRecord(r: unknown): r is PoolRecord {
     typeof o.query === "string" &&
     typeof o.text === "string" &&
     Array.isArray(o.links) &&
-    (o.links as unknown[]).every((l) => !!l && typeof l === "object" && Object.keys(l).sort().join(",") === "title,url") &&
+    (o.links as unknown[]).every(
+      (l) =>
+        !!l &&
+        typeof l === "object" &&
+        Object.keys(l).sort().join(",") === "title,url" &&
+        typeof (l as Record<string, unknown>).title === "string" &&
+        typeof (l as Record<string, unknown>).url === "string",
+    ) &&
     (o.agent === "main" || o.agent === "subagent") &&
     (o.origin === "events" || o.origin === "child-transcript") &&
     !!src &&
     typeof src.runRef === "string" &&
-    RUN_REF.test(src.runRef)
+    RUN_REF.test(src.runRef) &&
+    ["scenario", "skill", "skillRef", "variantHash", "agentVersion", "desktopVersion", "model", "recordedAt"].every(
+      (k) => src[k] === null || typeof src[k] === "string",
+    )
   );
 }
 
@@ -196,12 +208,14 @@ export function secretHits(records: PoolRecord[], secrets: string[] = collectSec
     .map((r) => r.id);
 }
 
-/** Whether `dir` (or its nearest existing ancestor) is inside a git work tree. Fails closed: when git cannot be run
- *  or errors for any reason other than "not a git repository", the answer is "inside". */
-export function insideGitWorkTree(dir: string): boolean {
+/** Whether `dir` (or its nearest existing ancestor directory) is inside a git work tree. Fails closed: when git
+ *  cannot be run or errors for any reason other than "not a git repository", the answer is "inside". */
+export function insideGitWorkTree(dir: string, env: NodeJS.ProcessEnv = process.env): boolean {
   let d = resolve(dir);
   while (!existsSync(d)) d = dirname(d);
-  const r = spawnSync("git", ["-C", d, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  if (!statSync(d).isDirectory()) d = dirname(d); // `git -C` needs a directory
+  // LC_ALL=C: the "not a git repository" check reads git's message, which other locales translate.
+  const r = spawnSync("git", ["-C", d, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", env: { ...env, LC_ALL: "C" } });
   if (r.error) return true;
   if (r.status === 0) return r.stdout.trim() === "true";
   return !/not a git repository/i.test(r.stderr ?? "");
@@ -295,7 +309,8 @@ export function assemblePool(a: {
     sha256: poolHash(records, a.retrieval),
     createdAt: a.now.toISOString(),
     harnessVersion: a.harnessVersion,
-    mixed: skills.length > 1,
+    // A pool of runs naming no skill is a measured variant too (it needed --mixed).
+    mixed: skills.length > 1 || skills.includes("(unknown)"),
     skills,
     sources: kept.sort((x, y) => (x.runRef < y.runRef ? -1 : 1)),
     counts: { records: records.length, urls: new Set(records.flatMap((r) => r.links.map((l) => l.url))).size, runs: runsWithSearches },
