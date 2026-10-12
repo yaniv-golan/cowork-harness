@@ -26,7 +26,16 @@ export function turnEventsBytes(outDir: string, turn: number, scrubWith?: string
 
 export async function measureCommandMetrics(
   decls: readonly ScenarioMetric[],
-  o: { outDir: string; turn: number; secrets: string[]; scrubEvents: boolean; deadline?: number },
+  o: {
+    outDir: string;
+    turn: number;
+    secrets: string[];
+    scrubEvents: boolean;
+    deadline?: number;
+    /** Where each script's scrubbed stderr head is kept. Default: the run's own `turns/<N>/metrics/` (a live run). A
+     *  grading path passes its own output dir, or null to keep none: it must never overwrite the live run's logs. */
+    stderrDir?: string | null;
+  },
 ): Promise<Map<string, CommandMeasurement>> {
   const out = new Map<string, CommandMeasurement>();
   const cmds = decls.filter(isCommandMetric);
@@ -52,8 +61,8 @@ export async function measureCommandMetrics(
       secrets: o.secrets,
       ...(o.deadline !== undefined ? { deadline: o.deadline } : {}),
     });
-    if (r.stderr) {
-      const dir = join(o.outDir, "turns", String(o.turn), "metrics");
+    const dir = o.stderrDir === undefined ? join(o.outDir, "turns", String(o.turn), "metrics") : o.stderrDir;
+    if (r.stderr && dir !== null) {
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, `${m.id}.stderr.txt`), r.stderr);
     }
@@ -107,6 +116,9 @@ export async function remeasureCommandMetrics(
     allow: boolean;
     secrets: string[];
     warn?: (line: string) => void;
+    /** Where a re-run keeps each script's stderr head (the grading path's own output dir), or null for none. Never the
+     *  run's own `turns/<N>/metrics/`, which holds the live run's logs. */
+    stderrDir: string | null;
   },
 ): Promise<CommandOutcomes> {
   const out = new Map<string, MetricMeasurement & { command?: MetricCommandRecord }>();
@@ -168,9 +180,15 @@ export async function remeasureCommandMetrics(
       o.warn?.(
         `metric "${m.id}": no recorded measurement — the kept events are scrubbed with this process's secret set before the script reads them`,
       );
-    const fresh = (await measureCommandMetrics([m], { outDir: o.outDir, turn: o.turn, secrets: o.secrets, scrubEvents: scrubFirst })).get(
-      m.id,
-    )!;
+    const fresh = (
+      await measureCommandMetrics([m], {
+        outDir: o.outDir,
+        turn: o.turn,
+        secrets: o.secrets,
+        scrubEvents: scrubFirst,
+        stderrDir: o.stderrDir,
+      })
+    ).get(m.id)!;
     if (typeof fresh.value === "number" && typeof rec?.value === "number" && fresh.value !== rec.value) {
       out.set(m.id, {
         id: m.id,

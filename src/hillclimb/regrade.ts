@@ -262,6 +262,8 @@ export async function rowCommandOutcomes(
         recorded: result.metrics,
         allow: true,
         secrets: o.secrets ?? [],
+        // Never over the kept run's own turns/<N>/metrics/ logs.
+        stderrDir: null,
       })
     : undefined;
   for (const m of cmds) {

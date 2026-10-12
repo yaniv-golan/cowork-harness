@@ -2,7 +2,7 @@
 // consented re-run's regrade-vs-recorded determinism check.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScenarioMetric, type MetricCommandRecord } from "../src/types.js";
@@ -51,7 +51,15 @@ async function recordLive(m: ScenarioMetric) {
   ];
 }
 const remeasure = (m: ScenarioMetric, recorded: Awaited<ReturnType<typeof recordLive>> | undefined, allow: boolean) =>
-  remeasureCommandMetrics([m], { scenarioPath: scen(), outDir: run, turn: 1, recorded, allow, secrets: [] }).then((o) => o.get(m.id)!);
+  remeasureCommandMetrics([m], {
+    scenarioPath: scen(),
+    outDir: run,
+    turn: 1,
+    recorded,
+    allow,
+    secrets: [],
+    stderrDir: join(root, "out"),
+  }).then((o) => o.get(m.id)!);
 
 describe("remeasureCommandMetrics", () => {
   it("without consent the recorded value is carried, stamped carried: true — never presented as fresh", async () => {
@@ -101,6 +109,17 @@ describe("remeasureCommandMetrics", () => {
     const r = await remeasure(decl(), forged, true);
     expect(r.unavailable).toBe("nondeterministic");
     expect(r.why).toMatch(/re-measured 2 .* recorded 99/);
+  });
+
+  it("a consented re-run never writes over the live run's turns/<N>/metrics/ logs; it keeps its own stderr where told", async () => {
+    write("metrics/noisy.mjs", "console.error('rerun-stderr'); console.log(2)");
+    const m = decl({ command: ["../metrics/noisy.mjs"] });
+    const recorded = await recordLive(m);
+    const liveLog = join(run, "turns", "1", "metrics", "n.stderr.txt");
+    writeFileSync(liveLog, "LIVE LOG");
+    await remeasure(decl({ command: ["../metrics/noisy.mjs"] }), recorded, true);
+    expect(readFileSync(liveLog, "utf8")).toBe("LIVE LOG");
+    expect(readFileSync(join(root, "out", "n.stderr.txt"), "utf8")).toContain("rerun-stderr");
   });
 
   it("with consent and an agreeing value, the fresh measurement is reported (not carried)", async () => {

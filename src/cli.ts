@@ -4657,6 +4657,9 @@ async function cmdVerifyRun(args: string[]) {
       recorded: result.metrics,
       allow: p.flags["--allow-metric-commands"] === true,
       secrets: collectSecrets(),
+      // verify-run writes nothing into the run dir: a re-run's stderr is not kept (its reason carries the first
+      // sandbox line).
+      stderrDir: null,
       warn: (line) => process.stderr.write(`::warning:: verify-run: ${line}\n`),
     }),
   );

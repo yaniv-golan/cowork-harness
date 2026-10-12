@@ -1275,6 +1275,8 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
         recorded: p.recordedMetrics,
         allow: opts.allowMetricCommands === true,
         secrets,
+        // Beside this regrade's own file, never over the live run's turns/<N>/metrics/ logs.
+        stderrDir: join(turnWriteDir(p.runDir, p.turn), "regrade", "metrics"),
         warn: (line) => process.stderr.write(`::warning:: ${CMD}: ${line}\n`),
       }),
     );
