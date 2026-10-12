@@ -33,14 +33,17 @@ import {
   writeFileAtomic,
   RecordPostRunRefusalError,
   checkStaleness,
+  preSpendVerdicts,
+  redactionPreflightMessage,
   type Cassette,
   type RecordOpts,
 } from "./cassette.js";
 import { loadRedactionPolicy, redactText, type RedactionPolicy } from "../redact.js";
 import { warn } from "../io.js";
+import { UsageError } from "../errors.js";
 import { join } from "node:path";
 import { legScenario, loadMultiLegScenario } from "./execute.js";
-import { executeMultiLeg, composeScenarioVerdict, type MultiLegOutcome } from "./multi-leg.js";
+import { executeMultiLeg, composeScenarioVerdict, expectDeniedSignals, type MultiLegOutcome } from "./multi-leg.js";
 import { hostActionAsserts, type Leg, type MultiLegScenario } from "./multi-leg-scenario.js";
 import { compileUserRegex } from "../regex.js";
 import type { ActionRecord } from "./host-action.js";
@@ -154,14 +157,46 @@ function redactStrings<T>(v: T, policy: RedactionPolicy | undefined): T {
   return walk(v) as T;
 }
 
+/** The checks a multi-leg `record` runs before anything spends (and `record --dry-run` previews): the loader, then the
+ *  pre-spend checks a single recording gets, per prompt leg (each runs as its own single-prompt scenario) —
+ *  `on_unanswered: prompt`, the host-inventory preflight, the slug collision with another scenario's cassette — and the
+ *  redaction preflight. Throws UsageError on a refusal; warnings are printed. */
+export function preflightMultiLegRecord(
+  scenarioFile: string,
+  opts: Pick<RecordOpts, "cassettePath" | "force" | "allowHostInventoryFixture"> & { noRedact?: boolean },
+): { ms: MultiLegScenario; cassettePath: string } {
+  const ms = loadMultiLegScenario(scenarioFile);
+  const cassettePath = opts.cassettePath ?? defaultCassettePath(ms.name);
+  for (const leg of ms.legs) {
+    if (leg.prompt === undefined) continue;
+    for (const v of preSpendVerdicts(legScenario(ms, leg), cassettePath, {
+      force: opts.force,
+      explicitOutPath: opts.cassettePath !== undefined,
+      allowHostInventoryFixture: opts.allowHostInventoryFixture,
+      scenarioSourceFile: scenarioFile,
+    })) {
+      if (v.kind === "refuse") throw new UsageError(`leg "${leg.id}": ${v.message}`);
+      warn(`${v.message}\n`);
+    }
+  }
+  if (!opts.noRedact) {
+    const preflight = redactionPreflightMessage(
+      ms.legs
+        .filter((l) => l.prompt !== undefined)
+        .map((l) => ({ scenario: legScenario(ms, l), policyDirs: [process.cwd(), dirname(scenarioFile), dirname(cassettePath)] })),
+    );
+    if (preflight) warn(preflight);
+  }
+  return { ms, cassettePath };
+}
+
 /** `record <legs.yaml>`: run every leg, refuse a failing scenario unless --allow-failing, freeze each prompt leg through
  *  the ordinary freeze path (unwritten), redact each action record, scan, compose, and write one file. */
 export async function recordMultiLeg(
   scenarioFile: string,
   opts: RecordOpts & { allowFailing?: boolean; noRedact?: boolean; allowHostInventoryFindings?: boolean },
 ): Promise<{ outcome: MultiLegOutcome; cassettePath: string }> {
-  const ms = loadMultiLegScenario(scenarioFile);
-  const cassettePath = opts.cassettePath ?? defaultCassettePath(ms.name);
+  const { ms, cassettePath } = preflightMultiLegRecord(scenarioFile, opts);
   // Each prompt leg is frozen the moment it finishes: under `workdir: persistent` the next leg rewrites the shared
   // tree, so a snapshot taken after the scenario would give every leg the LAST leg's files.
   const frozenByLeg = new Map<string, Cassette>();
@@ -434,7 +469,15 @@ export async function replayMultiLegCassette(
     legs.push({ id: rec.id, kind: "prompt", status: verdict.pass ? "passed" : "failed", verdict });
     if (!verdict.pass) stopped = rec.id;
   }
-  return { verdict: composeScenarioVerdict(legs, stopped), legs, results, staleness };
+  // `expect_denied` over every leg's egress (the replayed legs' and the actions' recorded), as live.
+  const extra =
+    stopped === undefined
+      ? expectDeniedSignals(c.scenario.expect_denied ?? [], [
+          ...results.flatMap((r) => r.egress ?? []),
+          ...c.legs.flatMap((l) => ("action" in l ? ((l as { action: ActionRecord }).action.egress ?? []) : [])),
+        ])
+      : [];
+  return { verdict: composeScenarioVerdict(legs, stopped, extra), legs, results, staleness };
 }
 
 /** Drift of a multi-leg cassette's frozen legs against the scenario file it was recorded from: the leg list, each leg's

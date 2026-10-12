@@ -4266,6 +4266,8 @@ async function cmdStatus(args: string[]) {
     // it so `status <run-dir>` works — not only the exact outDir printed at run start.
     dir = resolveStatusTarget(p.positionals[0]);
   } catch (e) {
+    // A multi-leg candidate is a refused shape (`runtime`), not a bad argument.
+    if (e instanceof RunDirShapeError) return fail("status", "runtime", e.message, undefined, isJsonOutput(args));
     return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   if (p.flags["--follow"]) {
@@ -4618,6 +4620,7 @@ function cmdScaffold(args: string[]) {
   try {
     file = resolveEventsFile(target);
   } catch (e) {
+    if (e instanceof RunDirShapeError) return void fail("scaffold", "runtime", e.message, undefined, json);
     return void fail("scaffold", "usage", String((e as Error).message), undefined, json);
   }
   let yaml: string;
@@ -5105,8 +5108,16 @@ function cmdTrace(args: string[]) {
   if (legIdx >= 0 && (legArg === undefined || legArg.startsWith("--"))) fail("trace", "usage", "--leg requires a leg id", undefined, json);
   let traceTarget = target!;
   if (legArg !== undefined) {
-    const legDir = join(target!, "legs", legArg);
-    if (classifyRunDir(target!).kind !== "legs" || !existsSync(join(legDir, "leg.json")))
+    // A run id or fragment resolves to its multi-leg root first (the resolver refuses a root without --leg, naming it).
+    let rootDir = target!;
+    if (!existsSync(rootDir))
+      try {
+        resolveEventsFile(rootDir);
+      } catch (e) {
+        if (e instanceof MultiLegRunDirError && e.runDir !== undefined) rootDir = e.runDir;
+      }
+    const legDir = join(rootDir, "legs", legArg);
+    if (classifyRunDir(rootDir).kind !== "legs" || !existsSync(join(legDir, "leg.json")))
       return fail("trace", "usage", `trace --leg: ${target} is not a multi-leg run dir with a leg "${legArg}"`, undefined, json);
     traceTarget = legDir;
   }
@@ -5261,7 +5272,9 @@ function detectDiffKind(arg: string): DiffKind {
   try {
     resolveEventsFile(arg);
     return "run";
-  } catch {
+  } catch (e) {
+    // A multi-leg run resolved fine and is a refused shape: never retried as a baseline name.
+    if (e instanceof RunDirShapeError) throw e;
     /* not a resolvable run either — fall through */
   }
   return "baseline"; // validated for real by loadBaseline() at load time; unresolvable throws there
@@ -5571,6 +5584,8 @@ function cmdInspect(args: string[]) {
   const target = allPositionals[0];
   let runDir: string;
   try {
+    // A multi-leg root or an action leg: refused with inspect's own name (requireTurns), routed as runtime below.
+    if (existsSync(target) && ["legs", "action-leg"].includes(classifyRunDir(target).kind)) requireTurns(target, "inspect");
     runDir = hasTurnDirs(target) ? target : dirname(resolveEventsFile(target));
   } catch (e) {
     // A multi-leg root or an action leg resolved fine; it is a refused shape (`runtime`), not a bad argument.

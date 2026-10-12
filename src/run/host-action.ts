@@ -128,6 +128,8 @@ export interface ActionExec {
   durationMs: number;
   /** Why the action could not run at all (spawn failure), when it could not. */
   spawnError?: string;
+  /** The egress decisions of the action's own sidecar or proxy (container, microvm); absent on protocol. */
+  egress?: Array<{ host: string; decision: "allow" | "deny" }>;
 }
 
 /** Spawn `cmd args`, capped capture, killed (`kill()`) at the deadline. */
@@ -212,6 +214,8 @@ export interface ActionRecord {
   stderr: { sha256: string; bytes: number; head: string };
   /** Files the action created or changed under the user-visible roots: (path, sha256). */
   produced: Array<{ path: string; sha256: string | null }>;
+  /** Its egress decisions (see ActionExec.egress). */
+  egress?: Array<{ host: string; decision: "allow" | "deny" }>;
   /** Why the leg failed before or instead of running the command (status file, template, spawn). */
   refused?: string;
   assertions: Array<{ assertion: Record<string, unknown>; pass: boolean; message?: string }>;

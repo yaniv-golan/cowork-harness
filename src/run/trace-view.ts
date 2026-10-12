@@ -154,7 +154,10 @@ function isMultiLegDir(dir: string): boolean {
   return k === "legs" || k === "action-leg";
 }
 function multiLegCandidate(arg: string, dir: string): MultiLegRunDirError {
-  return new MultiLegRunDirError(`"${arg}" matches multi-leg run ${dir}: pass --leg <id> (trace) or point at ${join(dir, "legs")}/<id>`);
+  return new MultiLegRunDirError(
+    `"${arg}" matches multi-leg run ${dir}: pass --leg <id> (trace) or point at ${join(dir, "legs")}/<id>`,
+    dir,
+  );
 }
 
 function resolveViaIndexRows(rows: RunIndexRow[], arg: string): string | undefined {
@@ -189,7 +192,11 @@ function resolveViaIndexRows(rows: RunIndexRow[], arg: string): string | undefin
 export function resolveEventsFile(arg: string): string {
   if (existsSync(arg) && statSync(arg).isFile()) return arg;
   if (existsSync(arg) && statSync(arg).isDirectory()) {
-    if (isMultiLegDir(arg)) throw multiLegCandidate(arg, arg);
+    if (isMultiLegDir(arg)) {
+      const shape = classifyRunDir(arg);
+      // An action leg (or an unreadable one) is not a root to pick a leg from: say what it is.
+      throw shape.kind === "action-leg" ? new MultiLegRunDirError(preLayoutMessage(shape, arg)) : multiLegCandidate(arg, arg);
+    }
     const f = join(arg, "events.jsonl");
     if (existsSync(f)) return f;
   }
@@ -255,8 +262,8 @@ export function resolveEventsFile(arg: string): string {
       });
       warn(
         `::warning:: ambiguous trace fragment "${arg}" matches ${candidates.length} run dirs:\n` +
-          candidates.map((c) => `  ${c}`).join("\n") +
-          `\nUsing the most recent: ${candidates[0]}\nPass a more specific id or full path to be deterministic.\n`,
+          candidates.map((c) => `  ${c.endsWith(MULTI_LEG_SENTINEL) ? `${dirname(c)} (a multi-leg run)` : c}`).join("\n") +
+          `\nUsing the most recent: ${candidates[0]!.endsWith(MULTI_LEG_SENTINEL) ? dirname(candidates[0]!) : candidates[0]}\nPass a more specific id or full path to be deterministic.\n`,
       );
       return pick(candidates[0]);
     }

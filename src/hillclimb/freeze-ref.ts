@@ -184,7 +184,7 @@ export function freezeCaseRef(i: FreezeCaseInput): FreezeCaseOutcome {
 }
 
 /** One field of the run's latest-turn result.json (undefined when unreadable). */
-function runResultField(runDir: string, field: string): unknown {
+export function runResultField(runDir: string, field: string): unknown {
   try {
     const turn = latestTurn(runDir);
     if (turn === undefined) return undefined;

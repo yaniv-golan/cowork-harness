@@ -242,7 +242,7 @@ export function exportFixture(opts: {
   while (lstatOrNull(anchor) === null && dirname(anchor) !== anchor) anchor = dirname(anchor);
   // For a leg, the kept run is the whole scenario root, not just this leg's dir.
   const legMarker = readLegMarker(opts.runDir);
-  const keptReal = legMarker ? realpathSync.native(join(opts.runDir, legMarker.scenarioRoot)) : runReal;
+  const keptReal = legMarker ? realpathSync.native(join(opts.runDir, "..", "..")) : runReal;
   if (isUnderRealRoot(keptReal, realpathSync.native(anchor)))
     return refuse(`${cmd}: --out ${opts.out} is inside the run dir; exporting there would alter the kept run`, {
       outputsDir,

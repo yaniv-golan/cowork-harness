@@ -103,7 +103,7 @@ export function readLegMarker(dir: string): LegMarker | undefined {
 }
 
 /** The legs of a scenario root that carry a marker, in leg order (the marker's `index`, then id). */
-export function legDirsOf(outDir: string): Array<{ id: string; dir: string; marker: LegMarker }> {
+export function legDirsOf(outDir: string): Array<{ id: string; dir: string; marker: LegMarker | undefined }> {
   const root = join(outDir, "legs");
   let entries: import("node:fs").Dirent[];
   try {
@@ -111,14 +111,23 @@ export function legDirsOf(outDir: string): Array<{ id: string; dir: string; mark
   } catch {
     return [];
   }
-  const out: Array<{ id: string; dir: string; marker: LegMarker }> = [];
+  // A leg is a grammar-matching dir whose leg.json EXISTS. A marker that does not parse (a crash mid-write, a damaged
+  // disk) still makes it a leg — the shape must not fall back to "none", which prune treats as junk — but with no
+  // marker (`undefined`), so nothing resolves a tree or a kind from it.
+  const out: Array<{ id: string; dir: string; marker: LegMarker | undefined }> = [];
   for (const e of entries) {
     if (!e.isDirectory() || !LEG_ID_RE.test(e.name)) continue;
     const dir = join(root, e.name);
-    const marker = readLegMarker(dir);
-    if (marker) out.push({ id: e.name, dir, marker });
+    if (!existsSync(join(dir, "leg.json"))) continue;
+    out.push({ id: e.name, dir, marker: readLegMarker(dir) });
   }
-  return out.sort((a, b) => a.marker.index - b.marker.index || a.id.localeCompare(b.id));
+  const order = (x: { marker: LegMarker | undefined }) => x.marker?.index ?? Number.MAX_SAFE_INTEGER;
+  return out.sort((a, b) => order(a) - order(b) || a.id.localeCompare(b.id));
+}
+
+/** A leg dir whose leg.json exists but does not parse. */
+export function legMarkerUnreadable(dir: string): boolean {
+  return existsSync(join(dir, "leg.json")) && readLegMarker(dir) === undefined;
 }
 
 /** Where a leg's session tree (`work/`) is, for a reader that needs the files and not just the turns.
@@ -126,19 +135,24 @@ export function legDirsOf(outDir: string): Array<{ id: string; dir: string; mark
  *  - `cowork-task` → the leg's own `legs/<id>/work/` (each leg had its own session root);
  *  - `persistent` → the scenario root's shared `work/`, which only the LAST leg's post-state still matches, and only
  *    once the scenario has finished. Any other persistent leg is refused: later legs changed that tree, and its
- *    post-state survives only as hashes in its post-run-manifest.json. */
+ *    post-state survives only as hashes in its leg-post-manifest.json. */
 export function legTreeRoot(dir: string, command: string): { root: string } | { refused: string } {
+  if (legMarkerUnreadable(dir))
+    return { refused: `${command}: ${dir}'s leg.json is unreadable, so which leg it is (and where its files are) cannot be told` };
   const marker = readLegMarker(dir);
   if (!marker) return { root: dir };
   if (marker.workdir === "cowork-task") return { root: dir };
-  const scenarioRoot = join(dir, marker.scenarioRoot);
+  // A leg dir is always <root>/legs/<id>: the marker's own claim about where its root is is not trusted.
+  const scenarioRoot = join(dir, "..", "..");
   const legs = legDirsOf(scenarioRoot);
+  if (legs.some((l) => !l.marker))
+    return { refused: `${command}: a leg marker under ${join(scenarioRoot, "legs")} is unreadable, so which leg was last cannot be told` };
   const last = legs[legs.length - 1];
   if (last?.id === marker.id && existsSync(join(scenarioRoot, SCENARIO_RESULT))) return { root: scenarioRoot };
   return {
     refused:
       `${command}: ${dir} is leg ${marker.id} of a multi-leg run; its session tree is shared and was changed by ` +
-      `later legs, so its post-state is only in post-run-manifest.json.`,
+      `later legs, so its post-state is only in its leg-post-manifest.json.`,
   };
 }
 
@@ -281,7 +295,8 @@ export function classifyRunDir(outDir: string): RunDirShape {
     if (turns.length || markers.length) return { kind: "mixed", turns, markers: [...markers, "legs/"] };
     return { kind: "legs", legs: legs.map((l) => l.id), complete: existsSync(join(outDir, SCENARIO_RESULT)) };
   }
-  if (readLegMarker(outDir)?.kind === "action") return { kind: "action-leg" };
+  // A host-action leg, or a leg whose marker is unreadable: neither is an agent session to read.
+  if (readLegMarker(outDir)?.kind === "action" || legMarkerUnreadable(outDir)) return { kind: "action-leg" };
   if (turns.length) return markers.length ? { kind: "mixed", turns, markers } : { kind: "turns", turns };
   return markers.length ? { kind: "legacy", markers } : { kind: "none" };
 }
@@ -311,7 +326,9 @@ export function preLayoutMessage(shape: RunDirShape, outDir: string, command = "
           `${SCENARIO_RESULT}): it is still running or was interrupted. A finished leg is readable at ` +
           `${join(outDir, "legs")}/<id>.`;
   if (shape.kind === "action-leg")
-    return `${outDir} is a host-action leg (no agent session); its record is ${join(outDir, "action.json")}.`;
+    return legMarkerUnreadable(outDir)
+      ? `${outDir} is a leg of a multi-leg run whose leg.json is unreadable, so it cannot be read as an agent session.`
+      : `${outDir} is a host-action leg (no agent session); its record is ${join(outDir, "action.json")}.`;
   if (shape.kind === "legacy")
     return (
       `${outDir} is a pre-layout run dir (written before the turns/<N>/ layout): ${shape.markers.join(", ")} ` +

@@ -109,7 +109,8 @@ All notable changes to this project are documented here. The format is based on
 - **Multi-leg scenarios (`legs:`).** A scenario can run a list of legs strictly in order: a **prompt leg** is a fresh
   agent session (its own session id, never resumed), and a **host action** runs one argv command between legs in the
   runtime of the leg before it (a one-shot container of the agent image, the same microvm guest, or — on `protocol`
-  — a host subprocess), with the agent's environment minus its credentials and no tokens spent. A leg that fails
+  — a host subprocess), with the agent's environment minus its Anthropic credentials (on `protocol`, the rest of your shell's environment
+  reaches it, as it reaches the agent) and no tokens spent. A leg that fails
   stops the scenario; later legs are reported `skipped`. Built for skills that park at a question and resume in a
   later session. See [docs/scenario.md → Multi-leg scenarios](./docs/scenario.md#multi-leg-scenarios-legs).
   - `workdir: persistent` (the default) runs every leg in one session tree with a shared agent config dir (a
@@ -126,7 +127,7 @@ All notable changes to this project are documented here. The format is based on
   - The run dir is one scenario root with `legs/<id>/` per leg and `scenario-result.json` (its `verdict` has the
     same shape as a run's). It is ONE index row (`multiLeg: true`) in `stats`, and `status --latest-for` ranks it by
     when it ended. `trace`, `verify-run` and `regrade` take `--leg <id>`; every reader of run dirs either reads a
-    leg or refuses a multi-leg root by name, and `prune` keeps an unfinished one.
+    leg or refuses a multi-leg root by name, and `prune` ranks an unfinished one as a real run (not an empty dir).
 - **Cassette v18: the multi-leg cassette.** `record <legs.yaml>` writes one cassette for the scenario: each prompt
   leg nests a complete single-prompt cassette, frozen when that leg ends, and each host action its record. `replay`
   re-drives the prompt legs and re-grades each action from its record (it never re-runs it); `verify-cassettes`

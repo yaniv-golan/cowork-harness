@@ -72,7 +72,7 @@
                   "artifact": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "an outputs-relative JSON status file to read before the action"
+                    "description": "a JSON status file to read before the action, relative to the work root as assertion paths are (`outputs/…`)"
                   },
                   "expect": {
                     "description": "top-level fields the status file must have (`{field: {not_null: true}}` requires a non-null value)",

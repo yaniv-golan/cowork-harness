@@ -1405,7 +1405,8 @@ fails as `vacuous_positive_assertion` without spawning.
 is replaced by that string field of the `status:` file (read before the action; `expect:` checks top-level fields,
 and `{not_null: true}` requires a value). A substituted value may not start with `-`, hold a `..` segment, exceed
 4096 bytes, or (when it looks like a path) leave the agent-visible session root. The action runs in the runtime of
-the prompt leg before it, with that agent's environment minus its credentials:
+the prompt leg before it, with that agent's environment minus its Anthropic credentials (on `protocol` that
+environment is your shell's, as it is for the agent):
 
 | Tier | The action runs as |
 |---|---|
@@ -1447,7 +1448,11 @@ verdict, each leg's verdict, and the run's one index row) once the scenario ends
 | `trace <root> --leg <id>`, `inspect <root>/legs/<id>`, `fixture export <root>/legs/<id>` | read one leg (export: only when its tree is still its own) |
 | `eval`, `hillclimb`, `ref`, `scaffold`, `diff` on the root, `rehash` | refused, by name |
 
-A plain `run` makes no cassette, so to re-grade a multi-leg run later at no cost, record it.
+A plain `run` makes no cassette, so to re-grade a multi-leg run later at no cost, record it. A leg's "has its tree
+changed" check covers its user-visible files (outputs and connected folders), the ones its file assertions read.
+
+`expect_denied:` is about the whole scenario: each host must have been denied in SOME leg's (or action's) egress. A
+leg's own `egress_denied` assertion reads that leg's egress only.
 
 **Not modelled yet.** A leg's prompt is literal: a gate whose key is known only at run time (an instance id the skill
 mints) cannot be answered from the earlier leg's status file.

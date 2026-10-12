@@ -116,14 +116,21 @@ export interface RunDirEvidence {
    *  so this protects an in-flight or crashed multi-leg run the way a root events.jsonl protects a single run. */
   legs: boolean;
 }
+/** Any `legs/<id>/events.jsonl`, whatever the state of the leg markers: a session started under that leg. */
+function anyLegEvents(dir: string): boolean {
+  try {
+    return readdirSync(join(dir, "legs")).some((id) => isFile(join(dir, "legs", id, "events.jsonl")));
+  } catch {
+    return false;
+  }
+}
+
 export function runDirEvidence(dir: string): RunDirEvidence {
   const shape = classifyRunDir(dir);
   return {
     status: isFile(join(dir, "status.json")),
     origin: isFile(join(dir, ".origin")),
-    events:
-      isFile(join(dir, "events.jsonl")) ||
-      (shape.kind === "legs" && shape.legs.some((id) => isFile(join(dir, "legs", id, "events.jsonl")))),
+    events: isFile(join(dir, "events.jsonl")) || anyLegEvents(dir),
     turns: shape.kind === "turns" || shape.kind === "mixed",
     legacy: shape.kind === "legacy" || shape.kind === "mixed" ? shape.markers.filter((m) => isFile(join(dir, m))) : [],
     legs: shape.kind === "legs",

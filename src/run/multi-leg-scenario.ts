@@ -78,7 +78,10 @@ export type HostActionAssertion = z.infer<typeof HostActionOwnAssert> | Assertio
 export const HostAction = z.strictObject({
   status: z
     .strictObject({
-      artifact: z.string().min(1).describe("an outputs-relative JSON status file to read before the action"),
+      artifact: z
+        .string()
+        .min(1)
+        .describe("a JSON status file to read before the action, relative to the work root as assertion paths are (`outputs/…`)"),
       expect: z
         .record(z.string(), z.unknown())
         .optional()

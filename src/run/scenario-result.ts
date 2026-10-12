@@ -15,7 +15,7 @@ export const SCENARIO_RESULT_SCHEMA = "cowork-harness/scenario-result";
 
 /** The scenario-level signals only a multi-leg run raises, beside the legs' own (each prefixed with its leg). */
 export interface MultiLegSignal {
-  code: "vacuous_positive_assertion" | "plugin_identity_changed";
+  code: "vacuous_positive_assertion" | "plugin_identity_changed" | "expect_denied";
   severity: "fail";
   message: string;
 }

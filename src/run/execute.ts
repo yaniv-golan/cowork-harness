@@ -2866,7 +2866,9 @@ export function legScenario(s: MultiLegScenario, leg: Leg): Scenario {
     ...(leg.timeout_ms !== undefined ? { timeout_ms: leg.timeout_ms } : {}),
     answers: s.answers,
     ...(s.on_unanswered !== undefined ? { on_unanswered: s.on_unanswered } : {}),
-    expect_denied: s.expect_denied,
+    // Scenario-wide: graded once over the union of every leg's egress (multi-leg.ts), never per leg — a leg that made
+    // no request to the host would otherwise fail a check about the scenario.
+    expect_denied: [],
     assert: promptLegAsserts(leg),
     skills: s.skills,
     requires_capabilities: s.requires_capabilities,

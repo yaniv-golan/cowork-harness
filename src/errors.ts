@@ -180,9 +180,12 @@ export class LegacyRunDirError extends RunDirShapeError {
  * "no turns" answer would read as an empty run; a caller that was not taught the shape fails loud instead.
  */
 export class MultiLegRunDirError extends RunDirShapeError {
-  constructor(message: string) {
+  /** The multi-leg root a run-id/fragment resolved to, when that is what was refused (`trace <run-id> --leg`). */
+  readonly runDir?: string;
+  constructor(message: string, runDir?: string) {
     super(message);
     this.name = "MultiLegRunDirError";
+    if (runDir !== undefined) this.runDir = runDir;
   }
 }
 

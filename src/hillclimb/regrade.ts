@@ -365,7 +365,7 @@ const regradeModel = (report: RegradeRunReport): string | undefined => {
 /** A core message as the flow, the JSON envelope and stderr show it: no secret, no host path. */
 const shownMessage = (m: string, secrets: readonly string[]): string => redactDeep(m, secrets);
 
-function readResult(runDir: string): RunResult | undefined {
+export function readResult(runDir: string): RunResult | undefined {
   try {
     const turn = latestTurn(runDir);
     if (turn === undefined) return undefined;
@@ -503,7 +503,7 @@ const REGRADE_FILE_RE = /^[A-Za-z0-9._-]+\.json$/;
 /** The judged entries a row is graded with now: those of the re-grade that last rewrote it (`meta.regrade_file` — a
  *  re-grade never touches result.json, so after one the run's own judged entries are no longer the row's), else the
  *  run's own. `undefined` when the row names a regrade file that cannot be read: what it was graded with is unknown. */
-function gradedSource(row: Row, runDir: string, result: RunResult): { entries: Entry[]; at: number[]; file: boolean } | undefined {
+export function gradedSource(row: Row, runDir: string, result: RunResult): { entries: Entry[]; at: number[]; file: boolean } | undefined {
   const named = row.meta?.regrade_file;
   if (typeof named !== "string" || named === "") {
     const judged = authoredOf(result).flatMap((e, i) => (judgedOpts(e.assertion) !== undefined ? [{ e, i }] : []));

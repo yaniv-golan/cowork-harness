@@ -272,6 +272,11 @@ describe.runIf(can)("multi-leg record → replay → verify-cassettes (stub agen
       const vc2 = await cli(f, ["verify-cassettes", cass, "--output-format", "json"]);
       expect(vc2.code).toBe(1);
       expect(vc2.stdout).toMatch(/leg resume: the prompt changed/);
+      // A scenario-wide field shapes every leg: its edit is drift too.
+      writeFileSync(p, readFileSync(p, "utf8").replace("fidelity: protocol", "fidelity: container"));
+      const vc3 = await cli(f, ["verify-cassettes", cass, "--output-format", "json"]);
+      expect(vc3.code).toBe(1);
+      expect(vc3.stdout).toMatch(/scenario-drift: fidelity changed/);
       const bad = JSON.parse(readFileSync(cass, "utf8"));
       bad.legs[1].action.exitCode = 1;
       writeFileSync(join(f.cwd, "bad.cassette.json"), JSON.stringify(bad));
@@ -296,6 +301,20 @@ describe.runIf(can)("multi-leg record → replay → verify-cassettes (stub agen
       const df = await cli(f, ["diff", cass, cass]);
       expect(df.code).not.toBe(0);
       expect(df.stderr + df.stdout).toMatch(/multi-leg cassette/);
+      // The pre-spend refusals a single record gets: on_unanswered: prompt, and another scenario's cassette at the path.
+      writeFileSync(
+        join(f.cwd, "pr.yaml"),
+        readFileSync(p, "utf8").replace("fidelity: protocol", "fidelity: protocol\non_unanswered: prompt"),
+      );
+      const pr = await cli(f, ["record", join(f.cwd, "pr.yaml"), "--dry-run", "--out", join(f.cwd, "pr.cassette.json")]);
+      expect(pr.code).toBe(2);
+      expect(pr.stdout + pr.stderr).toMatch(/on_unanswered: prompt/);
+      writeFileSync(join(f.cwd, "other.yaml"), readFileSync(p, "utf8").replace("name: ml", "name: other"));
+      mkdirSync(join(f.cwd, "cassettes"), { recursive: true });
+      writeFileSync(join(f.cwd, "cassettes", "other.cassette.json"), JSON.stringify({ scenario: { name: "someone-else" } }));
+      const col = await cli(f, ["record", join(f.cwd, "other.yaml"), "--dry-run"]);
+      expect(col.code).toBe(2);
+      expect(col.stdout + col.stderr).toMatch(/belongs to scenario "someone-else"/);
       const batch = await cli(f, ["record", f.cwd, "--dry-run", "--output-format", "json"]);
       expect(batch.stdout + batch.stderr).toMatch(/recorded on its own/);
       // --rerecord-stale over a dir holding a fresh multi-leg cassette: nothing to do, not a failure.
@@ -336,6 +355,8 @@ describe.runIf(can)("verify-run --leg (stub agent, protocol, $0)", () => {
       expect(rg.stdout + rg.stderr).toMatch(/no_semantic_asserts/);
       const tr = await cli(f, ["trace", root, "--leg", "resume", "--output-format", "json"]);
       expect(tr.code, tr.stderr).toBe(0);
+      const byId = await cli(f, ["trace", root.split("/").pop()!, "--leg", "resume", "--output-format", "json"]);
+      expect(byId.code, byId.stdout + byId.stderr).toBe(0);
       const trRoot = await cli(f, ["trace", root, "--output-format", "json"]);
       expect(trRoot.code).toBe(2);
       expect(trRoot.stdout).toMatch(/"category":"runtime".*multi-leg run/);

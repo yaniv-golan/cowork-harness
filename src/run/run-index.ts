@@ -614,9 +614,14 @@ export function reindexFromRunsTree(runsRoot: string): {
         // two-leg pass counts once. The walk never descends into legs/. Branch before listTurns, which throws here;
         // an unfinished one has no result yet and is counted like an in-flight run, never half-indexed.
         if (shape.kind === "legs") {
-          const sr = shape.complete ? readScenarioResult(outDir) : undefined;
-          if (!sr) {
+          if (!shape.complete) {
             skippedInFlightLegs++;
+            continue;
+          }
+          const sr = readScenarioResult(outDir);
+          // Finished, but its result does not read: a corrupt result, counted as one (never as still running).
+          if (!sr) {
+            skipped++;
             continue;
           }
           const row = { ...sr.indexRow, ts: scenarioResultMtime(outDir) ?? sr.indexRow.ts };

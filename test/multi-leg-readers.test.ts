@@ -208,7 +208,7 @@ describe("migrate-run-dir and the tree-reading readers", () => {
     const p = legsRun("s", "local_1");
     expect(legTreeRoot(join(p, "legs", "resume"), "x")).toEqual({ root: join(p, "legs", "resume", "..", "..") });
     expect(legTreeRoot(join(p, "legs", "ask"), "x")).toEqual({
-      refused: `x: ${join(p, "legs", "ask")} is leg ask of a multi-leg run; its session tree is shared and was changed by later legs, so its post-state is only in post-run-manifest.json.`,
+      refused: `x: ${join(p, "legs", "ask")} is leg ask of a multi-leg run; its session tree is shared and was changed by later legs, so its post-state is only in its leg-post-manifest.json.`,
     });
     const unfinished = legsRun("s", "local_2", { complete: false });
     expect("refused" in legTreeRoot(join(unfinished, "legs", "resume"), "x")).toBe(true);
@@ -253,12 +253,48 @@ describe("CLI: a refused multi-leg dir is a clean `runtime` refusal, never a sta
     for (const args of [
       ["inspect", dir],
       ["scaffold", dir],
+      ["trace", dir],
+      ["diff", dir, dir],
       ["verify-run", dir, join(root, "none.yaml")],
     ]) {
       const r = cli(args);
       expect(r.code, args.join(" ")).toBe(2);
       expect(r.stderr + r.stdout, args.join(" ")).not.toMatch(/\n\s+at /); // no stack frames
-      expect(r.stdout + r.stderr, args.join(" ")).toMatch(/multi-leg run dir|multi-leg run/);
+      expect(r.stdout + r.stderr, args.join(" ")).toMatch(/multi-leg run/);
+      // A refused SHAPE, not a bad argument: the envelope says runtime (fail() maps both to exit 2).
+      const env = JSON.parse(r.stdout.trim().split("\n").pop()!);
+      expect(env.error.category, args.join(" ")).toBe("runtime");
     }
+    // inspect's refusal names the command, like every other one.
+    expect(JSON.parse(cli(["inspect", dir]).stdout.trim().split("\n").pop()!).error.message).toMatch(/^inspect: /);
+  });
+});
+
+describe("the callers that catch a helper's answer let MultiLegRunDirError out (behavioural)", () => {
+  it("freeze-ref's runResultField, hillclimb regrade's readResult and gradedSource, and recordedFixtureFileSigs", async () => {
+    const { runResultField } = await import("../src/hillclimb/freeze-ref.js");
+    const { readResult, gradedSource } = await import("../src/hillclimb/regrade.js");
+    const { recordedFixtureFileSigs } = await import("../src/fixture/workspace.js");
+    const dir = legsRun("s", "local_1");
+    expect(() => runResultField(dir, "scenario")).toThrow(MultiLegRunDirError);
+    expect(() => readResult(dir)).toThrow(MultiLegRunDirError);
+    expect(() => gradedSource({ meta: { regrade_file: "x-y-z.json" } }, dir, { assertions: [] } as never)).toThrow(MultiLegRunDirError);
+    expect(() => recordedFixtureFileSigs(dir)).toThrow(MultiLegRunDirError);
+  });
+});
+
+describe("a damaged leg marker", () => {
+  it("keeps the root a (real) multi-leg run, refuses the leg dir, and refuses a tree lookup that needs it", async () => {
+    const { classifyRunDir } = await import("../src/run/turn-layout.js");
+    const dir = legsRun("s", "local_1", { complete: false, status: JSON.stringify({ state: "running" }) });
+    writeFileSync(join(dir, "legs", "ask", "leg.json"), '{"scenarioRoot":"../..","id":"as'); // truncated
+    expect(classifyRunDir(dir).kind).toBe("legs");
+    expect(isRealRun(dir)).toBe(true);
+    expect(classifyRunDir(join(dir, "legs", "ask")).kind).toBe("action-leg");
+    // The LAST leg's marker damaged: no other leg can be told apart from it.
+    const done = legsRun("s", "local_2");
+    writeFileSync(join(done, "legs", "resume", "leg.json"), "{");
+    expect("refused" in legTreeRoot(join(done, "legs", "ask"), "x")).toBe(true);
+    expect(legTreeRoot(join(done, "legs", "resume"), "x")).toEqual({ refused: expect.stringMatching(/leg.json is unreadable/) });
   });
 });

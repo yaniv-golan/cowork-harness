@@ -127,7 +127,9 @@ export async function runActionInTier(p: {
         agentArgv: argv,
         readOnlyMountPaths: plan.mounts.filter((x) => x.mode === "r").map((x) => x.mountPath),
       });
-      return await runCapped(runner, args, { env: process.env, timeoutMs, kill: () => removeContainer(runner, name) });
+      const exec = await runCapped(runner, args, { env: process.env, timeoutMs, kill: () => removeContainer(runner, name) });
+      removeContainer(runner, name);
+      return { ...exec, egress: sidecar.collect().entries.map((e) => ({ host: e.host, decision: e.decision })) };
     } finally {
       removeContainer(runner, name);
       deregister();
@@ -136,7 +138,14 @@ export async function runActionInTier(p: {
   }
   // microvm
   const { instance } = vmInit(baseline);
-  const proxy = startEgressProxy({ allow: plan.egressAllow, host: "0.0.0.0", port: 0, logPath: join(legDir, "egress.log") });
+  const egress: Array<{ host: string; decision: "allow" | "deny" }> = [];
+  const proxy = startEgressProxy({
+    allow: plan.egressAllow,
+    host: "0.0.0.0",
+    port: 0,
+    logPath: join(legDir, "egress.log"),
+    onDecision: (host, decision) => egress.push({ host, decision }),
+  });
   try {
     await proxy.ready;
     const gatewayIp = vmGatewayIp();
@@ -158,7 +167,7 @@ export async function runActionInTier(p: {
     };
     let deregister: (() => void) | undefined;
     try {
-      return await runCapped(
+      const exec = await runCapped(
         limaPath(),
         ["shell", instance, "sh", "-c", script, "_", `${sessionVm}/mnt/outputs`, "env", ...envPairs, ...argv],
         {
@@ -168,6 +177,7 @@ export async function runActionInTier(p: {
           onSpawn: (child) => (deregister = registerCleanup({ phase: "container", run: () => stop(child) })),
         },
       );
+      return { ...exec, egress };
     } finally {
       deregister?.();
     }

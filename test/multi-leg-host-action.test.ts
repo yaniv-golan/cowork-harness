@@ -131,3 +131,32 @@ describe("hostActionEnv: the agent's env minus the credentials, on every tier", 
     }
   });
 });
+
+describe("review fixes", () => {
+  it("the executable cannot come from the status file", () => {
+    expect(resolveActionArgv(["{status.cmd}", "x"], { cmd: "curl" }, "/sessions/a")).toMatchObject({ ok: false, why: /run\[0\]/ });
+  });
+  it("live: a no-hit past the stdout capture is evidence-unavailable, not a pass", () => {
+    const ctx = { transcript: "", workRoot: dir, effectiveFidelity: "protocol", lane: "local" } as never;
+    const r = gradeAction([{ stdout_not_matches: "ERROR" }], { exitCode: 0, timedOut: false }, "ok", ctx, true);
+    expect(r.find((x) => "stdout_not_matches" in x.assertion)).toMatchObject({ pass: false, message: /evidence unavailable/ });
+  });
+});
+
+describe("expect_denied is graded over every leg's egress", () => {
+  it("passes when any leg (or action) was denied the host, fails when none was", async () => {
+    const { expectDeniedSignals } = await import("../src/run/multi-leg.js");
+    expect(
+      expectDeniedSignals(
+        ["evil.example"],
+        [
+          { host: "ok.example", decision: "allow" },
+          { host: "evil.example", decision: "deny" },
+        ],
+      ),
+    ).toEqual([]);
+    expect(expectDeniedSignals(["evil.example"], [{ host: "ok.example", decision: "allow" }])).toEqual([
+      expect.objectContaining({ code: "expect_denied", severity: "fail" }),
+    ]);
+  });
+});

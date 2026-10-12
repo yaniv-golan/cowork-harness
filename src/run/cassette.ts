@@ -82,6 +82,7 @@ import {
   readMultiLegCassette,
   replayMultiLegCassette,
   multiLegScenarioDrift,
+  preflightMultiLegRecord,
 } from "./multi-leg-cassette.js";
 import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
 import { unresolvedModelRefusal } from "./model-provenance.js";
@@ -5051,8 +5052,22 @@ export async function cmdRecord(args: string[]) {
         undefined,
         asJson,
       );
+    // No per-scenario cost estimate exists for a multi-leg run yet: refused rather than parsed and ignored.
+    if (maxBudgetUsd !== undefined)
+      return fail("record", "usage", "record: --max-budget-usd is not supported for a multi-leg scenario yet", undefined, asJson);
     if (p.flags["--dry-run"]) {
-      loadMultiLegScenario(target); // the load-time refusals, with nothing run
+      try {
+        // The loader and every pre-spend refusal the real record runs, with nothing run.
+        preflightMultiLegRecord(target, {
+          ...(p.options["--out"] !== undefined ? { cassettePath: p.options["--out"] } : {}),
+          force,
+          allowHostInventoryFixture,
+          noRedact,
+        });
+      } catch (e) {
+        if (e instanceof UsageError) return fail("record", "usage", e.message, undefined, asJson);
+        throw e;
+      }
       if (asJson)
         out(
           jsonPayloadEnvelope("record", true, {
@@ -5073,8 +5088,10 @@ export async function cmdRecord(args: string[]) {
         ...(p.options["--out"] !== undefined ? { cassettePath: p.options["--out"] } : {}),
         allowFailing,
         noRedact,
+        force,
         allowHostInventoryFixture,
         allowHostInventoryFindings,
+        ...(maxArtifactBytes !== undefined ? { maxArtifactBytes } : {}),
         ...(modelOverride !== undefined ? { modelOverride } : {}),
         ...(onUnansweredOpt !== undefined ? { onUnanswered: onUnansweredOpt } : {}),
       });
@@ -5712,6 +5729,12 @@ export async function cmdRecord(args: string[]) {
           const why = "error" in m ? m.error : `its scenario source ${srcPath ?? "(none recorded)"} is not there`;
           log(`  ✗ ${tag} ${cp}: ${why} — cannot re-record`);
           staleItems[i] = { cassette: cp, status: "failed", error: `${why} — cannot re-record` };
+          return false;
+        }
+        if (maxBudgetUsd !== undefined) {
+          const why = "--max-budget-usd is not supported for a multi-leg scenario yet";
+          log(`  ✗ ${tag} ${cp}: ${why} — not re-recorded`);
+          staleItems[i] = { cassette: cp, status: "failed", error: why };
           return false;
         }
         log(`${tag} ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);

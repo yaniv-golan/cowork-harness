@@ -9,7 +9,7 @@
 // executeScenario with a LegRunContext. A failing leg stops the scenario: every later leg is reported `skipped`, never
 // run on bad state. The scenario's verdict, its one index row and its per-leg verdicts go to scenario-result.json.
 
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { RunResult, Assertion, Scenario } from "../types.js";
@@ -46,7 +46,7 @@ import {
   type ScenarioVerdict,
   type MultiLegSignal,
 } from "./scenario-result.js";
-import { evaluate } from "../assert.js";
+import { evaluate, expandExpectDenied } from "../assert.js";
 import { snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import { writeLegPostManifest } from "./leg-manifest.js";
 import type { MultiLegScenario, Leg, LegSessionOverlay } from "./multi-leg-scenario.js";
@@ -142,7 +142,8 @@ function workRootOf(workBase: string, tier: string): string {
 
 function writeLegMarker(dir: string, marker: LegMarker): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "leg.json"), JSON.stringify(marker, null, 2) + "\n");
+  // Atomic: a torn marker would leave the leg unreadable (refused everywhere) rather than wrong; a whole one is the point.
+  writeTextAtomic(join(dir, "leg.json"), JSON.stringify(marker, null, 2) + "\n");
 }
 
 /** A leg's verdict signals and failures, each prefixed with the leg so the scenario verdict names where it failed. */
@@ -151,6 +152,13 @@ function prefixVerdict(id: string, v: ScenarioVerdict): { signals: ScenarioVerdi
     signals: v.signals.map((s) => ({ ...s, message: `leg ${id}: ${s.message}` })),
     failures: (v.failures ?? []).map((f) => ({ ...f, message: `leg ${id}: ${f.message}` })),
   };
+}
+
+/** A scenario's `expect_denied`, over the union of its legs' egress: each host must have been denied somewhere. */
+export function expectDeniedSignals(hosts: readonly string[], egress: ReadonlyArray<{ host: string; decision: string }>): MultiLegSignal[] {
+  return expandExpectDenied([...hosts], [...egress])
+    .filter((r) => !r.pass)
+    .map((r) => ({ code: "expect_denied", severity: "fail", message: `expect_denied (all legs): ${r.message ?? "not denied"}` }));
 }
 
 /** The scenario verdict, the same live and on replay: every leg passed and none was skipped. Signals and failures name
@@ -187,7 +195,7 @@ async function executeHostAction(p: {
   session: SessionConfig;
   sessionId: string;
   workBase: string;
-}): Promise<{ pass: boolean; verdict: ScenarioVerdict }> {
+}): Promise<{ pass: boolean; verdict: ScenarioVerdict; egress?: ActionRecord["egress"] }> {
   const { leg, legDir, tier, baseline, session, sessionId, workBase } = p;
   const ha = leg.host_action!;
   const secrets = collectSecrets();
@@ -196,7 +204,7 @@ async function executeHostAction(p: {
   });
   const paths = actionPaths(tier, baseline, sessionId, workBase);
   const empty = { sha256: "", bytes: 0, head: "" };
-  const finish = (raw: Omit<ActionRecord, "pass">): { pass: boolean; verdict: ScenarioVerdict } => {
+  const finish = (raw: Omit<ActionRecord, "pass">): { pass: boolean; verdict: ScenarioVerdict; egress?: ActionRecord["egress"] } => {
     // A refusal or an assertion message can quote the status file or a file's content: scrubbed like stdout.
     const rec = {
       ...raw,
@@ -211,6 +219,7 @@ async function executeHostAction(p: {
     ];
     return {
       pass,
+      ...(rec.egress ? { egress: rec.egress } : {}),
       verdict: {
         pass,
         exitCode: pass ? 0 : 1,
@@ -279,6 +288,7 @@ async function executeHostAction(p: {
     stdout: recordedStream(exec.stdout, exec.stdoutBytes, secrets),
     stderr: recordedStream(exec.stderr, exec.stderrBytes, secrets),
     produced: producedFiles(before, after),
+    ...(exec.egress ? { egress: exec.egress } : {}),
     assertions,
   });
 }
@@ -347,6 +357,8 @@ export async function executeMultiLeg(
       throw named('asserts boundary behavior (egress/expect_denied) but fidelity is "protocol" (no sandbox); use container or microvm');
   }
   if (promptLegs.length < 2) throw new UsageError("a multi-leg scenario needs at least two prompt legs");
+  if (tier === "protocol" && ms.expect_denied.length > 0)
+    throw new UsageError('expect_denied asserts boundary behavior but fidelity is "protocol" (no sandbox); use container or microvm');
 
   const runId = opts.runId ?? `local_${process.hrtime.bigint().toString(36)}`;
   const root = runOutDir(ms.name, runId);
@@ -375,6 +387,7 @@ export async function executeMultiLeg(
   let unanswered: UnansweredError | undefined;
   let prevWorkBase: string | undefined;
   let prevSessionId: string | undefined;
+  const actionEgress: NonNullable<ActionRecord["egress"]> = [];
   let skillHash: string | undefined;
   const identityFailures: MultiLegSignal[] = [];
 
@@ -399,6 +412,7 @@ export async function executeMultiLeg(
           workBase: prevWorkBase!,
         });
         legEntries.push({ id: leg.id, kind, status: action.pass ? "passed" : "failed", verdict: action.verdict });
+        actionEgress.push(...(action.egress ?? []));
         if (!action.pass) stopped = leg.id;
         continue;
       }
@@ -489,6 +503,11 @@ export async function executeMultiLeg(
     throw e;
   }
 
+  // `expect_denied` is about the scenario: graded once over every leg's egress (and every action's), when every leg ran.
+  if (stopped === undefined)
+    identityFailures.push(
+      ...expectDeniedSignals(ms.expect_denied, [...[...legResults.values()].flatMap((r) => r.egress ?? []), ...actionEgress]),
+    );
   const verdict = composeScenarioVerdict(legEntries, stopped, identityFailures);
   const pass = verdict.pass;
 
