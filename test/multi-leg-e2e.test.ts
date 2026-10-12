@@ -483,6 +483,13 @@ describe.runIf(can)("verify-run --leg (stub agent, protocol, $0)", () => {
       expect(trRoot.stdout).toMatch(/"category":"runtime".*multi-leg run/);
       const rg1 = await cli(f, ["regrade", root, "--scenario", p, "--leg", "ask", "--output-format", "json"]);
       expect(rg1.stdout + rg1.stderr).toMatch(/no_semantic_asserts/);
+      // inspect previews the earlier leg's files from its snapshot too: `waiting`, not the shared tree's `complete`.
+      const ins = await cli(f, ["inspect", join(root, "legs", "ask"), "--output-format", "json"]);
+      expect(ins.code, ins.stdout + ins.stderr).toBe(0);
+      const insText = JSON.stringify(JSON.parse(ins.stdout));
+      expect(insText).toMatch(/"status":"waiting"/);
+      expect(insText).not.toMatch(/"status":"complete"/);
+      expect(insText).not.toMatch(/previewsSkipped/);
       // No usable snapshot (removed here; over the cap, or a tampered one, the same): back to the live-tree rule.
       rmSync(join(root, "legs", "ask", "snapshot.json"));
       const noSnap = await cli(f, ["verify-run", root, p, "--leg", "ask"]);

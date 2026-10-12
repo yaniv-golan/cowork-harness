@@ -70,13 +70,14 @@ function digestFor(runDir: string): InspectDigest {
   // manifest), so a dir the graders refuse — a copy beside its original, an evidence path outside the run dir — is
   // still shown, with a warning and no previews: they would read another dir's bytes under this run's name.
   // A multi-leg leg's tree may live at its scenario root (persistent): its evidence is still its own.
-  const leg = legTreeRoot(runDir, "inspect");
+  // A leg with a usable snapshot reads it (its files as they were when it ended), so its tree is never the question:
+  // decided first, as verify-run does, since legTreeRoot refuses a non-final persistent leg.
+  const snap = readLegMarker(runDir) ? legSnapshotRoot(runDir) : undefined;
+  const leg = snap ? { root: join(runDir, "..", "..") } : legTreeRoot(runDir, "inspect");
   const placed = decideRunDir(runDir, result, "inspect", readLegMarker(runDir) && "root" in leg ? leg.root : undefined);
   if (placed.kind === "refuse")
     warn(`::warning:: ${placed.message.replace(/ \(can't verify ⇒ not green\)$/, "")} — artifact previews skipped.\n`);
   else noteRelocation(placed);
-  // A leg reads its own snapshot when it has one: its files as they were when it ended.
-  const snap = readLegMarker(runDir) ? legSnapshotRoot(runDir) : undefined;
   const workDir = placed.kind === "refuse" ? "" : (snap ?? placed.paths.workDir ?? "");
   const workDirAvailable = !!workDir && existsSync(workDir);
   // artifacts === undefined means evidence-unavailable (replay, or a run whose root was missing at
