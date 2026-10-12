@@ -873,3 +873,55 @@ describe("a device image that cannot be built stops the run before the agent sta
     );
   });
 });
+
+// A grant takes effect from the next device_bash call. The grants file reaches the container through the runtime's
+// file sharing, which can serve a stale copy for a moment, so the bridge answers the card only once the container
+// sees the grant.
+describe("a delete grant is visible in the container before the card's answer returns", () => {
+  it("waits until the container reads the granted folder back", async () => {
+    const root = scratch();
+    const reads = join(root, "reads");
+    const runner = join(root, "lag.sh");
+    // `exec <ctr> cat <grants>`: the first read is stale (empty), later ones show the file.
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
+        `if [ "$1" = exec ] && [ "$3" = cat ]; then echo x >> "${reads}"; [ "$(wc -l < "${reads}")" -lt 2 ] && exit 0; cat "${join(root, "out", "device-ctl", "grants")}"; exit 0; fi`,
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        "  inspect) echo true; exit 0;;",
+        "esac",
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const b = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out"),
+      sessionId: "s",
+      runToken: "grant-lag",
+      mounts: [folder(root, "proj")],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    try {
+      await b.shimCheck;
+      const r = (await b.bundle.handle("remote-devices", {
+        method: "tools/call",
+        params: { name: "device_request_delete_permission", arguments: { paths: ["~/proj"] } },
+      })) as any;
+      expect(r.result.isError).toBeFalsy();
+      expect(readFileSync(reads, "utf8").trim().split("\n").length).toBeGreaterThanOrEqual(2);
+    } finally {
+      await b.teardown();
+    }
+  });
+});

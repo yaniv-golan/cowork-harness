@@ -663,7 +663,10 @@ export function startDeviceBridge(p: {
   const grantCalls: Array<{ folders: string[]; ok: boolean }> = [];
   const handle = makeRemoteDevicesHandler({
     folders: folders.map((f) => ({ name: f.name, mode: f.mode })),
-    onGrant: (granted) => writeDeviceGrant(p.outDir, granted),
+    onGrant: async (granted) => {
+      writeDeviceGrant(p.outDir, granted);
+      await grantVisible(p.runner, containerName, granted);
+    },
     onGrantCall: (c) => void grantCalls.push(c),
     appVersion: p.appVersion,
     exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId), () => (running ??= shimCheck.then(() => undefined))),
@@ -709,6 +712,23 @@ export function startDeviceBridge(p: {
     shimEnforced: () => enforced,
     ...("error" in built ? { imageError: built.error } : {}),
   };
+}
+
+/** Waits (up to `limitMs`) until the container reads every granted folder back from its grants file. The file
+ *  reaches the container through the runtime's file sharing, which can serve a stale copy for a moment; production's
+ *  grant applies from the next device_bash call, so the card's answer waits for it. */
+export async function grantVisible(runner: string, containerName: string, folders: ReadonlyArray<string>, limitMs = 5_000): Promise<void> {
+  const until = Date.now() + limitMs;
+  while (Date.now() < until) {
+    try {
+      const { stdout } = await pexec(runner, ["exec", containerName, "cat", `${CTL_MOUNT}/grants`], { encoding: "utf8", timeout: 5_000 });
+      const seen = new Set(stdout.split("\n"));
+      if (folders.every((f) => seen.has(f))) return;
+    } catch {
+      /* not readable yet */
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 /** Stop before the agent starts when the device image could not be prepared: the run would fail on its canary

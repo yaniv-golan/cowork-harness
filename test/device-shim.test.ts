@@ -18,6 +18,7 @@ import {
   deviceBridgeRecord,
   deviceTreeIdentityReliable,
   deviceTurnFindings,
+  grantVisible,
   prepareDeviceControl,
   readDeviceAudit,
   recordDeviceTree,
@@ -58,7 +59,11 @@ function sh(cmd: string): { code: number; out: string } {
   const r = spawnSync("docker", ["exec", "-w", HOME, name, "bash", "-c", cmd], { encoding: "utf8", timeout: 30_000 });
   return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
 }
-const grant = (folder: string) => writeDeviceGrant(outDir, [folder]);
+// As the bridge grants: write, then wait until the container reads it back.
+const grant = async (folder: string) => {
+  writeDeviceGrant(outDir, [folder]);
+  await grantVisible("docker", name, [folder]);
+};
 const auditLines = () => readDeviceAudit(outDir).lines;
 
 const mount = (name: string, mode: Mount["mode"]): Mount => {
@@ -249,8 +254,8 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
     expect(c2.out).toMatch(/HEAD\.lock.*File exists|File exists/s);
   });
 
-  it("after a grant for the folder, the next rm works and is logged as granted", () => {
-    grant("proj");
+  it("after a grant for the folder, the next rm works and is logged as granted", async () => {
+    await grant("proj");
     expect(sh("rm mnt/proj/keep.txt").code).toBe(0);
     expect(existsSync(join(host, "mnt", "proj", "keep.txt"))).toBe(false);
     expect(auditLines()).toContainEqual(expect.objectContaining({ folder: "proj", rel: "keep.txt", result: "granted" }));
