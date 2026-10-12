@@ -230,9 +230,9 @@ or a `host_action` (an argv command in the previous leg's runtime, asserted with
 `stdout_not_matches` and the file keys). Pick `workdir: persistent` (one tree across legs — a persistent workspace,
 not Cowork) or `workdir: cowork-task` (a new tree per prompt leg, folders carried — a model of a new Cowork task).
 Judge completion from the skill's own status file and ledger (`artifact_json`), never from the agent's prose. The
-YAML is in [`scenario-schema.md`](./scenario-schema.md#multi-leg-scenario-yaml-legs), the walkthrough is Recipe 9 in
+YAML is in [`scenario-schema.md`](./scenario-schema.md#multi-leg-scenario-yaml-legs), the walkthrough is Recipe 10 in
 [`task-recipes.md`](./task-recipes.md), and the rules are in [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#multi-leg-scenarios-legs).
-`scaffold` does not generate the multi-leg form; start from the resumable-probe example Recipe 9 links.
+`scaffold` does not generate the multi-leg form; start from the resumable-probe example Recipe 10 links.
 
 ### Scaffold a valid scenario, then lint before you push
 

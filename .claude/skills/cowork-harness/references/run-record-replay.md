@@ -400,7 +400,7 @@ than a stuck `"running"`.)
 
 ### Multi-leg runs (`legs:`)
 
-A multi-leg scenario ([schema](./scenario-schema.md#multi-leg-scenario-yaml-legs), [Recipe 9](./task-recipes.md)) runs
+A multi-leg scenario ([schema](./scenario-schema.md#multi-leg-scenario-yaml-legs), [Recipe 10](./task-recipes.md)) runs
 with the ordinary commands, one scenario at a time:
 
 - `run <legs.yaml>` runs every leg in order and stops at the first failed leg (later legs are `skipped`). It writes
