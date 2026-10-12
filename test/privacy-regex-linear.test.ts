@@ -13,7 +13,9 @@ import { DEFAULT_SCAN_PATTERNS } from "../src/scan.js";
  *
  * Each target runs in a CHILD process with a hard SIGKILL: a regression FAILS here instead of blocking the worker
  * (an in-process timing assertion cannot fire while the regex holds the thread). The binding check is the
- * per-input time measured inside the child: 1 s per input for one regex, 2 s for an end-to-end pass. The kill is
+ * per-input CPU time measured inside the child: 1 s per input for one regex, 2 s for an end-to-end pass. CPU time,
+ * not wall time: on a machine at load 20–40 the worst linear input took ~120 ms of CPU but up to ~700 ms of wall
+ * time (waiting for a core), and a wall budget failed whenever the machine was busy. The kill is
  * set at (inputs × budget) + 10 s, so a child whose every input is within budget can never be killed — a kill
  * means some input blew its budget and never returned. The linear versions take about 0.1 s at worst; the
  * quadratic ones they replaced took 3–22 s on these inputs.

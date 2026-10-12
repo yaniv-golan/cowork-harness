@@ -1,5 +1,5 @@
 // Child-process probe for test/outputs-delete-basis-linear.test.ts. Builds one named input, runs the REAL
-// `outputsDeleteBasis` on it and prints `{"ms": <best of N>, "basis": …}`. It runs in its own process so the
+// `outputsDeleteBasis` on it and prints `{"ms": <best-of-N CPU ms>, "basis": …}`. It runs in its own process so the
 // test can SIGKILL a catastrophic regex instead of blocking its own worker: a synchronous hang cannot be
 // pre-empted by a vitest timeout.
 import { pathToFileURL } from "node:url";
@@ -92,13 +92,19 @@ if (isEntry && name !== undefined) {
   let bestDetector = Infinity;
   let basis = "";
   let flagged = false;
+  // CPU time (user + system), not wall time: wall time also counts waiting for a core, which grows severalfold on a
+  // loaded machine while the classifier's own cost does not.
+  const cpuMs = (c0: NodeJS.CpuUsage) => {
+    const c = process.cpuUsage(c0);
+    return (c.user + c.system) / 1000;
+  };
   for (let i = 0; i < 3; i++) {
-    let t = performance.now();
+    let c = process.cpuUsage();
     flagged = isOutputsDelete(cmd);
-    bestDetector = Math.min(bestDetector, performance.now() - t);
-    t = performance.now();
+    bestDetector = Math.min(bestDetector, cpuMs(c));
+    c = process.cpuUsage();
     basis = outputsDeleteBasis(cmd);
-    best = Math.min(best, performance.now() - t);
+    best = Math.min(best, cpuMs(c));
   }
   // The whole per-command cost as a real run pays it: scanEvents runs the detector over every writable
   // mount, the finding snippet (its own expansion passes) and nothing else; the basis is timed above.
@@ -109,9 +115,9 @@ if (isEntry && name !== undefined) {
   );
   let bestScan = Infinity;
   for (let i = 0; i < 3; i++) {
-    const t = performance.now();
+    const c = process.cpuUsage();
     scanEvents(events, ["outputs", "proj"]);
-    bestScan = Math.min(bestScan, performance.now() - t);
+    bestScan = Math.min(bestScan, cpuMs(c));
   }
   console.log(JSON.stringify({ ms: best, detectorMs: bestDetector, scanMs: bestScan, flagged, basis, chars: cmd.length }));
 }
