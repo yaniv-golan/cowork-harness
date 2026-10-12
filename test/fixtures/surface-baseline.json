@@ -2401,6 +2401,9 @@
       ".deviceBridge.auditInconsistent": {
         "type": "integer"
       },
+      ".deviceBridge.auditUnreadable": {
+        "type": "string"
+      },
       ".deviceBridge.bypassedDeletes": {
         "type": "array"
       },
@@ -5106,6 +5109,9 @@
       },
       ".deviceBridge.auditInconsistent": {
         "type": "integer"
+      },
+      ".deviceBridge.auditUnreadable": {
+        "type": "string"
       },
       ".deviceBridge.bypassedDeletes": {
         "type": "array"
