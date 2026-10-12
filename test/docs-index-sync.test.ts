@@ -166,11 +166,13 @@ describe("verdict-signals docs ↔ code", () => {
   // the `first`/`llm` fallbacks it co-occurs with `non_deterministic`, and on `fail` the run is already red.
   // 13 as of `parked_at_question`. It fires only under `answer_channel: none`, and only where `stalled` (a fail) would
   // otherwise have fired, so no run gains a signal it did not have.
-  it('the docs\' "only thirteen warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 14 as of `device_delete_unconfirmed`: it fires only under an enforced device_bridge, where a file is gone from a
+  // folder never granted on a filesystem that cannot tell that from a rename followed by an edit.
+  it('the docs\' "only fourteen warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(13);
-    expect(scenarioMdText).toMatch(/Only thirteen codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(14);
+    expect(scenarioMdText).toMatch(/Only fourteen codes are \*\*warn\*\*-severity/);
   });
 });
 

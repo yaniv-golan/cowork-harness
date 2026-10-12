@@ -1,7 +1,8 @@
 // The files the device container's shim reads and writes, from the host side: the folder list it enforces, the
 // grants it honours, the per-session user it runs as, and the audit log it appends to. Pure file tests; the shim's
 // behaviour over them is in device-shim.test.ts.
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -32,7 +33,7 @@ describe("prepareDeviceControl", () => {
     const home = deviceHome("cse_ABC");
     expect(readFileSync(join(out, "device-ctl", "folders"), "utf8")).toBe(
       [
-        `@mnt\t-\t${home}/mnt`,
+        `/mnt\t-\t${home}/mnt`,
         `proj\trw\t${home}/mnt/proj`,
         `free\trwd\t${home}/mnt/free`,
         `ref\tr\t${home}/mnt/ref`,
@@ -55,9 +56,6 @@ describe("prepareDeviceControl", () => {
     writeDeviceGrant(out, ["proj"]);
     prepareDeviceControl(out, "s", deviceFolders(mounts), user);
     expect(readDeviceGrants(out)).toEqual(["proj"]);
-  });
-  it("no connected folder can take the canary's name", () => {
-    expect(DEVICE_CANARY_NAME).toMatch(/^\./);
   });
 });
 
@@ -117,5 +115,52 @@ describe("readDeviceAudit: the device user can write the log, so it is read with
   });
   it("no log is no lines", () => {
     expect(readDeviceAudit(scratch())).toEqual({ lines: [], malformed: 0 });
+  });
+});
+
+describe("prepareDeviceControl on a resumed turn: the device user could write the canary and audit dirs", () => {
+  it("never writes through a link the device user planted as the canary probe", () => {
+    const out = scratch();
+    prepareDeviceControl(out, "s", deviceFolders(mounts), user);
+    const victim = join(out, "victim.txt");
+    writeFileSync(victim, "precious\n");
+    const probe = join(out, "device-canary", "probe");
+    rmSync(probe);
+    symlinkSync(victim, probe);
+    prepareDeviceControl(out, "s", deviceFolders(mounts), user);
+    expect(readFileSync(victim, "utf8")).toBe("precious\n");
+    expect(lstatSync(probe).isFile()).toBe(true);
+  });
+  it("starts each turn with an empty audit log, so a turn reports only its own refusals and deletes", () => {
+    const out = scratch();
+    prepareDeviceControl(out, "s", deviceFolders(mounts), user);
+    writeFileSync(join(out, "device-audit", "audit.jsonl"), '{"op":"unlinkat","folder":"proj","rel":"a","result":"refused","pid":1}\n');
+    prepareDeviceControl(out, "s", deviceFolders(mounts), user);
+    expect(readDeviceAudit(out).lines).toEqual([]);
+  });
+  it("a FIFO planted as the audit log is refused without blocking", () => {
+    const out = scratch();
+    prepareDeviceControl(out, "s", deviceFolders(mounts), user);
+    execFileSync("mkfifo", [join(out, "device-audit", "audit.jsonl")]);
+    expect(readDeviceAudit(out)).toMatchObject({ lines: [], refusedReason: "not a regular file" });
+  });
+});
+
+describe("folder names the control file cannot carry", () => {
+  it("a name with a tab or newline is refused before the container starts", () => {
+    for (const bad of ["a\tb", "a\nb"]) {
+      const m: Mount[] = [{ hostPath: "/x/p", mountPath: bad, mode: "rw", kind: "folder" }];
+      expect(() => prepareDeviceControl(scratch(), "s", deviceFolders(m), user), JSON.stringify(bad)).toThrow(/folder name/);
+    }
+  });
+  it("no folder name can be taken for the canary or the folders' parent: those lines use a name with a slash", () => {
+    const out = scratch();
+    prepareDeviceControl(out, "s", deviceFolders(mounts), user);
+    const lines = readFileSync(join(out, "device-ctl", "folders"), "utf8")
+      .trim()
+      .split("\n");
+    const reserved = lines.map((l) => l.split("\t")[0]!).filter((n) => !["proj", "free", "ref"].includes(n));
+    expect(reserved.length).toBe(2);
+    for (const n of reserved) expect(n).toContain("/");
   });
 });

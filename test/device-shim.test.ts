@@ -142,6 +142,48 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
     expect(sh("rm mnt/proj/does-not-exist").out).toMatch(/No such file or directory/);
   });
 
+  it('an empty path is missing, not refused (rm -f "$unset" in a set -e script must not fail)', () => {
+    expect(sh(`cd mnt/proj && rm -f ""; echo $?`).out.trim().split("\n").pop()).toBe("0");
+    expect(sh(`cd mnt/proj && python3 -c 'import os; os.unlink("")' 2>&1`).out).toMatch(/FileNotFoundError/);
+  });
+
+  it("the kernel's type errors come first: unlink of a directory, rmdir of a file, a trailing slash on a file", () => {
+    writeFileSync(join(host, "mnt", "proj", "t1"), "t");
+    mkdirSync(join(host, "mnt", "proj", "td"), { recursive: true });
+    expect(sh(`python3 -c 'import os; os.rmdir("mnt/proj/t1")' 2>&1`).out).toMatch(/NotADirectoryError/);
+    expect(sh(`python3 -c 'import os; os.unlink("mnt/proj/td")' 2>&1`).out).toMatch(/IsADirectoryError/);
+    expect(sh(`python3 -c 'import os; os.unlink("mnt/proj/t1/")' 2>&1`).out).toMatch(/NotADirectoryError/);
+    expect(sh(`rmdir mnt/proj/td/; echo $?`).out).toMatch(/Operation not permitted/);
+    expect(existsSync(join(host, "mnt", "proj", "t1"))).toBe(true);
+    expect(existsSync(join(host, "mnt", "proj", "td"))).toBe(true);
+  });
+
+  it("an absolute path with a directory fd, and libc remove(), are refused too", () => {
+    writeFileSync(join(host, "mnt", "proj", "t2"), "t");
+    const abs = `${HOME}/mnt/proj/t2`;
+    expect(sh(`python3 -c 'import os; fd=os.open("/tmp", os.O_RDONLY); os.unlink("${abs}", dir_fd=fd)' 2>&1`).out).toMatch(
+      /PermissionError/,
+    );
+    expect(sh(`python3 -c 'import ctypes; print(ctypes.CDLL(None).remove(b"mnt/proj/t2"))'`).out.trim()).toBe("-1");
+    expect(existsSync(join(host, "mnt", "proj", "t2"))).toBe(true);
+  });
+
+  it("a path too deep to name is placed by its directory: refused in a folder, allowed in /tmp", () => {
+    const deep = (root: string) =>
+      `cd ${root} && for i in $(seq 1 45); do mkdir -p ${"x".repeat(100)} && cd ${"x".repeat(100)} || exit 9; done && touch f && rm f; echo rc=$?`;
+    expect(sh(deep("/tmp")).out).toMatch(/rc=0/);
+    const inFolder = sh(deep(`${HOME}/mnt/proj`)).out;
+    expect(inFolder).toMatch(/rc=1/);
+    expect(inFolder).toMatch(/Operation not permitted/);
+  });
+
+  it("the audit log stays valid JSON for a name with quotes and control characters", () => {
+    writeFileSync(join(host, "mnt", "proj", 'q"u\\o\tte'), "q");
+    sh(`cd mnt/proj && rm $'q"u\\\\o\\tte'`);
+    expect(readDeviceAudit(outDir).malformed).toBe(0);
+    expect(auditLines()).toContainEqual(expect.objectContaining({ rel: 'q"u\\o\tte', result: "refused" }));
+  });
+
   it("allows writes, sed -i, and a rename within a folder, also over an existing file", () => {
     expect(sh("echo x > mnt/proj/new.txt && sed -i 's/one/uno/' mnt/proj/existing.txt").code).toBe(0);
     expect(readFileSync(join(host, "mnt", "proj", "existing.txt"), "utf8")).toBe("uno\n");
@@ -241,8 +283,8 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
     expect(v.pass).toBe(reliable === false);
   });
 
-  it("the canary's control name can never be a connected folder's", () => {
-    expect(DEVICE_CANARY_NAME.startsWith(".")).toBe(true);
+  it("a folder cannot be granted the canary's name: the handler grants only connected folders, and it holds a slash", () => {
+    expect(DEVICE_CANARY_NAME).toContain("/");
   });
 });
 

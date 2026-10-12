@@ -9,7 +9,7 @@
  * harness compares the device tree before and after the run for that.
  *
  * Control files (written by the harness on the host; the device user cannot change them):
- *   /run/cwh-device/ctl/folders  one line per folder: name TAB mode TAB absolute path; "@mnt" names the folders'
+ *   /run/cwh-device/ctl/folders  one line per folder: name TAB mode TAB absolute path; "/mnt" names the folders'
  *                                parent. Only mode "rw" refuses deletes ("rwd" allows them; "r" is a read-only
  *                                mount already).
  *   /run/cwh-device/ctl/grants   one folder name per line, appended when the user allows deletion; re-read on
@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -70,17 +71,26 @@ static ssize_t read_small(const char *path, char *buf, size_t cap) {
   return (ssize_t)got;
 }
 
-/* Heap, not static: libuv and other thread pools delete from worker threads, and these structures are too large
- * for every thread's stack. */
+/* mmap, not malloc or a static: libuv and other thread pools delete from worker threads, git unlinks its lock
+ * files from a signal handler (where malloc is unsafe), and these structures are too large for a thread's stack. */
+static void *page_alloc(size_t n) {
+  void *p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  return p == MAP_FAILED ? NULL : p;
+}
+#define ctl_free(c) \
+  do {                \
+    if (c) munmap((c), sizeof(struct ctl)); \
+  } while (0)
+
 static struct ctl *load_ctl(void) {
-  struct ctl *c = calloc(1, sizeof *c);
-  char *buf = malloc(MAX_FILE);
+  struct ctl *c = page_alloc(sizeof *c); /* zero-filled */
+  char *buf = page_alloc(MAX_FILE);
   if (!c || !buf) {
-    free(buf);
+    if (buf) munmap(buf, MAX_FILE);
     return c; /* c->ok stays 0: fail closed below */
   }
   if (read_small(CTL_FOLDERS, buf, MAX_FILE) < 0) {
-    free(buf);
+    munmap(buf, MAX_FILE);
     return c;
   }
   c->ok = 1;
@@ -92,7 +102,7 @@ static struct ctl *load_ctl(void) {
     if (!t2) continue;
     *t1 = '\0';
     *t2 = '\0';
-    if (strcmp(line, "@mnt") == 0) {
+    if (strcmp(line, "/mnt") == 0) {
       snprintf(c->mnt, sizeof c->mnt, "%s", t2 + 1);
       continue;
     }
@@ -102,12 +112,12 @@ static struct ctl *load_ctl(void) {
     snprintf(f->mode, sizeof f->mode, "%s", t1 + 1);
     snprintf(f->path, sizeof f->path, "%s", t2 + 1);
   }
-  free(buf);
+  munmap(buf, MAX_FILE);
   return c;
 }
 
 static int granted(const char *name) {
-  char *buf = malloc(MAX_FILE);
+  char *buf = page_alloc(MAX_FILE);
   int found = 0;
   if (!buf) return 0;
   if (read_small(CTL_GRANTS, buf, MAX_FILE) >= 0) {
@@ -115,7 +125,7 @@ static int granted(const char *name) {
     for (char *line = strtok_r(buf, "\n", &save); line && !found; line = strtok_r(NULL, "\n", &save))
       if (strcmp(line, name) == 0) found = 1;
   }
-  free(buf);
+  munmap(buf, MAX_FILE);
   return found;
 }
 
@@ -184,21 +194,28 @@ static int resolve_path(int dirfd, const char *path, char *out, size_t cap) {
   return n < 0 || (size_t)n >= cap ? -2 : 0;
 }
 
-static void audit(const char *op, const char *folder, const char *rel, const char *result) {
-  char line[PATH_MAX * 2 + 512];
-  char esc[PATH_MAX * 2];
+/* `s` as a JSON string body. */
+static void json_escape(const char *s, char *out, size_t cap) {
   size_t j = 0;
-  for (const char *s = rel; *s && j < sizeof esc - 8; s++) {
+  for (; *s && j < cap - 8; s++) {
     unsigned char ch = (unsigned char)*s;
     if (ch == '"' || ch == '\\') {
-      esc[j++] = '\\';
-      esc[j++] = (char)ch;
+      out[j++] = '\\';
+      out[j++] = (char)ch;
     } else if (ch < 0x20) {
-      j += (size_t)snprintf(esc + j, sizeof esc - j, "\\u%04x", ch);
-    } else esc[j++] = (char)ch;
+      j += (size_t)snprintf(out + j, cap - j, "\\u%04x", ch);
+    } else out[j++] = (char)ch;
   }
-  esc[j] = '\0';
-  int n = snprintf(line, sizeof line, "{\"op\":\"%s\",\"folder\":\"%s\",\"rel\":\"%s\",\"result\":\"%s\",\"pid\":%d}\n", op, folder, esc, result,
+  out[j] = '\0';
+}
+
+static void audit(const char *op, const char *folder, const char *rel, const char *result) {
+  char line[PATH_MAX * 2 + 1024];
+  char esc[PATH_MAX * 2];
+  char fesc[600];
+  json_escape(rel, esc, sizeof esc);
+  json_escape(folder, fesc, sizeof fesc);
+  int n = snprintf(line, sizeof line, "{\"op\":\"%s\",\"folder\":\"%s\",\"rel\":\"%s\",\"result\":\"%s\",\"pid\":%d}\n", op, fesc, esc, result,
                    (int)getpid());
   if (n <= 0) return;
   int fd = open(AUDIT_LOG, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0644);
@@ -210,12 +227,85 @@ static void audit(const char *op, const char *folder, const char *rel, const cha
 
 /* Decide a delete. Returns 1 to call through (with *granted_folder set when the call is a granted delete to log),
  * 0 when refused here (errno set). */
-static int delete_allowed(const char *op, int dirfd, const char *path, int *fi_out, struct ctl *c, char *full) {
+/* For a path too deep to resolve as a string (a short name relative to a deep directory): the folder its parent
+ * lies in, found by walking up from the parent directory itself and comparing each ancestor with the folder roots
+ * by device and inode, so no symlink can mislead it. -1 for none; -2 when it cannot tell. */
+static int deep_folder_of(const struct ctl *c, int dirfd, const char *path) {
+  char parent[PATH_MAX];
+  int n = snprintf(parent, sizeof parent, "%s", path);
+  if (n < 0 || (size_t)n >= sizeof parent) return -2;
+  char *slash = strrchr(parent, '/');
+  if (slash) *slash = '\0';
+  else snprintf(parent, sizeof parent, ".");
+  int fd = openat(dirfd, parent[0] ? parent : "/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+  if (fd < 0) return -2;
+  struct stat roots[MAX_FOLDERS];
+  for (int i = 0; i < c->n; i++)
+    if (stat(c->f[i].path, &roots[i]) != 0) roots[i].st_ino = 0;
+  for (int depth = 0; depth < PATH_MAX; depth++) {
+    struct stat st;
+    if (fstat(fd, &st) != 0) break;
+    for (int i = 0; i < c->n; i++)
+      if (roots[i].st_ino && roots[i].st_ino == st.st_ino && roots[i].st_dev == st.st_dev) {
+        close(fd);
+        return i;
+      }
+    int up = openat(fd, "..", O_PATH | O_DIRECTORY | O_CLOEXEC);
+    struct stat ust;
+    if (up < 0 || fstat(up, &ust) != 0) {
+      if (up >= 0) close(up);
+      break;
+    }
+    close(fd);
+    fd = up;
+    if (ust.st_ino == st.st_ino && ust.st_dev == st.st_dev) {
+      close(fd);
+      return -1; /* reached / */
+    }
+  }
+  close(fd);
+  return -2;
+}
+
+enum del_kind { DEL_UNLINK, DEL_RMDIR, DEL_REMOVE };
+
+/* Decide a delete. Returns 1 to call through (with *fi_out set when the call is a granted delete to log), 0 when
+ * refused here (errno set). The kernel's own answers come first, as they would for a refusal production's mount
+ * makes: a missing file is missing, `unlink` of a directory is EISDIR, `rmdir` of a file ENOTDIR. */
+static int delete_allowed(const char *op, enum del_kind kind, int dirfd, const char *path, int *fi_out, struct ctl *c, char *full) {
   int saved = errno;
   *fi_out = -1;
+  if (!path || !*path) {
+    errno = ENOENT;
+    return 0;
+  }
+  size_t plen = strlen(path);
+  /* `unlink("x/")` never deletes (ENOTDIR or EISDIR): the kernel answers it. */
+  if (kind == DEL_UNLINK && path[plen - 1] == '/') {
+    errno = saved;
+    return 1;
+  }
   int resolved = resolve_path(dirfd, path, full, PATH_MAX);
+  int fi;
   if (resolved == -2) {
-    /* Too deep to place: refuse rather than let a deep tree slip a delete past the folder check. */
+    /* Too deep to place by name. An absolute or over-long name fails in the kernel anyway; a short name under a
+     * deep directory is placed by walking up from it. */
+    if (path[0] == '/' || plen >= PATH_MAX) {
+      errno = saved;
+      return 1;
+    }
+    if (!c || !c->ok) fi = -2;
+    else {
+      fi = deep_folder_of(c, dirfd, path);
+      if (fi == -1 || (fi >= 0 && strcmp(c->f[fi].mode, "rw") != 0)) {
+        errno = saved;
+        return 1;
+      }
+      if (fi >= 0 && granted(c->f[fi].name)) {
+        errno = saved;
+        return 1;
+      }
+    }
     errno = EPERM;
     return 0;
   }
@@ -223,7 +313,6 @@ static int delete_allowed(const char *op, int dirfd, const char *path, int *fi_o
     errno = saved;
     return 1;
   }
-  int fi;
   if (!c || !c->ok) {
     /* No control file: refuse every delete under a session's mnt rather than enforce nothing. */
     if (strncmp(full, "/sessions/", 10) == 0 && strstr(full, "/mnt/")) fi = -2;
@@ -246,6 +335,14 @@ static int delete_allowed(const char *op, int dirfd, const char *path, int *fi_o
   struct stat st;
   if (lstat(full, &st) != 0) {
     errno = ENOENT;
+    return 0;
+  }
+  if (kind == DEL_UNLINK && S_ISDIR(st.st_mode)) {
+    errno = EISDIR;
+    return 0;
+  }
+  if (kind == DEL_RMDIR && !S_ISDIR(st.st_mode)) {
+    errno = ENOTDIR;
     return 0;
   }
   if (fi >= 0) {
@@ -281,14 +378,14 @@ int unlinkat(int dirfd, const char *path, int flags) {
   char full[PATH_MAX];
   int fi;
   const char *op = (flags & AT_REMOVEDIR) ? "rmdir" : "unlinkat";
-  if (!delete_allowed(op, dirfd, path, &fi, c, full)) {
-    free(c);
+  if (!delete_allowed(op, (flags & AT_REMOVEDIR) ? DEL_RMDIR : DEL_UNLINK, dirfd, path, &fi, c, full)) {
+    ctl_free(c);
     return -1;
   }
   int rc = real_unlinkat(dirfd, path, flags);
   int e = errno;
   log_granted(op, c, fi, full, rc);
-  free(c);
+  ctl_free(c);
   errno = e;
   return rc;
 }
@@ -298,14 +395,14 @@ int unlink(const char *path) {
   struct ctl *c = load_ctl();
   char full[PATH_MAX];
   int fi;
-  if (!delete_allowed("unlink", AT_FDCWD, path, &fi, c, full)) {
-    free(c);
+  if (!delete_allowed("unlink", DEL_UNLINK, AT_FDCWD, path, &fi, c, full)) {
+    ctl_free(c);
     return -1;
   }
   int rc = real_unlink(path);
   int e = errno;
   log_granted("unlink", c, fi, full, rc);
-  free(c);
+  ctl_free(c);
   errno = e;
   return rc;
 }
@@ -315,14 +412,14 @@ int rmdir(const char *path) {
   struct ctl *c = load_ctl();
   char full[PATH_MAX];
   int fi;
-  if (!delete_allowed("rmdir", AT_FDCWD, path, &fi, c, full)) {
-    free(c);
+  if (!delete_allowed("rmdir", DEL_RMDIR, AT_FDCWD, path, &fi, c, full)) {
+    ctl_free(c);
     return -1;
   }
   int rc = real_rmdir(path);
   int e = errno;
   log_granted("rmdir", c, fi, full, rc);
-  free(c);
+  ctl_free(c);
   errno = e;
   return rc;
 }
@@ -333,14 +430,14 @@ int remove(const char *path) {
   struct ctl *c = load_ctl();
   char full[PATH_MAX];
   int fi;
-  if (!delete_allowed("remove", AT_FDCWD, path, &fi, c, full)) {
-    free(c);
+  if (!delete_allowed("remove", DEL_REMOVE, AT_FDCWD, path, &fi, c, full)) {
+    ctl_free(c);
     return -1;
   }
   int rc = real_remove(path);
   int e = errno;
   log_granted("remove", c, fi, full, rc);
-  free(c);
+  ctl_free(c);
   errno = e;
   return rc;
 }
@@ -353,7 +450,7 @@ static int rename_allowed(int olddirfd, const char *oldpath, int newdirfd, const
   struct ctl *c = load_ctl();
   int verdict = 1;
   if (!c || !c->ok) {
-    free(c);
+    ctl_free(c);
     errno = saved;
     return 1;
   }
@@ -373,7 +470,7 @@ static int rename_allowed(int olddirfd, const char *oldpath, int newdirfd, const
     verdict = 0;
     saved = EXDEV;
   }
-  free(c);
+  ctl_free(c);
   errno = saved;
   return verdict;
 }

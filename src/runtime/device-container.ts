@@ -14,6 +14,7 @@ import {
   readSync,
   realpathSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -373,8 +374,8 @@ const CANARY_DIR = "device-canary";
 const ETC_DIR = "device-etc";
 const CTL_MOUNT = "/run/cwh-device/ctl";
 const CANARY_MOUNT = "/run/cwh-device/canary";
-/** The canary's folder name in the control file. A leading dot: no connected folder is named so. */
-export const DEVICE_CANARY_NAME = ".cwh-canary";
+/** The canary's folder name in the control file. It holds a slash, which no connected folder's name can. */
+export const DEVICE_CANARY_NAME = "/canary";
 const AUDIT_CAP = 4 * 1024 * 1024;
 
 const grantsFile = (outDir: string): string => join(resolve(outDir), CTL_DIR, "grants");
@@ -396,15 +397,21 @@ export function prepareDeviceControl(
 ): void {
   const root = resolve(outDir);
   const home = deviceHome(sessionId);
+  for (const f of folders)
+    if (/[\t\n\r]/.test(f.name))
+      throw new BoundaryError(`device_bridge: the folder name ${JSON.stringify(f.name)} cannot be listed for the device`);
+  // The device user can write the audit and canary dirs, so on a resumed turn either may hold a link it planted:
+  // both are recreated, never written through. A fresh audit log also makes each turn report only its own deletes.
+  for (const d of [AUDIT_DIR, CANARY_DIR]) rmSync(join(root, d), { recursive: true, force: true });
   for (const d of [CTL_DIR, AUDIT_DIR, CANARY_DIR, ETC_DIR]) mkdirSync(join(root, d), { recursive: true });
   const lines = [
-    `@mnt\t-\t${home}/mnt`,
+    `/mnt\t-\t${home}/mnt`,
     ...folders.map((f) => `${f.name}\t${f.mode}\t${home}/mnt/${f.name}`),
     `${DEVICE_CANARY_NAME}\trw\t${CANARY_MOUNT}`,
   ];
   writeFileSync(join(root, CTL_DIR, "folders"), lines.join("\n") + "\n");
   if (!existsSync(grantsFile(outDir))) writeFileSync(grantsFile(outDir), "");
-  writeFileSync(join(root, CANARY_DIR, "probe"), "the device container's delete refusal is checked against this file\n");
+  writeFileSync(join(root, CANARY_DIR, "probe"), "the device container's delete refusal is checked against this file\n", { flag: "wx" });
   const name = deviceVmUser(sessionId);
   writeFileSync(
     join(root, ETC_DIR, "passwd"),
@@ -420,9 +427,16 @@ export type DeviceAuditLine = { op: string; folder: string; rel: string; result:
  *  never of their absence. */
 export function readDeviceAudit(outDir: string): { lines: DeviceAuditLine[]; malformed: number; refusedReason?: string } {
   const file = join(resolve(outDir), AUDIT_DIR, "audit.jsonl");
+  try {
+    // Before the open: a FIFO would block an open forever.
+    if (!lstatSync(file).isFile()) return { lines: [], malformed: 0, refusedReason: "not a regular file" };
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return { lines: [], malformed: 0 };
+    return { lines: [], malformed: 0, refusedReason: String(e?.code ?? e) };
+  }
   let fd: number;
   try {
-    fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
   } catch (e: any) {
     if (e?.code === "ENOENT") return { lines: [], malformed: 0 };
     return { lines: [], malformed: 0, refusedReason: e?.code === "ELOOP" ? "not a regular file" : String(e?.code ?? e) };
