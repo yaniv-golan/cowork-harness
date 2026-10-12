@@ -41,6 +41,7 @@ const DISPOSITIONS: Record<string, string> = {
   "src/run/trace-view.ts": "resolveEventsFile refuses a multi-leg candidate; a leg dir is unchanged",
   "src/run/verify-context.ts": "requireTurns refuses a root; legTreeRoot refuses a non-final persistent leg",
   "src/runtime/image-capabilities.ts": "per-leg events lines by construction",
+  "src/search-corpus/harvest.ts": "resolveGraded throws on a multi-leg root, so search-pool build stops loudly; a leg dir reads as a run",
 };
 
 function tsFiles(dir: string): string[] {
