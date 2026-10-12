@@ -243,7 +243,8 @@ prevent, so use it to unblock once, never in CI.
   at the cost of non-determinism (one model call per gate). Correct, but flaky for skills whose gates
   appear stochastically.
 - `first` — picks option 1 and warns loudly. **Flagged `nonDeterministic`** — not a deterministic
-  substitute for scripted answers. (For a web_fetch approval gate it abstains, and the fetch is denied.)
+  substitute for scripted answers. (For a web_fetch approval gate it abstains, and the fetch is denied; for the device bridge's delete card it picks
+  `Decline`.)
 - `prompt` — asks at the TTY (`skill` only).
 - `llm` — a model answers; flagged `nonDeterministic`.
 
