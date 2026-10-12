@@ -64,6 +64,29 @@ function flatten(value: unknown, prefix: string, out: Map<string, string>): void
   for (const key of keys) flatten(obj[key], prefix ? `${prefix}.${key}` : key, out);
 }
 
+/** The schemas a user WRITES (a scenario or session file), as opposed to the ones the harness writes for readers
+ *  (run results, cassettes, reports, envelopes). `required` cuts the opposite way on each: on an input schema it
+ *  constrains the author, so dropping it accepts every file the old schema did (a widening) and adding it can reject
+ *  one that used to load (a narrowing); on an output schema it is a promise to readers, so dropping it is the break.
+ *  - scenario.schema.json: a scenario file, authored by the user.
+ *  - scenario-multi-leg.schema.json: the multi-leg form of the same file.
+ *  - session.schema.json: a session file, authored by the user.
+ *  Every other schema under schema/ is written by the harness (or exchanged with a decider: protocol.v1.json, whose
+ *  both directions have readers), so a removed `required` there stays a break. */
+export const INPUT_SCHEMAS: ReadonlySet<string> = new Set([
+  "scenario.schema.json",
+  "scenario-multi-leg.schema.json",
+  "session.schema.json",
+]);
+
+/** For a `schemas.<file>.<path>.required` leaf of an input schema: the file and the property path. */
+function inputRequired(leaf: string): { file: string; prop: string } | undefined {
+  if (!leaf.startsWith("schemas.") || !leaf.endsWith(".required")) return undefined;
+  for (const file of INPUT_SCHEMAS)
+    if (leaf.startsWith(`schemas.${file}.`)) return { file, prop: leaf.slice(`schemas.${file}.`.length, -".required".length) };
+  return undefined;
+}
+
 /** Pure diff of two surfaces. `added` (a new leaf path) is fine at 1.0; `removed` and `changed` are
  *  breaking. A scalar leaf that moved under a union arm with the SAME value (`a.b.type` → `a.b<anyOf:0>.type`)
  *  is a widening — the old shape is still accepted — so it goes to `widened`, not `removed`. */
@@ -118,6 +141,19 @@ export function diffSurfaces(baseline: unknown, current: unknown): SurfaceDiff {
     (v === "widened" ? widened : v === "changed" ? changed : removed).push(path);
   }
   for (let i = added.length - 1; i >= 0; i--) if (consumedArmLeaves.has(added[i])) added.splice(i, 1);
+  // `required` on an input schema (INPUT_SCHEMAS): dropping it widens. Adding it narrows when the object it sits in
+  // already existed (an old file may lack the field); inside an object that is itself new, no old file has it.
+  for (let i = removed.length - 1; i >= 0; i--) if (inputRequired(removed[i]!)) widened.push(...removed.splice(i, 1));
+  for (let i = added.length - 1; i >= 0; i--) {
+    const r = inputRequired(added[i]!);
+    if (!r) continue;
+    const parent = r.prop.replace(/\.[^.]*$/, "");
+    const at = `schemas.${r.file}.${parent}`;
+    const parentExisted = [...baseFlat.keys()].some(
+      (k) => k.startsWith(at) && (k.length === at.length || /^[.[<]/.test(k.slice(at.length))),
+    );
+    if (parentExisted) changed.push(...added.splice(i, 1));
+  }
 
   added.sort();
   removed.sort();
