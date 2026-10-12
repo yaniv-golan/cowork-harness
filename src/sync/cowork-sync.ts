@@ -7,12 +7,19 @@ import { gunzipSync } from "node:zlib";
 import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
-import { ObservedSpawnEnv, type CloudBlock, type DesktopInitSurface, type ObservedSpawnEnvDeclaration } from "../types.js";
+import {
+  ObservedSpawnEnv,
+  type AgentSearchGates,
+  type CloudBlock,
+  type DesktopInitSurface,
+  type ObservedSpawnEnvDeclaration,
+} from "../types.js";
 import { safeCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
 import { classifySpawnEnvKey, windowAllowlistedNames, postWriteOnlyNames } from "./spawn-env-registry.js";
 import { scanSpawnEnvPostWrites } from "./spawn-env-post-writes.js";
 import { readObservedSpawnEnv, bundleHasSpawnEnvProducer } from "./observed-spawn-env.js";
+import { readAgentSearchGates } from "./agent-search-gates.js";
 
 /**
  * cowork-sync — derive a VOLATILE parity baseline from the live Claude Desktop
@@ -73,6 +80,9 @@ export interface SyncResult {
    *  observed-spawn-env.ts). `observed:false` with a reason when no dump exists. Carried forward only for the
    *  SAME build, after its log entries rotated away. */
   observedSpawnEnv: ObservedSpawnEnv;
+  /** The agent-side feature values that shape a live WebSearch, from Desktop's per-session GrowthBook cache (see
+   *  agent-search-gates.ts). `observed:false` when no cache file exists; a NOTE, never a delta. Never carried forward. */
+  agentSearchGates: AgentSearchGates;
   /** The `cloud` block (remote-devices tool list + description fingerprints + unreachable features); null when
    *  the asar could not be read or the extraction failed (a delta says which). Never carried forward. */
   cloud: CloudBlock | null;
@@ -946,6 +956,16 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
   for (const d of observedSpawnEnv.deltas) flag(unknown, d);
   notes.push(...observedSpawnEnv.notes);
 
+  // 8. The agent's own web-search feature values (not Desktop gates, so not in the fcache). Informational: a live
+  // run does not depend on them, and a frozen-versus-live comparison reads them to know what live search did.
+  const agentSearchGates = readAgentSearchGates(join(SUPPORT, "local-agent-mode-sessions"));
+  if (!agentSearchGates.observed)
+    notes.push("agentSearchGates: no cowork-gb-cache.json found — provenance.agentSearchGates records observed:false");
+  else if (agentSearchGates.disagreeing?.length)
+    notes.push(
+      `agentSearchGates: ${agentSearchGates.disagreeing.join(", ")} differ across Desktop's session caches — recorded from the newest`,
+    );
+
   // network.allowDomains is a PINNED, hand-curated list carried forward from the newest committed
   // baseline — never re-derived from the bundle. See checkEgressContractFacts for why deriving it is
   // unsound in both directions. The operator's own coworkEgressAllowedHosts are still merged, matching
@@ -992,6 +1012,7 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     agentReleaseChannel,
     desktopInitSurface: initSurface.surface,
     observedSpawnEnv: observedSpawnEnv.block,
+    agentSearchGates,
     cloud,
     unknownDeltas: unknown,
     notes,

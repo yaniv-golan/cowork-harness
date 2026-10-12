@@ -12,6 +12,8 @@ import {
   FIDELITY_TIERS,
   DesktopInitSurface,
   ObservedSpawnEnv,
+  SearchAnchors,
+  AgentSearchGates,
   ObservedSpawnEnvDeclaration,
   type RunResult,
   type RunStatus,
@@ -31,7 +33,9 @@ import {
   deriveNativeStagedPath,
   nativeManifestBuild,
   buildNextAgentBinary,
+  parseNativeStagedPath,
 } from "./baseline.js";
+import { searchAnchorsForSync } from "./sync/search-anchors.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
   executeScenario,
@@ -3278,6 +3282,11 @@ async function cmdSync(args: string[]) {
     );
   let shaFields: { sha256?: string; shaProvenance?: string; manifestChecksumMatch?: boolean | "unknown" } = {};
   let stringSentinels: Record<string, number> | undefined;
+  // Web-search anchors (agentBinary.searchAnchors): the same measure-or-carry lifecycle, except that a staged ELF
+  // whose anchors cannot be extracted BLOCKS the write. A frozen search corpus recognises the nested search request
+  // by them, and a silent fallback would let a live search into a run labelled frozen.
+  const baseSearchAnchors = (baseAgentBinary.searchAnchors ?? undefined) as SearchAnchors | undefined;
+  let searchAnchors: SearchAnchors | undefined;
   // CLI capabilities (agentBinary.cliCapabilities): the same measure-or-carry lifecycle as the sentinels.
   const baseCliCapabilities = (baseAgentBinary.cliCapabilities ?? undefined) as CliCapabilities | undefined;
   let cliCapabilities: CliCapabilities | undefined;
@@ -3285,6 +3294,18 @@ async function cmdSync(args: string[]) {
     const measured = sha256File(resolvedDerived);
     stringSentinels = Object.fromEntries(AGENT_STRING_SENTINELS.map((s) => [s, countStringInFile(resolvedDerived, s)]));
     cliCapabilities = cliCapabilitiesOfFile(resolvedDerived);
+    // hostloop runs the NATIVE agent, so its anchors must match. Compared only when the native build is the same
+    // agent version (the two stage on separate cadences).
+    const nativeResolved = derivedNativeStagedPath.replace(/^~(?=$|\/)/, homeDir);
+    const nativeSameVersion = parseNativeStagedPath(derivedNativeStagedPath)?.version === res.agentVersion && existsSync(nativeResolved);
+    const anchored = searchAnchorsForSync({
+      elf: readFileSync(resolvedDerived),
+      native: nativeSameVersion ? readFileSync(nativeResolved) : null,
+      sameVersionAsBase: (base.agentVersion as string | undefined) === res.agentVersion,
+      base: baseSearchAnchors,
+    });
+    searchAnchors = anchored.anchors;
+    res.unknownDeltas.push(...anchored.deltas);
     shaFields = {
       sha256: measured,
       shaProvenance: "measured-local",
@@ -3304,6 +3325,7 @@ async function cmdSync(args: string[]) {
     if ((base.agentVersion as string | undefined) === res.agentVersion) {
       stringSentinels = baseSentinels;
       cliCapabilities = baseCliCapabilities;
+      searchAnchors = baseSearchAnchors;
     }
   } else if ((base.agentVersion as string | undefined) === res.agentVersion) {
     // offline re-sync of the same version — keep what the base recorded rather than dropping it.
@@ -3314,6 +3336,7 @@ async function cmdSync(args: string[]) {
     };
     stringSentinels = baseSentinels;
     cliCapabilities = baseCliCapabilities;
+    searchAnchors = baseSearchAnchors;
   }
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
@@ -3327,6 +3350,7 @@ async function cmdSync(args: string[]) {
     manifestChecksumMatch: shaFields.manifestChecksumMatch,
     stringSentinels,
     cliCapabilities,
+    searchAnchors,
   });
 
   // re-sync GrowthBook gate states from the decoded fcache (was: stale-carry + blanket warning).
@@ -3420,6 +3444,20 @@ async function cmdSync(args: string[]) {
       1,
     );
   }
+  for (const [field, check] of [
+    ["agentBinary.searchAnchors", searchAnchors === undefined ? null : SearchAnchors.safeParse(searchAnchors)],
+    ["provenance.agentSearchGates", AgentSearchGates.safeParse(res.agentSearchGates)],
+  ] as const) {
+    if (check && !check.success)
+      fail(
+        "sync",
+        "runtime",
+        `ERROR: ${field} failed its schema — refusing to write baseline (issue paths: ${check.error.issues.map((i) => i.path.join(".") || "(root)").join(", ")})`,
+        "This is an extractor bug in src/sync/search-anchors.ts or src/sync/agent-search-gates.ts, not a Desktop change.",
+        isJsonOutput(normalizedArgs),
+        1,
+      );
+  }
   const observedCheck = ObservedSpawnEnv.safeParse(res.observedSpawnEnv);
   if (!observedCheck.success) {
     fail(
@@ -3501,6 +3539,8 @@ async function cmdSync(args: string[]) {
         // The env key NAMES Desktop's own host-loop spawn carried on THIS build, from its local log. Carried forward
         // by the reader only for the same build (log rotation); never from a previous release.
         observedSpawnEnv: res.observedSpawnEnv,
+        // The agent's web-search feature values, from Desktop's session GrowthBook cache. Never carried forward.
+        agentSearchGates: res.agentSearchGates,
       },
     },
     res.cloud,

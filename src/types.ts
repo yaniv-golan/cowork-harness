@@ -19,6 +19,48 @@ const MountSpec = z.object({
   purpose: z.string().optional(),
 });
 
+/** A prose literal from the agent binary, recorded without its text: sha256 and UTF-8 byte length (both over the
+ *  same ASCII bytes, so the predicate can hash a fixed-length span of a request body). */
+const HashedLiteral = z.strictObject({
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  bytes: z.number().int().positive(),
+});
+
+/** `agentBinary.searchAnchors`: the facts the frozen search corpus recognises the agent's nested WebSearch request
+ *  by (src/sync/search-anchors.ts). STRICT: the baseline is public, and nothing but these fields may be written. */
+export const SearchAnchors = z.strictObject({
+  toolType: z.string().regex(/^web_search_[0-9A-Za-z_]+$/),
+  systemSentence: HashedLiteral,
+  userPrefix: HashedLiteral,
+  ccr: z.strictObject({
+    sessionsPath: z.literal("/v1/code/sessions/"),
+    workerPath: z.literal("/worker/"),
+    searchRoute: z.literal("web-search"),
+  }),
+});
+export type SearchAnchors = z.infer<typeof SearchAnchors>;
+
+const AgentSearchGateKey = z.enum(["tengu_plum_vx3", "tengu_sleepy_shore", "tengu_gzip_request_bodies", "tengu_buzzing_pike"]);
+const sortedKeys = z.array(AgentSearchGateKey).refine(isSortedUniqueKeys, "must be duplicate-free");
+function isSortedUniqueKeys(xs: string[]): boolean {
+  return new Set(xs).size === xs.length;
+}
+
+/** `provenance.agentSearchGates`: the agent-side feature values that shape a live WebSearch, from Desktop's
+ *  per-session GrowthBook cache (src/sync/agent-search-gates.ts). Raw values, size-capped; no org or session id. */
+export const AgentSearchGates = z.discriminatedUnion("observed", [
+  z.strictObject({
+    observed: z.literal(true),
+    files: z.number().int().positive(),
+    values: z.partialRecord(AgentSearchGateKey, z.json()),
+    absent: sortedKeys.optional(),
+    withheld: sortedKeys.optional(),
+    disagreeing: sortedKeys.optional(),
+  }),
+  z.strictObject({ observed: z.literal(false) }),
+]);
+export type AgentSearchGates = z.infer<typeof AgentSearchGates>;
+
 export const PlatformBaseline = z.looseObject({
   baselineVersion: z.number(),
   appVersion: z.string(),
@@ -93,6 +135,10 @@ export const PlatformBaseline = z.looseObject({
     // strings (`cliCapabilitiesOfBuffer`). Same lifecycle as `stringSentinels`. ABSENT means unknown (a baseline
     // synced before the field existed), and a feature that needs a capability refuses on unknown — never assumes it.
     cliCapabilities: z.strictObject({ permissionPrompts: z.boolean() }).optional(),
+    // The web-search anchors the frozen search corpus recognises the agent's nested search request by
+    // (src/sync/search-anchors.ts). Same lifecycle as `stringSentinels`. ABSENT means unknown, and a search corpus
+    // refuses to run on unknown anchors rather than guess.
+    searchAnchors: SearchAnchors.optional(),
   }),
   guest: z.looseObject({ os: z.string(), arch: z.string(), baseImage: z.string().optional() }),
   spawn: z
