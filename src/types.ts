@@ -2220,8 +2220,12 @@ export interface DeviceBridgeRecord {
    *  the delete (a static binary, a raw system call), or, under `rename-reads-as-delete`, a file was renamed and then
    *  edited. Fails the run where the filesystem keeps identities apart; warns otherwise. */
   bypassedDeletes?: string[];
-  /** Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts; ignored. */
+  /** Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts, or naming
+   *  a path outside their folder; ignored. */
   auditInconsistent?: number;
+  /** Enforced runs only: why the shim's audit log could not be read (the device shell replaced it), so its counts
+   *  are unknown rather than zero. */
+  auditUnreadable?: string;
   /** Which of production's egress branches the device container modeled: the session allowlist through the proxy
    *  (`allowlist`), or everything through it (`unrestricted`, from `egress.unrestricted: true`). */
   egress: "allowlist" | "unrestricted";

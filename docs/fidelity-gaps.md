@@ -1873,15 +1873,16 @@ a simulated session.
     "File exists" on `.git/HEAD.lock`.
 
   Only calls through the C library are refused. A static binary or a raw system call deletes anyway, as it would
-  not in production. The device copy is compared before and after the run to catch that: a file gone from a folder
+  not in production; so does an io_uring unlink on a container runtime whose seccomp profile allows io_uring
+  (Docker's default profile does not). The device copy is compared before and after the run to catch that: a file gone from a folder
   deletion was never allowed in is listed in `deviceBridge.bypassedDeletes` and fails the run
   (`device_delete_bypassed`). A file the session made and deleted that way leaves no trace and is not caught. The
   library's log of refused and allowed deletes is writable by the device shell, so its counts (`refusedDeletes`, and
   the allowed deletes of files the session made) can be understated by a command that edits it; a line in it can add
   a delete to the record, never excuse one.
   Before the first `device_bash` call the bridge checks the library works by trying to delete a probe file; if it
-  is not refused, or the device image cannot be built, the run fails as an infrastructure error (`device-shim`), so
-  a bridge run never goes unenforced without saying so.
+  is not refused, the run fails as an infrastructure error (`device-shim`), so a bridge run never goes unenforced
+  without saying so. A device image that cannot be built stops the run the same way, before the agent starts.
 
   The device image is the agent image plus that library, built locally on the first bridge run (it needs Docker Hub
   and apt; a few minutes) and rebuilt when either changes. `doctor` reports whether it is built. Earlier builds are

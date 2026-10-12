@@ -291,8 +291,12 @@ export interface DeviceDeleteFindings {
   bypassedDeletes: string[];
   /** Deletes the shim refused (its audit log; evidence that refusals happened, never of their absence). */
   refusedDeletes: number;
-  /** Audit lines claiming a granted delete the tree contradicts (the file is still there): ignored. */
+  /** Audit lines claiming a granted delete the tree contradicts (the file is still there), or naming a path outside
+   *  its folder: ignored. */
   auditInconsistent: number;
+  /** Why the audit log could not be read (the device user replaced it), when it could not: its counts are then
+   *  unknown, not zero. */
+  auditUnreadable?: string;
 }
 
 /** The deletes a device_bridge run made in the connected folders. With the shim enforcing (`enforced`), a loss in
@@ -320,6 +324,7 @@ export function deviceDeleteFindings(
       else out.bypassedDeletes.push(path);
     }
   const audit = readDeviceAudit(outDir);
+  if (audit.refusedReason) out.auditUnreadable = audit.refusedReason;
   const seen = new Set(out.mountDeletes.map((d) => d.command));
   for (const l of audit.lines) {
     if (!mountOf.has(l.folder)) continue;
@@ -328,6 +333,11 @@ export function deviceDeleteFindings(
       continue;
     }
     if (l.result !== "granted") continue;
+    // A line the device user wrote could name any path: only one inside its folder is looked up.
+    if (l.rel.startsWith("/") || l.rel.split("/").some((seg) => seg === ".." || seg === ".")) {
+      out.auditInconsistent++;
+      continue;
+    }
     const path = l.rel ? `${l.folder}/${l.rel}` : l.folder;
     if (existsSync(join(deviceHost, "mnt", path))) {
       out.auditInconsistent++;
@@ -595,6 +605,8 @@ export function startDeviceBridge(p: {
   shimCheck: Promise<boolean>;
   /** The canary's outcome so far: true only once it passed. */
   shimEnforced: () => boolean;
+  /** Why the device image could not be prepared, when it could not (assertDeviceImageReady). */
+  imageError?: string;
 } {
   const deviceHost = join(resolve(p.outDir), "work", "device");
   const folders = deviceFolders(p.mounts);
@@ -695,7 +707,14 @@ export function startDeviceBridge(p: {
     clientExited: () => started.child.killed || started.child.exitCode !== null || started.child.signalCode !== null,
     shimCheck,
     shimEnforced: () => enforced,
+    ...("error" in built ? { imageError: built.error } : {}),
   };
+}
+
+/** Stop before the agent starts when the device image could not be prepared: the run would fail on its canary
+ *  anyway, after spending the agent's tokens. The infra error is already on the bridge's record. */
+export function assertDeviceImageReady(device: { imageError?: string }): void {
+  if (device.imageError) throw new Error(`device_bridge: the device image could not be prepared: ${device.imageError}`);
 }
 
 /** The canary: `rm` of a probe file in a folder that refuses deletes, as the device user. True when the rm failed
@@ -769,6 +788,7 @@ export function deviceBridgeRecord(
           refusedDeletes: shim.refusedDeletes,
           bypassedDeletes: [...shim.bypassedDeletes],
           ...(shim.auditInconsistent ? { auditInconsistent: shim.auditInconsistent } : {}),
+          ...(shim.auditUnreadable ? { auditUnreadable: shim.auditUnreadable } : {}),
         }
       : {}),
     folders: deviceFolders(mounts).map((f) => ({ name: f.name, mode: f.mode })),

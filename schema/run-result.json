@@ -164,6 +164,10 @@
           "minimum": 1,
           "description": "Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts; ignored."
         },
+        "auditUnreadable": {
+          "type": "string",
+          "description": "Enforced runs only: why the shim's audit log could not be read (the device shell replaced it), so its counts are unknown rather than zero."
+        },
         "folders": {
           "type": "array",
           "items": {

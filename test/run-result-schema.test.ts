@@ -322,6 +322,7 @@ describe("a device_bridge record validates against the published schema", () => 
       refusedDeletes: 2,
       bypassedDeletes: ["proj/a.txt"],
       auditInconsistent: 1,
+      auditUnreadable: "not a regular file",
     });
     const reported = deviceBridgeRecord(mounts, "included", plan, grants, true);
     for (const deviceBridge of [enforced, reported]) {

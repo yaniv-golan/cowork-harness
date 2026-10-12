@@ -26,6 +26,9 @@ import {
   deviceVmUser,
   agentPlanFor,
   deniedDeviceFolders,
+  DEVICE_BRIDGE_ASK_TOOLS,
+  assertDeviceImageReady,
+  DEVICE_BRIDGE_TOOLS,
   deviceTreeDeletes,
   deviceTreeIdentityReliable,
   makeDeviceExec,
@@ -623,11 +626,19 @@ describe("wiring: spawnContainer", () => {
     expect(s).toMatch(/startDeviceBridge\(\{[\s\S]{0,400}mounts: launchPlan\.mounts,/);
     expect(s).toMatch(/stageWorkspace\(plan, mntHost, /);
   });
-  it("advertises, pre-approves and serves the bridge's tools", () => {
-    // What each list holds is deviceToolSurface's (delete-grant-serving.test.ts); here, that both lists use it.
-    expect(s).toMatch(/const deviceSurface = deviceToolSurface\(device\);/);
-    expect(s).toMatch(/extraTools: \[[^\]]*\.\.\.deviceSurface\.advertised\]/);
-    expect(s).toMatch(/extraAllowedTools: \[[^\]]*\.\.\.deviceSurface\.preApproved\]/);
+  it("advertises the delete card and pre-approves only the other device tools (the lists the agent is spawned with)", async () => {
+    const { containerToolLists } = await import("../src/runtime/container.js");
+    const lists = containerToolLists({ cowork: ["c"], webFetch: ["w"] }, { tools: DEVICE_BRIDGE_TOOLS, askTools: DEVICE_BRIDGE_ASK_TOOLS });
+    expect(lists.extraTools).toEqual(expect.arrayContaining([...DEVICE_BRIDGE_TOOLS, ...DEVICE_BRIDGE_ASK_TOOLS, "c", "w"]));
+    expect(lists.extraAllowedTools).toEqual(expect.arrayContaining([...DEVICE_BRIDGE_TOOLS, "c"]));
+    for (const t of [...DEVICE_BRIDGE_ASK_TOOLS, "w"]) expect(lists.extraAllowedTools).not.toContain(t);
+    expect(containerToolLists({ cowork: [], webFetch: [] }, undefined).extraTools.some((t) => t.startsWith("mcp__remote-devices__"))).toBe(
+      false,
+    );
+    // The spawn uses these lists as they are, and serves the bridge's bundle.
+    expect(s).toMatch(/const toolLists = containerToolLists\(\{ cowork: coworkTools, webFetch: webFetchTools \}, device\);/);
+    expect(s).toMatch(/extraTools: toolLists\.extraTools,/);
+    expect(s).toMatch(/extraAllowedTools: toolLists\.extraAllowedTools,/);
     expect(s).toMatch(/\.\.\.\(device \? \[device\.bundle\] : \[\]\)/);
   });
 });
@@ -655,7 +666,7 @@ describe("wiring: the review fixes reach the run", () => {
   it("container.ts hands the device over at once and feeds its folder copies to the input corpus", () => {
     const s = read("runtime/container.ts");
     expect(s).toMatch(
-      /if \(device\) opts\.onDeviceStarted\?\.\(device\);\s*\n(\s*\/\/[^\n]*\n)*\s*captureInputHostPathCorpus\(plan, mntHost, outDir, device\?\.inputRoots\);/,
+      /if \(device\) opts\.onDeviceStarted\?\.\(device\);\s*\n\s*if \(device\) assertDeviceImageReady\(device\);\s*\n(\s*\/\/[^\n]*\n)*\s*captureInputHostPathCorpus\(plan, mntHost, outDir, device\?\.inputRoots\);/,
     );
   });
   it("execute.ts adds device-tree deletes to the scan and refuses folder-path file assertions", () => {
@@ -811,5 +822,54 @@ describe("startDeviceBridge: teardown and the canary", () => {
     expect(settled).toBe(true);
     expect(b.infraErrors.length).toBe(errorsAtTeardown);
     expect(b.shimEnforced()).toBe(false);
+  });
+});
+
+describe("a device image that cannot be built stops the run before the agent starts", () => {
+  it("assertDeviceImageReady throws for a bridge whose image failed, and spawnContainer calls it before launching", () => {
+    const root = scratch();
+    const b = startDeviceBridge({
+      ensureImage: () => ({ error: "no network" }),
+      runner: standInRunner(root),
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out"),
+      sessionId: "s",
+      runToken: "img-fail",
+      mounts: [folder(root, "proj")],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    try {
+      expect(() => assertDeviceImageReady(b)).toThrow(/no network/);
+      expect(b.infraErrors.map((e) => e.source)).toContain("device-shim");
+    } finally {
+      b.markTearingDown();
+      b.reapNow();
+    }
+    const ok = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
+      runner: standInRunner(root),
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out2"),
+      sessionId: "s",
+      runToken: "img-ok",
+      mounts: [folder(root, "proj2")],
+      appVersion: "2.31226.1",
+      resume: false,
+    });
+    try {
+      expect(() => assertDeviceImageReady(ok)).not.toThrow();
+    } finally {
+      ok.markTearingDown();
+      ok.reapNow();
+    }
+    const s = readFileSync(join(import.meta.dirname, "..", "src", "runtime", "container.ts"), "utf8");
+    expect(s).toMatch(
+      /if \(device\) opts\.onDeviceStarted\?\.\(device\);\s*\n(\s*\/\/[^\n]*\n)*\s*if \(device\) assertDeviceImageReady\(device\);/,
+    );
   });
 });

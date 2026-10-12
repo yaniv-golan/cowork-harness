@@ -306,6 +306,22 @@ static int delete_allowed(const char *op, enum del_kind kind, int dirfd, const c
         return 1;
       }
     }
+    /* The same order as below: missing, then the type errors, then the refusal. */
+    struct stat dst;
+    if (fstatat(dirfd, path, &dst, AT_SYMLINK_NOFOLLOW) != 0) {
+      errno = ENOENT;
+      return 0;
+    }
+    if (kind == DEL_UNLINK && S_ISDIR(dst.st_mode)) {
+      errno = EISDIR;
+      return 0;
+    }
+    if (kind == DEL_RMDIR && !S_ISDIR(dst.st_mode)) {
+      errno = ENOTDIR;
+      return 0;
+    }
+    /* Too deep for its path inside the folder to be named: the audit line carries the name as given. */
+    if (fi >= 0) audit(op, c->f[fi].name, path, "refused");
     errno = EPERM;
     return 0;
   }

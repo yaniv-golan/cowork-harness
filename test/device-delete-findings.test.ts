@@ -3,7 +3,7 @@
 // A file gone from a folder the user allowed deletion in is a delete (production allowed it too); a file gone from
 // a folder never allowed got past the shim (a static binary, a raw system call), and fails the run. Where the
 // filesystem can reuse a deleted file's identity, a renamed-then-edited file reads as gone too, so there it warns.
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -81,6 +81,26 @@ describe("deviceDeleteFindings, enforced", () => {
     expect(f.auditInconsistent).toBe(1);
     expect(f.refusedDeletes).toBe(1);
     void copy;
+  });
+  it("a log line naming a path outside its folder is ignored, never looked up on the host", () => {
+    const { outDir, audit } = staged(true);
+    writeDeviceGrant(outDir, ["proj"]);
+    audit([
+      { op: "unlinkat", folder: "proj", rel: "../../../../etc/x", result: "granted" },
+      { op: "unlinkat", folder: "proj", rel: "/abs", result: "granted" },
+    ]);
+    const f = deviceDeleteFindings(outDir, DENIED, true);
+    expect(f.mountDeletes).toEqual([]);
+    expect(f.auditInconsistent).toBe(2);
+  });
+  it("an audit log it cannot read is said so on the record, not taken for zero refusals", () => {
+    const { outDir } = staged(true);
+    mkdirSync(join(outDir, "device-audit"), { recursive: true });
+    symlinkSync("/etc/hosts", join(outDir, "device-audit", "audit.jsonl"));
+    const f = deviceDeleteFindings(outDir, DENIED, true);
+    expect(f.auditUnreadable).toBe("not a regular file");
+    const r = deviceBridgeRecord(mounts, "included", plan, [], true, { ...f, enforced: true });
+    expect(r.auditUnreadable).toBe("not a regular file");
   });
   it("a staged file's granted delete is counted once, from the tree", () => {
     const { outDir, copy, audit } = staged(true);

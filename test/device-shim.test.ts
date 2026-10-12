@@ -175,6 +175,13 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
     const inFolder = sh(deep(`${HOME}/mnt/proj`)).out;
     expect(inFolder).toMatch(/rc=1/);
     expect(inFolder).toMatch(/Operation not permitted/);
+    // Down there too, a missing file is missing and a directory is not unlinked as a file.
+    const down = `cd ${HOME}/mnt/proj && for i in $(seq 1 45); do cd ${"x".repeat(100)}; done`;
+    expect(sh(`${down} && rm -f missing; echo rc=$?`).out).toMatch(/rc=0/);
+    expect(sh(`${down} && mkdir -p dd && python3 -c 'import os; os.unlink("dd")' 2>&1`).out).toMatch(/IsADirectoryError/);
+    expect(auditLines()).toContainEqual(
+      expect.objectContaining({ folder: "proj", rel: expect.stringMatching(/(^|\/)f$/), result: "refused" }),
+    );
   });
 
   it("the audit log stays valid JSON for a name with quotes and control characters", () => {

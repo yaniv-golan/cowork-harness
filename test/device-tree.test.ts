@@ -170,3 +170,17 @@ console.log(JSON.stringify({ collisions, reliable, deletes }));
     expect(r.deletes).toEqual(["(removed from the device copy) proj/a.txt"]);
   }, 90_000);
 });
+
+describe("deviceTreeListing never reads a file that could block", () => {
+  it("a FIFO (or socket, device) in a folder is listed by identity and type, never opened", async () => {
+    const root = scratch();
+    mkdirSync(join(root, "mnt", "proj"), { recursive: true });
+    execFileSync("mkfifo", [join(root, "mnt", "proj", "fifo")]);
+    // In a child process with a deadline: a blocking open would hang this test's own event loop otherwise.
+    const script = `import("${join(import.meta.dirname, "..", "src", "runtime", "device-tree.ts")}").then((m) => console.log(JSON.stringify(m.deviceTreeListing(${JSON.stringify(root)}))))`;
+    const out = execFileSync(process.execPath, ["--import", "tsx", "-e", script], { encoding: "utf8", timeout: 20_000 });
+    const listing = JSON.parse(out) as Record<string, TreeEntry>;
+    expect(listing["proj/fifo"]).toMatchObject({ type: "o" });
+    expect(listing["proj/fifo"]!.sha256).toBeUndefined();
+  });
+});

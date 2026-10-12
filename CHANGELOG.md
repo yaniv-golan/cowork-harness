@@ -33,7 +33,8 @@ All notable changes to this project are documented here. The format is based on
   `rwd`. A move between connected folders now copies and cannot remove its source, as in production.
 - **The first `device_bridge` run builds a device image locally** (the agent image plus the delete library; it needs
   Docker Hub and apt, and takes a few minutes), and rebuilds it when the agent image changes. A run whose device
-  image is missing the library, or cannot be built, fails as an infrastructure error (`device-shim`).
+  image is missing the library fails as an infrastructure error (`device-shim`); one whose image cannot be built
+  stops before the agent starts.
 - **A delete that gets past the refusal fails the run** (`device_delete_bypassed`, not waivable by
   `allow_delete_in`): a static binary or a raw system call, caught by comparing the device copy before and after.
   Where the run directory's filesystem can reuse a deleted file's identity, it is the warning
