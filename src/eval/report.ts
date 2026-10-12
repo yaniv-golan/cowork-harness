@@ -615,7 +615,11 @@ function metricSection(
       label,
       inFamily: r.adjustedP !== undefined,
       ...counts,
-      mdsBasis: r.mds ? MDS_BASIS : `${MDS_BASIS}; none at n = ${Math.min(r.n1, r.n2)} per arm (the table covers 4–6)`,
+      mdsBasis: r.mds
+        ? MDS_BASIS
+        : r.pooledSd === 0
+          ? `${MDS_BASIS}; none: every measured value is equal (SD 0), so there is no scale to read a shift in`
+          : `${MDS_BASIS}; none at n = ${Math.min(r.n1, r.n2)} per arm (the table covers 4–6)`,
       ...(notes.length ? { note: notes.join("; ") } : {}),
       ...(evidence ? { evidence } : {}),
     };

@@ -494,6 +494,18 @@ describe("evaluateMetricFamily", () => {
     expect(out.mds?.possible.units).toBeCloseTo(2.4 * out.pooledSd!, 12);
   });
 
+  it('no mds when every measured value is equal (SD 0): no scale, never "≈ 0"', () => {
+    const r: MetricRowInput = {
+      id: "z",
+      better: "lower",
+      a: { values: [5, 5, 5, 5, 5], worst: 0, excluded: 0 },
+      b: { values: [5, 5, 5, 5, 5], worst: 0, excluded: 0 },
+    };
+    const out = evaluateMetricFamily([r], holm(2)).rows[0];
+    expect(out.pooledSd).toBe(0);
+    expect(out.mds).toBeUndefined();
+  });
+
   it("mds at unequal arms uses the smaller arm (conservative) and says so", () => {
     const r: MetricRowInput = {
       id: "u",

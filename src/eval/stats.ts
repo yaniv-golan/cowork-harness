@@ -839,7 +839,8 @@ export function evaluateMetricFamily(rows: readonly MetricRowInput[], o: MetricF
       sd: { a: sampleSd(r.a.values), b: sampleSd(r.b.values) },
       ...(pooled ? { pooledSd: pooled.sd } : {}),
       ...(interval ? { pooledSdInterval95: interval } : {}),
-      ...(pooled && interval && possibleSd !== undefined
+      // An SD of 0 (every measured value equal) gives no scale to read a shift in: no MDS, rather than "≈ 0".
+      ...(pooled && pooled.sd > 0 && interval && possibleSd !== undefined
         ? { mds: { n, possible: scaled(possibleSd), confirmed: confirmedSd !== undefined ? scaled(confirmedSd) : null } }
         : {}),
       ...(hl ? { hl } : {}),
