@@ -72,6 +72,7 @@ describe.skipIf(!can)("cli --help: parseArgs-direct subcommands print usage", ()
     ["verify-run", "usage: verify-run"],
     ["regrade", "usage: regrade"],
     ["fixture", "usage: fixture"],
+    ["search-pool", "usage: search-pool"],
     ["ref", "usage: ref freeze"],
     ["doctor", "usage: doctor"],
     ["status", "usage: status"],

@@ -93,6 +93,7 @@ import { cmdFixture } from "./fixture/cli.js";
 import { cmdHillclimb } from "./hillclimb/cli.js";
 import { HILLCLIMB_USAGE } from "./hillclimb/usage.js";
 import { FIXTURE_USAGE } from "./fixture/usage.js";
+import { cmdSearchPool, SEARCH_POOL_USAGE } from "./search-corpus/cli.js";
 import { cmdRef } from "./refs/cli.js";
 import { REF_USAGE } from "./refs/cli-usage.js";
 import { resolveInputs } from "./run/inputs.js";
@@ -368,6 +369,9 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--judge-model <id>] [--authored-total-bytes <N>] [--output-format json]
   fixture export <run-dir> --out <dir>   copy a kept run's outputs tree into a directory a scenario can start from
       [--allow-host-paths] [--output-format json]
+  search-pool build <pool> --from <run-dir|runs-dir> [--from …]   build a pool of the WebSearch results recorded in kept runs
+      [--mixed] [--exclude <record-id>]… [--min-score <n>] [--allow-in-repo] [--output-format json]
+  search-pool export <pool> --out <file> | search-pool import <file> <pool>   move a pool between machines (hash re-verified)
   ref freeze <run-dir> --scenario <yaml> --out <store>   freeze a kept run's judged document as a semantic_pairwise reference
       [--case-id <id>] [--allow-unchecked] [--output-format json]
   ref verify <store>…   re-hash every frozen reference document in a store [--output-format json]
@@ -726,6 +730,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     'usage: answer <dir> --gate <N> (--choose <label> [--choose <label>…] | --answer "<q>=<label>") [--output-format text|json]   (write an in-band gate reply atomically; repeat --choose for a multiSelect gate)',
   regrade: REGRADE_USAGE,
   fixture: FIXTURE_USAGE,
+  "search-pool": SEARCH_POOL_USAGE,
   ref: REF_USAGE,
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent)",
@@ -813,6 +818,7 @@ const COMMANDS = [
   "verify-run",
   "regrade",
   "fixture",
+  "search-pool",
   "ref",
   "trace",
   "inspect",
@@ -1050,6 +1056,8 @@ async function main() {
       return cmdRegrade(rest);
     case "fixture":
       return cmdFixture(rest);
+    case "search-pool":
+      return cmdSearchPool(rest);
     case "ref":
       return cmdRef(rest);
     case "trace":

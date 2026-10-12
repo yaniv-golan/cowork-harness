@@ -88,6 +88,15 @@ All notable changes to this project are documented here. The format is based on
   cache for the same organisation rather than the fcache. Only booleans, numbers and flat objects of them are published, with no
   org or session identifier. A missing cache is a note, never a blocker.
 
+### Added
+
+- **`search-pool build|export|import`: collect the WebSearch results recorded in kept runs into a pool.** One record
+  per search (its query, links and prose summary) with the source run's skill, skill commit, skill snapshot signature,
+  agent and Desktop versions, model and start time. A pool holds one skill unless built `--mixed`; a record containing
+  a known secret refuses the build; records that name or quote an upload are listed for `--exclude`. Pools live under
+  `~/.cowork-harness/search-pools/` (`0700`/`0600`) and are refused inside a git work tree unless `--allow-in-repo`.
+  `export` writes one JSON file (not a tarball) that `import` re-verifies. Nothing serves a pool yet.
+
 ## [4.8.1] — 2026-10-12
 
 ### Upgrade notes
