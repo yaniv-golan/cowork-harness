@@ -10,6 +10,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
+- **Cassettes: no re-record needed, except a `device_bridge` recording.** The shipped `desktop-2.31226.1` baseline's
+  pinned gates, spawn env, prompts, egress allowlist and agent version are unchanged (its re-sync added provenance
+  blocks only), and the agent's spawn and tool surface are unchanged outside `device_bridge`. A `device_bridge`
+  recording made on 4.8 still replays as recorded, but it has no delete card and no delete refusal; re-record it to
+  capture them.
 - **An unanswered web_fetch approval now fails the run under `on_unanswered: fail` (exit 2).** When the agent fetches
   a URL that appeared in neither the prompt nor an earlier fetch result, and no `answers:` rule or session
   `web_fetch.approved_domains` covers its domain, the run used to deny the fetch silently and carry on; no verdict
