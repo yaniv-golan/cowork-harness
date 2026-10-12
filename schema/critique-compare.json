@@ -71,8 +71,65 @@
     "excluded": {
       "type": "array",
       "items": { "type": "object", "properties": { "file": { "type": "string" }, "reason": { "type": "string" } }, "required": ["file", "reason"] }
+    },
+    "clustering": {
+      "type": "object",
+      "description": "--cluster: none (default) or lexical. Built over citation-resolved findings only. Nothing is sent anywhere. `validated` is null: no labelled set has validated a grouping, so no output says a finding was reproduced.",
+      "properties": {
+        "mode": { "enum": ["none", "lexical"] },
+        "population": { "const": "citation-resolved" },
+        "similarity": {
+          "type": "object",
+          "properties": {
+            "scheme": { "const": "char_wb-3-5-tfidf/1" },
+            "text": { "type": "string" },
+            "idf": { "type": "string" },
+            "linkage": { "const": "complete" },
+            "threshold": { "type": "number" }
+          },
+          "required": ["scheme", "text", "idf", "linkage", "threshold"],
+          "additionalProperties": false
+        },
+        "findingsCompared": { "type": "integer" },
+        "summariesSkipped": { "type": "string" },
+        "sent": { "const": "nothing" },
+        "validated": { "type": "null" }
+      },
+      "required": ["mode", "population", "sent", "validated"],
+      "additionalProperties": false
+    },
+    "candidateGroups": {
+      "type": "array",
+      "description": "lexical mode only: findings whose every pair is at or above the similarity threshold (complete linkage), in input order. A JUDGEMENT from word overlap, not a match: no k/N, and an ungrouped finding is not a claim that no reworded repeat exists.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "basis": { "const": "lexical-similarity (a judgement, not a match)" },
+          "groups": { "type": "null" },
+          "members": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "properties": {
+                "labelGroup": { "type": ["string", "null"] },
+                "report": { "type": "integer" },
+                "sessionId": { "type": ["string", "null"] },
+                "itemIndex": { "type": "integer" },
+                "findingFingerprint": { "type": "string" },
+                "classification": { "type": "string" },
+                "idea": { "type": "string" }
+              },
+              "required": ["labelGroup", "report", "sessionId", "itemIndex", "findingFingerprint", "classification", "idea"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["basis", "groups", "members"],
+        "additionalProperties": false
+      }
     }
   },
-  "required": ["mode", "publicSafe", "note", "noiseFloorControl", "groups", "fingerprints", "possibleRewordings", "excluded"],
+  "required": ["mode", "publicSafe", "note", "noiseFloorControl", "groups", "fingerprints", "possibleRewordings", "excluded", "clustering"],
   "additionalProperties": false
 }

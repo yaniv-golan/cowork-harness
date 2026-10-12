@@ -28,6 +28,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`critique --compare --cluster lexical`: candidate groups of findings that read alike.** Citation-resolved findings
+  with text, from full reports, across every report and label group (a group spans at least two reports), grouped by character 3–5-gram TF-IDF similarity of their idea
+  and recommended action, complete linkage at a fixed cut of 0.20 (every pair in a group at or above it). A judgement from
+  word overlap, not a match: a group carries no k/N, an ungrouped finding is not a claim that it did not recur, and
+  groups are listed in input order. Local; nothing is sent. The payload gains `clustering` (always) and
+  `candidateGroups` (lexical mode); `schema/critique-compare.json` describes both. `--cluster judge` is refused.
+
 - **`device_bridge` serves the delete card, `device_request_delete_permission`.** Production's schema (1 to 8 connected
   folder roots, an optional reason), registered to load without ToolSearch and not pre-approved, so the agent asks
   first. The handler refuses a path that is not a connected folder root, a read-only folder, or a malformed request,

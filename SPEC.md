@@ -601,7 +601,7 @@ there are three families:
   (`scenario`: the YAML, `out`: the file written or `null`), `skill --dry-run` (`dryRun: true` plus the
   preview's fields), `critique --corpus-only`'s corpus payload (with its corpus hashes, `corpusManifest`
   and `source`), `critique --compare` (`mode: "compare"`, `publicSafe`, `note`, `noiseFloorControl`, `groups`,
-  `fingerprints`, `possibleRewordings`, `excluded`), `eval` and `eval report` (`evalDir`, `arms`, `pins`,
+  `fingerprints`, `possibleRewordings`, `excluded`, `clustering`, and `candidateGroups` under `--cluster lexical`), `eval` and `eval report` (`evalDir`, `arms`, `pins`,
   `sections`, `summary`, `cost`, `stoppedEarly`), `eval --dry-run` (`dryRun: true`, `plan` — no `evalDir`, none
   is created; §12 covers `plan.cost`'s summary keys and nothing else of `plan`), `hillclimb run` (`flow`, `variant`, `scheduled`, `scored` — the
   rows written to `results.jsonl` this pass, named so it never shadows the envelope's `ok` — `failed`, `exitCode`, and on `--dry-run`

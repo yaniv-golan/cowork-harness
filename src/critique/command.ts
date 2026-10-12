@@ -25,6 +25,7 @@ import type { CorpusDigest, CorpusManifestEntry, HashBasis } from "./corpus-dige
 import { isGitTarget, stageGitTarget, type GitTargetSource } from "./git-target.js";
 import { buildCritiqueSummary, writeSummaryFile, type SummaryContext } from "./summary.js";
 import { CompareRefusal, compareMembers, loadMember, renderCompareText } from "./compare.js";
+import type { ClusterMode } from "./cluster-lexical.js";
 import { applyCommandGlobal } from "../run/command-globals.js";
 import { gradedAliasPath, turnArtifactPath } from "../run/turn-layout.js";
 import { renderKnownLimitations } from "./limitations.js";
@@ -148,13 +149,18 @@ function usage(): string {
   nothing. A path at <plugin>/skills/<name> grades that skill of the plugin, as <plugin> --skill
   <name> does; the report records the resolved commit in source.commit.
 
-  critique --compare <report.json | summary.json …> [--strict] [--out <path>] [--output-format json]
+  critique --compare <report.json | summary.json …> [--strict] [--cluster none|lexical] [--out <path>] [--output-format json]
   lines up several critiques of one skill side by side (no spend, no model): one group, or two by
   --label (before/after). No verdicts — exact fingerprints are a lower-bound "same wording" aid, a shared
   cited passage a "read these together" aid. A group mixing evaluator models, hash bases, skill trees or
   probes, or holding a pass-1-only critique, is marked and --strict refuses it; a group with no probe
   hash, or whose packaged corpus varies, is only marked. Its output carries finding text: not for a
   public repository.
+  --cluster none (the default) groups nothing. --cluster lexical adds candidate groups: citation-resolved
+  findings with text (full reports only) whose wording is close, every pair of a group at or above a fixed
+  similarity cut of 0.20, from at least two reports. A judgement from word overlap, not a match: no k/N, no
+  "reproduced", and a finding left out of every group may still recur in other words. Local, nothing is
+  sent. --cluster judge is not available.
 
 Probe (one required):
   --prompt "<probe>"        the task to run the skill against
@@ -2456,27 +2462,36 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (argv.includes("--compare")) {
     let strict = false;
     let out: string | undefined;
+    let cluster: string | undefined;
     const files: string[] = [];
     for (let i = 0; i < argv.length; i++) {
       const a = argv[i]!;
       if (a === "--compare") continue;
       else if (a === "--strict") strict = true;
-      else if (a === "--output-format" || a === "--out") {
+      else if (a === "--output-format" || a === "--out" || a === "--cluster") {
         const v = argv[i + 1];
         if (v === undefined || v.startsWith("-")) return refuse("usage", `${a} requires a value`);
         if (a === "--out") out = v;
+        else if (a === "--cluster") cluster = v;
         else if (v !== "json" && v !== "text") return refuse("usage", `--output-format must be json or text (got "${v}")`);
         i++;
       } else if (a.startsWith("--output-format=")) {
         if (!["json", "text"].includes(a.slice("--output-format=".length))) return refuse("usage", `--output-format must be json or text`);
       } else if (a.startsWith("--out=")) out = a.slice("--out=".length);
+      else if (a.startsWith("--cluster=")) cluster = a.slice("--cluster=".length);
       else if (a.startsWith("-"))
-        return refuse("usage", `${a} is not accepted with --compare (it takes report files, --strict, --out and --output-format)`);
+        return refuse(
+          "usage",
+          `${a} is not accepted with --compare (it takes report files, --strict, --cluster, --out and --output-format)`,
+        );
       else files.push(a);
     }
     let result: Record<string, unknown>;
     try {
-      result = compareMembers(files.map(loadMember), { strict });
+      result = compareMembers(files.map(loadMember), {
+        strict,
+        ...(cluster !== undefined ? { cluster: cluster as ClusterMode } : {}),
+      });
     } catch (e) {
       if (e instanceof CompareRefusal) return refuse("usage", `critique --compare: ${e.message}`);
       throw e;

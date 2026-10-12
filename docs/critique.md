@@ -173,7 +173,7 @@ ignored.
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--out <path>` | **also** write the selected-format report to this file (stdout unchanged). The format comes from `--output-format`, which defaults to **text** — so `--out report.json` writes TEXT unless you also pass `--output-format json`, and a downstream `json.load()` then fails with `Expecting value: line 1 column 1`, which reads as a corrupt report rather than a format mismatch. A mismatch between the extension and the format warns at argument-parse time, before the run spawns |
 | `--summary-out <path>` | **also** write a public-safe summary — no finding text — to this file; see [A public summary](#a-public-summary----summary-out). `--summary-include-cost` / `--summary-include-prompt-hash` add what it leaves out by default |
-| `--compare <report.json…>` | a separate mode: lay several critique reports or summaries side by side, no spend — see [`critique --compare`](#critique---compare--the-reports-side-by-side). Takes only `--strict`, `--out` and `--output-format` |
+| `--compare <report.json…>` | a separate mode: lay several critique reports or summaries side by side, no spend — see [`critique --compare`](#critique---compare--the-reports-side-by-side). Takes only `--strict`, `--cluster`, `--out` and `--output-format` |
 | `--skill <name>` | multi-skill **plugin** target: grade `skills/<name>/SKILL.md` (+ every `agents/**.md` it can dispatch, + any plugin-root `references/` file the skill actually links) instead of a missing plugin-root SKILL.md — see below |
 | `--fidelity container\|hostloop\|cowork` | container (default) or hostloop; `cowork` resolves via the baseline's loop gate to one of those two and pins BOTH turns to it. `microvm`/`protocol` refused with a reason — see [Known limitations](#known-limitations). At hostloop a writable `--folder` needs `--allow-host-writes` |
 | `--keep` | accepted as a no-op; runs are always kept |
@@ -676,6 +676,38 @@ No spend and no model: it reads `--output-format json` reports (or `--out` files
 - **`noiseFloorControl: true`** when both groups have the same `corpusHash` and one, shared `skillTreeHash`: the
   same skill in both, so any difference is run-to-run variation. A `scripts/` edit moves `skillTreeHash` only, so
   it is never a noise-floor control.
+- **`clustering`** says which grouping ran (`mode: "none"` by default) over which findings (`population:
+  "citation-resolved"`), that nothing was sent anywhere, and `validated: null`: no labelled set has validated a
+  grouping, so nothing here says a finding was reproduced.
+
+#### `--cluster lexical`: candidate groups
+
+```bash
+cowork-harness critique --compare runs/critique-*.json --cluster lexical
+```
+
+`--cluster none` is the default and groups nothing. `--cluster lexical` adds **`candidateGroups`**: findings, across
+every report and both label groups, whose wording is close. Each
+finding is its idea and recommended action; the similarity is character 3–5-gram TF-IDF cosine, the IDF fitted
+over the findings being compared (so the same finding can score differently in a different set). Groups use
+complete linkage at a fixed cut of 0.20: every pair inside a group is at or above it, so a group never chains A~B~C
+through a weak A–C. Only findings whose citation resolved and that have idea or action text take part, from full
+reports (a summary carries no finding text; `clustering.summariesSkipped` says so when one was given). A group must
+hold findings from at least two reports: one whose members all come from one report is dropped, since it says
+nothing about a finding coming back. Classification is not part of the key:
+the same finding filed under two classifications can share a group.
+
+A candidate group is **a judgement from word overlap, not a match** (its `basis` says so):
+
+- two findings that say the same thing in different words often land in different groups, and two that share a
+  template can land in one. Read the members before treating them as one finding;
+- a group carries **no k/N** (`groups: null`), and a finding left out of every group is **not** a claim that it
+  did not recur;
+- groups are listed in input order (label group, then report, then item), never by size; each member names its
+  report, its `itemIndex` in that report and its fingerprint.
+
+It runs locally and sends nothing. `--cluster judge` (a model judging pairs) is not available: it would need a
+labelled set to validate it first, and is refused with exit 2.
 
 It refuses (exit 2): a mix of graded skills, of `corpusHashScheme` or `fingerprintScheme`, or of harness
 major versions; a mix of `corpusHash` within one group (give the other corpus its own `--label`); the same
