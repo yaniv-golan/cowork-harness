@@ -484,7 +484,7 @@
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-exec"]
+            "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-shim", "device-exec"]
           },
           "message": {
             "type": "string"

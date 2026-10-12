@@ -153,12 +153,17 @@ describe("deviceContainerArgv", () => {
 // bash -c <command>` runs the command locally (in `cwd`, standing in for $HOME), with `timeout`'s own exit 124 when it
 // outlives its limit; a missing container answers as the daemon does (exit 1). `run` stays alive like the keep-alive
 // container and `rm` records the name it removed.
+/** The stand-in runner has no images: the device image is the agent image as given. */
+const STAND_IN_IMAGE = (_runner: string, base: string) => ({ imageId: base });
+
 function standInRunner(root: string, cwd = "/"): string {
   const runner = join(root, "runner.sh");
   writeFileSync(
     runner,
     [
       "#!/bin/bash",
+      // The canary's rm, answered as the shim answers it.
+      'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
       'case "$1" in',
       "  run) exec sleep 30;;",
       `  rm) echo "$3" >> "${root}/removed"; exit 0;;`,
@@ -225,6 +230,7 @@ describe("startDeviceBridge", () => {
     const outDir = join(root, "out");
     const runner = standInRunner(root, join(outDir, "work", "device"));
     const bridge = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
       runner,
       image: "img",
       network: "net",
@@ -272,6 +278,8 @@ describe("startDeviceBridge: teardown", () => {
       runner,
       [
         "#!/bin/bash",
+        // The canary's rm, answered as the shim answers it.
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
         'case "$1" in',
         `  run) ( sleep 0.3; echo created > "${exists}" ) >/dev/null 2>&1 & disown; exec sleep 30;;`,
         `  rm) rm -f "${exists}"; echo rm >> "${root}/removed"; exit 0;;`,
@@ -282,6 +290,7 @@ describe("startDeviceBridge: teardown", () => {
       { mode: 0o755 },
     );
     const b = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
       runner,
       image: "img",
       network: "net",
@@ -315,6 +324,8 @@ describe("startDeviceBridge: a container that is slow to come up", () => {
       runner,
       [
         "#!/bin/bash",
+        // The canary's rm, answered as the shim answers it.
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
         `echo "$1" >> "${log}"`,
         'case "$1" in',
         "  run) exec sleep 30;;",
@@ -328,6 +339,7 @@ describe("startDeviceBridge: a container that is slow to come up", () => {
       { mode: 0o755 },
     );
     const bridge = startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
       runner,
       image: "img",
       network: "net",
@@ -379,6 +391,7 @@ describe("startDeviceBridge: a resumed turn never binds what a command left behi
     const runner = standInRunner(root, join(outDir, "work", "device"));
     const start = (resume: boolean) =>
       startDeviceBridge({
+        ensureImage: STAND_IN_IMAGE,
         runner,
         image: "img",
         network: "net",
@@ -413,6 +426,7 @@ describe("startDeviceBridge: a resumed turn never binds what a command left behi
     const runner = standInRunner(root, deviceHost);
     expect(() =>
       startDeviceBridge({
+        ensureImage: STAND_IN_IMAGE,
         runner,
         image: "img",
         network: "net",
@@ -434,6 +448,7 @@ describe("startDeviceBridge: a resumed turn never binds what a command left behi
     const runner = standInRunner(root, join(outDir, "work", "device"));
     const start = (resume: boolean) =>
       startDeviceBridge({
+        ensureImage: STAND_IN_IMAGE,
         runner,
         image: "img",
         network: "net",
@@ -510,6 +525,7 @@ describe("deviceTreeDeletes", () => {
     const runner = standInRunner(root, join(outDir, "work", "device"));
     const start = (resume: boolean) =>
       startDeviceBridge({
+        ensureImage: STAND_IN_IMAGE,
         runner,
         image: "img",
         network: "net",

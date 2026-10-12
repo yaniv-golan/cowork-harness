@@ -30,6 +30,7 @@ import { makeInfraEmitters, startHostLoopSidecar } from "./hostloop.js";
 import { HARDENING, proxyEnvVars } from "./argv.js";
 import { removeContainer } from "../egress/sidecar.js";
 import { DELETE_GRANT_TOOL } from "../decide/decider.js";
+import { ensureDeviceImage } from "./device-image.js";
 import { deviceTreeListing, probeIdentityReliable, treeDeletes, type TreeEntry } from "./device-tree.js";
 export { treeDeletes, type TreeEntry } from "./device-tree.js";
 
@@ -468,6 +469,8 @@ export function startDeviceBridge(p: {
   appVersion: string;
   /** A resumed turn reuses the device tree as the first turn left it, as the agent's own tree is reused. */
   resume: boolean;
+  /** Builds or finds the device image on `image` (ensureDeviceImage); injectable for tests. */
+  ensureImage?: (runner: string, baseRef: string) => { imageId: string } | { error: string };
 }): {
   containerName: string;
   bundle: { servers: string[]; handle: McpHandler };
@@ -489,6 +492,11 @@ export function startDeviceBridge(p: {
   teardown: () => Promise<boolean>;
   /** Whether the `docker run` client has been stopped (for tests). */
   clientExited: () => boolean;
+  /** Resolves once the canary has run: true when the shim refused its delete. A failure is a `device-shim` infra
+   *  error, which fails the run. */
+  shimCheck: Promise<boolean>;
+  /** The canary's outcome so far: true only once it passed. */
+  shimEnforced: () => boolean;
 } {
   const deviceHost = join(resolve(p.outDir), "work", "device");
   const folders = deviceFolders(p.mounts);
@@ -501,11 +509,17 @@ export function startDeviceBridge(p: {
   const containerName = `cowork-dev-${p.runToken ?? p.sessionId}`;
   const infraErrors: { source: InfraErrorSource; message: string }[] = [];
   const { logSidecarInfra, logExecInfra } = makeInfraEmitters(p.outDir, infraErrors, { sidecar: "device-container", exec: "device-exec" });
+  const { logSidecarInfra: logShimInfra } = makeInfraEmitters(p.outDir, infraErrors, { sidecar: "device-shim", exec: "device-exec" });
+  // The device image: the agent image plus the shim. Without it the container still starts on the plain agent
+  // image, so device_bash works, and the canary below fails the run.
+  const built = (p.ensureImage ?? ensureDeviceImage)(p.runner, p.image);
+  if ("error" in built) logShimInfra(`the device image could not be prepared: ${built.error}`);
+  const deviceImage = "imageId" in built ? built.imageId : p.image;
   const user = deviceUser();
   prepareDeviceControl(p.outDir, p.sessionId, folders, user);
   const argv = deviceContainerArgv({
     name: containerName,
-    image: p.image,
+    image: deviceImage,
     network: p.network,
     egressProxy: p.egressProxy,
     deviceHost,
@@ -523,6 +537,13 @@ export function startDeviceBridge(p: {
     logInfra: logSidecarInfra,
     label: "device_bridge container",
   });
+  let enforced = false;
+  const shimCheck = waitRunning(p.runner, containerName).then(async () => {
+    const ok = await deviceCanary(p.runner, containerName, p.outDir);
+    if (ok === true) enforced = true;
+    else if (!("error" in built)) logShimInfra(`the device container does not refuse deletes: ${ok}`);
+    return ok === true;
+  });
   let running: Promise<void> | undefined;
   const grantCalls: Array<{ folders: string[]; ok: boolean }> = [];
   const handle = makeRemoteDevicesHandler({
@@ -530,7 +551,7 @@ export function startDeviceBridge(p: {
     onGrant: (granted) => writeDeviceGrant(p.outDir, granted),
     onGrantCall: (c) => void grantCalls.push(c),
     appVersion: p.appVersion,
-    exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId), () => (running ??= waitRunning(p.runner, containerName))),
+    exec: makeDeviceExec(p.runner, containerName, deviceHome(p.sessionId), () => (running ??= shimCheck.then(() => undefined))),
     onInfraError: logExecInfra,
   });
   return {
@@ -562,7 +583,33 @@ export function startDeviceBridge(p: {
       return gone;
     },
     clientExited: () => started.child.killed || started.child.exitCode !== null || started.child.signalCode !== null,
+    shimCheck,
+    shimEnforced: () => enforced,
   };
+}
+
+/** The canary: `rm` of a probe file in a folder that refuses deletes, as the device user. True when the rm failed
+ *  with "Operation not permitted" and the file is still there on the host; otherwise what went wrong. */
+async function deviceCanary(runner: string, containerName: string, outDir: string): Promise<true | string> {
+  const probe = join(resolve(outDir), CANARY_DIR, "probe");
+  let out = "";
+  let code: number | null = 0;
+  try {
+    await pexec(runner, ["exec", containerName, "rm", `${CANARY_MOUNT}/probe`], { encoding: "utf8", timeout: 30_000 });
+  } catch (e: any) {
+    code = typeof e?.code === "number" ? e.code : null;
+    out = `${e?.stdout ?? ""}${e?.stderr ?? ""}`;
+  }
+  let present = false;
+  try {
+    present = lstatSync(probe).isFile();
+  } catch {
+    present = false;
+  }
+  if (code !== 0 && /Operation not permitted/.test(out) && present) return true;
+  return code === 0 || !present
+    ? "its canary file was deleted (no shim loaded)"
+    : `the canary rm failed otherwise (exit ${code}): ${out.trim().slice(0, 200)}`;
 }
 
 /** The record a device_bridge run carries (`RunResult.deviceBridge`): what it served and how, and every known

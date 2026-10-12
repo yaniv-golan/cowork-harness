@@ -18,6 +18,7 @@ import {
   prepareDeviceControl,
   readDeviceAudit,
   stageDeviceFolders,
+  startDeviceBridge,
   writeDeviceGrant,
 } from "../src/runtime/device-container.js";
 import type { Mount } from "../src/session.js";
@@ -203,4 +204,63 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
   it("the canary's control name can never be a connected folder's", () => {
     expect(DEVICE_CANARY_NAME.startsWith(".")).toBe(true);
   });
+});
+
+// The canary: before anything depends on it, the bridge proves the shim refuses a delete. A container whose image
+// has no shim (the plain agent image), or whose preload names a library that does not load (glibc then skips it
+// without a word), must fail the run as a device-shim infra error rather than run unenforced.
+describe.skipIf(!CAN)("startDeviceBridge's canary", () => {
+  async function start(ensureImage?: (runner: string, base: string) => { imageId: string } | { error: string }) {
+    const r = realpathSync(mkdtempSync(join(tmpdir(), "device-canary-")));
+    const hostPath = join(r, "user", "proj");
+    mkdirSync(hostPath, { recursive: true });
+    writeFileSync(join(hostPath, "a.txt"), "a\n");
+    const outDir = join(r, "out");
+    const bridge = startDeviceBridge({
+      runner: "docker",
+      image: BASE,
+      network: "none",
+      egressProxy: "http://127.0.0.1:9",
+      outDir,
+      sessionId: `canary${process.pid}${ensureImage ? "x" : ""}`,
+      mounts: [{ hostPath, mountPath: "proj", mode: "rw", kind: "folder" }],
+      appVersion: "2.31226.1",
+      resume: false,
+      ...(ensureImage ? { ensureImage } : {}),
+    });
+    const enforced = await bridge.shimCheck;
+    return { r, outDir, bridge, enforced };
+  }
+  it("passes on the device image: the probe survives, the record will say enforced", async () => {
+    const { r, outDir, bridge, enforced } = await start();
+    try {
+      expect(enforced).toBe(true);
+      expect(bridge.infraErrors).toEqual([]);
+      expect(existsSync(join(outDir, "device-canary", "probe"))).toBe(true);
+    } finally {
+      await bridge.teardown();
+      rmSync(r, { recursive: true, force: true });
+    }
+  }, 600_000);
+  it("fails as device-shim on an image without the shim", async () => {
+    const { r, bridge, enforced } = await start(() => ({ imageId: BASE }));
+    try {
+      expect(enforced).toBe(false);
+      expect(bridge.infraErrors).toEqual([expect.objectContaining({ source: "device-shim" })]);
+    } finally {
+      await bridge.teardown();
+      rmSync(r, { recursive: true, force: true });
+    }
+  }, 600_000);
+  it("fails as device-shim when the image cannot be built", async () => {
+    const { r, bridge, enforced } = await start(() => ({ error: "no network" }));
+    try {
+      expect(enforced).toBe(false);
+      expect(bridge.infraErrors.map((e) => e.source)).toContain("device-shim");
+      expect(bridge.infraErrors.find((e) => e.source === "device-shim")?.message).toMatch(/no network/);
+    } finally {
+      await bridge.teardown();
+      rmSync(r, { recursive: true, force: true });
+    }
+  }, 600_000);
 });

@@ -2232,7 +2232,7 @@ export interface DeviceBridgeRecord {
 /** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
  *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
  *  differently instead of collapsing both into one fatal class. */
-export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar" | "device-container" | "device-exec";
+export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar" | "device-container" | "device-shim" | "device-exec";
 
 /** See `RunResult.fsDiff`. `findings` are `[fs-diff] output file removed post-run: <path>` strings. */
 export interface OutputsFsDiff {
