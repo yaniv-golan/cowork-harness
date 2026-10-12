@@ -520,12 +520,14 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
       L.push(
         `[eval] ${name} metrics: ${sec.metricFamily.m} row(s) in their own family (${sec.metricFamily.rule} at ${sec.metricFamily.level}); at --reps ${plan.reps} ${reachText(sec.metricFamily.minRowsToConfirm)} — not planned (no rate history for a metric)`,
       );
-    L.push(
-      `[eval] sequential, ${name} section (planned, NOT implemented — assumed: a look every ${seq.scheme.lookEveryReps} reps per arm, L=${seq.scheme.looks}, alpha/L per look, holm within a look): ` +
-        (seq.firstConfirmableLook
-          ? `first look where \`confirmed\` is reachable, ${seq.basis}: look ${seq.firstConfirmableLook.look} (${seq.firstConfirmableLook.repsPerArm} reps per arm)`
-          : `\`confirmed\` is never reachable at --reps ${plan.reps}, ${seq.basis} — a sequential run could never confirm here, and the planned --sequential would refuse it`),
-    );
+    // The sequential preview is about pass rows; a metrics-only section has none.
+    if (sec.m > 0)
+      L.push(
+        `[eval] sequential, ${name} section (planned, NOT implemented — assumed: a look every ${seq.scheme.lookEveryReps} reps per arm, L=${seq.scheme.looks}, alpha/L per look, holm within a look): ` +
+          (seq.firstConfirmableLook
+            ? `first look where \`confirmed\` is reachable, ${seq.basis}: look ${seq.firstConfirmableLook.look} (${seq.firstConfirmableLook.repsPerArm} reps per arm)`
+            : `\`confirmed\` is never reachable at --reps ${plan.reps}, ${seq.basis} — a sequential run could never confirm here, and the planned --sequential would refuse it`),
+      );
     const f = (x: { look: number; repsPerArm: number } | null) => (x ? `look ${x.look} (${x.repsPerArm} reps)` : "none");
     const reached = (seq.byRow ?? []).filter((r) => r.firstLookForTarget.drop || r.firstLookForTarget.rise);
     for (const r of reached)

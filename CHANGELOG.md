@@ -24,8 +24,8 @@ All notable changes to this project are documented here. The format is based on
   did not write the number, ranks worst. A rep whose number is missing because of the scorer, the capture or a cap is
   left out, and no verdict may rest on its absence: such a row is `unresolved` and never gates, and a candidate whose
   extra left-out reps took a row below the rep threshold is `insufficient_unmeasured`, which `--fail-on possible`
-  gates on. A rep state that breaks the comparison (`pruned`, `no_manifest`) leaves the row `not compared`, and the
-  eval exits 1.
+  gates on. A rep state that breaks the comparison (`pruned`, `no_manifest`, or a completed rep with no entry for a
+  declared metric, `metric_unrecorded`) leaves the row `not compared`, and the eval exits 1.
 - **Metric rows use Holm at `--alpha`, split evenly with the pass-rate rows when a section has both** (0.025 by
   default); an explicit `--correction bh` grades them with Benjamini–Hochberg at q = 0.10, unsplit. Pass-rate rows are
   graded exactly as before. Every report now states, per section and family, its correction, its number of rows, and

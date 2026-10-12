@@ -839,7 +839,8 @@ export function evaluateMetricFamily(rows: readonly MetricRowInput[], o: MetricF
       sd: { a: sampleSd(r.a.values), b: sampleSd(r.b.values) },
       ...(pooled ? { pooledSd: pooled.sd } : {}),
       ...(interval ? { pooledSdInterval95: interval } : {}),
-      // An SD of 0 (every measured value equal) gives no scale to read a shift in: no MDS, rather than "≈ 0".
+      // No within-arm spread (pooled SD 0) gives no scale to read a shift in: no MDS, rather than "≈ 0". The arms
+      // can still differ (every A at 0, every B at 9), so this is not "every value tied" (that is floor 1).
       ...(pooled && pooled.sd > 0 && interval && possibleSd !== undefined
         ? { mds: { n, possible: scaled(possibleSd), confirmed: confirmedSd !== undefined ? scaled(confirmedSd) : null } }
         : {}),

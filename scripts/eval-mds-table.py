@@ -2,7 +2,7 @@
 # which the exact two-sided Wilcoxon–Mann–Whitney test, n v n untied reps, gives p <= the threshold with B better in
 # at least 80% of simulations. One row per (n, attainable p <= 0.05). Seeded, so a re-run prints the same table.
 #
-#   python3 scripts/eval-mds-table.py      # needs numpy; about 5 minutes
+#   python3 scripts/eval-mds-table.py      # needs numpy; a few seconds
 #
 # Output (2026-10-12): 4 0.02857 3.0 | 5 0.00794 3.2 | 5 0.01587 2.8 | 5 0.03175 2.4 |
 #                      6 0.00216 3.4 | 6 0.00433 3.0 | 6 0.00866 2.6 | 6 0.01515 2.4 | 6 0.02597 2.2 | 6 0.04113 2.0

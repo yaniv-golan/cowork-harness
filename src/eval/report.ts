@@ -618,7 +618,7 @@ function metricSection(
       mdsBasis: r.mds
         ? MDS_BASIS
         : r.pooledSd === 0
-          ? `${MDS_BASIS}; none: every measured value is equal (SD 0), so there is no scale to read a shift in`
+          ? `${MDS_BASIS}; none: no within-arm spread (pooled SD 0), so there is no scale to read a shift in`
           : `${MDS_BASIS}; none at n = ${Math.min(r.n1, r.n2)} per arm (the table covers 4–6)`,
       ...(notes.length ? { note: notes.join("; ") } : {}),
       ...(evidence ? { evidence } : {}),
