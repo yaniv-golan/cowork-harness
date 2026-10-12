@@ -56,9 +56,10 @@ describe("wiring", () => {
     expect(src).toMatch(/launchSources, \{\s*deviceBridge: scenario\.device_bridge === true,?\s*\}\);/);
   });
   it("both result sites record the plan's mode", () => {
-    expect(
-      src.split("deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir))").length - 1,
-    ).toBe(2);
+    expect(src).toContain(
+      "const bridgeRecord = () => deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir));",
+    );
+    expect(src.split("deviceBridge: scenario.device_bridge === true ? bridgeRecord() : undefined").length - 1).toBe(2);
   });
 });
 

@@ -114,11 +114,10 @@ describe("the cassette freezes the record", () => {
 describe("wiring: a live run carries the record", () => {
   const s = readFileSync(join(import.meta.dirname, "..", "src", "run", "execute.ts"), "utf8");
   it("both the full and the partial result build it from the launch plan", () => {
-    expect(
-      s.match(
-        /deviceBridge:\s+scenario\.device_bridge === true\s+\? deviceBridgeRecord\(plan\.mounts, bridgeNote, plan, bridgeGrants\(\), deviceTreeIdentityReliable\(outDir\)\)\s+: undefined/g,
-      ),
-    ).toHaveLength(2);
+    expect(s.match(/deviceBridge: scenario\.device_bridge === true \? bridgeRecord\(\) : undefined/g)).toHaveLength(2);
+    expect(s).toContain(
+      "const bridgeRecord = () => deviceBridgeRecord(plan.mounts, bridgeNote, plan, bridgeGrants(), deviceTreeIdentityReliable(outDir));",
+    );
     expect(s).toMatch(/deviceBridge: args\.deviceBridge,/);
   });
 });
