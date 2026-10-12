@@ -257,6 +257,52 @@ describe("critique --compare with cluster: lexical — order, indexes, summaries
   });
 });
 
+describe("critique --compare with cluster: lexical — groups are across critiques", () => {
+  const A1 = { idea: "The resume codeword is never explained.", action: "Explain the resume codeword in one line." };
+  const A2 = { idea: "The resume codeword is never explained here.", action: "Explain the resume codeword in a line." };
+  const OTHER = { idea: "The output folder is not named anywhere.", action: "Name the output folder." };
+
+  it("two near-identical findings in ONE report make no group; the same pair across two reports does", () => {
+    const d = dir();
+    const one = writeReport(d, "one.json", [
+      { ...A1, fp: "1".repeat(16) },
+      { ...A2, fp: "2".repeat(16) },
+    ]);
+    const other = writeReport(d, "other.json", [{ ...OTHER, fp: "3".repeat(16) }]);
+    expect(compareMembers([one, other].map(loadMember), { cluster: "lexical" }).candidateGroups).toEqual([]);
+
+    const a = writeReport(d, "a.json", [{ ...A1, fp: "4".repeat(16) }]);
+    const b = writeReport(d, "b.json", [{ ...A2, fp: "5".repeat(16) }]);
+    const groups = compareMembers([a, b].map(loadMember), { cluster: "lexical" }).candidateGroups as Array<{
+      members: Array<{ report: number }>;
+    }>;
+    expect(groups).toHaveLength(1);
+    expect(new Set(groups[0]!.members.map((m) => m.report)).size).toBe(2);
+  });
+
+  it("a group spanning two reports keeps its same-report members", () => {
+    const d = dir();
+    const a = writeReport(d, "a.json", [
+      { ...A1, fp: "6".repeat(16) },
+      { ...A2, fp: "7".repeat(16) },
+    ]);
+    const b = writeReport(d, "b.json", [{ ...A1, fp: "8".repeat(16) }]);
+    const groups = compareMembers([a, b].map(loadMember), { cluster: "lexical" }).candidateGroups as Array<{
+      members: Array<{ findingFingerprint: string }>;
+    }>;
+    expect(groups.map((g) => g.members.map((m) => m.findingFingerprint[0]))).toEqual([["6", "7", "8"]]);
+  });
+
+  it("findings with no idea and no action text take no part (they would match on the separator alone)", () => {
+    const d = dir();
+    const a = writeReport(d, "a.json", [{ idea: "", action: "  ", fp: "9".repeat(16) }]);
+    const b = writeReport(d, "b.json", [{ idea: "", action: "", fp: "a".repeat(16) }]);
+    const out = compareMembers([a, b].map(loadMember), { cluster: "lexical" });
+    expect(out.candidateGroups).toEqual([]);
+    expect((out.clustering as Record<string, unknown>).findingsCompared).toBe(0);
+  });
+});
+
 describe("the judge stays held and nothing can say reproduced", () => {
   it("the gate constant is null and the user-facing judge is off", () => {
     expect(CLUSTER_GATE).toBeNull();

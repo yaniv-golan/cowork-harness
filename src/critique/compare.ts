@@ -426,26 +426,33 @@ export function compareMembers(input: CompareMember[], opts: { strict?: boolean;
 
   // Candidate groups (lexical mode): over every citation-resolved finding of every full report, across label groups,
   // in input order (label group, report, item). Summaries carry no finding text and take no part.
-  const clusterItems = cluster === "lexical" ? flat : [];
+  // A finding with no idea and no action text has nothing to compare: two of them would match on the separator alone.
+  const clusterItems =
+    cluster === "lexical" ? flat.filter((x) => norm(x.it.idea ?? "") !== "" || norm(x.it.recommendedAction ?? "") !== "") : [];
   const candidateGroups =
     cluster === "lexical"
-      ? candidateGroupsOf(lexicalSimilarity(clusterItems.map((x) => x.it)), LEXICAL_GROUP_THRESHOLD).map((g) => ({
-          basis: LEXICAL_BASIS,
-          groups: null,
-          members: g.map((i) => {
-            const x = clusterItems[i]!;
-            const m = groups[x.group]!.members[x.report]!;
-            return {
-              labelGroup: groups[x.group]!.label,
-              report: x.report,
-              sessionId: m.sessionId,
-              itemIndex: x.it.itemIndex,
-              findingFingerprint: x.it.findingFingerprint,
-              classification: x.it.classification,
-              idea: x.it.idea ?? "",
-            };
-          }),
-        }))
+      ? candidateGroupsOf(lexicalSimilarity(clusterItems.map((x) => x.it)), LEXICAL_GROUP_THRESHOLD)
+          // Groups are across critiques: one whose members all come from one report says nothing about recurrence. It is
+          // dropped after linkage (not by zeroing same-report similarity, which would break complete linkage for a group
+          // spanning reports).
+          .filter((g) => new Set(g.map((i) => `${clusterItems[i]!.group}:${clusterItems[i]!.report}`)).size >= 2)
+          .map((g) => ({
+            basis: LEXICAL_BASIS,
+            groups: null,
+            members: g.map((i) => {
+              const x = clusterItems[i]!;
+              const m = groups[x.group]!.members[x.report]!;
+              return {
+                labelGroup: groups[x.group]!.label,
+                report: x.report,
+                sessionId: m.sessionId,
+                itemIndex: x.it.itemIndex,
+                findingFingerprint: x.it.findingFingerprint,
+                classification: x.it.classification,
+                idea: x.it.idea ?? "",
+              };
+            }),
+          }))
       : undefined;
   const clustering = {
     mode: cluster,

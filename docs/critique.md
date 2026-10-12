@@ -686,12 +686,15 @@ No spend and no model: it reads `--output-format json` reports (or `--out` files
 cowork-harness critique --compare runs/critique-*.json --cluster lexical
 ```
 
-Adds **`candidateGroups`**: findings, across every report and both label groups, whose wording is close. Each
+`--cluster none` is the default and groups nothing. `--cluster lexical` adds **`candidateGroups`**: findings, across
+every report and both label groups, whose wording is close. Each
 finding is its idea and recommended action; the similarity is character 3–5-gram TF-IDF cosine, the IDF fitted
 over the findings being compared (so the same finding can score differently in a different set). Groups use
-complete linkage at a fixed cut of 0.20: every pair inside a group clears it, so a group never chains A~B~C
-through a weak A–C. Only findings whose citation resolved take part, from full reports (a summary carries no
-finding text; `clustering.summariesSkipped` says so when one was given). Classification is not part of the key:
+complete linkage at a fixed cut of 0.20: every pair inside a group is at or above it, so a group never chains A~B~C
+through a weak A–C. Only findings whose citation resolved and that have idea or action text take part, from full
+reports (a summary carries no finding text; `clustering.summariesSkipped` says so when one was given). A group must
+hold findings from at least two reports: one whose members all come from one report is dropped, since it says
+nothing about a finding coming back. Classification is not part of the key:
 the same finding filed under two classifications can share a group.
 
 A candidate group is **a judgement from word overlap, not a match** (its `basis` says so):
