@@ -185,8 +185,10 @@ All notable changes to this project are documented here. The format is based on
   for the scenario form.
 - **`verify-run --leg <id>` and `regrade --leg <id>`** re-grade one prompt leg of a multi-leg run, against its own
   dir, at no cost. Each prompt leg snapshots its user-visible files when it ends (`legs/<id>/snapshot/`, a
-  copy-on-write clone where the filesystem supports one, so it costs almost no disk until a later leg changes a
-  file), with their hashes (`leg-post-manifest.json`) proving the snapshot is the leg's own; `inspect` and `fixture
+  copy-on-write clone where the filesystem supports one — macOS APFS through `cp -c`, Linux btrfs and XFS with
+  reflink — so it costs almost no disk until a later leg changes a file; where it cannot — ext4, the usual Linux and
+  CI disk — a full copy of the leg's outputs and connected folders, per prompt leg; `snapshot.json` records which as
+  `method`), with their hashes (`leg-post-manifest.json`) proving the snapshot is the leg's own; `inspect` and `fixture
   export` of a leg read it too. A leg with no usable snapshot (over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES`, default
   512 MiB) falls back to its session tree and is refused when that tree changed after the leg ended.
 
