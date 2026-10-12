@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, statSync, utimesSync, symlinkSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, statSync, utimesSync, symlinkSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { snapshotLegTree, legSnapshotRoot } from "../src/run/leg-snapshot.js";
+import { snapshotLegTree, legSnapshotRoot, legSnapshotCap } from "../src/run/leg-snapshot.js";
 import { writeLegPostManifest } from "../src/run/leg-manifest.js";
 
 // A leg's snapshot: its user-visible files cloned when it ended, trusted only while it matches the leg's own post-run
@@ -60,6 +60,21 @@ describe("leg snapshot", () => {
       complete: false,
       reason: /over the 5-byte snapshot cap/,
     });
+    expect(legSnapshotRoot(leg)).toBeUndefined();
+  });
+  it("a malformed cap is refused, not read as the default", () => {
+    delete process.env.COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES;
+    expect(legSnapshotCap()).toBe(512 * 1024 * 1024);
+    for (const bad of ["512MiB", "-1", "0", "1.5"]) {
+      process.env.COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES = bad;
+      expect(() => legSnapshotCap(), bad).toThrow(/must be a whole number of bytes >= 1/);
+    }
+  });
+  it("a hard-linked file makes the snapshot untrusted (fails safe: the leg falls back to the live-tree rules)", () => {
+    const { work, leg, roots } = tree();
+    linkSync(join(work, "proj", "doc.txt"), join(dir, "elsewhere.txt"));
+    writeLegPostManifest(leg, work, roots);
+    snapshotLegTree(leg, work, roots);
     expect(legSnapshotRoot(leg)).toBeUndefined();
   });
 });

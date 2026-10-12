@@ -49,7 +49,7 @@ import {
 import { evaluate, expandExpectDenied } from "../assert.js";
 import { snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import { writeLegPostManifest } from "./leg-manifest.js";
-import { snapshotLegTree } from "./leg-snapshot.js";
+import { legSnapshotCap, snapshotLegTree } from "./leg-snapshot.js";
 import type { MultiLegScenario, Leg, LegSessionOverlay } from "./multi-leg-scenario.js";
 import { buildLaunchPlan, resolveLaunchSources, type SessionConfig, type LegStage } from "../session.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -387,6 +387,7 @@ export async function executeMultiLeg(
   if (tier === "protocol" && ms.expect_denied.length > 0)
     throw new UsageError('expect_denied asserts boundary behavior but fidelity is "protocol" (no sandbox); use container or microvm');
 
+  legSnapshotCap(); // a malformed snapshot cap is refused before anything spends, not discovered after leg 1
   // A caller's run id names the root, so it is checked (as a single run checks it) before anything is created.
   if (opts.runId !== undefined && !/^local_[0-9a-z]{8,32}$/.test(opts.runId))
     throw new UsageError(`run id "${opts.runId}" must be local_ followed by 8-32 base36 characters`);

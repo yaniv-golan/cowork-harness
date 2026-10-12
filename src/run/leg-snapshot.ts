@@ -22,16 +22,22 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { UsageError } from "../errors.js";
 import { legTreeDrift } from "./leg-manifest.js";
 
 export const LEG_SNAPSHOT_DIR = "snapshot";
 const META = "snapshot.json";
 
-/** Bytes a leg's snapshot may hold (COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES; default 512 MiB). Over it, no snapshot. */
+const CAP_ENV = "COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES";
+
+/** Bytes a leg's snapshot may hold (COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES; default 512 MiB). Over it, no snapshot.
+ *  A malformed value is refused, not ignored: a run checks it before it starts (executeMultiLeg). */
 export function legSnapshotCap(): number {
-  const raw = process.env.COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES;
-  const n = raw === undefined || raw === "" ? NaN : Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 512 * 1024 * 1024;
+  const raw = process.env[CAP_ENV];
+  if (raw === undefined || raw.trim() === "") return 512 * 1024 * 1024;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) throw new UsageError(`${CAP_ENV} must be a whole number of bytes >= 1 (got ${JSON.stringify(raw)})`);
+  return n;
 }
 
 interface SnapshotMeta {
