@@ -325,10 +325,14 @@ describe("a device_bridge record validates against the published schema", () => 
       auditUnreadable: "not a regular file",
     });
     const reported = deviceBridgeRecord(mounts, "included", plan, grants, true);
+    // The cassette freezes the same record: the v18 schema's deviceBridge must admit it too.
+    const v18 = JSON.parse(readFileSync(resolve("schema/cassette.v18.json"), "utf8"));
+    const validateFrozen = new Ajv({ strict: false }).compile(v18.properties.deviceBridge);
     for (const deviceBridge of [enforced, reported]) {
       const r = { ...full, deviceBridge };
       expect(validatePublished(r), JSON.stringify(validatePublished.errors)).toBe(true);
       expect(validateStrict(r), JSON.stringify(validateStrict.errors)).toBe(true);
+      expect(validateFrozen(deviceBridge), JSON.stringify(validateFrozen.errors)).toBe(true);
     }
   });
 });
