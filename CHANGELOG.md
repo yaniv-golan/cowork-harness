@@ -78,8 +78,12 @@ All notable changes to this project are documented here. The format is based on
   the script, the events read, the interpreter and whether the value was `carried` or `frozen`. On `eval` a
   scorer failure is excluded and guarded, and a rep scored by another script than the one the eval froze is not
   compared. The scripts are kept out of every folder the agent can see, and join the `hillclimb` harness gate.
-  `hillclimb check` warns on a scorer that failed on a row the agent did not fail, calls a metric incomparable when
-  its variants measured it on different shares of their rows, and errors when one column holds two signatures.
+  `hillclimb check`, and the end of every `hillclimb run` pass, warn on a scorer that failed on a row the agent did not
+  fail and call a metric incomparable when its variants measured it on different shares of their rows; `check` errors
+  when one column holds two signatures. `hillclimb run` and `regrade` note two command metrics that run the same
+  script under different ids (separate columns, never a delta). `lint` and every command that loads a scenario to
+  run it refuse a command metric whose script or dep is untracked, outside the scenario's repository, a symlink inside
+  it or hard-linked, and a Python command metric when `python3` is older than 3.9.
 - **Cassette v18**: a scenario declaring a command metric stamps v18 and freezes `commandMetrics`; a cassette that
   uses no v18 feature stamps exactly what it did.
 - **`eval` compares each scenario's declared `metrics:` between the arms.** Each metric is a row tested with an exact

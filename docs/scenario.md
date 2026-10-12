@@ -1465,8 +1465,11 @@ script never does. The script gets a fixed environment (`PATH=/usr/bin:/bin`, `H
 `COWORK_HARNESS_*` setting and no `NODE_OPTIONS` or `PYTHONPATH` is passed. stdin is closed, stdout is capped at
 4 KiB, stderr never fails a measurement (its first 4 KiB, scrubbed, is kept at
 `turns/<N>/metrics/<id>.stderr.txt`), and the timeout kills the script's whole process group. Python runs with no
-site packages (standard library only) under the harness's runner, whose audit hook refuses reads outside the temp
-dir and the standard library, writes outside the temp dir, process creation, native loading and sockets. Node runs
+site packages (standard library only) under the harness's runner, whose audit hook is a tripwire against an honest
+mistake, not a sandbox: it refuses reads outside the temp dir and the standard library; writes and other filesystem
+changes (remove, rename, link, symlink, truncate, mkdir, rmdir, chmod, chown, utime) when any path is outside the temp
+dir; process creation; native loading; sockets; and name resolution. A script that patches the interpreter can get
+around every one of these checks. Node runs
 under its permission model with read access to the temp dir only. A live run runs the script twice, each in its own
 temp dir, and reports a value only when both print the same number. **Not promised:** the Python hook is a
 tripwire, not a sandbox, and a determined script can get around it; neither language is cut off from the network; a
