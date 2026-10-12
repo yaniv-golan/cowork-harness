@@ -86,7 +86,7 @@ export interface ParsedLog {
   entries: number;
 }
 
-const ENTRY = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) \[\w+\] (.*)$/;
+export const ENTRY = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) \[\w+\] (.*)$/;
 const DUMP_HEAD = /^\[HostLoop\] sdkOptions after patch: \{$/;
 const SESSION_RUNNING = /^\[Lifecycle\] Session local_[0-9a-f-]+: initializing → running$/;
 const START_APP_VERSION = /^ {2}appVersion: '(\d+\.\d+\.\d+)',?$/;
@@ -99,7 +99,7 @@ const ENV_KEYS_CLOSE = /^ {2}\],?$/;
 const KEY_ITEM = /^(['"])([A-Z][A-Z0-9_]{0,127})\1$/;
 
 /** Desktop's log stamps are local wall-clock with no zone: read the fields as local time, never via Date.parse. */
-function localMs(m: RegExpMatchArray): number {
+export function localMs(m: RegExpMatchArray): number {
   return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
 }
 
@@ -208,7 +208,7 @@ export function parseDesktopLogLines(lines: Iterable<string>): ParsedLog {
 }
 
 /** `main<N>.log` oldest first (highest N), then `main.log`. Nothing else in the dir is opened. */
-function* logLines(dir: string, counts: { unreadable: number; nonEmpty: number }): Generator<string> {
+export function* logLines(dir: string, counts: { unreadable: number; nonEmpty: number }): Generator<string> {
   let names: string[];
   try {
     names = readdirSync(dir);

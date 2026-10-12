@@ -10,6 +10,7 @@ import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from 
 import {
   ObservedSpawnEnv,
   type AgentSearchGates,
+  type CaptureOrg,
   type CloudBlock,
   type DesktopInitSurface,
   type ObservedSpawnEnvDeclaration,
@@ -20,6 +21,7 @@ import { classifySpawnEnvKey, windowAllowlistedNames, postWriteOnlyNames } from 
 import { scanSpawnEnvPostWrites } from "./spawn-env-post-writes.js";
 import { readObservedSpawnEnv, bundleHasSpawnEnvProducer } from "./observed-spawn-env.js";
 import { readAgentSearchGates } from "./agent-search-gates.js";
+import { readCaptureOrg } from "./capture-org.js";
 
 /**
  * cowork-sync — derive a VOLATILE parity baseline from the live Claude Desktop
@@ -83,6 +85,9 @@ export interface SyncResult {
   /** The agent-side feature values that shape a live WebSearch, from Desktop's per-session GrowthBook cache (see
    *  agent-search-gates.ts). `observed:false` when no cache file exists; a NOTE, never a delta. Never carried forward. */
   agentSearchGates: AgentSearchGates;
+  /** Which organisation the gate cache (fcache) was captured under, as a one-way hash (see capture-org.ts). The CLI
+   *  refuses a write captured under a different organisation from the previous baseline's. */
+  captureOrg: CaptureOrg;
   /** The `cloud` block (remote-devices tool list + description fingerprints + unreachable features); null when
    *  the asar could not be read or the extraction failed (a delta says which). Never carried forward. */
   cloud: CloudBlock | null;
@@ -906,6 +911,16 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
   // corresponding spawn.env value diff.
   const gates = decodeFcacheGates();
   const fcacheProv = decodeFcacheProvenance();
+  // Desktop rewrites the fcache per signed-in organisation, so record which one this cache belongs to.
+  let captureOrg: CaptureOrg = { observed: false };
+  let captureOrgId: string | null = null; // in memory only: picks the organisation's agent cache below
+  try {
+    const read = readCaptureOrg(join(homedir(), "Library/Logs/Claude"), statSync(join(SUPPORT, "fcache")).mtimeMs);
+    captureOrg = read.record;
+    captureOrgId = read.orgId;
+  } catch {
+    // no fcache: the gates block already records that
+  }
 
   // 5. Spawn contract + fingerprints from the asar. The egress allowlist is NOT among them: on the
   // first-party deployment the harness models, the VM allowlist is server-delivered per session and
@@ -958,9 +973,12 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
 
   // 8. The agent's own web-search feature values (not Desktop gates, so not in the fcache). Informational: a live
   // run does not depend on them, and a frozen-versus-live comparison reads them to know what live search did.
-  const agentSearchGates = readAgentSearchGates(join(SUPPORT, "local-agent-mode-sessions"));
+  // Read from the same organisation's cache as the gates, never another organisation's.
+  const agentSearchGates = readAgentSearchGates(join(SUPPORT, "local-agent-mode-sessions"), captureOrgId);
   if (!agentSearchGates.observed)
-    notes.push("agentSearchGates: no cowork-gb-cache.json found — provenance.agentSearchGates records observed:false");
+    notes.push(
+      "agentSearchGates: no cowork-gb-cache.json for the gate cache's organisation (or the organisation could not be told) — provenance.agentSearchGates records observed:false",
+    );
   else if (agentSearchGates.disagreeing?.length)
     notes.push(
       `agentSearchGates: ${agentSearchGates.disagreeing.join(", ")} differ across Desktop's session caches — recorded from the newest`,
@@ -1013,6 +1031,7 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     desktopInitSurface: initSurface.surface,
     observedSpawnEnv: observedSpawnEnv.block,
     agentSearchGates,
+    captureOrg,
     cloud,
     unknownDeltas: unknown,
     notes,

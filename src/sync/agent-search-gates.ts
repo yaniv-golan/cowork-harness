@@ -1,17 +1,19 @@
 /**
- * The agent-side feature values that shape a live WebSearch, read from Desktop's per-session GrowthBook cache.
+ * The agent-side feature values that shape a live WebSearch, read from Desktop's GrowthBook cache for the organisation
+ * the gate cache was captured under.
  *
  * These are the agent's own `tengu_*` features, not Desktop gates, so they are not in the fcache `sync` decodes.
- * Desktop writes them to `local-agent-mode-sessions/<org>/<session>/cowork-gb-cache.json`
- * (`cachedGrowthBookFeatures`). Recorded so a frozen-versus-live comparison knows what live search did:
+ * Desktop writes them to `local-agent-mode-sessions/<account>/<org>/cowork-gb-cache.json` (`cachedGrowthBookFeatures`),
+ * one file per account and organisation (MEASURED 2026-10-12: the second path level is the organisation id). Recorded
+ * so a frozen-versus-live comparison knows what live search did:
  * - `tengu_plum_vx3`: the nested search runs on the small/fast model instead of the main-loop model;
  * - `tengu_sleepy_shore`: the fast search profile;
  * - `tengu_gzip_request_bodies`, `tengu_buzzing_pike`: request-body compression, which a proxy env turns off.
  *
- * Values are recorded raw (their shapes differ: a boolean, an object, a number). The newest file is the source; a
- * key whose value differs in another file that also has it is listed in `disagreeing`; a value that is not a boolean,
- * a number or a flat object of them is `withheld` (several orgs or a mid-rollout refetch).
- * Nothing that identifies an org or a session is recorded, because the baseline is public.
+ * Values are recorded raw (their shapes differ). The newest of the organisation's files is the source; a key whose
+ * value differs in another of its files that also has it is listed in `disagreeing`; a value that is not a boolean,
+ * a number or a flat object of them is `withheld`. Nothing that identifies an account or an organisation is recorded,
+ * because the baseline is public.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -28,28 +30,21 @@ const FILE = "cowork-gb-cache.json";
 /** The schema's per-value shape, so the reader withholds exactly what the schema would refuse. */
 const valueSchema = AgentSearchGates.options[0].shape.values.valueType;
 
-function cacheFiles(dir: string): { path: string; mtimeMs: number }[] {
+/** The organisation's caches: `<sessionsDir>/<account>/<orgId>/cowork-gb-cache.json`, one per account. */
+function cacheFiles(dir: string, orgId: string): { path: string; mtimeMs: number }[] {
   const out: { path: string; mtimeMs: number }[] = [];
-  let orgs: string[];
+  let accounts: string[];
   try {
-    orgs = readdirSync(dir);
+    accounts = readdirSync(dir);
   } catch {
     return out;
   }
-  for (const org of orgs) {
-    let sessions: string[];
+  for (const account of accounts) {
+    const p = join(dir, account, orgId, FILE);
     try {
-      sessions = readdirSync(join(dir, org));
+      out.push({ path: p, mtimeMs: statSync(p).mtimeMs });
     } catch {
-      continue;
-    }
-    for (const s of sessions) {
-      const p = join(dir, org, s, FILE);
-      try {
-        out.push({ path: p, mtimeMs: statSync(p).mtimeMs });
-      } catch {
-        // no cache file in this session dir
-      }
+      // this account has no cache for the organisation
     }
   }
   return out;
@@ -64,9 +59,12 @@ function features(path: string): Record<string, unknown> | null {
   }
 }
 
-/** Read the four keys from every `cowork-gb-cache.json` under `sessionsDir` (Desktop's `local-agent-mode-sessions`). */
-export function readAgentSearchGates(sessionsDir: string): AgentSearchGates {
-  const read = cacheFiles(sessionsDir)
+/** Read the four keys from the capture organisation's `cowork-gb-cache.json` under `sessionsDir` (Desktop's
+ *  `local-agent-mode-sessions`). `orgId` null (the organisation could not be told) records `observed: false`: another
+ *  organisation's values would be the wrong ones. */
+export function readAgentSearchGates(sessionsDir: string, orgId: string | null): AgentSearchGates {
+  if (orgId === null) return { observed: false };
+  const read = cacheFiles(sessionsDir, orgId)
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
     .map((f) => ({ mtimeMs: f.mtimeMs, features: features(f.path) }))
     .filter((f): f is { mtimeMs: number; features: Record<string, unknown> } => f.features !== null);

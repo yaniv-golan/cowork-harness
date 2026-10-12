@@ -40,6 +40,14 @@ export const SearchAnchors = z.strictObject({
 });
 export type SearchAnchors = z.infer<typeof SearchAnchors>;
 
+/** `provenance.captureOrg`: which organisation Desktop's gate cache was captured under, as a short one-way hash of
+ *  the organisation id (src/sync/capture-org.ts). Desktop rewrites gates per organisation. */
+export const CaptureOrg = z.discriminatedUnion("observed", [
+  z.strictObject({ observed: z.literal(true), orgRef: z.string().regex(/^[0-9a-f]{12}$/) }),
+  z.strictObject({ observed: z.literal(false) }),
+]);
+export type CaptureOrg = z.infer<typeof CaptureOrg>;
+
 /** The four agent feature values `sync` records (src/sync/agent-search-gates.ts). One list, used by the reader too. */
 export const AGENT_SEARCH_GATE_KEYS = ["tengu_plum_vx3", "tengu_sleepy_shore", "tengu_gzip_request_bodies", "tengu_buzzing_pike"] as const;
 const AgentSearchGateKey = z.enum(AGENT_SEARCH_GATE_KEYS);

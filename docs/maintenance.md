@@ -476,10 +476,20 @@ committed baseline and say why in that baseline's `$comment`.
      base only on a re-sync of the same agent version when the ELF is not staged.
    - **Measured.** Every backed-up agent from 2.1.260 through 2.1.295 gives the same anchors.
 
+   **`provenance.captureOrg` → which organisation the gate cache was captured under.** Desktop rewrites its
+   gate cache for the organisation it is signed in to, and some gates differ between organisations, so a re-sync
+   under another organisation shows gate changes that are not production changes. `sync` reads the organisation
+   from Desktop's log (the newest org-naming entry at or before the cache was written) and records a short one-way
+   hash of it, never the id.
+   - **Refusing.** A capture under a different organisation from the previous baseline's, or one whose organisation
+     the logs cannot tell when the previous baseline recorded one, refuses the write. Switch Desktop to the
+     organisation the baseline is captured under and re-run `sync`; `--allow-org-change` writes anyway, for when that
+     organisation really changed. A baseline with no recorded organisation records the first one with a note.
+
    **`provenance.agentSearchGates` → the agent's own web-search feature values.** These are the agent's
-   features, not Desktop gates, so they are not in the fcache. Desktop caches them per session in
-   `local-agent-mode-sessions/*/*/cowork-gb-cache.json`, and `sync` records four of them from the newest file, as
-   raw values: whether the nested search runs on the small/fast model, the fast search profile, and the two
+   features, not Desktop gates, so they are not in the fcache. Desktop caches them per account and organisation in
+   `local-agent-mode-sessions/<account>/<organisation>/cowork-gb-cache.json`, and `sync` records four of them from the
+   capture organisation's newest file (never another organisation's), as raw values: whether the nested search runs on the small/fast model, the fast search profile, and the two
    request-body compression features. A key another cache file holds with a different value is listed in
    `disagreeing`. Only a boolean, a number or a flat object of them is published; any other value (a string could
    carry an identifier) is `withheld`. `newestDate` is the newest cache file's date, so a stale cache shows. No org

@@ -22,10 +22,16 @@ All notable changes to this project are documented here. The format is based on
   system sentence and user-message prefix as a hash and byte length (never the text). When a staged agent's anchors
   cannot be extracted, or its native build gives different anchors from its VM build, `sync` prints a warning and
   records no anchors; it does not block the write. Nothing reads the block yet.
+- **For maintainers: `sync` records which organisation Desktop's gate cache was captured under, and refuses a
+  re-sync under a different one.** Desktop rewrites its gate cache for the organisation it is signed in to, so a
+  re-sync under another organisation showed gate changes that were not production changes. `sync` now records a
+  one-way hash of the organisation (`provenance.captureOrg`, read from Desktop's log) and refuses to write when it
+  differs from the previous baseline's, or cannot be told when the previous baseline recorded one.
+  `--allow-org-change` writes anyway.
 - **For maintainers: `sync` records the agent's own web-search feature values** as `provenance.agentSearchGates`:
   whether the nested search runs on the small/fast model, the fast search profile, and the two request-body
   compression features. They are the agent's features, not Desktop gates, so `sync` reads them from Desktop's
-  per-session cache rather than the fcache. Only booleans, numbers and flat objects of them are published, with no
+  cache for the same organisation rather than the fcache. Only booleans, numbers and flat objects of them are published, with no
   org or session identifier. A missing cache is a note, never a blocker.
 
 ## [4.8.1] — 2026-10-12

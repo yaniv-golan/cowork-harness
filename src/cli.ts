@@ -14,6 +14,7 @@ import {
   ObservedSpawnEnv,
   SearchAnchors,
   AgentSearchGates,
+  CaptureOrg,
   ObservedSpawnEnvDeclaration,
   type RunResult,
   type RunStatus,
@@ -35,6 +36,7 @@ import {
   buildNextAgentBinary,
 } from "./baseline.js";
 import { searchAnchorsForSync } from "./sync/search-anchors.js";
+import { checkCaptureOrg } from "./sync/capture-org.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
   executeScenario,
@@ -407,7 +409,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       answer it with 'gates'/'answer' above (the one path here that waits — that is the rehearsal)
 
 ── Platform admin ─────────────────────────────────────────────────────────────
-  sync [--diff] [--allow-empty|--force] [--spawn-env-unobservable <reason>]  derive/refresh a platform baseline from the live Desktop install (macOS only)
+  sync [--diff] [--allow-empty|--force] [--allow-org-change] [--spawn-env-unobservable <reason>]  derive/refresh a platform baseline from the live Desktop install (macOS only)
   list                         list available platform baselines
   boundary-check [baseline] [--session <file>]   prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); macOS arm64 only
@@ -656,7 +658,7 @@ function hasHelp(args: string[]): boolean {
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
 
 const SUBCOMMAND_USAGE: Record<string, string> = {
-  sync: "usage: sync [--diff] [--allow-empty|--force] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
+  sync: "usage: sync [--diff] [--allow-empty|--force] [--allow-org-change] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --allow-org-change: write even though Desktop's gate cache was captured under a different organisation from the previous baseline's (Desktop rewrites gates per organisation)\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [<baseline>] [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove the VM\n  prune   drop all orphaned VMs\n  <baseline> (default: latest) is a baseline name like desktop-<version>, not a VM name — each acts on that baseline's VM",
@@ -3136,7 +3138,7 @@ async function cmdSync(args: string[]) {
     syncParsed = parseArgs(
       normalizedArgs,
       withCommandGlobals({
-        booleans: ["--diff", "--allow-empty"],
+        booleans: ["--diff", "--allow-empty", "--allow-org-change"],
         values: ["--spawn-env-unobservable"],
         enums: { "--spawn-env-unobservable": [...ObservedSpawnEnvDeclaration.options] },
       }),
@@ -3446,7 +3448,15 @@ async function cmdSync(args: string[]) {
       1,
     );
   }
+  // Desktop rewrites the gate cache per organisation: a capture under another organisation would read as gate flips.
+  {
+    const prevOrg = CaptureOrg.safeParse((baseProvenance as Record<string, unknown>).captureOrg);
+    const org = checkCaptureOrg(prevOrg.success ? prevOrg.data : undefined, res.captureOrg, !!syncParsed.flags["--allow-org-change"]);
+    res.notes.push(...org.notes);
+    if (org.refuse) return fail("sync", "runtime", `ERROR: ${org.refuse}`, undefined, isJsonOutput(normalizedArgs), 1);
+  }
   for (const [field, check] of [
+    ["provenance.captureOrg", CaptureOrg.safeParse(res.captureOrg)],
     ["agentBinary.searchAnchors", searchAnchors === undefined ? null : SearchAnchors.safeParse(searchAnchors)],
     ["provenance.agentSearchGates", AgentSearchGates.safeParse(res.agentSearchGates)],
   ] as const) {
@@ -3543,6 +3553,8 @@ async function cmdSync(args: string[]) {
         observedSpawnEnv: res.observedSpawnEnv,
         // The agent's web-search feature values, from Desktop's session GrowthBook cache. Never carried forward.
         agentSearchGates: res.agentSearchGates,
+        // The organisation the gate cache was captured under (a one-way hash). Never carried forward.
+        captureOrg: res.captureOrg,
       },
     },
     res.cloud,
