@@ -18,6 +18,9 @@ import {
   assertSigWarnings,
   headroom,
   metricRangeWarnings,
+  metricSigFindings,
+  scorerRobustnessWarnings,
+  incomparableMetricWarnings,
   pairwiseHints,
   pairwiseRefFindings,
   staleAssertSigWarnings,
@@ -211,7 +214,7 @@ export function checkReport(
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
   const base = checkFlowDir(flowAbs, { profile: "harness" });
   const snap = loadFlowSnapshot(flowAbs);
-  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap)];
+  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap), ...metricSigFindings(snap)];
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
   const flowShown = normalizeRootArg(flowArg);
   const sig = assertSigScenarios(snap, cwd, flowShown, target);
@@ -220,6 +223,8 @@ export function checkReport(
     warnings: [
       ...headroom(snap, sig.cases).warnings,
       ...metricRangeWarnings(snap),
+      ...incomparableMetricWarnings(snap),
+      ...scorerRobustnessWarnings(snap),
       ...assertSigWarnings(snap, flowShown, sig.targetOf),
       ...staleAssertSigWarnings(snap, sig.cases, flowShown, sig.targetOf),
       ...sig.notes,

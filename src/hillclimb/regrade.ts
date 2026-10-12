@@ -56,7 +56,7 @@ import { defaultJudgeModel, JUDGE_PROMPT_HASH } from "../decide/semantic-judge.j
 import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
 import { judgedOpts, sharedCaptureWarning } from "../assert.js";
 import { gradeFor, judgeFieldsOf, orderedGrade } from "./rows.js";
-import { flowMetricUnion, metricSigs, refuseChangedMetrics } from "./metric-keys.js";
+import { flowMetricUnion, metricSigs, refuseChangedMetrics, successorColumnNotes } from "./metric-keys.js";
 import { metricSig } from "../metric-sig.js";
 import { mergeCommandOutcomes, type CommandOutcomes, type MetricMeasurement } from "../metrics.js";
 import { remeasureCommandMetrics } from "../metric-command/live.js";
@@ -1205,6 +1205,7 @@ async function regradeFlowInner(
   const union = (deps.metricDecls ?? flowMetricUnion)(all);
   const existing = existingFlowSnapshot(flowArg, deps.cwd);
   if (existing) refuseChangedMetrics(existing, union);
+  for (const n of successorColumnNotes(union)) say(n);
 
   // The variants: every one with rows, or the one named. Read-only checks first — opening a writer creates files.
   const variants =

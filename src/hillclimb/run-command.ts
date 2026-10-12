@@ -44,7 +44,7 @@ import type { FidelityTier, Scenario } from "../types.js";
 import { authFailureHint, type DoctorCheck } from "../run/doctor.js";
 import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
-import { refuseChangedMetrics } from "./metric-keys.js";
+import { refuseChangedMetrics, successorColumnNotes } from "./metric-keys.js";
 import { prepareCases } from "./command.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
@@ -164,6 +164,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   // ...and a metric re-declared since the flow's rows were written (the runner repeats this too).
   const existing = existingFlowSnapshot(normalizeRootArg(args.flow), deps.cwd);
   if (existing) refuseChangedMetrics(existing, union);
+  for (const n of successorColumnNotes(union)) say(n);
   const selected = selectCases(cases, args.cases);
   const prep = prepareCases(
     cases,
