@@ -4730,8 +4730,8 @@ async function cmdVerifyRun(args: string[]) {
     loaded.metrics,
     await remeasureCommandMetrics(scenario.metrics ?? [], {
       scenarioPath: scenarioFile,
-      outDir: runDir,
-      turn: latestTurn(runDir) ?? 1,
+      outDir: target.runDir,
+      turn: latestTurn(target.runDir) ?? 1,
       recorded: result.metrics,
       allow: p.flags["--allow-metric-commands"] === true,
       secrets: collectSecrets(),
@@ -4780,12 +4780,12 @@ async function cmdVerifyRun(args: string[]) {
         isJsonOutput(args),
       );
     }
-    const parsed = parseGatesFromEvents(join(runDir, "events.jsonl"));
+    const parsed = parseGatesFromEvents(join(target.runDir, "events.jsonl"));
     if (parsed === null) {
       return fail(
         "verify-run",
         "runtime",
-        `verify-run: scenario declares answers but ${runDir} has no events.jsonl — cannot verify answer coverage ` +
+        `verify-run: scenario declares answers but ${target.runDir} has no events.jsonl — cannot verify answer coverage ` +
           `(re-keep the run with the gates, or drop answers). (can't verify ⇒ not green)`,
         undefined,
         isJsonOutput(args),
@@ -4795,7 +4795,7 @@ async function cmdVerifyRun(args: string[]) {
       return fail(
         "verify-run",
         "runtime",
-        `verify-run: events.jsonl under ${runDir} has ${parsed.corruptLines} unparseable line(s) — ` +
+        `verify-run: events.jsonl under ${target.runDir} has ${parsed.corruptLines} unparseable line(s) — ` +
           `truncation, a hand edit, or raw agent-stdout noise in the stream; either way gate evidence ` +
           `is untrustworthy and answer coverage cannot be certified; re-record. (can't verify ⇒ not green)`,
         undefined,
