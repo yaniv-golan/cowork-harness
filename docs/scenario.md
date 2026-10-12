@@ -1500,8 +1500,20 @@ own measurement forward, marked `carried`, while its signature and the events it
 or `pruned` otherwise), and read `command_not_allowed` when nothing was recorded. With the flag the script re-runs,
 and a value that differs from the recorded one is `nondeterministic`. In a hillclimb flow the row is what is carried,
 and a `nondeterministic` row stays so on later regrades. Editing a command metric's script, deps, args or timeout
-mid-flow changes its signature, which `hillclimb run` and `regrade` refuse: give the changed metric a new id, or
-start a new flow.
+mid-flow changes its signature, which `hillclimb run` and `regrade` refuse, so one column never mixes two scorers.
+
+**Changing a command metric's script mid-flow.** Re-score the flow under a new id, at no agent cost:
+
+1. Edit the script, and rename the metric in the scenario (`leak_scan` → `leak_scan_v2`), removing the old
+   declaration. A removed metric only warns; its column stays on the rows already written.
+2. Approve the scenario change (`hillclimb run … --approve-harness`, the user's to give) and merge the new entry from
+   `hillclimb state-template` into `_state.json`.
+3. Run `hillclimb regrade <scenarios> --flow <dir> --variant all --allow-metric-commands`. It runs the new script over
+   every variant's kept run events and writes the new column on every row, so the variants compare under one scorer.
+
+The kept run dirs must still exist: a row whose run was pruned reads `command_not_allowed` in the new column, so run
+the regrade before `prune`, or pass `prune` a larger `--keep-last`. Read the old and the new column side by side,
+never as a delta.
 
 ## Output
 
