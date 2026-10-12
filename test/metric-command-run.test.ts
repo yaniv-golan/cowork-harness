@@ -2,7 +2,7 @@
 // code fails loudly, a forged .pyc never runs), the env allowlist, argv without a shell, caps and time, determinism.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScenarioMetric } from "../src/types.js";
@@ -235,6 +235,67 @@ describe.each(pythons)("Python command metrics under %s", (py) => {
     write("metrics/json.py", "def loads(s): return 999\n");
     write("metrics/j.py", "import json\nprint(json.loads('5'))\n");
     expect((await measure({ command: ["../metrics/j.py"] })).value).toBe(5);
+  });
+
+  it.each([
+    ["os.remove", (t: string) => `os.remove(${t})`],
+    ["os.truncate", (t: string) => `os.truncate(${t}, 0)`],
+    ["os.rename", (t: string) => `os.rename(${t}, 'in-tmp')`],
+    ["os.link", (t: string) => `os.link(${t}, 'in-tmp')`],
+    ["os.symlink", (t: string) => `os.symlink(${t}, 'in-tmp')`],
+    ["os.chmod", (t: string) => `os.chmod(${t}, 0o600)`],
+    ["os.utime", (t: string) => `os.utime(${t}, None)`],
+    ["os.mkdir", (t: string) => `os.mkdir(${t} + '.d')`],
+    ["os.rmdir", (t: string) => `os.rmdir(${t} + '.d')`],
+    ["os.chown", (t: string) => `os.chown(${t}, -1, -1)`],
+  ])("%s on a file OUTSIDE the temp dir is refused, and the file is untouched", async (event, op) => {
+    const target = join(root, "victim.txt");
+    writeFileSync(target, "keep me");
+    mkdirSync(target + ".d", { recursive: true });
+    write("metrics/fs.py", `import os\n${op(JSON.stringify(target))}\nprint(1)\n`);
+    const r = await measure({ command: ["../metrics/fs.py"] });
+    expect(r.unavailable).toBe("command_failed");
+    expect(r.why).toContain(`metric sandbox: ${event} outside the temp dir`);
+    expect(readFileSync(target, "utf8")).toBe("keep me");
+  });
+
+  it("name resolution is refused (a DNS lookup is a channel out)", async () => {
+    write("metrics/dns.py", "import socket\nsocket.getaddrinfo('example.invalid', 80)\nprint(1)\n");
+    expect((await measure({ command: ["../metrics/dns.py"] })).why).toMatch(/metric sandbox: socket.getaddrinfo/);
+    write("metrics/dns2.py", "import socket\nsocket.gethostbyname('example.invalid')\nprint(1)\n");
+    expect((await measure({ command: ["../metrics/dns2.py"] })).why).toMatch(/metric sandbox: socket.gethostbyname/);
+  });
+
+  it("filesystem changes INSIDE the temp dir are allowed (a scratch file renamed and removed)", async () => {
+    write(
+      "metrics/scratch.py",
+      "import os\nopen('a','w').write('1')\nos.rename('a','b')\nos.mkdir('d')\nos.rmdir('d')\nos.remove('b')\nprint(2)\n",
+    );
+    expect((await measure({ command: ["../metrics/scratch.py"] })).value).toBe(2);
+  });
+
+  it("reassigning os.path.realpath does not blind the read check", async () => {
+    write(
+      "metrics/rp.py",
+      `import os\nos.path.realpath = lambda p: ${JSON.stringify(join(root, "x"))}\nprint(len(open(${JSON.stringify(join(repo, "scenarios", "s.yaml"))}).read()))\n`,
+    );
+    expect((await measure({ command: ["../metrics/rp.py"] })).why).toMatch(/metric sandbox: read outside the stage/);
+  });
+
+  it("the env a Python script sees is exactly the allowlist", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    try {
+      write(
+        "metrics/env.py",
+        "import os, sys\nsys.stderr.write(','.join(sorted(k for k in os.environ if k != '__CF_USER_TEXT_ENCODING')) + '\\n')\nprint(1)\n",
+      );
+      const r = await measure({ command: ["../metrics/env.py"] });
+      expect(r.stderr.split("\n")[0]).toBe(
+        "COWORK_HARNESS_METRIC_ID,HOME,LANG,LC_ALL,PATH,PYTHONDONTWRITEBYTECODE,PYTHONHASHSEED,PYTHONIOENCODING,TMPDIR,TZ",
+      );
+    } finally {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
   });
 
   it("the audit hook refuses a UDP send, a repo listing and a subprocess, naming the event", async () => {
