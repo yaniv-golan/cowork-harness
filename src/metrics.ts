@@ -223,3 +223,17 @@ export function metricsFor(
 ): RunResult["metrics"] {
   return decls !== undefined && decls.length > 0 ? extractMetrics(ctx, decls, commands) : undefined;
 }
+
+/** Replace each command metric's entry in `metrics` with its producer's outcome (same id, same position). */
+export function mergeCommandOutcomes(metrics: RunResult["metrics"], outcomes: CommandOutcomes): RunResult["metrics"] {
+  if (metrics === undefined || outcomes.size === 0) return metrics;
+  return metrics.map((e) => {
+    const o = outcomes.get(e.id);
+    if (o === undefined) return e;
+    return {
+      id: e.id,
+      ...(o.value !== undefined ? { value: o.value } : { unavailable: o.unavailable! }),
+      ...(o.command ? { command: o.command } : {}),
+    };
+  });
+}
