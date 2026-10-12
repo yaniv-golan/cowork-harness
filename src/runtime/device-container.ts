@@ -1,5 +1,21 @@
 import { execFile } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  constants as fsConstants,
+  cpSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { containedRealPath } from "../boundary-paths.js";
@@ -118,8 +134,12 @@ export function deviceContainerArgv(i: {
   egressProxy: string;
   /** The device tree under the run's work directory; staged by stageDeviceFolders. */
   deviceHost: string;
+  /** The run directory holding the shim's control, audit, canary and user files (prepareDeviceControl). */
+  controlHost: string;
   sessionId: string;
   folders: ReadonlyArray<DeviceFolder>;
+  /** The host user: every staged file is then the shell's own, as production's per-session user owns its tree. */
+  user: { uid: number; gid: number };
 }): string[] {
   const home = deviceHome(i.sessionId);
   const env: Record<string, string> = {
@@ -138,6 +158,8 @@ export function deviceContainerArgv(i: {
     "--network",
     i.network,
     ...HARDENING,
+    "--user",
+    `${i.user.uid}:${i.user.gid}`,
     "-w",
     home,
     ...Object.entries(env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
@@ -148,6 +170,19 @@ export function deviceContainerArgv(i: {
     "-v",
     `${i.deviceHost}/mnt:${home}/mnt`,
     ...i.folders.filter((f) => f.mode === "r").flatMap((f) => ["-v", `${i.deviceHost}/mnt/${f.name}:${home}/mnt/${f.name}:ro`]),
+    // The shim's control files (read-only: the device user cannot grant itself), its audit log and the canary.
+    // A directory bind, not a file bind, so a grants file replaced on the host is seen inside.
+    "-v",
+    `${i.controlHost}/${CTL_DIR}:${CTL_MOUNT}:ro`,
+    "-v",
+    `${i.controlHost}/${AUDIT_DIR}:/run/cwh-device/audit`,
+    "-v",
+    `${i.controlHost}/${CANARY_DIR}:${CANARY_MOUNT}`,
+    // Production's per-session user, by name and home, for the host uid the shell runs as.
+    "-v",
+    `${i.controlHost}/${ETC_DIR}/passwd:/etc/passwd:ro`,
+    "-v",
+    `${i.controlHost}/${ETC_DIR}/group:/etc/group:ro`,
     i.image,
     "sleep",
     "infinity",
@@ -263,29 +298,119 @@ export const DEVICE_BRIDGE_ASK_TOOLS = [DELETE_GRANT_TOOL];
 
 /** Where a run keeps its delete grants: `<outDir>/device-ctl/grants`, one folder name per line, in grant order. A
  *  resumed turn reads the same file, so a grant lasts the session, as production's does. */
-const grantsFile = (outDir: string): string => join(resolve(outDir), "device-ctl", "grants");
+const CTL_DIR = "device-ctl";
+const AUDIT_DIR = "device-audit";
+const CANARY_DIR = "device-canary";
+const ETC_DIR = "device-etc";
+const CTL_MOUNT = "/run/cwh-device/ctl";
+const CANARY_MOUNT = "/run/cwh-device/canary";
+/** The canary's folder name in the control file. A leading dot: no connected folder is named so. */
+export const DEVICE_CANARY_NAME = ".cwh-canary";
+const AUDIT_CAP = 4 * 1024 * 1024;
+
+const grantsFile = (outDir: string): string => join(resolve(outDir), CTL_DIR, "grants");
+
+/** Write what the device container's shim reads, before the container starts: every connected folder by name, mode
+ *  and its path inside the container (only `rw` refuses deletes), the canary's folder, an empty grants file (kept
+ *  on a resumed turn: production's grant lasts the session), the canary's probe file, and production's per-session
+ *  user for the host uid. */
+/** The host user the device shell runs as (uid 1000 where the platform has no uid, as on Windows). */
+export function deviceUser(): { uid: number; gid: number } {
+  return { uid: process.getuid?.() ?? 1000, gid: process.getgid?.() ?? 1000 };
+}
+
+export function prepareDeviceControl(
+  outDir: string,
+  sessionId: string,
+  folders: ReadonlyArray<DeviceFolder>,
+  user: { uid: number; gid: number },
+): void {
+  const root = resolve(outDir);
+  const home = deviceHome(sessionId);
+  for (const d of [CTL_DIR, AUDIT_DIR, CANARY_DIR, ETC_DIR]) mkdirSync(join(root, d), { recursive: true });
+  const lines = [
+    `@mnt\t-\t${home}/mnt`,
+    ...folders.map((f) => `${f.name}\t${f.mode}\t${home}/mnt/${f.name}`),
+    `${DEVICE_CANARY_NAME}\trw\t${CANARY_MOUNT}`,
+  ];
+  writeFileSync(join(root, CTL_DIR, "folders"), lines.join("\n") + "\n");
+  if (!existsSync(grantsFile(outDir))) writeFileSync(grantsFile(outDir), "");
+  writeFileSync(join(root, CANARY_DIR, "probe"), "the device container's delete refusal is checked against this file\n");
+  const name = deviceVmUser(sessionId);
+  writeFileSync(
+    join(root, ETC_DIR, "passwd"),
+    `root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n${name}:x:${user.uid}:${user.gid}::${home}:/bin/bash\n`,
+  );
+  writeFileSync(join(root, ETC_DIR, "group"), `root:x:0:\nnogroup:x:65534:\n${name}:x:${user.gid}:\n`);
+}
+
+export type DeviceAuditLine = { op: string; folder: string; rel: string; result: string; pid: number };
+
+/** The shim's audit log. The device user can write it, so it is read as untrusted: never through a link, only a
+ *  regular file, at most AUDIT_CAP bytes, malformed lines counted and skipped. Evidence that refusals happened,
+ *  never of their absence. */
+export function readDeviceAudit(outDir: string): { lines: DeviceAuditLine[]; malformed: number; refusedReason?: string } {
+  const file = join(resolve(outDir), AUDIT_DIR, "audit.jsonl");
+  let fd: number;
+  try {
+    fd = openSync(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return { lines: [], malformed: 0 };
+    return { lines: [], malformed: 0, refusedReason: e?.code === "ELOOP" ? "not a regular file" : String(e?.code ?? e) };
+  }
+  let text: string;
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { lines: [], malformed: 0, refusedReason: "not a regular file" };
+    const buf = Buffer.alloc(Math.min(st.size, AUDIT_CAP));
+    readSync(fd, buf, 0, buf.length, 0);
+    text = buf.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+  const lines: DeviceAuditLine[] = [];
+  let malformed = 0;
+  for (const l of text.split("\n")) {
+    if (!l) continue;
+    try {
+      const o = JSON.parse(l);
+      if (
+        typeof o?.op === "string" &&
+        typeof o.folder === "string" &&
+        typeof o.rel === "string" &&
+        typeof o.result === "string" &&
+        typeof o.pid === "number"
+      )
+        lines.push({ op: o.op, folder: o.folder, rel: o.rel, result: o.result, pid: o.pid });
+      else malformed++;
+    } catch {
+      malformed++;
+    }
+  }
+  return { lines, malformed };
+}
 
 /** The folders granted so far in this run's session. */
 export function readDeviceGrants(outDir: string): string[] {
   try {
-    return readFileSync(grantsFile(outDir), "utf8")
-      .split("\n")
-      .filter((l) => l !== "");
+    return [
+      ...new Set(
+        readFileSync(grantsFile(outDir), "utf8")
+          .split("\n")
+          .filter((l) => l !== ""),
+      ),
+    ];
   } catch {
     return [];
   }
 }
 
-/** Add folders to the grants file. Written to a temp file and renamed inside the same directory, so a reader never
- *  sees half a file. */
+/** Add folders to the grants file with one append each, so two cards answered together cannot lose a folder (a
+ *  read-modify-write would). The shim reads it on every would-be refusal; readers de-duplicate. */
 export function writeDeviceGrant(outDir: string, folders: ReadonlyArray<string>): void {
-  const all = readDeviceGrants(outDir);
-  for (const f of folders) if (!all.includes(f)) all.push(f);
   const file = grantsFile(outDir);
   mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, all.map((f) => `${f}\n`).join(""));
-  renameSync(tmp, file);
+  appendFileSync(file, folders.map((f) => `${f}\n`).join(""));
 }
 
 /** Who answered a delete grant. `script` is a scenario answer, `decider` an
@@ -376,14 +501,18 @@ export function startDeviceBridge(p: {
   const containerName = `cowork-dev-${p.runToken ?? p.sessionId}`;
   const infraErrors: { source: InfraErrorSource; message: string }[] = [];
   const { logSidecarInfra, logExecInfra } = makeInfraEmitters(p.outDir, infraErrors, { sidecar: "device-container", exec: "device-exec" });
+  const user = deviceUser();
+  prepareDeviceControl(p.outDir, p.sessionId, folders, user);
   const argv = deviceContainerArgv({
     name: containerName,
     image: p.image,
     network: p.network,
     egressProxy: p.egressProxy,
     deviceHost,
+    controlHost: resolve(p.outDir),
     sessionId: p.sessionId,
     folders,
+    user,
   });
   // A container left under this name (a teardown that ran before a slow create finished) would make the start fail.
   removeContainer(p.runner, containerName);

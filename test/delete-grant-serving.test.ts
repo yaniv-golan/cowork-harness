@@ -90,14 +90,14 @@ describe("the delete card's handler", () => {
 });
 
 describe("the grants file", () => {
-  it("is written atomically under the run dir and read back, de-duplicated, in grant order", () => {
+  it("is appended to under the run dir and read back, de-duplicated, in grant order", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-grants-"));
     expect(readDeviceGrants(d)).toEqual([]);
     writeDeviceGrant(d, ["notes"]);
     writeDeviceGrant(d, ["tidy", "notes"]);
     expect(readDeviceGrants(d)).toEqual(["notes", "tidy"]);
     expect(existsSync(join(d, "device-ctl", "grants"))).toBe(true);
-    expect(readFileSync(join(d, "device-ctl", "grants"), "utf8")).toBe("notes\ntidy\n");
+    expect(readFileSync(join(d, "device-ctl", "grants"), "utf8")).toBe("notes\ntidy\nnotes\n");
   });
 });
 

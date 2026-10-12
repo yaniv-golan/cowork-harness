@@ -89,15 +89,17 @@ describe("deviceContainerArgv", () => {
     network: "cowork-int-t",
     egressProxy: "http://proxy:8080",
     deviceHost,
+    controlHost: join(root, "out"),
     sessionId: "session_t1",
     folders: deviceFolders(mounts),
+    user: { uid: 501, gid: 20 },
   });
 
-  it("binds only paths under the run's device tree, never a mount's host path", () => {
+  it("binds only paths under the run directory, never a mount's host path", () => {
     const sources = binds(argv).map((b) => b.split(":")[0]);
     expect(sources.length).toBeGreaterThan(0);
     for (const s of sources) {
-      expect(s.startsWith(deviceHost), s).toBe(true);
+      expect(s.startsWith(join(root, "out")), s).toBe(true);
       for (const m of mounts) expect(s.startsWith(m.hostPath), s).toBe(false);
     }
     expect(argv.join(" ")).not.toContain(join(root, "user"));
@@ -106,11 +108,17 @@ describe("deviceContainerArgv", () => {
   it("mounts the device tree as $HOME and each folder at $HOME/mnt/<name>, read-only folders :ro", () => {
     // mnt is a mount point of its own, so a command cannot rename or replace it (and with it a read-only folder's
     // bind source) for a later turn to bind.
-    expect(binds(argv)).toEqual([
+    expect(binds(argv).slice(0, 3)).toEqual([
       `${deviceHost}:/sessions/rcw-t1`,
       `${deviceHost}/mnt:/sessions/rcw-t1/mnt`,
       `${deviceHost}/mnt/ref:/sessions/rcw-t1/mnt/ref:ro`,
     ]);
+    // The rest are the shim's control files (device-control.test.ts).
+    expect(
+      binds(argv)
+        .slice(3)
+        .every((b) => b.startsWith(join(root, "out", "device-"))),
+    ).toBe(true);
     expect(argv[argv.indexOf("-w") + 1]).toBe("/sessions/rcw-t1");
   });
 
@@ -132,8 +140,10 @@ describe("deviceContainerArgv", () => {
       network: "net",
       egressProxy: "http://proxy:8080",
       deviceHost,
+      controlHost: join(root, "out"),
       sessionId: "s",
       folders: deviceFolders([mounts[1]]),
+      user: { uid: 501, gid: 20 },
     });
     expect(roOnly.some((a) => a.startsWith("GIT_"))).toBe(false);
   });
