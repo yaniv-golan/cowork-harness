@@ -10,7 +10,7 @@ import {
   CLONE_FALLBACK_CODES,
   darwinTreeCloner,
 } from "../src/run/leg-snapshot.js";
-import { constants, copyFileSync, existsSync } from "node:fs";
+import { constants, copyFileSync, existsSync, chmodSync, lstatSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { writeLegPostManifest } from "../src/run/leg-manifest.js";
 
@@ -94,7 +94,10 @@ const cloneProbe = ((): { ok: true } | { ok: false; code: string } => {
   const d = mkdtempSync(join(tmpdir(), "ml-clone-probe-"));
   try {
     writeFileSync(join(d, "a"), "probe");
-    if (darwinTreeCloner) return darwinTreeCloner(join(d, "a"), join(d, "b")) ? { ok: true } : { ok: false, code: "cp -c failed" };
+    if (darwinTreeCloner) {
+      const c = darwinTreeCloner(join(d, "a"), join(d, "b"));
+      return c.ok ? { ok: true } : { ok: false, code: "cp -c failed" };
+    }
     copyFileSync(join(d, "a"), join(d, "b"), constants.COPYFILE_FICLONE_FORCE);
     return { ok: true };
   } catch (e) {
@@ -120,14 +123,15 @@ const noClone =
     if (forced(mode)) throw errno(code);
     copyFileSync(src, dest);
   };
-/** A tree cloner that "clones" by a recursive plain copy (dereferencing nothing), or fails. */
+/** A tree cloner that "clones" by a recursive plain copy keeping modes (`cp -pR`, as the macOS cloner's `-p` does),
+ *  or refuses; `okFor` picks which sources it accepts. */
 const fakeTree =
-  (ok: boolean, calls: string[] = []) =>
-  (src: string, dest: string) => {
+  (okFor: boolean | ((src: string) => boolean), calls: string[] = []) =>
+  (src: string, dest: string): { ok: true } | { ok: false; why: string } => {
     calls.push(src);
-    if (!ok) return false;
-    execFileSync("cp", ["-R", src, dest]);
-    return true;
+    if (!(typeof okFor === "function" ? okFor(src) : okFor)) return { ok: false, why: "refused by the test" };
+    execFileSync("cp", ["-pR", src, dest]);
+    return { ok: true };
   };
 
 describe("leg snapshot: clone or copy, recorded", () => {
@@ -161,10 +165,44 @@ describe("leg snapshot: clone or copy, recorded", () => {
     const { work, leg, roots } = tree();
     writeLegPostManifest(leg, work, roots);
     snapshotLegTree(leg, work, roots, noClone("ENOTSUP"), fakeTree(false));
-    expect(JSON.parse(readFileSync(join(leg, "snapshot.json"), "utf8"))).toMatchObject({ method: "copy", cloned: 0, copied: 2 });
+    expect(JSON.parse(readFileSync(join(leg, "snapshot.json"), "utf8"))).toMatchObject({
+      method: "copy",
+      cloned: 0,
+      copied: 2,
+      fallback: ["outputs: refused by the test", "proj: refused by the test"],
+    });
     expect(legSnapshotRoot(leg)).toBe(join(leg, "snapshot"));
   });
-  it("snapshot.json records the method: copy, mixed (a root on another device), none with no files", () => {
+  it("a read-only directory kept by the tree clone never makes the snapshot throw, and the next snapshot replaces it", () => {
+    const { work, leg, roots } = tree();
+    mkdirSync(join(work, "outputs", "ro"));
+    writeFileSync(join(work, "outputs", "ro", "f.txt"), "x");
+    chmodSync(join(work, "outputs", "ro"), 0o555);
+    try {
+      writeLegPostManifest(leg, work, roots);
+      // root 1 clones (keeping the 0555 dir); root 2 then fails with a real error: the catch must clean up, not throw
+      expect(() =>
+        snapshotLegTree(
+          leg,
+          work,
+          roots,
+          noClone("EACCES"),
+          fakeTree((src) => src.endsWith("outputs")),
+        ),
+      ).not.toThrow();
+      expect(JSON.parse(readFileSync(join(leg, "snapshot.json"), "utf8"))).toMatchObject({ complete: false });
+      // a later snapshot over a kept read-only tree replaces it
+      snapshotLegTree(leg, work, roots, noClone("ENOTSUP"), fakeTree(true));
+      expect(JSON.parse(readFileSync(join(leg, "snapshot.json"), "utf8"))).toMatchObject({ complete: true, method: "clone" });
+      expect(() => snapshotLegTree(leg, work, roots, noClone("ENOTSUP"), fakeTree(true))).not.toThrow();
+      expect(JSON.parse(readFileSync(join(leg, "snapshot.json"), "utf8"))).toMatchObject({ complete: true });
+    } finally {
+      chmodSync(join(work, "outputs", "ro"), 0o755);
+      const kept = join(leg, "snapshot", "outputs", "ro");
+      if (existsSync(kept)) chmodSync(kept, 0o755);
+    }
+  });
+  it("snapshot.json records the method: copy, mixed (one root cloned, another copied), none with no files", () => {
     const { work, leg, roots } = tree();
     writeLegPostManifest(leg, work, roots);
     snapshotLegTree(leg, work, roots, noClone("ENOTSUP"), null);
@@ -201,5 +239,61 @@ describe("leg snapshot: clone or copy, recorded", () => {
     expect(meta.method).toBe(expectedMethod);
     expect(legSnapshotRoot(leg)).toBe(join(leg, "snapshot")); // a clone or a copy, the snapshot is trusted
     expect(statSync(join(leg, "snapshot", "proj", "doc.txt")).mtime.toISOString()).toBe("2026-01-02T03:04:05.000Z");
+  });
+});
+
+// The real macOS cloner, on real volumes. CI has no macOS runner, so these run on a maintainer's Mac only; elsewhere
+// they skip with that reason. The probe above uses the same `cp -c` as the snapshot, so on macOS the generic
+// real-filesystem test cannot tell a clone from cp's silent fallback copy; the disk-image cases here can.
+const onMac = process.platform === "darwin" && existsSync("/usr/bin/hdiutil");
+describe.skipIf(!onMac)(`leg snapshot on macOS volumes${onMac ? "" : " (SKIPPED: needs macOS with hdiutil)"}`, () => {
+  const images: string[] = [];
+  const attach = (fs: "HFS+" | "APFS", name: string): string => {
+    const img = join(dir, `${name}.dmg`);
+    execFileSync("/usr/bin/hdiutil", ["create", "-size", "20m", "-fs", fs, "-volname", name, img], { stdio: "ignore" });
+    const out = execFileSync("/usr/bin/hdiutil", ["attach", "-nobrowse", img], { encoding: "utf8" });
+    const mount = out.trim().split("\n").pop()!.split("\t").pop()!.trim();
+    images.push(mount);
+    return mount;
+  };
+  afterEach(() => {
+    for (const m of images.splice(0)) execFileSync("/usr/bin/hdiutil", ["detach", "-force", m], { stdio: "ignore" });
+  });
+  const treeAt = (base: string) => {
+    const work = join(base, "work");
+    mkdirSync(join(work, "outputs", "runs"), { recursive: true });
+    writeFileSync(join(work, "outputs", "runs", "status.json"), '{"status":"waiting"}');
+    return { work, roots: ["outputs"] };
+  };
+  const snap = (legBase: string, work: string, roots: string[]) => {
+    const leg = join(legBase, "legs", "ask");
+    mkdirSync(leg, { recursive: true });
+    writeLegPostManifest(leg, work, roots);
+    snapshotLegTree(leg, work, roots);
+    return { leg, meta: JSON.parse(readFileSync(join(leg, "snapshot.json"), "utf8")) };
+  };
+
+  it("the same APFS volume clones; a symlink to a DIRECTORY in the tree is removed, not fatal (it threw on Node 25)", () => {
+    const { work, roots } = treeAt(dir);
+    mkdirSync(join(dir, "elsewhere"));
+    symlinkSync(join(dir, "elsewhere"), join(work, "outputs", "dirlink"));
+    const { leg, meta } = snap(dir, work, roots);
+    expect(meta).toMatchObject({ complete: true, method: "clone", cloned: 1 });
+    expect(existsSync(join(leg, "snapshot", "outputs", "dirlink"))).toBe(false);
+    expect(lstatSync(join(work, "outputs", "dirlink")).isSymbolicLink()).toBe(true); // the source is untouched
+  });
+  it("a tree on another device is copied file by file and recorded as a copy, with the reason", () => {
+    const vol = attach("APFS", "cwhapfs2");
+    const { work, roots } = treeAt(vol);
+    const { meta } = snap(dir, work, roots);
+    expect(meta).toMatchObject({ complete: true, method: "copy", cloned: 0, copied: 1 });
+    expect(meta.fallback.join(" ")).toMatch(/another device/);
+  });
+  it("a tree and snapshot both on HFS+ (no clone) are recorded as a copy, with the reason", () => {
+    const vol = attach("HFS+", "cwhhfs");
+    const { work, roots } = treeAt(vol);
+    const { meta } = snap(vol, work, roots);
+    expect(meta).toMatchObject({ complete: true, method: "copy", copied: 1 });
+    expect(meta.fallback.join(" ")).toMatch(/not apfs/);
   });
 });

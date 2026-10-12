@@ -1464,12 +1464,14 @@ verdict, each leg's verdict, and the run's one index row) once the scenario ends
 
 A plain `run` keeps the run dir, whose legs re-grade from their snapshots (`verify-run --leg`) for as long as the run dir is kept; `record` makes the portable, committable form (`replay`). Every prompt leg snapshots its user-visible
 files (outputs and connected folders, the ones its file assertions read) when it ends, into `legs/<id>/snapshot/` —
-a copy-on-write clone on a filesystem that can clone (macOS APFS, through `cp -c`; Linux btrfs and XFS with reflink),
+a copy-on-write clone on a filesystem that can clone (macOS APFS, through `cp -c`, when the folder is on the same volume
+as the run dir; Linux btrfs and XFS with reflink),
 none over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES` (default 512 MiB) — so a kept run's every leg re-grades from its own
 files at no cost. Where the filesystem cannot clone (ext4, the usual Linux and CI disk), each snapshot is a **full
 copy** of the leg's outputs and connected folders, once per prompt leg, and takes its full size on disk: lower the cap
 to bound it. `legs/<id>/snapshot.json` records how it was taken: `method` is `clone`, `copy`, `mixed` (one root
-cloned, another copied, e.g. on another device) or `none`, with the file counts (`cloned`, `copied`).
+cloned, another copied, e.g. a connected folder on another volume) or `none`, with the file counts (`cloned`,
+`copied`), and on macOS `fallback` says why a folder was copied rather than cloned.
 
 `expect_denied:` is about the whole scenario: each host must have been denied in SOME leg's (or action's) egress. A
 leg's own `egress_denied` assertion reads that leg's egress only.
