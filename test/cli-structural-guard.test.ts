@@ -51,6 +51,7 @@ const CASES: Array<[string, string[]]> = [
   ["verify-run", ["somedir", "s.yaml"]],
   ["regrade", ["somedir", "--scenario", "s.yaml"]],
   ["fixture", ["export", "somedir", "--out", "o"]],
+  ["search-pool", ["build", "p", "--from", "somedir"]],
   ["ref", ["freeze", "somedir", "--scenario", "s.yaml", "--out", "o"]],
   ["ref", ["verify", "somestore"]],
   ["eval", ["s.yaml", "--arm", "a", "--arm", "b"]],

@@ -57,6 +57,8 @@ describe.skipIf(!can)("--output-format json — exactly one JSON document on std
     [["regrade", missing, "--scenario", `${missing}.yaml`], 2],
     [["fixture"], 2],
     [["fixture", "export", missing, "--out", `${missing}-out`], 2],
+    [["search-pool"], 2],
+    [["search-pool", "import", missing, `${missing}-pool`], 2],
     [["ref"], 2],
     [["ref", "freeze", missing, "--scenario", `${missing}.yaml`, "--out", `${missing}-out`], 2],
     [["ref", "verify", missing], 1],

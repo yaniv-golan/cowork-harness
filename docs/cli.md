@@ -457,6 +457,35 @@ enums, `error.code` and `refusals[]` — is a covered surface ([SPEC.md](../SPEC
 `true`), removing or renaming one is a major change. The regrade **file**'s name, layout and contents are
 experimental and may change in a minor release.
 
+### Search pools (`search-pool`)
+
+`search-pool build <pool> --from <run-dir|runs-dir>` (repeat `--from` for more) collects the WebSearch results recorded in kept runs into a
+pool: one record per search, holding its query, its links and the search's prose summary, plus the source run's
+skill, skill commit, skill snapshot signature, agent and Desktop versions, model and start time. Nothing serves a pool
+yet; a later release will let an eval or hillclimb run answer its searches from one.
+
+- **Where.** `<pool>` is a name under `~/.cowork-harness/search-pools/`, or a path. The pool dir is `0700` and its two
+  files (`pool.json`, `records.jsonl`) are `0600`. A path inside a git work tree is refused unless `--allow-in-repo`:
+  a pool holds third-party titles and URLs and model-written summaries, which can quote an upload.
+- **What it reads.** The raw frames in each run's `events.jsonl` (the main loop's and each sub-agent's) and each
+  sub-agent's own transcript; a search seen in both is kept once. A result is kept only when it re-renders to the
+  agent's exact tool_result text. Error results, results it cannot reproduce, and a search whose only content is the
+  agent's search-error line are skipped and counted in the summary.
+- **One skill per pool.** A run's skill is its graded skill (a critique run), else the one skill its fingerprint was
+  scoped to, else the one skill it invoked; never its plugin directory. Runs of several skills, or a run naming none,
+  are refused unless `--mixed` (a measured variant, never a baseline); `--skill <name>` declares the skill for runs
+  that name none and refuses a run of another skill.
+- **Refusals and review.** A record containing a known secret (the credentials, `COWORK_HARNESS_SCRUB_KEYS` /
+  `COWORK_HARNESS_SCRUB_VALUES`, and their encoded forms) refuses the build, naming the record. The summary lists
+  records that name an upload file or repeat eight consecutive words of a text upload; drop any with `--exclude <id>`.
+- **The hashes.** `pool.json` carries `sha256`, over the sorted record ids and the retrieval parameters (including
+  `--min-score`, default `0.4`), so a pool is identified by what it would serve; and `contentSha256`, over the whole
+  manifest and every record including its provenance. Reading, exporting or importing a pool re-verifies both.
+- **Moving a pool.** `search-pool export <pool> --out <file>` writes **one JSON file** (not a tarball), `0600`, holding
+  a notice, the manifest and the records; it refuses an existing file and, like `build` and `import`, a path inside a
+  git work tree unless `--allow-in-repo`. `search-pool import <file> <pool>` re-verifies every record, both hashes and
+  the secret scan before writing.
+
 ### Exporting a run's outputs as a fixture (`fixture export`)
 
 `cowork-harness fixture export <run-dir> --out <dir> [--allow-host-paths] [--session-paths] [--exclude <path>]... [--output-format json]`
@@ -653,6 +682,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `verify-run <run-dir> <scenario.yaml>` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s). It also re-measures the scenario's `metrics:` from the kept work dir (`results[0].metrics`), reading a file only while its bytes equal the run's recorded post-run hash (else `pruned`) — the $0 re-measure route, including for a scenario with no `semantic_matches` or `semantic_pairwise` assert, which `regrade` refuses. The stall signals (`stalled`, `parked_at_question`) come from the flag recorded in the run's `result.json`; the stall detector is not re-run, so a run recorded by an earlier build shows no `parked_at_question` here, while `replay` of its cassette does | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
 | `regrade <run-dir>… --scenario <scenario.yaml>` | Re-grade a kept run's `semantic_matches` and `semantic_pairwise` asserts with the judge — **no live agent**; the judge call is the only spend. Writes a new file beside the run and never touches `result.json`; reports whether the judge read the same document the live judge did. See [Re-grading a kept run](#re-grading-a-kept-run-regrade) | you changed a rubric (or want a different judge model) and need the new grade on runs you already paid for |
 | `fixture export <run-dir> --out <dir>` | Copy a kept run's outputs tree, byte-for-byte, into a directory a scenario can start from. Refuses (writing nothing) on a secret in any file or its name, or a host path in a text file or a file name, and alters no byte except the opt-in `--session-paths` rewrite of the run's own session roots; `--exclude` leaves files out; compressed or binary formats are copied without inspection. See [Exporting a run's outputs as a fixture](#exporting-a-runs-outputs-as-a-fixture-fixture-export) | turning a run that stopped after step N into the starting state for a test of step N+1 |
+| `search-pool build <pool> --from <run-dir\|runs-dir>` (repeatable) · `search-pool export <pool> --out <file>` · `search-pool import <file> <pool>` | Build a pool of the WebSearch results recorded in kept runs (one record per search: its query, links and the search's prose summary, with the source run's skill and versions); move a pool between machines. Nothing serves a pool yet. See [Search pools](#search-pools-search-pool) | after runs whose searches you want to keep for later |
 | `ref freeze <run-dir> --scenario <scenario.yaml> --out <store>` · `ref verify <store>…` | Freeze a kept run's judged document as a frozen reference for `semantic_pairwise`, once, never rewritten; re-hash a store's documents. See [Frozen references](#frozen-references-for-semantic_pairwise-ref) | setting the baseline a pairwise judge compares later runs with |
 | `trace <run-id>` | Digest a run's `events.jsonl` through one of eight `--view`s (tools, questions, dispatches, tool-durations, tool-errors, files, usage, subagent-research). Per-view detail: see [Flags worth knowing](#flags-worth-knowing) | "how many sub-agents *actually* dispatched, and which?" — plus per-tool timings, per-call stderr, a workspace-file diff, per-model cost, or each dispatch's WebSearch query+result |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |

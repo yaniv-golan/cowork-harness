@@ -614,6 +614,8 @@ there are three families:
   `--session-paths` `substituted`; a
   refusal is the error envelope, its message in `error.message`, carrying `refused[]` and whichever of the other
   fields were known when it refused — `written`/`skipped`/`notes`/`bytes` only once the outputs tree was read),
+  `search-pool build|export|import` (exit `0` written, `2` usage or refusal; payload experimental, §12: `build`
+  `dir`, `manifest`, `summary`; `export` `out`; `import` `dir`, `manifest`; a refusal is the error envelope),
   `ref freeze` (`caseId`, `frozen`, `added`; experimental, §12), `ref verify` (`stores[]`, each
   `{store, entries, problems, notes}`; experimental, §12), and `regrade` (below).
 - **Dedicated (hand-shaped, no shared helper)** — its own bespoke shape: **`list`** (a raw JSON
@@ -1319,6 +1321,9 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   path) are covered above.
 - **`fixture export`'s JSON payload** — the command, its flags and exit codes are covered; the payload keys are
   experimental and may change in a minor release.
+- **The `search-pool` JSON payloads and the pool format** (`pool.json`, `records.jsonl`, and the single-file export)
+  — EXPERIMENTAL. The command — its subcommands, flags and exit codes — is covered above; the payload keys and the
+  on-disk format may change in a minor release. A pool records its `schemaVersion`, and a reader refuses another.
 - **The `ref freeze` / `ref verify` JSON payloads and the reference-store layout** (`<store>/<case-id>/ref.json`,
   `doc-<key>.txt`/`.json`) — EXPERIMENTAL. The command — its name, subcommands, flags and exit codes — is covered
   above; the payload keys and the on-disk layout may change in a minor release (a store is read only through `ref`
