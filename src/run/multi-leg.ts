@@ -25,11 +25,17 @@ import {
   loadMultiLegScenario,
   parseScenarioFile,
   type ExecuteOptions,
+  assertContradiction,
+  tierVacuityRefusal,
 } from "./execute.js";
 import { loadBaseline } from "../baseline.js";
+import { artifactsRootRefusal, answerChannelRefusal } from "../answer-channel.js";
+import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
+import { strippedEnv } from "../session.js";
 import { UsageError, UnansweredError } from "../errors.js";
 import { writeTextAtomic } from "../io.js";
-import { writeRunningStatus, finalizeRunStatus, type RunStatusMeta } from "./run-status.js";
+import { writeRunningStatus, registerRunForCrashSafety, startStatusTicker, type RunStatusMeta } from "./run-status.js";
+import type { RunRecord } from "./run.js";
 import { indexRowFromResult, appendIndexRow, type RunIndexRow } from "./run-index.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { SCENARIO_RESULT, readLegMarker, type LegMarker } from "./turn-layout.js";
@@ -41,12 +47,14 @@ import {
   type MultiLegSignal,
 } from "./scenario-result.js";
 import { evaluate } from "../assert.js";
+import { snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import { writeLegPostManifest } from "./leg-manifest.js";
 import type { MultiLegScenario, Leg, LegSessionOverlay } from "./multi-leg-scenario.js";
 import { buildLaunchPlan, resolveLaunchSources, type SessionConfig, type LegStage } from "../session.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { readPreRunManifestHashes } from "./pre-run-manifest.js";
 import {
+  ACTION_OUTPUT_CAP,
   readActionStatus,
   resolveActionArgv,
   recordedStream,
@@ -188,7 +196,13 @@ async function executeHostAction(p: {
   });
   const paths = actionPaths(tier, baseline, sessionId, workBase);
   const empty = { sha256: "", bytes: 0, head: "" };
-  const finish = (rec: Omit<ActionRecord, "pass">): { pass: boolean; verdict: ScenarioVerdict } => {
+  const finish = (raw: Omit<ActionRecord, "pass">): { pass: boolean; verdict: ScenarioVerdict } => {
+    // A refusal or an assertion message can quote the status file or a file's content: scrubbed like stdout.
+    const rec = {
+      ...raw,
+      ...(raw.refused !== undefined ? { refused: scrub(raw.refused, secrets) } : {}),
+      assertions: raw.assertions.map((a) => (a.message !== undefined ? { ...a, message: scrub(a.message, secrets) } : a)),
+    };
     const pass = rec.refused === undefined && rec.assertions.every((a) => a.pass);
     writeActionRecord(legDir, { ...rec, pass });
     const messages = [
@@ -239,7 +253,14 @@ async function executeHostAction(p: {
     argv: resolved.argv,
     timeoutMs: ha.timeout * 1000,
   });
-  if (exec.spawnError) return refusedRecord(`the action could not run: ${exec.spawnError}`, resolved.argv);
+  if (exec.spawnError)
+    return refusedRecord(
+      `the action could not run: ${exec.spawnError}`,
+      resolved.argv.map((a) => scrub(a, secrets)),
+    );
+  // On microvm the action wrote to the live guest tree; the copy under the scenario root (what the next leg's checks
+  // and a cowork-task carry read) is refreshed now, as a prompt leg's is when it ends.
+  if (tier === "microvm") snapshotMicroVmWorkspace(sessionId, join(workBase, "work", "session"));
   takeActionManifest(plan, paths.hostWorkRoot, legDir, tier, "post");
   const before = readPreRunManifestHashes(legDir) ?? {};
   const after = readJsonHashes(join(legDir, "post-run-manifest.json"));
@@ -248,6 +269,7 @@ async function executeHostAction(p: {
     exec,
     scrub(exec.stdout, secrets),
     actionFileCtx(plan, paths.hostWorkRoot, legDir, tier),
+    exec.stdoutBytes > ACTION_OUTPUT_CAP,
   );
   return finish({
     argv: resolved.argv.map((a) => scrub(a, secrets)),
@@ -294,10 +316,35 @@ export async function executeMultiLeg(
   for (const [i, leg] of ms.legs.entries()) {
     if (leg.prompt === undefined) continue;
     const s = overlaySession(baseSession, leg.session);
+    const scn = legScenario(ms, leg);
+    const named = (why: string) => new UsageError(`leg "${leg.id}": ${why}`);
     if (i > 0 && s.answer_channel === "none") {
-      const r = vacuousLegBlockRefusal(leg, legScenario(ms, leg).assert);
+      const r = vacuousLegBlockRefusal(leg, scn.assert);
       if (r) throw new UsageError(r);
     }
+    // The load-time refusals executeScenario would throw for this leg, here, so a later leg's mistake never costs
+    // the earlier legs' runs.
+    const refusal =
+      assertContradiction(scn) ??
+      tierVacuityRefusal(scn, baseline) ??
+      artifactsRootRefusal(s, tier, scn.fidelity) ??
+      answerChannelRefusal({
+        scenario: scn,
+        session: s,
+        tier,
+        baseline,
+        invocation: {
+          onUnansweredFlag: opts.onUnansweredFlag,
+          hasDecider: opts.decider !== undefined,
+          hasExternalChannel: opts.externalChannel !== undefined,
+          llmModel: opts.llmModel,
+          llmIntent: opts.llmIntent,
+        },
+        probeHostCli: () => hostCliSupportsPermissionPrompts(strippedEnv(baseline)),
+      });
+    if (refusal) throw named(refusal);
+    if (tier === "protocol" && (scn.assert.some((a) => a.egress_denied || a.egress_allowed) || scn.expect_denied.length > 0))
+      throw named('asserts boundary behavior (egress/expect_denied) but fidelity is "protocol" (no sandbox); use container or microvm');
   }
   if (promptLegs.length < 2) throw new UsageError("a multi-leg scenario needs at least two prompt legs");
 
@@ -314,6 +361,10 @@ export async function executeMultiLeg(
     runLabel: opts.runLabel,
   };
   writeRunningStatus(root, meta);
+  // The root's status.json, like a leg's: swept to `error` if the process dies before the scenario finishes, and kept
+  // fresh while it runs (a root that stopped updating reads as a stale run).
+  const rootSafety = registerRunForCrashSafety(root, meta);
+  const stopTicker = startStatusTicker(root, meta, () => ({ toolCounts: {}, subagents: [] }) as unknown as RunRecord);
   process.stderr.write(opts.compact ? "" : `[status] ${root}\n`);
 
   const startedAt = new Date();
@@ -433,13 +484,8 @@ export async function executeMultiLeg(
     }
   } catch (e) {
     // A leg's own run dir is finalized by its execution; the scenario root must not be left reading "running".
-    finalizeRunStatus(
-      root,
-      meta,
-      { toolCounts: {}, subagents: [] } as unknown as Parameters<typeof finalizeRunStatus>[2],
-      "error",
-      Date.now() - startedAt.getTime(),
-    );
+    stopTicker();
+    rootSafety.finalize({ toolCounts: {}, subagents: [] } as unknown as RunRecord, "error", Date.now() - startedAt.getTime());
     throw e;
   }
 
@@ -462,13 +508,8 @@ export async function executeMultiLeg(
   };
   writeTextAtomic(join(root, SCENARIO_RESULT), JSON.stringify(scenarioResult, null, 2));
   appendIndexRow(runsWriteRoot(), indexRow);
-  finalizeRunStatus(
-    root,
-    meta,
-    { toolCounts: {}, subagents: [] } as unknown as Parameters<typeof finalizeRunStatus>[2],
-    pass ? "success" : "error",
-    scenarioResult.durationMs,
-  );
+  stopTicker();
+  rootSafety.finalize({ toolCounts: {}, subagents: [] } as unknown as RunRecord, pass ? "success" : "error", scenarioResult.durationMs);
   if (unanswered) throw unanswered;
   return { outDir: root, scenarioResult, legResults };
 }

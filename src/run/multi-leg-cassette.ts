@@ -105,6 +105,11 @@ export function readMultiLegCassette(path: string): { cassette: MultiLegCassette
     };
   }
   const c = raw as MultiLegCassette;
+  // Every leg of the scenario, in order, and nothing else: a dropped or reordered leg would replay as a shorter run.
+  const want = c.scenario.legs.map((l) => l.id).join(",");
+  const got = c.legs.map((l) => l.id).join(",");
+  if (!c.legs.length || want !== got)
+    return { error: `invalid multi-leg cassette: legs [${got}] do not match the scenario's legs [${want}]` };
   for (const [i, leg] of c.legs.entries()) {
     if (leg.status === "skipped") continue;
     if (leg.kind === "prompt") {
@@ -124,7 +129,29 @@ function redactAction(rec: ActionRecord, policy: RedactionPolicy | undefined): A
     argv: rec.argv.map(r),
     stdout: { ...rec.stdout, head: r(rec.stdout.head) },
     stderr: { ...rec.stderr, head: r(rec.stderr.head) },
+    ...(rec.refused !== undefined ? { refused: r(rec.refused) } : {}),
+    assertions: rec.assertions.map((a) => ({
+      ...a,
+      assertion: redactStrings(a.assertion, policy),
+      ...(a.message !== undefined ? { message: r(a.message) } : {}),
+    })),
   };
+}
+
+/** Every string leaf of `v` through the redaction policy (keys kept). For the parts of a multi-leg cassette's frozen
+ *  scenario that no nested cassette's own redaction covers: the top-level answers, each action's status/run, and
+ *  the assert blocks of action and skipped legs. */
+function redactStrings<T>(v: T, policy: RedactionPolicy | undefined): T {
+  if (!policy) return v;
+  const walk = (x: unknown): unknown =>
+    typeof x === "string"
+      ? redactText(x, policy)
+      : Array.isArray(x)
+        ? x.map(walk)
+        : x !== null && typeof x === "object"
+          ? Object.fromEntries(Object.entries(x).map(([k, y]) => [k, walk(y)]))
+          : x;
+  return walk(v) as T;
 }
 
 /** `record <legs.yaml>`: run every leg, refuse a failing scenario unless --allow-failing, freeze each prompt leg through
@@ -187,21 +214,15 @@ export async function recordMultiLeg(
       legs.push({ id: entry.id, kind: entry.kind, status: "skipped" });
       frozenLegs.push(
         leg.prompt !== undefined
-          ? { ...leg, prompt: usePolicy ? redactText(leg.prompt, usePolicy) : leg.prompt }
-          : {
-              ...leg,
-              host_action: { ...leg.host_action!, run: leg.host_action!.run.map((a) => (usePolicy ? redactText(a, usePolicy) : a)) },
-            },
+          ? { ...leg, prompt: usePolicy ? redactText(leg.prompt, usePolicy) : leg.prompt, assert: redactStrings(leg.assert, usePolicy) }
+          : { ...leg, assert: redactStrings(leg.assert, usePolicy), host_action: redactStrings(leg.host_action!, usePolicy) },
       );
       continue;
     }
     if (entry.kind === "action") {
       const raw = JSON.parse(readFileSync(join(outcome.outDir, "legs", entry.id, "action.json"), "utf8")) as ActionRecord;
       legs.push({ id: entry.id, kind: "action", status: entry.status, action: redactAction(raw, usePolicy) });
-      frozenLegs.push({
-        ...leg,
-        host_action: { ...leg.host_action!, run: leg.host_action!.run.map((a) => (usePolicy ? redactText(a, usePolicy) : a)) },
-      });
+      frozenLegs.push({ ...leg, assert: redactStrings(leg.assert, usePolicy), host_action: redactStrings(leg.host_action!, usePolicy) });
       continue;
     }
     const lc = frozenByLeg.get(entry.id);
@@ -213,6 +234,7 @@ export async function recordMultiLeg(
 
   const frozenScenario = {
     ...ms,
+    answers: redactStrings(ms.answers, usePolicy),
     session: cassetteSessionRef(ms.session, cassettePath),
     ...(ms.workspace_fixture !== undefined ? { workspace_fixture: cassetteFixtureRef(ms.workspace_fixture, cassettePath) } : {}),
     legs: frozenLegs,
@@ -232,6 +254,14 @@ export async function recordMultiLeg(
   };
   // The record-time privacy scan, per nested cassette (the action records carry argv and output heads, scrubbed of
   // secrets and redacted above; their head text is scanned through a stand-in cassette carrying it as an event).
+  // The frozen scenario itself (answers, action argv and status, assert blocks), outside every nested cassette.
+  const scenarioLeak = classifyRecordLeak(
+    { scenario: { prompt: JSON.stringify(frozenScenario), session: "", assert: [] }, events: [] } as unknown as Cassette,
+    cassettePath,
+    opts.allowHostInventoryFindings === true,
+  );
+  if (scenarioLeak.kind === "quarantine")
+    refuse(`refusing to write ${cassettePath}: the frozen scenario carries THIS MACHINE's inventory.\n${scenarioLeak.detail}`);
   for (const l of legs) {
     const target: Cassette | undefined =
       "cassette" in l
@@ -239,7 +269,12 @@ export async function recordMultiLeg(
         : "action" in l
           ? ({
               scenario: { prompt: l.action.argv.join(" "), session: "", assert: [] },
-              events: [l.action.stdout.head, l.action.stderr.head],
+              events: [
+                l.action.stdout.head,
+                l.action.stderr.head,
+                l.action.refused ?? "",
+                ...l.action.assertions.map((a) => a.message ?? ""),
+              ],
             } as unknown as Cassette)
           : undefined;
     if (!target) continue;
@@ -271,6 +306,7 @@ export function regradeRecordedAction(leg: Leg, rec: ActionRecord): ScenarioLegE
   if (rec.refused) msgs.push(rec.refused);
   if (rec.timedOut) msgs.push("the action timed out and was killed");
   const asserts = hostActionAsserts(leg);
+  const recordedFor = (o: Record<string, unknown>) => rec.assertions.find((r) => JSON.stringify(r.assertion) === JSON.stringify(o));
   if (!rec.refused && !asserts.some((a) => (a as Record<string, unknown>).exit_code !== undefined) && rec.exitCode !== 0)
     msgs.push(`exited ${rec.exitCode}, expected 0 (default)`);
   for (const a of asserts) {
@@ -280,6 +316,12 @@ export function regradeRecordedAction(leg: Leg, rec: ActionRecord): ScenarioLegE
       if (rec.exitCode !== o.exit_code) msgs.push(`exited ${rec.exitCode}, expected ${String(o.exit_code)}`);
     } else if (typeof o.stdout_matches === "string" || typeof o.stdout_not_matches === "string") {
       const key = typeof o.stdout_matches === "string" ? "stdout_matches" : "stdout_not_matches";
+      // The live grade saw the whole capture; a recorded failure stands whatever the kept head shows.
+      const recorded = recordedFor(o);
+      if (recorded && !recorded.pass) {
+        msgs.push(recorded.message ?? `${key} ${JSON.stringify(o[key])}: failed when recorded`);
+        continue;
+      }
       const c = compileUserRegex(o[key] as string);
       if ("error" in c) {
         msgs.push(`bad regex in ${key}: ${c.error}`);
@@ -287,15 +329,17 @@ export function regradeRecordedAction(leg: Leg, rec: ActionRecord): ScenarioLegE
       }
       const hit = c.re.test(rec.stdout.head);
       const truncated = rec.stdout.bytes > Buffer.byteLength(rec.stdout.head);
-      const pass = key === "stdout_matches" ? hit : !hit;
-      if (!pass)
-        (truncated ? unavailable : msgs).push(
-          truncated
-            ? `${key} ${JSON.stringify(o[key])}: evidence unavailable — the recording keeps the first ${Buffer.byteLength(rec.stdout.head)} of ${rec.stdout.bytes} stdout bytes`
-            : `${key} ${JSON.stringify(o[key])}: ${hit ? "matched" : "no match"} in stdout`,
+      // Past the kept head neither a match nor its absence can be shown: a no-hit there is evidence-unavailable.
+      if (!hit && truncated) {
+        unavailable.push(
+          `${key} ${JSON.stringify(o[key])}: evidence unavailable — the recording keeps the first ${Buffer.byteLength(rec.stdout.head)} of ${rec.stdout.bytes} stdout bytes`,
         );
+        continue;
+      }
+      const pass = key === "stdout_matches" ? hit : !hit;
+      if (!pass) msgs.push(`${key} ${JSON.stringify(o[key])}: ${hit ? "matched" : "no match"} in stdout`);
     } else {
-      const recorded = rec.assertions.find((r) => JSON.stringify(r.assertion) === JSON.stringify(o));
+      const recorded = recordedFor(o);
       if (!recorded)
         unavailable.push(
           `${Object.keys(o)[0]}: evidence unavailable — a host action's file assertions are graded from the recording, and this one was not recorded`,
@@ -415,6 +459,23 @@ export function multiLegScenarioDrift(c: MultiLegCassette, cassettePath: string)
   if (ids(onDisk.legs) !== ids(c.scenario.legs))
     return [`scenario-drift: the legs changed (${ids(c.scenario.legs)} → ${ids(onDisk.legs)})`];
   if (onDisk.workdir !== c.scenario.workdir) out.push(`scenario-drift: workdir ${c.scenario.workdir} → ${onDisk.workdir}`);
+  // The scenario-wide fields that shape a recording, as a single cassette's drift check covers them. The fixture is
+  // stored cassette-relative, so it is compared by presence (its content has its own signature in each leg).
+  const norm = (v: unknown) => JSON.stringify(v ?? null);
+  for (const k of [
+    "baseline",
+    "fidelity",
+    "lane",
+    "skills",
+    "requires_capabilities",
+    "on_unanswered",
+    "expect_denied",
+    "allow_host_hooks",
+  ] as const)
+    if (norm(onDisk[k]) !== norm(c.scenario[k])) out.push(`scenario-drift: ${k} changed`);
+  if (norm(redactStrings(onDisk.answers, policy)) !== norm(c.scenario.answers)) out.push("scenario-drift: answers changed");
+  if ((onDisk.workspace_fixture === undefined) !== (c.scenario.workspace_fixture === undefined))
+    out.push("scenario-drift: workspace_fixture added or removed");
   for (const leg of onDisk.legs) {
     const fr = c.scenario.legs.find((l) => l.id === leg.id)!;
     const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
@@ -422,7 +483,7 @@ export function multiLegScenarioDrift(c: MultiLegCassette, cassettePath: string)
     if (!same(leg.session, fr.session)) out.push(`scenario-drift: leg ${leg.id}: the session overlay changed`);
     if (!same(leg.timeout_ms, fr.timeout_ms)) out.push(`scenario-drift: leg ${leg.id}: timeout_ms changed`);
     if (leg.host_action) {
-      const ha = { ...leg.host_action, run: leg.host_action.run.map(red) };
+      const ha = redactStrings(leg.host_action, policy);
       if (!same(ha, fr.host_action)) out.push(`scenario-drift: leg ${leg.id}: the host action changed`);
     }
   }

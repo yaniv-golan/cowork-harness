@@ -98,6 +98,8 @@ export function resolveActionArgv(
       return v;
     });
     if (bad) return { ok: false, why: bad };
+    // The executable is the author's, never a value the run wrote (the status file is the agent's to write).
+    if (substituted && i === 0) return { ok: false, why: "run[0]: the executable cannot come from the status file; name it literally" };
     if (substituted) {
       if (out.startsWith("-"))
         return { ok: false, why: `run[${i}]: a substituted value may not start with "-" (got ${JSON.stringify(out)})` };
@@ -132,7 +134,14 @@ export interface ActionExec {
 export function runCapped(
   cmd: string,
   args: string[],
-  opts: { cwd?: string; env: NodeJS.ProcessEnv; timeoutMs: number; kill: (child: ReturnType<typeof spawn>) => void },
+  opts: {
+    cwd?: string;
+    env: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    kill: (child: ReturnType<typeof spawn>) => void;
+    /** Called with the child once spawned: the caller registers its interrupt cleanup there. */
+    onSpawn?: (child: ReturnType<typeof spawn>) => void;
+  },
 ): Promise<ActionExec> {
   const started = Date.now();
   return new Promise((res) => {
@@ -151,6 +160,7 @@ export function runCapped(
         spawnError: (e as Error).message,
       });
     }
+    opts.onSpawn?.(child);
     const out = { s: "", n: 0 };
     const err = { s: "", n: 0 };
     const take = (b: { s: string; n: number }) => (d: Buffer) => {
@@ -221,6 +231,7 @@ export function gradeAction(
   exec: Pick<ActionExec, "exitCode" | "timedOut">,
   stdoutScrubbed: string,
   fileCtx: Parameters<typeof evaluate>[1],
+  stdoutTruncated = false,
 ): ActionRecord["assertions"] {
   const out: ActionRecord["assertions"] = [];
   const asserted = asserts.some((a) => (a as Record<string, unknown>).exit_code !== undefined);
@@ -245,6 +256,15 @@ export function gradeAction(
         continue;
       }
       const hit = c.re.test(stdoutScrubbed);
+      // Past the capture cap, an absence (and a missing match) cannot be shown: evidence-unavailable, never a pass.
+      if (!hit && stdoutTruncated) {
+        out.push({
+          assertion: o,
+          pass: false,
+          message: `${key} ${JSON.stringify(o[key])}: evidence unavailable — stdout exceeded the ${ACTION_OUTPUT_CAP}-byte capture`,
+        });
+        continue;
+      }
       const pass = key === "stdout_matches" ? hit : !hit;
       out.push({
         assertion: o,

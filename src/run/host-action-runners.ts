@@ -1,7 +1,7 @@
 // The per-tier runners for a multi-leg HOST ACTION (see host-action.ts for what "the leg runtime" means and why).
 // Each runs one argv in the runtime of the agent that ran before it, with that agent's env minus the credentials.
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type spawn } from "node:child_process";
 import { join } from "node:path";
 import { mkdirSync, renameSync, rmSync } from "node:fs";
 import type { PlatformBaseline } from "../types.js";
@@ -92,7 +92,20 @@ export async function runActionInTier(p: {
   const token = `a${process.hrtime.bigint().toString(36)}`;
   if (tier === "protocol") {
     const env = hostActionEnv(tier, baseline, plan, { sessionId, proxyHost: "", outputsHost: paths.outputsHost });
-    return runCapped(argv[0]!, argv.slice(1), { cwd: paths.outputsHost, env, timeoutMs, kill: killGroup });
+    // Detached into its own group (so a timeout kills the whole tree), which also keeps the terminal's Ctrl-C from
+    // reaching it: register the kill for the interrupt path too.
+    let deregister: (() => void) | undefined;
+    try {
+      return await runCapped(argv[0]!, argv.slice(1), {
+        cwd: paths.outputsHost,
+        env,
+        timeoutMs,
+        kill: killGroup,
+        onSpawn: (child) => (deregister = registerCleanup({ phase: "container", run: () => killGroup(child) })),
+      });
+    } finally {
+      deregister?.();
+    }
   }
   if (tier === "container") {
     const runner = resolveContainerRuntime();
@@ -137,19 +150,27 @@ export async function runActionInTier(p: {
     const configVm = microvmGuestConfigDir(baseline, sessionVm);
     const script = `cd "$1" && shift && exec "$@"`;
     const envPairs = Object.entries(env).map(([k, v]) => `${k}=${v}`);
-    return await runCapped(
-      limaPath(),
-      ["shell", instance, "sh", "-c", script, "_", `${sessionVm}/mnt/outputs`, "env", ...envPairs, ...argv],
-      {
-        env: process.env,
-        timeoutMs,
-        // Killing the host client does not reach the guest: stop the action's guest processes by their config dir.
-        kill: (child) => {
-          spawnSync(limaPath(), microvmGuestKillArgv(instance, configVm, "KILL"), { stdio: "ignore" });
-          child.kill("SIGKILL");
+    // Killing the host client does not reach the guest: stop the action's guest processes by their config dir — on a
+    // timeout, and on the operator's interrupt.
+    const stop = (child: ReturnType<typeof spawn>) => {
+      spawnSync(limaPath(), microvmGuestKillArgv(instance, configVm, "KILL"), { stdio: "ignore" });
+      child.kill("SIGKILL");
+    };
+    let deregister: (() => void) | undefined;
+    try {
+      return await runCapped(
+        limaPath(),
+        ["shell", instance, "sh", "-c", script, "_", `${sessionVm}/mnt/outputs`, "env", ...envPairs, ...argv],
+        {
+          env: process.env,
+          timeoutMs,
+          kill: stop,
+          onSpawn: (child) => (deregister = registerCleanup({ phase: "container", run: () => stop(child) })),
         },
-      },
-    );
+      );
+    } finally {
+      deregister?.();
+    }
   } finally {
     proxy.close();
   }

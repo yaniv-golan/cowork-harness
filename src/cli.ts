@@ -1652,9 +1652,10 @@ async function runMultiLegFile(
     externalChannel: ReturnType<typeof resolveExternal>;
     o: ReturnType<typeof resolveOutput>;
     modelFlag: string | undefined;
+    deciderModel: string | undefined;
   },
 ): Promise<void> {
-  const { flags, policy, externalChannel, o, modelFlag } = p;
+  const { flags, policy, externalChannel, o, modelFlag, deciderModel } = p;
   const ms = loadMultiLegScenario(file);
   if (ms.on_unanswered === "prompt")
     fail("run", "usage", `scenario "${ms.name}" sets on_unanswered: prompt — rejected on \`run\``, undefined, o.json);
@@ -1668,6 +1669,9 @@ async function runMultiLegFile(
       compact: !!(flags.compact || flags.demo),
       runLabel: flags.label,
       ...(modelFlag !== undefined ? { modelOverride: modelFlag } : {}),
+      ...(deciderModel !== undefined ? { llmModel: deciderModel } : {}),
+      // Passed through so executeMultiLeg refuses it: a negative control must never quietly run with the skill.
+      ...(flags.ablateSkill ? { ablateSkill: true } : {}),
     });
   } catch (e) {
     if (e instanceof UnansweredError)
@@ -1891,7 +1895,7 @@ async function cmdRun(rawArgs: string[]) {
         undefined,
         o.json,
       );
-    return void (await runMultiLegFile(files[0], { flags, policy, externalChannel, o, modelFlag }));
+    return void (await runMultiLegFile(files[0], { flags, policy, externalChannel, o, modelFlag, deciderModel }));
   }
 
   // --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N

@@ -8259,6 +8259,12 @@ export async function cmdVerifyCassettes(args: string[]) {
     for (const leg of c.legs) {
       if ("cassette" in leg) {
         const nested = (leg as { cassette: Cassette }).cassette;
+        // The session file shapes every leg: its drift reds the cassette as it reds a single one.
+        if (doStaleness) {
+          const sfd = sessionFingerprintDrift(nested, dirname(f), "none", vcSessionOverride);
+          if (sfd.drifted) out.staleness.push(`leg ${leg.id}: session-shape fingerprint differs from the current session file — re-record`);
+          if (sfd.note) out.notes.push(`leg ${leg.id}: ${sfd.note}`);
+        }
         if (doPrivacy) out.findings.push(...scanCassette(nested, allow).map((x) => ({ ...x, where: `leg ${leg.id}: ${x.where}` })));
         if (doStaleness) {
           const st = computeStaleness(nested, dirname(f), vcSessionOverride);
@@ -8279,7 +8285,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       out.version.push(
         `cassette format v${c.cassetteVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,
       );
-    if (doStaleness) out.scenarioDrift.push(...multiLegScenarioDrift(c, f));
+    if (doScenarioDrift) out.scenarioDrift.push(...multiLegScenarioDrift(c, f));
     return out;
   }
   function verifyOneCassette(f: string) {
