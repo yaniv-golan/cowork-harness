@@ -112,26 +112,41 @@ export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
 }
 
 /** `sync`'s decision for `agentBinary.searchAnchors`. Pure: the caller reads the binaries.
- *  - `elf` present: extract; a failure is a delta, which blocks the write.
- *  - `native` present: its anchors must equal the ELF's, since hostloop runs it.
+ *  - `elf` present: extract. A failure records NO anchors and a warning.
+ *  - `native` present: its anchors must equal the ELF's, since hostloop runs it. A mismatch, an unreadable native
+ *    agent, or one the extractor cannot read records NO anchors and a warning.
  *  - `elf` absent: carry the base's anchors only for the same agent version (the ELF is immutable per version),
- *    else record nothing (absent means unknown). */
+ *    else record nothing.
+ *  Absent anchors mean unknown, and whatever reads them must refuse on unknown. Warnings, not write-blocking
+ *  deltas, while nothing reads the anchors: a Desktop release should not stall sync over a block no feature uses. */
 export function searchAnchorsForSync(a: {
   elf: Buffer | null;
-  native: Buffer | null;
+  native: Buffer | { unreadable: string } | null;
   sameVersionAsBase: boolean;
   base: SearchAnchors | undefined;
-}): { anchors: SearchAnchors | undefined; deltas: string[] } {
-  if (!a.elf) return { anchors: a.sameVersionAsBase ? a.base : undefined, deltas: [] };
+}): { anchors: SearchAnchors | undefined; warnings: string[] } {
+  if (!a.elf) return { anchors: a.sameVersionAsBase ? a.base : undefined, warnings: [] };
   const elf = extractSearchAnchors(a.elf);
-  if (!elf.ok) return { anchors: undefined, deltas: elf.defects.map((d) => `agentBinary.searchAnchors: ${d}`) };
-  const deltas: string[] = [];
+  if (!elf.ok) return { anchors: undefined, warnings: elf.defects.map((d) => `agentBinary.searchAnchors not recorded: ${d}`) };
+  if (a.native && !Buffer.isBuffer(a.native))
+    return {
+      anchors: undefined,
+      warnings: [`agentBinary.searchAnchors not recorded: the native agent could not be read (${a.native.unreadable})`],
+    };
   if (a.native) {
     const native = extractSearchAnchors(a.native);
     if (!native.ok)
-      deltas.push(`agentBinary.searchAnchors: the native agent's web-search anchors could not be extracted (${native.defects.join("; ")})`);
-    else if (JSON.stringify(native.anchors) !== JSON.stringify(elf.anchors))
-      deltas.push("agentBinary.searchAnchors: the native agent's web-search anchors differ from the VM ELF's");
+      return {
+        anchors: undefined,
+        warnings: [
+          `agentBinary.searchAnchors not recorded: the native agent's anchors could not be extracted (${native.defects.join("; ")})`,
+        ],
+      };
+    if (JSON.stringify(native.anchors) !== JSON.stringify(elf.anchors))
+      return {
+        anchors: undefined,
+        warnings: ["agentBinary.searchAnchors not recorded: the native agent's anchors differ from the VM ELF's"],
+      };
   }
-  return { anchors: elf.anchors, deltas };
+  return { anchors: elf.anchors, warnings: [] };
 }

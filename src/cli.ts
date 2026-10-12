@@ -3319,19 +3319,17 @@ async function cmdSync(args: string[]) {
     cliCapabilities = baseCliCapabilities;
   }
   // Web-search anchors (agentBinary.searchAnchors). searchAnchorsForSync owns the lifecycle: measured from a staged
-  // ELF, where a failed extraction BLOCKS the write (a silent fallback would later let a live search into a run
-  // labelled frozen); carried from the base only for the same agent version when the ELF is not staged. The native
-  // agent, which hostloop runs, must give the same anchors whatever its version: they have not moved from 2.1.260
-  // through 2.1.295, so a difference is a finding, not a version skew.
+  // ELF, carried from the base only for the same agent version when the ELF is not staged. The native agent, which
+  // hostloop runs, must give the same anchors whatever its version: they have not moved from 2.1.260 through 2.1.295,
+  // so a difference is a finding, not a version skew. Any failure records no anchors and prints a WARNING; it does not
+  // block the write while nothing reads the anchors.
   const nativeResolved = derivedNativeStagedPath.replace(/^~(?=$|\/)/, homeDir);
-  let nativeAgent: Buffer | null = null;
+  let nativeAgent: Buffer | { unreadable: string } | null = null;
   if (existsSync(nativeResolved)) {
     try {
       nativeAgent = readFileSync(nativeResolved);
     } catch (e) {
-      res.unknownDeltas.push(
-        `agentBinary.searchAnchors: the native agent could not be read (${(e as NodeJS.ErrnoException).code ?? "error"})`,
-      );
+      nativeAgent = { unreadable: (e as NodeJS.ErrnoException).code ?? "error" };
     }
   }
   const anchored = searchAnchorsForSync({
@@ -3341,7 +3339,7 @@ async function cmdSync(args: string[]) {
     base: (baseAgentBinary.searchAnchors ?? undefined) as SearchAnchors | undefined,
   });
   const searchAnchors = anchored.anchors;
-  res.unknownDeltas.push(...anchored.deltas);
+  res.notes.push(...anchored.warnings.map((w) => `WARNING: ${w}`));
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
   const nextAgentBinary = buildNextAgentBinary(baseAgentBinary, {

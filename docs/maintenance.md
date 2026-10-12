@@ -469,8 +469,10 @@ committed baseline and say why in that baseline's `$comment`.
    located by code shape inside the one call site that names the nested search, because the binary also holds
    string-table copies. The cloud route pieces are only checked to be present exactly once; they are constants.
    Nothing in the harness reads the block yet; it exists so a later release can recognise the nested request.
-   - **Blocking.** A staged agent whose anchors cannot be extracted, or whose native build (the one hostloop runs)
-     gives different anchors from the VM ELF, refuses the write, whatever the two builds' versions. Same lifecycle as `stringSentinels` otherwise: carried from the
+   - **Warning, not blocking.** When a staged agent's anchors cannot be extracted, or its native build (the one
+     hostloop runs) gives different anchors from the VM ELF, whatever the two builds' versions, `sync` prints a
+     `WARNING` and records no anchors. It does not block the write, because nothing reads the block yet. Absent
+     anchors mean unknown. Same lifecycle as `stringSentinels` otherwise: carried from the
      base only on a re-sync of the same agent version when the ELF is not staged.
    - **Measured.** Every backed-up agent from 2.1.260 through 2.1.295 gives the same anchors.
 

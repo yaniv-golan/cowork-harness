@@ -19,16 +19,14 @@ All notable changes to this project are documented here. The format is based on
 - **For maintainers: `sync` records how the agent's WebSearch tool asks for a search.** The agent's WebSearch tool
   makes its own nested model request. `sync` now records, from the staged agent, the facts that identify that
   request, as `agentBinary.searchAnchors`: the server tool type, the cloud search route's path pieces, and the
-  system sentence and user-message prefix as a hash and byte length (never the text). A staged agent whose anchors
-  cannot be extracted, or whose native build gives different anchors from its VM build, refuses the write. Nothing
-  reads the block yet.
+  system sentence and user-message prefix as a hash and byte length (never the text). When a staged agent's anchors
+  cannot be extracted, or its native build gives different anchors from its VM build, `sync` prints a warning and
+  records no anchors; it does not block the write. Nothing reads the block yet.
 - **For maintainers: `sync` records the agent's own web-search feature values** as `provenance.agentSearchGates`:
   whether the nested search runs on the small/fast model, the fast search profile, and the two request-body
   compression features. They are the agent's features, not Desktop gates, so `sync` reads them from Desktop's
   per-session cache rather than the fcache. Only booleans, numbers and flat objects of them are published, with no
   org or session identifier. A missing cache is a note, never a blocker.
-- **The 2.31226.1 baseline is re-synced.** Besides the two blocks above, the computer-use permission gate moved
-  from off to forced on in production. The harness does not serve that tool family, so no verdict changes.
 
 ## [4.8.1] — 2026-10-12
 

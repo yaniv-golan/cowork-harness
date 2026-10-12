@@ -119,33 +119,40 @@ describe("extractSearchAnchors", () => {
   });
 });
 
-describe("searchAnchorsForSync — sync's decision", () => {
+describe("searchAnchorsForSync — sync's decision (warnings, never write-blocking, while nothing reads the anchors)", () => {
   const good = bundle();
   const anchors = (extractSearchAnchors(good) as { ok: true; anchors: SearchAnchors }).anchors;
   const other = { ...anchors, userPrefix: { ...anchors.userPrefix, bytes: anchors.userPrefix.bytes + 1 } };
+  const none = { sameVersionAsBase: false, base: undefined };
 
-  it("records the ELF's anchors, with no delta, when the native agent agrees", () => {
-    expect(searchAnchorsForSync({ elf: good, native: good, sameVersionAsBase: false, base: undefined })).toEqual({ anchors, deltas: [] });
+  it("records the ELF's anchors when the native agent agrees", () => {
+    expect(searchAnchorsForSync({ elf: good, native: good, ...none })).toEqual({ anchors, warnings: [] });
   });
-  it("blocks (a delta) when the staged ELF's anchors cannot be extracted", () => {
+  it("records NO anchors and warns when the staged ELF's anchors cannot be extracted, even with a base to carry", () => {
     const r = searchAnchorsForSync({ elf: Buffer.from("no call site"), native: null, sameVersionAsBase: true, base: anchors });
     expect(r.anchors).toBeUndefined();
-    expect(r.deltas.join("\n")).toMatch(/agentBinary\.searchAnchors: querySource/);
+    expect(r.warnings.join("\n")).toMatch(/searchAnchors not recorded: querySource/);
   });
-  it("blocks when the native agent's anchors differ or cannot be extracted", () => {
+  it("records NO anchors when the native agent differs, cannot be extracted, or cannot be read", () => {
     const changed = bundle(callSite("Some other prefix text here: "));
-    expect(searchAnchorsForSync({ elf: good, native: changed, sameVersionAsBase: false, base: undefined }).deltas.join("\n")).toMatch(
-      /differ from the VM ELF/,
-    );
-    expect(
-      searchAnchorsForSync({ elf: good, native: Buffer.from("nothing"), sameVersionAsBase: false, base: undefined }).deltas.join("\n"),
-    ).toMatch(/native agent's web-search anchors could not be extracted/);
+    for (const [native, msg] of [
+      [changed, /differ from the VM ELF/],
+      [Buffer.from("nothing"), /could not be extracted/],
+      [{ unreadable: "EACCES" }, /could not be read \(EACCES\)/],
+    ] as const) {
+      const r = searchAnchorsForSync({ elf: good, native, ...none });
+      expect(r.anchors).toBeUndefined();
+      expect(r.warnings.join("\n")).toMatch(msg);
+    }
   });
   it("carries the base's anchors only for the same agent version when the ELF is not staged", () => {
-    expect(searchAnchorsForSync({ elf: null, native: null, sameVersionAsBase: true, base: other })).toEqual({ anchors: other, deltas: [] });
+    expect(searchAnchorsForSync({ elf: null, native: null, sameVersionAsBase: true, base: other })).toEqual({
+      anchors: other,
+      warnings: [],
+    });
     expect(searchAnchorsForSync({ elf: null, native: null, sameVersionAsBase: false, base: other })).toEqual({
       anchors: undefined,
-      deltas: [],
+      warnings: [],
     });
   });
 });
@@ -171,10 +178,10 @@ describe("committed baselines: the search blocks parse strictly (non-vacuous on 
   });
 });
 
-describe("sync wiring (source text): every anchor path goes through searchAnchorsForSync, and its deltas block", () => {
+describe("sync wiring (source text): every anchor path goes through searchAnchorsForSync, and its warnings print", () => {
   const cli = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
-  it("pushes the helper's deltas into the write-blocking list", () => {
-    expect(cli).toContain("res.unknownDeltas.push(...anchored.deltas);");
+  it("prints the helper's warnings as notes", () => {
+    expect(cli).toContain("res.notes.push(...anchored.warnings.map((w) => `WARNING: ${w}`));");
   });
   it("never assigns the base's anchors outside the helper", () => {
     expect(cli).not.toMatch(/searchAnchors = baseSearchAnchors/);
