@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { initAgentVersion } from "../run/recorded-agent-version.js";
+import { resolveGraded } from "../run/turn-layout.js";
 import { parseWebSearchResult, renderWebSearchResult, splitSearches, type SearchLink } from "./render.js";
 
 export interface RecordSource {
@@ -118,20 +119,10 @@ function readJson(path: string): Record<string, unknown> | null {
   }
 }
 
-/** The newest turn's result.json (per-turn layout), else a legacy root result.json. */
+/** The run's graded result, through the turn-layout seam (the graded alias, else turn 1). */
 function resultOf(runDir: string): Record<string, unknown> | null {
-  const turns = join(runDir, "turns");
-  if (existsSync(turns)) {
-    const ns = readdirSync(turns)
-      .filter((n) => /^\d+$/.test(n))
-      .map(Number)
-      .sort((a, b) => b - a);
-    for (const n of ns) {
-      const r = readJson(join(turns, String(n), "result.json"));
-      if (r) return r;
-    }
-  }
-  return readJson(join(runDir, "result.json"));
+  const p = resolveGraded(runDir, "result.json");
+  return p ? readJson(p) : null;
 }
 
 function childTranscripts(runDir: string): string[] {
