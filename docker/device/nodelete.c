@@ -42,12 +42,16 @@ struct folder {
   char name[256];
   char mode[8];
   char path[PATH_MAX];
+  dev_t dev; /* the root's identity; ino 0 when it could not be read */
+  ino_t ino;
 };
 
 struct ctl {
   int n;
   int ok; /* the folders file was read */
   char mnt[PATH_MAX];
+  dev_t mnt_dev;
+  ino_t mnt_ino;
   struct folder f[MAX_FOLDERS];
 };
 
@@ -113,6 +117,18 @@ static struct ctl *load_ctl(void) {
     snprintf(f->path, sizeof f->path, "%s", t2 + 1);
   }
   munmap(buf, MAX_FILE);
+  /* Each root's identity: a path is placed by what it is, never by how it is spelled (a case-insensitive
+   * filesystem answers to other spellings of a folder's name). */
+  struct stat st;
+  for (int i = 0; i < c->n; i++)
+    if (stat(c->f[i].path, &st) == 0) {
+      c->f[i].dev = st.st_dev;
+      c->f[i].ino = st.st_ino;
+    }
+  if (c->mnt[0] && stat(c->mnt, &st) == 0) {
+    c->mnt_dev = st.st_dev;
+    c->mnt_ino = st.st_ino;
+  }
   return c;
 }
 
@@ -127,26 +143,6 @@ static int granted(const char *name) {
   }
   munmap(buf, MAX_FILE);
   return found;
-}
-
-/* `p` equals `root` or lies beneath it (a prefix only at a path boundary). */
-static int under(const char *p, const char *root) {
-  size_t n = strlen(root);
-  return n > 0 && strncmp(p, root, n) == 0 && (p[n] == '\0' || p[n] == '/');
-}
-
-/* The folder holding `p`, or -1. */
-static int folder_of(const struct ctl *c, const char *p) {
-  for (int i = 0; i < c->n; i++)
-    if (under(p, c->f[i].path)) return i;
-  return -1;
-}
-
-static int is_root(const struct ctl *c, const char *p) {
-  if (c->mnt[0] && strcmp(p, c->mnt) == 0) return 1;
-  for (int i = 0; i < c->n; i++)
-    if (strcmp(p, c->f[i].path) == 0) return 1;
-  return 0;
 }
 
 /* The absolute path `path` names relative to `dirfd`, with its parent resolved (symlinks, `..`) and the leaf kept
@@ -227,29 +223,43 @@ static void audit(const char *op, const char *folder, const char *rel, const cha
 
 /* Decide a delete. Returns 1 to call through (with *granted_folder set when the call is a granted delete to log),
  * 0 when refused here (errno set). */
-/* For a path too deep to resolve as a string (a short name relative to a deep directory): the folder its parent
- * lies in, found by walking up from the parent directory itself and comparing each ancestor with the folder roots
- * by device and inode, so no symlink can mislead it. -1 for none; -2 when it cannot tell. */
-static int deep_folder_of(const struct ctl *c, int dirfd, const char *path) {
+#define AT_MNT (-3)
+
+/* Which root `st` is: a folder's index, AT_MNT for the folders' parent, -1 for neither. */
+static int root_index(const struct ctl *c, const struct stat *st) {
+  for (int i = 0; i < c->n; i++)
+    if (c->f[i].ino && c->f[i].ino == st->st_ino && c->f[i].dev == st->st_dev) return i;
+  if (c->mnt_ino && c->mnt_ino == st->st_ino && c->mnt_dev == st->st_dev) return AT_MNT;
+  return -1;
+}
+
+/* The folder holding `path`'s parent directory: found by opening that directory and walking up from it, comparing
+ * each ancestor with the roots by device and inode, so neither a symlink, another spelling of a name, nor a path too
+ * long to name can mislead it. A folder's index; -1 for none (the folders' parent, or outside); -2 when the parent
+ * cannot be opened (errno set). */
+static int place_parent(const struct ctl *c, int dirfd, const char *path) {
   char parent[PATH_MAX];
   int n = snprintf(parent, sizeof parent, "%s", path);
-  if (n < 0 || (size_t)n >= sizeof parent) return -2;
+  if (n < 0 || (size_t)n >= sizeof parent) {
+    errno = ENAMETOOLONG;
+    return -2;
+  }
+  size_t len = strlen(parent);
+  while (len > 1 && parent[len - 1] == '/') parent[--len] = '\0';
   char *slash = strrchr(parent, '/');
-  if (slash) *slash = '\0';
-  else snprintf(parent, sizeof parent, ".");
-  int fd = openat(dirfd, parent[0] ? parent : "/", O_PATH | O_DIRECTORY | O_CLOEXEC);
+  if (!slash) snprintf(parent, sizeof parent, ".");
+  else if (slash == parent) parent[1] = '\0';
+  else *slash = '\0';
+  int fd = openat(dirfd, parent, O_PATH | O_DIRECTORY | O_CLOEXEC);
   if (fd < 0) return -2;
-  struct stat roots[MAX_FOLDERS];
-  for (int i = 0; i < c->n; i++)
-    if (stat(c->f[i].path, &roots[i]) != 0) roots[i].st_ino = 0;
   for (int depth = 0; depth < PATH_MAX; depth++) {
     struct stat st;
     if (fstat(fd, &st) != 0) break;
-    for (int i = 0; i < c->n; i++)
-      if (roots[i].st_ino && roots[i].st_ino == st.st_ino && roots[i].st_dev == st.st_dev) {
-        close(fd);
-        return i;
-      }
+    int r = root_index(c, &st);
+    if (r >= 0 || r == AT_MNT) {
+      close(fd);
+      return r >= 0 ? r : -1;
+    }
     int up = openat(fd, "..", O_PATH | O_DIRECTORY | O_CLOEXEC);
     struct stat ust;
     if (up < 0 || fstat(up, &ust) != 0) {
@@ -264,7 +274,18 @@ static int deep_folder_of(const struct ctl *c, int dirfd, const char *path) {
     }
   }
   close(fd);
+  errno = EIO;
   return -2;
+}
+
+/* The path inside folder `fi` for an audit line: from the resolved name when it lies under the root (compared
+ * without case, as the filesystem may), else the name as given. */
+static const char *rel_in(const struct ctl *c, int fi, int dirfd, const char *path, char *full) {
+  if (resolve_path(dirfd, path, full, PATH_MAX) == 0) {
+    size_t n = strlen(c->f[fi].path);
+    if (strncasecmp(full, c->f[fi].path, n) == 0 && (full[n] == '/' || full[n] == '\0')) return full[n] == '/' ? full + n + 1 : full + n;
+  }
+  return path;
 }
 
 enum del_kind { DEL_UNLINK, DEL_RMDIR, DEL_REMOVE };
@@ -275,6 +296,7 @@ enum del_kind { DEL_UNLINK, DEL_RMDIR, DEL_REMOVE };
 static int delete_allowed(const char *op, enum del_kind kind, int dirfd, const char *path, int *fi_out, struct ctl *c, char *full) {
   int saved = errno;
   *fi_out = -1;
+  full[0] = '\0';
   if (!path || !*path) {
     errno = ENOENT;
     return 0;
@@ -285,96 +307,61 @@ static int delete_allowed(const char *op, enum del_kind kind, int dirfd, const c
     errno = saved;
     return 1;
   }
-  int resolved = resolve_path(dirfd, path, full, PATH_MAX);
-  int fi;
-  if (resolved == -2) {
-    /* Too deep to place by name. An absolute or over-long name fails in the kernel anyway; a short name under a
-     * deep directory is placed by walking up from it. */
-    if (path[0] == '/' || plen >= PATH_MAX) {
+  if (!c || !c->ok) {
+    /* No control file: refuse every delete under a session's mnt rather than enforce nothing. */
+    if (resolve_path(dirfd, path, full, PATH_MAX) != 0 || !(strncmp(full, "/sessions/", 10) == 0 && strstr(full, "/mnt/"))) {
       errno = saved;
       return 1;
     }
-    if (!c || !c->ok) fi = -2;
-    else {
-      fi = deep_folder_of(c, dirfd, path);
-      if (fi == -1 || (fi >= 0 && strcmp(c->f[fi].mode, "rw") != 0)) {
-        errno = saved;
-        return 1;
-      }
-      if (fi >= 0 && granted(c->f[fi].name)) {
-        errno = saved;
-        return 1;
-      }
-    }
-    /* The same order as below: missing, then the type errors, then the refusal. */
-    struct stat dst;
-    if (fstatat(dirfd, path, &dst, AT_SYMLINK_NOFOLLOW) != 0) {
-      errno = ENOENT;
-      return 0;
-    }
-    if (kind == DEL_UNLINK && S_ISDIR(dst.st_mode)) {
-      errno = EISDIR;
-      return 0;
-    }
-    if (kind == DEL_RMDIR && !S_ISDIR(dst.st_mode)) {
-      errno = ENOTDIR;
-      return 0;
-    }
-    /* Too deep for its path inside the folder to be named: the audit line carries the name as given. */
-    if (fi >= 0) audit(op, c->f[fi].name, path, "refused");
     errno = EPERM;
     return 0;
   }
-  if (resolved != 0) {
+  struct stat tst;
+  int exists = fstatat(dirfd, path, &tst, AT_SYMLINK_NOFOLLOW) == 0;
+  /* A folder root, or the folders' parent, is a mount point in production: never removed. */
+  if (exists && root_index(c, &tst) != -1) {
+    errno = EBUSY;
+    return 0;
+  }
+  int fi = place_parent(c, dirfd, path);
+  if (fi == -2) {
+    /* A parent that does not exist or is not a directory: the kernel answers that. Anything else: refuse. */
+    if (errno == ENOENT || errno == ENOTDIR || errno == ENAMETOOLONG) {
+      errno = saved;
+      return 1;
+    }
+    errno = EPERM;
+    return 0;
+  }
+  if (fi < 0 || strcmp(c->f[fi].mode, "rw") != 0) {
     errno = saved;
     return 1;
   }
-  if (!c || !c->ok) {
-    /* No control file: refuse every delete under a session's mnt rather than enforce nothing. */
-    if (strncmp(full, "/sessions/", 10) == 0 && strstr(full, "/mnt/")) fi = -2;
-    else {
-      errno = saved;
-      return 1;
-    }
-  } else {
-    fi = folder_of(c, full);
-    if (fi < 0 || strcmp(c->f[fi].mode, "rw") != 0) {
-      errno = saved;
-      return 1;
-    }
-    if (granted(c->f[fi].name)) {
-      *fi_out = fi;
-      errno = saved;
-      return 1;
-    }
+  if (granted(c->f[fi].name)) {
+    *fi_out = fi;
+    errno = saved;
+    return 1;
   }
-  struct stat st;
-  if (lstat(full, &st) != 0) {
+  /* The kernel's own answers come first, as they would for a refusal production's mount makes. */
+  if (!exists) {
     errno = ENOENT;
     return 0;
   }
-  if (kind == DEL_UNLINK && S_ISDIR(st.st_mode)) {
+  if (kind == DEL_UNLINK && S_ISDIR(tst.st_mode)) {
     errno = EISDIR;
     return 0;
   }
-  if (kind == DEL_RMDIR && !S_ISDIR(st.st_mode)) {
+  if (kind == DEL_RMDIR && !S_ISDIR(tst.st_mode)) {
     errno = ENOTDIR;
     return 0;
   }
-  if (fi >= 0) {
-    const char *root = c->f[fi].path;
-    const char *rel = full + strlen(root);
-    if (*rel == '/') rel++;
-    audit(op, c->f[fi].name, rel, "refused");
-  }
+  audit(op, c->f[fi].name, rel_in(c, fi, dirfd, path, full), "refused");
   errno = EPERM;
   return 0;
 }
 
-static void log_granted(const char *op, const struct ctl *c, int fi, const char *full, int rc) {
+static void log_granted(const char *op, const struct ctl *c, int fi, const char *rel, int rc) {
   if (fi < 0) return;
-  const char *rel = full + strlen(c->f[fi].path);
-  if (*rel == '/') rel++;
   audit(op, c->f[fi].name, rel, rc == 0 ? "granted" : "granted-failed");
 }
 
@@ -398,9 +385,10 @@ int unlinkat(int dirfd, const char *path, int flags) {
     ctl_free(c);
     return -1;
   }
+  const char *rel = fi >= 0 ? rel_in(c, fi, dirfd, path, full) : "";
   int rc = real_unlinkat(dirfd, path, flags);
   int e = errno;
-  log_granted(op, c, fi, full, rc);
+  log_granted(op, c, fi, rel, rc);
   ctl_free(c);
   errno = e;
   return rc;
@@ -415,9 +403,10 @@ int unlink(const char *path) {
     ctl_free(c);
     return -1;
   }
+  const char *rel = fi >= 0 ? rel_in(c, fi, AT_FDCWD, path, full) : "";
   int rc = real_unlink(path);
   int e = errno;
-  log_granted("unlink", c, fi, full, rc);
+  log_granted("unlink", c, fi, rel, rc);
   ctl_free(c);
   errno = e;
   return rc;
@@ -432,9 +421,10 @@ int rmdir(const char *path) {
     ctl_free(c);
     return -1;
   }
+  const char *rel = fi >= 0 ? rel_in(c, fi, AT_FDCWD, path, full) : "";
   int rc = real_rmdir(path);
   int e = errno;
-  log_granted("rmdir", c, fi, full, rc);
+  log_granted("rmdir", c, fi, rel, rc);
   ctl_free(c);
   errno = e;
   return rc;
@@ -450,41 +440,55 @@ int remove(const char *path) {
     ctl_free(c);
     return -1;
   }
+  const char *rel = fi >= 0 ? rel_in(c, fi, AT_FDCWD, path, full) : "";
   int rc = real_remove(path);
   int e = errno;
-  log_granted("remove", c, fi, full, rc);
+  log_granted("remove", c, fi, rel, rc);
   ctl_free(c);
   errno = e;
   return rc;
 }
 
 /* A rename stays inside one folder: across a folder boundary it is cross-device (EXDEV, so `mv` falls back to a
- * copy and an unlink, which is then refused), and a folder root or the folders' parent cannot be renamed (EBUSY,
- * as a mount point). */
+ * copy and an unlink, which is then refused), and a folder root or the folders' parent cannot be renamed, nor
+ * replaced (EBUSY, as a mount point). Placed by identity, as a delete is. */
 static int rename_allowed(int olddirfd, const char *oldpath, int newdirfd, const char *newpath) {
   int saved = errno;
   struct ctl *c = load_ctl();
   int verdict = 1;
   if (!c || !c->ok) {
-    ctl_free(c);
+    /* No control file: keep every rename under a session's mnt from leaving where it is, as deletes there are
+     * refused, rather than enforce nothing. */
+    char from[PATH_MAX], to[PATH_MAX];
+    int in_from = resolve_path(olddirfd, oldpath, from, sizeof from) == 0 && strncmp(from, "/sessions/", 10) == 0 && strstr(from, "/mnt/");
+    int in_to = resolve_path(newdirfd, newpath, to, sizeof to) == 0 && strncmp(to, "/sessions/", 10) == 0 && strstr(to, "/mnt/");
+    if (c) ctl_free(c);
+    if (in_from || in_to) {
+      errno = EXDEV;
+      return 0;
+    }
     errno = saved;
     return 1;
   }
-  char from[PATH_MAX], to[PATH_MAX];
-  int rf = resolve_path(olddirfd, oldpath, from, sizeof from);
-  int rt = resolve_path(newdirfd, newpath, to, sizeof to);
-  if (rf == -2 || rt == -2) {
-    /* Too deep to place: treat it as crossing a folder boundary. */
-    verdict = 0;
-    saved = EXDEV;
-  } else if (rf != 0 || rt != 0) {
-    /* unresolvable: the real call reports it */
-  } else if (is_root(c, from) || is_root(c, to)) {
+  struct stat st;
+  if ((fstatat(olddirfd, oldpath, &st, AT_SYMLINK_NOFOLLOW) == 0 && root_index(c, &st) != -1) ||
+      (fstatat(newdirfd, newpath, &st, AT_SYMLINK_NOFOLLOW) == 0 && root_index(c, &st) != -1)) {
     verdict = 0;
     saved = EBUSY;
-  } else if (folder_of(c, from) != folder_of(c, to)) {
-    verdict = 0;
-    saved = EXDEV;
+  } else {
+    int from = place_parent(c, olddirfd, oldpath);
+    int ferr = errno;
+    int to = place_parent(c, newdirfd, newpath);
+    int terr = errno;
+    if ((from == -2 && !(ferr == ENOENT || ferr == ENOTDIR)) || (to == -2 && !(terr == ENOENT || terr == ENOTDIR))) {
+      /* Cannot place one end: treat it as crossing a folder boundary. */
+      verdict = 0;
+      saved = EXDEV;
+    } else if (from != -2 && to != -2 && from != to) {
+      verdict = 0;
+      saved = EXDEV;
+    }
+    /* A missing parent at either end: the real call reports it. */
   }
   ctl_free(c);
   errno = saved;

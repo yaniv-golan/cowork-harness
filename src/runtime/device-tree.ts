@@ -111,7 +111,11 @@ const sameBytes = (a: TreeEntry, b: TreeEntry) => a.type === b.type && a.size ==
 function renamedAfter(path: string, before: Before, after: After, afterById: ReadonlyMap<string, string[]>, reliable: boolean): boolean {
   const b = before[path]!;
   if (typeof b === "string") return false;
+  // All folder copies share one tree, so a raw system call can carry a file out of its folder; production's folders
+  // are separate mounts, where that is impossible. A rename stays inside its folder.
+  const folder = path.split("/")[0]!;
   return (afterById.get(b.id) ?? []).some((q) => {
+    if (q.split("/")[0] !== folder || !q.includes("/")) return false;
     const a = after[q]!;
     if (a.type !== b.type) return false;
     if (reliable) return true;

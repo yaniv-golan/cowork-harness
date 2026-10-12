@@ -224,6 +224,21 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
     expect(sh("touch h.txt && rm h.txt && touch /tmp/t && rm /tmp/t").code).toBe(0);
   });
 
+  // A folder copy on a case-insensitive filesystem (APFS through Docker Desktop's file sharing; not CI's ext4) answers
+  // to another spelling of its name. The shim must place a path by what it is, not how it is spelled.
+  it("another spelling of a folder's name on a case-insensitive filesystem is still that folder", () => {
+    writeFileSync(join(host, "mnt", "proj", "cs"), "cs");
+    const ci = sh("test -e mnt/PROJ/cs && echo ci || echo cs").out.trim();
+    if (ci !== "ci") {
+      process.stderr.write("::notice:: device-shim: case-sensitive filesystem here, so the other-spelling case is not exercised\n");
+      return;
+    }
+    expect(sh("rm mnt/PROJ/cs").code).toBe(1);
+    expect(existsSync(join(host, "mnt", "proj", "cs"))).toBe(true);
+    expect(sh("mv mnt/PROJ mnt/elsewhere").code).not.toBe(0);
+    expect(existsSync(join(host, "mnt", "proj"))).toBe(true);
+  });
+
   it("a prefix of another folder's name is not that folder", () => {
     // `proj` is denied; a sibling named `projx` is not a connected folder at all.
     mkdirSync(join(host, "mnt", "projx"), { recursive: true });
@@ -293,6 +308,19 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
     const sig = v.signals.find((x) => x.code === (reliable === false ? "device_delete_unconfirmed" : "device_delete_bypassed"));
     expect(sig?.severity).toBe(reliable === false ? "warn" : "fail");
     expect(v.pass).toBe(reliable === false);
+  });
+
+  it("a raw-syscall move out of a folder gets past the shim; the device tree reports it as gone, not renamed", () => {
+    writeFileSync(join(host, "mnt", "other", "carried.txt"), "c");
+    recordDeviceTree(outDir);
+    // aarch64 renameat2 is syscall 276; AT_FDCWD is -100.
+    const r = sh(
+      `python3 -c 'import ctypes; l=ctypes.CDLL(None); print(l.syscall(276, -100, b"mnt/other/carried.txt", -100, b"mnt/carried.txt", 0))'`,
+    );
+    expect(r.out.trim()).toBe("0");
+    expect(existsSync(join(host, "mnt", "carried.txt"))).toBe(true);
+    const findings = deviceTurnFindings(outDir, mounts, { shimEnforced: () => true });
+    expect(findings.bypassedDeletes).toContain("other/carried.txt");
   });
 
   it("a folder cannot be granted the canary's name: the handler grants only connected folders, and it holds a slash", () => {

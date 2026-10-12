@@ -184,3 +184,37 @@ describe("deviceTreeListing never reads a file that could block", () => {
     expect(listing["proj/fifo"]!.sha256).toBeUndefined();
   });
 });
+
+// All folder copies share one tree, so a raw system call can move a file out of its folder without a delete. Production
+// cannot (each folder is its own mount): the file is gone from the folder, so it is a loss, never a rename.
+describe("treeDeletes: a rename stays inside its folder", () => {
+  const DENIED2 = [
+    { name: "proj", mountPath: "proj" },
+    { name: "other", mountPath: "other" },
+  ];
+  for (const reliable of [true, false]) {
+    it(`a move to the folders' parent, to another folder, or of the whole folder is a loss (identity ${reliable ? "reliable" : "unreliable"})`, () => {
+      const before = { "proj/a.txt": f("7:1", "aa"), "proj/sub/": d("9:1"), "proj/sub/x": f("8:1", "xx") };
+      expect(
+        cmds(treeDeletes(before, { "a.txt": f("7:1", "aa"), "proj/sub/": d("9:1"), "proj/sub/x": f("8:1", "xx") }, DENIED2, reliable)),
+      ).toEqual(["(removed from the device copy) proj/a.txt"]);
+      expect(
+        cmds(
+          treeDeletes(before, { "other/a.txt": f("7:1", "aa"), "proj/sub/": d("9:1"), "proj/sub/x": f("8:1", "xx") }, DENIED2, reliable),
+        ),
+      ).toEqual(["(removed from the device copy) proj/a.txt"]);
+      expect(
+        cmds(
+          treeDeletes(before, { "stash/a.txt": f("7:1", "aa"), "stash/sub/": d("9:1"), "stash/sub/x": f("8:1", "xx") }, DENIED2, reliable),
+        ),
+      ).toEqual([
+        "(removed from the device copy) proj/a.txt",
+        "(removed from the device copy) proj/sub/",
+        "(removed from the device copy) proj/sub/x",
+      ]);
+    });
+  }
+  it("a move within the folder is still a rename", () => {
+    expect(treeDeletes({ "proj/a.txt": f("7:1", "aa") }, { "proj/deep/a.txt": f("7:1", "aa") }, PROJ, true)).toEqual([]);
+  });
+});
