@@ -1445,7 +1445,7 @@ verdict, each leg's verdict, and the run's one index row) once the scenario ends
 | `run <file>`, `record <file>` | run every leg; `record` writes one cassette (format v18) for the whole scenario. Not in a directory batch, and not with `--repeat`, `--matrix`, `--session-id` or `--resume` |
 | `replay`, `verify-cassettes` | replay each prompt leg from its nested cassette and re-grade each action from its record; scan and staleness-check every leg |
 | `verify-run <root> <file> --leg <id>`, `regrade <root> --scenario <file> --leg <id>` | re-grade one prompt leg against its own dir, from the leg's snapshot of its files — every leg, at no cost. Without a usable snapshot (over the size cap) it falls back to the session tree and is refused when that tree changed after the leg ended. Refused for a host action |
-| `trace <root> --leg <id>`, `inspect <root>/legs/<id>`, `fixture export <root>/legs/<id>` | read one leg (export: only when its tree is still its own) |
+| `trace <root> --leg <id>`, `inspect <root>/legs/<id>`, `fixture export <root>/legs/<id>` | read one leg, from its snapshot (its files as they were when it ended); a leg with no usable snapshot falls back to its session tree, which export reads only while that tree is still the leg's own |
 | `eval`, `hillclimb`, `ref`, `scaffold`, `diff` on the root, `rehash` | refused, by name |
 
 A plain `run` keeps the run dir, whose legs re-grade from their snapshots (`verify-run --leg`) for as long as the run dir is kept; `record` makes the portable, committable form (`replay`). Every prompt leg snapshots its user-visible

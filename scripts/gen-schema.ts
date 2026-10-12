@@ -17,7 +17,7 @@ import {
   METRIC_ARTIFACT_REFUSED_PATTERNS,
 } from "../src/types.js";
 import { SessionConfig } from "../src/session.js";
-import { MultiLegScenarioObject } from "../src/run/multi-leg-scenario.js";
+import { HOST_ACTION_FILE_KEYS, HOST_ACTION_OWN_KEYS, HostAction, Leg, MultiLegScenarioObject } from "../src/run/multi-leg-scenario.js";
 import {
   SERVED_HOOK_EVENTS,
   KNOWN_HOOK_EVENTS,
@@ -127,6 +127,14 @@ export function buildAssertionKeys(): string {
         // by a stable dotted field id. See collectEnums/buildEnumMap above. scenario.py's
         // `enum-value-invalid` rule keeps an embedded fallback parity-tested against this.
         enums: buildEnumMap(),
+        // A multi-leg (`legs:`) scenario: its top-level keys, a leg's keys, a host_action's keys, and the assert keys
+        // a host_action leg takes (its own exit/stdout keys plus the file keys; it has no transcript).
+        multiLeg: {
+          topLevelKeys: Object.keys(MultiLegScenarioObject.shape).sort(),
+          legKeys: Object.keys(Leg.shape).sort(),
+          hostActionKeys: Object.keys(HostAction.shape).sort(),
+          hostActionAssertKeys: [...HOST_ACTION_OWN_KEYS, ...HOST_ACTION_FILE_KEYS].sort(),
+        },
       },
       null,
       2,

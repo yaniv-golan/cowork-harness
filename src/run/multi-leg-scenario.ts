@@ -37,7 +37,8 @@ const HostActionOwnAssert = z.strictObject({
   stdout_not_matches: z.string().optional().describe("a regex the action's stdout must not match"),
 });
 
-const OWN_KEYS = ["exit_code", "stdout_matches", "stdout_not_matches"] as const;
+export const HOST_ACTION_OWN_KEYS = ["exit_code", "stdout_matches", "stdout_not_matches"] as const;
+const OWN_KEYS = HOST_ACTION_OWN_KEYS;
 
 /** One host-action assert item: either one of the action's own keys, or an ordinary assertion restricted to the file
  *  keys. Dispatched on the item's keys rather than a z.union, whose failure says only "invalid input". */

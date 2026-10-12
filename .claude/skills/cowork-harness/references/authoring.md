@@ -222,6 +222,18 @@ your gate actually has a label called `"first"`.
 Surprise to remember: adding a host to `egress.extra_allow` is a **no-op** for a provenanced fetch.
 Full model in `references/scenario-schema.md`.
 
+### A skill that parks and resumes in a later session: `legs:`
+
+When the skill stops (a question, a gate, a status file) and a NEW session resumes it, author ONE multi-leg scenario
+instead of two scenarios glued together: `legs:` in place of `prompt:`, each leg a `prompt` (a fresh agent session)
+or a `host_action` (an argv command in the previous leg's runtime, asserted with `exit_code`, `stdout_matches`,
+`stdout_not_matches` and the file keys). Pick `workdir: persistent` (one tree across legs — a persistent workspace,
+not Cowork) or `workdir: cowork-task` (a new tree per prompt leg, folders carried — a model of a new Cowork task).
+Judge completion from the skill's own status file and ledger (`artifact_json`), never from the agent's prose. The
+YAML is in [`scenario-schema.md`](./scenario-schema.md#multi-leg-scenario-yaml-legs), the walkthrough is Recipe 9 in
+[`task-recipes.md`](./task-recipes.md), and the rules are in [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#multi-leg-scenarios-legs).
+`scaffold` does not generate the multi-leg form; start from the resumable-probe example Recipe 9 links.
+
 ### Scaffold a valid scenario, then lint before you push
 
 Don't hand-write the YAML from memory — that's how invented keys (`assertions:` vs `assert:`,
