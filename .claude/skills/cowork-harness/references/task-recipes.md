@@ -526,3 +526,20 @@ cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy  
   git work tree is refused unless `--allow-in-repo`.
 - **`--min-score <n>`** sets the relevance floor a query must clear to be served (default `0.4`). It is part of the pool
   hash, so two pools with different floors are different pools.
+
+## Recipe 10 — A skill that parks and resumes in a later session (`legs:`)
+
+When a skill stops at a question, writes a status file and is resumed by a NEW session (after a host step), test the
+whole loop as one multi-leg scenario: `legs:` in place of `prompt:`, each leg a prompt (a fresh agent session) or a
+`host_action` (an argv command in the leg runtime, no agent). Judge completion from the skill's status file
+(`artifact_json`), and prove the resume did not redo work from the skill's own ledger, never from the agent's prose.
+Copy `examples/probes/resumable-probe.scenario.yaml`. Rules and limits: docs/scenario.md → "Multi-leg scenarios".
+
+- `workdir: persistent` (default) keeps one session tree across legs (a persistent workspace — not Cowork);
+  `workdir: cowork-task` gives each prompt leg a new tree with connected folders carried (a model of a new Cowork
+  task, unverified).
+- Runs on `container`, `microvm` or `protocol` (a host action on `protocol` runs on your host). `record` writes one
+  v18 cassette; `replay` and `verify-cassettes` take it.
+- Re-grade or read one leg with `--leg <id>`: `verify-run <run-dir> <legs.yaml> --leg <id>`,
+  `regrade <run-dir> --scenario <legs.yaml> --leg <id>`, `trace <run-dir | run-id> --leg <id>`. A leg whose files a
+  later leg or host action changed is refused.

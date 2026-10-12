@@ -8286,14 +8286,15 @@ export async function cmdVerifyCassettes(args: string[]) {
         if (doStaleness) {
           const sfd = sessionFingerprintDrift(nested, dirname(f), "none", vcSessionOverride);
           if (sfd.drifted) out.staleness.push(`leg ${leg.id}: session-shape fingerprint differs from the current session file — re-record`);
-          if (sfd.note) out.notes.push(`leg ${leg.id}: ${sfd.note}`);
+          // One session file: the same note for every leg, recorded once.
+          if (sfd.note && !out.notes.includes(sfd.note)) out.notes.push(sfd.note);
         }
         if (doPrivacy) out.findings.push(...scanCassette(nested, allow).map((x) => ({ ...x, where: `leg ${leg.id}: ${x.where}` })));
         if (doStaleness) {
           const st = computeStaleness(nested, dirname(f), vcSessionOverride);
           for (const x of st.findings)
             (x.class.startsWith("unverifiable-") ? out.unverifiable : out.staleness).push(`leg ${leg.id}: ${x.message}`);
-          out.notes.push(...st.notes.map((n) => `leg ${leg.id}: ${n}`));
+          out.notes.push(...st.notes.map((n) => `${n} (leg ${leg.id})`));
         }
       } else if ("action" in leg && doPrivacy) {
         const a = (leg as { action: { argv: string[]; stdout: { head: string }; stderr: { head: string } } }).action;

@@ -462,7 +462,7 @@ export async function replayMultiLegCassette(
       continue;
     }
     const nested = (rec as { cassette: Cassette }).cassette;
-    staleness.push(...checkStaleness(nested, opts.cassetteDir).map((s) => `leg ${rec.id}: ${s}`));
+    staleness.push(...checkStaleness(nested, opts.cassetteDir).map((s) => `${s} (leg ${rec.id})`));
     const r = await replayCassette(nested, hooks, opts);
     results.push(r);
     const verdict: ScenarioVerdict = computeVerdict(r, "replay");

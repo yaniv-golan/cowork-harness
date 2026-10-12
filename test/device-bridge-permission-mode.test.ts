@@ -53,7 +53,7 @@ describe("the record names the mode and where it came from", () => {
 describe("wiring", () => {
   const src = readFileSync(new URL("../src/run/execute.ts", import.meta.url), "utf8");
   it("executeScenario tells the plan builder about the bridge", () => {
-    expect(src).toMatch(/launchSources, \{\s*deviceBridge: scenario\.device_bridge === true,?\s*\}\);/);
+    expect(src).toMatch(/launchSources, \{\s*deviceBridge: scenario\.device_bridge === true,/);
   });
   it("both result sites record the plan's mode", () => {
     expect(src).toContain(
