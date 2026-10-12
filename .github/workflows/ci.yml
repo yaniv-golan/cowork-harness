@@ -394,6 +394,19 @@ jobs:
           fi
       - name: Prove the sandbox enforces Cowork's limitations (self-contained sidecar)
         run: node dist/cli.js boundary-check
+      - name: device_bridge — the delete shim refuses deletes on Linux, against the pinned agent image
+        # Builds the device image (the pinned agent image above plus libcwh-nodelete) the way a bridge run does,
+        # then drives real commands in a real container: refusals, the rename rules, production's git signature,
+        # the canary, and a raw-syscall delete caught by the device tree. CWH_REQUIRE_DOCKER turns the tests'
+        # no-Docker skip into a failure, so a broken build cannot pass as skipped. The shim is also compiled with
+        # -Werror here; the on-demand build is not, so an apt gcc change cannot break every bridge run.
+        env:
+          CWH_REQUIRE_DOCKER: "1"
+        run: |
+          base=$(grep -o 'ubuntu:22.04@sha256:[0-9a-f]*' docker/device/Dockerfile)
+          docker run --rm --platform linux/arm64 -v "$PWD/docker/device:/s:ro" "$base" bash -c \
+            'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends gcc libc6-dev >/dev/null && gcc -shared -fPIC -O2 -Wall -Wextra -Werror -o /tmp/x.so /s/nodelete.c -ldl'
+          npx vitest run test/device-shim.test.ts
       - name: Live contract tests — guard the binary assumptions (free ON THIS RUNNER)
         # Requires the staged agent; only runs where it's present. Skips cleanly otherwise.
         #
