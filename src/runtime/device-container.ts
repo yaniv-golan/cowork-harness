@@ -333,6 +333,11 @@ export function deviceDeleteFindings(
       continue;
     }
     if (l.result !== "granted") continue;
+    // A granted delete in a folder the user never allowed cannot have happened through the shim: a forged line.
+    if (!grants.has(l.folder)) {
+      out.auditInconsistent++;
+      continue;
+    }
     // A line the device user wrote could name any path: only one inside its folder is looked up.
     if (l.rel.startsWith("/") || l.rel.split("/").some((seg) => seg === ".." || seg === ".")) {
       out.auditInconsistent++;
@@ -818,7 +823,8 @@ export function deviceBridgeRecord(
     grants: grants.map((g) => ({ ...g, folders: [...g.folders] })),
     ...(enforced && shim
       ? {
-          refusedDeletes: shim.refusedDeletes,
+          // Unknown, not zero, when the log could not be read.
+          ...(shim.auditUnreadable ? {} : { refusedDeletes: shim.refusedDeletes }),
           bypassedDeletes: [...shim.bypassedDeletes],
           ...(shim.auditInconsistent ? { auditInconsistent: shim.auditInconsistent } : {}),
           ...(shim.auditUnreadable ? { auditUnreadable: shim.auditUnreadable } : {}),

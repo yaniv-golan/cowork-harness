@@ -36,7 +36,9 @@ All notable changes to this project are documented here. The format is based on
   image is missing the library fails as an infrastructure error (`device-shim`); one whose image cannot be built
   stops before the agent starts.
 - **A delete that gets past the refusal fails the run** (`device_delete_bypassed`, not waivable by
-  `allow_delete_in`): a static binary or a raw system call, caught by comparing the device copy before and after.
+  `allow_delete_in`): a static binary or a raw system call that deletes a file, or moves it out of its folder, caught
+  by comparing the device copy before and after. If the device shell replaces the refusal's log, the run warns
+  (`device_audit_unreadable`) and the record leaves the refusal count out.
   Where the run directory's filesystem can reuse a deleted file's identity, it is the warning
   `device_delete_unconfirmed` instead: a rename followed by an edit reads the same there.
 - **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal`
@@ -67,7 +69,8 @@ All notable changes to this project are documented here. The format is based on
   `bypassPermissions` the grant is immediate. Each grant is recorded in `RunResult.deviceBridge.grants` with who
   answered it, and takes effect from the next device_bash call.
 - **The device container refuses deletes as production does.** A library preloaded into every process refuses
-  `unlink`, `rmdir` and `remove` in an `rw` folder until it is granted (a missing file still reports missing), keeps
+  `unlink`, `rmdir` and `remove` in an `rw` folder until it is granted (a missing file still reports missing; a
+  folder is recognized by its identity, so another spelling of its name on a case-insensitive filesystem is too), keeps
   a rename within a folder, also over an existing file, and makes a move across folders cross-device; git leaves
   its lock files and the next commit fails on `HEAD.lock`, production's measured behaviour. The bridge proves the
   refusal on a probe file before the first command. The device shell runs as the host user under production's

@@ -19,6 +19,7 @@ export interface VerdictSignal {
     | "mount_delete"
     | "device_delete_bypassed"
     | "device_delete_unconfirmed"
+    | "device_audit_unreadable"
     | "host_path_leak"
     | "non_deterministic"
     | "model_fallback"
@@ -610,6 +611,16 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     // would have refused it, so the run is not faithful. Not waivable by allow_delete_in (that names a delete the
     // author meant, not a way around the refusal). Where the filesystem can reuse a deleted file's identity, a file
     // renamed and then edited reads the same, so there it only warns.
+    // The device shell replaced the shim's log: its refusal count, and the allowed deletes of files the session made,
+    // are unknown. The device tree still decides what is gone.
+    if (result.deviceBridge?.auditUnreadable)
+      signals.push({
+        code: "device_audit_unreadable",
+        severity: "warn",
+        message:
+          `the device's delete log could not be read (${result.deviceBridge.auditUnreadable}): how many deletes were refused, and ` +
+          `deletes of files the session made after a grant, are unknown; the before-and-after comparison of the folders still ran`,
+      });
     const bypassed = result.deviceBridge?.bypassedDeletes ?? [];
     if (bypassed.length) {
       const unreliable = (result.deviceBridge?.divergences ?? []).includes("rename-reads-as-delete");

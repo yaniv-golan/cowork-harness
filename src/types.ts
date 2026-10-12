@@ -2724,6 +2724,7 @@ export interface RunResult {
         | "mount_delete"
         | "device_delete_bypassed"
         | "device_delete_unconfirmed"
+        | "device_audit_unreadable"
         | "host_path_leak"
         | "non_deterministic"
         | "model_fallback"

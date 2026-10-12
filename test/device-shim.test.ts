@@ -424,6 +424,27 @@ describe.skipIf(!CAN)("startDeviceBridge's canary", () => {
       expect(out.status).not.toBe(0);
       expect(out.stderr).toMatch(/Operation not permitted/);
       expect(existsSync(join(r, "f"))).toBe(true);
+      // A move out is refused the same way: mv copies, then cannot remove the source.
+      const mv = spawnSync(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--network",
+          "none",
+          "--user",
+          `${uid}:${gid}`,
+          "-v",
+          `${r}:/sessions/rcw-x/mnt/p`,
+          built.imageId,
+          "mv",
+          "/sessions/rcw-x/mnt/p/f",
+          "/tmp/f",
+        ],
+        { encoding: "utf8", timeout: 60_000 },
+      );
+      expect(mv.status).not.toBe(0);
+      expect(existsSync(join(r, "f"))).toBe(true);
     } finally {
       rmSync(r, { recursive: true, force: true });
     }

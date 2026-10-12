@@ -93,7 +93,7 @@ describe("deviceDeleteFindings, enforced", () => {
     expect(f.mountDeletes).toEqual([]);
     expect(f.auditInconsistent).toBe(2);
   });
-  it("an audit log it cannot read is said so on the record, not taken for zero refusals", () => {
+  it("an audit log it cannot read is said so on the record, its count left out (unknown, not zero), and warned about", () => {
     const { outDir } = staged(true);
     mkdirSync(join(outDir, "device-audit"), { recursive: true });
     symlinkSync("/etc/hosts", join(outDir, "device-audit", "audit.jsonl"));
@@ -101,6 +101,16 @@ describe("deviceDeleteFindings, enforced", () => {
     expect(f.auditUnreadable).toBe("not a regular file");
     const r = deviceBridgeRecord(mounts, "included", plan, [], true, { ...f, enforced: true });
     expect(r.auditUnreadable).toBe("not a regular file");
+    expect(r).not.toHaveProperty("refusedDeletes");
+    expect(codes(rr({ scan, deviceBridge: r } as Partial<RunResult>))).toContain("device_audit_unreadable:warn");
+  });
+  it("a granted line for a folder the user never allowed is ignored, not an allowed delete", () => {
+    const { outDir, audit } = staged(true);
+    writeDeviceGrant(outDir, ["proj"]);
+    audit([{ op: "unlinkat", folder: "other", rel: "made.txt", result: "granted" }]);
+    const f = deviceDeleteFindings(outDir, DENIED, true);
+    expect(f.mountDeletes).toEqual([]);
+    expect(f.auditInconsistent).toBe(1);
   });
   it("a staged file's granted delete is counted once, from the tree", () => {
     const { outDir, copy, audit } = staged(true);

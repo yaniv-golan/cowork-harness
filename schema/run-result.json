@@ -152,12 +152,12 @@
         "refusedDeletes": {
           "type": "integer",
           "minimum": 0,
-          "description": "Enforced runs only: deletes the device shim refused this turn, from its audit log (evidence that refusals happened, never of their absence)."
+          "description": "Enforced runs only: deletes the device shim refused this turn, from its audit log (evidence that refusals happened, never of their absence). Absent when the log could not be read (auditUnreadable)."
         },
         "bypassedDeletes": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Enforced runs only: <folder>/<path> gone from a connected folder deletion was never allowed in. The shim did not see the delete (a static binary or raw system call), or, under rename-reads-as-delete, a file was renamed and then edited."
+          "description": "Enforced runs only: <folder>/<path> gone from a connected folder deletion was never allowed in, deleted or moved out of the folder. The shim did not see it (a static binary or raw system call), or, under rename-reads-as-delete, a file was renamed and then edited."
         },
         "auditInconsistent": {
           "type": "integer",
@@ -793,6 +793,7 @@
                   "mount_delete",
                   "device_delete_bypassed",
                   "device_delete_unconfirmed",
+                  "device_audit_unreadable",
                   "host_path_leak",
                   "non_deterministic",
                   "model_fallback",

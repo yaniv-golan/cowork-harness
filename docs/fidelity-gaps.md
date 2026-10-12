@@ -1872,10 +1872,13 @@ a simulated session.
   - git behaves as production's does: a commit lands but leaves its lock files, and the next commit fails with
     "File exists" on `.git/HEAD.lock`.
 
-  Only calls through the C library are refused. A static binary or a raw system call deletes anyway, as it would
-  not in production; so does an io_uring unlink on a container runtime whose seccomp profile allows io_uring
-  (Docker's default profile does not). The device copy is compared before and after the run to catch that: a file gone from a folder
-  deletion was never allowed in is listed in `deviceBridge.bypassedDeletes` and fails the run
+  The library places each path by what it is (device and inode, walking up from its directory), not by how it is
+  spelled, so another spelling of a folder's name on a case-insensitive filesystem is still that folder. Only calls
+  through the C library are refused. A static binary or a raw system call deletes, or moves a file out of its folder,
+  anyway, as it could not in production, where each folder is its own mount; so does an io_uring unlink on a
+  container runtime whose seccomp profile allows io_uring (Docker's default profile does not). The device copy is
+  compared before and after the run to catch that: a file gone from a folder deletion was never allowed in, whether
+  deleted or carried out of the folder, is listed in `deviceBridge.bypassedDeletes` and fails the run
   (`device_delete_bypassed`). A file the session made and deleted that way leaves no trace and is not caught. The
   library's log of refused and allowed deletes is writable by the device shell, so its counts (`refusedDeletes`, and
   the allowed deletes of files the session made) can be understated by a command that edits it; a line in it can add

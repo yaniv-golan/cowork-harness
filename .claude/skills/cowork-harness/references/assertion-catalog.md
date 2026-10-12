@@ -52,7 +52,7 @@ predicates neither can express.
 
 **VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; twelve
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`) and fourteen are **warn**-severity (informational, never flip pass/fail). All twenty-six signal
+`"success"`) and fifteen are **warn**-severity (informational, never flip pass/fail). All twenty-seven signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 | Code | Severity | Meaning |
@@ -68,6 +68,7 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `mount_delete` | warn | A delete touched a delete-denied mount other than `outputs` (a `rw` connected folder). Production denies `unlink`/`rmdir` there until per-mount approval, so the run diverged. Warn, not fail: the harness detects post-hoc what production enforces. Author `no_delete_in_mounts` to hard-fail, or `allow_delete_in` to waive. Not raised under `device_bridge` once the device refuses deletes (`deleteRefusal: "enforced"`): a delete left there is one the user allowed |
 | `device_delete_bypassed` | fail | `device_bridge`: a file is gone from a connected folder deletion was never allowed in, past the device's refusal (a static binary or raw system call; `deviceBridge.bypassedDeletes` names them). Production would have refused it. Not waivable by `allow_delete_in`. Where the filesystem can read a rename followed by an edit as a delete (`rename-reads-as-delete`) it is `device_delete_unconfirmed` instead |
 | `device_delete_unconfirmed` | warn | `device_bridge`, on a filesystem that can give a new file a deleted file's identity (`rename-reads-as-delete`): files are gone from a connected folder deletion was never allowed in, either deleted past the device's refusal or renamed and then edited, which that filesystem cannot tell apart |
+| `device_audit_unreadable` | warn | `device_bridge`: the shim's delete log was replaced by the device shell (a link, a FIFO), so the number of refused deletes, and deletes of files the session made after a grant, are unknown (`deviceBridge.auditUnreadable`; `refusedDeletes` is left out). The before-and-after comparison of the folders still ran |
 | `host_path_leak` | fail | A host path leaked into model-visible text (opt out: author `transcript_no_host_path`). A path copied verbatim from the scenario's own uploads, connected folders, prompt, or declared plugins' or local skills' files is not a leak |
 | `l0_host_config_contamination` | fail | `protocol` ran against the operator's REAL config dir, so host-installed plugins/skills/MCP servers may have answered instead of the thing under test — the run did not necessarily measure it (opt out: `allow_l0_host_config_contamination`). Name predates the meaning: delivery at L0 works, contamination is what this reports |
 | `missing_capability` | fail | A `requires_capabilities` need was unmet, or the skill used a capability the image omits (opt out: `allow_missing_capability`, or `skill --allow-missing-capability` on an open-ended run) |
@@ -86,4 +87,4 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.verdict.signals[].severity` or the run's exit code. Only the fourteen **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the fifteen **warn** codes are truly benign.

@@ -168,11 +168,12 @@ describe("verdict-signals docs ↔ code", () => {
   // otherwise have fired, so no run gains a signal it did not have.
   // 14 as of `device_delete_unconfirmed`: it fires only under an enforced device_bridge, where a file is gone from a
   // folder never granted on a filesystem that cannot tell that from a rename followed by an edit.
-  it('the docs\' "only fourteen warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 15 as of `device_audit_unreadable`: the device shell replaced the shim's delete log.
+  it('the docs\' "only fifteen warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(14);
-    expect(scenarioMdText).toMatch(/Only fourteen codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(15);
+    expect(scenarioMdText).toMatch(/Only fifteen codes are \*\*warn\*\*-severity/);
   });
   // 12 as of `device_delete_bypassed`: a delete in a connected folder past the device's refusal, under an enforced
   // device_bridge only.

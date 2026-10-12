@@ -302,6 +302,9 @@ Recognize these before "fixing" a non-bug:
 - **`device_delete_unconfirmed`** (`WARN`, `device_bridge`) — the same loss on a filesystem that cannot tell a
   delete from a rename followed by an edit: either a delete got past the refusal, or a file was renamed and then
   edited. Read `deviceBridge.bypassedDeletes` and the `device_bash` commands to tell which.
+- **`device_audit_unreadable`** (`WARN`, `device_bridge`) — the device shell replaced the shim's delete log, so the
+  refusal count and the allowed deletes of files the session made are unknown; the folders' before-and-after
+  comparison still ran.
 - **`host_path_leak`** — skipped at **`hostloop` and `protocol`** fidelity (the agent runs on real host
   paths there, so a host path in model-visible text is expected, not a leak); it is *armed* at
   `container`/`microvm`, but only *fires* on an actual scanned leak with no authored
@@ -366,7 +369,7 @@ Recognize these before "fixing" a non-bug:
   A recording made under the key freezes `answerChannel: "none"` at the cassette's top level and stamps v15, so
   replay runs with the channel still absent and an older build refuses the cassette as too new.
 
-The full 26-code signal table (severity + per-signal opt-out) is in
+The full 27-code signal table (severity + per-signal opt-out) is in
 [`references/assertion-catalog.md`](./assertion-catalog.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 
