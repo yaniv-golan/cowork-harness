@@ -9,7 +9,7 @@
 // recognise is `errored_infra` with `unclassified: true` — excluded and reported, never silently scored as
 // the skill failing.
 import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
-import type { Assertion, RunResult } from "../types.js";
+import type { Assertion, MetricUnavailable, RunResult, ScenarioMetric } from "../types.js";
 import { VERDICT_MODIFIER_KEYS, isLiveModelId } from "../types.js";
 import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.js";
 import { firstAssertionKey } from "../run/repeat.js";
@@ -66,6 +66,7 @@ export type ClassifiableResult = Partial<
     | "models"
     | "modelPinHonored"
     | "finalMessage"
+    | "metrics"
   >
 > & {
   result: RunResult["result"];
@@ -492,6 +493,63 @@ export function repRowValues(
     if (claim === undefined) return { row, excluded: "claims_missing" };
     if (normalizeClaim(claim.claim) !== row.claim) return { row, excluded: "grade_misaligned" };
     return { row, value: bit(claim.pass) };
+  });
+}
+
+// ---- metric rows -------------------------------------------------------------------------------------------
+
+/** How a rep whose metric is unavailable enters that metric's row, one class per reason:
+ *  - `W` (worst rank): the skill did not produce the number — ranked strictly beyond every measured value.
+ *  - `X` (excluded, guarded): the number is missing because of the scorer, the capture or a cap, not the skill —
+ *    left out of the test, counted, and guarded so its absence can carry no verdict.
+ *  - `N` (not compared): the comparison itself is broken — the row is `not compared` and the eval exits 1.
+ *  A Record, so a reason added to METRIC_UNAVAILABLE fails the typecheck until it is classified here. */
+export const METRIC_STATE_CLASS: Record<MetricUnavailable, "W" | "X" | "N"> = {
+  missing_artifact: "W",
+  missing_path: "W",
+  not_json: "W",
+  not_a_number: "W",
+  // The run did not write the file. Undecidable authorship is a scenario property, so it is symmetric.
+  pre_run: "W",
+  size: "X",
+  readonly: "X",
+  remote: "X",
+  // A live eval arms the manifest, so either of these means a harness defect.
+  pruned: "N",
+  no_manifest: "N",
+};
+
+/** One rep's contribution to one metric row. */
+export type MetricRepValue =
+  | { value: number }
+  /** `errored_agent`, or a class-W reason. */
+  | { worst: "errored_agent" | MetricUnavailable }
+  /** A class-X reason. */
+  | { excluded: MetricUnavailable }
+  /** A class-N reason, or `metric_unrecorded`: a valid rep whose result holds no entry for a declared id. A completed
+   *  run records every declared id (`extractMetrics`), so a gap is a harness defect, and the row is not compared. */
+  | { notCompared: MetricUnavailable | "metric_unrecorded" }
+  /** The rep is excluded from every row of the eval (infrastructure, drift, a pin or judge-prompt mismatch). */
+  | { dropped: RepBucket };
+
+/** One rep's contribution to each declared metric. `errored_agent` is worst-ranked on every metric (intention to
+ *  treat, like the 0 on pass rows — never an imputed 0); `valid` and `judge_invalid` reps read their measured
+ *  entry (the judge has nothing to do with the artifact); every other bucket drops the rep, as on pass rows. */
+export function repMetricValues(
+  decls: readonly ScenarioMetric[],
+  c: RepClassification,
+  result: ClassifiableResult | undefined,
+): Array<{ id: string; v: MetricRepValue }> {
+  return decls.map((d) => {
+    if (c.bucket === "errored_agent") return { id: d.id, v: { worst: "errored_agent" } };
+    if (c.bucket !== "valid" && c.bucket !== "judge_invalid") return { id: d.id, v: { dropped: c.bucket } };
+    const entry = result?.metrics?.find((m) => m.id === d.id);
+    if (entry === undefined) return { id: d.id, v: { notCompared: "metric_unrecorded" } };
+    if (typeof entry.value === "number" && Number.isFinite(entry.value)) return { id: d.id, v: { value: entry.value } };
+    const reason = entry.unavailable;
+    if (reason === undefined) return { id: d.id, v: { notCompared: "metric_unrecorded" } };
+    const cls = METRIC_STATE_CLASS[reason];
+    return { id: d.id, v: cls === "W" ? { worst: reason } : cls === "X" ? { excluded: reason } : { notCompared: reason } };
   });
 }
 

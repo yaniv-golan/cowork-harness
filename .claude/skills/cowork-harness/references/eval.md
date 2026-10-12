@@ -20,8 +20,9 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
   not the `remote_plugins` path a UI-installed plugin has (`mnt/.remote-plugins/plugin_<id>`). A skill that
   locates its own files at runtime sees a different path under each, so the comparison holds for the
   `local_plugins` layout only.
-- Every row is a pass or a fail per rep, and `eval` compares pass rates. A scenario's `metrics:` are not graded or
-  compared here; `hillclimb` records and compares them.
+- Pass rows are a pass or a fail per rep, and `eval` compares pass rates. Each number a scenario declares under
+  `metrics:` is a metric row, compared with an exact rank test in its own correction family (see
+  [Metric rows](#metric-rows)).
 - scenarios × 2 × `--reps` live runs (10 per scenario at the default `--reps 5`), interleaved, plus one judge
   call per `semantic_matches` assert per run. The start-up line prints the job count.
 - Before an A/B, plan it: `eval … --dry-run --target-effect 30pp` runs nothing and prints, from the runs
@@ -35,7 +36,8 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
 - Run an A/A first (`--allow-identical-arms`, the same source twice) to see your scenarios' noise.
 - A directory arm's snapshot leaves out untracked files unless you pass `--include-untracked` (not with a
   `git:` arm). `--correction bh|holm` picks the multiple-comparison correction behind `confirmed` (default
-  `bh` at q = 0.10; `holm` is stricter).
+  `bh` at q = 0.10; `holm` is stricter). Metric rows default to holm at `--alpha` split across the section's
+  families (0.025 beside pass rows); an explicit `--correction bh` grades them with BH at q = 0.10, unsplit.
 
 ## Reading the labels
 
@@ -46,6 +48,9 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
 | `no detectable change` | with the smallest change this n could have detected (MDD) |
 | `underpowered` | no outcome at these sizes could reach `--alpha` — NOT "no change" |
 | `insufficient` | too few valid reps in an arm (4 of 5 needed by default) |
+
+Metric rows say `confirmed/possible worse|better` (read through the metric's `better`), plus `unresolved`,
+`insufficient_unmeasured` and `not compared` ([below](#metric-rows)).
 
 A drop is a signal to investigate, not proof: open the run dirs the report links for that row. In order,
 first match wins: an infrastructure failure is excluded and reported — including a usage limit the run lane
@@ -73,7 +78,8 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
 - an arm that contains the eval's own scenario or session files (by location, copy or symlink), an
   `evals.json`, or a symlink resolving outside it;
 - a scenario input a run would refuse (a missing path, a `tool_not_called` the tier can never violate);
-- `--fail-on confirmed` when no row could reach `confirmed` at this `--reps`;
+- `--fail-on confirmed` when no family (pass rows or metric rows, in any section) could reach `confirmed` at this
+  `--reps`; when only some can, the start-up line names the families the gate can fire on;
 - no usable agent credential for a scenario's tier — the same check as `doctor --tier <tier>`'s `token` row,
   with its fix. A Keychain login or a `.credentials.json` in the config dir, without an env/.env token,
   passes only at `protocol`;
@@ -81,10 +87,33 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
   one `local_plugins` entry). Workaround: eval a copy of the session that declares the same directory under
   `local_plugins`, and check the `remote_plugins` path handling with an ordinary `run`.
 
+## Metric rows
+
+- One row per (scenario, declared metric). The test is exact two-sided Wilcoxon–Mann–Whitney, so ties and skewed
+  numbers are fine. Each row also shows the Hodges–Lehmann shift with its ACHIEVED coverage (96.8% at 5 v 5), each
+  arm's SD and the minimum detectable shift (`mds`).
+- **At 5 reps a metric row reliably flags only a shift of about 2.4 SD** (2.0 at 6 reps): near-complete separation.
+  Every metric row is `underpowered` at `--reps 3`; use `--reps 5`, since at `--reps 4` one lost rep silences it.
+  A metric whose every value is equal is `underpowered`, never "no change".
+- A rep where the agent failed, or the skill did not produce the number (`missing_artifact`, `missing_path`,
+  `not_json`, `not_a_number`, `pre_run`), ranks WORST, below every measured value. A rep whose number is missing
+  because of the scorer, the capture or a cap (`size`, `readonly`, `remote`) is EXCLUDED and
+  guarded: no verdict may rest on it, so a row that would flag only while those reps stay unknown is `unresolved`
+  (never gates). The candidate's ≥ 2 extra excluded reps that took a row below the threshold: `insufficient_unmeasured`
+  (`--fail-on possible` gates). `pruned` / `no_manifest`, or a completed rep with no entry for the id
+  (`metric_unrecorded`): `not compared`, exit 1.
+- At 5 reps a metric can be `confirmed` beside pass rows only when the section declares 3 metrics or fewer; 4–11
+  need `--reps 6`. Every report states each family's correction, row count and A/A false-confirm rate.
+- Worth it for count metrics on a targeted defect fix (a ×3.3 rate change is `possible` at 5 reps, ×4.1
+  confirms). Otherwise run an A/A first and read each row's `sd` and `mds`: if `MDS possible` (in the metric's units)
+  is larger than the change you hope for, raise `--reps` or change the metric.
+- An eval dir written before metrics were graded reports them as not recorded (exit code unchanged).
+
 ## Exit codes
 
-`0` completed — no drop fails the eval unless you pass `--fail-on`. `1` a drop at the `--fail-on` level,
-every row `insufficient`, a scenario that compared nothing, or the judge model differed across reps (an A/A run under `--fail-on possible`
+`0` completed — no drop fails the eval unless you pass `--fail-on`. `1` a drop or a worse metric at the `--fail-on`
+level, every row `insufficient`, a scenario that compared nothing, a metric row `not compared`, or the judge model
+differed across reps (an A/A run under `--fail-on possible`
 can exit 1 on noise). `2` usage or a refusal. `3` an arm snapshot could not be copied or staged.
 
 ## Files

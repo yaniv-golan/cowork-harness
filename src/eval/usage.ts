@@ -48,12 +48,14 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --concurrency <n>          jobs in flight (default 2, 1..8); must be 1 with --decider-cmd/--decider-dir
   --alpha <a>                per-row level for 'possible' and Holm's family-wise level (default 0.05)
   --correction bh|holm       multiple-comparison correction for 'confirmed' (default bh at a fixed q = 0.10;
-                             holm at --alpha is stricter). Runs within each report section.
+                             holm at --alpha is stricter). Runs within each report section. Metric rows (a
+                             scenario's metrics:) are their own family: holm at --alpha split across the section's
+                             families by default (0.025 beside pass rows); with an explicit bh, BH at q = 0.10, no split
   --holdout <scenario.yaml>  repeatable; must be one of the eval's scenarios. Reported (and corrected) in a
                              separate held-out section — scenarios you tuned the skill against are weak evidence.
   --include-untracked        snapshot a directory arm's untracked files too (the raw walk); not with a git: arm
   --allow-identical-arms     run even when both arms hash identically (an A/A noise run)
-  --fail-on possible|confirmed  opt in to gating: exit 1 on a drop at this level. Without it no drop fails the
+  --fail-on possible|confirmed  opt in to gating: exit 1 on a drop, or a metric that got worse, at this level. Without it no drop fails the
                              eval (every row insufficient, or a judge disagreement, still exits 1). At --reps 5 a single collapsed row reaches
                              'possible' but, with 13 or more rows under bh, cannot reach 'confirmed' alone; the
                              start-up notice prints how many rows 'confirmed' needs. An A/A run under
@@ -77,10 +79,11 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --quiet                    no per-job progress lines (a --dry-run's plan is its output, and still prints)
   --dotenv <path>, --run-dir <path>   as on every command
        No run label or session id is accepted: eval labels each run eval:<eval-id>:<arm> and gives each job its own session.
-       exit codes: 0 completed (with --fail-on: and no drop at that level) · 1 a drop at the --fail-on level
+       exit codes: 0 completed (with --fail-on: and no drop at that level) · 1 a drop or a worse metric at the --fail-on level
        (under possible, also an insufficient_refusals row: the candidate refused ≥ 2 more semantic_matches
-       grades for unavailable evidence than the baseline, and that excess took the row below the threshold),
-       every row insufficient, or the judge model differed across reps · 2 usage, or a refusal before any
+       grades for unavailable evidence than the baseline, and that excess took the row below the threshold; or an
+       insufficient_unmeasured metric row, the same for metric values the scorer or a cap left out),
+       every row insufficient, a metric row not compared (a broken metric state), or the judge model differed across reps · 2 usage, or a refusal before any
        run (including the --max-budget-usd refusal) · 3 an arm snapshot could not be copied, or failed its staging
        preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above, or the
        temp dir is inside a git work tree, or git cannot tell whether it is (set TMPDIR)`;

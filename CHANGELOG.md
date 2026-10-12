@@ -14,6 +14,28 @@ All notable changes to this project are documented here. The format is based on
   A session whose own `mcp.config` declares a server named `visualize` is not refused. `lint` reports it as
   `tool-not-called-tier-vacuous`; `protocol` is not judged.
 
+### Added
+
+- **`eval` compares each scenario's declared `metrics:` between the arms.** Each metric is a row tested with an exact
+  two-sided rank test (Wilcoxon–Mann–Whitney), with a Hodges–Lehmann shift and its interval's achieved coverage,
+  each arm's SD, the pooled SD with its interval, and the minimum detectable shift. Rows are labelled `possible` /
+  `confirmed` `worse` or `better` through the metric's `better`, in their own correction family, and `--fail-on`
+  gates on a metric that got worse as it does on a pass-rate drop. A rep where the agent failed, or where the skill
+  did not write the number, ranks worst. A rep whose number is missing because of the scorer, the capture or a cap is
+  left out, and no verdict may rest on its absence: such a row is `unresolved` and never gates, and a candidate whose
+  extra left-out reps took a row below the rep threshold is `insufficient_unmeasured`, which `--fail-on possible`
+  gates on. A rep state that breaks the comparison (`pruned`, `no_manifest`, or a completed rep with no entry for a
+  declared metric, `metric_unrecorded`) leaves the row `not compared`, and the eval exits 1.
+- **Metric rows use Holm at `--alpha`, split evenly with the pass-rate rows when a section has both** (0.025 by
+  default); an explicit `--correction bh` grades them with Benjamini–Hochberg at q = 0.10, unsplit. Pass-rate rows are
+  graded exactly as before. Every report now states, per section and family, its correction, its number of rows, and
+  the false-confirm rate an A/A eval would have. `--fail-on confirmed` is refused only when no family can reach
+  `confirmed`, and the eval says before spending which families it can fire on. `eval --dry-run` states each
+  section's metric family beside its pass rows.
+- **`runs.jsonl` records each rep's metrics, and `manifest.json` freezes each scenario's metric declarations and the
+  metric correction.** An eval dir written before this release reports metrics as not recorded, grades none, and
+  keeps its exit code.
+
 ## [4.8.1] — 2026-10-12
 
 ### Upgrade notes

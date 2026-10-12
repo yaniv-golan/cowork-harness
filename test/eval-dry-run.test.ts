@@ -802,3 +802,23 @@ describe("eval --dry-run: the plan's text", () => {
     expect(err.message).not.toMatch(/the plan's budgetGateWorstUsd/);
   });
 });
+
+describe("eval --dry-run: a section's metric family", () => {
+  it("states the metric family's size, rule and reach beside the pass family, and marks metric rows not planned", async () => {
+    const { scen, a, b } = setup();
+    const file = join(scen, "csv-metrics.yaml");
+    const body = readFileSync(file, "utf8").replace(
+      "prompt:",
+      "metrics:\n  - id: leaks\n    artifact: outputs/m.json\n    path: n\n    better: lower\n    unbounded: true\nprompt:",
+    );
+    writeFileSync(file, body);
+    const { plan } = await planEvalDryRun(dry(scen, a, b), planDeps([]));
+    expect(plan.sections.tuned!.m).toBe(7);
+    expect(plan.sections.tuned!.metricFamily).toEqual({ m: 1, rule: "holm", level: 0.025, minRowsToConfirm: 1, planned: false });
+    const text = planText(plan).join("\n");
+    expect(text).toMatch(/fixed design \(what eval runs today\), tuned section: 7 row\(s\) in the family/);
+    expect(text).toMatch(
+      /tuned metrics: 1 row\(s\) in their own family \(holm at 0\.025\); at --reps 5 one collapsed row can reach `confirmed` — not planned/,
+    );
+  });
+});

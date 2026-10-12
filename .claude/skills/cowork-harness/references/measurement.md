@@ -27,7 +27,7 @@ What the harness gives you here is the run execution and the control arm — des
 
 **"Did my edit change it?"** → `cowork-harness eval` (EXPERIMENTAL): the version before your edit and the
 one after, interleaved, with the agent and judge models pinned, compared per assertion and per rubric
-claim with an exact test. It is a regression signal to investigate, not proof — see
+claim with an exact test, and per declared metric (`metrics:`) with an exact rank test. It is a regression signal to investigate, not proof — see
 [`eval.md`](eval.md) and Recipe 5 step 6 in [`task-recipes.md`](task-recipes.md).
 
 ### Tool timing — what `toolDurations` measures

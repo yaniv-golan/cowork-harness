@@ -30,7 +30,8 @@ import { checkBatchBudget, noHistoryCauseText, runsDirInfo } from "../run/budget
 import { recordBudgetStatus, type BudgetStatus } from "../run/budget-status.js";
 import { resolveCritiquedSkillDir, gradedSkillNameFor } from "../critique/command.js";
 import { scenarioRows } from "./classify.js";
-import { attainableFloor, minRowsToConfirm, type Correction } from "./stats.js";
+import { type Correction } from "./stats.js";
+import { familyReach, metricCorrectionFor, sectionFamilies, type FamilyReach, type MetricCorrection } from "./families.js";
 import {
   parseArmSpec,
   snapshotDirArm,
@@ -78,6 +79,9 @@ export interface EvalArgs {
   concurrency: number;
   alpha: number;
   correction: Correction;
+  /** The metric family's correction, from the `--correction` the user gave: not given or holm → Holm split across
+   *  each section's families; an explicit bh → BH at q, unsplit. The pass family is graded by `correction`. */
+  metricCorrection: MetricCorrection;
   holdout: string[];
   includeUntracked: boolean;
   allowIdenticalArms: boolean;
@@ -199,6 +203,7 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
   const alpha = values["--alpha"] !== undefined ? num("--alpha", values["--alpha"], (n) => n > 0 && n < 0.5, "a number in (0, 0.5)") : 0.05;
   const correction = values["--correction"] ?? "bh";
   if (correction !== "bh" && correction !== "holm") throw new UsageError(`--correction must be bh or holm (got "${correction}")`);
+  const metricCorrection = metricCorrectionFor(values["--correction"] as Correction | undefined);
   const failOn = values["--fail-on"];
   if (failOn !== undefined && failOn !== "possible" && failOn !== "confirmed")
     throw new UsageError(`--fail-on must be possible or confirmed (got "${failOn}")`);
@@ -240,6 +245,7 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
     concurrency,
     alpha,
     correction,
+    metricCorrection,
     holdout: repeated["--holdout"],
     includeUntracked: booleans.has("--include-untracked"),
     allowIdenticalArms: booleans.has("--allow-identical-arms"),
@@ -421,14 +427,14 @@ function resolveEvalContext(args: EvalArgs, deps: EvalDeps): EvalContext {
   let rowCount = 0;
   for (const s of scenarios) {
     try {
-      rowCount += scenarioRows(s.scenario.name, s.scenario.assert ?? []).length;
+      rowCount += scenarioRows(s.scenario.name, s.scenario.assert ?? []).length + (s.scenario.metrics?.length ?? 0);
     } catch (e) {
       throw new UsageError((e as Error).message);
     }
   }
   if (rowCount === 0)
     throw new UsageError(
-      "eval: no scenario has an assert: entry that is compared (a verdict modifier such as allow_stall is not a row) — there is nothing to compare",
+      "eval: no scenario has an assert: entry that is compared (a verdict modifier such as allow_stall is not a row) or a declared metric — there is nothing to compare",
     );
 
   // Pins.
@@ -608,32 +614,50 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
     }
   }
 
-  // `--fail-on confirmed` must be able to fire.
-  const floor = attainableFloor(args.reps, args.reps);
-  const opts = { correction: args.correction, q: BH_Q, alpha: args.alpha };
-  const familySize = (held: boolean) =>
-    scenarios
-      .filter((s) => s.heldOut === held)
-      .reduce((n, s) => n + scenarioRows(s.scenario.name, s.scenario.assert ?? []).filter((r) => r.kind !== "semantic_rollup").length, 0);
+  // `--fail-on confirmed` must be able to fire. Each section has up to two families (its pass rows and its
+  // metric rows), each with its own rule; the reach of each comes from the frozen scenarios (families.ts), the same
+  // function the dry-run plan and the report call.
   const sectionReach = [false, true]
-    .map((held) => ({ held, m: familySize(held) }))
-    .filter((x) => x.m > 0)
-    .map((x) => ({ ...x, j: minRowsToConfirm(floor, x.m, opts) }));
+    .map((held) => {
+      const frozen = scenarios
+        .filter((s) => s.heldOut === held)
+        .map((s) => ({ name: s.scenario.name, assertions: s.scenario.assert ?? [], metrics: s.scenario.metrics ?? [] }));
+      const fam = sectionFamilies(frozen, {
+        correction: args.correction,
+        alpha: args.alpha,
+        q: BH_Q,
+        metricCorrection: args.metricCorrection,
+      });
+      return { held, reach: familyReach(fam, args.reps) };
+    })
+    .filter((x) => x.reach.length > 0);
+  const familyName = (held: boolean, r: FamilyReach) => `${held ? "held-out" : "tuned"} ${r.kind === "pass" ? "pass rates" : "metrics"}`;
   // A dry run's plan prints the same line beside its sequential preview; the real eval prints it here.
   if (mode === "run")
     for (const x of sectionReach)
-      say(
-        `[eval] ${x.held ? "held-out" : "tuned"} section: ${x.m} row(s) in the family; at --reps ${args.reps} ` +
-          (x.j === null
-            ? "`confirmed` is unreachable"
-            : x.j === 1
-              ? "one collapsed row can reach `confirmed`"
-              : `\`confirmed\` needs >= ${x.j} collapsed rows — a single regression cannot reach it (it can still be 'possible')`),
-      );
-  if (args.failOn === "confirmed" && sectionReach.every((x) => x.j === null))
+      for (const r of x.reach)
+        say(
+          `[eval] ${familyName(x.held, r)}: ${r.m} row(s) in the family; at --reps ${args.reps} ` +
+            (r.minRowsToConfirm === null
+              ? "`confirmed` is unreachable"
+              : r.minRowsToConfirm === 1
+                ? "one collapsed row can reach `confirmed`"
+                : `\`confirmed\` needs >= ${r.minRowsToConfirm} collapsed rows — a single regression cannot reach it (it can still be 'possible')`),
+        );
+  const allReach = sectionReach.flatMap((x) => x.reach.map((r) => ({ held: x.held, r })));
+  if (args.failOn === "confirmed" && allReach.every((x) => x.r.minRowsToConfirm === null))
     throw new UsageError(
-      `--fail-on confirmed can never fire at --reps ${args.reps} with ${sectionReach.map((x) => x.m).join("/")} row(s) under ${args.correction}: raise --reps, or use --fail-on possible`,
+      `--fail-on confirmed can never fire at --reps ${args.reps}: no family can reach \`confirmed\` (${allReach
+        .map((x) => `${familyName(x.held, x.r)}: ${x.r.m} row(s)`)
+        .join(
+          "; ",
+        )}; pass rates under ${args.correction}, metrics under ${args.metricCorrection.rule}${args.metricCorrection.split ? " split across families" : ""}): raise --reps, or use --fail-on possible`,
     );
+  if (args.failOn === "confirmed" && mode === "run" && allReach.some((x) => x.r.minRowsToConfirm === null)) {
+    const can = allReach.filter((x) => x.r.minRowsToConfirm !== null).map((x) => familyName(x.held, x.r));
+    const cannot = allReach.filter((x) => x.r.minRowsToConfirm === null).map((x) => `${familyName(x.held, x.r)} (m = ${x.r.m})`);
+    say(`[eval] --fail-on confirmed can fire only on: ${can.join(", ")}. ${cannot.join(", ")} cannot confirm at --reps ${args.reps}.`);
+  }
 
   // Credentials: doctor's own token check for every tier the scenarios run at, before the manifest (so a
   // refusal leaves no eval dir) and before any spend. Without it an eval with no usable credential runs
@@ -750,6 +774,7 @@ function buildPlan(
       baseline: filters.baseline,
       agentPin: ctx.agentPins[si].model,
       rows: scenarioRows(name, assertions),
+      metricCount: s.scenario.metrics?.length ?? 0,
       cost: loadCostHistory(indexRows, filters),
       rates: costOnly
         ? noRates()
@@ -768,6 +793,7 @@ function buildPlan(
     alpha: args.alpha,
     correction: args.correction,
     q: BH_Q,
+    metricCorrection: args.metricCorrection,
     ...(args.targetEffectPp !== undefined ? { targetEffectPp: args.targetEffectPp } : {}),
     allowUnderpowered: args.allowUnderpowered,
     costOnly,
@@ -860,6 +886,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
       baseline: loadBaseline(s.scenario.baseline).appVersion,
       heldOut: s.heldOut,
       assertions: s.scenario.assert ?? [],
+      metrics: s.scenario.metrics ?? [],
     }));
     const arms = snaps.map((s, i): ManifestArm => ({
       label: s.spec.label,
@@ -886,6 +913,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
         alpha: args.alpha,
         q: BH_Q,
         correction: args.correction,
+        metricCorrection: args.metricCorrection,
         failOn: args.failOn ?? null,
         concurrency: args.concurrency,
         includeUntracked: args.includeUntracked,

@@ -1392,6 +1392,10 @@ reads `no_manifest` (declaring a metric arms the manifest); a kept run or casset
 metric added to a scenario after its run, or an old cassette.
 So a metric should read a file under `outputs/` or a connected folder.
 
+**In `eval`** each metric is a row compared between the two arms with an exact rank test, in its own correction
+family; a rep where the skill did not produce the number ranks worst, and one whose number a scorer or cap left out
+is excluded and can carry no verdict. See [eval.md → Metric rows](./eval.md#metric-rows).
+
 **In `hillclimb`** each metric is a grade key on every row, `<id>` beside `<id>_present`, with the reason an
 unmeasured one was unavailable in `meta.metrics_unavailable`. Adding or removing a metric mid-flow is allowed; changing
 one's declaration is refused, since the flow's rows were graded under the old one. See
