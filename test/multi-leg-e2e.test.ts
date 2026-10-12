@@ -253,6 +253,29 @@ describe.runIf(can)("multi-leg plugin identity (stub agent, protocol)", () => {
 
 describe.runIf(can)("multi-leg host actions (stub agent, protocol)", () => {
   const WRITE = 'mkdir -p artifacts/runs/r1 && printf "{\\"n\\":2}" > artifacts/runs/r1/corrections.json && echo applied 2 corrections';
+  it("an action runs with the env of the leg before it, that leg's session overlay applied", async () => {
+    const f = fixture();
+    try {
+      const p = threeLeg(
+        f,
+        "envov",
+        ["sh", "-c", 'echo "sm=$CLAUDE_CODE_SUBAGENT_MODEL"'],
+        ['      - stdout_matches: "sm=claude-overlay-mark"'],
+      );
+      writeFileSync(
+        p,
+        readFileSync(p, "utf8").replace(
+          "    prompt: run the gated probe\n",
+          "    prompt: run the gated probe\n    session: { agent_env: { subagent_model: claude-overlay-mark } }\n",
+        ),
+      );
+      const r = await cli(f, ["run", p, "--output-format", "json"]);
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      expect(legStatus(JSON.parse(r.stdout))).toEqual(["ask:passed", "apply:passed", "resume:passed"]);
+    } finally {
+      f.cleanup();
+    }
+  });
   it("runs between the legs in the leg's tree, records what it wrote, and the resume leg completes", async () => {
     const f = fixture();
     try {

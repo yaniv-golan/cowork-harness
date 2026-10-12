@@ -176,6 +176,18 @@ export function expectDeniedSignals(hosts: readonly string[], egress: ReadonlyAr
     .map((r) => ({ code: "expect_denied", severity: "fail", message: `expect_denied (all legs): ${r.message ?? "not denied"}` }));
 }
 
+/** One guard per name across the legs, at the worst status any leg reported: a guard that fired on one leg is not
+ *  hidden by a later leg where it held. */
+const GUARD_RANK: Record<string, number> = { na: 0, ok: 1, unverified: 2, fired: 3 };
+export function mergeGuards(guards: ScenarioVerdict["guards"]): ScenarioVerdict["guards"] {
+  const by = new Map<string, ScenarioVerdict["guards"][number]>();
+  for (const g of guards) {
+    const had = by.get(g.name);
+    if (!had || (GUARD_RANK[g.status] ?? 0) > (GUARD_RANK[had.status] ?? 0)) by.set(g.name, g);
+  }
+  return [...by.values()];
+}
+
 /** The scenario verdict, the same live and on replay: every leg passed and none was skipped. Signals and failures name
  *  their leg; `extra` is the scenario-level signals (plugin identity). */
 export function composeScenarioVerdict(
@@ -194,7 +206,7 @@ export function composeScenarioVerdict(
     pass,
     exitCode: pass ? 0 : 1,
     signals,
-    guards: [...new Map(legEntries.flatMap((e) => e.verdict?.guards ?? []).map((g) => [g.name, g])).values()],
+    guards: mergeGuards(legEntries.flatMap((e) => e.verdict?.guards ?? [])),
     failures,
   } as ScenarioVerdict;
 }
@@ -375,6 +387,9 @@ export async function executeMultiLeg(
   if (tier === "protocol" && ms.expect_denied.length > 0)
     throw new UsageError('expect_denied asserts boundary behavior but fidelity is "protocol" (no sandbox); use container or microvm');
 
+  // A caller's run id names the root, so it is checked (as a single run checks it) before anything is created.
+  if (opts.runId !== undefined && !/^local_[0-9a-z]{8,32}$/.test(opts.runId))
+    throw new UsageError(`run id "${opts.runId}" must be local_ followed by 8-32 base36 characters`);
   const runId = opts.runId ?? `local_${process.hrtime.bigint().toString(36)}`;
   const root = runOutDir(ms.name, runId);
   if (existsSync(root)) throw new UsageError(`run id ${runId} is already used by ${root}`);
@@ -403,6 +418,8 @@ export async function executeMultiLeg(
   let prevWorkBase: string | undefined;
   let prevSessionId: string | undefined;
   let prevVisibleRoots: string[] = ["outputs"];
+  // The session the previous prompt leg ran with (its overlay applied): an action runs in that leg's runtime and env.
+  let prevSession: SessionConfig | undefined;
   const actionEgress: NonNullable<ActionRecord["egress"]> = [];
   let skillHash: string | undefined;
   const identityFailures: MultiLegSignal[] = [];
@@ -423,7 +440,7 @@ export async function executeMultiLeg(
           legDir,
           tier: tier as ActionTier,
           baseline,
-          session: baseSession,
+          session: prevSession ?? baseSession,
           sessionId: prevSessionId!,
           workBase: prevWorkBase!,
         });
@@ -470,6 +487,7 @@ export async function executeMultiLeg(
       try {
         result = await executeScenario(scn, {
           ...opts,
+          runId: undefined, // the scenario root's; each leg's own ids come from `leg`
           session,
           leg: {
             outDir: legDir,
@@ -485,6 +503,7 @@ export async function executeMultiLeg(
       }
       prevWorkBase = workBase;
       prevSessionId = legSessionId;
+      prevSession = session;
       if (!result) {
         legEntries.push({ id: leg.id, kind, agentSessionId, status: "failed" });
         stopped = leg.id;
