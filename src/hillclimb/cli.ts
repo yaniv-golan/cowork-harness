@@ -48,7 +48,7 @@ import { flowHasPairwise } from "./grade-keys.js";
 import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
 import { flowMetricUnion, rowAssertSigs } from "./metric-keys.js";
 import { pathSafeId } from "./ids.js";
-import { parseScenarioFile } from "../run/execute.js";
+import { parseScenarioFile, loadRunnableScenario } from "../run/execute.js";
 import type { Scenario } from "../types.js";
 import type { FlowSnapshot } from "./schema-check.js";
 
@@ -149,7 +149,7 @@ function assertSigScenarios(
       continue;
     }
     try {
-      cases.push({ id, scenario: parseScenarioFile(resolve(cwd, mine[0]!)) });
+      cases.push({ id, scenario: loadRunnableScenario(resolve(cwd, mine[0]!)) });
       fileOf.set(id, mine[0]!);
     } catch (e) {
       notes.push(

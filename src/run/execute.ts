@@ -3,6 +3,8 @@ import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
 import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
+import { resolveCommandMetrics } from "../metric-command/resolve.js";
+import { asOutcomes, commandMetricNotice, measureCommandMetrics } from "../metric-command/live.js";
 import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { ZodError } from "zod";
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, rmSync, readdirSync, renameSync, realpathSync } from "node:fs";
@@ -775,6 +777,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Sited here rather than in each command because every lane funnels through executeScenario
   // (`run`/`skill` via cli.ts, `record` via cassette.ts), and a library caller gets it too.
   const contradiction = assertContradiction(scenario);
+  // A command metric runs repo code as the operator after the run: say so before anything is spent.
+  for (const line of commandMetricNotice(scenario.metrics ?? [])) process.stderr.write(line + "\n");
   if (contradiction) throw new UsageError(contradiction);
   // Validate the authored-evidence budget HERE, not at capture time. `authoredTotalBytes()` throws on a
   // malformed value and is otherwise first called after the agent has finished — so a typo would cost a
@@ -2142,7 +2146,17 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     }
     const assertions = evaluate(scenario.assert, assertCtx);
     // Measured from the same context (and so the same evidence gates and pre-run baseline) the asserts just read.
-    const metrics = metricsFor(assertCtx, scenario.metrics);
+    // Command metrics run here, after the asserts and before the final scrub: they read this turn's slice of the RAW
+    // events.jsonl, scrubbed with the same secret set the final scrub applies, so a later regrade over the kept
+    // (scrubbed) file reads the same bytes (checked by `eventsSha256`).
+    const commandMs = await measureCommandMetrics(scenario.metrics ?? [], {
+      outDir,
+      turn: currentTurn(outDir),
+      secrets: collectSecrets(),
+      scrubEvents: true,
+      ...(opts.deadline !== undefined ? { deadline: opts.deadline } : {}),
+    });
+    const metrics = metricsFor(assertCtx, scenario.metrics, asOutcomes(commandMs));
 
     if (scenario.fidelity === "protocol" && (record.toolsCalled.has("WebFetch") || record.toolsCalled.has("WebSearch"))) {
       warn(`::warning:: ${scenario.name}: a network tool ran at L0 (protocol) — egress is NOT enforced here.\n`);
@@ -2633,6 +2647,15 @@ function fidelityMissingError(path: string, e: ZodError): FidelityMissingError {
  *  defaulted-fidelity notice, retired when `fidelity:` became required). */
 export function parseScenarioFile(path: string): Scenario {
   return inlineSchemaFiles(loadScenarioPure(path), path);
+}
+
+/** A scenario a command will RUN (or record, eval, hillclimb): `parseScenarioFile`, then its command metrics resolved
+ *  against the filesystem (containment, tracked, hashed). Kept apart from `parseScenarioFile`, which the cassette
+ *  drift, discovery and verify paths also call: those must never stat or read a metric script. */
+export function loadRunnableScenario(path: string): Scenario {
+  const scenario = parseScenarioFile(path);
+  resolveCommandMetrics(scenario, path);
+  return scenario;
 }
 
 /** Everything the loader checks about a scenario FILE, with no side effects: reads `path` and nothing else —

@@ -60,6 +60,7 @@ import {
   executeScenario,
   assertContradiction,
   parseScenarioFile,
+  loadRunnableScenario,
   collectArtifactPaths,
   parseSessionFile,
   slugForPath,
@@ -4579,7 +4580,7 @@ async function recordScenarioFile(
 ): Promise<{ result: RunResult; cassettePath: string; artifacts: number; delta?: string }> {
   // remember the authored scenario source file so the cassette can persist it (relocatable) for a
   // later `--rerecord-stale` that prefers it over a name-derived guess.
-  return recordScenarioObject(parseScenarioFile(file), { ...opts, scenarioSourceFile: file }, [dirname(file)]);
+  return recordScenarioObject(loadRunnableScenario(file), { ...opts, scenarioSourceFile: file }, [dirname(file)]);
 }
 
 // `record`'s accepted flags — hoisted to exported consts (not a function-local literal) so both

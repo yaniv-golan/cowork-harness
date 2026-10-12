@@ -41,6 +41,7 @@ import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchS
 import {
   executeScenario,
   parseScenarioFile,
+  loadRunnableScenario,
   loadSessionFromFile,
   firstLine,
   unresolvedModelPreflight,
@@ -1836,7 +1837,7 @@ async function cmdRun(rawArgs: string[]) {
         o.json,
       );
     if (!existsSync(matrixFile)) fail("run", "usage", `matrix file not found: ${matrixFile}`, undefined, o.json);
-    const scenario = parseScenarioFile(files[0]);
+    const scenario = loadRunnableScenario(files[0]);
     if (scenario.on_unanswered === "prompt")
       fail(
         "run",
@@ -2024,7 +2025,7 @@ async function cmdRun(rawArgs: string[]) {
   // `fidelity:` — a smuggled `on_unanswered: prompt`, or the budget cap) would fire only after 1 and 2 had
   // already been paid for, and the refusal exits — so those completed results would never reach the JSON
   // envelope either. A pre-flight that spends money before refusing is not a pre-flight.
-  const loaded = files.map((f) => parseScenarioFile(f));
+  const loaded = files.map((f) => loadRunnableScenario(f));
   for (const scenario of loaded) {
     // The CLI flag guard (resolvePolicy) rejects --on-unanswered prompt on `run`, but a committed
     // scenario could smuggle it via its YAML and silently block/hang in non-TTY CI. Reject it here too.

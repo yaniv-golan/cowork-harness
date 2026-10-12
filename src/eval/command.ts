@@ -17,7 +17,14 @@ import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
 import { applySessionOverrides, expandHome } from "../session.js";
 import { loadBaseline } from "../baseline.js";
-import { parseScenarioFile, loadSessionFromFile, scenarioInputFindings, sessionOriginSources, effectiveTier } from "../run/execute.js";
+import {
+  parseScenarioFile,
+  loadRunnableScenario,
+  loadSessionFromFile,
+  scenarioInputFindings,
+  sessionOriginSources,
+  effectiveTier,
+} from "../run/execute.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { resolveInputs } from "../run/inputs.js";
 import { pMapBounded } from "../async-pool.js";
@@ -356,7 +363,7 @@ function loadScenarios(args: EvalArgs, say: (s: string) => void): LoadedScenario
     const file = resolved.files[i];
     let scenario: Scenario;
     try {
-      scenario = parseScenarioFile(file);
+      scenario = loadRunnableScenario(file);
     } catch (e) {
       throw new UsageError(`${file}: ${(e as Error).message}`);
     }
