@@ -488,7 +488,7 @@ committed baseline and say why in that baseline's `$comment`.
    - **Refusing.** A capture under a different organisation from the one this machine last synced under, one whose
      organisation the logs cannot tell once this machine has a record, or an unreadable record refuses the write.
      Switch Desktop back to that organisation and re-run `sync`; `--allow-org-change` writes anyway, for when the
-     organisation you sync under really changed (the record then follows the new one).
+     organisation you sync under really changed (the record then follows the new one, once the logs can tell it).
    - **Warning only.** The first sync on a machine records its organisation without refusing. A capture under a
      different organisation from the previous baseline's warns on every sync and never refuses: anyone outside the
      organisation the shipped baselines are captured under re-syncs under their own, and gate changes against the

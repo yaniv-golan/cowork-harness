@@ -17,7 +17,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -93,6 +93,11 @@ export function recordCaptureOrg(path: string, now: CaptureOrg): string | null {
     renameSync(tmp, path);
     return null;
   } catch (e) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // best effort: the warning below is what matters
+    }
     return `WARNING: captureOrg: could not record this machine's organisation at ${path} (${(e as NodeJS.ErrnoException).code ?? "error"}); the next sync compares against the old record`;
   }
 }
@@ -128,7 +133,10 @@ export function checkCaptureOrg(
   if (problem === null) return { refuse: null, notes };
   if (allowChange) return { refuse: null, notes: [...notes, `WARNING: captureOrg: ${problem} (written anyway: --allow-org-change)`] };
   return {
-    refuse: `captureOrg: ${problem}. Switch Desktop back to that organisation and re-run sync, or pass --allow-org-change if the organisation you sync under has changed.`,
+    refuse:
+      local.state === "corrupt"
+        ? `captureOrg: ${problem}. Fix or remove that file and re-run sync, or pass --allow-org-change to write and record the current organisation.`
+        : `captureOrg: ${problem}. Switch Desktop back to that organisation and re-run sync, or pass --allow-org-change if the organisation you sync under has changed.`,
     notes,
   };
 }
