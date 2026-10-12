@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.9.0] — 2026-10-12
+
 ### Upgrade notes
 
 - **An unanswered web_fetch approval now fails the run under `on_unanswered: fail` (exit 2).** When the agent fetches
