@@ -140,3 +140,12 @@ export function resolveCommandMetrics(scenario: Pick<Scenario, "metrics">, scena
 export function commandFilePaths(r: ResolvedCommand): Array<{ rel: string; abs: string }> {
   return [r.scriptRel, ...r.depsRel].map((rel) => ({ rel, abs: join(r.root, ...rel.split("/")) }));
 }
+
+/** The absolute paths of every resolved command metric's script and deps in `metrics` — the files the answer-key
+ *  guard keeps out of every mount, and the hillclimb gate hashes. A metric that was never resolved contributes none. */
+export function commandMetricFiles(metrics: readonly ScenarioMetric[] | undefined): string[] {
+  return (metrics ?? []).flatMap((m) => {
+    const r = m.command !== undefined ? resolvedCommand(m) : undefined;
+    return r ? commandFilePaths(r).map((f) => f.abs) : [];
+  });
+}

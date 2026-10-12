@@ -557,6 +557,10 @@ export function repMetricValues(
     if (c.bucket !== "valid" && c.bucket !== "judge_invalid") return { id: d.id, v: { dropped: c.bucket } };
     const entry = result?.metrics?.find((m) => m.id === d.id);
     if (entry === undefined) return { id: d.id, v: { notCompared: "metric_unrecorded" } };
+    // A command metric: the rep must have been scored by the scorer the eval froze, or an arm would mix scorers.
+    const frozenSig = (d as { sig?: string }).sig;
+    if (d.command !== undefined && frozenSig !== undefined && entry.command?.sig !== undefined && entry.command.sig !== frozenSig)
+      return { id: d.id, v: { notCompared: "command_changed" } };
     if (typeof entry.value === "number" && Number.isFinite(entry.value)) return { id: d.id, v: { value: entry.value } };
     const reason = entry.unavailable;
     if (reason === undefined) return { id: d.id, v: { notCompared: "metric_unrecorded" } };
