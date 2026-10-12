@@ -3,7 +3,7 @@
 // parks at `waiting` when it finds no run, and completes (invocation 2) when it finds a waiting one. Synthetic data only.
 
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLI, POSIX, exited, makeStubFixture, spawnCli, type StubFixture } from "./helpers/stub-agent.js";
 import { classifyRunDir } from "../src/run/turn-layout.js";
@@ -336,7 +336,7 @@ describe.runIf(can)("multi-leg record → replay → verify-cassettes (stub agen
 describe.runIf(can)("verify-run --leg (stub agent, protocol, $0)", () => {
   const rootOf = (f: StubFixture, name: string) =>
     join(f.runsDir, name, readdirSync(join(f.runsDir, name)).filter((x) => !x.startsWith("."))[0]!);
-  it("persistent: the last leg verifies; an earlier leg is refused (the shared tree moved on)", async () => {
+  it("persistent: every leg verifies from its own snapshot; without one, an earlier leg is refused (the shared tree moved on)", async () => {
     const f = fixture();
     try {
       const p = scenario(f, "persistent");
@@ -344,9 +344,9 @@ describe.runIf(can)("verify-run --leg (stub agent, protocol, $0)", () => {
       const root = rootOf(f, "ml");
       const last = await cli(f, ["verify-run", root, p, "--leg", "resume", "--output-format", "json"]);
       expect(last.code, last.stdout + last.stderr).toBe(0);
-      const first = await cli(f, ["verify-run", root, p, "--leg", "ask"]);
-      expect(first.code).toBe(2);
-      expect(first.stderr + first.stdout).toMatch(/its session tree is shared and was changed by later legs/);
+      // Leg 1 asserted `waiting`; the shared tree now says `complete`. Its snapshot still says `waiting`.
+      const first = await cli(f, ["verify-run", root, p, "--leg", "ask", "--output-format", "json"]);
+      expect(first.code, first.stdout + first.stderr).toBe(0);
       const noLeg = await cli(f, ["verify-run", root, p]);
       expect(noLeg.stderr + noLeg.stdout).toMatch(/pass --leg <id>/);
       // regrade resolves the same leg the same way: the last leg loads as its own scenario (which has no judged assert,
@@ -361,13 +361,18 @@ describe.runIf(can)("verify-run --leg (stub agent, protocol, $0)", () => {
       expect(trRoot.code).toBe(2);
       expect(trRoot.stdout).toMatch(/"category":"runtime".*multi-leg run/);
       const rg1 = await cli(f, ["regrade", root, "--scenario", p, "--leg", "ask", "--output-format", "json"]);
-      expect(rg1.stdout + rg1.stderr).toMatch(/its session tree is shared and was changed by later legs/);
+      expect(rg1.stdout + rg1.stderr).toMatch(/no_semantic_asserts/);
+      // No usable snapshot (removed here; over the cap, or a tampered one, the same): back to the live-tree rule.
+      rmSync(join(root, "legs", "ask", "snapshot.json"));
+      const noSnap = await cli(f, ["verify-run", root, p, "--leg", "ask"]);
+      expect(noSnap.code).toBe(2);
+      expect(noSnap.stderr + noSnap.stdout).toMatch(/its session tree is shared and was changed by later legs/);
     } finally {
       f.cleanup();
     }
   });
 
-  it("cowork-task: a leg verifies against its own tree, until a host action writes to that tree", async () => {
+  it("cowork-task: a leg verifies from its snapshot even after a host action wrote to its tree", async () => {
     const f = fixture();
     try {
       const p = scenario(f, "cowork-task");
@@ -376,9 +381,13 @@ describe.runIf(can)("verify-run --leg (stub agent, protocol, $0)", () => {
       expect(ok.code, ok.stdout + ok.stderr).toBe(0);
       const p2 = threeLeg(f, "touch", ["sh", "-c", "echo x > touched.txt"], [], "cowork-task");
       await cli(f, ["run", p2]);
-      const moved = await cli(f, ["verify-run", rootOf(f, "touch"), p2, "--leg", "ask"]);
-      expect(moved.code).toBe(2);
-      expect(moved.stderr + moved.stdout).toMatch(/tree changed after the leg ended \(added outputs\/touched\.txt/);
+      const moved = await cli(f, ["verify-run", rootOf(f, "touch"), p2, "--leg", "ask", "--output-format", "json"]);
+      expect(moved.code, moved.stdout + moved.stderr).toBe(0);
+      // Without the snapshot, the changed tree is refused, naming what changed.
+      rmSync(join(rootOf(f, "touch"), "legs", "ask", "snapshot.json"));
+      const live = await cli(f, ["verify-run", rootOf(f, "touch"), p2, "--leg", "ask"]);
+      expect(live.code).toBe(2);
+      expect(live.stderr + live.stdout).toMatch(/tree changed after the leg ended \(added outputs\/touched\.txt/);
       const action = await cli(f, ["verify-run", rootOf(f, "touch"), p2, "--leg", "apply"]);
       expect(action.stderr + action.stdout).toMatch(/is a host action/);
     } finally {

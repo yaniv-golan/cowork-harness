@@ -281,8 +281,9 @@ Under `order: both`, a comparison judged again records its own fresh per-order o
 comparison a fill copies keeps the ones it was judged with.
 Every other assert is listed as *not re-graded*. The agent does not run again; the judge call is the only spend.
 With a [multi-leg scenario](./scenario.md#multi-leg-scenarios-legs), `--leg <id>` re-grades that prompt leg against
-its own `legs/<id>` dir (`verify-run` takes the same flag); it is refused when the leg's tree changed after the leg
-ended, and for a host-action leg.
+its own `legs/<id>` dir (`verify-run` takes the same flag), reading the files from the leg's snapshot (its files as
+they stood when it ended). A leg with no usable snapshot (over the size cap) falls back to its session tree and is
+refused when that tree changed after the leg ended. A host-action leg is refused.
 An entry a judge read records `judgeModel`, the id the judge answered as, and `judgeModelRequested`, the model it
 was asked for (`--judge-model`, else the assert's `judge_model`, else the default).
 
@@ -1067,6 +1068,7 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 - `COWORK_HARNESS_ALLOW_FOREIGN_RESUME=1` — overrides the guard that blocks `--resume` onto another project's pinned session.
 - `COWORK_HARNESS_PRERUN_HASH_CAP` — override the default cap on pre-run file hashing (bytes); raise it if `input_unmodified`/`no_unexpected_files` report evidence unavailable on a large connected folder.
 - `COWORK_HARNESS_WORKSPACE_FIXTURE_MAX_BYTES` — the total-size cap on a scenario's `workspace_fixture` directory (bytes, a whole number ≥ 1; default 64 MiB). Over it, the run is refused at load (exit 2) — a guard against a fixture pointed at the wrong directory. A malformed value is refused, not ignored.
+- `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES` — the size cap on a multi-leg prompt leg's end-of-leg snapshot (bytes; default 512 MiB). Over it, the leg is not snapshotted, and a later re-grade of it falls back to the live session tree, refused where that tree may have changed. See [multi-leg scenarios](scenario.md#multi-leg-scenarios-legs).
 - `COWORK_HARNESS_MAX_ARTIFACT_BYTES` — override the inline-artifact-body cap (default 65536 bytes;
   same knob as `record --max-artifact-bytes`, which takes precedence) so a large structured deliverable
   stays replay-checkable instead of being truncated.

@@ -541,5 +541,5 @@ Copy `examples/probes/resumable-probe.scenario.yaml`. Rules and limits: docs/sce
 - Runs on `container`, `microvm` or `protocol` (a host action on `protocol` runs on your host). `record` writes one
   v18 cassette; `replay` and `verify-cassettes` take it.
 - Re-grade or read one leg with `--leg <id>`: `verify-run <run-dir> <legs.yaml> --leg <id>`,
-  `regrade <run-dir> --scenario <legs.yaml> --leg <id>`, `trace <run-dir | run-id> --leg <id>`. A leg whose files a
-  later leg or host action changed is refused.
+  `regrade <run-dir> --scenario <legs.yaml> --leg <id>`, `trace <run-dir | run-id> --leg <id>`. Each leg is read from its
+  own snapshot (its files as they stood when it ended), so every leg of a kept run re-grades at no cost.

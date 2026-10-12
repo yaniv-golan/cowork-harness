@@ -1444,12 +1444,14 @@ verdict, each leg's verdict, and the run's one index row) once the scenario ends
 |---|---|
 | `run <file>`, `record <file>` | run every leg; `record` writes one cassette (format v18) for the whole scenario. Not in a directory batch, and not with `--repeat`, `--matrix`, `--session-id` or `--resume` |
 | `replay`, `verify-cassettes` | replay each prompt leg from its nested cassette and re-grade each action from its record; scan and staleness-check every leg |
-| `verify-run <root> <file> --leg <id>`, `regrade <root> --scenario <file> --leg <id>` | re-grade one prompt leg against its own dir — refused when its tree changed after it ended (every `persistent` leg but the last; a `cowork-task` leg once a host action wrote to its tree), and for a host action |
+| `verify-run <root> <file> --leg <id>`, `regrade <root> --scenario <file> --leg <id>` | re-grade one prompt leg against its own dir, from the leg's snapshot of its files — every leg, at no cost. Without a usable snapshot (over the size cap) it falls back to the session tree and is refused when that tree changed after the leg ended. Refused for a host action |
 | `trace <root> --leg <id>`, `inspect <root>/legs/<id>`, `fixture export <root>/legs/<id>` | read one leg (export: only when its tree is still its own) |
 | `eval`, `hillclimb`, `ref`, `scaffold`, `diff` on the root, `rehash` | refused, by name |
 
-A plain `run` makes no cassette, so to re-grade a multi-leg run later at no cost, record it. A leg's "has its tree
-changed" check covers its user-visible files (outputs and connected folders), the ones its file assertions read.
+A plain `run` keeps the run dir, whose legs re-grade from their snapshots (`verify-run --leg`) for as long as the run dir is kept; `record` makes the portable, committable form (`replay`). Every prompt leg snapshots its user-visible
+files (outputs and connected folders, the ones its file assertions read) when it ends, into `legs/<id>/snapshot/` —
+a copy-on-write clone on APFS, btrfs and XFS, a copy elsewhere, none over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES`
+(default 512 MiB) — so a kept run's every leg re-grades from its own files at no cost.
 
 `expect_denied:` is about the whole scenario: each host must have been denied in SOME leg's (or action's) egress. A
 leg's own `egress_denied` assertion reads that leg's egress only.

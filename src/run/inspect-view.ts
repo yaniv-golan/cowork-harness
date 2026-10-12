@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { RunResult } from "../types.js";
 import { legTreeRoot, readLegMarker, requireTurns, turnArtifactPath } from "./turn-layout.js";
 import { decideRunDir, noteRelocation } from "./run-dir-identity.js";
+import { legSnapshotRoot } from "./leg-snapshot.js";
 import { warn } from "../io.js";
 
 /** A compact, depth-1 preview of a JSON artifact: scalars kept inline, arrays shown as a count, nested
@@ -74,7 +75,9 @@ function digestFor(runDir: string): InspectDigest {
   if (placed.kind === "refuse")
     warn(`::warning:: ${placed.message.replace(/ \(can't verify ⇒ not green\)$/, "")} — artifact previews skipped.\n`);
   else noteRelocation(placed);
-  const workDir = placed.kind === "refuse" ? "" : (placed.paths.workDir ?? "");
+  // A leg reads its own snapshot when it has one: its files as they were when it ended.
+  const snap = readLegMarker(runDir) ? legSnapshotRoot(runDir) : undefined;
+  const workDir = placed.kind === "refuse" ? "" : (snap ?? placed.paths.workDir ?? "");
   const workDirAvailable = !!workDir && existsSync(workDir);
   // artifacts === undefined means evidence-unavailable (replay, or a run whose root was missing at
   // collection), NOT a genuine zero-artifact run. Distinguish it from [] so `inspect` can't present

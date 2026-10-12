@@ -22,6 +22,7 @@ import { authoredCaptureOpts } from "./authored-capture-opts.js";
 import { unionReferenceAccesses } from "./run.js";
 import { legTreeRoot, readLegMarker, requireTurns, turnArtifactPath } from "./turn-layout.js";
 import { legTreeDrift } from "./leg-manifest.js";
+import { legSnapshotRoot } from "./leg-snapshot.js";
 import { decideRunDir, noteRelocation, withDecidedPaths } from "./run-dir-identity.js";
 import { recordedSlashInvokedSkills } from "../critique/skill-invocation.js";
 
@@ -177,7 +178,10 @@ export function assertContextFromRunDir(
   // A leg of a multi-leg run: its filesystem evidence is the recorded workDir, which under `workdir: persistent` is the
   // scenario's SHARED tree. Only the last leg's post-state still matches it; grading any other persistent leg there
   // would silently use a later leg's files.
-  const tree = legTreeRoot(runDir, cmd);
+  // A leg of a multi-leg run is re-graded from its snapshot (its own files as they stood when it ended) when it has a
+  // usable one; otherwise from its session tree, under the rules that tree allows (legTreeRoot, and the drift check).
+  const snap = readLegMarker(runDir) ? legSnapshotRoot(runDir) : undefined;
+  const tree = snap ? { root: join(runDir, "..", "..") } : legTreeRoot(runDir, cmd);
   if ("refused" in tree) return refuse("runtime", tree.refused);
   // A MULTI-TURN run dir addresses more than one completion, and this command cannot tell which one the
   // caller's scenario describes. Checked on the TURN COUNT (before loading any result), not a `result.turn`
@@ -290,10 +294,11 @@ export function assertContextFromRunDir(
     scenario = scenarioOrLoader;
   }
 
+  if (snap) result = { ...result, workDir: snap };
   const workRoot = result.workDir ?? "";
   // A leg of a multi-leg run: its files are read from a tree a later leg or host action may have changed. Re-grade
   // only when the tree still matches the leg's own post-run manifest.
-  if (readLegMarker(runDir)) {
+  if (readLegMarker(runDir) && !snap) {
     const drift = legTreeDrift(runDir, workRoot);
     if (drift === undefined)
       return refuse(

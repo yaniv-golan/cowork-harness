@@ -136,9 +136,11 @@ All notable changes to this project are documented here. The format is based on
   grading its first leg as the whole run. `schema/cassette.v18.json`, and `schema/scenario-multi-leg.schema.json`
   for the scenario form.
 - **`verify-run --leg <id>` and `regrade --leg <id>`** re-grade one prompt leg of a multi-leg run, against its own
-  dir. Each prompt leg records its files when it ends (`leg-post-manifest.json`), and a re-grade (or `fixture
-  export`) of a leg is refused when its tree has changed since — under `workdir: persistent`, every leg but the
-  last.
+  dir, at no cost. Each prompt leg snapshots its user-visible files when it ends (`legs/<id>/snapshot/`, a
+  copy-on-write clone where the filesystem supports one, so it costs almost no disk until a later leg changes a
+  file), with their hashes (`leg-post-manifest.json`) proving the snapshot is the leg's own; `inspect` and `fixture
+  export` of a leg read it too. A leg with no usable snapshot (over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES`, default
+  512 MiB) falls back to its session tree and is refused when that tree changed after the leg ended.
 
 ### Changed
 

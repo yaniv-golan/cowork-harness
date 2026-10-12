@@ -744,8 +744,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   "search-pool": SEARCH_POOL_USAGE,
   ref: REF_USAGE,
   "verify-run":
-    "usage: verify-run <run-dir> <scenario.yaml> [--leg <id>] [--allow-metric-commands] [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent; a command metric is carried forward from the run unless --allow-metric-commands re-runs it)",
-    "       --leg <id>: with a multi-leg (`legs:`) scenario, re-evaluate that prompt leg's assert: against its legs/<id> dir (or name the leg dir itself). Refused when the leg's tree changed after it ended (a later leg or host action wrote to it; under workdir: persistent every leg but the last), and for a host-action leg.",
+    "usage: verify-run <run-dir> <scenario.yaml> [--leg <id>] [--allow-metric-commands] [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent; a command metric is carried forward from the run unless --allow-metric-commands re-runs it)\n" +
+    "       --leg <id>: with a multi-leg (`legs:`) scenario, re-evaluate that prompt leg's assert: against its legs/<id> dir (or name the leg dir itself). Its files are read from the leg's snapshot (taken when it ended), so every leg verifies; a leg with no usable snapshot (over COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES) is refused when its session tree changed after it ended. Refused for a host-action leg.",
   inspect:
     "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run PRODUCED: artifacts + a shallow preview of each JSON artifact's fields; for what HAPPENED — tools/decisions — use `trace`)",
   diff:
@@ -4706,7 +4706,7 @@ async function cmdVerifyRun(args: string[]) {
   // the evaluation (`evaluate` + `expandExpectDenied`) and the metrics re-measure are shared with every other
   // consumer that re-evaluates a kept run; see `reevaluateRun` in src/run/verify-context.ts.
   // A multi-leg scenario re-grades ONE prompt leg (`--leg <id>`, or the leg dir itself): that leg as a single-prompt
-  // scenario, against its own run dir, refused when its tree has changed since it ended (verify-context.ts).
+  // scenario, against its own run dir, reading its snapshot (verify-context.ts).
   const target = resolveLegTarget(runDir, scenarioFile, p.options["--leg"], "verify-run");
   if (!target.ok) return fail("verify-run", "usage", target.message, undefined, isJsonOutput(args));
   const loaded = reevaluateRun(target.runDir, target.load);

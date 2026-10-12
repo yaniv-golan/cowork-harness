@@ -15,6 +15,7 @@ import { tildeify } from "../io.js";
 import { hostPathTokens } from "../run/host-path-tokens.js";
 import { legTreeRoot, readLegMarker, requireTurns, turnArtifactPath } from "../run/turn-layout.js";
 import { legTreeDrift } from "../run/leg-manifest.js";
+import { legSnapshotRoot } from "../run/leg-snapshot.js";
 import { runsWriteRoot } from "../run/trace-view.js";
 import { VM_GUEST_SESSIONS_ROOT, VM_WORK_HOST } from "../runtime/lima.js";
 import { scanText } from "../scan.js";
@@ -205,10 +206,12 @@ export function exportFixture(opts: {
   const recorded = result.outputsDir;
   if (typeof recorded !== "string" || recorded === "") return refuse(`${cmd}: ${resultPath} records no outputsDir`, source);
   // A multi-leg leg dir: its turns are its own, but its session tree may be the scenario root's shared work/.
-  const tree = legTreeRoot(opts.runDir, cmd);
+  // A leg's own files: its snapshot (leg-snapshot.ts) when it has a usable one; otherwise its session tree, only while
+  // that tree is still the leg's own (a later leg or host action may have changed it).
+  const snap = readLegMarker(opts.runDir) ? legSnapshotRoot(opts.runDir) : undefined;
+  const tree = snap ? { root: opts.runDir } : legTreeRoot(opts.runDir, cmd);
   if ("refused" in tree) return refuse(tree.refused, source);
-  // A leg's tree may have been changed by a later leg or host action since it ended: export only the leg's own files.
-  if (readLegMarker(opts.runDir) && result.workDir) {
+  if (!snap && readLegMarker(opts.runDir) && result.workDir) {
     const drift = legTreeDrift(opts.runDir, result.workDir);
     if (drift === undefined || drift.length)
       return refuse(
@@ -232,7 +235,7 @@ export function exportFixture(opts: {
       source,
     );
   const named = shapes[tailIdx]!;
-  const outputsDir = lstatOrNull(named) !== null ? named : shapes.find((s) => lstatOrNull(s) !== null);
+  const outputsDir = snap ? join(snap, "outputs") : lstatOrNull(named) !== null ? named : shapes.find((s) => lstatOrNull(s) !== null);
   if (outputsDir === undefined)
     return refuse(`${cmd}: ${opts.runDir} has no outputs dir of its own (work/session/mnt/outputs or work/outputs; a pruned run?)`, source);
   if (isSymlink(outputsDir) || !lstatSync(outputsDir).isDirectory())

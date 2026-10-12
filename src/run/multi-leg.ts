@@ -49,6 +49,7 @@ import {
 import { evaluate, expandExpectDenied } from "../assert.js";
 import { snapshotMicroVmWorkspace } from "../runtime/microvm.js";
 import { writeLegPostManifest } from "./leg-manifest.js";
+import { snapshotLegTree } from "./leg-snapshot.js";
 import type { MultiLegScenario, Leg, LegSessionOverlay } from "./multi-leg-scenario.js";
 import { buildLaunchPlan, resolveLaunchSources, type SessionConfig, type LegStage } from "../session.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -477,7 +478,12 @@ export async function executeMultiLeg(
       legResults.set(leg.id, result);
       // The leg's files as they stand NOW, before a later leg or action can change them: what a later re-grade of
       // this leg compares the tree with (leg-manifest.ts).
-      if (result.workDir) writeLegPostManifest(legDir, result.workDir, result.userVisibleRoots ?? ["outputs"]);
+      if (result.workDir) {
+        writeLegPostManifest(legDir, result.workDir, result.userVisibleRoots ?? ["outputs"]);
+        // And the files themselves (a copy-on-write clone where the filesystem allows): what a later re-grade of this
+        // leg reads, so every leg stays re-gradable however later legs change the tree.
+        snapshotLegTree(legDir, result.workDir, result.userVisibleRoots ?? ["outputs"]);
+      }
       await hooks.afterPromptLeg?.(leg, result);
       legRows.push(indexRowFromResult(result, { command: opts.command ?? "run", partial: false }));
       const verdict: ScenarioVerdict = computeVerdict(result, "live");
