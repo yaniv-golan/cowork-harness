@@ -47,10 +47,11 @@ export const DEFAULT_RETRIEVAL: RetrievalParams = {
   roundShare: 0.75,
 };
 
-const WORD = /[\p{L}\p{N}]+/gu;
+const WORD = /[\p{L}\p{M}\p{N}]+/gu;
 const DIGITS = /^\p{Nd}+$/u;
 
-/** Tokenizer v1: NFKC, lowercase, runs of letters and numbers; keep every digit run and every other token of at
+/** Tokenizer v1: NFKC, lowercase, runs of letters, combining marks and numbers (so Indic, Thai and pointed scripts
+ *  stay whole); keep every digit run and every other token of at
  *  least two characters that is not a stopword. No stemming. */
 export function tokenize(s: string): string[] {
   const out: string[] = [];
@@ -68,9 +69,9 @@ export function queryTokenSet(q: string): string {
 /** URL identity for merging links across rounds: lowercase scheme and host, no fragment, no trailing slash, the
  *  query string kept. */
 export function normalizeUrl(u: string): string {
-  const m = u.trim().match(/^(https?):\/\/([^/?#]+)([^#]*)/i);
+  const m = u.trim().match(/^(https?):\/\/([^/?#]+)([^?#]*)(\?[^#]*)?/i);
   if (!m) return u.trim();
-  return `${m[1]!.toLowerCase()}://${m[2]!.toLowerCase()}${m[3]!.replace(/\/+$/, "")}`;
+  return `${m[1]!.toLowerCase()}://${m[2]!.toLowerCase()}${m[3]!.replace(/\/+$/, "")}${m[4] ?? ""}`;
 }
 
 interface Doc {
@@ -144,8 +145,12 @@ export function maxScore(idx: PoolIndex, query: string): number {
 }
 
 function hostOf(url: string): string | null {
-  const m = url.trim().match(/^https?:\/\/([^/?#:]+)/i);
-  return m ? m[1]!.toLowerCase() : null;
+  try {
+    const u = new URL(url.trim());
+    return u.protocol === "http:" || u.protocol === "https:" ? u.hostname.toLowerCase() : null;
+  } catch {
+    return null;
+  }
 }
 
 function matchesDomain(host: string, domain: string): boolean {
@@ -200,6 +205,8 @@ export function select(idx: PoolIndex, query: string, domains: { allowed?: strin
       seen.add(key);
       links.push(l);
     }
+    // A later round whose links were all served earlier adds nothing a live search would show twice; drop it.
+    if (rounds.length > 0 && links.length === 0) continue;
     rounds.push({ record, score: c.score, links, match: queryTokenSet(record.query) === want ? "exact" : "nearby" });
   }
   return { verdict: "served", nscore, rounds, candidates };

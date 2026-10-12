@@ -30,7 +30,10 @@ export interface PoolSource {
 export interface PoolManifest {
   schemaVersion: number;
   poolId: string;
+  /** The pool's identity: sorted record ids plus retrieval parameters, i.e. what it would serve. */
   sha256: string;
+  /** Integrity over everything else: the whole manifest (this field excluded) and every record, provenance included. */
+  contentSha256: string;
   createdAt: string;
   harnessVersion: string;
   /** More than one skill: built with `--mixed`, and treated as a measured variant, never a baseline. */
@@ -44,6 +47,45 @@ export interface PoolManifest {
 /** A bare name is a pool under `~/.cowork-harness/search-pools/`; anything with a path separator is a path. */
 export function resolvePoolDir(arg: string): string {
   return /[\\/]/.test(arg) || arg === "." || arg === ".." ? resolve(arg) : join(POOLS_DIR, arg);
+}
+
+function canon(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
+  return `{${Object.keys(v as object)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`)
+    .join(",")}}`;
+}
+
+/** sha256 over the canonical manifest (without `contentSha256`) and the records in id order. */
+export function contentHash(manifest: Omit<PoolManifest, "contentSha256"> & { contentSha256?: string }, records: PoolRecord[]): string {
+  const { contentSha256: _drop, ...rest } = manifest;
+  const sorted = [...records].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
+  return createHash("sha256")
+    .update(canon({ manifest: rest, records: sorted }), "utf8")
+    .digest("hex");
+}
+
+const RUN_REF = /^[0-9a-f]{16}$/;
+/** A record has exactly the fields a harvest writes, and its run reference is a 16-hex hash, never a path. */
+function validRecord(r: unknown): r is PoolRecord {
+  if (!r || typeof r !== "object") return false;
+  const o = r as Record<string, unknown>;
+  const src = o.source as Record<string, unknown> | undefined;
+  return (
+    Object.keys(o).sort().join(",") === "agent,id,links,origin,query,source,text" &&
+    typeof o.id === "string" &&
+    typeof o.query === "string" &&
+    typeof o.text === "string" &&
+    Array.isArray(o.links) &&
+    (o.links as unknown[]).every((l) => !!l && typeof l === "object" && Object.keys(l).sort().join(",") === "title,url") &&
+    (o.agent === "main" || o.agent === "subagent") &&
+    (o.origin === "events" || o.origin === "child-transcript") &&
+    !!src &&
+    typeof src.runRef === "string" &&
+    RUN_REF.test(src.runRef)
+  );
 }
 
 export function poolHash(records: { id: string }[], retrieval: RetrievalParams): string {
@@ -154,11 +196,15 @@ export function secretHits(records: PoolRecord[], secrets: string[] = collectSec
     .map((r) => r.id);
 }
 
+/** Whether `dir` (or its nearest existing ancestor) is inside a git work tree. Fails closed: when git cannot be run
+ *  or errors for any reason other than "not a git repository", the answer is "inside". */
 export function insideGitWorkTree(dir: string): boolean {
   let d = resolve(dir);
   while (!existsSync(d)) d = dirname(d);
   const r = spawnSync("git", ["-C", d, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
-  return r.status === 0 && r.stdout.trim() === "true";
+  if (r.error) return true;
+  if (r.status === 0) return r.stdout.trim() === "true";
+  return !/not a git repository/i.test(r.stderr ?? "");
 }
 
 export interface BuildSummary {
@@ -180,6 +226,8 @@ export function assemblePool(a: {
   runDirs: string[];
   mixed: boolean;
   exclude: ReadonlySet<string>;
+  /** Declares the pool's skill: runs that name no skill take it, and a run naming another skill is refused. */
+  skill?: string;
   retrieval: RetrievalParams;
   harnessVersion: string;
   now: Date;
@@ -209,6 +257,14 @@ export function assemblePool(a: {
       else byId.set(r.id, r);
     }
   }
+  if (!a.poolId) throw new PoolBuildError("the pool name is empty");
+  if (a.skill !== undefined)
+    for (const r of byId.values()) {
+      if (r.source.skill === null) r.source.skill = a.skill;
+      else if (r.source.skill !== a.skill && !a.mixed)
+        throw new PoolBuildError(`--skill ${a.skill}: a source run is of skill ${r.source.skill}; build it separately or pass --mixed`);
+    }
+  for (const s of sources.values()) if (s.skill === null && a.skill !== undefined) s.skill = a.skill;
   const unknownExcludes = [...a.exclude].filter((id) => !byId.has(id));
   if (unknownExcludes.length) throw new PoolBuildError(`--exclude names no record in this pool: ${unknownExcludes.join(", ")}`);
   const records = [...byId.values()].filter((r) => !a.exclude.has(r.id)).sort((x, y) => (x.id < y.id ? -1 : 1));
@@ -218,14 +274,22 @@ export function assemblePool(a: {
     throw new PoolBuildError(
       `a known secret appears in ${leaked.length} record(s): ${leaked.join(", ")}. Nothing was written; drop them with --exclude <id>.`,
     );
-  const skills = [...new Set(records.map((r) => r.source.skill ?? "(unknown)"))].sort();
+  // Every run that produced a kept record, including one whose records all duplicate another run's.
+  const kept = [...new Set(records.flatMap((r) => [...contributors.get(r.id)!]))].map((ref) => sources.get(ref)!);
+  // Skills come from the contributing runs, not only from the record each id kept: a run of another skill whose
+  // searches all duplicate this one's still mixes the pool.
+  const skills = [...new Set(kept.map((s) => s.skill ?? "(unknown)"))].sort();
+  if (skills.includes("(unknown)") && !a.mixed)
+    throw new PoolBuildError(
+      "a source run names no single skill under test (no graded skill, no single scoped or invoked skill); declare the pool's skill with --skill <name>, or pass --mixed",
+    );
   if (skills.length > 1 && !a.mixed)
     throw new PoolBuildError(
       `the runs hold searches from ${skills.length} skills (${skills.join(", ")}); a pool holds one skill. Build one pool per skill, or pass --mixed for a pool that is a measured variant, never a baseline.`,
     );
   const perSkill: Record<string, number> = {};
   for (const r of records) perSkill[r.source.skill ?? "(unknown)"] = (perSkill[r.source.skill ?? "(unknown)"] ?? 0) + 1;
-  const manifest: PoolManifest = {
+  const manifestBase: Omit<PoolManifest, "contentSha256"> = {
     schemaVersion: POOL_SCHEMA_VERSION,
     poolId: a.poolId,
     sha256: poolHash(records, a.retrieval),
@@ -233,13 +297,11 @@ export function assemblePool(a: {
     harnessVersion: a.harnessVersion,
     mixed: skills.length > 1,
     skills,
-    // Every run that produced a kept record, including one whose records all duplicate another run's.
-    sources: [...new Set(records.flatMap((r) => [...contributors.get(r.id)!]))]
-      .map((ref) => sources.get(ref)!)
-      .sort((x, y) => (x.runRef < y.runRef ? -1 : 1)),
+    sources: kept.sort((x, y) => (x.runRef < y.runRef ? -1 : 1)),
     counts: { records: records.length, urls: new Set(records.flatMap((r) => r.links.map((l) => l.url))).size, runs: runsWithSearches },
     retrieval: a.retrieval,
   };
+  const manifest: PoolManifest = { ...manifestBase, contentSha256: contentHash(manifestBase, records) };
   return {
     manifest,
     records,
@@ -265,43 +327,62 @@ export function writePool(dir: string, manifest: PoolManifest, records: PoolReco
   writeFileSync(join(dir, "pool.json"), JSON.stringify(manifest, null, 2) + "\n", { mode: 0o600 });
 }
 
-/** Read a pool dir and verify its hash against its records and retrieval parameters. */
+/** Verify a pool's parts: schema version, every record's shape and id, the identity hash and the content hash. */
+function verifyPool(where: string, manifest: unknown, records: unknown): { manifest: PoolManifest; records: PoolRecord[] } {
+  const m = manifest as PoolManifest | null;
+  if (!m || typeof m !== "object" || !Array.isArray(records) || !m.retrieval || typeof m.sha256 !== "string")
+    throw new PoolBuildError(`${where} is not a search pool`);
+  if (m.schemaVersion !== POOL_SCHEMA_VERSION)
+    throw new PoolBuildError(`${where}: pool schema version ${m.schemaVersion} is not supported (expected ${POOL_SCHEMA_VERSION})`);
+  for (const r of records) {
+    if (!validRecord(r)) throw new PoolBuildError(`${where}: a record has an unexpected shape (the pool was edited)`);
+    if (recordId(r) !== r.id) throw new PoolBuildError(`${where}: record ${r.id} does not hash to its id (the pool was edited)`);
+  }
+  const recs = records as PoolRecord[];
+  if (poolHash(recs, m.retrieval) !== m.sha256)
+    throw new PoolBuildError(`${where}: the pool hash does not match its records and parameters (the pool was edited)`);
+  if (contentHash(m, recs) !== m.contentSha256)
+    throw new PoolBuildError(`${where}: the pool's manifest or provenance does not match its content hash (the pool was edited)`);
+  return { manifest: m, records: recs };
+}
+
+/** Read a pool dir and verify it. */
 export function readPool(dir: string): { manifest: PoolManifest; records: PoolRecord[] } {
-  const manifest = JSON.parse(readFileSync(join(dir, "pool.json"), "utf8")) as PoolManifest;
-  if (manifest.schemaVersion !== POOL_SCHEMA_VERSION)
-    throw new PoolBuildError(`${dir}: pool schema version ${manifest.schemaVersion} is not supported (expected ${POOL_SCHEMA_VERSION})`);
+  const manifest: unknown = JSON.parse(readFileSync(join(dir, "pool.json"), "utf8"));
   const records = readFileSync(join(dir, "records.jsonl"), "utf8")
     .split("\n")
     .filter(Boolean)
-    .map((l) => JSON.parse(l) as PoolRecord);
-  for (const r of records)
-    if (recordId(r) !== r.id) throw new PoolBuildError(`${dir}: record ${r.id} does not hash to its id (the pool was edited)`);
-  const sha = poolHash(records, manifest.retrieval);
-  if (sha !== manifest.sha256)
-    throw new PoolBuildError(`${dir}: the pool hash does not match its records and parameters (the pool was edited)`);
-  return { manifest, records };
+    .map((l) => JSON.parse(l) as unknown);
+  return verifyPool(dir, manifest, records);
 }
 
 export const EXPORT_NOTICE =
   "This file holds third-party web page titles and URLs and model-written search summaries, recorded from your own " +
   "cowork-harness runs, for private evaluation. It holds no page bodies. Sharing it is your call.";
 
-/** A single-file export: the notice, the manifest and the records. The hash travels with it and is re-verified on
- *  import, so an eval pin checks on the other machine. */
+/** A single-file export: the notice, the manifest and the records. Both hashes travel with it and are re-verified on
+ *  import, so an eval pin checks on the other machine. Refuses an existing file. */
 export function exportPool(dir: string, file: string): void {
   const { manifest, records } = readPool(dir);
   if (!isAbsolute(file)) file = resolve(file);
-  writeFileSync(file, JSON.stringify({ notice: EXPORT_NOTICE, manifest, records }) + "\n", { mode: 0o600 });
+  if (existsSync(file)) throw new PoolBuildError(`${file} already exists`);
+  writeFileSync(file, JSON.stringify({ notice: EXPORT_NOTICE, manifest, records }) + "\n", { mode: 0o600, flag: "wx" });
 }
 
-export function importPool(file: string, dir: string): PoolManifest {
-  const bundle = JSON.parse(readFileSync(file, "utf8")) as { manifest?: PoolManifest; records?: PoolRecord[] };
-  if (!bundle.manifest || !Array.isArray(bundle.records)) throw new PoolBuildError(`${file} is not a search-pool export`);
-  for (const r of bundle.records) if (recordId(r) !== r.id) throw new PoolBuildError(`${file}: record ${r.id} does not hash to its id`);
-  if (poolHash(bundle.records, bundle.manifest.retrieval) !== bundle.manifest.sha256)
-    throw new PoolBuildError(`${file}: the pool hash does not match its records and parameters`);
-  writePool(dir, bundle.manifest, bundle.records);
-  return bundle.manifest;
+export function importPool(file: string, dir: string, secrets: string[] = collectSecrets()): PoolManifest {
+  let bundle: { manifest?: unknown; records?: unknown };
+  try {
+    bundle = JSON.parse(readFileSync(file, "utf8")) as typeof bundle;
+  } catch (e) {
+    if (e instanceof SyntaxError) throw new PoolBuildError(`${file} is not a search-pool export (not JSON)`);
+    throw e;
+  }
+  if (!bundle || typeof bundle !== "object") throw new PoolBuildError(`${file} is not a search-pool export`);
+  const { manifest, records } = verifyPool(file, bundle.manifest, bundle.records);
+  const leaked = secretHits(records, secrets);
+  if (leaked.length) throw new PoolBuildError(`${file}: a known secret appears in ${leaked.length} record(s): ${leaked.join(", ")}`);
+  writePool(dir, manifest, records);
+  return manifest;
 }
 
 export { DEFAULT_RETRIEVAL };

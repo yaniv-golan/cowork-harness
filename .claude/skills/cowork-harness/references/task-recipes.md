@@ -503,3 +503,24 @@ decided a tool permission. *Does not prove:* scheduled-task behaviour. Real sche
 and tell the model no user is present; the harness does not model them. To check instead that a skill parks correctly when
 nobody can answer at all, use the session key `answer_channel: none`: the agent gets no question tool, and the run
 is graded by the status file the skill writes ([docs/headless-no-answer.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/headless-no-answer.md)).
+
+## Recipe 9 — Keep the web searches your runs made (`search-pool`)
+
+When a skill researches on the web, its kept runs hold every WebSearch result: the query, the links and the search's
+prose summary. `search-pool build` collects them into a pool, one record per search, with the run's skill and
+versions. Nothing serves a pool yet; build one now to inspect what a skill searched for and found.
+
+```bash
+cowork-harness search-pool build market-sizing --from ~/.cowork-harness/runs/my-scenario   # repeat --from for more
+cowork-harness search-pool export market-sizing --out ~/market-sizing-pool.json            # one JSON file, 0600
+cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy             # re-verifies both hashes
+```
+
+- **One skill per pool.** A run whose skill differs from the others, or that names no single skill, is refused. Pass
+  `--skill <name>` to name the skill for runs that name none, or `--mixed` for a pool of several skills (a measured
+  variant, never a baseline).
+- **Review before you share.** The build refuses a record holding a known secret and lists records that name or quote
+  an upload; drop them with `--exclude <id>`. Pools live under `~/.cowork-harness/search-pools/`, and a path inside a
+  git work tree is refused unless `--allow-in-repo`.
+- **`--min-score <n>`** sets the relevance floor a query must clear to be served (default `0.4`). It is part of the pool
+  hash, so two pools with different floors are different pools.

@@ -1,0 +1,56 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`determinism golden vector (macOS and Linux CI must agree) > serves exactly the recorded ids, rounds and normalised scores 1`] = `
+[
+  [
+    "ev charging market europe 2024",
+    "served",
+    "0.584664071",
+    [
+      [
+        0,
+        "nearby",
+      ],
+    ],
+  ],
+  [
+    "pos software competitors",
+    "served",
+    "0.674512201",
+    [
+      [
+        2,
+        "nearby",
+      ],
+    ],
+  ],
+  [
+    "marktes ladestationen",
+    "served",
+    "0.645688598",
+    [
+      [
+        3,
+        "nearby",
+      ],
+    ],
+  ],
+  [
+    "充電 市場 規模",
+    "served",
+    "0.761592095",
+    [
+      [
+        4,
+        "exact",
+      ],
+    ],
+  ],
+  [
+    "quantum computing",
+    "miss",
+    "0.000000000",
+    [],
+  ],
+]
+`;

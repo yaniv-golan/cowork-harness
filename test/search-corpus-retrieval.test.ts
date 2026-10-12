@@ -43,7 +43,8 @@ describe("tokenize (v1)", () => {
 
 describe("normalizeUrl", () => {
   it("lowercases scheme and host, drops fragment and trailing slash, keeps the query string", () => {
-    expect(normalizeUrl("HTTPS://Example.COM/A/b/?x=1#frag")).toBe("https://example.com/A/b/?x=1");
+    expect(normalizeUrl("HTTPS://Example.COM/A/b/?x=1#frag")).toBe("https://example.com/A/b?x=1");
+    expect(normalizeUrl("https://e.com/p?next=/a/")).toBe("https://e.com/p?next=/a/");
     expect(normalizeUrl("https://example.com/path/")).toBe("https://example.com/path");
   });
 });
@@ -120,5 +121,57 @@ describe("rank / select", () => {
     const two = rank(buildIndex([b, a]), "same query words").map((c) => c.id);
     expect(one).toEqual(two);
     expect(one).toEqual([a.id, b.id].sort());
+  });
+});
+
+describe("review fixes", () => {
+  it("keeps combining marks, so Indic and pointed scripts tokenize whole", () => {
+    expect(tokenize("हिन्दी बाज़ार")).toEqual(["हिन्दी", "बाज़ार".normalize("NFKC")]);
+  });
+  it("a userinfo URL is filtered by its real host", () => {
+    const r = rec("evil links", [["x", "https://b.example@attacker.com/x"]], "x");
+    expect(rank(buildIndex([r]), "evil links", { blocked: ["attacker.com"] })).toEqual([]);
+  });
+  it("a query sharing one word with an otherwise unrelated pool is a miss", () => {
+    const pool = [rec("electric vehicle charging market size europe", [["EV", "https://a.example/ev"]], "x")];
+    const s = select(buildIndex(pool), "electric guitar amplifier reviews");
+    expect(s.verdict).toBe("miss");
+    expect(s.nscore).toBeLessThan(DEFAULT_RETRIEVAL.minScore);
+  });
+  it("drops a later round whose links were all served earlier", () => {
+    const a = rec("solar panel prices", [["A", "https://s.example/1"]], "solar panel prices fell");
+    const b = rec("solar panel prices 2026", [["B", "https://s.example/1/"]], "solar panel prices fell");
+    const s = select(buildIndex([a, b]), "solar panel prices");
+    expect(s.rounds.every((r) => r.links.length > 0)).toBe(true);
+  });
+});
+
+// S7: a committed golden vector. Any machine, any engine: the same pool and queries give exactly these results.
+describe("determinism golden vector (macOS and Linux CI must agree)", () => {
+  const pool = [
+    rec(
+      "electric vehicle charging market size europe",
+      [["EV charging Europe", "https://a.example/ev"]],
+      "The European EV charging market was 5 billion in 2024.",
+    ),
+    rec("electric vehicle charging market size usa", [["EV charging US", "https://b.example/ev"]], "US charging market figures for 2025."),
+    rec("restaurant pos software competitors", [["POS", "https://c.example/pos"]], "Toast, Square and Clover lead the segment."),
+    rec("größe des marktes für ladestationen", [["Markt", "https://d.example/de"]], "Der Markt wächst."),
+    rec("市場 規模 充電", [["JP", "https://e.example/jp"]], "充電 市場"),
+  ];
+  const idx = buildIndex(pool);
+  const queries = [
+    "ev charging market europe 2024",
+    "pos software competitors",
+    "marktes ladestationen",
+    "充電 市場 規模",
+    "quantum computing",
+  ];
+  it("serves exactly the recorded ids, rounds and normalised scores", () => {
+    const got = queries.map((q) => {
+      const s = select(idx, q);
+      return [q, s.verdict, s.nscore.toFixed(9), s.rounds.map((r) => [pool.findIndex((p) => p.id === r.record.id), r.match])];
+    });
+    expect(got).toMatchSnapshot();
   });
 });

@@ -77,44 +77,48 @@ describe("parseWebSearchResult / renderWebSearchResult", () => {
 // Local only (never CI): every WebSearch tool_result in the operator's kept runs re-renders byte-exactly. Prints
 // counts only; no web text.
 const RUNS = join(homedir(), ".cowork-harness");
-const kept = existsSync(RUNS) ? globSync(join(RUNS, "runs*/**/events.jsonl")) : [];
-describe.skipIf(!process.env.COWORK_SEARCH_CORPUS_P2 || kept.length === 0)(
-  "round-trip over kept runs (local, COWORK_SEARCH_CORPUS_P2=1)",
-  () => {
-    it("re-renders every non-error WebSearch tool_result exactly", () => {
-      let ok = 0;
-      const bad: string[] = [];
-      for (const f of kept) {
-        const ids = new Set<string>();
-        for (const line of readFileSync(f, "utf8").split("\n")) {
-          if (!line.includes("WebSearch") && !line.includes("tool_result")) continue;
-          let o: { message?: { content?: unknown } };
-          try {
-            o = JSON.parse(line);
-          } catch {
-            continue;
-          }
-          const c = o.message?.content;
-          if (!Array.isArray(c)) continue;
-          for (const b of c as {
-            type?: string;
-            name?: string;
-            id?: string;
-            tool_use_id?: string;
-            content?: unknown;
-            is_error?: boolean;
-          }[]) {
-            if (b.type === "tool_use" && b.name === "WebSearch" && b.id) ids.add(b.id);
-            if (b.type === "tool_result" && b.tool_use_id && ids.has(b.tool_use_id) && !b.is_error && typeof b.content === "string") {
-              const p = parseWebSearchResult(b.content);
-              if (p.ok && renderWebSearchResult(p.result) === b.content) ok++;
-              else bad.push(`${f}:${b.tool_use_id}`);
-            }
+// The env var is checked first, so an ordinary run never walks the runs dir. Main-loop events and sub-agent transcripts.
+const kept =
+  process.env.COWORK_SEARCH_CORPUS_P2 && existsSync(RUNS)
+    ? [
+        ...globSync(join(RUNS, "runs*/**/events.jsonl")),
+        ...globSync(join(RUNS, "runs*/*/*/claude-config/projects/*/*/subagents/agent-*.jsonl")),
+      ]
+    : [];
+describe.skipIf(kept.length === 0)("round-trip over kept runs (local, COWORK_SEARCH_CORPUS_P2=1)", () => {
+  it("re-renders every non-error WebSearch tool_result exactly", () => {
+    let ok = 0;
+    const bad: string[] = [];
+    for (const f of kept) {
+      const ids = new Set<string>();
+      for (const line of readFileSync(f, "utf8").split("\n")) {
+        if (!line.includes("WebSearch") && !line.includes("tool_result")) continue;
+        let o: { message?: { content?: unknown } };
+        try {
+          o = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const c = o.message?.content;
+        if (!Array.isArray(c)) continue;
+        for (const b of c as {
+          type?: string;
+          name?: string;
+          id?: string;
+          tool_use_id?: string;
+          content?: unknown;
+          is_error?: boolean;
+        }[]) {
+          if (b.type === "tool_use" && b.name === "WebSearch" && b.id) ids.add(b.id);
+          if (b.type === "tool_result" && b.tool_use_id && ids.has(b.tool_use_id) && !b.is_error && typeof b.content === "string") {
+            const p = parseWebSearchResult(b.content);
+            if (p.ok && renderWebSearchResult(p.result) === b.content) ok++;
+            else bad.push(`${f}:${b.tool_use_id}`);
           }
         }
       }
-      expect(bad.length, `${bad.length} mismatches (first: ${bad[0]})`).toBe(0);
-      expect(ok).toBeGreaterThan(0);
-    });
-  },
-);
+    }
+    expect(bad.length, `${bad.length} mismatches (first: ${bad[0]})`).toBe(0);
+    expect(ok).toBeGreaterThan(0);
+  });
+});

@@ -57,7 +57,9 @@ function linksOf(seg: string): SearchLink[] | undefined {
       if (Object.keys(o).join(",") !== "title,url" || typeof o.title !== "string" || typeof o.url !== "string") return undefined;
       out.push({ title: o.title, url: o.url });
     }
-    return out;
+    // Only the agent's own rendering (compact JSON, at least one link) is a link entry; anything else stays text, so
+    // the re-render is exact.
+    return out.length > 0 && seg === LINKS + JSON.stringify(out) ? out : undefined;
   } catch {
     return undefined;
   }

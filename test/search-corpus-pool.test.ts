@@ -52,7 +52,11 @@ function run(root: string, o: { skill: string; searches: [string, string, string
   writeFileSync(join(d, "events.jsonl"), lines.join("\n"));
   writeFileSync(
     join(d, "turns", "1", "result.json"),
-    JSON.stringify({ scenario: "s", fingerprint: { contentSig: `sig-${o.skill}`, skillSources: [`../${o.skill}`] } }),
+    JSON.stringify({
+      scenario: "s",
+      fingerprint: { contentSig: `sig-${o.skill}`, skillSources: ["../plugin"] },
+      ...(o.skill === "none" ? {} : { skillsInvoked: [`plug:${o.skill}`] }),
+    }),
   );
   if (o.upload) {
     mkdirSync(join(d, "work", "uploads"), { recursive: true });
@@ -200,5 +204,88 @@ describe("helpers", () => {
   it("insideGitWorkTree is true in this repo and false in a temp dir", () => {
     expect(insideGitWorkTree(process.cwd())).toBe(true);
     expect(insideGitWorkTree(mkdtempSync(join(tmpdir(), "cwh-nogit-")))).toBe(false);
+  });
+});
+
+describe("review fixes", () => {
+  const one = (skill = "ms", searches: [string, string, string][] = [["q", "https://a", "x"]]) => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-"));
+    return { root, d: run(root, { skill, searches }) };
+  };
+
+  it("the content hash covers provenance: a forged manifest field or record source is refused on read", () => {
+    const { d } = one();
+    const { manifest, records } = assemblePool({ ...base, runDirs: [d] });
+    for (const forge of [
+      (m: Record<string, unknown>) => (m.mixed = true),
+      (m: Record<string, unknown>) => ((m.sources as { variantHash: string }[])[0]!.variantHash = "forged"),
+    ]) {
+      const dir = join(mkdtempSync(join(tmpdir(), "cwh-pool-out-")), "pool");
+      writePool(dir, manifest, records);
+      const m = JSON.parse(readFileSync(join(dir, "pool.json"), "utf8"));
+      forge(m);
+      writeFileSync(join(dir, "pool.json"), JSON.stringify(m));
+      expect(() => readPool(dir)).toThrow(/content hash/);
+    }
+    const dir = join(mkdtempSync(join(tmpdir(), "cwh-pool-out-")), "pool");
+    writePool(dir, manifest, records);
+    const p = join(dir, "records.jsonl");
+    const r = JSON.parse(readFileSync(p, "utf8"));
+    r.source.runRef = "/Users/someone/run";
+    writeFileSync(p, JSON.stringify(r) + "\n");
+    expect(() => readPool(dir)).toThrow(/unexpected shape/);
+  });
+
+  it("a run naming no skill is refused unless --skill or --mixed; --skill refuses a run of another skill", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-"));
+    const none = run(root, { skill: "none", searches: [["q1", "https://a", "x"]] });
+    const ms = run(root, { skill: "ms", searches: [["q2", "https://b", "y"]] });
+    expect(() => assemblePool({ ...base, runDirs: [none] })).toThrow(/--skill/);
+    expect(assemblePool({ ...base, runDirs: [none, ms], skill: "ms" }).manifest).toMatchObject({ skills: ["ms"], mixed: false });
+    expect(() => assemblePool({ ...base, runDirs: [ms], skill: "cp" })).toThrow(/of skill ms/);
+  });
+
+  it("a run of another skill whose searches all duplicate this one's still makes the pool mixed", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-"));
+    const a = run(root, { skill: "ms", searches: [["same", "https://a", "x"]] });
+    const b = run(root, { skill: "cp", searches: [["same", "https://a", "x"]] });
+    expect(() => assemblePool({ ...base, runDirs: [a, b] })).toThrow(/2 skills/);
+  });
+
+  it("finds a secret in the query, a title or a URL, not only the prose", () => {
+    for (const where of ["query", "title", "url"] as const) {
+      const S = "sk-ant-SECRETVALUE123";
+      const q = where === "query" ? `q ${S}` : "q";
+      const url = where === "url" ? `https://a/${S}` : "https://a";
+      const root = mkdtempSync(join(tmpdir(), "cwh-pool-"));
+      const d = run(root, { skill: "ms", searches: [[q, url, "x"]] });
+      if (where === "title") {
+        const ev = readFileSync(join(d, "events.jsonl"), "utf8").replaceAll('\\"title\\":\\"q\\"', `\\"title\\":\\"t ${S}\\"`);
+        writeFileSync(join(d, "events.jsonl"), ev);
+      }
+      expect(() => assemblePool({ ...base, runDirs: [d], secrets: [S] }), where).toThrow(/known secret/);
+    }
+  });
+
+  it("export refuses an existing file and writes 0600; import refuses a malformed file or a secret", () => {
+    const { d } = one();
+    const { manifest, records } = assemblePool({ ...base, runDirs: [d] });
+    const dir = join(mkdtempSync(join(tmpdir(), "cwh-pool-out-")), "pool");
+    writePool(dir, manifest, records);
+    const file = join(mkdtempSync(join(tmpdir(), "cwh-pool-x-")), "p.json");
+    exportPool(dir, file);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(() => exportPool(dir, file)).toThrow(/already exists/);
+    const bad = join(mkdtempSync(join(tmpdir(), "cwh-pool-x-")), "bad.json");
+    writeFileSync(bad, '{"manifest": 1}');
+    expect(() => importPool(bad, join(mkdtempSync(join(tmpdir(), "cwh-in-")), "p"))).toThrow(/not a search pool/);
+    writeFileSync(bad, "not json");
+    expect(() => importPool(bad, join(mkdtempSync(join(tmpdir(), "cwh-in-")), "p"))).toThrow(/not JSON/);
+    expect(() => importPool(file, join(mkdtempSync(join(tmpdir(), "cwh-in-")), "p"), ["https://a"])).toThrow(/known secret/);
+  });
+
+  it("refuses an empty pool name", () => {
+    const { d } = one();
+    expect(() => assemblePool({ ...base, poolId: "", runDirs: [d] })).toThrow(/empty/);
   });
 });

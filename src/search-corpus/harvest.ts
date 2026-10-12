@@ -17,13 +17,14 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { initAgentVersion } from "../run/recorded-agent-version.js";
-import { parseWebSearchResult, splitSearches, type SearchLink } from "./render.js";
+import { parseWebSearchResult, renderWebSearchResult, splitSearches, type SearchLink } from "./render.js";
 
 export interface RecordSource {
   /** A hash of the run dir's `<scenario>/<run id>`, never a host path. */
   runRef: string;
   scenario: string | null;
-  /** The skill under test: a critique run's graded skill, else the names of the run's skill source dirs. A pool
+  /** The skill under test, without its plugin prefix: a critique run's graded skill, else the one skill the
+   *  fingerprint was scoped to, else the one skill the run invoked; null when none of them names exactly one. A pool
    *  holds one skill unless it is built as mixed. */
   skill: string | null;
   /** The skill sources' git HEAD at run time (`skillCommit`), when known. */
@@ -151,17 +152,29 @@ function childTranscripts(runDir: string): string[] {
   return out.sort();
 }
 
+/** A skill name without its plugin prefix (`plugin:skill` → `skill`). */
+const bareSkill = (s: string) => s.slice(s.lastIndexOf(":") + 1);
+
+/** The one skill a list names, or null when it names none or several. */
+function onlyOne(xs: unknown): string | null {
+  if (!Array.isArray(xs)) return null;
+  const names = [...new Set(xs.filter((x): x is string => typeof x === "string" && x.length > 0).map(bareSkill))];
+  return names.length === 1 ? names[0]! : null;
+}
+
+function skillOf(runDir: string, r: Record<string, unknown>): string | null {
+  const graded = (readJson(join(runDir, "critique-report.json")) ?? {}).gradedSkill;
+  if (typeof graded === "string" && graded.length > 0) return bareSkill(graded);
+  return onlyOne((r.fingerprint as { skillScope?: unknown } | undefined)?.skillScope) ?? onlyOne(r.skillsInvoked);
+}
+
 export function sourceOf(runDir: string, eventLines: string[]): RecordSource {
   const r = resultOf(runDir) ?? {};
   const status = readJson(join(runDir, "status.json")) ?? {};
   const fp = (r.fingerprint ?? {}) as { contentSig?: unknown };
   const str = (v: unknown) => (typeof v === "string" && v.length > 0 ? v : null);
   const models = Array.isArray(r.models) ? r.models : [];
-  const graded = (readJson(join(runDir, "critique-report.json")) ?? {}).gradedSkill;
-  const sources = Array.isArray((r.fingerprint as { skillSources?: unknown } | undefined)?.skillSources)
-    ? ((r.fingerprint as { skillSources: unknown[] }).skillSources.filter((x) => typeof x === "string") as string[])
-    : [];
-  const skill = str(graded) ?? (sources.length ? [...new Set(sources.map((x) => basename(x)))].sort().join("+") : null);
+  const skill = skillOf(runDir, r);
   return {
     runRef: createHash("sha256")
       .update(`${basename(dirname(runDir))}/${basename(runDir)}`, "utf8")
@@ -195,6 +208,11 @@ export function harvestRun(runDir: string): { records: PoolRecord[]; counts: Har
       const t = textOf(p.content);
       const parsed = t === null ? null : parseWebSearchResult(t);
       if (!parsed || !parsed.ok) {
+        counts.unparsed++;
+        continue;
+      }
+      // Keep only what the agent's renderer would reproduce byte-for-byte: anything else was guessed at.
+      if (renderWebSearchResult(parsed.result) !== t) {
         counts.unparsed++;
         continue;
       }

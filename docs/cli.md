@@ -467,19 +467,24 @@ yet; a later release will let an eval or hillclimb run answer its searches from 
 - **Where.** `<pool>` is a name under `~/.cowork-harness/search-pools/`, or a path. The pool dir is `0700` and its two
   files (`pool.json`, `records.jsonl`) are `0600`. A path inside a git work tree is refused unless `--allow-in-repo`:
   a pool holds third-party titles and URLs and model-written summaries, which can quote an upload.
-- **What it reads.** The raw main-loop frames in each run's `events.jsonl` and each sub-agent's own transcript (a
-  search seen in both is kept once). Error results, results it cannot read, and a search whose only content is the
+- **What it reads.** The raw frames in each run's `events.jsonl` (the main loop's and each sub-agent's) and each
+  sub-agent's own transcript; a search seen in both is kept once. A result is kept only when it re-renders to the
+  agent's exact tool_result text. Error results, results it cannot reproduce, and a search whose only content is the
   agent's search-error line are skipped and counted in the summary.
-- **One skill per pool.** Runs of several skills are refused unless `--mixed`; a mixed pool is a measured variant,
-  never a baseline.
+- **One skill per pool.** A run's skill is its graded skill (a critique run), else the one skill its fingerprint was
+  scoped to, else the one skill it invoked; never its plugin directory. Runs of several skills, or a run naming none,
+  are refused unless `--mixed` (a measured variant, never a baseline); `--skill <name>` declares the skill for runs
+  that name none and refuses a run of another skill.
 - **Refusals and review.** A record containing a known secret (the credentials, `COWORK_HARNESS_SCRUB_KEYS` /
   `COWORK_HARNESS_SCRUB_VALUES`, and their encoded forms) refuses the build, naming the record. The summary lists
   records that name an upload file or repeat eight consecutive words of a text upload; drop any with `--exclude <id>`.
-- **The hash.** `pool.json` carries a hash over the sorted record ids and the retrieval parameters (including
-  `--min-score`, default `0.4`), so a pool is identified by what it would serve.
-- **Moving a pool.** `search-pool export <pool> --out <file>` writes **one JSON file** (not a tarball) holding a notice,
-  the manifest and the records; `search-pool import <file> <pool>` re-verifies every record id and the pool hash before
-  writing.
+- **The hashes.** `pool.json` carries `sha256`, over the sorted record ids and the retrieval parameters (including
+  `--min-score`, default `0.4`), so a pool is identified by what it would serve; and `contentSha256`, over the whole
+  manifest and every record including its provenance. Reading, exporting or importing a pool re-verifies both.
+- **Moving a pool.** `search-pool export <pool> --out <file>` writes **one JSON file** (not a tarball), `0600`, holding
+  a notice, the manifest and the records; it refuses an existing file and, like `build` and `import`, a path inside a
+  git work tree unless `--allow-in-repo`. `search-pool import <file> <pool>` re-verifies every record, both hashes and
+  the secret scan before writing.
 
 ### Exporting a run's outputs as a fixture (`fixture export`)
 

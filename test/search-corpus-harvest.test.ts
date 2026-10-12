@@ -7,6 +7,7 @@ import { renderWebSearchResult } from "../src/search-corpus/render.js";
 
 // Synthetic run dir in the harness's per-turn layout. All web text is invented.
 const REM = "REMINDER: cite the sources above.";
+const result_ = (q: string) => result(q, [{ title: "T", url: "https://t" }], "x");
 const result = (query: string, links: { title: string; url: string }[], text: string) =>
   renderWebSearchResult({ query, entries: [{ kind: "links", links }, ...(text ? [{ kind: "text" as const, text }] : [])], reminder: REM });
 const use = (id: string, query: string, parent?: string) =>
@@ -38,7 +39,8 @@ function runDir(o: { events: string[]; child?: string[]; result?: object }): str
         baseline: "1.2.3",
         models: ["m-1"],
         skillCommit: "abc123",
-        fingerprint: { contentSig: "sig-1", skillSources: ["../../plugins/my-skill"] },
+        fingerprint: { contentSig: "sig-1", skillSources: ["../../plugins/my-plugin"] },
+        skillsInvoked: ["my-plugin:my-skill"],
       },
     ),
   );
@@ -134,5 +136,28 @@ describe("harvestRun", () => {
   it("records null provenance fields rather than inventing them", () => {
     const d = runDir({ events: [use("t", "q"), res("t", result("q", [], "x"))], result: { scenario: "s" } });
     expect(harvestRun(d).records[0]!.source).toMatchObject({ skillRef: null, variantHash: null, model: null, desktopVersion: null });
+  });
+
+  it("names a run's skill from its graded skill, its one scoped skill, or its one invoked skill — never its plugin dir", () => {
+    const skillWith = (result: object, critique?: object) => {
+      const d = runDir({ events: [use("t", "q"), res("t", result_("q"))], result: { scenario: "s", ...result } });
+      if (critique) writeFileSync(join(d, "critique-report.json"), JSON.stringify(critique));
+      return harvestRun(d).records[0]!.source.skill;
+    };
+    expect(skillWith({ fingerprint: { skillSources: ["../founder-skills"] } }, { gradedSkill: "founder-skills:market-sizing" })).toBe(
+      "market-sizing",
+    );
+    expect(skillWith({ fingerprint: { skillScope: ["deck-review"], skillSources: ["../plugin"] } })).toBe("deck-review");
+    expect(skillWith({ skillsInvoked: ["p:a", "p:a"] })).toBe("a");
+    expect(skillWith({ skillsInvoked: ["p:a", "p:b"] })).toBeNull();
+    expect(skillWith({ fingerprint: { skillSources: ["../plugin"] } })).toBeNull();
+  });
+
+  it("does not harvest a result whose re-render would differ (a guess)", () => {
+    const spaced = 'Web search results for query: "q"\n\nLinks: [{"title": "t", "url": "u"}]\n\n\nREMINDER: x';
+    const d = runDir({ events: [use("t", "q"), res("t", spaced)] });
+    const { records, counts } = harvestRun(d);
+    expect(records.every((r) => r.links.length === 0)).toBe(true); // the spaced JSON is kept as text, never as links
+    expect(counts.unparsed + counts.records).toBe(1);
   });
 });
