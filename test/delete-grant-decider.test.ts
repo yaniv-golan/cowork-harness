@@ -3,7 +3,7 @@
 // as an unanswered gate, `first` declines, and every other answerer reads its two options through
 // `coerceDeleteGrant`, never through web_fetch's grant scopes.
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLI, POSIX, credentialLeaks, exited, makeStubFixture, runDir, spawnCli } from "./helpers/stub-agent.js";
 import { Run } from "../src/run/run.js";
@@ -123,6 +123,28 @@ describe("coerceDeleteGrant and the interactive answerers", () => {
     expect(d.response).toMatchObject({ kind: "permission", behavior: "allow" });
     expect(d.response).not.toHaveProperty("grant");
   });
+  it("LlmDecider asks about deleting in the requested folders, naming them and the reason, never a web fetch", async () => {
+    const prompts: string[] = [];
+    await new LlmDecider(async (p) => (prompts.push(p), { text: "Decline", model: "m" })).decide(withOptions());
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("~/notes");
+    expect(prompts[0]).toContain("tidy up");
+    expect(prompts[0]).toMatch(/delete/i);
+    expect(prompts[0]).not.toMatch(/fetch|URL|domain/i);
+  });
+  it("PromptDecider shows the requested folders and the reason before the two options", async () => {
+    const orig = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    const shown: string[] = [];
+    try {
+      await new PromptDecider(async (p) => (shown.push(p), "1")).decide(withOptions());
+    } finally {
+      Object.defineProperty(process.stdin, "isTTY", { value: orig, configurable: true });
+    }
+    expect(shown[0]).toContain("~/notes");
+    expect(shown[0]).toContain("tidy up");
+    expect(shown[0]).toContain("Allow for this session");
+  });
   it("PromptDecider: a typed 1 declines", async () => {
     const orig = process.stdin.isTTY;
     Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
@@ -175,6 +197,25 @@ describe.runIf(can)("an unscripted delete card through the CLI", () => {
       const res = JSON.parse(readFileSync(join(d, "turns", "1", "result.json"), "utf8"));
       expect(res.unansweredGate.message).toMatch(/delete permission/);
       expect(res.verdict.pass).toBe(false);
+      expect((res.decisions ?? []).some((x: { decision: string }) => x.decision === "allow")).toBe(false);
+    } finally {
+      f.cleanup();
+    }
+  });
+  it("allow_permissive_auto_allow cannot waive it: the run still exits 2 with nothing allowed", async () => {
+    const f = makeStubFixture(`printf '%s\\n' '${GRANT_FRAME}'\nexec sleep 300`);
+    try {
+      writeFileSync(
+        f.scenario,
+        "baseline: latest\nfidelity: protocol\nprompt: say hi\nassert:\n  - result: success\n  - allow_permissive_auto_allow: true\n",
+      );
+      const cli = spawnCli(f, ["run", f.scenario, "--output-format", "json"]);
+      const r = await exited(cli, 25_000);
+      expect(r.code, cli.stderrText()).toBe(2);
+      const res = JSON.parse(readFileSync(join(runDir(f)!, "turns", "1", "result.json"), "utf8"));
+      expect(res.unansweredGate.message).toMatch(/delete permission/);
+      expect(res.verdict.pass).toBe(false);
+      expect(res.permissiveAutoAllow).toBeUndefined();
       expect((res.decisions ?? []).some((x: { decision: string }) => x.decision === "allow")).toBe(false);
     } finally {
       f.cleanup();

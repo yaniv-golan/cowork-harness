@@ -575,6 +575,16 @@ export function coerceDeleteGrant(answer: string): { behavior: "allow" | "deny";
   );
 }
 
+/** What the delete card asks, for an answerer that reads text: the folders requested and the agent's reason. */
+function deleteCardText(input: unknown): string[] {
+  const { paths, reason } = (input ?? {}) as { paths?: unknown; reason?: unknown };
+  const folders = Array.isArray(paths) ? paths.map(String).join(", ") : "?";
+  return [
+    `The agent asks to permanently delete files in these folders on your computer, for the rest of the session, subfolders included: ${folders}`,
+    ...(typeof reason === "string" && reason ? [`Its reason: ${reason}`] : []),
+  ];
+}
+
 /** Map a web_fetch approval answer (a grant-scope label, shorthand, or 1-based index) → {behavior, grant}.
  *  The ONLY label→grant map (off-wire, web_fetch-local). Throws loud on an unknown answer — NEVER a silent
  *  default-allow (the ethos's no-false-green rule). "domain" = "Allow all for website" (per-run host grant). */
@@ -803,16 +813,21 @@ export class LlmDecider implements Decider {
     };
   }
 
-  /** Prompt for a web_fetch approval gate (domain + url + the grant options). */
+  /** Prompt for an options-bearing permission: a web_fetch approval (domain + url) or the delete card (folders +
+   *  reason), with the grant options. */
   private permPrompt(req: Extract<DecisionRequest, { kind: "permission" }>, ctx?: RunContext): string {
     const tail = (ctx?.transcript?.() ?? "").slice(-1000);
     const { domain, url } = req.input as { domain?: string; url?: string };
+    const card = req.tool === DELETE_GRANT_TOOL;
+    const what = card ? "a request to delete files" : "a web_fetch approval";
     return [
       this.intent
-        ? `You are deciding a web_fetch approval on behalf of a tester. The tester's intent for THIS run: ${this.intent}\nPick the option that best serves that intent.`
-        : `You are deciding whether to allow a web fetch, as a sensible user would.`,
+        ? `You are deciding ${what} on behalf of a tester. The tester's intent for THIS run: ${this.intent}\nPick the option that best serves that intent.`
+        : card
+          ? `You are deciding whether to let the agent delete files, as a sensible user would.`
+          : `You are deciding whether to allow a web fetch, as a sensible user would.`,
       tail ? `Recent context (transcript tail):\n${tail}` : "",
-      `The agent wants to fetch the URL ${url ?? "?"} (domain "${domain ?? "?"}").`,
+      card ? deleteCardText(req.input).join("\n") : `The agent wants to fetch the URL ${url ?? "?"} (domain "${domain ?? "?"}").`,
       `Options:\n${(req.options ?? []).map((o) => `- ${o.label}${o.description ? `: ${o.description}` : ""}`).join("\n")}`,
       `Reply with ONLY the exact label of the single best option. No explanation, no punctuation — just the label.`,
     ]
@@ -911,7 +926,10 @@ export class PromptDecider implements Decider {
           `protocol error: permission request for "${req.tool}" carries an empty options array`,
           "the protocol guarantees at least one option on an options-bearing permission gate",
         );
-      const permPrompt = boxPrompt([`${req.tool}?`, ...labels.map((l, i) => `  ${i + 1}) ${l}`)]);
+      const permPrompt = boxPrompt([
+        ...(req.tool === DELETE_GRANT_TOOL ? deleteCardText(req.input) : [`${req.tool}?`]),
+        ...labels.map((l, i) => `  ${i + 1}) ${l}`),
+      ]);
       let coercedPerm: { value: string; matched: boolean };
       do {
         const ans = await this.ask(permPrompt);

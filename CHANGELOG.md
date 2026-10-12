@@ -32,7 +32,7 @@ All notable changes to this project are documented here. The format is based on
   first. The handler refuses a path that is not a connected folder root, a read-only folder, or a malformed request,
   as production does. A scenario answers the card like any tool permission; permission parity never answers it,
   `on_unanswered: fail` ends the run, `first` declines it, and `llm`, the prompt and `--decider-cmd` choose between
-  its two buttons (`Decline`, `Allow for this session`). Under `bypassPermissions` the grant is immediate. Each grant is
+  its two buttons (`Decline`, `Allow for this session`), shown the folders requested and the agent's reason. Under `bypassPermissions` the grant is immediate. Each grant is
   recorded in `RunResult.deviceBridge.grants` with who answered it. Nothing refuses a delete on the device copy yet:
   `deleteRefusal: "reported"`, and `delete-not-refused` stays.
 
