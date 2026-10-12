@@ -290,7 +290,10 @@ A [multi-leg scenario](./scenario.md#multi-leg-scenarios-legs) records ONE casse
 - **Replay stops where live stopped:** a failing leg makes every later leg `skipped`; a leg the recording itself
   skipped has nothing to replay from and fails as evidence-unavailable.
 - `verify-cassettes` runs the privacy scan and the staleness checks per leg, and reports drift of the frozen legs
-  (each prompt, session overlay and action) against the scenario file the cassette names.
+  (each prompt, session overlay and action) against the scenario file the cassette names. The cassette's own top
+  level (the frozen scenario, its `session` and `scenarioSource` paths, and the verdict) is privacy-scanned too;
+  those findings are prefixed `scenario:`. Paths there are relative to the cassette, so record into the repo, not a
+  temp dir, or the path climbs through your home directory and is flagged.
 - `record --rerecord-stale <dir>` finds a multi-leg cassette stale when any leg's nested cassette is, and re-records
   it from the scenario file it names. `diff` and `rehash` refuse one by name, and `replay --assert-from`,
   `--reassert`, `--write`, `--mutate` and `--session` are refused for one.

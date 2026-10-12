@@ -8305,6 +8305,23 @@ export async function cmdVerifyCassettes(args: string[]) {
         out.findings.push(...scanCassette(stand, allow).map((x) => ({ ...x, where: `leg ${leg.id} (host action): ${x.where}` })));
       }
     }
+    // The cassette's own top level is committed too: the frozen scenario (every leg's prompt, argv and asserts, the
+    // answers), the paths it was recorded from, and the verdict's failure messages. Scanned as a single cassette's are.
+    if (doPrivacy) {
+      const { name, session, ...rest } = c.scenario as { name?: string; session?: string } & Record<string, unknown>;
+      const src = (c as { scenarioSource?: string }).scenarioSource ?? "";
+      out.findings.push(
+        ...[
+          ...scanText(name ?? "", "metadata:scenario.name", allow, DEFAULT_SCAN_PATTERNS),
+          ...scanText(session ?? "", "metadata:scenario.session", allow, DEFAULT_SCAN_PATTERNS),
+          ...scanClimbOutHomePath(session ?? "", "metadata:scenario.session", allow),
+          ...scanText(src, "metadata:scenarioSource", allow, DEFAULT_SCAN_PATTERNS),
+          ...scanClimbOutHomePath(src, "metadata:scenarioSource", allow),
+          ...scanText(JSON.stringify(rest), "scenario", allow, DEFAULT_SCAN_PATTERNS),
+          ...scanText(JSON.stringify((c as { verdict?: unknown }).verdict ?? null), "verdict", allow, DEFAULT_SCAN_PATTERNS),
+        ].map((x) => ({ ...x, where: `scenario: ${x.where}` })),
+      );
+    }
     if ((c.cassetteVersion ?? 0) > CASSETTE_VERSION)
       out.version.push(
         `cassette format v${c.cassetteVersion} is newer than this harness understands (v${CASSETTE_VERSION}) — upgrade cowork-harness (can't verify ⇒ not green)`,

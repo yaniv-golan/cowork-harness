@@ -267,6 +267,18 @@ describe.runIf(can)("multi-leg record → replay → verify-cassettes (stub agen
       const vc = await cli(f, ["verify-cassettes", cass, "--output-format", "json"]);
       expect(vc.code, vc.stdout + vc.stderr).toBe(0);
 
+      // The cassette's own top level (scenario, scenarioSource) is committed too, so it is scanned like a leg's.
+      const top = JSON.parse(readFileSync(cass, "utf8"));
+      top.scenario.name = "probe for ceo@acme-customer.com";
+      top.scenario.legs[1].host_action.run = ["sh", "-c", "echo jane.doe@acme-customer.com"];
+      top.scenarioSource = "../../../../../Users/alice/acme/rec.yaml";
+      writeFileSync(join(f.cwd, "top.cassette.json"), JSON.stringify(top));
+      const vcTop = await cli(f, ["verify-cassettes", join(f.cwd, "top.cassette.json"), "--output-format", "json"]);
+      expect(vcTop.code, vcTop.stdout + vcTop.stderr).toBe(1);
+      expect(vcTop.stdout).toMatch(/scenario: metadata:scenario\.name/);
+      expect(vcTop.stdout).toMatch(/jane\.doe/);
+      expect(vcTop.stdout).toMatch(/scenario: metadata:scenarioSource/);
+
       // An edited prompt in the scenario file is drift; an edited action exit expectation fails the replay.
       writeFileSync(p, readFileSync(p, "utf8").replace("run the gated probe. FS_HOST_ANSWER g1=a", "something else"));
       const vc2 = await cli(f, ["verify-cassettes", cass, "--output-format", "json"]);
