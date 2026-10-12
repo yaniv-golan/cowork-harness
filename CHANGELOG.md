@@ -218,7 +218,6 @@ All notable changes to this project are documented here. The format is based on
   export` of a leg read it too. A leg with no usable snapshot (over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES`, default
   512 MiB; a malformed value is refused before the run starts) falls back to its session tree and is refused when
   that tree changed after the leg ended.
-<!-- PENDING (leg snapshot clone/copy): this entry lands with its PR. -->
 - **`critique --compare --cluster lexical`: candidate groups of findings that read alike.** Citation-resolved findings
   with text, from full reports, across every report and label group (a group spans at least two reports), grouped by
   character 3–5-gram TF-IDF similarity of their idea and recommended action, complete linkage at a fixed cut of 0.20
