@@ -128,6 +128,15 @@ All notable changes to this project are documented here. The format is based on
     same shape as a run's). It is ONE index row (`multiLeg: true`) in `stats`, and `status --latest-for` ranks it by
     when it ended. `trace`, `verify-run` and `regrade` take `--leg <id>`; every reader of run dirs either reads a
     leg or refuses a multi-leg root by name, and `prune` ranks an unfinished one as a real run (not an empty dir).
+    `stats --reindex` indexes a finished one as its one row and counts an unfinished one separately ("multi-leg run
+    not finished"), never half-indexed.
+  - The `--output-format json` envelope of `run` carries `multiLeg` (the scenario result: each leg's id, kind, status
+    and verdict, and the scenario verdict); `replay` carries `multiLegs`, one per multi-leg cassette.
+  - Refused with a multi-leg scenario: `run` in a directory batch, with `--matrix`, `--repeat` or `--ablate-skill`;
+    `record --max-budget-usd` and a live decider (`--decider-dir`, `--decider-llm`); `replay --assert-from`,
+    `--reassert`, `--write`, `--mutate` and `--session`.
+  - The skill's `scripts/assertion-keys.json` gains `multiLeg` (the form's top-level, leg, host-action and
+    host-action assert keys), generated from the schemas.
 - **Cassette v18: the multi-leg cassette.** `record <legs.yaml>` writes one cassette for the scenario: each prompt
   leg nests a complete single-prompt cassette, frozen when that leg ends, and each host action its record. `replay`
   re-drives the prompt legs and re-grades each action from its record (it never re-runs it); `verify-cassettes`
