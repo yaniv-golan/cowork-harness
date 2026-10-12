@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadScenarioPure, loadMultiLegScenario, legScenario, isMultiLegFile } from "../src/run/execute.js";
@@ -148,5 +148,27 @@ describe("legScenario: one prompt leg as the executor's single-prompt scenario",
     expect(last.workspace_fixture).toBeUndefined();
     expect(last.fidelity).toBe("container");
     expect(() => legScenario(s, s.legs[1])).toThrow(/host_action/);
+  });
+});
+
+describe("executeMultiLeg: refused before any run dir exists", () => {
+  it("the host loop (and cowork, which can resolve there), --session-id / --resume and --ablate-skill", async () => {
+    const { executeMultiLeg } = await import("../src/run/multi-leg.js");
+    const runs = join(dir, "runs");
+    const prev = process.env.COWORK_HARNESS_RUNS_DIR;
+    process.env.COWORK_HARNESS_RUNS_DIR = runs;
+    try {
+      for (const fid of ["hostloop", "cowork"]) {
+        const s = loadMultiLegScenario(file(VALID.replace("fidelity: container", `fidelity: ${fid}`), `${fid}.yaml`));
+        await expect(executeMultiLeg(s)).rejects.toThrow(/runs on container, microvm or protocol/);
+      }
+      const s = loadMultiLegScenario(file(VALID));
+      await expect(executeMultiLeg(s, { sessionId: "x" })).rejects.toThrow(/--session-id and --resume take a single-prompt scenario/);
+      await expect(executeMultiLeg(s, { ablateSkill: true })).rejects.toThrow(/--ablate-skill/);
+      expect(existsSync(runs)).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.COWORK_HARNESS_RUNS_DIR;
+      else process.env.COWORK_HARNESS_RUNS_DIR = prev;
+    }
   });
 });

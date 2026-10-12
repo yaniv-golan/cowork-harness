@@ -192,6 +192,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 | **v16** | a recording whose top-level `hookFailureBlocks` lists an event or is unknown: the run may have had an `onFailure: "block"` hook (agent 2.1.295+), so a failed or timed-out hook frame is unreadable. A v15 reader ignores the field and would read that frame as "no decision". An empty `{"events": []}` stamps what the cassette needs otherwise | v15: refuses as too new — upgrade the harness, don't re-record |
 | **v17** | a scenario with `device_bridge: true` (the remote lane's device tools, served from a second container). A v16 reader refuses it as too new | v16: refuses as too new — upgrade the harness, don't re-record |
 | **v18** | a scenario with `device_bridge: true` recorded since the delete card: its frozen `deviceBridge` carries `deleteRefusal` and `grants`, which a v17 reader rejects. A v17 bridge recording still reads; or a scenario declaring a command metric (`metrics[].command`, a script over the run's own events), whose record-time values are frozen in `commandMetrics` (replay reports them as recorded and never re-runs the script), which a v17 reader rejects as unrecognized | v17: refuses as too new — upgrade the harness, don't re-record |
+| **v18** | is a multi-leg (`legs:`) scenario: the cassette is the multi-leg FORM (see [Multi-leg cassettes](#multi-leg-cassettes)) — `legs[]` in place of `events`, no top-level `prompt` | v17: fails its shape check (`events`, `scenario.prompt` missing) even under `--best-effort-future-cassette` — upgrade the harness |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes
@@ -259,6 +260,40 @@ cowork-harness rehash one.cassette.json --session s.yaml      # a MOVED cassette
 so a `git mv`, a repo reorg or a copy into another project leaves its skill sources unresolvable — and
 therefore unprovable. `--session` says where the tree went. One cassette at a time: each may have been
 recorded against a different source, so a directory batch cannot share a single override.
+
+### Multi-leg cassettes
+
+A [multi-leg scenario](./scenario.md#multi-leg-scenarios-legs) records ONE cassette (v18) for the whole scenario:
+
+```jsonc
+{
+  "cassetteVersion": 18,
+  "scenario": { "legs": [ ... ], "workdir": "persistent", ... },   // the frozen legs: scenario — no top-level prompt
+  "scenarioSource": "../scenarios/resume.yaml",
+  "legs": [
+    { "id": "ask",    "kind": "prompt", "status": "passed", "cassette": { /* a complete single-prompt cassette */ } },
+    { "id": "apply",  "kind": "action", "status": "passed", "action":   { /* the host action's record */ } },
+    { "id": "resume", "kind": "prompt", "status": "passed", "cassette": { ... } }
+  ],
+  "verdict": { "pass": true }
+}
+```
+
+- **Each prompt leg nests a complete single-prompt cassette**, built and checked exactly as a single recording is
+  (redaction and its verdict-preservation check, the account-data scrub, the artifact manifest), and frozen **the
+  moment that leg ends** — under `workdir: persistent` a later leg rewrites the shared tree, so a snapshot taken at
+  the end of the scenario would give every leg the last leg's files. The frozen top-level prompts and asserts are
+  copied from the nested cassettes.
+- **A host action is recorded, never re-run.** `replay` re-grades it from its record: the exit code, the recorded
+  first 4 KiB of stdout (a pattern that does not match there while the recorded stdout was longer is
+  evidence-unavailable, not a pass or a fail), and the file assertions' recorded results.
+- **Replay stops where live stopped:** a failing leg makes every later leg `skipped`; a leg the recording itself
+  skipped has nothing to replay from and fails as evidence-unavailable.
+- `verify-cassettes` runs the privacy scan and the staleness checks per leg, and reports drift of the frozen legs
+  (each prompt, session overlay and action) against the scenario file the cassette names.
+- `record --rerecord-stale <dir>` finds a multi-leg cassette stale when any leg's nested cassette is, and re-records
+  it from the scenario file it names. `diff` and `rehash` refuse one by name, and `replay --assert-from`,
+  `--reassert`, `--write`, `--mutate` and `--session` are refused for one.
 
 ### Recording provenance (`environment`)
 

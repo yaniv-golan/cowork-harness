@@ -106,6 +106,39 @@ All notable changes to this project are documented here. The format is based on
   metric correction.** An eval dir written before this release reports metrics as not recorded, grades none, and
   keeps its exit code.
 
+- **Multi-leg scenarios (`legs:`).** A scenario can run a list of legs strictly in order: a **prompt leg** is a fresh
+  agent session (its own session id, never resumed), and a **host action** runs one argv command between legs in the
+  runtime of the leg before it (a one-shot container of the agent image, the same microvm guest, or — on `protocol`
+  — a host subprocess), with the agent's environment minus its credentials and no tokens spent. A leg that fails
+  stops the scenario; later legs are reported `skipped`. Built for skills that park at a question and resume in a
+  later session. See [docs/scenario.md → Multi-leg scenarios](./docs/scenario.md#multi-leg-scenarios-legs).
+  - `workdir: persistent` (the default) runs every leg in one session tree with a shared agent config dir (a
+    persistent workspace — not Cowork); `workdir: cowork-task` gives each prompt leg a new tree, carrying connected
+    folders but not outputs or the agent config dir (a model of a new local Cowork task, unverified against Cowork).
+  - A leg's `session:` may set `answer_channel`, `permission_mode` and `agent_env` (not `artifacts_root`). A skill
+    tree that changes between legs fails the scenario. Under `answer_channel: none`, a later leg needs a positive
+    file assertion that cannot already hold on the earlier legs' files.
+  - A host action reads an optional JSON status file (`{status.<field>}` fills argv elements, each checked: no
+    leading `-`, no `..`, at most 4096 bytes, inside the session root) and asserts files plus `exit_code` (0 when
+    unasserted), `stdout_matches` and `stdout_not_matches`. `legs/<id>/action.json` records it.
+  - Runs on `container`, `microvm` and `protocol`; the host loop (`hostloop`, and `cowork`, which can resolve
+    there) and `lane: remote` are refused.
+  - The run dir is one scenario root with `legs/<id>/` per leg and `scenario-result.json` (its `verdict` has the
+    same shape as a run's). It is ONE index row (`multiLeg: true`) in `stats`, and `status --latest-for` ranks it by
+    when it ended. `trace`, `verify-run` and `regrade` take `--leg <id>`; every reader of run dirs either reads a
+    leg or refuses a multi-leg root by name, and `prune` keeps an unfinished one.
+- **Cassette v18: the multi-leg cassette.** `record <legs.yaml>` writes one cassette for the scenario: each prompt
+  leg nests a complete single-prompt cassette, frozen when that leg ends, and each host action its record. `replay`
+  re-drives the prompt legs and re-grades each action from its record (it never re-runs it); `verify-cassettes`
+  scans, staleness-checks and drift-checks every leg; `record --rerecord-stale` re-records one from its scenario
+  file. A multi-leg cassette has no top-level `prompt` or `events`, so an older reader refuses it instead of
+  grading its first leg as the whole run. `schema/cassette.v18.json`, and `schema/scenario-multi-leg.schema.json`
+  for the scenario form.
+- **`verify-run --leg <id>` and `regrade --leg <id>`** re-grade one prompt leg of a multi-leg run, against its own
+  dir. Each prompt leg records its files when it ends (`leg-post-manifest.json`), and a re-grade (or `fixture
+  export`) of a leg is refused when its tree has changed since — under `workdir: persistent`, every leg but the
+  last.
+
 ### Changed
 
 - **For maintainers: `sync` records how the agent's WebSearch tool asks for a search.** The agent's WebSearch tool
@@ -125,6 +158,10 @@ All notable changes to this project are documented here. The format is based on
   compression features. They are the agent's features, not Desktop gates, so `sync` reads them from Desktop's
   cache for the same organisation rather than the fcache. Only booleans, numbers and flat objects of them are published, with no
   org or session identifier. A missing cache is a note, never a blocker.
+- **A cassette this build cannot parse because it is newer reads as "too new; upgrade"**, not "invalid cassette
+  shape", whose remedy (a broken file) was the wrong one.
+- **`lint` reads a multi-leg scenario**: the loader prepass uses the multi-leg loader, and the Python checks run on
+  each prompt leg (findings name the leg).
 
 ## [4.8.1] — 2026-10-12
 

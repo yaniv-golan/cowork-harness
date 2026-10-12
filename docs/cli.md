@@ -270,7 +270,7 @@ a TTY, `fail` when piped/CI) and `run` is always `fail`.
 
 ### Re-grading a kept run (`regrade`)
 
-`cowork-harness regrade <run-dir>… --scenario <scenario.yaml> [--judge-model <model-id>] [--authored-total-bytes <N>] [--allow-doc-drift] [--allow-unchecked] [--allow-scrub-change] [--output-format json]`
+`cowork-harness regrade <run-dir>… --scenario <scenario.yaml> [--leg <id>] [--judge-model <model-id>] [--authored-total-bytes <N>] [--allow-doc-drift] [--allow-unchecked] [--allow-scrub-change] [--output-format json]`
 
 `verify-run` re-checks assertions but never calls the semantic judge, so a `semantic_matches` assert cannot be
 re-graded with it. `regrade` does exactly that: it rebuilds the judged document from the kept run dir and grades
@@ -280,6 +280,9 @@ before any judge call, and a run whose comparisons were all neutral is drift-che
 Under `order: both`, a comparison judged again records its own fresh per-order outcomes (`pairwise[].orders`); a
 comparison a fill copies keeps the ones it was judged with.
 Every other assert is listed as *not re-graded*. The agent does not run again; the judge call is the only spend.
+With a [multi-leg scenario](./scenario.md#multi-leg-scenarios-legs), `--leg <id>` re-grades that prompt leg against
+its own `legs/<id>` dir (`verify-run` takes the same flag); it is refused when the leg's tree changed after the leg
+ended, and for a host-action leg.
 An entry a judge read records `judgeModel`, the id the judge answered as, and `judgeModelRequested`, the model it
 was asked for (`--judge-model`, else the assert's `judge_model`, else the default).
 

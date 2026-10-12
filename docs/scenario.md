@@ -21,6 +21,7 @@ The full schema below documents every optional field.
 - [Scripted answers](#scripted-answers)
 - [Assertions](#assertions)
 - [Starting from a saved workspace (`workspace_fixture:`)](#starting-from-a-saved-workspace-workspace_fixture)
+- [Multi-leg scenarios (`legs:`)](#multi-leg-scenarios-legs)
 - [Numeric metrics (`metrics:`)](#numeric-metrics-metrics)
 - [Output](#output)
 - [Running](#running)
@@ -1350,6 +1351,106 @@ staleness check: replay recomputes it from the fixture directory, and a changed 
 fixture that cannot be found or scanned is `unverifiable-fixture`, which fails the replay. Only the
 owner-executable bit counts among permission bits. A cassette that uses `workspace_fixture` or `authored`
 stamps cassette format v14 ([cassette.md](./cassette.md)).
+
+## Multi-leg scenarios (`legs:`)
+
+Some skills stop part-way and resume in a LATER session: they park at a question and write a status file, a host
+does something (applies corrections, answers the gate), and a new session picks the run up again. `legs:` tests
+that whole loop in one scenario: a list of legs run strictly in order, each a **prompt leg** (a fresh agent
+session) or a **host action** (a command, no agent, no tokens).
+
+```yaml
+fidelity: container
+workdir: persistent                 # default; see below
+legs:
+  - id: ask
+    prompt: "/my-skill:run --run r1 --no-ask"
+    session: { answer_channel: none, permission_mode: bypassPermissions }
+    assert:
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: waiting }
+
+  - id: apply                        # a host action: runs in the leg runtime, no agent
+    host_action:
+      status: { artifact: outputs/artifacts/runs/r1/run_status.json, expect: { status: waiting, scripts_dir_shell: { not_null: true } } }
+      run: ["python3", "{status.scripts_dir_shell}/apply_corrections.py", "--run", "r1"]
+      timeout: 120
+    assert:
+      - exit_code: 0
+      - stdout_matches: "applied \\d+ corrections"
+      - file_exists: { path: outputs/artifacts/runs/r1/corrections.json, authored: true }
+
+  - id: resume
+    prompt: "/my-skill:run --run r1 --no-ask --answer g1=a"
+    session: { answer_channel: none, permission_mode: bypassPermissions }
+    assert:
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: status, equals: complete }
+      - artifact_json: { artifact: outputs/artifacts/runs/r1/run_status.json, path: invocation, equals: 2 }
+```
+
+**Rules.** `legs:` replaces `prompt:` (and `assert:`, `timeout_ms:` and `metrics:`, which are per leg or refused).
+The first leg is a prompt leg, and there are at least two prompt legs. Leg ids are unique (`[a-z0-9_-]`, up to 64).
+A leg that fails stops the scenario: every later leg is reported `skipped`, never run on a state the author did not
+intend. The scenario passes when every leg passes.
+
+**Prompt legs.** Each is a NEW agent session (its own session id, never `--resume`) with the leg's prompt and
+assertions. A leg's `session:` overlays the scenario session with `answer_channel`, `permission_mode` and
+`agent_env` (not `agent_env.artifacts_root`). Nothing that changes the plugins, the mounts or the tier can be set
+per leg, and a skill tree that changes between legs fails the scenario (`plugin_identity_changed`).
+`workspace_fixture:` stages into the first leg only. Under `answer_channel: none`, a leg after the first needs a
+positive file assertion that cannot already hold on the earlier legs' files (a value assertion, or a presence
+assertion with `authored: true`); a leg whose file assertions all pass on the tree as it stands before the leg
+fails as `vacuous_positive_assertion` without spawning.
+
+**Host actions.** `run:` is argv, one element per argument, never a shell string. `{status.<field>}` in an element
+is replaced by that string field of the `status:` file (read before the action; `expect:` checks top-level fields,
+and `{not_null: true}` requires a value). A substituted value may not start with `-`, hold a `..` segment, exceed
+4096 bytes, or (when it looks like a path) leave the agent-visible session root. The action runs in the runtime of
+the prompt leg before it, with that agent's environment minus its credentials:
+
+| Tier | The action runs as |
+|---|---|
+| `container` | a one-shot `docker run` of the agent image over the same session tree, with the same user and the leg's egress allowlist; removed on timeout or interrupt |
+| `microvm` | `limactl shell` in the same guest, same session root, the leg's egress allowlist |
+| `protocol` | **a subprocess on your host** — this tier has no isolation to reproduce |
+
+`timeout:` is in seconds (default 120, at most 600). A host action asserts files (`file_exists`, `file_absent`,
+`artifact_json`, `artifact_text`) plus `exit_code`, `stdout_matches` and `stdout_not_matches` (over its scrubbed
+stdout). An unasserted exit code must be 0. `authored: true` on an action means the action wrote the file. An
+absent or malformed status file, an `expect:` mismatch, a template that cannot be filled, a timeout, or a non-zero
+exit each fail the leg; `legs/<id>/action.json` records the argv, exit, timing, the first 4 KiB of stdout and
+stderr (scrubbed, with hashes) and the files it produced.
+
+**`workdir:`** — what a later leg starts from:
+
+| `workdir:` | A later leg | Models |
+|---|---|---|
+| `persistent` (default) | runs in the **same** session tree: earlier legs' files are at the same paths, and the agent's config dir is shared | a persistent workspace with a task per container — **not Cowork** |
+| `cowork-task` | gets a **new** session tree: connected folders carry over (with the earlier legs' changes), outputs and the agent config dir do not | a new local Cowork task (a model, **unverified** against Cowork) |
+
+**Where it runs.** `container`, `microvm` and `protocol`. The host loop (`fidelity: hostloop`, or `cowork`, which can
+resolve there) and `lane: remote` are refused. Each leg (and each container or microvm action) starts its own
+egress sidecar or proxy on the scenario's allowlist, and keeps its own `egress.log`.
+
+**The run dir.** One scenario root holds `legs/<id>/` per leg — a prompt leg's dir is an ordinary single-session run
+dir (`turns/1/…`, `events.jsonl`), an action's holds `action.json` — plus `scenario-result.json` (the scenario
+verdict, each leg's verdict, and the run's one index row) once the scenario ends. A multi-leg run is ONE row in
+`stats`, and `status --latest-for` ranks it by when it ended. Under `persistent` the shared tree is the root's
+`work/`.
+
+**Commands.**
+
+| Command | With a multi-leg scenario or run |
+|---|---|
+| `run <file>`, `record <file>` | run every leg; `record` writes one cassette (format v18) for the whole scenario. Not in a directory batch, and not with `--repeat`, `--matrix`, `--session-id` or `--resume` |
+| `replay`, `verify-cassettes` | replay each prompt leg from its nested cassette and re-grade each action from its record; scan and staleness-check every leg |
+| `verify-run <root> <file> --leg <id>`, `regrade <root> --scenario <file> --leg <id>` | re-grade one prompt leg against its own dir — refused when its tree changed after it ended (every `persistent` leg but the last; a `cowork-task` leg once a host action wrote to its tree), and for a host action |
+| `trace <root> --leg <id>`, `inspect <root>/legs/<id>`, `fixture export <root>/legs/<id>` | read one leg (export: only when its tree is still its own) |
+| `eval`, `hillclimb`, `ref`, `scaffold`, `diff` on the root, `rehash` | refused, by name |
+
+A plain `run` makes no cassette, so to re-grade a multi-leg run later at no cost, record it.
+
+**Not modelled yet.** A leg's prompt is literal: a gate whose key is known only at run time (an instance id the skill
+mints) cannot be answered from the earlier leg's status file.
 
 ## Numeric metrics (`metrics:`)
 

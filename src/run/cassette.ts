@@ -4321,6 +4321,17 @@ export function selectStaleCassettes(dir: string): { path: string; staleness: st
     .sort()
     .map((f) => join(dir, f))
     .map((path) => {
+      // A multi-leg cassette is stale when any leg's nested cassette is.
+      if (isMultiLegCassetteFile(path)) {
+        const m = readMultiLegCassette(path);
+        if ("error" in m) return { path, staleness: [m.error] };
+        return {
+          path,
+          staleness: m.cassette.legs.flatMap((l) =>
+            "cassette" in l ? checkStaleness((l as { cassette: Cassette }).cassette, dirname(path)).map((x) => `leg ${l.id}: ${x}`) : [],
+          ),
+        };
+      }
       const r = readCassette(path);
       return "error" in r ? { path, staleness: [r.error] } : { path, staleness: checkStaleness(r.cassette, dirname(path)) };
     })
@@ -5692,6 +5703,34 @@ export async function cmdRecord(args: string[]) {
         // Not a failure: exit 0 with the skip reported. Unlike `run --repeat`, which fails a budget-stopped
         // batch unless --allow-budget-stop, a record batch stopped by its cap still exits 0.
         return true;
+      }
+      // A multi-leg cassette re-records from the legs: scenario it names, into the same file.
+      if (isMultiLegCassetteFile(cp)) {
+        const m = readMultiLegCassette(cp);
+        const srcPath = "error" in m || !m.cassette.scenarioSource ? undefined : join(dirname(cp), m.cassette.scenarioSource);
+        if (!srcPath || !existsSync(srcPath)) {
+          const why = "error" in m ? m.error : `its scenario source ${srcPath ?? "(none recorded)"} is not there`;
+          log(`  ✗ ${tag} ${cp}: ${why} — cannot re-record`);
+          staleItems[i] = { cassette: cp, status: "failed", error: `${why} — cannot re-record` };
+          return false;
+        }
+        log(`${tag} ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
+        try {
+          await recordMultiLeg(srcPath, {
+            cassettePath: cp,
+            allowFailing: false,
+            noRedact,
+            allowHostInventoryFixture,
+            allowHostInventoryFindings,
+            ...(modelOverride !== undefined ? { modelOverride } : {}),
+          });
+          staleItems[i] = { cassette: cp, status: "recorded" };
+          return true;
+        } catch (e) {
+          log(`  ✗ ${tag} ${cp}: ${(e as Error).message}`);
+          staleItems[i] = { cassette: cp, status: "failed", error: (e as Error).message };
+          return false;
+        }
       }
       const rc = readCassette(cp);
       if ("error" in rc) {

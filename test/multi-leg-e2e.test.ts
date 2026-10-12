@@ -3,7 +3,7 @@
 // parks at `waiting` when it finds no run, and completes (invocation 2) when it finds a waiting one. Synthetic data only.
 
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLI, POSIX, exited, makeStubFixture, spawnCli, type StubFixture } from "./helpers/stub-agent.js";
 import { classifyRunDir } from "../src/run/turn-layout.js";
@@ -298,6 +298,16 @@ describe.runIf(can)("multi-leg record → replay → verify-cassettes (stub agen
       expect(df.stderr + df.stdout).toMatch(/multi-leg cassette/);
       const batch = await cli(f, ["record", f.cwd, "--dry-run", "--output-format", "json"]);
       expect(batch.stdout + batch.stderr).toMatch(/recorded on its own/);
+      // --rerecord-stale over a dir holding a fresh multi-leg cassette: nothing to do, not a failure.
+      const cdir = join(f.cwd, "cass");
+      mkdirSync(cdir);
+      writeFileSync(
+        join(cdir, "two.cassette.json"),
+        readFileSync(cass, "utf8").replace(/"scenarioSource": "([^"]+)"/, '"scenarioSource": "../$1"'),
+      );
+      const rs = await cli(f, ["record", cdir, "--rerecord-stale"]);
+      expect(rs.code, rs.stdout + rs.stderr).toBe(0);
+      expect(rs.stdout + rs.stderr).toMatch(/all cassettes under .* are fresh/);
     } finally {
       f.cleanup();
     }
