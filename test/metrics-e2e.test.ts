@@ -231,3 +231,72 @@ describe.runIf(POSIX)("scenario metrics, through the real executeScenario (proto
     expect(existsSync(join(dir, "mode"))).toBe(true);
   }, 120_000);
 });
+
+describe.runIf(POSIX)("a command metric through the real CLI: record, verify-run with no flag, replay (protocol, stub agent)", () => {
+  it("record measures it live; verify-run carries the recorded value; replay serves the frozen value without running it", async () => {
+    // A tiny repo: the scenario and its script, tracked.
+    const repo = join(dir, "repo");
+    mkdirSync(join(repo, "metrics"), { recursive: true });
+    writeFileSync(
+      join(repo, "metrics", "count.mjs"),
+      "import {readFileSync} from 'node:fs'; console.log(readFileSync(process.argv[2],'utf8').split('\\n').filter(Boolean).length)",
+    );
+    writeFileSync(join(dir, "mode"), "none");
+    const scen = join(repo, "cm.yaml");
+    writeFileSync(
+      scen,
+      [
+        "name: cm",
+        "baseline: latest",
+        "fidelity: protocol",
+        "prompt: hi",
+        "metrics:",
+        "  - {id: lines, command: [metrics/count.mjs], better: lower, unbounded: true}",
+      ].join("\n") + "\n",
+    );
+    const cassette = join(dir, "cm.cassette.json");
+    const cli = (...args: string[]) => spawnSync(process.execPath, ["dist/cli.js", ...args], { encoding: "utf8" });
+
+    const rec = cli("record", scen, "--out", cassette, "--output-format", "json");
+    const recJson = JSON.parse(rec.stdout);
+    const measured = recJson.results[0].metrics[0];
+    expect(measured.value, rec.stderr).toBeGreaterThan(0);
+    expect(measured.command.sig).toMatch(/^[0-9a-f]{16}$/);
+    expect(rec.stderr).toMatch(/\[metrics\] lines: runs metrics\/count\.mjs \(sha [0-9a-f]{12}\)/);
+
+    const c = JSON.parse(readFileSync(cassette, "utf8"));
+    expect(c.cassetteVersion).toBe(18);
+    expect(c.commandMetrics[0]).toMatchObject({ id: "lines", value: measured.value });
+
+    const v = cli("verify-run", recJson.results[0].outDir, scen, "--output-format", "json");
+    const carried = JSON.parse(v.stdout).results[0].metrics[0];
+    expect(carried, v.stderr).toMatchObject({ id: "lines", value: measured.value, command: { carried: true } });
+
+    // Replay never runs the script: delete it first.
+    rmSync(join(repo, "metrics", "count.mjs"));
+    const rp = cli("replay", cassette, "--output-format", "json");
+    const frozen = JSON.parse(rp.stdout).results[0].metrics[0];
+    expect(frozen, rp.stderr).toMatchObject({ id: "lines", value: measured.value, command: { frozen: true } });
+  }, 180_000);
+
+  it("a scenario loaded without resolving its command metric is refused before the spawn, never measured as missing", async () => {
+    const repo = join(dir, "repo2");
+    mkdirSync(join(repo, "metrics"), { recursive: true });
+    writeFileSync(join(repo, "metrics", "c.mjs"), "console.log(1)");
+    writeFileSync(join(dir, "mode"), "none");
+    const scen = join(repo, "u.yaml");
+    writeFileSync(
+      scen,
+      [
+        "name: u",
+        "baseline: latest",
+        "fidelity: protocol",
+        "prompt: hi",
+        "metrics:",
+        "  - {id: n, command: [metrics/c.mjs], better: lower, unbounded: true}",
+      ].join("\n") + "\n",
+    );
+    await expect(executeScenario(parseScenarioFile(scen), {})).rejects.toThrow(/were not resolved against their files/);
+    expect(existsSync(f.stubPidFile)).toBe(false);
+  }, 60_000);
+});

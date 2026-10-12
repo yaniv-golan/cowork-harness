@@ -3,7 +3,7 @@ import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
 import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
-import { resolveCommandMetrics } from "../metric-command/resolve.js";
+import { resolveCommandMetrics, resolvedCommand } from "../metric-command/resolve.js";
 import { resolvePython } from "../metric-command/interpreters.js";
 import { asOutcomes, commandMetricNotice, measureCommandMetrics } from "../metric-command/live.js";
 import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
@@ -778,7 +778,15 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Sited here rather than in each command because every lane funnels through executeScenario
   // (`run`/`skill` via cli.ts, `record` via cassette.ts), and a library caller gets it too.
   const contradiction = assertContradiction(scenario);
-  // A command metric runs repo code as the operator after the run: say so before anything is spent.
+  // A command metric runs repo code as the operator after the run: say so before anything is spent. One that was never
+  // resolved against its files (a caller that loaded the scenario with `parseScenarioFile` instead of
+  // `loadRunnableScenario`, or a re-record from a cassette's embedded copy) cannot be measured: refused here, before the
+  // spawn, rather than paid for and reported as command_missing afterwards.
+  const unresolved = (scenario.metrics ?? []).filter((m) => m.command !== undefined && resolvedCommand(m) === undefined);
+  if (unresolved.length)
+    throw new UsageError(
+      `scenario ${scenario.name}: command metric(s) ${unresolved.map((m) => `"${m.id}"`).join(", ")} were not resolved against their files, so they cannot be measured — run the scenario from its file (a re-record from a cassette's embedded copy cannot run a command metric)`,
+    );
   for (const line of commandMetricNotice(scenario.metrics ?? [])) process.stderr.write(line + "\n");
   if (contradiction) throw new UsageError(contradiction);
   // Validate the authored-evidence budget HERE, not at capture time. `authoredTotalBytes()` throws on a

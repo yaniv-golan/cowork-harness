@@ -5345,7 +5345,7 @@ export async function cmdRecord(args: string[]) {
     // Single scenario dry-run.
     let scenario;
     try {
-      scenario = parseScenarioFile(target);
+      scenario = loadRunnableScenario(target);
     } catch (e) {
       // Forward the HINT: the message is now compact, and `error.hint` is where the full Zod issue
       // array lives for anyone who wants it. Passing `undefined` here would drop it on the floor and
@@ -5486,7 +5486,7 @@ export async function cmdRecord(args: string[]) {
     // as "cannot parse scenario: ENOENT …", which says the file is malformed when it is simply absent.
     if (!existsSync(target)) return fail("record", "usage", `record: scenario path not found: ${target}`, undefined, asJson);
     try {
-      scenario = parseScenarioFile(target);
+      scenario = loadRunnableScenario(target);
     } catch (e) {
       return fail("record", "usage", `record: cannot parse scenario: ${(e as Error).message}`, (e as UsageError).hint, asJson);
     }

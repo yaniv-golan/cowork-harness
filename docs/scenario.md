@@ -1495,6 +1495,8 @@ notice per command metric (its script, root-relative path and content hash) befo
 `verify-cassettes` and CI never run it: the cassette freezes each command metric's record-time value
 (`commandMetrics`, cassette v18), and replay reports it marked `frozen`, only while the declaration being measured is
 the one the value was measured under (`command_changed` otherwise, as under `replay --assert-from` after an edit).
+`record --rerecord-stale --from-embedded` re-records from the cassette's embedded copy, which has no files to run,
+so it refuses a scenario with a command metric before spending: re-record from the scenario file instead.
 `verify-run`, `regrade` and `hillclimb regrade` never run it without `--allow-metric-commands`: they carry the run's
 own measurement forward, marked `carried`, while its signature and the events it read still match (`command_changed`
 or `pruned` otherwise), and read `command_not_allowed` when nothing was recorded. With the flag the script re-runs,
