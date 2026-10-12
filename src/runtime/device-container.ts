@@ -230,9 +230,9 @@ const TEARDOWN_SETTLE_MS = 750;
 
 /** Resolves once the container runs, or after `limitMs` (an exec then reports what is wrong). Under load `docker
  *  run` can take seconds to create it, and a command sent before then fails as "No such container". */
-async function waitRunning(runner: string, containerName: string, limitMs = 60_000): Promise<void> {
+async function waitRunning(runner: string, containerName: string, limitMs = 60_000, stop: () => boolean = () => false): Promise<void> {
   const until = Date.now() + limitMs;
-  while (Date.now() < until) {
+  while (Date.now() < until && !stop()) {
     try {
       const { stdout } = await pexec(runner, ["inspect", "-f", "{{.State.Running}}", containerName], { encoding: "utf8" });
       if (stdout.trim() === "true") return;
@@ -567,6 +567,8 @@ export function startDeviceBridge(p: {
   resume: boolean;
   /** Builds or finds the device image on `image` (ensureDeviceImage); injectable for tests. */
   ensureImage?: (runner: string, baseRef: string) => { imageId: string } | { error: string };
+  /** How long teardown waits for a canary still running (a container slow to come up). */
+  shimWaitMs?: number;
 }): {
   containerName: string;
   bundle: { servers: string[]; handle: McpHandler };
@@ -634,8 +636,13 @@ export function startDeviceBridge(p: {
     label: "device_bridge container",
   });
   let enforced = false;
-  const shimCheck = waitRunning(p.runner, containerName).then(async () => {
+  // Set once teardown begins: a canary still pending then stops without reporting, since the run's errors have been
+  // collected (or are about to be) and a container being removed fails any check.
+  let tearingDown = false;
+  const shimCheck = waitRunning(p.runner, containerName, 60_000, () => tearingDown).then(async () => {
+    if (tearingDown) return false;
     const ok = await deviceCanary(p.runner, containerName, p.outDir);
+    if (tearingDown) return false;
     if (ok === true) enforced = true;
     else if (!("error" in built)) logShimInfra(`the device container does not refuse deletes: ${ok}`);
     return ok === true;
@@ -658,10 +665,17 @@ export function startDeviceBridge(p: {
     grantCalls: () => grantCalls,
     inputRoots: folders.map((f) => join(deviceHost, "mnt", f.name)),
     infraErrors,
-    markTearingDown: started.markTearingDown,
+    markTearingDown: () => {
+      tearingDown = true;
+      started.markTearingDown();
+    },
     deregister: started.deregister,
     reapNow: started.reapNow,
     teardown: async () => {
+      // A run that never called device_bash can end before the canary did: wait for it (bounded), so the record
+      // says whether the refusal was proven.
+      await Promise.race([shimCheck, new Promise((r) => setTimeout(r, p.shimWaitMs ?? 60_000).unref())]);
+      tearingDown = true;
       started.markTearingDown();
       started.reapNow();
       const child = started.child;

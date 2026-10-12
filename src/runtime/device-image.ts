@@ -56,13 +56,13 @@ export function ensureDeviceImage(
   runner: string,
   baseRef: string,
   inspect: ImageInspect = dockerImageId(runner),
-): { imageId: string } | { error: string } {
+): { imageId: string; tag: string } | { error: string } {
   const baseId = inspect(baseRef);
   if (!baseId) return { error: `the agent image ${baseRef} is not present, so the device image cannot be built on it` };
   const sourceHash = deviceImageSourceHash();
   const tag = deviceImageTag(sourceHash, baseId);
   const have = inspect(tag);
-  if (have) return { imageId: have };
+  if (have) return { imageId: have, tag };
   process.stderr.write(`[device] building ${tag} on ${baseRef} (first device_bridge run on this image; needs Docker Hub and apt)\n`);
   const build = spawnSync(
     runner,
@@ -87,5 +87,5 @@ export function ensureDeviceImage(
       error: `building the device image ${tag} failed (exit ${build.status ?? build.signal}); it needs Docker Hub (ubuntu:22.04) and apt`,
     };
   const built = inspect(tag);
-  return built ? { imageId: built } : { error: `the device image ${tag} was built but cannot be found` };
+  return built ? { imageId: built, tag } : { error: `the device image ${tag} was built but cannot be found` };
 }

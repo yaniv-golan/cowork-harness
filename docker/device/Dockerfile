@@ -8,7 +8,10 @@ ARG BASE=cowork-agent-base:2
 FROM --platform=linux/arm64 ubuntu:22.04@sha256:3b06811b2afd352be909dd088a004166d665dc76d38b13eada33522a9d915c6f AS shim
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 COPY nodelete.c /src/nodelete.c
-RUN gcc -shared -fPIC -O2 -Wall -o /libcwh-nodelete.so /src/nodelete.c -ldl
+# Warnings never fail the on-demand build (a newer apt gcc must not break every bridge run); CI builds this stage
+# with CFLAGS="-Wall -Wextra -Werror".
+ARG CFLAGS="-Wall"
+RUN gcc -shared -fPIC -O2 ${CFLAGS} -o /libcwh-nodelete.so /src/nodelete.c -ldl
 
 FROM ${BASE}
 COPY --from=shim /libcwh-nodelete.so /opt/cowork/lib/libcwh-nodelete.so

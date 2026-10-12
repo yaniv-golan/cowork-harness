@@ -334,6 +334,60 @@ describe.skipIf(!CAN)("startDeviceBridge's canary", () => {
       rmSync(r, { recursive: true, force: true });
     }
   }, 600_000);
+  it("fails as device-shim when the preload names a library that does not load (glibc skips it silently)", async () => {
+    const built = ensureDeviceImage("docker", BASE);
+    if ("error" in built) throw new Error(built.error);
+    const tag = `cwh-shim-broken-preload:${process.pid}`;
+    const b = spawnSync("docker", ["build", "-q", "--platform", "linux/arm64", "-t", tag, "-"], {
+      input: `FROM ${built.tag}\nUSER root\nRUN echo /opt/cowork/lib/missing.so > /etc/ld.so.preload\nUSER ubuntu\n`,
+      encoding: "utf8",
+      timeout: 120_000,
+    });
+    expect(b.status, b.stderr).toBe(0);
+    try {
+      const { r, bridge, enforced } = await start(() => ({ imageId: tag }));
+      try {
+        expect(enforced).toBe(false);
+        expect(bridge.infraErrors).toEqual([expect.objectContaining({ source: "device-shim" })]);
+      } finally {
+        await bridge.teardown();
+        rmSync(r, { recursive: true, force: true });
+      }
+    } finally {
+      spawnSync("docker", ["rmi", "-f", tag], { stdio: "ignore" });
+    }
+  }, 600_000);
+  it("without its control file the shim still refuses deletes under a session's folders", () => {
+    const built = ensureDeviceImage("docker", BASE);
+    if ("error" in built) throw new Error(built.error);
+    const r = realpathSync(mkdtempSync(join(tmpdir(), "device-noctl-")));
+    try {
+      writeFileSync(join(r, "f"), "f");
+      const { uid, gid } = userInfo();
+      const out = spawnSync(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--network",
+          "none",
+          "--user",
+          `${uid}:${gid}`,
+          "-v",
+          `${r}:/sessions/rcw-x/mnt/p`,
+          built.imageId,
+          "rm",
+          "/sessions/rcw-x/mnt/p/f",
+        ],
+        { encoding: "utf8", timeout: 60_000 },
+      );
+      expect(out.status).not.toBe(0);
+      expect(out.stderr).toMatch(/Operation not permitted/);
+      expect(existsSync(join(r, "f"))).toBe(true);
+    } finally {
+      rmSync(r, { recursive: true, force: true });
+    }
+  });
   it("fails as device-shim when the image cannot be built", async () => {
     const { r, bridge, enforced } = await start(() => ({ error: "no network" }));
     try {

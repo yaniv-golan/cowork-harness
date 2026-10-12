@@ -16,7 +16,7 @@ import {
   writeDeviceGrant,
 } from "../src/runtime/device-container.js";
 import { computeVerdict } from "../src/run/verdict.js";
-import { scanEvents } from "../src/run/execute.js";
+import { scanEvents, scanTurn } from "../src/run/execute.js";
 import type { Mount } from "../src/session.js";
 import type { RunResult } from "../src/types.js";
 
@@ -196,5 +196,43 @@ describe("the record and the verdict", () => {
       mountDeletes: [{ mount: "proj", command: "(removed from the device copy after deletion was allowed) proj/a.txt" }],
     };
     expect(codes(rr({ scan: withDelete, deviceBridge } as Partial<RunResult>))).not.toContain("mount_delete:warn");
+  });
+});
+
+// execute.ts's own glue, run for real: the scan of the turn's events with the device findings folded in, as the
+// run builds it, then the verdict over that scan and the record.
+describe("scanTurn: a device_bridge turn's scan, as execute.ts builds it", () => {
+  function turn(enforced: boolean) {
+    const { outDir, copy } = staged(true);
+    writeDeviceGrant(outDir, ["proj"]);
+    rmSync(join(copy("proj"), "a.txt")); // allowed: proj was granted
+    const ev = join(outDir, "events.jsonl");
+    const tool = (command: string) =>
+      JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name: "mcp__remote-devices__device_bash", input: { command } }] },
+      });
+    // An rm whose text names a file that is still there: under the shim it deleted nothing.
+    writeFileSync(ev, tool("rm mnt/proj/b.txt") + "\n");
+    const findings = { ...deviceDeleteFindings(outDir, DENIED, enforced), enforced };
+    return { outDir, ...scanTurn(ev, ["outputs", "proj", ".projects/other"], undefined, { findings }), findings };
+  }
+  it("enforced: the refused rm's text is not a delete; the allowed one is; nothing to warn about", () => {
+    const t = turn(true);
+    expect(t.scan.mountDeletes.map((d) => d.mount)).toEqual(["proj"]);
+    expect(t.warnDeletes).toEqual([]);
+    const deviceBridge = deviceBridgeRecord(mounts, "included", plan, [], true, t.findings);
+    const v = computeVerdict(rr({ scan: t.scan, deviceBridge } as Partial<RunResult>), "live");
+    expect(v.pass).toBe(true);
+    // no_delete_in_mounts would still see the allowed delete
+    expect(t.scan.mountDeletes).toHaveLength(1);
+  });
+  it("not enforced: the command text counts again and is warned about, as before the shim", () => {
+    const t = turn(false);
+    expect(t.scan.mountDeletes.map((d) => d.command)).toEqual([
+      expect.stringContaining("rm mnt/proj/b.txt"),
+      "(removed from the device copy) proj/a.txt",
+    ]);
+    expect(t.warnDeletes.length).toBe(2);
   });
 });

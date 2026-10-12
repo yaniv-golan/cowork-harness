@@ -492,7 +492,7 @@
     },
     "infraErrors": {
       "type": "array",
-      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died \u2014 a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'device-container' (the device_bridge container) is the same class. 'hostloop-exec' is a single failed container exec, and 'device-exec' a single failed device_bash exec: the tool call failed, the run did not, so it only warns.",
+      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died \u2014 a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'device-container' (the device_bridge container) is the same class, and so is 'device-shim' (the device's delete refusal could not be proven: its image could not be built, or its canary delete was not refused). 'hostloop-exec' is a single failed container exec, and 'device-exec' a single failed device_bash exec: the tool call failed, the run did not, so it only warns.",
       "items": {
         "type": "object",
         "required": ["source", "message"],

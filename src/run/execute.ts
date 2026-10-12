@@ -1790,30 +1790,16 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // Host paths the user supplied (the staged input files, captured on the first turn, and this turn's
     // prompt) are not a leak when the agent quotes them back verbatim.
     const inputCorpus = inputProvenanceCorpus(outDir, sessionId, baseline, scenario.prompt, effectiveFidelity, workBaseOf(plan, outDir));
-    const scan = scanEvents(join(outDir, "events.jsonl"), deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"), inputCorpus, {
-      deviceBridge: scenario.device_bridge === true,
-      deviceEnforced: scenario.device_bridge === true && bridgeFindings().enforced,
-    });
-    // device_bridge: a delete on the device copy by any means (`find -delete`, a glob, a script), read off the
-    // device tree before and after the run, since the command text alone cannot see every one. Under the shim,
-    // only the deletes the user allowed are left here; what got past it is in the record's bypassedDeletes.
-    if (scenario.device_bridge === true) scan.mountDeletes.push(...bridgeFindings().mountDeletes);
-    // A missing or corrupt events.jsonl means the post-run scan (host-path-leak / delete-in-outputs /
-    // self-heal) has no trustworthy evidence — treat it as unavailable, never as a clean scan.
-    const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
-    // A delete outside `outputs` used to produce NO signal whatsoever, because detection was scoped to
-    // the literal `outputs`. Production denies unlink/rmdir on every delete-denied mount, so this is a
-    // real divergence: the agent proceeded where production would have returned EPERM. Reported as a
-    // warning rather than a verdict signal — the harness DETECTS what production ENFORCES, and promoting
-    // it to a failure would silently re-verdict existing runs.
-    // Under an enforced bridge, a connected-folder delete left is one the user allowed: no divergence to warn about.
-    if (!scanUnavailable && !(scenario.device_bridge === true && bridgeFindings().enforced)) {
-      const nonOutputs = scan.mountDeletes.filter((d) => d.mount !== "outputs");
-      for (const d of nonOutputs)
-        warn(
-          `::warning:: [scan] delete detected in mount "${d.mount}" — production denies unlink/rmdir there until approved: ${d.command}\n`,
-        );
-    }
+    const { scan, scanUnavailable, warnDeletes } = scanTurn(
+      join(outDir, "events.jsonl"),
+      deleteDeniedRootsFromPlan(plan, outputsMountMode ?? "rw"),
+      inputCorpus,
+      scenario.device_bridge === true ? { findings: bridgeFindings() } : undefined,
+    );
+    for (const d of warnDeletes)
+      warn(
+        `::warning:: [scan] delete detected in mount "${d.mount}" — production denies unlink/rmdir there until approved: ${d.command}\n`,
+      );
     if (scan.sidecarMissing)
       warn(
         `::warning:: [scan] events.jsonl missing — post-run scan evidence unavailable (host-path-leak / outputs-delete text scan / self-heal cannot be verified; the outputs filesystem diff still runs)\n`,
@@ -4672,6 +4658,28 @@ export function inputProvenanceCorpus(
     neverExemptExact: exact,
     sourced: readSourcedHostPathCorpus(outDir),
   };
+}
+
+/** The turn's event scan as the run grades it. Under device_bridge the device findings are folded in: a delete on
+ *  the device copy by any means (`find -delete`, a glob, a script), read off the device tree before and after the
+ *  run, since the command text alone cannot see every one; under the shim, only the deletes the user allowed are
+ *  left there (what got past it is the record's bypassedDeletes), and a device_bash command's text no longer counts.
+ *  `warnDeletes`: the connected-folder deletes to warn about. A delete outside `outputs` is a divergence (production
+ *  denies unlink/rmdir on every delete-denied mount), warned rather than failed because the harness detects what
+ *  production enforces; under an enforced bridge a delete left is one the user allowed, so none. A missing or
+ *  corrupt events.jsonl leaves the scan without trustworthy evidence (`scanUnavailable`), never a clean scan. */
+export function scanTurn(
+  eventsPath: string,
+  rwMounts: string[],
+  inputCorpus: InputHostPathCorpus | undefined,
+  device?: { findings: { enforced: boolean; mountDeletes: { mount: string; command: string }[] } },
+): { scan: ReturnType<typeof scanEvents>; scanUnavailable: boolean; warnDeletes: { mount: string; command: string }[] } {
+  const enforced = device?.findings.enforced === true;
+  const scan = scanEvents(eventsPath, rwMounts, inputCorpus, { deviceBridge: !!device, deviceEnforced: enforced });
+  if (device) scan.mountDeletes.push(...device.findings.mountDeletes);
+  const scanUnavailable = scan.sidecarMissing || scan.malformedLines > 0;
+  const warnDeletes = scanUnavailable || enforced ? [] : scan.mountDeletes.filter((d) => d.mount !== "outputs");
+  return { scan, scanUnavailable, warnDeletes };
 }
 
 /** Scan a run's events.jsonl for limitation-fidelity signals (moved from cli.ts). */

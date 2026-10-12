@@ -1875,22 +1875,26 @@ a simulated session.
   Only calls through the C library are refused. A static binary or a raw system call deletes anyway, as it would
   not in production. The device copy is compared before and after the run to catch that: a file gone from a folder
   deletion was never allowed in is listed in `deviceBridge.bypassedDeletes` and fails the run
-  (`device_delete_bypassed`). A file the session made and deleted that way leaves no trace and is not caught.
+  (`device_delete_bypassed`). A file the session made and deleted that way leaves no trace and is not caught. The
+  library's log of refused and allowed deletes is writable by the device shell, so its counts (`refusedDeletes`, and
+  the allowed deletes of files the session made) can be understated by a command that edits it; a line in it can add
+  a delete to the record, never excuse one.
   Before the first `device_bash` call the bridge checks the library works by trying to delete a probe file; if it
   is not refused, or the device image cannot be built, the run fails as an infrastructure error (`device-shim`), so
   a bridge run never goes unenforced without saying so.
 
   The device image is the agent image plus that library, built locally on the first bridge run (it needs Docker Hub
-  and apt; a few minutes) and rebuilt when either changes. `doctor` reports whether it is built.
+  and apt; a few minutes) and rebuilt when either changes. `doctor` reports whether it is built. Earlier builds are
+  left in place: `docker images cowork-device` lists them, and `docker rmi` removes one no longer needed.
 
   A rename within a folder is not a delete. Some Linux filesystems give a new file the identity (inode and birth
   time) of one just deleted, so the run first checks whether the run directory's filesystem does. Where it does, a
   moved file counts as a rename only when its bytes are unchanged, and a moved directory only when a file inside it
   moved with it; see `rename-reads-as-delete`. macOS keeps identities apart, so there a rename followed by an edit
   stays a rename.
-- **`delete-not-refused`.** Only on a recording made before the device library (`deleteRefusal: "reported"`): a
-  delete succeeded on the device copy and was reported after the run, from the `device_bash` command text and the
-  before-and-after comparison.
+- **`delete-not-refused`.** On a recording made before the device library, or a run that ended before the bridge
+  could prove the refusal (`deleteRefusal: "reported"`): a delete succeeded on the device copy, or may have, and was
+  reported after the run, from the `device_bash` command text and the before-and-after comparison.
 - **`egress-allowlist`.** The device container goes through the run's egress proxy, so the session's allowlist
   applies. Production's device shell follows the account's egress policy, which can pass all traffic through. A
   fetch the allowlist blocks fails here and may succeed in production. A session with `egress.unrestricted: true`

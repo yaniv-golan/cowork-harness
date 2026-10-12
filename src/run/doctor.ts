@@ -810,8 +810,8 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       required: false,
     });
 
-    // device_bridge's image — informational, never blocking: a bridge run builds it, and its canary refuses to run
-    // unenforced, so an absent or stale image costs a build, not a wrong result.
+    // device_bridge's image — informational, never blocking: a bridge run builds it, and a run whose canary finds
+    // deletes not refused fails, so an absent or stale image costs a build, not a wrong result.
     const device = up && probe.deviceImage ? probe.deviceImage() : undefined;
     if (device)
       checks.push({

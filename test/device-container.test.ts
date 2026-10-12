@@ -660,7 +660,8 @@ describe("wiring: the review fixes reach the run", () => {
   });
   it("execute.ts adds device-tree deletes to the scan and refuses folder-path file assertions", () => {
     const s = read("run/execute.ts");
-    expect(s).toMatch(/if \(scenario\.device_bridge === true\) scan\.mountDeletes\.push\(\.\.\.bridgeFindings\(\)\.mountDeletes\);/);
+    // scanTurn folds the findings in (device-delete-findings.test.ts runs it); here, that the run hands them over.
+    expect(s).toMatch(/scenario\.device_bridge === true \? \{ findings: bridgeFindings\(\) \} : undefined,/);
     expect(s).toMatch(/deviceBridgeFolderAssertRefusal\(\s*scenario,\s*deviceFolders\(plan\.mounts\)/);
   });
 });
@@ -733,5 +734,82 @@ describe("deviceTreeDeletes: the recorded listing", () => {
     );
     renameSync(join(copy, "a.txt"), join(copy, "moved.txt"));
     expect(deviceTreeDeletes(outDir, PROJ).map((d) => d.command)).toEqual(["(removed from the device copy) proj/a.txt"]);
+  });
+});
+
+// The canary runs as the container comes up. A run that never calls device_bash can end first, so teardown waits for
+// it (bounded): the record then says whether the refusal was proven, and a canary still pending when teardown gives
+// up cannot report an infra error after the run's errors were collected.
+describe("startDeviceBridge: teardown and the canary", () => {
+  function bridge(root: string, runner: string, shimWaitMs?: number) {
+    const f = folder(root, "proj");
+    return startDeviceBridge({
+      ensureImage: STAND_IN_IMAGE,
+      runner,
+      image: "img",
+      network: "net",
+      egressProxy: "http://proxy:8080",
+      outDir: join(root, "out"),
+      sessionId: "s",
+      runToken: `t${Math.random().toString(36).slice(2)}`,
+      mounts: [f],
+      appVersion: "2.31226.1",
+      resume: false,
+      ...(shimWaitMs !== undefined ? { shimWaitMs } : {}),
+    });
+  }
+  it("a run that never called device_bash still records the canary's outcome", async () => {
+    const root = scratch();
+    // The container takes 8 s to come up, longer than teardown takes on its own.
+    const runner = join(root, "slow.sh");
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'if [ "$1" = exec ] && [ "$3" = rm ]; then echo "rm: cannot remove \'$4\': Operation not permitted" >&2; exit 1; fi',
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        "  inspect) sleep 8; echo true; exit 0;;",
+        "esac",
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const b = bridge(root, runner, 30_000);
+    await b.teardown();
+    expect(b.shimEnforced()).toBe(true);
+    expect(b.infraErrors).toEqual([]);
+  });
+  it("a container that never comes up: teardown gives up on the canary within its bound, and nothing is reported after", async () => {
+    const root = scratch();
+    const runner = join(root, "never.sh");
+    writeFileSync(
+      runner,
+      [
+        "#!/bin/bash",
+        'case "$1" in',
+        "  run) exec sleep 30;;",
+        "  rm) exit 0;;",
+        "  inspect) echo false; exit 0;;",
+        "esac",
+        "exit 1",
+        "",
+      ].join("\n"),
+      {
+        mode: 0o755,
+      },
+    );
+    const b = bridge(root, runner, 300);
+    const t0 = Date.now();
+    await b.teardown();
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    const errorsAtTeardown = b.infraErrors.length;
+    // The pending canary stops with the teardown rather than polling on for a minute.
+    const settled = await Promise.race([b.shimCheck.then(() => true), new Promise((r) => setTimeout(() => r(false), 3000))]);
+    expect(settled).toBe(true);
+    expect(b.infraErrors.length).toBe(errorsAtTeardown);
+    expect(b.shimEnforced()).toBe(false);
   });
 });

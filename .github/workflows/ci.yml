@@ -403,9 +403,8 @@ jobs:
         env:
           CWH_REQUIRE_DOCKER: "1"
         run: |
-          base=$(grep -o 'ubuntu:22.04@sha256:[0-9a-f]*' docker/device/Dockerfile)
-          docker run --rm --platform linux/arm64 -v "$PWD/docker/device:/s:ro" "$base" bash -c \
-            'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends gcc libc6-dev >/dev/null && gcc -shared -fPIC -O2 -Wall -Wextra -Werror -o /tmp/x.so /s/nodelete.c -ldl'
+          # A build stage, not a plain `docker run`: builds resolve Docker Hub through the mirror above, pulls do not.
+          docker build --platform linux/arm64 --target shim --build-arg CFLAGS="-Wall -Wextra -Werror" docker/device
           npx vitest run test/device-shim.test.ts
       - name: Live contract tests — guard the binary assumptions (free ON THIS RUNNER)
         # Requires the staged agent; only runs where it's present. Skips cleanly otherwise.
