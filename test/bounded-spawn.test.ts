@@ -4,7 +4,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { boundedSpawnBuffers } from "../src/bounded-spawn.js";
+import { boundedSpawnBuffers, killOutstandingChildGroups, outstandingChildPids } from "../src/bounded-spawn.js";
 
 const node = process.execPath;
 
@@ -81,5 +81,18 @@ describe("boundedSpawnBuffers: separate stdout cap, drained stderr", () => {
     const r = await boundedSpawnBuffers("/nonexistent/bin", [], { timeoutMs: 1000, stdoutMax: 10 });
     expect(r.spawnError).toMatch(/ENOENT/);
     expect(r.code).toBeNull();
+  });
+});
+
+describe("killOutstandingChildGroups (what SIGINT/SIGTERM run for metric scripts)", () => {
+  it("kills a running child's group, so its promise settles at once", async () => {
+    const p = boundedSpawnBuffers(node, ["-e", "setTimeout(()=>{}, 60000)"], { timeoutMs: 60_000, stdoutMax: 10 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(outstandingChildPids.size).toBeGreaterThan(0);
+    const t = Date.now();
+    killOutstandingChildGroups();
+    const r = await p;
+    expect(r.signal).toBe("SIGKILL");
+    expect(Date.now() - t).toBeLessThan(5000);
   });
 });

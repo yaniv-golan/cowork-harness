@@ -189,6 +189,8 @@ export async function remeasureCommandMetrics(
         stderrDir: o.stderrDir,
       })
     ).get(m.id)!;
+    if (recCmd?.interpreter !== undefined && fresh.command.interpreter !== undefined && fresh.command.interpreter !== recCmd.interpreter)
+      o.warn?.(`metric "${m.id}": re-run under ${fresh.command.interpreter}, but the run measured it under ${recCmd.interpreter}`);
     if (typeof fresh.value === "number" && typeof rec?.value === "number" && fresh.value !== rec.value) {
       out.set(m.id, {
         id: m.id,

@@ -11,9 +11,33 @@
 //
 // Not promised: a grandchild that called setsid() has left the group and survives the kill.
 import { spawn } from "node:child_process";
+import { installTerminationHandler, registerTerminationStep } from "./termination.js";
 
 /** Every outstanding child's pid (its own group id), so an entry path's signal handler can kill them all. */
 export const outstandingChildPids = new Set<number>();
+
+/** Kill every outstanding child's group. A detached child does not get the terminal's Ctrl-C, so a caller whose
+ *  process may be interrupted registers this (`installChildGroupKiller`). */
+export function killOutstandingChildGroups(): void {
+  for (const pid of outstandingChildPids) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+let killerInstalled = false;
+/** Kill outstanding child groups on SIGINT/SIGTERM (through the process-wide termination handler) and on exit.
+ *  Idempotent. */
+export function installChildGroupKiller(): void {
+  if (killerInstalled) return;
+  killerInstalled = true;
+  process.on("exit", killOutstandingChildGroups);
+  registerTerminationStep("helpers", killOutstandingChildGroups);
+  installTerminationHandler();
+}
 
 export interface BoundedSpawnOptions {
   timeoutMs: number;

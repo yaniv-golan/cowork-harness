@@ -4,6 +4,7 @@ import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal }
 import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
 import { resolveCommandMetrics } from "../metric-command/resolve.js";
+import { resolvePython } from "../metric-command/interpreters.js";
 import { asOutcomes, commandMetricNotice, measureCommandMetrics } from "../metric-command/live.js";
 import { BoundaryError, UsageError, LegacyRunDirError, SessionFileError, ScenarioFileError, compactSchemaError } from "../errors.js";
 import { ZodError } from "zod";
@@ -2655,6 +2656,11 @@ export function parseScenarioFile(path: string): Scenario {
 export function loadRunnableScenario(path: string): Scenario {
   const scenario = parseScenarioFile(path);
   resolveCommandMetrics(scenario, path);
+  // A Python command metric needs python3 3.9+: refused here, before any spend, rather than as command_failed after it.
+  if ((scenario.metrics ?? []).some((m) => m.command?.[0]?.endsWith(".py"))) {
+    const py = resolvePython();
+    if ("refused" in py) throw new UsageError(`invalid scenario ${path}: a Python command metric cannot run here — ${py.refused}`);
+  }
   return scenario;
 }
 

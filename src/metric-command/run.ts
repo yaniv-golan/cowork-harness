@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { MetricCommandRecord, MetricUnavailable, ScenarioMetric } from "../types.js";
-import { boundedSpawnBuffers } from "../bounded-spawn.js";
+import { boundedSpawnBuffers, installChildGroupKiller } from "../bounded-spawn.js";
 import { scrub } from "../secrets.js";
 import { metricSig } from "../metric-sig.js";
 import { parseMetricOutput } from "./output.js";
@@ -156,6 +156,8 @@ async function runOnce(
 /** Run one command metric live (or on a consented re-measure): read the files once, check them against the
  *  resolution, run twice, and report a value only when both runs print the same number. */
 export async function runCommandMetric(input: CommandRunInput): Promise<CommandMeasurement> {
+  // A detached script does not get the terminal's Ctrl-C: the harness kills its group on SIGINT/SIGTERM and exit.
+  installChildGroupKiller();
   const m = input.metric;
   const r = input.resolved;
   const record: MetricCommandRecord = { sig: metricSig(m), script: r.scriptRel, scriptSha256: r.scriptSha256 };

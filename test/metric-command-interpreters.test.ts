@@ -28,3 +28,35 @@ describe("the shipped Python runner", () => {
     expect(src).not.toMatch(/:\s*\w+\s*\|\s*\w+\s*[=)]/);
   });
 });
+
+describe("a Python command metric needs python3 3.9+, refused at load (before any spend)", () => {
+  it("loadRunnableScenario refuses when python3 is older than 3.9", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, chmodSync, realpathSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { execFileSync } = await import("node:child_process");
+    const { loadRunnableScenario } = await import("../src/run/execute.js");
+    const { resetInterpreterCache } = await import("../src/metric-command/interpreters.js");
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pyfloor-")));
+    const savedPath = process.env.PATH;
+    try {
+      mkdirSync(join(root, "bin"));
+      writeFileSync(join(root, "bin", "python3"), "#!/bin/sh\necho /usr/bin/python3.8\necho 3.8.10\n");
+      chmodSync(join(root, "bin", "python3"), 0o755);
+      mkdirSync(join(root, "repo", "metrics"), { recursive: true });
+      writeFileSync(join(root, "repo", "metrics", "m.py"), "print(1)\n");
+      writeFileSync(
+        join(root, "repo", "s.yaml"),
+        "fidelity: protocol\nprompt: hi\nmetrics:\n  - {id: n, command: [metrics/m.py], better: lower, unbounded: true}\n",
+      );
+      execFileSync("git", ["init", "-q"], { cwd: join(root, "repo") });
+      execFileSync("git", ["add", "-A"], { cwd: join(root, "repo") });
+      process.env.PATH = `${join(root, "bin")}:${savedPath}`;
+      resetInterpreterCache();
+      expect(() => loadRunnableScenario(join(root, "repo", "s.yaml"))).toThrow(/needs 3\.9 or later/);
+    } finally {
+      process.env.PATH = savedPath;
+      resetInterpreterCache();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
