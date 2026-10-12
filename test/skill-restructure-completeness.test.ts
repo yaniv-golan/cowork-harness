@@ -24,7 +24,7 @@ const FROZEN_HEADINGS = [
   '#### External deciders and the "first" shorthand',
   "### Assertions: two orthogonal axes",
   "#### Which assertion for which question (goal → key)",
-  "### web_fetch (fail-closed, two-path)",
+  "### web_fetch (never auto-allowed, two-path)",
   "### Scaffold a valid scenario, then lint before you push",
   "## Part II — RUN, RECORD & LOCK",
   "### Run, then lock determinism",

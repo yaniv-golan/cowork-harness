@@ -366,7 +366,7 @@ matched and unmatched sub-questions) without changing the verdict; script every 
 The predicate sees the tool's input fields as locals (`command`, `file_path`, `url`, `domain`, …).
 Unmatched tools fall to the **permission parity** default: read-only tools (`Read`, `Glob`, `Grep`)
 always allow; otherwise `cowork` parity allows-with-audit, `strict` parity denies. **Exception:**
-`webfetch:<domain>` is fail-closed (see web_fetch below).
+`webfetch:<domain>` is never auto-allowed (see web_fetch below).
 
 **Reusable answer policies** (`--answer-policy <yaml>` on `skill`): the same `{when_question, choose}`
 rules in a separate file. A missing/unparseable/non-list policy fails loud at load — never treated as
@@ -454,7 +454,7 @@ on a manifest-less cassette those are skipped, so the gate can't see the deliver
 
 ## The web_fetch model
 
-`web_fetch` is gated by **URL provenance**, not the egress allowlist, and is **fail-closed**.
+`web_fetch` is gated by **URL provenance**, not the egress allowlist, and is **never auto-allowed**.
 
 - **Provenance:** a URL is provenanced iff it appeared in the **prompt (user message)** or a **prior
   `web_fetch` result**. (WebSearch is a real Cowork tool the harness now captures structurally in
@@ -468,9 +468,11 @@ on a manifest-less cassette those are skipped, so the gate can't see the deliver
   a private host. A provenance *miss* raises the approval gate below.
 - **Path B (no provenance enforced):** the per-hop gate is the full egress allowlist + scheme +
   private-address check.
-- **The approval gate (`webfetch:<domain>`):** raised on a provenance miss; **fail-closed under
-  cowork parity** — it is *not* auto-allowed like other unscripted tools, and `--on-unanswered first`
-  does **not** allow it. Answer it three ways: a scripted rule (`when_tool: "webfetch:<domain>"` +
+- **The approval gate (`webfetch:<domain>`):** raised on a provenance miss; it is *not* auto-allowed
+  like other unscripted tools. Unanswered under `on_unanswered: fail` (the `run` default) it **ends
+  the run as an unanswered gate**, naming the domain, the URL and the rule to add (production asks
+  the user and waits; it never denies on its own). Under `--on-unanswered first` or `llm` it is
+  denied. Answer it three ways: a scripted rule (`when_tool: "webfetch:<domain>"` +
   `grant: domain|once`), a session `web_fetch.approved_domains: [host]` (test convenience, per-run),
   or a live terminal decider (`--decider-llm` / `--decider-cmd` / `--decider-dir`).
 - **`egress_*` observes web_fetch on both paths** (an egress allow/deny event fires on the terminal
