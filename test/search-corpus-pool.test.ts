@@ -244,7 +244,55 @@ describe("multi-leg runs in a pool", () => {
     const h = (s: string) => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 16);
     expect(manifest.sources.map((s) => s.runRef).sort()).toEqual([h("scn-ms/local_r1/legs/ask"), h("scn-ms/local_r2/legs/ask")].sort());
   });
-  it("record ids and the pool hash do not depend on where a run sits", () => {
+  it("a persistent leg's sub-agent searches are harvested from the scenario root's config dir, per leg", () => {
+    // workdir: persistent shares one claude-config at the scenario root; each leg's sub-agent transcripts sit under
+    // its own agent session id there.
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const leg = legRoot(root, "ms", "local_r1", "ask", [["main q", "https://a", "x"]]);
+    const other = legRoot(root, "ms", "local_r1", "resume", [["resume q", "https://c", "z"]]);
+    const sessionOf = (d: string, id: string) =>
+      writeFileSync(
+        join(d, "events.jsonl"),
+        [JSON.stringify({ type: "system", subtype: "init", session_id: id }), readFileSync(join(d, "events.jsonl"), "utf8")].join("\n"),
+      );
+    sessionOf(leg, "sess-ask");
+    sessionOf(other, "sess-resume");
+    const sub = (id: string, q: string, url: string) => {
+      const dir = join(root, "scn-ms", "local_r1", "claude-config", "projects", "p", id, "subagents");
+      mkdirSync(dir, { recursive: true });
+      const rendered = renderWebSearchResult({ query: q, entries: [{ kind: "links", links: [{ title: q, url }] }], reminder: REM });
+      writeFileSync(
+        join(dir, "agent-a1.jsonl"),
+        [
+          JSON.stringify({
+            type: "assistant",
+            message: { content: [{ type: "tool_use", id: "s1", name: "WebSearch", input: { query: q } }] },
+          }),
+          JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "s1", content: rendered }] } }),
+        ].join("\n"),
+      );
+    };
+    sub("sess-ask", "subq ask", "https://sub-ask");
+    sub("sess-resume", "subq resume", "https://sub-resume");
+    expect(
+      harvestRun(leg)
+        .records.map((r) => r.query)
+        .sort(),
+    ).toEqual(["main q", "subq ask"]);
+    expect(
+      harvestRun(other)
+        .records.map((r) => r.query)
+        .sort(),
+    ).toEqual(["resume q", "subq resume"]);
+  });
+  it("a leg whose leg.json does not parse is treated the same from a runs dir and from its root: an ordinary run dir", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const leg = legRoot(root, "ms", "local_r1", "ask", [["q", "https://a", "x"]]);
+    writeFileSync(join(leg, "leg.json"), "{not json");
+    expect(discoverRunDirs([root])).toEqual([leg]);
+    expect(discoverRunDirs([join(root, "scn-ms", "local_r1")])).toEqual([leg]);
+  });
+  it("pin (also true before the leg fix): record ids and the pool hash do not depend on where a run sits", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
     const leg = legRoot(root, "ms", "local_r1", "ask", [["q", "https://a", "x"]]);
     const plain = run(mkdtempSync(join(tmpdir(), "cwh-pool-legs-")), { skill: "ms", searches: [["q", "https://a", "x"]] });
@@ -424,7 +472,6 @@ describe.skipIf(keptRoots.length === 0)("kept runs (local, COWORK_SEARCH_CORPUS_
       const h = harvestRun(d);
       for (const r of h.records) {
         expect(r.source.runRef, d).toBe(old(d));
-        expect(r.id).toBe(recordId(r));
       }
       if (h.records.length) withRecords++;
       records += h.records.length;

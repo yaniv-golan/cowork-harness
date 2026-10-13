@@ -107,8 +107,8 @@ export function poolHash(records: { id: string }[], retrieval: RetrievalParams):
 }
 
 /** Run dirs named by `--from`: a run dir itself (it holds events.jsonl), or a dir whose run dirs sit up to three
- *  levels below it. A multi-leg scenario root's prompt legs (`legs/<id>/` with a valid `leg.json`) are run dirs too,
- *  found at any depth, since a root sits as deep as an ordinary run. A run's own work dir is never searched (an
+ *  levels below it. A multi-leg scenario root's prompt legs (`legs/<id>/`) are run dirs too: a root sits where an
+ *  ordinary run dir does, so its legs are found within the same three levels. A run's own work dir is never searched (an
  *  agent's nested runs are not this run's). */
 export function discoverRunDirs(from: string[]): string[] {
   const out = new Set<string>();
@@ -124,9 +124,13 @@ export function discoverRunDirs(from: string[]): string[] {
     } catch {
       // unreadable legs dir
     }
-    const promptLegs = legNames.map((n) => join(legs, n)).filter((p) => readLegMarker(p)?.kind === "prompt");
-    if (promptLegs.length) {
-      for (const p of promptLegs) if (existsSync(join(p, "events.jsonl"))) out.add(resolve(p));
+    // Every leg with an agent session: a host-action leg has no events.jsonl. A leg whose marker does not parse is
+    // still found, from a runs dir and from its root alike, and is read as an ordinary run dir.
+    const legRuns = legNames
+      .map((n) => join(legs, n))
+      .filter((p) => readLegMarker(p)?.kind !== "action" && existsSync(join(p, "events.jsonl")));
+    if (legRuns.length) {
+      for (const p of legRuns) out.add(resolve(p));
       return;
     }
     if (depth === 0) return;

@@ -125,8 +125,28 @@ function resultOf(runDir: string): Record<string, unknown> | null {
   return p ? readJson(p) : null;
 }
 
-function childTranscripts(runDir: string): string[] {
-  const projects = join(runDir, "claude-config", "projects");
+/** The agent session ids a run's events.jsonl names (every stream frame carries `session_id`). */
+function sessionIds(eventLines: string[]): Set<string> {
+  const ids = new Set<string>();
+  for (const line of eventLines) {
+    const m = /"session_id":"([^"]+)"/.exec(line);
+    if (m) ids.add(m[1]!);
+  }
+  return ids;
+}
+
+/** Sub-agent transcripts: `claude-config/projects/<project>/<session>/subagents/agent-<id>.jsonl`. A run dir has its
+ *  own config dir; a multi-leg run's prompt leg under `workdir: persistent` shares the scenario root's, so for a leg
+ *  the root's is read too, keeping only the session dirs of this leg's own agent sessions. */
+function childTranscripts(runDir: string, eventLines: string[]): string[] {
+  const own = transcriptsUnder(join(runDir, "claude-config", "projects"), () => true);
+  if (basename(dirname(runDir)) !== "legs" || readLegMarker(runDir) === undefined) return own;
+  const mine = sessionIds(eventLines);
+  const shared = transcriptsUnder(join(dirname(dirname(runDir)), "claude-config", "projects"), (session) => mine.has(session));
+  return [...new Set([...own, ...shared])].sort();
+}
+
+function transcriptsUnder(projects: string, keepSession: (session: string) => boolean): string[] {
   const out: string[] = [];
   const ls = (d: string) => {
     try {
@@ -137,6 +157,7 @@ function childTranscripts(runDir: string): string[] {
   };
   for (const p of ls(projects))
     for (const s of ls(join(projects, p))) {
+      if (!keepSession(s)) continue;
       const sub = join(projects, p, s, "subagents");
       for (const f of ls(sub)) if (/^agent-[\w-]+\.jsonl$/.test(f)) out.push(join(sub, f));
     }
@@ -234,7 +255,8 @@ export function harvestRun(runDir: string): { records: PoolRecord[]; counts: Har
   // transcript is not captured for every sub-agent, and the frames carry the same tool_result text, so the two
   // produce the same record id and the copy is dropped below.
   take(pairs(eventLines, "parented"), "events", "subagent");
-  for (const f of childTranscripts(runDir)) take(pairs(readFileSync(f, "utf8").split("\n"), "all"), "child-transcript", "subagent");
+  for (const f of childTranscripts(runDir, eventLines))
+    take(pairs(readFileSync(f, "utf8").split("\n"), "all"), "child-transcript", "subagent");
   const seen = new Set<string>();
   const unique = records.filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
   counts.duplicates = records.length - unique.length;
