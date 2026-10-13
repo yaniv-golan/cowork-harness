@@ -101,7 +101,12 @@ function leafKeys(file: string, path: string, kind: string, value: unknown): str
  *    array and the same scalar) widens;
  *  - a numeric constraint loosened (min lowered, max raised) widens; tightened stays a change; a pattern change of
  *    any kind stays a change (regex containment cannot be decided). */
-function inputReclassify(base: unknown, cur: unknown): { widen: Set<string>; narrow: Set<string> } {
+function inputReclassify(
+  base: unknown,
+  cur: unknown,
+  /** Branch leaves diffSurfaces read as an old shape moved intact into a union branch (a widening union). */
+  consumedArmLeaves: ReadonlySet<string> = new Set(),
+): { widen: Set<string>; narrow: Set<string> } {
   const widen = new Set<string>();
   const narrow = new Set<string>();
   const B = ((base as { schemas?: Leaves })?.schemas ?? {}) as Leaves;
@@ -127,8 +132,10 @@ function inputReclassify(base: unknown, cur: unknown): { widen: Set<string>; nar
         if (!existed(prefix)) break; // a branch on a new property: an addition
         const kind = m[1]!;
         const firstOfKind = !paths.some((p) => p.startsWith(`${prefix}<${kind}:`));
-        const keptOwn = Object.entries(bf[prefix] ?? {}).every(([kd, v]) => JSON.stringify(cf[prefix]?.[kd]) === JSON.stringify(v));
-        if (kind === "allOf" || (firstOfKind && keptOwn))
+        // A first anyOf/oneOf is a widening only when one of its branches is the property's old shape moved there
+        // intact (diffSurfaces' branch logic consumed its leaves): the other branches then only add what is accepted.
+        const unionKeepsOld = [...consumedArmLeaves].some((x) => x.startsWith(`schemas.${file}.${prefix}<${kind}:`));
+        if (kind === "allOf" || (firstOfKind && !unionKeepsOld))
           for (const [kd, v] of Object.entries(cf[path]!)) leafKeys(file, path, kd, v).forEach((x) => narrow.add(x));
         break;
       }
@@ -151,6 +158,8 @@ function inputReclassify(base: unknown, cur: unknown): { widen: Set<string>; nar
         }
       }
       if (!("enum" in b) && "enum" in c && existed(path)) keys(c, "enum").forEach((x) => narrow.add(x));
+      // A type introduced on a property that existed rejects any value of another type.
+      if (!("type" in b) && "type" in c && existed(path)) keys(c, "type").forEach((x) => narrow.add(x));
       // An enum dropped entirely from a property that is still there accepts any value it allowed.
       if ("enum" in b && !("enum" in c) && path in cf) keys(b, "enum").forEach((x) => widen.add(x));
       // An exclusive bound replaced by an inclusive one at or beyond it (`exclusiveMinimum: 0` → `minimum: 0`).
@@ -249,7 +258,7 @@ export function diffSurfaces(baseline: unknown, current: unknown): SurfaceDiff {
   }
   for (let i = added.length - 1; i >= 0; i--) if (consumedArmLeaves.has(added[i])) added.splice(i, 1);
   // The schemas a user writes: a change that accepts every old file widens, one that can reject one narrows.
-  const { widen, narrow } = inputReclassify(baseline, current);
+  const { widen, narrow } = inputReclassify(baseline, current, consumedArmLeaves);
   for (let i = removed.length - 1; i >= 0; i--) if (widen.has(removed[i]!)) widened.push(...removed.splice(i, 1));
   for (let i = changed.length - 1; i >= 0; i--) if (widen.has(changed[i]!)) widened.push(...changed.splice(i, 1));
   for (let i = added.length - 1; i >= 0; i--) {

@@ -189,3 +189,40 @@ describe("loosenings that used to read as breaks", () => {
     expect(diff(IN, { ".a": { exclusiveMinimum: 0 } }, { ".a": { minimum: 1 } }).ok).toBe(false);
   });
 });
+
+describe("review round 2: a union that replaces a property's own constraints", () => {
+  it("session effort: six accepted values narrowed to one through a new anyOf fails", () => {
+    const enumOf = (vs: string[]) => ({ type: "string", enum: vs });
+    const d = diffSurfaces(
+      surface("session.schema.json", { ".effort": enumOf(["extra", "high", "low", "max", "medium", "xhigh"]) }),
+      surface("session.schema.json", { ".effort": { type: "string" }, ".effort<anyOf:0>": { enum: ["low"] } }),
+    );
+    expect(d.ok).toBe(false);
+    expect(d.changed).toContain(k("session.schema.json", ".effort<anyOf:0>.enum[low]"));
+  });
+  it("multi-leg workspace_fixture: a dropped minLength replaced by an anyOf pattern fails", () => {
+    const F = "scenario-multi-leg.schema.json";
+    const d = diffSurfaces(
+      surface(F, { ".workspace_fixture": { type: "string", minLength: 1 } }),
+      surface(F, { ".workspace_fixture": { type: "string" }, ".workspace_fixture<anyOf:0>": { pattern: "^[a-z]" } }),
+    );
+    expect(d.ok).toBe(false);
+    expect(d.changed).toContain(k(F, ".workspace_fixture<anyOf:0>.pattern"));
+  });
+  it("a type added to an existing input property narrows it", () => {
+    const d = diff(IN, { ".a": { enum: ["x", "y"] } }, { ".a": { type: "number" } });
+    expect(d.ok).toBe(false);
+    expect(d.changed).toContain(k(IN, ".a.type"));
+  });
+  it("an allOf added inside an existing anyOf branch narrows it", () => {
+    const d = diff(
+      IN,
+      { ".a": {}, ".a<anyOf:0>": { type: "string" } },
+      { ".a": {}, ".a<anyOf:0>": { type: "string" }, ".a<anyOf:0><allOf:0>": { pattern: "^x" } },
+    );
+    expect(d.changed).toEqual([k(IN, ".a<anyOf:0><allOf:0>.pattern")]);
+  });
+  it("an exclusive maximum replaced by a smaller inclusive one is stricter: it fails", () => {
+    expect(diff(IN, { ".a": { exclusiveMaximum: 9 } }, { ".a": { maximum: 8 } }).ok).toBe(false);
+  });
+});
