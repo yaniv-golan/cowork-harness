@@ -49,6 +49,36 @@ describe("checkEgressContractFacts (guards the pinned allowDomains)", () => {
     expect(checkEgressContractFacts(drifted).some((f) => f.includes("resolveVmAllowedDomains"))).toBe(true);
   });
 
+  describe("the three-parameter resolver (Desktop 2.37337.1)", () => {
+    // A set policy plus a host-run CLI skips the OTLP host; a null policy still reaches the augmenter.
+    const three = ok.replace(
+      "async resolveVmAllowedDomains(e,n){let r=t.Qh().vmEgressPolicy(),i=r?t.$h(r):e;return t.Wc(i,n)}",
+      "async resolveVmAllowedDomains(e,n,a){let r=t.Qh().vmEgressPolicy(),i=r?t.$h(r):e;return r&&a.cliRunsOnThisHost?i:t.Wc(i,n)}",
+    );
+    const flagged = (b: string) => checkEgressContractFacts(b).filter((f) => f.includes("resolveVmAllowedDomains"));
+
+    it("admits the policy-only short-circuit", () => {
+      expect(three).not.toBe(ok);
+      expect(checkEgressContractFacts(three)).toEqual([]);
+    });
+
+    it("flags a short-circuit that no longer requires the policy (a null policy would skip the augmenter)", () => {
+      expect(flagged(three.replace("return r&&a.cliRunsOnThisHost?", "return a.cliRunsOnThisHost?"))).not.toEqual([]);
+    });
+
+    it("flags a short-circuit keyed on another binding than the deployment policy", () => {
+      expect(flagged(three.replace("return r&&a.cliRunsOnThisHost?", "return n&&a.cliRunsOnThisHost?"))).not.toEqual([]);
+    });
+
+    it("flags a short-circuit that returns a different list than the resolved one", () => {
+      expect(flagged(three.replace("cliRunsOnThisHost?i:", "cliRunsOnThisHost?e:"))).not.toEqual([]);
+    });
+
+    it("still requires the null-policy fall-through to the first argument", () => {
+      expect(flagged(three.replace("i=r?t.$h(r):e;", "i=r?t.$h(r):[];"))).not.toEqual([]);
+    });
+  });
+
   it("flags when the resolver returns a different binding than the ternary produced", () => {
     // Backreferences are what catch this: the shape still 'looks' right, but t.Wc gets `r`, not `i`.
     const drifted = ok.replace("return t.Wc(i,n)", "return t.Wc(r,n)");

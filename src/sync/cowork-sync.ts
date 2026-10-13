@@ -141,6 +141,7 @@ export const PINNED_GATES: Record<string, string> = {
   "1936081873": "oauthScopesEnv", // CLAUDE_CODE_OAUTH_SCOPES (value host-derived; allowlisted)
   "4153934152": "skipPrecompactLoad", // CLAUDE_CODE_SKIP_PRECOMPACT_LOAD:"1"
   "1129419822": "enableToolSearchAuto", // ENABLE_TOOL_SEARCH:"auto" — dark (see DARK_GATES)
+  "3184956269": "mcpAppsHost", // post-construction CLAUDE_CODE_MCP_APPS_HOST:"1" on the host loop — dark (see DARK_GATES)
   // CLAUDE_CODE_QUESTION_EXTENDED:"1" in W1 (Desktop >=1.46388.3). Served-and-OFF on a standard
   // account (`{on:false, source:"defaultValue"}`), NOT dark — so it needs no DARK_GATES entry and the
   // pin round-trips through the fcache on its own. Behavioural if it flips: the agent reads the key
@@ -369,6 +370,10 @@ const DARK_GATES = new Set([
   //                be segment-targeted, so another account may still see it absent, and dropping it would
   //                turn that account's sync into a spurious hard-fail. Tolerating absence is the point —
   //                without it the PINNED_GATES pin never round-trips and the sentinel guards nothing.
+  "3184956269", // mcpAppsHost — new in Desktop 2.37337.1 and dark (absent from a standard fcache) when
+  //                pinned 2026-10-13. Default off: on the host loop it writes CLAUDE_CODE_MCP_APPS_HOST:"1"
+  //                into the spawn env after construction. Absent from ONE org's fcache says nothing
+  //                about another org's.
 ]);
 
 /**
@@ -2032,20 +2037,25 @@ export function checkEgressContractFacts(bundle: string, files?: Map<string, str
   // after it resolves to the HIPAA all-domains filter (see egressWrapperDefect): a wrapper is exactly
   // where an asar-side allowlist contribution would hide, so widening the match without pinning the
   // wrapper would have turned this sentinel into one that cannot fire.
+  //
+  // Desktop 2.37337.1 adds a third parameter, `{cliRunsOnThisHost}`, and returns the list WITHOUT the OTLP
+  // host when a deployment policy is set and the CLI runs on the host: `return i&&r.cliRunsOnThisHost?a:<otlp>(a,n)`.
+  // That branch is policy-only. The match requires its left operand to be the policy binding itself (`\4&&`),
+  // so a null policy still reaches `<otlp>(<list>, n)`, the same fall-through as before.
   const resolver =
-    /resolveVmAllowedDomains\(\s*([\w$]+)\s*,\s*([\w$]+)\s*\)\s*\{\s*let\s+([\w$]+)\s*=\s*[\w$.]+\(\)\s*\.vmEgressPolicy\(\)\s*,\s*([\w$]+)\s*=\s*(?:([\w$.]+)\(\s*)?\3\s*\?\s*[\w$.]+\(\s*\3\s*\)\s*:\s*\1\s*(\)\s*)?;\s*return\s+[\w$.]+\(\s*\4\s*,\s*\2\s*\)\s*\}/;
+    /resolveVmAllowedDomains\(\s*([\w$]+)\s*,\s*([\w$]+)\s*(?:,\s*([\w$]+)\s*)?\)\s*\{\s*let\s+([\w$]+)\s*=\s*[\w$.]+\(\)\s*\.vmEgressPolicy\(\)\s*,\s*([\w$]+)\s*=\s*(?:([\w$.]+)\(\s*)?\4\s*\?\s*[\w$.]+\(\s*\4\s*\)\s*:\s*\1\s*(\)\s*)?;\s*return\s+(?:\4\s*&&\s*\3\s*\.cliRunsOnThisHost\s*\?\s*\5\s*:\s*)?[\w$.]+\(\s*\5\s*,\s*\2\s*\)\s*\}/;
   const rm = resolver.exec(bundle);
-  if (!rm || (rm[5] === undefined) !== (rm[6] === undefined))
+  if (!rm || (rm[6] === undefined) !== (rm[7] === undefined))
     miss(
       "`resolveVmAllowedDomains` no longer falls through to its first argument when the deployment policy is null",
       "the 1p allowlist may no longer be the server-delivered session list",
     );
-  else if (rm[5] !== undefined) {
+  else if (rm[6] !== undefined) {
     const site = (files && [...files.values()].find((c) => resolver.test(c))) ?? bundle;
-    const defect = egressWrapperDefect(rm[5], site, files);
+    const defect = egressWrapperDefect(rm[6], site, files);
     if (defect)
       miss(
-        `\`resolveVmAllowedDomains\` wraps the resolved list in \`${rm[5]}\`, which is not the HIPAA all-domains filter`,
+        `\`resolveVmAllowedDomains\` wraps the resolved list in \`${rm[6]}\`, which is not the HIPAA all-domains filter`,
         `${defect} — the asar may now contribute or remove hosts on the first-party path`,
       );
   }
