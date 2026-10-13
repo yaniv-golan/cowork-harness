@@ -141,6 +141,11 @@ describe("a union branch added onto an existing input property", () => {
       expect(d.changed, kind).toEqual([k(IN, `.a<${kind}:0>.minLength`), k(IN, `.a<${kind}:1>.maxLength`)]);
     }
   });
+  it("a property whose own type moves into anyOf branches that keep it is widened, not narrowed", () => {
+    const d = diff(IN, { ".a": { type: "string" } }, { ".a": {}, ".a<anyOf:0>": { type: "string" }, ".a<anyOf:1>": { type: "number" } });
+    expect(d.ok).toBe(true);
+    expect(d.changed).toEqual([]);
+  });
   it("a branch appended to an existing anyOf widens it (an addition)", () => {
     const d = diff(
       IN,
