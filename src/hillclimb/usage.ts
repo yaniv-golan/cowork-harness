@@ -31,6 +31,46 @@ export const HILLCLIMB_REGRADE_BOOLEAN_FLAGS = [
   "--allow-scrub-change",
   "--allow-metric-commands",
 ] as const;
+export const HILLCLIMB_REGRADE_REPEATED_FLAGS = ["--case"] as const;
+export const HILLCLIMB_REGRADE_NO_DASH_VALUE = ["--flow", "--variant", "--case", "--judge-model"] as const;
+export const HILLCLIMB_CHECK_VALUE_FLAGS = ["--flow", "--output-format"] as const;
+export const HILLCLIMB_STATE_TEMPLATE_VALUE_FLAGS = ["--flow", "--skill", "--output-format"] as const;
+export const HILLCLIMB_FREEZE_REF_VALUE_FLAGS = ["--flow", "--variant", "--output-format"] as const;
+export const HILLCLIMB_FREEZE_REF_REPEATED_FLAGS = ["--case"] as const;
+export const HILLCLIMB_FREEZE_REF_NO_DASH_VALUE = ["--flow", "--variant", "--case"] as const;
+
+/** Every hillclimb subcommand's own flag lists, as its parser takes them. The usage-guard registry's single
+ *  `hillclimb` entry is their union, so a flag any subcommand accepts is checked against HILLCLIMB_USAGE. */
+export const HILLCLIMB_SUBCOMMAND_FLAGS: Record<
+  string,
+  { booleans: readonly string[]; values: readonly string[]; repeated: readonly string[]; noDashValue: readonly string[] }
+> = {
+  run: {
+    booleans: HILLCLIMB_RUN_BOOLEAN_FLAGS,
+    values: HILLCLIMB_RUN_VALUE_FLAGS,
+    repeated: HILLCLIMB_RUN_REPEATED_FLAGS,
+    noDashValue: [],
+  },
+  check: { booleans: [], values: HILLCLIMB_CHECK_VALUE_FLAGS, repeated: [], noDashValue: [] },
+  "state-template": { booleans: [], values: HILLCLIMB_STATE_TEMPLATE_VALUE_FLAGS, repeated: [], noDashValue: [] },
+  regrade: {
+    booleans: HILLCLIMB_REGRADE_BOOLEAN_FLAGS,
+    values: HILLCLIMB_REGRADE_VALUE_FLAGS,
+    repeated: HILLCLIMB_REGRADE_REPEATED_FLAGS,
+    noDashValue: HILLCLIMB_REGRADE_NO_DASH_VALUE,
+  },
+  "freeze-ref": {
+    booleans: [],
+    values: HILLCLIMB_FREEZE_REF_VALUE_FLAGS,
+    repeated: HILLCLIMB_FREEZE_REF_REPEATED_FLAGS,
+    noDashValue: HILLCLIMB_FREEZE_REF_NO_DASH_VALUE,
+  },
+};
+
+/** The union of every subcommand's lists of one kind, deduplicated (the usage-guard registry entry). */
+export function hillclimbFlagUnion(kind: "booleans" | "values" | "repeated"): string[] {
+  return [...new Set(Object.values(HILLCLIMB_SUBCOMMAND_FLAGS).flatMap((f) => [...f[kind]]))];
+}
 
 export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> [--flow DIR] [--variant ID] [--model ID] [--effort LEVEL] [--reps N]
        [--concurrency N] [--timeout-s N (0 = no ceiling)] [--approve-harness] [flags]

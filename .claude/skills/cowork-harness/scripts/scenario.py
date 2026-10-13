@@ -1484,8 +1484,8 @@ def _hook_block_contradictions(items):
 
 # A multi-leg (`legs:`) scenario: these top-level keys, and per-leg prompt/host_action/session/assert. Kept equal to
 # MultiLegScenarioObject (src/run/multi-leg-scenario.ts); the harness loader is the authority and runs first under
-# the `cowork-harness lint` wrapper.
-_MULTI_LEG_TOP_KEYS = {
+# the `cowork-harness lint` wrapper. Read from the generated assertion-keys.json at run time; this is its fallback.
+_EMBEDDED_MULTI_LEG_TOP_KEYS = {
     "name",
     "baseline",
     "session",
@@ -1502,6 +1502,24 @@ _MULTI_LEG_TOP_KEYS = {
     "allow_host_hooks",
     "workspace_fixture",
 }
+
+
+def _load_multi_leg_top_keys():
+    """A multi-leg scenario's top-level keys, from the generated assertion-keys.json (multiLeg.topLevelKeys), so the
+    unknown-key check can't drift; falls back to the embedded copy (kept equal, test-enforced) with a warning."""
+    p = Path(__file__).resolve().parent / "assertion-keys.json"
+    try:
+        return set(json.loads(p.read_text(encoding="utf-8"))["multiLeg"]["topLevelKeys"])
+    except Exception:
+        print(
+            f"::warning:: multiLeg.topLevelKeys not readable from {p} — "
+            "using a built-in key list that may be stale (run `npm run schema`).",
+            file=sys.stderr,
+        )
+        return set(_EMBEDDED_MULTI_LEG_TOP_KEYS)
+
+
+_MULTI_LEG_TOP_KEYS = _load_multi_leg_top_keys()
 # The scenario-wide keys a prompt leg runs with (legScenario in src/run/execute.ts).
 _LEG_SHARED_KEYS = (
     "name",

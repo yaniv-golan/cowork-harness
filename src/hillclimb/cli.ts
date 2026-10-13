@@ -41,6 +41,13 @@ import {
   HILLCLIMB_FREEZE_REF_USAGE,
   HILLCLIMB_REGRADE_BOOLEAN_FLAGS,
   HILLCLIMB_REGRADE_VALUE_FLAGS,
+  HILLCLIMB_REGRADE_REPEATED_FLAGS,
+  HILLCLIMB_REGRADE_NO_DASH_VALUE,
+  HILLCLIMB_CHECK_VALUE_FLAGS,
+  HILLCLIMB_STATE_TEMPLATE_VALUE_FLAGS,
+  HILLCLIMB_FREEZE_REF_VALUE_FLAGS,
+  HILLCLIMB_FREEZE_REF_REPEATED_FLAGS,
+  HILLCLIMB_FREEZE_REF_NO_DASH_VALUE,
   HILLCLIMB_REGRADE_USAGE,
   HILLCLIMB_STATE_TEMPLATE_USAGE,
   HILLCLIMB_USAGE,
@@ -419,7 +426,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         rest,
         withCommandGlobals({
           booleans: [],
-          values: sub === "check" ? ["--flow", "--output-format"] : ["--flow", "--skill", "--output-format"],
+          values: sub === "check" ? [...HILLCLIMB_CHECK_VALUE_FLAGS] : [...HILLCLIMB_STATE_TEMPLATE_VALUE_FLAGS],
           enums: { "--output-format": ["text", "json"] },
         }),
       );
@@ -507,9 +514,9 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         withCommandGlobals({
           booleans: [...HILLCLIMB_REGRADE_BOOLEAN_FLAGS],
           values: [...HILLCLIMB_REGRADE_VALUE_FLAGS],
-          repeated: ["--case"],
+          repeated: [...HILLCLIMB_REGRADE_REPEATED_FLAGS],
           enums: { "--output-format": ["text", "json"] },
-          noDashValue: ["--flow", "--variant", "--case", "--judge-model"],
+          noDashValue: [...HILLCLIMB_REGRADE_NO_DASH_VALUE],
         }),
       );
     } catch (e) {
@@ -574,10 +581,10 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         rest,
         withCommandGlobals({
           booleans: [],
-          values: ["--flow", "--variant", "--output-format"],
-          repeated: ["--case"],
+          values: [...HILLCLIMB_FREEZE_REF_VALUE_FLAGS],
+          repeated: [...HILLCLIMB_FREEZE_REF_REPEATED_FLAGS],
           enums: { "--output-format": ["text", "json"] },
-          noDashValue: ["--flow", "--variant", "--case"],
+          noDashValue: [...HILLCLIMB_FREEZE_REF_NO_DASH_VALUE],
         }),
       );
     } catch (e) {
