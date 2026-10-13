@@ -2686,3 +2686,92 @@ def test_multi_leg_unknown_top_key_and_per_leg_rules(tmp_path):
 
 def test_multi_leg_without_fidelity_is_an_error(tmp_path):
     assert len(_mk(tmp_path, _ML.replace("fidelity: container\n", ""), rule="fidelity-missing")) == 1
+
+
+# A malformed assertion-keys.json must not be read as if it were well formed: a string where a list of keys belongs
+# would be iterated as characters, a string enum value would turn membership into a substring test. Each loader warns
+# (naming its field) and falls back; the live-verified hook list falls back to NOTHING verified, never the built-in.
+def _load_beside(tmp_path, sidecar):
+    import shutil
+    import subprocess
+    import sys as _sys
+
+    shutil.copy(SCENARIO_PY, tmp_path / "scenario.py")
+    (tmp_path / "assertion-keys.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    code = (
+        "import importlib.util,json,sys\n"
+        f"s=importlib.util.spec_from_file_location('m',{str(tmp_path / 'scenario.py')!r})\n"
+        "m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\n"
+        "print(json.dumps({'assert': sorted(m.ASSERT_KEYS), 'top': sorted(m.TOP_LEVEL_KEYS),"
+        " 'multi': sorted(m._MULTI_LEG_TOP_KEYS), 'served': sorted(m.SERVED_HOOK_EVENTS),"
+        " 'known': sorted(m.KNOWN_HOOK_EVENTS), 'live': sorted(m.LIVE_VERIFIED_HOOK_EVENTS),"
+        " 'enums': m.ENUM_VALUES}))\n"
+    )
+    r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip().splitlines()[-1]), r.stderr
+
+
+@pytest.mark.parametrize("bad_list", ["prompt", ["prompt", 1]], ids=["string", "mixed-list"])
+def test_malformed_key_lists_warn_per_loader_and_fall_back(tmp_path, bad_list):
+    good = json.loads(KEYS_JSON.read_text(encoding="utf-8"))
+    bad = dict(good)
+    bad["keys"] = bad_list
+    bad["topLevelKeys"] = bad_list
+    bad["multiLeg"] = {**good["multiLeg"], "topLevelKeys": bad_list}
+    got, err = _load_beside(tmp_path, bad)
+    assert set(got["assert"]) == scenario._CLASSIFIED_KEYS
+    assert set(got["top"]) == scenario._EMBEDDED_TOP_LEVEL_KEYS
+    assert set(got["multi"]) == scenario._EMBEDDED_MULTI_LEG_TOP_KEYS
+    for field in ("keys", "topLevelKeys", "multiLeg.topLevelKeys"):
+        assert f"{field} is not a list of strings" in err, field
+
+
+@pytest.mark.parametrize("field", ["servedHookEvents", "knownHookEvents"])
+@pytest.mark.parametrize("bad_list", ["Stop", ["Stop", 1]], ids=["string", "mixed-list"])
+def test_malformed_hook_event_lists_warn_and_fall_back(tmp_path, field, bad_list):
+    good = json.loads(KEYS_JSON.read_text(encoding="utf-8"))
+    got, err = _load_beside(tmp_path, {**good, field: bad_list})
+    assert set(got["served"]) == set(scenario._FALLBACK_SERVED_HOOK_EVENTS)
+    assert set(got["known"]) == set(scenario._FALLBACK_KNOWN_HOOK_EVENTS)
+    assert f"{field} is not a list of strings" in err
+
+
+@pytest.mark.parametrize("bad_list", ["Stop", ["Stop", 1]], ids=["string", "mixed-list"])
+def test_malformed_live_verified_list_verifies_nothing(tmp_path, bad_list):
+    good = json.loads(KEYS_JSON.read_text(encoding="utf-8"))
+    got, err = _load_beside(tmp_path, {**good, "liveVerifiedHookEvents": bad_list})
+    # Never the built-in list: a malformed receipt must not widen into one.
+    assert got["live"] == []
+    assert set(got["served"]) == set(good["servedHookEvents"])
+    assert "liveVerifiedHookEvents is not a list of strings" in err
+
+
+@pytest.mark.parametrize(
+    "bad_value", ["container", 5, ["container", 5]], ids=["string", "number", "mixed-list"]
+)
+def test_malformed_enum_value_falls_back_for_that_field(tmp_path, bad_value):
+    good = json.loads(KEYS_JSON.read_text(encoding="utf-8"))
+    got, err = _load_beside(tmp_path, {**good, "enums": {**good["enums"], "fidelity": bad_value}})
+    assert got["enums"]["fidelity"] == scenario._EMBEDDED_ENUMS["fidelity"]
+    # The other fields keep the generated values.
+    other = next(k for k in good["enums"] if k != "fidelity")
+    assert got["enums"][other] == good["enums"][other]
+    assert "enums.fidelity is not a list of strings" in err
+
+
+def test_a_substring_of_a_valid_value_is_not_valid(tmp_path):
+    f = tmp_path / "sc.yaml"
+    f.write_text("name: t\nbaseline: latest\nsession: (inline)\nfidelity: tain\nprompt: hi\n", encoding="utf-8")
+    assert "enum-value-invalid" in {fnd.rule for fnd in scenario.lint_file(str(f))}
+
+
+def test_a_list_typed_enum_map_falls_back_whole(tmp_path):
+    good = json.loads(KEYS_JSON.read_text(encoding="utf-8"))
+    got, err = _load_beside(tmp_path, {**good, "enums": ["not", "a", "map"]})
+    assert got["enums"] == scenario._EMBEDDED_ENUMS
+    assert "enums is not a map" in err
+
+
+def test_the_missing_file_warning_says_missing_or_malformed():
+    assert "not found next to scenario.py" not in SCENARIO_PY.read_text(encoding="utf-8")
