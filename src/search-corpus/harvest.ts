@@ -14,7 +14,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { initAgentVersion } from "../run/recorded-agent-version.js";
 import { readLegMarker, resolveGraded } from "../run/turn-layout.js";
@@ -140,7 +140,7 @@ function sessionIds(eventLines: string[]): Set<string> {
  *  the root's is read too, keeping only the session dirs of this leg's own agent sessions. */
 function childTranscripts(runDir: string, eventLines: string[]): string[] {
   const own = transcriptsUnder(join(runDir, "claude-config", "projects"), () => true);
-  if (basename(dirname(runDir)) !== "legs" || readLegMarker(runDir) === undefined) return own;
+  if (!isLegDir(runDir)) return own;
   const mine = sessionIds(eventLines);
   const shared = transcriptsUnder(join(dirname(dirname(runDir)), "claude-config", "projects"), (session) => mine.has(session));
   return [...new Set([...own, ...shared])].sort();
@@ -180,11 +180,22 @@ function skillOf(runDir: string, r: Record<string, unknown>): string | null {
   return onlyOne((r.fingerprint as { skillScope?: unknown } | undefined)?.skillScope) ?? onlyOne(r.skillsInvoked);
 }
 
+/** A multi-leg run's leg dir: under `legs/`, with a `leg.json` the harness writes before the leg starts. The marker's
+ *  presence decides, parsed or not: a scenario named `legs` has ordinary runs there, which carry no marker. */
+export function isLegDir(dir: string): boolean {
+  if (basename(dirname(dir)) !== "legs") return false;
+  try {
+    return lstatSync(join(dir, "leg.json")).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /** A run's reference: the hash of `<scenario>/<run id>`, never a host path. A multi-leg run's prompt leg
  *  (`<scenario>/<run id>/legs/<leg>`, marked by `leg.json`) hashes all four parts: its last two alone are
  *  `legs/<leg>`, the same for every run that has a leg of that id. */
 export function runRefOf(runDir: string): string {
-  const leg = basename(dirname(runDir)) === "legs" && readLegMarker(runDir) !== undefined;
+  const leg = isLegDir(runDir);
   const root = leg ? dirname(dirname(runDir)) : runDir;
   const key = `${basename(dirname(root))}/${basename(root)}${leg ? `/legs/${basename(runDir)}` : ""}`;
   return createHash("sha256").update(key, "utf8").digest("hex").slice(0, 16);

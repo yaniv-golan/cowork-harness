@@ -14,7 +14,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, 
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { collectSecrets } from "../secrets.js";
-import { harvestRun, recordId, type HarvestCounts, type PoolRecord } from "./harvest.js";
+import { harvestRun, isLegDir, recordId, type HarvestCounts, type PoolRecord } from "./harvest.js";
 import { readLegMarker } from "../run/turn-layout.js";
 import { DEFAULT_RETRIEVAL, type RetrievalParams } from "./retrieval.js";
 
@@ -124,11 +124,12 @@ export function discoverRunDirs(from: string[]): string[] {
     } catch {
       // unreadable legs dir
     }
-    // Every leg with an agent session: a host-action leg has no events.jsonl. A leg whose marker does not parse is
-    // still found, from a runs dir and from its root alike, and is read as an ordinary run dir.
+    // Every leg with an agent session (a host-action leg has none). A leg is marked by its leg.json, parsed or not, so
+    // a leg whose marker does not parse is found from a runs dir as from its root; a scenario named `legs` holds
+    // ordinary runs with no marker, and is walked like any other scenario.
     const legRuns = legNames
       .map((n) => join(legs, n))
-      .filter((p) => readLegMarker(p)?.kind !== "action" && existsSync(join(p, "events.jsonl")));
+      .filter((p) => isLegDir(p) && readLegMarker(p)?.kind !== "action" && existsSync(join(p, "events.jsonl")));
     if (legRuns.length) {
       for (const p of legRuns) out.add(resolve(p));
       return;

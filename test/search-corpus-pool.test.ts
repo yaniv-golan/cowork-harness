@@ -292,6 +292,26 @@ describe("multi-leg runs in a pool", () => {
     expect(discoverRunDirs([root])).toEqual([leg]);
     expect(discoverRunDirs([join(root, "scn-ms", "local_r1")])).toEqual([leg]);
   });
+  it("a scenario named `legs` is an ordinary scenario: its runs carry no leg.json, and the other scenarios are still found", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const a = run(root, { skill: "ms", searches: [["qa", "https://a", "x"]], dir: join(root, "legs", "local_a") });
+    const b = run(root, { skill: "ms", searches: [["qb", "https://b", "y"]], dir: join(root, "other", "local_b") });
+    const c = run(root, { skill: "ms", searches: [["qc", "https://c", "z"]], dir: join(root, "zeta", "local_c") });
+    expect(discoverRunDirs([root])).toEqual([a, b, c].sort());
+    const old = (d: string) =>
+      createHash("sha256")
+        .update(`${basename(dirname(d))}/${basename(d)}`, "utf8")
+        .digest("hex")
+        .slice(0, 16);
+    expect(runRefOf(a)).toBe(old(a));
+  });
+  it("a leg whose leg.json does not parse still names its own run", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const a = legRoot(root, "ms", "local_r1", "ask", [["qa", "https://a", "x"]]);
+    const b = legRoot(root, "ms", "local_r2", "ask", [["qb", "https://b", "y"]]);
+    for (const d of [a, b]) writeFileSync(join(d, "leg.json"), "{not json");
+    expect(runRefOf(a)).not.toBe(runRefOf(b));
+  });
   it("pin (also true before the leg fix): record ids and the pool hash do not depend on where a run sits", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
     const leg = legRoot(root, "ms", "local_r1", "ask", [["q", "https://a", "x"]]);
