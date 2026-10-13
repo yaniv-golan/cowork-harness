@@ -66,6 +66,12 @@ A post-hoc loop over a **kept** run dir — one you preserved with `--keep` (or 
 rather than let the harness clean up. None of these spend tokens or need Docker — they read the run that
 already happened.
 
+**A multi-leg run (`legs:`) is read one leg at a time.** `trace`, `verify-run` and `regrade` take
+`--leg <id>` (or the leg dir `<root>/legs/<id>` itself); `inspect` and `fixture export` take the leg dir. A
+multi-leg root without `--leg` is refused, and `trace` / `inspect` name its legs. A host-action leg has no
+agent session and is refused too — its record is `legs/<id>/action.json`. See
+[scenario.md → Multi-leg scenarios](./scenario.md#multi-leg-scenarios-legs).
+
 1. **`inspect` — what did it produce?** The artifacts the run wrote, plus a shallow field preview of each
    JSON artifact. Works on a salvaged `PARTIAL` run too. Reach for it first to confirm whether the job
    was actually done before asking *why* it wasn't.

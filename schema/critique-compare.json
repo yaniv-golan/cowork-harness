@@ -100,7 +100,7 @@
     },
     "candidateGroups": {
       "type": "array",
-      "description": "lexical mode only: findings whose every pair is at or above the similarity threshold (complete linkage), in input order. A JUDGEMENT from word overlap, not a match: no k/N, and an ungrouped finding is not a claim that no reworded repeat exists.",
+      "description": "lexical mode only: findings whose every pair is at or above the similarity threshold (complete linkage), in input order. A group must span at least two reports (one whose members all come from one report is dropped), and a finding with neither idea nor recommendedAction text takes no part. A JUDGEMENT from word overlap, not a match: no k/N, and an ungrouped finding is not a claim that no reworded repeat exists.",
       "items": {
         "type": "object",
         "properties": {

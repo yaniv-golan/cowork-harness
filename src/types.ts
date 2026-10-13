@@ -1672,7 +1672,7 @@ export const ScenarioMetric = z
       .max(32)
       .optional()
       .describe(
-        "a script that computes the number from the run's own events: [script, ...literal args]. The script (relative to the scenario file; .py, .mjs, .js or .cjs) is run as `<interpreter> <script> <events-file> [args...]` and must print exactly one JSON number. It must be a regular, git-tracked file inside the scenario's repository; it runs as you, so only run scenarios from repositories you would run `npm test` in. Set exactly one of artifact or command",
+        "a script that computes the number from the run's own events: [script, ...literal args]. The script (relative to the scenario file; .py, .mjs, .js or .cjs) is run as `<interpreter> <script> <events-file> [args...]` and must print exactly one JSON number. It must be a regular file inside the scenario's repository, and git-tracked unless COWORK_HARNESS_GITSET=0 (the same holds for each dep); it runs as you, so only run scenarios from repositories you would run `npm test` in. Set exactly one of artifact or command",
       ),
     deps: z
       .array(z.string().min(1))
@@ -2220,8 +2220,8 @@ export interface DeviceBridgeRecord {
    *  the folder. The shim did not see it (a static binary, a raw system call), or, under `rename-reads-as-delete`, a
    *  file was renamed and then edited. Fails the run where the filesystem keeps identities apart; warns otherwise. */
   bypassedDeletes?: string[];
-  /** Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts, or naming
-   *  a path outside their folder; ignored. */
+  /** Enforced runs only, when non-zero: audit lines claiming a granted delete in a folder deletion was never allowed
+   *  in, naming a path outside their folder, or claiming a granted delete the device tree contradicts; ignored. */
   auditInconsistent?: number;
   /** Enforced runs only: why the shim's audit log could not be read (the device shell replaced it), so its counts
    *  are unknown rather than zero. */
@@ -2230,7 +2230,8 @@ export interface DeviceBridgeRecord {
    *  (`allowlist`), or everything through it (`unrestricted`, from `egress.unrestricted: true`). */
   egress: "allowlist" | "unrestricted";
   folders: Array<{ name: string; mode: "r" | "rw" | "rwd" }>;
-  /** Known differences from production, by id: `delete-not-refused` (no shim: a delete in a connected folder
+  /** Known differences from production, by id: `delete-not-refused` (the bridge's delete-refusal canary did not pass,
+   *  or a recording made before the delete card: a delete in a connected folder
    *  succeeds on the device copy, where production refuses it until the user allows deletion, and the harness
    *  reports it only after the run), `delete-refusal-libc` (the shim refuses deletes made through libc; a static
    *  binary or raw system call is caught only after the run), `egress-allowlist` (production may pass all traffic through), `description-paraphrase` (the tool

@@ -179,7 +179,7 @@ At `hostloop`, the staged **Linux/arm64 ELF** gets the same patch tolerance: the
 cowork-harness sync --allow-empty   # force-write past an empty allowlist or unknown deltas
 ```
 
-**Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — including (a) a missing required version field in the Desktop install it derives from, (b) a refused empty allowlist, (c) a `⚠ unknown deltas` refusal, and (d) a capture-organisation refusal. (b) and (c) are overridable with `--allow-empty`; (d) only with `--allow-org-change`.
+**Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — including the three refusals above, (a) a refused empty allowlist, (b) a `⚠ unknown deltas` refusal and (c) a capture-organisation refusal, and (d) a missing required version field in the Desktop install it derives from. (a) and (b) are overridable with `--allow-empty`; (c) only with `--allow-org-change`.
 
 ## Why the egress allowlist is pinned
 
@@ -489,6 +489,8 @@ committed baseline and say why in that baseline's `$comment`.
      organisation the logs cannot tell once this machine has a record, or an unreadable record refuses the write.
      Switch Desktop back to that organisation and re-run `sync`; `--allow-org-change` writes anyway, for when the
      organisation you sync under really changed (the record then follows the new one, once the logs can tell it).
+     For an unreadable record, fix or remove that file and re-run `sync` (with no record, the sync counts as this
+     machine's first), or pass `--allow-org-change` to write and record the current organisation.
    - **Warning only.** The first sync on a machine records its organisation without refusing. A capture under a
      different organisation from the previous baseline's warns on every sync and never refuses: anyone outside the
      organisation the shipped baselines are captured under re-syncs under their own, and gate changes against the

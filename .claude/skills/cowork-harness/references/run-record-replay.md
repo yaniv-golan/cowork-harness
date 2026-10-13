@@ -439,11 +439,13 @@ with the ordinary commands, one scenario at a time:
   `trace <root | run-id> --leg <id>`, `inspect <root>/legs/<id>`. A prompt leg is read from its snapshot
   (`legs/<id>/snapshot/`, its files as they were when it ended), so every prompt leg of a kept run re-grades at no
   cost (a host-action leg has no session and is refused). The snapshot is a copy-on-write clone where the filesystem
-  supports one (APFS, btrfs, XFS with reflink), costing almost no disk until a later leg changes a file, and
-  otherwise (ext4, the usual Linux and CI disk) a full copy of the leg's outputs and connected folders, per prompt
-  leg; `snapshot.json` records which as `method` (`clone`, `copy`, `mixed` or `none`), and `leg-post-manifest.json`
+  supports one (macOS APFS through `cp -c`, only when the folder is on the same volume as the run dir; Linux btrfs,
+  XFS with reflink), costing almost no disk until a later leg changes a file, and otherwise (ext4, the usual Linux and
+  CI disk, or a folder on another volume) a full copy of the leg's outputs and connected folders, per prompt leg;
+  `snapshot.json` records which as `method` (`clone`, `copy`, `mixed` — one folder cloned, another copied — or
+  `none`), on macOS `fallback` says why a folder was copied rather than cloned, and `leg-post-manifest.json`
   holds the hashes that prove it is the leg's own. A leg over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES` (default
-  512 MiB; a malformed value is refused before the run) gets no snapshot. A leg with no usable snapshot falls back to its session tree and is refused when a later leg changed that tree. A
+  512 MiB; a malformed value is refused before the run) gets no snapshot. A leg with no usable snapshot falls back to its session tree. Under `workdir: persistent` only the last leg of a finished scenario can use it (later legs changed the shared tree); every other leg is refused. That last leg, and every `cowork-task` leg, is refused when its tree changed after the leg ended, or when there is no post-run manifest to check it against. A
   multi-leg root without `--leg` is refused, naming the legs.
 
 Full rules: [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#multi-leg-scenarios-legs).
@@ -467,8 +469,10 @@ Full rules: [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yani
   path unless `--allow-host-paths` (a path into a run dir or a guest session is refused regardless).
   `--session-paths` tokenises this run's own session roots instead of refusing them, and staging writes the new
   run's roots in (hostloop, container, microvm); `--exclude <path>` drops a file.
-- `prune [--keep-last <n>] [--pinned-older-than <N>d]` removes old run dirs (default `--keep-last 5`);
-  `--dry-run` previews it.
+- `prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb]` removes old run dirs (default
+  `--keep-last 5`); `--dry-run` previews it. Hillclimb-labelled runs are kept outside `--keep-last`;
+  `--include-hillclimb` ranks them with the rest, so every flow's runs under the runs root (a running climb
+  included) can lose the ones `hillclimb regrade` / `freeze-ref` need; pass it only once every climb there is finished.
 
 ### Place assertions in the right CI lane
 

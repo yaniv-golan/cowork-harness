@@ -1939,7 +1939,8 @@ reading one on the Mac finds no such file here.
 File assertions grade the agent's own container, which holds no connected folder under the bridge. So `file_exists`
 or `input_unmodified` on a folder's path is refused before the run; assert on the `device_bash` call instead.
 
-**Permission mode.** The bridge's tools are pre-approved. When the session sets no `permission_mode`, the agent runs
+**Permission mode.** The bridge's tools are pre-approved, except the delete card (`device_request_delete_permission`),
+which the agent asks for and the scenario's answer decides. When the session sets no `permission_mode`, the agent runs
 with `acceptEdits`, which is what a cloud task's hooks report under the Manual approval choice, the composer's
 default. A `permission_mode` the session sets wins, `default` included. The run's record names the mode and where it
 came from (`deviceBridge.permissionMode`, `permissionModeSource`). Under Auto, a cloud task's hooks report `auto`,

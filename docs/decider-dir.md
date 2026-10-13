@@ -76,7 +76,11 @@ For a **question** gate you do not hand-write those files — two CLI subcommand
 > ```json
 > {"id":"…","behavior":"allow|deny"}                      // permission
 > {"id":"…","behavior":"allow|deny","grant":"once|domain"} // permission, web_fetch approval
+> {"id":"…","behavior":"allow|deny"}                      // permission, the delete card (device_request_delete_permission)
 > ```
+>
+> The delete card's reply takes no `grant`: production's only allow lasts the session, and a reply that carries
+> one is rejected, as a reply without the `id` is.
 >
 > Write it the way the harness does — to a temp file, then `rename` into place — so the poller never
 > reads a partial file, and echo the request's `id`: a reply without it is rejected.

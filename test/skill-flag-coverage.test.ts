@@ -27,7 +27,6 @@ const ALLOWLIST: Record<string, string> = {
     "only `sync`, writing a baseline whose gate cache was captured under a different organisation from the previous one: baseline maintenance, not skill testing",
   "--spawn-env-unobservable":
     "only `sync`, recording that no local Cowork task can run on the synced Desktop build: baseline maintenance, not skill testing",
-  "--strict-independent": "not a flag: help prose (analyze-skill's exit 3 holds whether or not --strict is passed)",
 };
 
 function skillDocs(): string {

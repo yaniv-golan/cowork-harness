@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Help text and docs now match the code in several places.** No behaviour changed.
+  - `--help`:
+    - `trace` names `--leg`; `verify-run` and `regrade` name `--leg` and `--allow-metric-commands`.
+    - `chat` names `--allow-host-hooks`.
+    - `hillclimb check` names `metrics.sig_mixed` as an error finding.
+    - `eval` lists every exit-1 cause.
+    - `regrade` names the stderr file a consented command-metric re-run writes.
+    - `critique`'s exit codes are no longer printed under `diff`.
+    - `analyze-skill` no longer reads as if `--strict-independent` were a flag.
+  - `search-pool --help` and docs/cli.md say `--min-score` is between 0 and 1, and that `build` and `import` refuse
+    a pool dir that is not empty.
+  - A command metric's script environment is listed in full, including `COWORK_HARNESS_METRIC_ID`, as is the
+    `timeout_ms` floor of 1000.
+  - A multi-leg leg with no usable snapshot is described as the code treats it: under `workdir: persistent`, every
+    leg but the last of a finished scenario is refused outright.
+  - The schemas' descriptions of the device-bridge audit counts, the `delete-not-refused` divergence, command-metric
+    records and a host action's record are corrected.
+
 ## [4.9.0] — 2026-10-13
 
 ### Upgrade notes

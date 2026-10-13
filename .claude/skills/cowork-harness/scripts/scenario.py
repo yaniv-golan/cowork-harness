@@ -410,7 +410,7 @@ _EMBEDDED_TOP_LEVEL_KEYS = {
     "allow_host_writes",
     "allow_host_hooks",  # protocol consent: a staged plugin's hooks run as NATIVE HOST processes  # hostloop native-split: consent for a writable connected folder (pre-run gate)
     "workspace_fixture",  # a saved outputs tree staged into outputs/ before turn 1 (scenario-file-relative dir)
-    "metrics",  # numbers read from JSON files the run wrote, reported beside the verdict (RunResult.metrics)
+    "metrics",  # numbers read from JSON files the run wrote or printed by a command metric's script, reported beside the verdict (RunResult.metrics)
 }
 
 
