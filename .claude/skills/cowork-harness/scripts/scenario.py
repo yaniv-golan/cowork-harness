@@ -272,13 +272,21 @@ VERDICT_MODIFIER_KEYS = {
 _CLASSIFIED_KEYS = CONTENT_KEYS | GATE_KEYS | MANIFEST_KEYS | LIVE_ONLY_KEYS | VERDICT_MODIFIER_KEYS | {"replay_protocol_fidelity"}
 
 
+def _str_list(v, name):
+    """`v` as a list of strings, or a TypeError naming the field: a string where a key list belongs would otherwise
+    be iterated as characters, and the loaders fall back to their embedded copies on any error."""
+    if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+        raise TypeError(f"assertion-keys.json {name} is not a list of strings")
+    return v
+
+
 def _load_assert_keys():
     """The authoritative `assert:` key set, generated from the Zod Assertion schema into a sibling
     `assertion-keys.json` (so the unknown-key check can't drift). Falls back to the embedded
     `_CLASSIFIED_KEYS` (kept equal to the generated list) with a loud warning if the file is missing."""
     p = Path(__file__).resolve().parent / "assertion-keys.json"
     try:
-        return set(json.loads(p.read_text(encoding="utf-8"))["keys"])
+        return set(_str_list(json.loads(p.read_text(encoding="utf-8"))["keys"], "keys"))
     except Exception:
         print(
             f"::warning:: assertion-keys.json not found next to scenario.py ({p}) — "
@@ -344,13 +352,18 @@ def _load_hook_events():
     p = Path(__file__).resolve().parent / "assertion-keys.json"
     try:
         d = json.loads(p.read_text(encoding="utf-8"))
-        served, known = set(d["servedHookEvents"]), set(d["knownHookEvents"])
+        served = set(_str_list(d["servedHookEvents"], "servedHookEvents"))
+        known = set(_str_list(d["knownHookEvents"], "knownHookEvents"))
         # Tolerate a sidecar generated before liveVerifiedHookEvents existed: fall back rather than
         # dropping to the embedded KNOWN set wholesale, which would undo the 33-name fix. Membership
         # test, NOT truthiness: an explicitly EMPTY list means the firing receipt was withdrawn, and
         # `or` would silently restore the 3-name claim -- widening a receipt, which is the one direction
         # this constant exists to prevent.
-        live = set(d["liveVerifiedHookEvents"]) if "liveVerifiedHookEvents" in d else set(_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS)
+        live = (
+            set(_str_list(d["liveVerifiedHookEvents"], "liveVerifiedHookEvents"))
+            if "liveVerifiedHookEvents" in d
+            else set(_FALLBACK_LIVE_VERIFIED_HOOK_EVENTS)
+        )
         if served and known:
             return served, known, live
     except Exception:
@@ -424,7 +437,7 @@ def _load_top_level_keys():
         keys = json.loads(p.read_text(encoding="utf-8")).get("topLevelKeys")
         if not keys:
             raise KeyError("topLevelKeys")
-        return set(keys)
+        return set(_str_list(keys, "topLevelKeys"))
     except Exception:
         print(
             f"::warning:: assertion-keys.json missing or has no topLevelKeys next to scenario.py ({p}) — "
@@ -500,6 +513,8 @@ def _load_enums():
         enums = json.loads(p.read_text(encoding="utf-8")).get("enums")
         if not enums:
             raise KeyError("enums")
+        if not isinstance(enums, dict):
+            raise TypeError("assertion-keys.json enums is not a map")
         return enums
     except Exception:
         print(
@@ -1509,7 +1524,7 @@ def _load_multi_leg_top_keys():
     unknown-key check can't drift; falls back to the embedded copy (kept equal, test-enforced) with a warning."""
     p = Path(__file__).resolve().parent / "assertion-keys.json"
     try:
-        return set(json.loads(p.read_text(encoding="utf-8"))["multiLeg"]["topLevelKeys"])
+        return set(_str_list(json.loads(p.read_text(encoding="utf-8"))["multiLeg"]["topLevelKeys"], "multiLeg.topLevelKeys"))
     except Exception:
         print(
             f"::warning:: multiLeg.topLevelKeys not readable from {p} — "

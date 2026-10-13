@@ -221,6 +221,10 @@ describe.skipIf(!can)("<cmd> --help prints the single-sourced usage text", () =>
 
 // `hillclimb` has one registry entry for the whole family; each subcommand parses its own lists. Every one of those
 // lists must be inside the entry, or a flag a subcommand accepts could go undocumented without this guard seeing it.
+// Against today's wiring (the entry IS the union of HILLCLIMB_SUBCOMMAND_FLAGS) this holds by construction; it fails
+// when the entry is hand-wired again. Not covered: a flag a parser in src/hillclimb/cli.ts lists INLINE beside the
+// constant (`values: [...HILLCLIMB_CHECK_VALUE_FLAGS, "--new"]`) — neither this test nor the registry sees it, so a new
+// flag goes into its subcommand's constant in src/hillclimb/usage.ts, never inline.
 describe("hillclimb: every subcommand's flags are inside the family's registry entry", () => {
   const entry = USAGE_GUARD_REGISTRY.find((e) => e.command === "hillclimb")!;
   for (const [sub, f] of Object.entries(HILLCLIMB_SUBCOMMAND_FLAGS)) {
