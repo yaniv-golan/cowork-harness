@@ -427,7 +427,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   list                         list available platform baselines
   boundary-check [baseline] [--session <file>]   prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); macOS arm64 only
-  doctor [--tier <tier>]       read-only prerequisite check (Docker, staged agent, token, baseline)
+  doctor [--tier <tier>]       read-only prerequisite check (Docker, staged agent, token, baseline, device_bridge image)
 
   Every command also takes (before or after the subcommand — once):
            --dotenv <path>     load a .env before the command runs (host-side creds; never mounted).
@@ -757,7 +757,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "       transcript is advisory (model-stochastic prose differs across live re-records no matter what) — tools/artifacts/meta are the gateable signal.\n" +
     "       runs anywhere (reads committed JSON / cassette files only — no live Desktop install needed for baseline mode, unlike `sync --diff`; no Docker/token needed for run/cassette mode).\n" +
     "       exit codes: 0 identical · 1 differing · 2 usage (e.g. an unresolvable baseline name, or a run/cassette with no matching side).",
-  doctor: "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format text|json]   (read-only prerequisite check)",
+  doctor:
+    "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format text|json]   (read-only prerequisite check per tier: Docker or Lima, the images, staged agent, token, baseline; the device_bridge image row is informational, never blocking)",
   rehash:
     "usage: rehash <dir/> [--dry-run] [--output-format text|json]\n" +
     "       rehash <file.cassette.json> --session <session.yaml> [--dry-run]\n" +

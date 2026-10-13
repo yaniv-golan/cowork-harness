@@ -149,6 +149,19 @@ That `skill=offered,invoked` is the part a transcript cannot give you: whether t
 not just whether the answer looked right. `offered,NOT-invoked` on a green run means the model solved
 it without your skill — which is a finding, not a pass.
 
+The same file grows with the skill:
+
+- **A task that spans sessions.** `legs:` in place of `prompt:` runs prompt legs (each a fresh agent session) and
+  host actions (a command, no agent) in order, each with its own assertions. See
+  [Multi-leg scenarios](./docs/scenario.md#multi-leg-scenarios-legs).
+- **Your own score.** `metrics:` reports numbers beside the verdict, read from a JSON file the run wrote or, with
+  `command:`, computed by a script from your repo over the run's own events. See
+  [Numeric metrics](./docs/scenario.md#numeric-metrics-metrics) and
+  [Command metrics](./docs/scenario.md#command-metrics).
+- **Searches kept for later.** `search-pool` builds a pool of the WebSearch results recorded in kept runs, and
+  exports and imports it between machines; nothing serves a pool to a run. See
+  [Search pools](./docs/cli.md#search-pools-search-pool).
+
 **Two runs are often worth more than one.** The same scenario at two fidelity tiers, diffed, is a
 discovery technique in its own right: a skill that passes at `container` and fails at `hostloop` has
 told you something specific about where it will break, and the difference *is* the finding. See
@@ -371,7 +384,7 @@ This repo is built to be driven by agents, not just read by humans:
 - **[AGENTS.md](./AGENTS.md)** — the canonical agent-instructions file (architecture seams, the build gate, invariants, ethos). Read it before changing code. Also indexed in **[llms.txt](./llms.txt)**.
 - **Companion skill** — [`.claude/skills/cowork-harness/`](./.claude/skills/cowork-harness/SKILL.md) teaches an agent to drive the harness; install it via the marketplace (see [above](./docs/companion-skill.md)).
 - **Machine-readable interfaces** — stable `--output-format json` envelope on stdout, deterministic exit codes (`0`/`1`/`2`/`3`, with a couple of documented per-command exceptions — see [SPEC.md](./SPEC.md) for the full table), and `--help` on every command.
-- **JSON Schemas** — [`schema/scenario.schema.json`](./schema/scenario.schema.json) and [`schema/session.schema.json`](./schema/session.schema.json) describe every field of the YAML you author (generated from the source schemas; `npm run schema`). [`schema/protocol.v1.json`](./schema/protocol.v1.json) (hand-authored) schemas the harness's own control-channel wire protocol, with a golden vector pack at [`fixtures/protocol/v1/`](./fixtures/protocol/v1/) — see [docs/protocol.md](./docs/protocol.md). [`schema/critique-report.json`](./schema/critique-report.json) describes `critique`'s JSON report / `critique-report.json` artifact for automation consumers (budget pacers, harvesters), [`schema/critique-summary.json`](./schema/critique-summary.json) its public-safe `--summary-out` file, and [`schema/critique-compare.json`](./schema/critique-compare.json) its `--compare` payload — **descriptive, not §12-frozen** while critique is EXPERIMENTAL (see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
+- **JSON Schemas** — [`schema/scenario.schema.json`](./schema/scenario.schema.json) and [`schema/session.schema.json`](./schema/session.schema.json) describe every field of the YAML you author, and [`schema/scenario-multi-leg.schema.json`](./schema/scenario-multi-leg.schema.json) does for a `legs:` scenario, which `scenario.schema.json` does not cover (generated from the source schemas; `npm run schema`). [`schema/protocol.v1.json`](./schema/protocol.v1.json) (hand-authored) schemas the harness's own control-channel wire protocol, with a golden vector pack at [`fixtures/protocol/v1/`](./fixtures/protocol/v1/) — see [docs/protocol.md](./docs/protocol.md). [`schema/critique-report.json`](./schema/critique-report.json) describes `critique`'s JSON report / `critique-report.json` artifact for automation consumers (budget pacers, harvesters), [`schema/critique-summary.json`](./schema/critique-summary.json) its public-safe `--summary-out` file, and [`schema/critique-compare.json`](./schema/critique-compare.json) its `--compare` payload — **descriptive, not §12-frozen** while critique is EXPERIMENTAL (see [SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
 
 `AGENTS.md`, `SPEC.md`, and `DESIGN.md` **are** shipped in the npm package (see `package.json` `files`) —
 a global install has them locally too, not just on GitHub.

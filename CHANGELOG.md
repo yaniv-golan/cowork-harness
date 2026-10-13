@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [4.9.0] — 2026-10-12
+## [4.9.0] — 2026-10-13
 
 ### Upgrade notes
 
@@ -48,8 +48,8 @@ All notable changes to this project are documented here. The format is based on
   reuse a deleted file's identity, it is the warning `device_delete_unconfirmed` instead: a rename followed by an
   edit reads the same there.
 - **`RunResult.deviceBridge` lists the card among `served` and `alwaysLoad`** and gains `deleteRefusal`
-  (`enforced`), `grants`, `refusedDeletes` and `bypassedDeletes`. `divergences` names
-  `delete-refusal-libc` where it named `delete-not-refused` (a run whose shim canary did not pass still records
+  (`enforced`), `grants`, `refusedDeletes`, `bypassedDeletes`, `auditInconsistent` and `auditUnreadable`.
+  `divergences` names `delete-refusal-libc` where it named `delete-not-refused` (a run whose shim canary did not pass still records
   `reported` and `delete-not-refused`), drops `shell-user` (commands run under production's per-session name and home), and gains
   `decline-text` on every bridge run (a declined card reaches the agent as the harness's own deny text),
   `grant-without-prompt` when a grant came with no card, and `rename-reads-as-delete` when the run directory's
@@ -82,7 +82,8 @@ All notable changes to this project are documented here. The format is based on
   - **`eval`**, triggered by a scenario that declares `metrics:`. A 4.8 `eval` never read them; 4.9 compares them.
     - Any metric row `not compared` exits 1, with or without `--fail-on`. A row is not compared when a rep was
       `pruned`, had `no_manifest`, or completed with no entry for a declared metric (`metric_unrecorded`), or when a
-      rep was scored by another script than the one the eval froze.
+      rep was scored by another script than the one the eval froze (`command_changed`), or reads `command_missing` or
+      `command_not_allowed`.
     - Under `--fail-on possible` or `confirmed`, a metric that got worse at that level exits 1, and under `possible`
       so does a row that is `insufficient_unmeasured`.
     - The "every row is `insufficient`" exit 1 now counts metric rows too: an eval whose pass rows are all
@@ -130,8 +131,9 @@ All notable changes to this project are documented here. The format is based on
   - Eight new `unavailable` reasons (`command_failed`, `command_timeout`, `command_output`, `command_changed`,
     `command_missing`, `command_not_allowed`, `nondeterministic`, `no_events`), and `RunResult.metrics[].command`
     records the signature, the script, the events read, the interpreter and whether the value was `carried` or
-    `frozen`. `replay --reassert` / `--write` drops a frozen value whose declaration the new block changed, so a
-    later replay reads `command_changed` rather than the old scorer's number.
+    `frozen`. `replay --write` drops a frozen value whose declaration the new block changed, so a later replay reads
+    `command_not_allowed` (nothing frozen) rather than the old scorer's number; a `--reassert` without `--write`
+    reports it as `command_changed`.
   - On `eval` a scorer failure is excluded and guarded, and a rep scored by another script than the one the eval
     froze is not compared. `eval` and `hillclimb` refuse, before spending, a scenario whose scripts sit in a folder
     the agent can see, and the scripts join the `hillclimb` harness gate.
@@ -183,7 +185,8 @@ All notable changes to this project are documented here. The format is based on
   — a host subprocess), with the agent's environment minus its Anthropic credentials (on `protocol`, the rest of your
   shell's environment reaches it, as it reaches the agent) and no tokens spent. A leg that fails stops the scenario;
   later legs are reported `skipped`. Built for skills that park at a question and resume in a later session. See
-  [docs/scenario.md → Multi-leg scenarios](./docs/scenario.md#multi-leg-scenarios-legs).
+  [docs/scenario.md → Multi-leg scenarios](./docs/scenario.md#multi-leg-scenarios-legs) and the example
+  `examples/probes/resumable-probe.scenario.yaml`.
   - `workdir: persistent` (the default) runs every leg in one session tree with a shared agent config dir (a
     persistent workspace — not Cowork); `workdir: cowork-task` gives each prompt leg a new tree, carrying connected
     folders but not outputs or the agent config dir (a model of a new local Cowork task, unverified against Cowork).
@@ -229,8 +232,9 @@ All notable changes to this project are documented here. The format is based on
   copy-on-write clone where the filesystem supports one — macOS APFS through `cp -c`, Linux btrfs and XFS with
   reflink — so it costs almost no disk until a later leg changes a file; where it cannot — ext4, the usual Linux and
   CI disk — a full copy of the leg's outputs and connected folders, per prompt leg; `snapshot.json` records which as
-  `method`), with their hashes (`leg-post-manifest.json`) proving the snapshot is the leg's own; `inspect` and `fixture
-  export` of a leg read it too. A leg with no usable snapshot (over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES`, default
+  `method`: `clone`, `copy`, `mixed` or `none`, and in `fallback` why a root was copied rather than cloned whole),
+  with their hashes (`leg-post-manifest.json`) proving the snapshot is the leg's own; `inspect` and `fixture export`
+  of a leg read it too. A leg with no usable snapshot (over `COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES`, default
   512 MiB; a malformed value is refused before the run starts) falls back to its session tree and is refused when
   that tree changed after the leg ended.
 - **`critique --compare --cluster lexical`: candidate groups of findings that read alike.** Citation-resolved findings

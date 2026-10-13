@@ -334,8 +334,9 @@ this is inferred, not verified. Put sub-agent settings in `agents/*.md` instead.
 
 ## Numbers a scenario declares (`metrics:`)
 
-A scenario can declare numbers it measures from an artifact the run writes ([scenario.md](./scenario.md), the
-`metrics:` key). In a flow, each one becomes a `float` grade key `<id>`, plus a binary `<id>_present`.
+A scenario can declare numbers it measures from an artifact the run writes, or computes with a script over the
+run's own events (`command:`) ([scenario.md](./scenario.md#numeric-metrics-metrics), the `metrics:` key). In a
+flow, each one becomes a `float` grade key `<id>`, plus a binary `<id>_present`.
 `state-template` declares each float with its direction (`better`) and, when bounded, its `scale` and `min`.
 Hillclimb runs no statistical test on them; for a tested before/after comparison of a metric, use
 [`eval`](./eval.md#metric-rows).
@@ -355,7 +356,8 @@ Hillclimb runs no statistical test on them; for a tested before/after comparison
   `hillclimb regrade` fills it from their kept runs at no agent cost: every hillclimb run records the pre-run
   manifest a metric is measured against. A re-graded row whose run lacks one reads `no_manifest`, and only
   re-running the case measures it.
-- **Changing a metric** (its artifact, path, direction, `scale`, `unbounded` or `min`) is refused on `run` and `regrade`.
+- **Changing a metric** (its artifact, path, direction, `scale`, `unbounded` or `min`; for a command metric also its
+  script's path or content, args, `deps` paths or content, or `timeout_ms`) is refused on `run` and `regrade`.
   Start a new flow, or declare it under a new id.
 - **Removing a metric** is allowed, with a warning to drop `<id>` and `<id>_present` from `_state.json`. Declaring
   a removed id again, differently, is refused while any row still carries the old declaration.
@@ -682,9 +684,11 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
 
 ## What a round can and cannot see
 
-- **A metric is read from a file the run writes,** so the skill under test writes it, and an edit can move the
-  number without improving the work. Never have the skill compute its own score; put the ground truth in the
-  scenario, as `artifact_json` expected values or rubric claims.
+- **An artifact metric is read from a file the run writes,** so the skill under test writes it, and an edit can move
+  the number without improving the work. Never have the skill compute its own score; put the ground truth in the
+  scenario, as `artifact_json` expected values or rubric claims. To compute a number outside the skill, declare a
+  command metric: a script over the run's events, outside every folder the agent can read (hillclimb refuses one
+  inside) ([scenario.md → Command metrics](./scenario.md#command-metrics)).
 - **The judge sees no uploads and no tool results** (except a `Skill` call's result under
   `include_fork_results: true`). It reads the final message, the assistant's transcript text
   and the files the run wrote ([scenario.md](./scenario.md), `semantic_matches`). To grade faithfulness to an

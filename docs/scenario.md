@@ -493,7 +493,7 @@ deterministic CI: scripted answers + `fail` for everything they don't cover.
   grant: domain                       # "Allow all for website" → approve example.com for the rest of the
                                       # run; `grant: once` (or omit) = a single-fetch allow. Deny = deny.
 ```
-The predicate is evaluated with the tool's input fields as locals (e.g. `command`, `file_path`, `url`, `domain`). Unmatched tools fall to the **permission parity** default (set on the session setup): read-only tools (`Read`, `Glob`, `Grep`) always allow; for everything else, the default `cowork` parity **allows** the unscripted tool but records an `allow-unscripted` audit finding (matching real Cowork, which would have asked a human), while `strict` parity **denies** it (for adversarial tests). **Exception — `webfetch:<domain>`:** real Cowork *gates* a web_fetch provenance miss (it does not auto-allow), so it is carved out of cowork parity and is never allowed unless answered (a scripted rule as above, `web_fetch.approved_domains`, or an LLM/external terminal). Unanswered, it **ends the run as an unanswered gate** under `on_unanswered: fail` (the `run` default), naming the domain, the URL and the rule to add, as an unscripted AskUserQuestion does; under `first` or `llm` it is denied. A URL you put in the **prompt** is provenanced → fetched with no gate at all.
+The predicate is evaluated with the tool's input fields as locals (e.g. `command`, `file_path`, `url`, `domain`). Unmatched tools fall to the **permission parity** default (set on the session setup): read-only tools (`Read`, `Glob`, `Grep`) always allow; for everything else, the default `cowork` parity **allows** the unscripted tool but records an `allow-unscripted` audit finding (matching real Cowork, which would have asked a human), while `strict` parity **denies** it (for adversarial tests). **Exception — `webfetch:<domain>`:** real Cowork *gates* a web_fetch provenance miss (it does not auto-allow), so it is carved out of cowork parity and is never allowed unless answered (a scripted rule as above, `web_fetch.approved_domains`, or an LLM/external terminal). Unanswered, it **ends the run as an unanswered gate** under `on_unanswered: fail` (the `run` default), naming the domain, the URL and the rule to add, as an unscripted AskUserQuestion does; under `--on-unanswered first` it is denied, and under `llm` a model picks one of its three buttons (`Allow once`, `Allow all for website`, `Deny`). A URL you put in the **prompt** is provenanced → fetched with no gate at all.
 
 ## Assertions
 
@@ -1618,8 +1618,8 @@ agent under test chose them — so never `eval`, `exec`, `pickle`, `yaml.load` o
 | `nondeterministic` | two runs over the same events disagreed, or a re-measure disagrees with the recorded value |
 | `no_events` | the run has no `events.jsonl`, or no slice for this turn |
 
-**Where it runs.** `run`, `skill`, `record`, `eval` and `hillclimb run` run it on every live run, after printing one
-notice per command metric (its script, root-relative path and content hash) before anything is spent. `replay`,
+**Where it runs.** `run`, `record`, `eval` and `hillclimb run` run it on every live run, after printing one notice
+per command metric (its script, root-relative path and content hash) before anything is spent. `replay`,
 `verify-cassettes` and CI never run it: the cassette freezes each command metric's record-time value
 (`commandMetrics`, cassette v18), and replay reports it marked `frozen`, only while the declaration being measured is
 the one the value was measured under (`command_changed` otherwise, as under `replay --assert-from` after an edit).
@@ -1641,8 +1641,9 @@ mid-flow changes its signature, which `hillclimb run` and `regrade` refuse, so o
 3. Run `hillclimb regrade <scenarios> --flow <dir> --variant all --allow-metric-commands`. It runs the new script over
    every variant's kept run events and writes the new column on every row, so the variants compare under one scorer.
 
-The kept run dirs must still exist: a row whose run was pruned reads `command_not_allowed` in the new column, so run
-the regrade before `prune`, or pass `prune` a larger `--keep-last`. Read the old and the new column side by side,
+The kept run dirs must still exist: a row whose kept run dir is gone is listed as evidence unavailable, gains no
+value in the new column, and makes `hillclimb regrade` exit 1. A plain `prune` keeps hillclimb runs outside
+`--keep-last`; run the regrade before any `prune --include-hillclimb`. Read the old and the new column side by side,
 never as a delta.
 
 ## Output
