@@ -3611,7 +3611,8 @@ export const REQUIRED_SPAWN_KEYS: readonly string[] = [
 
 const SPAWN_ADVICE =
   "classify the key in src/sync/spawn-env-registry.ts (pin via SPAWN_PIN_KEYS or allowlist with a class and reason via SPAWN_ENV_ALLOWLIST) — do NOT bypass with --allow-empty, which would commit a baseline that no longer matches the live spawn contract";
-// The --allow-empty footgun: --allow-empty force-writes past ALL tripwires, so every spawn flag
+// The --allow-empty footgun: --allow-empty force-writes past every tripwire except those with their own named
+// override (the capture organisation and the search anchors), so every spawn flag
 // ends with this explicit anti-instruction, not just the classify-the-key ones.
 const SPAWN_NO_BYPASS = "do NOT bypass with --allow-empty (it would commit a baseline that no longer matches the live spawn contract)";
 

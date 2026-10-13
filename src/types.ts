@@ -37,6 +37,23 @@ export const SearchAnchors = z.strictObject({
     workerPath: z.literal("/worker/"),
     searchRoute: z.literal("web-search"),
   }),
+  /** Which staged binary the anchors were extracted from: `both` (the VM ELF and the native agent, same version,
+   *  agreeing), `native` (the native agent, which hostloop runs), or `elf` (the VM ELF; no native was staged).
+   *  Absent on a baseline written before this field: extracted from the ELF, with the native agreeing or absent. */
+  source: z.enum(["elf", "native", "both"]).optional(),
+  /** The agent-side WebSearch results that show no request was made, as hashes: the two fixed `validateInput`
+   *  messages (they reach the agent inside the tool runner's `<tool_use_error>` wrapper), and the budget-cap text's
+   *  fixed prefix and the fixed fragment after its turn|session word. A permission denial is recognised from the
+   *  harness's own decision, so it has no anchor. Absent on a baseline written before this field; a run cannot serve
+   *  a frozen search corpus without it. */
+  noRequest: z
+    .strictObject({
+      missingQuery: HashedLiteral,
+      bothDomainLists: HashedLiteral,
+      budgetPrefix: HashedLiteral,
+      budgetFragment: HashedLiteral,
+    })
+    .optional(),
 });
 export type SearchAnchors = z.infer<typeof SearchAnchors>;
 

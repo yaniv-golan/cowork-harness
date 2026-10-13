@@ -97,8 +97,10 @@ describe("cmdSync builds the next agentBinary through buildNextAgentBinary", () 
   it("has no hand-written spread of the base agentBinary", () => expect(body).not.toContain("...baseAgentBinary"));
   // The staged ELF is measured in the same branch that hashes it, and the result reaches the next agentBinary.
   it("measures cliCapabilities from the staged ELF and passes it on", () => {
-    const measuredBranch = body.slice(body.indexOf("if (existsSync(resolvedDerived)) {"), body.indexOf("} else if (officialElfChecksum"));
-    expect(measuredBranch).toContain("cliCapabilities = cliCapabilitiesOfFile(resolvedDerived);");
+    const at = body.indexOf("if (Buffer.isBuffer(elfStaged)) {");
+    expect(at).toBeGreaterThan(-1);
+    const measuredBranch = body.slice(at, body.indexOf("} else if (officialElfChecksum"));
+    expect(measuredBranch).toContain("cliCapabilities = cliCapabilitiesOfBuffer(elfStaged);");
     const call = body.slice(body.indexOf("const nextAgentBinary = buildNextAgentBinary("));
     expect(call.slice(0, call.indexOf("});"))).toMatch(/\bcliCapabilities,/);
   });

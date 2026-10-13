@@ -22,7 +22,11 @@ export function sha256File(path: string): string {
  * way; a change in the committed count surfaces as a `sync --diff` line.
  */
 export function countStringInFile(path: string, needle: string): number {
-  const buf = readFileSync(path);
+  return countStringInBuffer(readFileSync(path), needle);
+}
+
+/** `countStringInFile` over bytes already read. */
+export function countStringInBuffer(buf: Buffer, needle: string): number {
   const nb = Buffer.from(needle);
   if (nb.length === 0) return 0;
   let n = 0;
@@ -786,7 +790,8 @@ export function nativeBuildsForPin(
  * whichever layout it is staged, so the path exists. Among several builds of that version it pins the one
  * the asar manifest names when the manifest is for that version, else the first in Desktop's fallback order.
  * Only when nothing is staged does it fall back to the `agentVersion`-derived flat-shape path (it cannot
- * invent a build) and warn. Pure apart from the read-only scan.
+ * invent a build) and warn. `version` is the native's own staged version, or null when nothing is staged (the
+ * search-anchors rule compares it with the VM agent's). Pure apart from the read-only scan.
  */
 export function deriveNativeStagedPath(a: {
   nativeRoot: string;
@@ -794,7 +799,7 @@ export function deriveNativeStagedPath(a: {
   oldNativeStagedPath: string;
   agentVersion: string;
   manifestBuild?: { version: string; build: string };
-}): { path: string; warnings: string[] } {
+}): { path: string; version: string | null; warnings: string[] } {
   const warnings: string[] = [];
   const tilde = (p: string) => (p.startsWith(a.homeDir) ? `~${p.slice(a.homeDir.length)}` : p);
   const versions = stagedNativeVersions(a.nativeRoot);
@@ -822,7 +827,7 @@ export function deriveNativeStagedPath(a: {
           `over ${cands.slice(1).map(buildLabel).join(", ")}.`,
       );
     }
-    return { path: tilde(resolve(chosen.path)), warnings };
+    return { path: tilde(resolve(chosen.path)), version: newest.version, warnings };
   }
   const re = /claude-code\/[^/]+\/(?:[0-9a-fA-F]{12}\/)?claude\.app\/Contents\/MacOS\/claude$/;
   let path: string;
@@ -842,7 +847,7 @@ export function deriveNativeStagedPath(a: {
       `${unusable.length ? `; ${unusable.join("; ")}` : ""}. Set COWORK_HOST_AGENT_BINARY=<path> to a staged binary or a saved copy of the .app.)`,
     `  resolveHostAgentBinary will fail until the file is present or COWORK_HOST_AGENT_BINARY is set.`,
   );
-  return { path, warnings };
+  return { path, version: null, warnings };
 }
 
 /** The mode a baseline records for the `outputs` mount, read as one of the two values the outputs-delete

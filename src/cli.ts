@@ -28,14 +28,15 @@ import {
   cmpVersionStrings,
   listBaselineNames,
   sha256File,
-  countStringInFile,
-  cliCapabilitiesOfFile,
+  countStringInBuffer,
+  cliCapabilitiesOfBuffer,
   type CliCapabilities,
   deriveNativeStagedPath,
   nativeManifestBuild,
   buildNextAgentBinary,
 } from "./baseline.js";
-import { searchAnchorsForSync } from "./sync/search-anchors.js";
+import { createHash } from "node:crypto";
+import { searchAnchorsForSync, searchAnchorsRefusal, stagedForAnchors } from "./sync/search-anchors.js";
 import { checkCaptureOrg, LOCAL_ORG_RECORD, readLocalOrg, recordCaptureOrg } from "./sync/capture-org.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
@@ -425,7 +426,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       answer it with 'gates'/'answer' above (the one path here that waits — that is the rehearsal)
 
 ── Platform admin ─────────────────────────────────────────────────────────────
-  sync [--diff] [--allow-empty|--force] [--allow-org-change] [--spawn-env-unobservable <reason>]  derive/refresh a platform baseline from the live Desktop install (macOS only)
+  sync [--diff] [--allow-empty|--force] [--allow-org-change] [--allow-missing-search-anchors] [--spawn-env-unobservable <reason>]  derive/refresh a platform baseline from the live Desktop install (macOS only)
   list                         list available platform baselines
   boundary-check [baseline] [--session <file>]   prove the sandbox enforces Cowork's limitations
   vm <init|status|delete|prune>  manage the L2 Apple-VZ microVM (fidelity: microvm); macOS arm64 only
@@ -674,7 +675,7 @@ function hasHelp(args: string[]): boolean {
 // per command, kept in sync with each command's own bad-invocation `usage:` string.
 
 const SUBCOMMAND_USAGE: Record<string, string> = {
-  sync: "usage: sync [--diff] [--allow-empty|--force] [--allow-org-change] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --allow-org-change: write even though Desktop's gate cache was captured under a different organisation from the one this machine last synced under, or that organisation cannot be told (Desktop rewrites gates per organisation)\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
+  sync: "usage: sync [--diff] [--allow-empty|--force] [--allow-org-change] [--allow-missing-search-anchors] [--spawn-env-unobservable local-lane-removed|no-local-entitlement]   (re-sync the platform baseline from the installed Cowork app; macOS only)\n       --allow-empty (alias --force): write even when the derived egress allowlist is empty\n       --allow-org-change: write even though Desktop's gate cache was captured under a different organisation from the one this machine last synced under, or that organisation cannot be told (Desktop rewrites gates per organisation)\n       --allow-missing-search-anchors: write without agentBinary.searchAnchors when they cannot be confirmed from the staged agent (no run against that baseline can serve a frozen search corpus)\n       --spawn-env-unobservable: no local host-loop task can run on this Desktop build, so record its spawn env as unobservable (refused when any local session or dump exists for the build)",
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [<baseline>] [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove the VM\n  prune   drop all orphaned VMs\n  <baseline> (default: latest) is a baseline name like desktop-<version>, not a VM name — each acts on that baseline's VM",
@@ -3224,7 +3225,7 @@ async function cmdSync(args: string[]) {
     syncParsed = parseArgs(
       normalizedArgs,
       withCommandGlobals({
-        booleans: ["--diff", "--allow-empty", "--allow-org-change"],
+        booleans: ["--diff", "--allow-empty", "--allow-org-change", "--allow-missing-search-anchors"],
         values: ["--spawn-env-unobservable"],
         enums: { "--spawn-env-unobservable": [...ObservedSpawnEnvDeclaration.options] },
       }),
@@ -3372,10 +3373,15 @@ async function cmdSync(args: string[]) {
   // CLI capabilities (agentBinary.cliCapabilities): the same measure-or-carry lifecycle as the sentinels.
   const baseCliCapabilities = (baseAgentBinary.cliCapabilities ?? undefined) as CliCapabilities | undefined;
   let cliCapabilities: CliCapabilities | undefined;
-  if (existsSync(resolvedDerived)) {
-    const measured = sha256File(resolvedDerived);
-    stringSentinels = Object.fromEntries(AGENT_STRING_SENTINELS.map((s) => [s, countStringInFile(resolvedDerived, s)]));
-    cliCapabilities = cliCapabilitiesOfFile(resolvedDerived);
+  // The ELF is read once, here, through the same wrap as the native: one that exists but cannot be read is reported
+  // (and treated as unstaged for the hash below) rather than throwing, and the anchors table sees it as unreadable.
+  const elfStaged = stagedForAnchors(resolvedDerived);
+  if (elfStaged !== null && !Buffer.isBuffer(elfStaged))
+    log(`WARNING: the staged agent ELF exists but cannot be read (${elfStaged.unreadable}): ${derivedStagedPath}`);
+  if (Buffer.isBuffer(elfStaged)) {
+    const measured = createHash("sha256").update(elfStaged).digest("hex");
+    stringSentinels = Object.fromEntries(AGENT_STRING_SENTINELS.map((s) => [s, countStringInBuffer(elfStaged, s)]));
+    cliCapabilities = cliCapabilitiesOfBuffer(elfStaged);
     shaFields = {
       sha256: measured,
       shaProvenance: "measured-local",
@@ -3406,28 +3412,21 @@ async function cmdSync(args: string[]) {
     stringSentinels = baseSentinels;
     cliCapabilities = baseCliCapabilities;
   }
-  // Web-search anchors (agentBinary.searchAnchors). searchAnchorsForSync owns the lifecycle: measured from a staged
-  // ELF, carried from the base only for the same agent version when the ELF is not staged. The native agent, which
-  // hostloop runs, must give the same anchors whatever its version: they have not moved from 2.1.260 through 2.1.295,
-  // so a difference is a finding, not a version skew. Any failure records no anchors and prints a WARNING; it does not
-  // block the write while nothing reads the anchors.
+  // Web-search anchors (agentBinary.searchAnchors). searchAnchorsForSync owns the decision: the native agent, which
+  // hostloop runs, decides wherever it is readable; the VM ELF corroborates it on the same version and stands in when
+  // no native is staged; the base's are carried only for an unchanged version with nothing readable. Its `refuse` is
+  // sync's own refusal, acted on after the --diff decision (searchAnchorsRefusal below), never an unknown delta.
   const nativeResolved = derivedNativeStagedPath.replace(/^~(?=$|\/)/, homeDir);
-  let nativeAgent: Buffer | { unreadable: string } | null = null;
-  if (existsSync(nativeResolved)) {
-    try {
-      nativeAgent = readFileSync(nativeResolved);
-    } catch (e) {
-      nativeAgent = { unreadable: (e as NodeJS.ErrnoException).code ?? "error" };
-    }
-  }
   const anchored = searchAnchorsForSync({
-    elf: existsSync(resolvedDerived) ? readFileSync(resolvedDerived) : null,
-    native: nativeAgent,
-    sameVersionAsBase: (base.agentVersion as string | undefined) === res.agentVersion,
+    elf: elfStaged,
+    native: stagedForAnchors(nativeResolved),
+    elfVersion: res.agentVersion,
+    nativeVersion: nativeDerived.version,
+    baseAgentVersion: base.agentVersion as string | undefined,
     base: (baseAgentBinary.searchAnchors ?? undefined) as SearchAnchors | undefined,
   });
   const searchAnchors = anchored.anchors;
-  res.notes.push(...anchored.warnings.map((w) => `WARNING: ${w}`));
+  res.notes.push(...anchored.notes);
   // Spread base first, then explicitly set the sha fields (undefined values are dropped by JSON.stringify,
   // so a version bump we couldn't hash writes no stale sha256/shaProvenance/manifestChecksumMatch).
   const nextAgentBinary = buildNextAgentBinary(baseAgentBinary, {
@@ -3693,6 +3692,11 @@ async function cmdSync(args: string[]) {
         1,
       );
     }
+  }
+  {
+    const r = searchAnchorsRefusal(anchored.refuse, { diff: diffFlag, allow: !!syncParsed.flags["--allow-missing-search-anchors"] });
+    if (r.log) log(`\n${r.log}`);
+    if (r.fail) return fail("sync", "runtime", r.fail, undefined, isJsonOutput(normalizedArgs), 1);
   }
   if (!diffFlag) {
     mkdirSync(BASELINES_DIR, { recursive: true });
