@@ -8,6 +8,22 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`latest` moves to `desktop-2.37337.1`** (agent **2.1.295**, unchanged). The Cowork system prompt, the egress
+  allowlist, the first-party spawn env and the tool lists a session receives are unchanged from `desktop-2.31226.1`.
+  Desktop changed in places a default first-party session does not reach, and `sync` now reads each of them:
+  - Two new spawn-env writes: one behind a new server gate (`3184956269`, off and pinned, so a flip shows in the
+    next sync's diff) and one only for an imported session.
+  - The `Artifact` tool and its two spawn-env keys now have separate conditions. They differ only for an
+    organization under Cowork's HIPAA restriction, where the tool is offered and the keys are withheld unless the
+    organization is cleared.
+  - The sub-agent's folder list gained a second wording for a folder the shell cannot reach, used only by a
+    third-party deployment that configures a file-read check. The sub-agent append's fingerprint is updated; the
+    text a first-party sub-agent receives is unchanged.
+  - Two descriptions of the cloud tool `device_commit_files` were reworded; the harness does not serve that tool.
+  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.31226.1 → 2.37337.1
+    since record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it.
+    The bundled cassettes are re-stamped to `2.37337.1`.
+
 - **Help text and docs now match the code in several places.** No behaviour changed.
   - `--help`:
     - `trace` names `--leg`; `verify-run` and `regrade` name `--leg` and `--allow-metric-commands`.
