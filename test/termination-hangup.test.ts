@@ -86,6 +86,10 @@ describe.runIf(POSIX && PY)("a closed terminal (SIGHUP on a real pty)", () => {
       import { appendFileSync, existsSync } from "node:fs";
       import { join } from "node:path";
       const L = (s) => appendFileSync(process.argv[2], s + "\\n");
+      // Diagnostics, filtered out of the sequence below: when this fails, the log says how the child ended and when.
+      const t0 = Date.now();
+      const D = (s) => L("diag " + s + " t=" + (Date.now() - t0));
+      process.on("SIGHUP", () => D("sighup"));
       installTerminationHandler();
       // The child must be IGNORING SIGTERM before the hangup, or a SIGTERM that lands first kills it and the stop
       // sequence rightly skips the SIGKILL. It writes a marker once its trap is set, and "ready" waits for it. The
@@ -94,23 +98,26 @@ describe.runIf(POSIX && PY)("a closed terminal (SIGHUP on a real pty)", () => {
       const trapped = join($DIR, "trapped"); // a mkdtemp path: no spaces, so the shell needs no quoting
       const child = spawn("sh", ["-c", "sleep 0.3; trap '' TERM; : > $1; while :; do sleep 1; done", "sh", trapped], { stdio: "ignore", detached: true });
       L("child " + child.pid);
+      child.on("exit", (code, signal) => D("child-exit code=" + code + " signal=" + signal));
       for (const until = Date.now() + 10_000; !existsSync(trapped); ) {
         if (Date.now() > until) throw new Error("the child never set its SIGTERM trap");
         await new Promise((r) => setTimeout(r, 20));
       }
       const orig = child.kill.bind(child);
-      child.kill = (s) => { L("kill " + s); return orig(s); };
+      child.kill = (s) => { D("kill-call " + s + " alive=" + (child.exitCode === null && child.signalCode === null)); L("kill " + s); return orig(s); };
       registerAgent(() => childProcessAgent(child));
-      process.on("exit", (c) => L("exit " + c));
+      process.on("exit", (c) => { D("exit-hook"); L("exit " + c); });
       L("ready");
       setInterval(() => {}, 1000);
     `);
     const pid = childOf(r.log);
+    const diag = r.log.filter((l) => l.startsWith("diag ")).join("; ");
+    if (process.env.CWH_HANGUP_DIAG) process.stderr.write(`[hangup-diag] ${r.outcome} | ${diag}\n`);
     const died = await waitGone(pid);
     killIfAlive(pid);
     expect(
-      r.log.filter((l) => !l.startsWith("child ") && l !== "ready"),
-      r.outcome,
+      r.log.filter((l) => !l.startsWith("child ") && !l.startsWith("diag ") && l !== "ready"),
+      `${r.outcome} | ${diag}`,
     ).toEqual(["kill SIGTERM", "kill SIGKILL", "exit 129"]);
     expect(r.outcome).toBe("exited 129");
     expect(died).toBe(true);
