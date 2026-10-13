@@ -1382,6 +1382,32 @@ export function resolveNamespaceRef(ref: string, siteChunk: string, files?: Map<
   return local ? { chunk: siteChunk, local } : null;
 }
 
+/** True when the reference to `local` at `at` sits inside the block of a later let/const/var declaration
+ *  of the same name, so it names that inner binding rather than the module-level one declared at `moduleAt`.
+ *  Scans from the nearest preceding declaration to the reference, skipping string and template literals; the
+ *  declaration's block encloses the reference when the brace depth never drops below where it started. */
+export function shadowedByInnerDeclaration(src: string, at: number, local: string, moduleAt: number): boolean {
+  const decl = new RegExp(`\\b(?:let|const|var)\\s+(?:[^;{}]*?,)?(?<![\\w$.])${reEsc(local)}=(?!=)`, "g");
+  let from = -1;
+  for (const m of src.slice(0, at).matchAll(decl)) if (m.index! > moduleAt + 1) from = m.index!;
+  if (from < 0) return false;
+  let depth = 0;
+  for (let i = from; i < at; i++) {
+    const c = src[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < at && src[i] !== c; i++) if (src[i] === "\\") i++;
+      continue;
+    }
+    if (c === "{") depth++;
+    else if (c === "}" && --depth < 0) return false;
+  }
+  return true;
+}
+
 /** Return the `{...}` body that follows `header` in `text`, brace-balanced, or null.
  *
  *  Exists because a WINDOWED match ("is the literal within N chars of the function header") is a guard
@@ -4567,6 +4593,18 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     else if (!new RegExp(`(?<![\\w$])${ref.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=${taskArray}`).test(ref.chunk))
       miss("S7 Task-tools spread", "the TaskCreate…TaskStop spread that tools[] injects moved");
 
+    // The HIPAA restriction reader, resolved in two hops (see S6e below for why both are needed). Returns the
+    // defect, or null when `ref` is `function <r>(){return <f>()==="restricted"}` and <f> reads coworkHipaaRestricted.
+    const restrictionReaderDefect = (ref: string, what: string): string | null => {
+      const hipaa = resolveNamespaceRef(ref, toolsSite, files);
+      if (!hipaa) return `the ${what} (${ref}) could not be resolved to its definition — classify it before admitting the spread`;
+      const h1 = hipaa.chunk.match(new RegExp(`function ${reEsc(hipaa.local)}\\(\\)\\{return ([\\w$]+)\\(\\)==="restricted"\\}`));
+      if (!h1) return `the ${what} no longer resolves to a \`<f>()==="restricted"\` reader — Artifact may no longer be HIPAA-restricted`;
+      const body = braceBodyOf(hipaa.chunk, `function ${h1[1]}(`);
+      if (!body || !body.includes("coworkHipaaRestricted"))
+        return `the ${what}'s restriction reader no longer consults coworkHipaaRestricted — the HIPAA restriction may be inert`;
+      return null;
+    };
     // S6c (Desktop 1.28929.0): the Artifact spread's condition must STILL be the frame-artifacts
     // predicate. Walk the real chain `cond -> attended-wrapper -> predicate`, capturing each callee
     // rather than hard-coding minified names; only the PROPERTY names are stable and only they are
@@ -4594,6 +4632,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     // checkPathHookFacts' wrapper rules), which is the corroborating evidence. Both term lists are
     // admitted so an older Desktop still syncs; what is pinned is that the REMAINING terms are intact.
     const artifactCond = s6[3];
+    let splitForm = false;
     if (artifactCond !== undefined) {
       const escC = artifactCond.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const at = toolsSite.indexOf(s6[0]);
@@ -4624,9 +4663,18 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         // names rotate every build exactly like literals do — capture the callee and RESOLVE it instead.
         // The expression stays anchored `^...$`: that is what makes R1 (`||!0` appended) and R3 (conjunct
         // replaced by a literal) fire, and both must keep firing after this change.
-        const whole = def[1].match(
+        // SPLIT form (Desktop 2.37337.1): the tool's condition lost its trailing restriction conjunct and reads the
+        // PINNED turn bit; the predicate takes a third "blocked" argument, passed `!1` here. The restriction moved
+        // to the two env keys' own condition, which S6d/S6f pin below.
+        //   (<sess> ? <built>?.builtTools===void 0 ? <F>(<args>,!1) : <sess>.frameArtifactsTurnPinned ?? !1 : !1)
+        const conjunct = def[1].match(
           /^\(([\w$]+)\?[\w$]+\?\.builtTools===void 0\?([\w$]+)\(([^)]*)\):\1\.frameArtifactsTurnEnabled\?\?!1:!1\)&&!([\w$]+(?:\.[\w$]+)?)\(\)$/,
         );
+        const split = conjunct
+          ? null
+          : def[1].match(/^([\w$]+)\?[\w$]+\?\.builtTools===void 0\?([\w$]+)\(([^)]*\}),!1\):\1\.frameArtifactsTurnPinned\?\?!1:!1$/);
+        if (split) splitForm = true;
+        const whole = conjunct ?? split;
         if (!whole)
           miss(
             "S6c Artifact gate",
@@ -4640,16 +4688,26 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         else {
           // Attended-turn wrapper: function F(e,t){return P(e,t)&&e._isUnattended!==!0}
           const wrap = toolsSite.match(
-            new RegExp(`function ${reEsc(whole[2])}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`),
+            splitForm
+              ? new RegExp(
+                  `function ${reEsc(whole[2])}\\(([\\w$]+),([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2,\\3\\)&&\\1\\._isUnattended!==!0\\}`,
+                )
+              : new RegExp(
+                  `function ${reEsc(whole[2])}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`,
+                ),
           );
           // Desktop 2.16120.0: the sessionType term may instead be `(<s>.sessionType===void 0||<s>.sessionType==="scheduled")`
           // with the scheduledTaskId term DROPPED — the scheduled-run restriction moved upstream (checked
           // below). The body is now anchored at its END too (`…&&!<hipaa>()}`): as a prefix match, a
           // widening appended after the last conjunct (`||!0`) passed silently.
+          // In the split form the trailing term is the third parameter (`&&!<blocked>}`), which this call site
+          // passes as `!1`. Both optional captures are named, so the extra parameter shifts no index.
+          const blkParam = splitForm ? ",(?<blk>[\\w$]+)" : "";
+          const blkTail = splitForm ? "!\\k<blk>" : "![\\w$]+(?:\\.[\\w$]+)?\\(\\)";
           const pred = wrap
             ? toolsSite.match(
                 new RegExp(
-                  `function ${reEsc(wrap[3])}\\(([\\w$]+),([\\w$]+)\\)\\{return \\1\\.frameArtifactsEnabled===!0&&(?:\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0|(\\(\\1\\.sessionType===void 0\\|\\|\\1\\.sessionType==="scheduled"\\))(?:&&\\1\\.scheduledTaskId===void 0)?)&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?![\\w$]+(?:\\.[\\w$]+)?\\(\\)\\}`,
+                  `function ${reEsc(wrap[splitForm ? 4 : 3]!)}\\(([\\w$]+),([\\w$]+)${blkParam}\\)\\{return \\1\\.frameArtifactsEnabled===!0&&(?:\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0|(?<sched>\\(\\1\\.sessionType===void 0\\|\\|\\1\\.sessionType==="scheduled"\\))(?:&&\\1\\.scheduledTaskId===void 0)?)&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?${blkTail}\\}`,
                 ),
               )
             : null;
@@ -4659,7 +4717,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
               "S6c Artifact gate",
               "the frame-artifacts predicate changed (a term was dropped, reordered or appended) — re-verify sessionType/scheduledTaskId/isBridgeSession/isDispatchChild before admitting the spread",
             );
-          else if (pred[3] !== undefined) {
+          else if (pred.groups?.sched !== undefined) {
             // Scheduled form: scheduled runs keep the server's frameArtifactsEnabled only while
             // `scheduledRunFrameArtifacts` (a key of coworkRuntimeConfig, gate 1978029737) allows it:
             //     e.scheduledTaskId&&!xp()&&(e.frameArtifactsEnabled=void 0)
@@ -4698,30 +4756,64 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           // brace-scanned body, never a window (see braceBodyOf for why a window cannot fail).
           // Resolution failure is a MISS, never a skip: failing open here is exactly how a guard that
           // cannot fail gets shipped.
-          const hipaa = resolveNamespaceRef(whole[4], toolsSite, files);
-          if (!hipaa)
-            miss(
-              "S6c Artifact gate",
-              `the trailing HIPAA conjunct (${whole[4]}) could not be resolved to its definition — classify it before admitting the spread`,
-            );
-          else {
-            const h1 = hipaa.chunk.match(
-              new RegExp(`function ${hipaa.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\(\\)\\{return ([\\w$]+)\\(\\)==="restricted"\\}`),
-            );
-            if (!h1)
-              miss(
-                "S6c Artifact gate",
-                'the trailing conjunct no longer resolves to a `<f>()==="restricted"` reader — Artifact may no longer be HIPAA-restricted',
-              );
-            else {
-              const body = braceBodyOf(hipaa.chunk, `function ${h1[1]}(`);
-              if (!body || !body.includes("coworkHipaaRestricted"))
-                miss(
-                  "S6c Artifact gate",
-                  "the restriction reader no longer consults coworkHipaaRestricted — the HIPAA conjunct may be inert",
-                );
-            }
+          // In the split form there is no trailing conjunct here: the restriction reader is resolved where it
+          // now lives, inside the env keys' condition (S6d).
+          if (!splitForm) {
+            const defect = restrictionReaderDefect(whole[4]!, "trailing HIPAA conjunct");
+            if (defect) miss("S6c Artifact gate", defect);
           }
+        }
+      }
+    }
+
+    // SPLIT form (Desktop 2.37337.1): the two env keys no longer share the tool's condition. They read
+    //     <env>=<tool>&&!<hipaaBlocked>&&!<O>(<acct>?.orgId,<sess>?.frameArtifactsBitUnderVerdict===!0)
+    // where <hipaaBlocked> is the launch function's `frameArtifactsHipaaBlocked` parameter and <O> is
+    //     function <O>(e,n){let r=<D>.isBlocked();return r||!<restricted>()?r:!n||e==null||e!==<orgId>()}
+    // with <D>=<ns>.<f>("cobalt_plinth"), the org-policy watcher that cannot block outside a restricted org.
+    // So outside a HIPAA-restricted org both conjuncts are false and the env keys equal the tool; inside one,
+    // the tool stays offered while the keys need the org's verdict. Every piece is pinned EXACTLY: the env
+    // keys must imply the tool (`<tool>&&` leads), and dropping or widening either conjunct must fail.
+    let envCond: string | undefined = artifactCond;
+    if (splitForm && artifactCond !== undefined) {
+      envCond = undefined;
+      const splitMiss = (why: string) => miss("S6d frame-artifacts env key", why);
+      const at = toolsSite.indexOf(s6[0]);
+      const win = toolsSite.slice(Math.max(0, at - 8000), at);
+      const defs = [
+        ...win.matchAll(
+          new RegExp(
+            `(?:\\b(?:const|let|var)\\s+|[,;({])([\\w$]+)=${reEsc(artifactCond)}&&!([\\w$]+)&&!([\\w$]+)\\(([\\w$]+)\\?\\.orgId,([\\w$]+)\\?\\.frameArtifactsBitUnderVerdict===!0\\)(?=[,;])`,
+            "g",
+          ),
+        ),
+      ];
+      const blockedParam = [...win.matchAll(/frameArtifactsHipaaBlocked:([\w$]+)[,}]/g)].pop()?.[1];
+      if (defs.length !== 1)
+        splitMiss(
+          `the env keys' condition is no longer exactly \`<tool>&&!<hipaaBlocked>&&!<verdict>(<orgId>,<bit>)\` (${defs.length} match(es)) — reclassify before the allowlist keeps admitting them`,
+        );
+      else if (blockedParam === undefined || defs[0]![2] !== blockedParam)
+        splitMiss(
+          `the env keys' first restriction conjunct (${defs[0]![2]}) is not the launch function's frameArtifactsHipaaBlocked parameter (${blockedParam ?? "absent"})`,
+        );
+      else {
+        const [, cond, , verdict] = defs[0]!;
+        const body = braceBodyOf(toolsSite, `function ${verdict}(`);
+        const shape = body?.match(
+          /^let ([\w$]+)=([\w$]+)\.isBlocked\(\);return \1\|\|!([\w$]+(?:\.[\w$]+)?)\(\)\?\1:!([\w$]+)\|\|([\w$]+)==null\|\|\5!==[\w$]+(?:\.[\w$]+)?\(\)$/,
+        );
+        const params = new RegExp(`function ${reEsc(verdict!)}\\(([\\w$]+),([\\w$]+)\\)\\{`).exec(toolsSite);
+        if (!shape || !params || shape[5] !== params[1] || shape[4] !== params[2])
+          splitMiss(
+            `the verdict check ${verdict}() is no longer exactly \`blocked || !restricted() ? blocked : !bit || org==null || org!==currentOrg()\` — the env keys may now be withheld or granted on a different rule`,
+          );
+        else if (!new RegExp(`(?<![\\w$.])${reEsc(shape[2]!)}=[\\w$]+(?:\\.[\\w$]+)?\\("cobalt_plinth"\\)`).test(toolsSite))
+          splitMiss(`the verdict check's block source ${shape[2]} is no longer the "cobalt_plinth" org-policy watcher`);
+        else {
+          const defect = restrictionReaderDefect(shape[3]!, "verdict check's restriction reader");
+          if (defect) splitMiss(defect);
+          else envCond = cond;
         }
       }
     }
@@ -4746,7 +4838,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         "S6d frame-artifacts env key",
         "CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is constructed without the Artifact tool spread — the allowlist entry would admit it unchecked",
       );
-    else if (artifactCond !== undefined && envKeySpread && envKeySpread[1] !== artifactCond)
+    else if (artifactCond !== undefined && envKeySpread && envKeySpread[1] !== envCond)
       miss(
         "S6d frame-artifacts env key",
         "CLAUDE_CODE_COWORK_FRAME_ARTIFACTS is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it",
@@ -4784,7 +4876,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     // Identifier equality is only meaningful within the chunk `artifactCond` was captured in; a spread in
     // another chunk necessarily has a different local name, and demanding equality there would be the S6c
     // false-alarm class all over again. The count rule above already requires that one to be guarded.
-    else if (artifactCond !== undefined && grantSpreads.some((g) => siteOf(g[0]) === toolsSite && g[1] !== artifactCond))
+    else if (artifactCond !== undefined && grantSpreads.some((g) => siteOf(g[0]) === toolsSite && g[1] !== envCond))
       miss(
         "S6f artifact host grant",
         `${GRANT_KEY} is gated on a different predicate than the Artifact tool — reclassify before the allowlist keeps admitting it`,
@@ -4865,9 +4957,14 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
       for (const [name, def] of files) {
         for (const om of def.matchAll(objRe)) {
           const local = om[1];
+          // A minified module reuses one-letter names in its inner scopes: 2.37337.1 bundles an HTTP client into
+          // this chunk whose method declares its own `c` and spreads it. A hit counts unless an inner
+          // let/const/var declaration of the same name encloses it; a parameter or any other shape still fails.
+          const own = (re: RegExp) =>
+            [...def.matchAll(re)].some((h) => !shadowedByInnerDeclaration(def, h.index ?? 0, local, om.index ?? 0));
           if (
-            new RegExp(`\\.\\.\\.${reEsc(local)}(?=[,})])`).test(def) ||
-            new RegExp(`Object\\.assign\\([^)]*,${reEsc(local)}\\)`).test(def)
+            own(new RegExp(`\\.\\.\\.${reEsc(local)}(?=[,})])`, "g")) ||
+            own(new RegExp(`Object\\.assign\\([^)]*,${reEsc(local)}\\)`, "g"))
           ) {
             schedMiss(`the ${SCHED_KEY} object ${local} is spread or assigned inside its own module, where no importer's guard applies`);
             continue;
@@ -4984,7 +5081,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   // condition to another identifier, must fail — a bare shape match admits both silently.
   {
     const s8 = bundle.match(
-      /"ToolSearch",\.\.\.([\w$]+)\.sessionType==="agent"\?\["SendUserMessage"\]:\[\],\.\.\.([\w$]+)\?\[([\w$.]+)\]:\[\]\],allowedTools:\["Task"/,
+      /"ToolSearch",\.\.\.([\w$]+)\.sessionType==="agent"\?\["SendUserMessage"\]:\[\],\.\.\.([\w$]+)\?\[([\w$.]+)\]:\[\](?:,\.\.\.[\w$]+\?([\w$.]+):\[\])?\],allowedTools:\["Task"/,
     );
     if (!s8) miss("S8 tools tail-guard", "the tools[] tail moved — a tool appended after ToolSearch would evade S6");
     else {
@@ -5000,6 +5097,15 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           "S8 tools tail-guard",
           "the trailing tool spread is no longer gated on toolModeProjectUuid — it may now render unconditionally",
         );
+      // Desktop 2.37337.1 appends a host-loop-only array spread (`...<cond>?<ns>.<list>:[]`). It is admitted
+      // only while the list is EMPTY, as S6b treats the design-tools spread: a non-empty list is a new tool
+      // set that must be modeled before it ships, whatever its condition says.
+      if (s8[4] !== undefined) {
+        const listRef = resolveNamespaceRef(s8[4], tailSite, files);
+        if (!listRef) miss("S8 tools tail-guard", "the trailing tool-list spread's alias could not be resolved");
+        else if (!new RegExp(`(?<![\\w$])${listRef.local.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=\\[\\]`).test(listRef.chunk))
+          miss("S8 tools tail-guard", "the trailing tool-list spread is no longer empty — a new spawn tool set to model");
+      }
     }
   }
   // A3: same member-expression spread widening as S6.
