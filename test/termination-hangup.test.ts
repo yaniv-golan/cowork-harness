@@ -104,7 +104,7 @@ describe.runIf(POSIX && PY)("a closed terminal (SIGHUP on a real pty)", () => {
         await new Promise((r) => setTimeout(r, 20));
       }
       const orig = child.kill.bind(child);
-      child.kill = (s) => { D("kill-call " + s + " alive=" + (child.exitCode === null && child.signalCode === null)); L("kill " + s); return orig(s); };
+      child.kill = (s) => { D("kill-call " + s); L("kill " + s); return orig(s); };
       registerAgent(() => childProcessAgent(child));
       process.on("exit", (c) => { D("exit-hook"); L("exit " + c); });
       L("ready");
@@ -119,8 +119,8 @@ describe.runIf(POSIX && PY)("a closed terminal (SIGHUP on a real pty)", () => {
       r.log.filter((l) => !l.startsWith("child ") && !l.startsWith("diag ") && l !== "ready"),
       `${r.outcome} | ${diag}`,
     ).toEqual(["kill SIGTERM", "kill SIGKILL", "exit 129"]);
-    expect(r.outcome).toBe("exited 129");
-    expect(died).toBe(true);
+    expect(r.outcome, `${r.outcome} | ${diag}`).toBe("exited 129");
+    expect(died, `${r.outcome} | ${diag}`).toBe(true);
   }, 30_000);
 
   it("a chat-style exit hold still finishes its result write, then exits 129", () => {
