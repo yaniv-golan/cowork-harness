@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { HILLCLIMB_SUBCOMMAND_FLAGS } from "../src/hillclimb/usage.js";
 import { USAGE_GUARD_REGISTRY, type UsageGuardEntry, RECORD_USAGE, REPLAY_USAGE, VERIFY_CASSETTES_USAGE } from "../src/run/cassette.js";
 import { escapeRegExp } from "./helpers/regex.js";
 
@@ -216,4 +217,22 @@ describe.skipIf(!can)("<cmd> --help prints the single-sourced usage text", () =>
       expect(r.stderr).toContain(usage);
     });
   }
+});
+
+// `hillclimb` has one registry entry for the whole family; each subcommand parses its own lists. Every one of those
+// lists must be inside the entry, or a flag a subcommand accepts could go undocumented without this guard seeing it.
+describe("hillclimb: every subcommand's flags are inside the family's registry entry", () => {
+  const entry = USAGE_GUARD_REGISTRY.find((e) => e.command === "hillclimb")!;
+  for (const [sub, f] of Object.entries(HILLCLIMB_SUBCOMMAND_FLAGS)) {
+    it(sub, () => {
+      for (const flag of f.booleans) expect(entry.booleanFlags, `${sub} ${flag}`).toContain(flag);
+      for (const flag of f.values) expect(entry.valueFlags, `${sub} ${flag}`).toContain(flag);
+      for (const flag of f.repeated) expect(entry.repeatedFlags, `${sub} ${flag}`).toContain(flag);
+      // A no-dash-value flag takes a value, so it is one of this parser's value or repeated flags.
+      for (const flag of f.noDashValue) expect([...f.values, ...f.repeated], `${sub} ${flag}`).toContain(flag);
+    });
+  }
+  it("covers every subcommand the CLI parses", () => {
+    expect(Object.keys(HILLCLIMB_SUBCOMMAND_FLAGS).sort()).toEqual(["check", "freeze-ref", "regrade", "run", "state-template"]);
+  });
 });

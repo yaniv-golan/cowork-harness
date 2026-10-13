@@ -7,13 +7,7 @@ import type { MetricCommandRecord, MetricUnavailable, ScenarioMetric } from "../
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "../fixture/usage.js";
 import { REF_FREEZE_BOOLEAN_FLAGS, REF_FREEZE_VALUE_FLAGS, REF_USAGE } from "../refs/cli-usage.js";
-import {
-  HILLCLIMB_RUN_BOOLEAN_FLAGS,
-  HILLCLIMB_REGRADE_BOOLEAN_FLAGS,
-  HILLCLIMB_RUN_REPEATED_FLAGS,
-  HILLCLIMB_RUN_VALUE_FLAGS,
-  HILLCLIMB_USAGE,
-} from "../hillclimb/usage.js";
+import { HILLCLIMB_USAGE, hillclimbFlagUnion } from "../hillclimb/usage.js";
 import { isTokenisedFileSig, recordedFixtureRefusal, scanWorkspaceFixture } from "../fixture/workspace.js";
 import { answerChannelAssertRefusal } from "../answer-channel.js";
 import { laneRemoteLoadRefusal } from "./lane-notice.js";
@@ -8038,12 +8032,12 @@ export const USAGE_GUARD_REGISTRY: readonly UsageGuardEntry[] = [
     allowlist: [],
   },
   {
-    // One entry for the family: `check` and `state-template` take a subset of `run`'s flags (--flow,
-    // --output-format and the command globals), and HILLCLIMB_USAGE documents every subcommand.
+    // One entry for the family: the union of every subcommand's own lists (HILLCLIMB_SUBCOMMAND_FLAGS), checked
+    // against HILLCLIMB_USAGE, which documents every subcommand.
     command: "hillclimb",
-    booleanFlags: [...new Set([...HILLCLIMB_RUN_BOOLEAN_FLAGS, ...HILLCLIMB_REGRADE_BOOLEAN_FLAGS])],
-    valueFlags: HILLCLIMB_RUN_VALUE_FLAGS,
-    repeatedFlags: HILLCLIMB_RUN_REPEATED_FLAGS,
+    booleanFlags: hillclimbFlagUnion("booleans"),
+    valueFlags: hillclimbFlagUnion("values"),
+    repeatedFlags: hillclimbFlagUnion("repeated"),
     aliases: {},
     usage: HILLCLIMB_USAGE,
     allowlist: [],
