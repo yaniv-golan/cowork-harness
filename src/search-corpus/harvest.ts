@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { initAgentVersion } from "../run/recorded-agent-version.js";
-import { resolveGraded } from "../run/turn-layout.js";
+import { readLegMarker, resolveGraded } from "../run/turn-layout.js";
 import { parseWebSearchResult, renderWebSearchResult, splitSearches, type SearchLink } from "./render.js";
 
 export interface RecordSource {
@@ -159,6 +159,16 @@ function skillOf(runDir: string, r: Record<string, unknown>): string | null {
   return onlyOne((r.fingerprint as { skillScope?: unknown } | undefined)?.skillScope) ?? onlyOne(r.skillsInvoked);
 }
 
+/** A run's reference: the hash of `<scenario>/<run id>`, never a host path. A multi-leg run's prompt leg
+ *  (`<scenario>/<run id>/legs/<leg>`, marked by `leg.json`) hashes all four parts: its last two alone are
+ *  `legs/<leg>`, the same for every run that has a leg of that id. */
+export function runRefOf(runDir: string): string {
+  const leg = basename(dirname(runDir)) === "legs" && readLegMarker(runDir) !== undefined;
+  const root = leg ? dirname(dirname(runDir)) : runDir;
+  const key = `${basename(dirname(root))}/${basename(root)}${leg ? `/legs/${basename(runDir)}` : ""}`;
+  return createHash("sha256").update(key, "utf8").digest("hex").slice(0, 16);
+}
+
 export function sourceOf(runDir: string, eventLines: string[]): RecordSource {
   const r = resultOf(runDir) ?? {};
   const status = readJson(join(runDir, "status.json")) ?? {};
@@ -167,10 +177,7 @@ export function sourceOf(runDir: string, eventLines: string[]): RecordSource {
   const models = Array.isArray(r.models) ? r.models : [];
   const skill = skillOf(runDir, r);
   return {
-    runRef: createHash("sha256")
-      .update(`${basename(dirname(runDir))}/${basename(runDir)}`, "utf8")
-      .digest("hex")
-      .slice(0, 16),
+    runRef: runRefOf(runDir),
     scenario: str(r.scenario),
     skill,
     skillRef: str(r.skillCommit),

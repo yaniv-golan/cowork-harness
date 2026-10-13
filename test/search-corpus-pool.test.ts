@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, statSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, globSync, mkdtempSync, mkdirSync, writeFileSync, statSync, readFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { createHash } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import {
   assemblePool,
   discoverRunDirs,
@@ -17,12 +18,13 @@ import {
 } from "../src/search-corpus/pool.js";
 import { DEFAULT_RETRIEVAL } from "../src/search-corpus/retrieval.js";
 import { renderWebSearchResult } from "../src/search-corpus/render.js";
+import { harvestRun, recordId, runRefOf } from "../src/search-corpus/harvest.js";
 
 // Synthetic kept runs; all web text invented.
 const REM = "REMINDER: cite the sources above.";
 let n = 0;
-function run(root: string, o: { skill: string; searches: [string, string, string][]; upload?: [string, string] }): string {
-  const d = join(root, `scn-${o.skill}`, `local_${n++}`);
+function run(root: string, o: { skill: string; searches: [string, string, string][]; upload?: [string, string]; dir?: string }): string {
+  const d = o.dir ?? join(root, `scn-${o.skill}`, `local_${n++}`);
   mkdirSync(join(d, "turns", "1"), { recursive: true });
   const lines = o.searches.flatMap(([q, url, text], i) => [
     JSON.stringify({
@@ -188,6 +190,71 @@ describe("pool files", () => {
   });
 });
 
+/** A multi-leg scenario root `<root>/scn-<skill>/<rootId>/` with one prompt leg `legs/<legId>/` (a complete run dir with
+ *  its `leg.json` marker) and one host-action leg (a marker and no events). */
+function legRoot(root: string, skill: string, rootId: string, legId: string, searches: [string, string, string][]): string {
+  const scenarioRoot = join(root, `scn-${skill}`, rootId);
+  const leg = join(scenarioRoot, "legs", legId);
+  run(root, { skill, searches, dir: leg });
+  writeFileSync(
+    join(leg, "leg.json"),
+    JSON.stringify({ scenarioRoot: "../..", id: legId, index: 0, kind: "prompt", workdir: "persistent" }),
+  );
+  const action = join(scenarioRoot, "legs", "apply");
+  mkdirSync(action, { recursive: true });
+  writeFileSync(
+    join(action, "leg.json"),
+    JSON.stringify({ scenarioRoot: "../..", id: "apply", index: 1, kind: "action", workdir: "persistent" }),
+  );
+  return leg;
+}
+
+describe("multi-leg runs in a pool", () => {
+  it("discoverRunDirs finds a prompt leg from a runs root, a scenario dir and the scenario root, never an action leg", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const leg = legRoot(root, "ms", "local_root1", "ask", [["q", "https://a", "x"]]);
+    const plain = run(root, { skill: "ms", searches: [["q2", "https://b", "y"]] });
+    expect(discoverRunDirs([root])).toEqual([leg, plain].sort());
+    expect(discoverRunDirs([join(root, "scn-ms")])).toEqual([leg, plain].sort());
+    expect(discoverRunDirs([join(root, "scn-ms", "local_root1")])).toEqual([leg]);
+  });
+  it("two runs' legs of the same id are two sources, so a two-skill pool is mixed", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const a = legRoot(root, "alpha", "local_r1", "ask", [["qa", "https://a", "x"]]);
+    const b = legRoot(root, "beta", "local_r2", "ask", [["qb", "https://b", "y"]]);
+    expect(() => assemblePool({ ...base, runDirs: [a, b] })).toThrow(/mixed|more than one skill|alpha.*beta|beta.*alpha/i);
+    const { manifest } = assemblePool({ ...base, runDirs: [a, b], mixed: true });
+    expect(manifest.sources.map((s) => s.skill).sort()).toEqual(["alpha", "beta"]);
+  });
+  it("an ordinary run's runRef is unchanged: the hash of <scenario>/<run id>", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const d = run(root, { skill: "ms", searches: [["q", "https://a", "x"]] });
+    const { manifest } = assemblePool({ ...base, runDirs: [d] });
+    const expected = createHash("sha256")
+      .update(`${basename(dirname(d))}/${basename(d)}`, "utf8")
+      .digest("hex")
+      .slice(0, 16);
+    expect(manifest.sources.map((s) => s.runRef)).toEqual([expected]);
+  });
+  it("a leg's runRef names its scenario root, so it differs across runs, and is never a host path", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const a = legRoot(root, "ms", "local_r1", "ask", [["qa", "https://a", "x"]]);
+    const b = legRoot(root, "ms", "local_r2", "ask", [["qb", "https://b", "y"]]);
+    const { manifest } = assemblePool({ ...base, runDirs: [a, b] });
+    const h = (s: string) => createHash("sha256").update(s, "utf8").digest("hex").slice(0, 16);
+    expect(manifest.sources.map((s) => s.runRef).sort()).toEqual([h("scn-ms/local_r1/legs/ask"), h("scn-ms/local_r2/legs/ask")].sort());
+  });
+  it("record ids and the pool hash do not depend on where a run sits", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-legs-"));
+    const leg = legRoot(root, "ms", "local_r1", "ask", [["q", "https://a", "x"]]);
+    const plain = run(mkdtempSync(join(tmpdir(), "cwh-pool-legs-")), { skill: "ms", searches: [["q", "https://a", "x"]] });
+    const fromLeg = assemblePool({ ...base, runDirs: [leg] });
+    const fromPlain = assemblePool({ ...base, runDirs: [plain] });
+    expect(fromLeg.records.map((r) => r.id)).toEqual(fromPlain.records.map((r) => r.id));
+    expect(fromLeg.manifest.sha256).toBe(fromPlain.manifest.sha256);
+  });
+});
+
 describe("helpers", () => {
   it("resolvePoolDir: a bare name lives under the pools dir, a path is a path", () => {
     expect(resolvePoolDir("my-pool")).toBe(join(POOLS_DIR, "my-pool"));
@@ -333,5 +400,39 @@ describe("final-review fixes", () => {
       writeFileSync(p, JSON.stringify(r) + "\n");
       expect(() => readPool(dir)).toThrow(/unexpected shape/);
     }
+  });
+});
+
+// Local only (never CI): over the operator's kept runs, the leg fix moves nothing but legs. Every ordinary run keeps
+// the runRef it had (the hash of its last two path parts), and the records each run yields — their ids — and so the
+// pool hash, do not depend on runRef at all. Prints counts only.
+const RUNS_ROOT = join(homedir(), ".cowork-harness");
+const keptRoots = process.env.COWORK_SEARCH_CORPUS_KEPT && existsSync(RUNS_ROOT) ? globSync(join(RUNS_ROOT, "runs*")) : [];
+describe.skipIf(keptRoots.length === 0)("kept runs (local, COWORK_SEARCH_CORPUS_KEPT=1)", () => {
+  it("ordinary runs keep their runRef; records and the pool hash are a function of the records alone", () => {
+    const dirs = discoverRunDirs(keptRoots);
+    const legs = dirs.filter((d) => basename(dirname(d)) === "legs");
+    const plain = dirs.filter((d) => basename(dirname(d)) !== "legs");
+    const old = (d: string) =>
+      createHash("sha256")
+        .update(`${basename(dirname(d))}/${basename(d)}`, "utf8")
+        .digest("hex")
+        .slice(0, 16);
+    let withRecords = 0;
+    let records = 0;
+    for (const d of plain) {
+      const h = harvestRun(d);
+      for (const r of h.records) {
+        expect(r.source.runRef, d).toBe(old(d));
+        expect(r.id).toBe(recordId(r));
+      }
+      if (h.records.length) withRecords++;
+      records += h.records.length;
+    }
+    const legRefs = new Set(legs.map(runRefOf));
+    expect(legRefs.size).toBe(legs.length);
+    console.log(
+      `kept runs: ${plain.length} ordinary (${withRecords} with searches, ${records} records), ${legs.length} prompt legs, ${legRefs.size} distinct leg runRefs`,
+    );
   });
 });

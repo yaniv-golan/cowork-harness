@@ -15,6 +15,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { collectSecrets } from "../secrets.js";
 import { harvestRun, recordId, type HarvestCounts, type PoolRecord } from "./harvest.js";
+import { readLegMarker } from "../run/turn-layout.js";
 import { DEFAULT_RETRIEVAL, type RetrievalParams } from "./retrieval.js";
 
 export const POOL_SCHEMA_VERSION = 1;
@@ -106,12 +107,26 @@ export function poolHash(records: { id: string }[], retrieval: RetrievalParams):
 }
 
 /** Run dirs named by `--from`: a run dir itself (it holds events.jsonl), or a dir whose run dirs sit up to three
- *  levels below it. A run's own work dir is never searched (an agent's nested runs are not this run's). */
+ *  levels below it. A multi-leg scenario root's prompt legs (`legs/<id>/` with a valid `leg.json`) are run dirs too,
+ *  found at any depth, since a root sits as deep as an ordinary run. A run's own work dir is never searched (an
+ *  agent's nested runs are not this run's). */
 export function discoverRunDirs(from: string[]): string[] {
   const out = new Set<string>();
   const walk = (d: string, depth: number) => {
     if (existsSync(join(d, "events.jsonl"))) {
       out.add(resolve(d));
+      return;
+    }
+    const legs = join(d, "legs");
+    let legNames: string[] = [];
+    try {
+      legNames = existsSync(legs) && statSync(legs).isDirectory() ? readdirSync(legs) : [];
+    } catch {
+      // unreadable legs dir
+    }
+    const promptLegs = legNames.map((n) => join(legs, n)).filter((p) => readLegMarker(p)?.kind === "prompt");
+    if (promptLegs.length) {
+      for (const p of promptLegs) if (existsSync(join(p, "events.jsonl"))) out.add(resolve(p));
       return;
     }
     if (depth === 0) return;

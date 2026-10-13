@@ -26,6 +26,15 @@ All notable changes to this project are documented here. The format is based on
   - The schemas' descriptions of the device-bridge audit counts, the `delete-not-refused` divergence, command-metric
     records and a host action's record are corrected.
 
+### Fixed
+
+- **`search-pool build` reads a multi-leg run's legs, each as its own source run.** `--from` a runs dir never reached
+  a multi-leg run's `legs/<id>/` dirs, so their searches were left out. Given a scenario dir, every run's leg of the
+  same id was recorded as one source, keeping only the last run's skill, skill commit and signature; a pool built from
+  two skills' legs could then be built as one skill without `--mixed`. Legs are now found under a run's root at any
+  depth, and each leg names its own run. An ordinary run's source reference, every record id and the pool hash are
+  unchanged.
+
 ## [4.9.0] — 2026-10-13
 
 ### Upgrade notes
