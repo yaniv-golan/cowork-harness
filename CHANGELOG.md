@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.9.1] — 2026-10-14
+
 ### Changed
 
 - **`latest` moves to `desktop-2.37337.1`** (agent **2.1.295**, unchanged). The Cowork system prompt, the egress
@@ -52,6 +54,25 @@ All notable changes to this project are documented here. The format is based on
   is (within the same three levels as an ordinary run), each leg names its own run, and a persistent leg's sub-agent
   searches are read from the root's config dir under that leg's own agent sessions. An ordinary run's source
   reference and every record id are unchanged, so a pool built from the same ordinary runs has the same hash.
+- **The companion skill's linter reads every key list from its `assertion-keys.json`, and says when it cannot.**
+  - A multi-leg scenario's top-level keys now come from that file too, instead of a copy inside `scenario.py`.
+  - A list that is missing or malformed (not a list of strings, or `enums` not a map) falls back to the built-in
+    list with a warning that names the field. Before, a string where a list belonged was read one character at a
+    time, and the hook-event lists fell back without a warning.
+  - A malformed `liveVerifiedHookEvents` list now counts no hook event as live-verified, rather than restoring the
+    built-in list. A malformed `enums` field falls back to its own built-in values alone.
+- **For maintainers: `check:surface` reads a narrowing of the scenario or session schema as a change.** Each of
+  these can reject a file that used to load, and each was missed or read as an addition, so it passed
+  `--since-tag` without a major bump:
+  - a field made required on an existing object;
+  - a closed object, a `const`, a new `enum`, or a new pattern, length, range or item-count limit on an existing
+    property;
+  - an `allOf` branch on an existing property;
+  - a new `anyOf`/`oneOf` on an existing property, unless one branch keeps the property's old shape unchanged;
+  - any added `oneOf` branch, since `oneOf` rejects a value two branches both accept.
+
+  The reverse reads as a widening and never as breaking: a field no longer required, a type kept inside a wider set
+  of types, a looser limit, or a dropped `enum`.
 
 ## [4.9.0] — 2026-10-13
 
