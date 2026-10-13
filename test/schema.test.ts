@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { REFUSED_TOP_LEVEL } from "../src/run/multi-leg-scenario.js";
 import { describe, expect, it } from "vitest";
 import { buildSchemas, buildAssertionKeys, SCHEMA_DIR, ASSERTION_KEYS_PATH } from "../scripts/gen-schema.js";
 import { AnswerRule, Assertion, Scenario, ScenarioObject, VERDICT_MODIFIER_KEYS, FIDELITY_TIERS } from "../src/types.js";
@@ -176,6 +177,53 @@ describe("scenario.py assertion-keys.json is in sync with the zod Assertion sche
   it.skipIf(!HAVE_PY)("scenario.py _EMBEDDED_TOP_LEVEL_KEYS equals the generated topLevelKeys", () => {
     const gen = (JSON.parse(buildAssertionKeys()).topLevelKeys as string[]).slice().sort();
     expect(pyKeySet("_EMBEDDED_TOP_LEVEL_KEYS")).toEqual(gen);
+  });
+  // A multi-leg scenario's keys: scenario.py reads them from assertion-keys.json at run time, falling back to an
+  // embedded copy that must equal the generated list; the keys a prompt leg inherits are the scenario-wide ones a
+  // single scenario also has, except the fixture (the first leg's only); and the keys a multi-leg file refuses are
+  // exactly the single scenario's keys it does not take.
+  it.skipIf(!HAVE_PY)("scenario.py's embedded multi-leg top-level keys equal the generated ones, and are what it checks against", () => {
+    const gen = JSON.parse(buildAssertionKeys()).multiLeg.topLevelKeys as string[];
+    expect(pyKeySet("_EMBEDDED_MULTI_LEG_TOP_KEYS")).toEqual([...gen].sort());
+    expect(pyKeySet("_MULTI_LEG_TOP_KEYS")).toEqual([...gen].sort());
+  });
+  it.skipIf(!HAVE_PY)("scenario.py's leg-shared keys are the multi-leg keys a single scenario also has, but the fixture", () => {
+    const keys = JSON.parse(buildAssertionKeys());
+    const single = new Set(keys.topLevelKeys as string[]);
+    const shared = (keys.multiLeg.topLevelKeys as string[]).filter((k) => single.has(k) && k !== "workspace_fixture").sort();
+    expect(pyKeySet("_LEG_SHARED_KEYS")).toEqual(shared);
+  });
+  it("each prompt leg the executor runs carries every leg-shared key", async () => {
+    const { legScenario } = await import("../src/run/execute.js");
+    const keys = JSON.parse(buildAssertionKeys());
+    const single = new Set(keys.topLevelKeys as string[]);
+    const shared = (keys.multiLeg.topLevelKeys as string[]).filter((k) => single.has(k) && k !== "workspace_fixture");
+    // Every optional scenario-wide key set, so a conditional copy shows too; the second leg (the fixture is the first's).
+    const full = {
+      name: "m",
+      baseline: "latest",
+      session: "s.yaml",
+      fidelity: "container",
+      execution: "local",
+      lane: "local",
+      answers: [],
+      on_unanswered: "fail",
+      expect_denied: [],
+      skills: [],
+      requires_capabilities: [],
+      allow_host_hooks: true,
+      legs: [
+        { id: "a", prompt: "one", assert: [] },
+        { id: "b", prompt: "two", assert: [] },
+      ],
+    } as never;
+    const ran = Object.keys(legScenario(full, { id: "b", prompt: "two", assert: [] } as never));
+    for (const k of shared) expect(ran, k).toContain(k);
+  });
+  it("a multi-leg file refuses exactly the single scenario's keys it does not take", () => {
+    const keys = JSON.parse(buildAssertionKeys());
+    const multi = new Set(keys.multiLeg.topLevelKeys as string[]);
+    expect(Object.keys(REFUSED_TOP_LEVEL).sort()).toEqual((keys.topLevelKeys as string[]).filter((k) => !multi.has(k)).sort());
   });
   it.skipIf(!HAVE_PY)("scenario.py _CLASSIFIED_KEYS equals the generated assert keys", () => {
     const gen = (JSON.parse(buildAssertionKeys()).keys as string[]).slice().sort();
