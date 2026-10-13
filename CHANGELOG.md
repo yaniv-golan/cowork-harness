@@ -26,6 +26,17 @@ All notable changes to this project are documented here. The format is based on
   - The schemas' descriptions of the device-bridge audit counts, the `delete-not-refused` divergence, command-metric
     records and a host action's record are corrected.
 
+### Fixed
+
+- **`search-pool build` reads a multi-leg run's legs, each as its own source run.** `--from` a runs dir never reached
+  a multi-leg run's `legs/<id>/` dirs, so their searches were left out. Given a scenario dir, every run's leg of the
+  same id was recorded as one source, keeping only the last run's skill, skill commit and signature; a pool built from
+  two skills' legs could then be built as one skill without `--mixed`. A leg run under `workdir: persistent` also lost its
+  sub-agents' searches, which sit in the scenario root's shared config dir. Legs are now found wherever their root
+  is (within the same three levels as an ordinary run), each leg names its own run, and a persistent leg's sub-agent
+  searches are read from the root's config dir under that leg's own agent sessions. An ordinary run's source
+  reference and every record id are unchanged, so a pool built from the same ordinary runs has the same hash.
+
 ## [4.9.0] — 2026-10-13
 
 ### Upgrade notes

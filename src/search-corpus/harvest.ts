@@ -14,10 +14,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { initAgentVersion } from "../run/recorded-agent-version.js";
-import { resolveGraded } from "../run/turn-layout.js";
+import { readLegMarker, resolveGraded } from "../run/turn-layout.js";
 import { parseWebSearchResult, renderWebSearchResult, splitSearches, type SearchLink } from "./render.js";
 
 export interface RecordSource {
@@ -125,8 +125,28 @@ function resultOf(runDir: string): Record<string, unknown> | null {
   return p ? readJson(p) : null;
 }
 
-function childTranscripts(runDir: string): string[] {
-  const projects = join(runDir, "claude-config", "projects");
+/** The agent session ids a run's events.jsonl names (every stream frame carries `session_id`). */
+function sessionIds(eventLines: string[]): Set<string> {
+  const ids = new Set<string>();
+  for (const line of eventLines) {
+    const m = /"session_id":"([^"]+)"/.exec(line);
+    if (m) ids.add(m[1]!);
+  }
+  return ids;
+}
+
+/** Sub-agent transcripts: `claude-config/projects/<project>/<session>/subagents/agent-<id>.jsonl`. A run dir has its
+ *  own config dir; a multi-leg run's prompt leg under `workdir: persistent` shares the scenario root's, so for a leg
+ *  the root's is read too, keeping only the session dirs of this leg's own agent sessions. */
+function childTranscripts(runDir: string, eventLines: string[]): string[] {
+  const own = transcriptsUnder(join(runDir, "claude-config", "projects"), () => true);
+  if (!isLegDir(runDir)) return own;
+  const mine = sessionIds(eventLines);
+  const shared = transcriptsUnder(join(dirname(dirname(runDir)), "claude-config", "projects"), (session) => mine.has(session));
+  return [...new Set([...own, ...shared])].sort();
+}
+
+function transcriptsUnder(projects: string, keepSession: (session: string) => boolean): string[] {
   const out: string[] = [];
   const ls = (d: string) => {
     try {
@@ -137,6 +157,7 @@ function childTranscripts(runDir: string): string[] {
   };
   for (const p of ls(projects))
     for (const s of ls(join(projects, p))) {
+      if (!keepSession(s)) continue;
       const sub = join(projects, p, s, "subagents");
       for (const f of ls(sub)) if (/^agent-[\w-]+\.jsonl$/.test(f)) out.push(join(sub, f));
     }
@@ -159,6 +180,27 @@ function skillOf(runDir: string, r: Record<string, unknown>): string | null {
   return onlyOne((r.fingerprint as { skillScope?: unknown } | undefined)?.skillScope) ?? onlyOne(r.skillsInvoked);
 }
 
+/** A multi-leg run's leg dir: under `legs/`, with a `leg.json` the harness writes before the leg starts. The marker's
+ *  presence decides, parsed or not: a scenario named `legs` has ordinary runs there, which carry no marker. */
+export function isLegDir(dir: string): boolean {
+  if (basename(dirname(dir)) !== "legs") return false;
+  try {
+    return lstatSync(join(dir, "leg.json")).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** A run's reference: the hash of `<scenario>/<run id>`, never a host path. A multi-leg run's prompt leg
+ *  (`<scenario>/<run id>/legs/<leg>`, marked by `leg.json`) hashes all four parts: its last two alone are
+ *  `legs/<leg>`, the same for every run that has a leg of that id. */
+export function runRefOf(runDir: string): string {
+  const leg = isLegDir(runDir);
+  const root = leg ? dirname(dirname(runDir)) : runDir;
+  const key = `${basename(dirname(root))}/${basename(root)}${leg ? `/legs/${basename(runDir)}` : ""}`;
+  return createHash("sha256").update(key, "utf8").digest("hex").slice(0, 16);
+}
+
 export function sourceOf(runDir: string, eventLines: string[]): RecordSource {
   const r = resultOf(runDir) ?? {};
   const status = readJson(join(runDir, "status.json")) ?? {};
@@ -167,10 +209,7 @@ export function sourceOf(runDir: string, eventLines: string[]): RecordSource {
   const models = Array.isArray(r.models) ? r.models : [];
   const skill = skillOf(runDir, r);
   return {
-    runRef: createHash("sha256")
-      .update(`${basename(dirname(runDir))}/${basename(runDir)}`, "utf8")
-      .digest("hex")
-      .slice(0, 16),
+    runRef: runRefOf(runDir),
     scenario: str(r.scenario),
     skill,
     skillRef: str(r.skillCommit),
@@ -227,7 +266,8 @@ export function harvestRun(runDir: string): { records: PoolRecord[]; counts: Har
   // transcript is not captured for every sub-agent, and the frames carry the same tool_result text, so the two
   // produce the same record id and the copy is dropped below.
   take(pairs(eventLines, "parented"), "events", "subagent");
-  for (const f of childTranscripts(runDir)) take(pairs(readFileSync(f, "utf8").split("\n"), "all"), "child-transcript", "subagent");
+  for (const f of childTranscripts(runDir, eventLines))
+    take(pairs(readFileSync(f, "utf8").split("\n"), "all"), "child-transcript", "subagent");
   const seen = new Set<string>();
   const unique = records.filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
   counts.duplicates = records.length - unique.length;

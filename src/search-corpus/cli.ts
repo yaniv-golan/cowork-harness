@@ -30,7 +30,7 @@ export const SEARCH_POOL_USAGE =
   "       git work tree is refused unless --allow-in-repo (a pool holds web text and summaries that can quote an upload).\n" +
   "       build and import refuse a pool dir that already exists and is not empty.\n" +
   "       --from (repeatable): a kept run dir, or a dir whose run dirs sit up to three levels below it (a run's work dir\n" +
-  "       is skipped).\n" +
+  "       is skipped). A multi-leg run's prompt legs are found under its root, each as its own source run.\n" +
   "       --mixed: allow searches from more than one skill, or from runs naming none (a measured variant, never a baseline).\n" +
   "       --skill: declare the pool's skill for runs that name no single skill under test (a run naming another skill is\n" +
   "       refused unless --mixed). A run's skill is its graded skill, else its one scoped skill, else its one invoked skill.\n" +

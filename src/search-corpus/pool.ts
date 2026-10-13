@@ -14,7 +14,8 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, 
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { collectSecrets } from "../secrets.js";
-import { harvestRun, recordId, type HarvestCounts, type PoolRecord } from "./harvest.js";
+import { harvestRun, isLegDir, recordId, type HarvestCounts, type PoolRecord } from "./harvest.js";
+import { readLegMarker } from "../run/turn-layout.js";
 import { DEFAULT_RETRIEVAL, type RetrievalParams } from "./retrieval.js";
 
 export const POOL_SCHEMA_VERSION = 1;
@@ -106,12 +107,31 @@ export function poolHash(records: { id: string }[], retrieval: RetrievalParams):
 }
 
 /** Run dirs named by `--from`: a run dir itself (it holds events.jsonl), or a dir whose run dirs sit up to three
- *  levels below it. A run's own work dir is never searched (an agent's nested runs are not this run's). */
+ *  levels below it. A multi-leg scenario root's prompt legs (`legs/<id>/`) are run dirs too: a root sits where an
+ *  ordinary run dir does, so its legs are found within the same three levels. A run's own work dir is never searched (an
+ *  agent's nested runs are not this run's). */
 export function discoverRunDirs(from: string[]): string[] {
   const out = new Set<string>();
   const walk = (d: string, depth: number) => {
     if (existsSync(join(d, "events.jsonl"))) {
       out.add(resolve(d));
+      return;
+    }
+    const legs = join(d, "legs");
+    let legNames: string[] = [];
+    try {
+      legNames = existsSync(legs) && statSync(legs).isDirectory() ? readdirSync(legs) : [];
+    } catch {
+      // unreadable legs dir
+    }
+    // Every leg with an agent session (a host-action leg has none). A leg is marked by its leg.json, parsed or not, so
+    // a leg whose marker does not parse is found from a runs dir as from its root; a scenario named `legs` holds
+    // ordinary runs with no marker, and is walked like any other scenario.
+    const legRuns = legNames
+      .map((n) => join(legs, n))
+      .filter((p) => isLegDir(p) && readLegMarker(p)?.kind !== "action" && existsSync(join(p, "events.jsonl")));
+    if (legRuns.length) {
+      for (const p of legRuns) out.add(resolve(p));
       return;
     }
     if (depth === 0) return;

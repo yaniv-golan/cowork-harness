@@ -464,7 +464,8 @@ experimental and may change in a minor release.
 
 `search-pool build <pool> --from <run-dir|runs-dir>` (repeat `--from` for more) collects the WebSearch results recorded in kept runs into a
 pool: one record per search, holding its query, its links and the search's prose summary, plus the source run's
-skill, skill commit, skill snapshot signature, agent and Desktop versions, model and start time. Nothing serves a pool
+skill, skill commit, skill snapshot signature, agent and Desktop versions, model and start time. A multi-leg run's
+prompt legs (`legs/<id>/`) are found under its root and count as separate source runs. Nothing serves a pool
 yet; a later release will let an eval or hillclimb run answer its searches from one.
 
 - **Where.** `<pool>` is a name under `~/.cowork-harness/search-pools/`, or a path. The pool dir is `0700` and its two
