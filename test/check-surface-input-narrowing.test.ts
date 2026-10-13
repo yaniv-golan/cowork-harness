@@ -79,10 +79,19 @@ describe("type on an input schema", () => {
     const d = diff(IN, { ".a": { type: "string" } }, { ".a": { type: ["string", "null"] } });
     expect(d.ok).toBe(true);
     expect(d.widened).toEqual([k(IN, ".a.type")]);
+    // The old type in its new spelling is not an addition; the new type is.
+    expect(d.added).toEqual([k(IN, ".a.type[null]")]);
   });
   it("a one-element array and the same scalar are equivalent, both ways", () => {
-    expect(diff(IN, { ".a": { type: ["string"] } }, { ".a": { type: "string" } }).ok).toBe(true);
-    expect(diff(IN, { ".a": { type: "string" } }, { ".a": { type: ["string"] } }).ok).toBe(true);
+    for (const [from, to] of [
+      [["string"], "string"],
+      ["string", ["string"]],
+    ]) {
+      const d = diff(IN, { ".a": { type: from } }, { ".a": { type: to } });
+      expect(d.ok).toBe(true);
+      expect(d.added).toEqual([]);
+      expect(d.removed).toEqual([]);
+    }
   });
   it("a type that drops a value, or changes, still breaks", () => {
     expect(diff(IN, { ".a": { type: ["string", "null"] } }, { ".a": { type: "string" } }).ok).toBe(false);
@@ -113,5 +122,65 @@ describe("constraints on an input schema", () => {
     expect(kinds("scenario.schema.json").has("pattern") || kinds("scenario.schema.json").has("minLength")).toBe(true);
     for (const kind of ["pattern", "minLength", "maxLength", "minimum", "maximum", "minItems", "maxItems"])
       expect(kinds("run-result.json").has(kind), kind).toBe(false);
+  });
+});
+
+describe("a union branch added onto an existing input property", () => {
+  it("a new allOf branch narrows it", () => {
+    const d = diff(IN, { ".a": { type: "string" } }, { ".a": { type: "string" }, ".a<allOf:0>": { pattern: "^x" } });
+    expect(d.changed).toEqual([k(IN, ".a<allOf:0>.pattern")]);
+    expect(d.ok).toBe(false);
+  });
+  it("a first anyOf or oneOf on a property that keeps its own type narrows it", () => {
+    for (const kind of ["anyOf", "oneOf"]) {
+      const d = diff(
+        IN,
+        { ".a": { type: "string" } },
+        { ".a": { type: "string" }, [`.a<${kind}:0>`]: { minLength: 1 }, [`.a<${kind}:1>`]: { maxLength: 9 } },
+      );
+      expect(d.changed, kind).toEqual([k(IN, `.a<${kind}:0>.minLength`), k(IN, `.a<${kind}:1>.maxLength`)]);
+    }
+  });
+  it("a branch appended to an existing anyOf widens it (an addition)", () => {
+    const d = diff(
+      IN,
+      { ".a": {}, ".a<anyOf:0>": { type: "string" } },
+      { ".a": {}, ".a<anyOf:0>": { type: "string" }, ".a<anyOf:1>": { type: "number" } },
+    );
+    expect(d.ok).toBe(true);
+    expect(d.added).toEqual([k(IN, ".a<anyOf:1>.type")]);
+  });
+  it("a branch on a new property is just added", () => {
+    const d = diff(
+      IN,
+      { ".a": { type: "string" } },
+      { ".a": { type: "string" }, ".b": { type: "string" }, ".b<allOf:0>": { pattern: "^x" } },
+    );
+    expect(d.ok).toBe(true);
+  });
+  it("the real allOf site on metrics: a new branch with a pattern on name fails", () => {
+    const base = { ".metrics[]": { type: "object" }, ".metrics[]<allOf:0>": { closed: true }, ".metrics[].name": { type: "string" } };
+    const cur = { ...base, ".metrics[]<allOf:1>.name": { pattern: "^[a-z]+$" } };
+    expect(diff(IN, base, cur).changed).toEqual([k(IN, ".metrics[]<allOf:1>.name.pattern")]);
+  });
+});
+
+describe("loosenings that used to read as breaks", () => {
+  it("an enum removed entirely from an existing input property widens it", () => {
+    const d = diff(IN, { ".a": { type: "string", enum: ["x", "y"] } }, { ".a": { type: "string" } });
+    expect(d.ok).toBe(true);
+    expect(d.widened).toEqual([k(IN, ".a.enum[x]"), k(IN, ".a.enum[y]")]);
+  });
+  it("an exclusive bound replaced by an inclusive one at or beyond it widens it", () => {
+    const d = diff(IN, { ".a": { exclusiveMinimum: 0 } }, { ".a": { minimum: 0 } });
+    expect(d.ok).toBe(true);
+    // Read as one widening: the exclusive bound widened, its inclusive replacement no separate addition.
+    expect(d.widened).toEqual([k(IN, ".a.exclusiveMinimum")]);
+    expect(d.added).toEqual([]);
+    expect(diff(IN, { ".a": { exclusiveMaximum: 9 } }, { ".a": { maximum: 9 } }).ok).toBe(true);
+  });
+  it("the stricter swap still fails", () => {
+    expect(diff(IN, { ".a": { minimum: 0 } }, { ".a": { exclusiveMinimum: 0 } }).ok).toBe(false);
+    expect(diff(IN, { ".a": { exclusiveMinimum: 0 } }, { ".a": { minimum: 1 } }).ok).toBe(false);
   });
 });

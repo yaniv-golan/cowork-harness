@@ -73,8 +73,12 @@ export const PRE_491_KINDS: readonly string[] = ["type", "enum", "const", "ref",
  *  - session.schema.json: a session file, authored by the user.
  *  Every other schema under schema/ is written by the harness (or exchanged with a decider: protocol.v1.json, whose
  *  both directions have readers).
- *  Not seen at all (any schema): a narrowing through `not`, `contains` or `propertyNames`, or on an untyped `{}`
- *  property; the walker records none of them. */
+ *  Not seen (any schema), so a narrowing through these reads as an addition or nothing:
+ *  - `not`, `contains`, `propertyNames`, and an untyped `{}` property;
+ *  - `items`, an `additionalProperties` schema, or a `$ref` added onto a property that existed;
+ *  - an object-valued `const` or `enum` (recorded by flattening, but not matched as introduced);
+ *  - a `required` naming a property its node does not declare in `properties`;
+ *  - `multipleOf`, `format`, `uniqueItems`, `minProperties`, `maxProperties` (not recorded). */
 export const INPUT_SCHEMAS: ReadonlySet<string> = new Set([
   "scenario.schema.json",
   "scenario-multi-leg.schema.json",

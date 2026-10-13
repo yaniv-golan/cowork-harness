@@ -114,6 +114,25 @@ function inputReclassify(base: unknown, cur: unknown): { widen: Set<string>; nar
     const existed = (path: string) =>
       path in bf || paths.some((p) => p.startsWith(path) && /^[.[<{]/.test(p.slice(path.length))) || (path === "" && paths.length > 0);
     const parentOf = (path: string) => path.replace(/\.[^.]*$/, "");
+    // A union branch new on a property that existed: an `allOf` branch always narrows it (every branch must match);
+    // a first `anyOf`/`oneOf` narrows it when the property keeps its own constraints (at least one branch must now
+    // match on top of them). A property whose own constraints moved INTO the branches is the widening union shape,
+    // read by diffSurfaces' branch logic. A branch appended to an existing anyOf/oneOf is an addition (a widening).
+    for (const path of Object.keys(cf)) {
+      if (path in bf) continue;
+      for (const m of path.matchAll(/<(allOf|anyOf|oneOf):\d+>/g)) {
+        const arm = path.slice(0, m.index! + m[0].length);
+        if (paths.some((p) => p === arm || p.startsWith(arm))) continue; // the branch existed
+        const prefix = path.slice(0, m.index!);
+        if (!existed(prefix)) break; // a branch on a new property: an addition
+        const kind = m[1]!;
+        const firstOfKind = !paths.some((p) => p.startsWith(`${prefix}<${kind}:`));
+        const keptOwn = Object.entries(bf[prefix] ?? {}).every(([kd, v]) => JSON.stringify(cf[prefix]?.[kd]) === JSON.stringify(v));
+        if (kind === "allOf" || (firstOfKind && keptOwn))
+          for (const [kd, v] of Object.entries(cf[path]!)) leafKeys(file, path, kd, v).forEach((x) => narrow.add(x));
+        break;
+      }
+    }
     for (const path of new Set([...Object.keys(bf), ...Object.keys(cf)])) {
       const b = bf[path] ?? {};
       const c = cf[path] ?? {};
@@ -132,14 +151,37 @@ function inputReclassify(base: unknown, cur: unknown): { widen: Set<string>; nar
         }
       }
       if (!("enum" in b) && "enum" in c && existed(path)) keys(c, "enum").forEach((x) => narrow.add(x));
+      // An enum dropped entirely from a property that is still there accepts any value it allowed.
+      if ("enum" in b && !("enum" in c) && path in cf) keys(b, "enum").forEach((x) => widen.add(x));
+      // An exclusive bound replaced by an inclusive one at or beyond it (`exclusiveMinimum: 0` → `minimum: 0`).
+      for (const [exc, inc, looser] of [
+        ["exclusiveMinimum", "minimum", (e: number, i: number) => i <= e],
+        ["exclusiveMaximum", "maximum", (e: number, i: number) => i >= e],
+      ] as const)
+        if (
+          typeof b[exc] === "number" &&
+          !(exc in c) &&
+          typeof c[inc] === "number" &&
+          !(inc in b) &&
+          looser(b[exc] as number, c[inc] as number)
+        ) {
+          keys(b, exc).forEach((x) => widen.add(x));
+          keys(c, inc).forEach((x) => {
+            widen.add(x);
+            narrow.delete(x);
+          });
+        }
       if ("type" in b && "type" in c) {
         const asSet = (t: unknown) => new Set((Array.isArray(t) ? t : [t]).map((v) => JSON.stringify(v)));
         const bt = asSet(b.type);
         const ct = asSet(c.type);
         if ([...bt].every((t) => ct.has(t))) {
           keys(b, "type").forEach((x) => widen.add(x));
-          // Equivalent forms (a one-element array and the same scalar): the new keys are not additions either.
-          if (bt.size === ct.size) keys(c, "type").forEach((x) => widen.add(x));
+          // The old types in their new spelling are not additions; a type the new set adds is.
+          const old = new Set((Array.isArray(b.type) ? b.type : [b.type]).map((v) => (typeof v === "string" ? v : JSON.stringify(v))));
+          keys(c, "type")
+            .filter((x) => old.has(Array.isArray(c.type) ? x.slice(x.lastIndexOf("[") + 1, -1) : JSON.parse(JSON.stringify(c.type))))
+            .forEach((x) => widen.add(x));
         }
       }
     }
