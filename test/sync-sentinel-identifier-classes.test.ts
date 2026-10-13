@@ -158,6 +158,8 @@ const ESCAPED_OR_CONSTANT_SPANS: Record<string, string> = {
   SCHED_KEY: "a string constant naming an env key",
   keyOpen: "a regex source fragment built from SCHED_KEY, interpolated as pattern on purpose",
   taskArray: "a regex source fragment built from constants",
+  blkParam: "a regex source constant chosen by the S6c split-form flag",
+  blkTail: "a regex source constant chosen by the S6c split-form flag",
   "arrayRe.source": "a regex literal's own source, interpolated as pattern on purpose",
   'forms.join("|")': "an alternation of regex source constants",
 };

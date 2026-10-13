@@ -339,6 +339,18 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
       "path → skill id map for analytics (skill_id); the agent deletes it from child-process env; set on every observed session; not modeled",
     sites: ["post-write", "observed"],
   },
+  CLAUDE_CODE_MCP_APPS_HOST: {
+    class: "gate-conditional-off",
+    reason:
+      'the host-loop launch writes "1" only when the session runs on the host loop, did not start through the host CLI launcher, and gate 3184956269 (default off, dark) is on; the spawn env of the Claude Code tab also gets it from an MCP-apps helper, behind a different gate (513873720), not the Cowork host loop; not modeled',
+    sites: ["post-write", "observed"],
+  },
+  CLAUDE_CODE_HOST_PROMPT_SUPERSEDES_RECORD: {
+    class: "session-conditional",
+    reason:
+      'written "1" only for an imported session whose system prompt is a recorded snapshot or custom prompt, when the organization base prompt was fetched or the deployment is 3p, on agent >= 2.1.288-dev; the harness never imports a session; not modeled',
+    sites: ["post-write", "observed"],
+  },
   API_FORCE_IDLE_TIMEOUT: {
     class: "host-loop-unmodeled",
     reason: 'Jp sets "1" (the agent\'s body-idle watchdog); untriaged, follow-up',

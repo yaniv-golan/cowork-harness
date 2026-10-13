@@ -182,6 +182,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
       "4200321681": { id: "4200321681", name: "autoModeOverridesAlwaysAllow", on: false, source: "absent", value: undefined },
       "1447478638": { id: "1447478638", name: "scheduledTaskToolsApprovableByAutoMode", on: false, source: "absent", value: undefined },
       "4074604942": { id: "4074604942", name: "1p-direct-mcp", on: false, source: "absent", value: undefined },
+      "3184956269": { id: "3184956269", name: "mcpAppsHost", on: false, source: "absent", value: undefined },
     });
   });
 
@@ -1455,6 +1456,78 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
   );
   const fixture1289290 = () => `HEADER;${W3};${W2};${W1_1289290}${STIER_1289290};${MODELCFG}TAIL`;
 
+  // SPLIT form (Desktop 2.37337.1): the tool reads the pinned turn bit with no restriction conjunct, and the
+  // two env keys get their own condition, `<tool>&&!<hipaaBlocked>&&!<verdict>(<orgId>,<bit>)`. The verdict
+  // check and its "cobalt_plinth" block source are carried verbatim in shape, renamed.
+  const SPLIT_DEF =
+    "frameArtifactsHipaaBlocked:zhb,hostLoopMode:v}){" +
+    "let zoe=N?g?.builtTools===void 0?zFo(i,{isBridgeSession:b,isDispatchChild:x},!1):N.frameArtifactsTurnPinned??!1:!1," +
+    "zde=zoe&&!zhb&&!zOi(h?.orgId,N?.frameArtifactsBitUnderVerdict===!0),zgr=1;" +
+    "N&&(N.frameArtifactsTurnEnabled=zde,N.frameArtifactsTurnPinned=zoe);" +
+    'function zPo(e,t,n){return e.frameArtifactsEnabled===!0&&(e.sessionType===void 0||e.sessionType==="scheduled")&&!t.isBridgeSession&&!t.isDispatchChild&&!n}' +
+    "function zFo(e,t,n){return zPo(e,t,n)&&e._isUnattended!==!0}" +
+    'var zDi=zt.XF("cobalt_plinth");function zOi(e,n){let r=zDi.isBlocked();return r||!zA.r()?r:!n||e==null||e!==zt.ZF()}' +
+    "e.scheduledTaskId&&!zxp()&&(e.frameArtifactsEnabled=void 0);" +
+    'function zxp(){return zt.OU()&&zt.AU("1978029737","scheduledRunFrameArtifacts",!0,zt.TQ())}' +
+    HIPAA_DEF;
+  const fixtureSplit = () =>
+    `HEADER;${W3};${W2};${W1_1289290}${SPLIT_DEF + STIER.replace('"AskUserQuestion","ToolSearch"', '"AskUserQuestion",...zoe?["Artifact"]:[],"ToolSearch"')};${MODELCFG}TAIL`;
+  describe("S6c/S6d split form (Desktop 2.37337.1)", () => {
+    const facts = (b: string) => checkSpawnContractFacts(b).join("\n");
+    it("the split shape is clean", () => {
+      expect(fixtureSplit()).toContain('...zde&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"}');
+      expect(facts(fixtureSplit())).toBe("");
+    });
+    // Each mutation must apply; a no-op replace would read as "the guard is redundant".
+    it.each([
+      [
+        "the env keys gated on the tool's own condition",
+        (b: string) => b.replace("...zde&&{CLAUDE_CODE_COWORK", "...zoe&&{CLAUDE_CODE_COWORK"),
+        "S6d",
+      ],
+      ["the hipaa-blocked conjunct dropped", (b: string) => b.replace("zde=zoe&&!zhb&&!zOi(", "zde=zoe&&!zOi("), "S6d"],
+      [
+        "the verdict conjunct dropped",
+        (b: string) => b.replace("&&!zOi(h?.orgId,N?.frameArtifactsBitUnderVerdict===!0),zgr", ",zgr"),
+        "S6d",
+      ],
+      [
+        "the env condition no longer led by the tool (keys could exceed it)",
+        (b: string) => b.replace("zde=zoe&&!zhb", "zde=!0&&!zhb"),
+        "S6d",
+      ],
+      ["the blocked conjunct re-pointed off the launch parameter", (b: string) => b.replace("zde=zoe&&!zhb&&", "zde=zoe&&!zyy&&"), "S6d"],
+      ["the verdict check no longer consults the restriction", (b: string) => b.replace("return r||!zA.r()?r:", "return r?r:"), "S6d"],
+      [
+        "the verdict check's block source is another capability",
+        (b: string) => b.replace('zt.XF("cobalt_plinth")', 'zt.XF("other_cap")'),
+        "S6d",
+      ],
+      [
+        "the verdict check's restriction reader stops reading the HIPAA flag",
+        (b: string) => b.replace('zRL("coworkHipaaRestricted")', 'zRL("other")'),
+        "S6d",
+      ],
+      ["the tool's call site passes blocked as true", (b: string) => b.replace("isDispatchChild:x},!1)", "isDispatchChild:x},!0)"), "S6c"],
+      [
+        "the tool condition widened",
+        (b: string) => b.replace("N.frameArtifactsTurnPinned??!1:!1,", "N.frameArtifactsTurnPinned??!1:!0,"),
+        "S6c",
+      ],
+      ["the predicate's blocked term dropped", (b: string) => b.replace("&&!t.isDispatchChild&&!n}", "&&!t.isDispatchChild}"), "S6c"],
+    ])("%s → flags", (_l, mutate, label) => {
+      const m = mutate(fixtureSplit());
+      expect(m, "mutation did not apply").not.toBe(fixtureSplit());
+      expect(facts(m)).toContain(label);
+    });
+  });
+
+  it("S8: an EMPTY host-loop tool-list spread after Projects is clean (Desktop 2.37337.1)", () => {
+    const b = fixture1289290().replace("...FKm?[FKproj]:[]]", "...FKm?[FKproj]:[],...FKv?FKwk:[]]") + ";var FKwk=[];";
+    expect(b).toContain("...FKv?FKwk:[]]");
+    expect(checkSpawnContractFacts(b)).toEqual([]);
+  });
+
   // D7 (Desktop 1.32352.0): production dropped `!isHostLoop` from BOTH the call site and the predicate
   // body, so Artifact now reaches the host-loop tier. Without this case the new shape is proven only by
   // the real-asar oracle, which skips wherever there is no Desktop install — i.e. in CI.
@@ -1606,6 +1679,16 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     [
       "M13b tail spread condition widened",
       () => fixture1289290().replace("...FKm?[FKproj]:[]]", "...FKother?[FKproj]:[]]"),
+      "S8 tools tail-guard",
+    ],
+    [
+      "M13c host-loop tool-list spread no longer empty",
+      () => fixture1289290().replace("...FKm?[FKproj]:[]]", "...FKm?[FKproj]:[],...FKv?FKwk:[]]") + ';var FKwk=["NewTool"];',
+      "S8 tools tail-guard",
+    ],
+    [
+      "M13d host-loop tool-list spread alias unresolvable",
+      () => fixture1289290().replace("...FKm?[FKproj]:[]]", "...FKm?[FKproj]:[],...FKv?zz.FKnope:[]]"),
       "S8 tools tail-guard",
     ],
   ];
@@ -1961,6 +2044,25 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
       expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
       expect(env).toEqual(EXPECTED_GREEN); // allowlisted, never pinned
       expect(keys).toContain("CLAUDE_CODE_HOST_SCHEDULED_RUN"); // the regex-rot oracle still sees it
+    });
+    // 2.37337.1 bundles an HTTP client into the module whose method declares and spreads its own `l`.
+    const INNER = "class H{async rest(i){let o=1,l=await this.f(i);return l?.ok?{...l,data:l.data}:l}}";
+    it("an inner let/const local of the same name spread in the module is not the scheduled-run object", () => {
+      expect(facts(filesOf({ mod: MOD + INNER }))).toBe("");
+    });
+    it("a module-level spread of the object still flags, beside a shadowing inner local", () => {
+      expect(facts(filesOf({ mod: MOD + INNER + "var w={...l};" }))).toContain("spread or assigned inside its own module");
+    });
+    // Shapes a brace count cannot read, and an inner binding that may BE the module object: each must still flag.
+    it.each([
+      ["a regex character class holding a brace", "function h(){let l=1;x=/[{]/.test(y);return 2}var w={...l};"],
+      ["a nested template holding a brace", 'function h(){let l=1;x=`a${y?`{`:""}b`;return 2}var w={...l};'],
+      ["an inner binding read from the module's exports", "function g(){let l=exports.J;return{...l}}"],
+    ])("%s between the inner declaration and a spread → still flags", (_l, extra) => {
+      expect(facts(filesOf({ mod: MOD + extra }))).toContain("spread or assigned inside its own module");
+    });
+    it("a parameter of the same name is not taken as shadowing (fails closed)", () => {
+      expect(facts(filesOf({ mod: MOD + "function g(l){return{...l}}" }))).toContain("spread or assigned inside its own module");
     });
     it("deriveSpawnEnv: a new key added to the imported object → unknown-key hard fail", () => {
       const { env, flags } = derive(
@@ -3140,12 +3242,13 @@ function subagentBundle(
   const tools = overrides.tools ?? `["Read","Write","Edit","Glob","Grep"]`;
   // The hl-only folder manifest (Desktop >=1.46388.3). Only the fragments the sentinel keys on are
   // verbatim — "(the shell cannot reach this folder)" (the slice anchor, deliberately INSIDE its own
-  // subject) and the `", "` tool-list join. The rest is paraphrased, and the committed golden below
+  // subject), the outputs-folder line's opening (the fallback anchor once that phrase is a ternary arm)
+  // and the `", "` tool-list join. The rest is paraphrased, and the committed golden below
   // derives from THIS text, so the suite stays self-consistent while the real manifest text lives only
   // in the baselines JSON.
   const manifest =
     overrides.manifest ??
-    'function mani(e,n,usf,mn,a){const o=nm(usf,!0),s=new Set(rc(usf,a));const c=[...r?[`- \\`${r}\\` (synthetic outputs folder; shell: \\`${e}/mnt/outputs/\\`)`]:[],...(i??[]).map(t=>s.has(t)?`- \\`${t}\\` (shell: \\`${e}/mnt/${o.get(t)}/\\`)`:`- \\`${t}\\` (the shell cannot reach this folder)`)];const l=NS.kw.join(", ");const u=`Synthetic relative-path clause naming \\`${n}\\`.`;return c.length===0?`\\n\\n${l} synthetic empty-list variant. ${u}`:`\\n\\n${l} synthetic list variant. ${u} Synthetic tail.\\n\\nSynthetic folder heading:\\n`+c.join(`\\n`)}';
+    'function mani(e,n,usf,mn,a){const o=nm(usf,!0),s=new Set(rc(usf,a));const c=[...r?[`- \\`${r}\\` (this session\'s outputs folder; shell: \\`${e}/mnt/outputs/\\`)`]:[],...(i??[]).map(t=>s.has(t)?`- \\`${t}\\` (shell: \\`${e}/mnt/${o.get(t)}/\\`)`:`- \\`${t}\\` (the shell cannot reach this folder)`)];const l=NS.kw.join(", ");const u=`Synthetic relative-path clause naming \\`${n}\\`.`;return c.length===0?`\\n\\n${l} synthetic empty-list variant. ${u}`:`\\n\\n${l} synthetic list variant. ${u} Synthetic tail.\\n\\nSynthetic folder heading:\\n`+c.join(`\\n`)}';
   const suffix = overrides.suffix ?? `var SUF="\\n\\nSynthetic trailing sentence appended to BOTH branches.";`;
   const call = overrides.call ?? '${h?mani(i,t,usf,mn,hof):""}';
   const delivery =
@@ -3374,6 +3477,74 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
       },
     } as unknown as typeof committed;
     expect(checkSubagentPromptFacts(genFiles(), withHistory)).toEqual([]);
+  });
+});
+
+// Desktop 2.37337.1: the unreachable-folder line became `(${<pred>?"<default>":NS.<id>})`. The other arm
+// is a policy-only message; the harness models the default arm, so that arm is asserted verbatim.
+describe("checkSubagentPromptFacts — the unreachable-folder ternary (Desktop 2.37337.1)", () => {
+  const PLAIN = "(the shell cannot reach this folder)";
+  const TERN = '(${pol.a()===void 0?"the shell cannot reach this folder":NS.ZJ})';
+  // The predicate's reader, with the first-party early return the check pins.
+  const READER =
+    'Object.defineProperty(exports,"a",{enumerable:!0,get:function(){return Zpol}});' +
+    'function Zpol(){if(zt.B2()&&zt.z2().type!=="3p")return;return zt.P0().workspace.fileReadCheck}';
+  const ALT =
+    'Object.defineProperty(exports,"ZJ",{enumerable:!0,get:function(){return Zq}});var Zq="Synthetic policy-only message.";' + READER;
+  const plainManifest = (subagentBundle().match(/function mani\([\s\S]*?c\.join\(`\\n`\)\}/) ?? [""])[0];
+  const ternFiles = (edit: (s: string) => string = (s) => s) => {
+    const manifest = plainManifest.replace(PLAIN, TERN);
+    expect(manifest, "the fixture no longer contains the plain unreachable-folder line").not.toBe(plainManifest);
+    return new Map([["index.chunk-gen.js", edit(subagentBundle({ manifest }) + ALT)]]);
+  };
+  const base = extractSubagentComposition(ternFiles())!;
+  const committed = {
+    versions: {
+      "2.37337.1": {
+        hl: subagentBranchFingerprint(extractSubagentBranchSlices(ternFiles())!.hl),
+        vm: subagentBranchFingerprint(extractSubagentBranchSlices(ternFiles())!.vm),
+        manifest: subagentBranchFingerprint(base.manifest),
+        suffix: subagentBranchFingerprint(base.suffix),
+      },
+    },
+  };
+  const fp = (files: Map<string, string>) => subagentBranchFingerprint(extractSubagentComposition(files)!.manifest);
+
+  it("slices the ternary form and reports its default arm", () => {
+    expect(base.defaultArm).toBe("the shell cannot reach this folder");
+    expect(checkSubagentPromptFacts(ternFiles(), committed)).toEqual([]);
+  });
+  it("the plain form still slices, with no default arm", () => {
+    expect(extractSubagentComposition(genFiles())?.defaultArm).toBeUndefined();
+  });
+  it("a changed DEFAULT arm flags by name (the default path a 1p sub-agent receives)", () => {
+    const files = ternFiles((s) => s.replace('?"the shell cannot reach this folder":', '?"the shell reaches this folder":'));
+    expect(files.get("index.chunk-gen.js")).not.toContain('?"the shell cannot reach this folder":');
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/unreachable-folder default arm changed/);
+  });
+  it("a changed OTHER arm moves the manifest fingerprint", () => {
+    const files = ternFiles((s) => s.replace("Synthetic policy-only message.", "Synthetic policy-only message, reworded."));
+    expect(fp(files)).not.toBe(fp(ternFiles()));
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/folder-manifest text fingerprint drifted/);
+  });
+  it("a changed predicate moves the manifest fingerprint", () => {
+    const files = ternFiles((s) => s.replace("pol.a()===void 0?", "pol.a()!==void 0?"));
+    expect(fp(files)).not.toBe(fp(ternFiles()));
+  });
+  it("a predicate re-pointed at a reader that does not resolve flags", () => {
+    const files = ternFiles((s) => s.replace("pol.a()===void 0?", "pol.zz()===void 0?"));
+    expect(files.get("index.chunk-gen.js")).toContain("pol.zz()===void 0?");
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/predicate's reader pol\.zz could not be resolved/);
+  });
+  it("a reader that lost its first-party early return flags (a 1p sub-agent could get the other arm)", () => {
+    const files = ternFiles((s) => s.replace('if(zt.B2()&&zt.z2().type!=="3p")return;', ""));
+    expect(files.get("index.chunk-gen.js")).not.toContain('type!=="3p")return;');
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/no longer returns undefined first on a non-3p deployment/);
+  });
+  it("an other arm that cannot be resolved fails closed", () => {
+    const files = ternFiles((s) => s.replace('"ZJ",{enumerable', '"ZK",{enumerable'));
+    expect(extractSubagentComposition(files)).toBeNull();
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/composed append parts anchor missing/);
   });
 });
 
