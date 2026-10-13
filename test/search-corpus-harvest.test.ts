@@ -153,6 +153,20 @@ describe("harvestRun", () => {
     expect(skillWith({ fingerprint: { skillSources: ["../plugin"] } })).toBeNull();
   });
 
+  it("skips a run served from a frozen search corpus: its results came from a pool, not the web", () => {
+    const events = [use("t", "q"), res("t", result_("q"))];
+    const pinned = runDir({
+      events,
+      result: { scenario: "s", searchCorpus: { poolId: "p", sha256: "a".repeat(64), minScore: 0.4, miss: "empty" } },
+    });
+    expect(harvestRun(pinned)).toMatchObject({ records: [], served: true, counts: { results: 0, records: 0 } });
+    const framed = runDir({ events });
+    writeFileSync(join(framed, "search-corpus.jsonl"), "");
+    expect(harvestRun(framed)).toMatchObject({ records: [], served: true });
+    // an ordinary run is not
+    expect(harvestRun(runDir({ events })).served).toBe(false);
+  });
+
   it("does not harvest a result whose re-render would differ (a guess)", () => {
     const spaced = 'Web search results for query: "q"\n\nLinks: [{"title": "t", "url": "u"}]\n\n\nREMINDER: x';
     const d = runDir({ events: [use("t", "q"), res("t", spaced)] });

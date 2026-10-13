@@ -52,6 +52,8 @@ function textSummary(s: ReturnType<typeof assemblePool>, dir: string): string[] 
       .join(", ")}`,
     `  skipped: ${u.harvest.errorResults} error result(s), ${u.harvest.unparsed} unreadable, ${u.harvest.queryMismatch} query mismatch(es), ${u.harvest.searchErrors} search error(s); ${u.harvest.duplicates + u.crossRunDuplicates} duplicate(s) merged; ${u.excluded} excluded`,
   ];
+  if (u.servedRuns)
+    lines.push(`  not harvested: ${u.servedRuns} run(s) served from a frozen search corpus (their results came from a pool)`);
   const unknown = m.sources.filter((x) => x.variantHash === null).length;
   if (unknown)
     lines.push(`  note: ${unknown} source run(s) record no skill snapshot signature, so this pool's provenance is unknown to eval`);
