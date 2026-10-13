@@ -47,7 +47,9 @@ examples/
   answer-policies/  reusable scripted-answer YAML fragments, loaded with `--answer-policy <yaml>` on
                     `skill`/`decide` (or authored inline via a scenario's `answers:` block) — see
                     docs/scenario.md § Reusable answer policies (--answer-policy)
-  probes/      live-contract probe scenarios (driven by test/live-contract.test.ts — not part of the copyable starter set)
+  probes/      live-contract probe scenarios (driven by test/live-contract.test.ts — not part of the copyable starter set),
+               with one exception: resumable-probe.scenario.yaml (and its -cowork-task variant) is the multi-leg
+               (`legs:`) starter to copy — its skill is resumable-probe/, its session sessions/resumable-probe.yaml
   hillclimb/   a `/claude-api hillclimb` walkthrough: a deliberately weak skill, its data, a session and four cases —
                see hillclimb/README.md (paid: every round runs the agent and a judge)
 ```

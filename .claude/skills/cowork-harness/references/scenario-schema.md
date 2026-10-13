@@ -156,6 +156,8 @@ metrics:                            # OPTIONAL — numbers read from JSON files 
                                     # run as `<script> <events-file> [args]` over this turn's scrubbed slice of
                                     # events.jsonl; it must print exactly one JSON number. Script + deps: regular,
                                     # git-tracked files inside the scenario's repo (no symlink, no hard link, <= 1 MiB).
+                                    # `timeout_ms`: the script's wall-clock limit per run (1000-300000, default
+                                    # 30000; command only — refused on an artifact metric), past it command_timeout.
                                     # RUNS THE REPO'S CODE AS YOU (only repos you would `npm test`). Live runs run it;
                                     # replay reports the frozen record-time value (cassette v18); verify-run / regrade /
                                     # hillclimb regrade carry it forward unless --allow-metric-commands. Its own reasons:

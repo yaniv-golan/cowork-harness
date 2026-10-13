@@ -157,21 +157,24 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 2. `.claude-plugin/marketplace.json` → `plugins[0].version`.
 3. `.claude/skills/cowork-harness/.claude-plugin/plugin.json` → `"version"`.
 4. `.claude/skills/cowork-harness/SKILL.md` → frontmatter `version:`, the `tracks-harness:` line,
-   the "**Version note**" block, and the **version floor** in §0 (`needs ≥ X.Y.Z`,
-   `npx "cowork-harness@^X.Y.Z"`).
+   the "**Version note**" block, and the **version floor** in §0 (`needs ≥ X.Y.Z`, every
+   `cowork-harness@^X.Y.Z`, and the bare `` `@^X.Y.Z` `` in the "Pin" phrase).
 5. `.claude/skills/cowork-harness/references/scenario-schema.md` → the
    "Tracks `cowork-harness X.Y.Z`" line.
 6. Every other `.claude/skills/cowork-harness/references/*.md` → the "Tracks `cowork-harness X.Y.Z`"
    line in each (`check:versions` enumerates the directory, so a new reference without one fails).
 7. The baseline these track (`tracks-harness … (baseline desktop-<ver>)`) — keep in sync with the
-   newest `baselines/desktop-*.json`. The `check:versions` guard enforces this for SKILL.md, every
+   newest `baselines/desktop-*.json`. The bump does **not** touch these (they track the baseline, not the
+   harness version): edit them by hand. The `check:versions` guard enforces this for SKILL.md, every
    `references/*.md` baseline pin, and DESIGN.md's current-state sentence — a lagging pin reds CI.
-8. `.claude/skills/cowork-harness/references/ci-recipe.md` → all `npm i -g "cowork-harness@^X.Y.Z"` floors
-   (currently 3 occurrences).
+8. `.claude/skills/cowork-harness/references/ci-recipe.md` → its "Tracks" line, all `cowork-harness@^X.Y.Z`
+   floors (currently 3 occurrences), and the `` e.g. `version: "X.Y.Z"` `` pinning example.
 9. `examples/replays/README.md` → the `npm i -g "cowork-harness@^X.Y.Z"` floor.
-10. `README.md` → every `cowork-harness@^X.Y.Z` floor (the bootstrap-fallback `npx`/`npm i -g` lines
-    plus the Action-inputs "companion skill's floor guidance" mention). The `check:versions` lockstep
-    guard enforces these match the SKILL.md floor and will red CI otherwise.
+10. `README.md` → every `cowork-harness@^X.Y.Z` floor (the `npm install -g` / `npm i -g` lines and the
+    skill's `npx` bootstrap mention). The `check:versions` lockstep guard enforces these match the SKILL.md
+    floor and will red CI otherwise.
+11. `docs/companion-skill.md`, `docs/cli.md`, `docs/ci.md` → every `cowork-harness@^X.Y.Z` floor (a
+    major-only `cowork-harness@^4` pin is not a floor and is left alone).
 
 ## Checklist
 
@@ -245,7 +248,10 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       `--allow-unobserved-init-surface` for an emergency release; fails if its `provenance.observedSpawnEnv`
       is missing, malformed, or unobserved with no declaration — run one local Cowork task on that Desktop and
       re-run `sync`, or pass `--allow-unobserved-spawn-env` for an emergency release (a declared `lane-gone` only
-      warns); fails if the covered surface lost or changed
+      warns). Both need a task with *Only on this computer* on, from an account that still offers local tasks (in
+      our observation, a Team-plan organization), and the re-run `sync` refuses to write if Desktop is signed in to
+      a different organisation from the one this machine last synced under (`provenance.captureOrg`; see
+      [docs/maintenance.md](./docs/maintenance.md#per-release-runbook)); fails if the covered surface lost or changed
       a leaf since the last release tag and the bumped version is not a major — the same check as
       `npm run check:surface -- --since-tag`, which prints the counts and lists every removed/changed leaf.
       Before the bump it reports the diff without enforcing it).

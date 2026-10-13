@@ -1754,7 +1754,7 @@
             "minLength": 1
           },
           "command": {
-            "description": "a script that computes the number from the run's own events: [script, ...literal args]. The script (relative to the scenario file; .py, .mjs, .js or .cjs) is run as `<interpreter> <script> <events-file> [args...]` and must print exactly one JSON number. It must be a regular, git-tracked file inside the scenario's repository; it runs as you, so only run scenarios from repositories you would run `npm test` in. Set exactly one of artifact or command",
+            "description": "a script that computes the number from the run's own events: [script, ...literal args]. The script (relative to the scenario file; .py, .mjs, .js or .cjs) is run as `<interpreter> <script> <events-file> [args...]` and must print exactly one JSON number. It must be a regular file inside the scenario's repository, and git-tracked unless COWORK_HARNESS_GITSET=0 (the same holds for each dep); it runs as you, so only run scenarios from repositories you would run `npm test` in. Set exactly one of artifact or command",
             "minItems": 1,
             "maxItems": 32,
             "type": "array",

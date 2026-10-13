@@ -28,6 +28,7 @@ export const SEARCH_POOL_USAGE =
   "       search's prose summary) with the source run's skill and versions. Nothing serves a pool yet.\n" +
   "       <pool> is a name under ~/.cowork-harness/search-pools/, or a path. Dirs are 0700, files 0600; a path inside a\n" +
   "       git work tree is refused unless --allow-in-repo (a pool holds web text and summaries that can quote an upload).\n" +
+  "       build and import refuse a pool dir that already exists and is not empty.\n" +
   "       --from (repeatable): a kept run dir, or a dir whose run dirs sit up to three levels below it (a run's work dir\n" +
   "       is skipped).\n" +
   "       --mixed: allow searches from more than one skill, or from runs naming none (a measured variant, never a baseline).\n" +
@@ -36,7 +37,8 @@ export const SEARCH_POOL_USAGE =
   "       --exclude: drop one record by id (repeatable); the build summary lists records that name an upload or repeat\n" +
   "       its text. A record containing a known secret (the credentials, COWORK_HARNESS_SCRUB_KEYS / _VALUES, and their\n" +
   "       encoded forms) refuses the build, naming it.\n" +
-  "       --min-score: the relevance floor a query must clear to be served (default 0.4; part of the pool hash).\n" +
+  "       --min-score: the relevance floor a query must clear to be served, greater than 0 and less than 1 (default 0.4;\n" +
+  "       part of the pool hash).\n" +
   "       export writes one JSON file (not a tarball) holding the pool and a notice, refusing an existing file and, like\n" +
   "       build and import, a path inside a git work tree; import re-verifies both hashes and the secret scan.";
 

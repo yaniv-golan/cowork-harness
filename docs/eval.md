@@ -376,7 +376,8 @@ grades none, and its exit code is unchanged. Re-run the eval to grade them.
   the stager delivers a mount's git-tracked files only, so a snapshot inside a repository would mount
   empty. When git cannot answer for the directory, the eval is refused too.
 - **Identical arms** are refused; `--allow-identical-arms` runs an A/A comparison.
-- **The answer key.** An arm that contains one of the eval's scenario or session files (by location —
+- **The answer key.** An arm that contains one of the eval's scenario or session files, or a command
+  metric's script or dep (by location —
   for a `git:` arm, the working-tree directory its path names — or as a byte-identical copy under any
   name, a symlink included), any `evals.json`, or any symlink that resolves outside the snapshot is
   refused: the agent could read the answers.

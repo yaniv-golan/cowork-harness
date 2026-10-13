@@ -86,7 +86,9 @@ export const HostAction = z.strictObject({
       expect: z
         .record(z.string(), z.unknown())
         .optional()
-        .describe("top-level fields the status file must have (`{field: {not_null: true}}` requires a non-null value)"),
+        .describe(
+          "top-level fields the status file must have: `{field: {not_null: true}}` requires a non-null value; any other value must equal the field's (compared as serialized JSON, so object key order counts)",
+        ),
     })
     .optional()
     .describe("a status file read before the action; its string fields fill `{status.<field>}` in `run`"),

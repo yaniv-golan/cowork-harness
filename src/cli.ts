@@ -361,7 +361,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--strict]               fail (exit 1) on any finding instead of just warning (mirrors lint-skill's --strict)
       [--runtime]              optional headless-DOM confirmation of interactive-artifact write-back findings (needs jsdom; ENRICHMENT only — never changes the exit code)
       analyze-skill: ignore    a line with this marker (bare or in an HTML comment) in a SKILL.md silences EVERY path-fidelity finding for that file, even under --strict
-      [--output-format json]   {tool,version,command,ok,files:[{file,findings,suppressed}],scanned,unscanned,strict,error} — exit 0 = default (even with findings) · exit 1 = --strict + finding(s) · exit 2 = usage · exit 3 = could-not-verify (an artifact candidate that couldn't be parsed; --strict-independent); a clean/suppressed result is a PRE-FLIGHT signal, not proof of on-tier resolution — see 'analyze-skill --help'
+      [--output-format json]   {tool,version,command,ok,files:[{file,findings,suppressed}],scanned,unscanned,strict,error} — exit 0 = default (even with findings) · exit 1 = --strict + finding(s) · exit 2 = usage · exit 3 = could-not-verify (an artifact candidate that couldn't be parsed; with or without --strict); a clean/suppressed result is a PRE-FLIGHT signal, not proof of on-tier resolution — see 'analyze-skill --help'
   assertions --list            list available scenario assertions (generated from Zod schema)
       [--output-format json]
 
@@ -371,11 +371,12 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                pathDenials, delivered} — a thin wrapper over 'skill' (see 'probe-dispatch --help')
   trace <run-id | dir | path>  digest a run's events.jsonl (tools+result status, dispatches, decisions)
       [--view ${TRACE_VIEWS.join("|")}] [--translate-paths] [--full-results]   focus on one view (default: all); see 'trace --help'
+      [--leg <id>]             one prompt leg of a multi-leg run dir
       [--output-format json]   structured rows
   verify-run <run-dir> <scenario.yaml>   re-evaluate assert: against a kept run dir (no live agent, ~1s)
-      [--output-format json]
+      [--leg <id>] [--allow-metric-commands] [--output-format json]
   regrade <run-dir>… --scenario <yaml>   re-grade kept runs' semantic_matches and semantic_pairwise asserts with the judge (no live agent; see 'regrade --help')
-      [--judge-model <id>] [--authored-total-bytes <N>] [--output-format json]
+      [--leg <id>] [--judge-model <id>] [--authored-total-bytes <N>] [--allow-metric-commands] [--output-format json]
   fixture export <run-dir> --out <dir>   copy a kept run's outputs tree into a directory a scenario can start from
       [--allow-host-paths] [--output-format json]
   search-pool build <pool> --from <run-dir|runs-dir> [--from …]   build a pool of the WebSearch results recorded in kept runs
@@ -388,14 +389,15 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   inspect <run-id | run-dir>   show what a run produced: artifacts + a shallow field preview of each JSON artifact
       [--output-format json]   structured digest
   diff <a> <b>                 compare two baselines, two runs, two cassettes, or a run+cassette (kind auto-detected by content)
+      [--changelog]            baseline mode: render known-field prose instead of the raw path-diff
+      [--view tools|transcript|artifacts|meta|all] [--no-normalize]   run/cassette mode (see 'diff --help')
+      [--output-format json]   exit codes: 0 identical · 1 differing · 2 usage
   critique <skill-folder>      EXPERIMENTAL — run a skill, ask the agent what confused it, then grade that
                                self-report against a frozen record of the run (see 'critique --help' for cost).
                                Advisory — a discovery lead, not an independent attestation. The folder may be
                                git:<ref>:<path> (a commit); 'critique --compare <reports…>' lines several
                                critiques up side by side, with no verdicts.
-      [--changelog]            baseline mode: render known-field prose instead of the raw path-diff
-      [--view tools|transcript|artifacts|meta|all] [--no-normalize]   run/cassette mode (see 'diff --help')
-      [--output-format json]   exit codes: 0 identical · 1 differing · 2 usage
+                               exit codes: 0 the critique ran (findings never gate) · 2 no critique produced, or usage
   scaffold <run-id | run-dir>  turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
       [--out <file.yaml>]      write to a file (default: stdout)
   scaffold --name <n> --prompt "<p>" [--skill <dir>] [--tier …] [--tool …]… [--out <file.yaml>]
@@ -676,7 +678,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   list: "usage: list [--output-format text|json]   (list available platform baselines)",
   "boundary-check": "usage: boundary-check [<baseline>] [--session <file>] [--output-format text|json]",
   vm: "usage: vm <init|status|delete|prune> [<baseline>] [--output-format text|json]   (macOS arm64 only)\n  init    create the L2 Apple-VZ microVM\n  status  show running VM state\n  delete  remove the VM\n  prune   drop all orphaned VMs\n  <baseline> (default: latest) is a baseline name like desktop-<version>, not a VM name — each acts on that baseline's VM",
-  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw] [--allow-host-writes]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity/--allow-host-writes (only --model applies)\n       --model: required unless COWORK_HARNESS_MODEL is set — a session that resolves no model is refused (exit 2), with or without --raw\n       --allow-host-writes: consent to a writable hostloop connected folder (native host FS access); refused loud otherwise\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
+  chat: "usage: chat <skill-folder> [prompt] [--fidelity protocol|container|hostloop] [--model <id>]\n              [--upload <file>]... [--folder <dir>]... [--plugin <dir>]... [--verbose] [--raw] [--allow-host-hooks] [--allow-host-writes]\n       --raw: native cowork mode via docker run -it; egress sandbox NOT applied; rejects --upload/--folder/--plugin/--fidelity/--allow-host-writes (only --model applies)\n       --model: required unless COWORK_HARNESS_MODEL is set — a session that resolves no model is refused (exit 2), with or without --raw\n       --allow-host-hooks: consent to running a staged plugin's hooks as native host processes at protocol (no sandbox); refused loud otherwise (plugins without hooks need no opt-in)\n       --allow-host-writes: consent to a writable hostloop connected folder (native host FS access); refused loud otherwise\n       --fidelity: protocol/container/hostloop only (no microvm/cowork); protocol = no Docker, no sandbox",
   // Single-sourced from src/run/cassette.ts's RECORD_USAGE/REPLAY_USAGE/VERIFY_CASSETTES_USAGE (also each
   // command's own `parseArgs` no-target usage error) so this text and each command's *_BOOLEAN_FLAGS/
   // *_VALUE_FLAGS consts can't drift apart again — see P3 (record) and P9 (replay/verify-cassettes,
@@ -745,7 +747,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   ref: REF_USAGE,
   "verify-run":
     "usage: verify-run <run-dir> <scenario.yaml> [--leg <id>] [--allow-metric-commands] [--output-format json]   (re-evaluate a scenario's assert: against a kept run dir; no live agent; a command metric is carried forward from the run unless --allow-metric-commands re-runs it)\n" +
-    "       --leg <id>: with a multi-leg (`legs:`) scenario, re-evaluate that prompt leg's assert: against its legs/<id> dir (or name the leg dir itself). Its files are read from the leg's snapshot (taken when it ended), so every leg verifies; a leg with no usable snapshot (over COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES) is refused when its session tree changed after it ended. Refused for a host-action leg.",
+    "       --leg <id>: with a multi-leg (`legs:`) scenario, re-evaluate that prompt leg's assert: against its legs/<id> dir (or name the leg dir itself). Its files are read from the leg's snapshot (taken when it ended), so every leg verifies; a leg with no usable snapshot (over COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES) falls back to its session tree. Under workdir: persistent only the last leg of a finished scenario can use it; every other leg is refused. That leg, and every cowork-task leg, is refused when its tree changed after it ended or has no post-run manifest. Refused for a host-action leg.",
   inspect:
     "usage: inspect <run-id | run-dir> [--output-format json]   (show what a run PRODUCED: artifacts + a shallow preview of each JSON artifact's fields; for what HAPPENED — tools/decisions — use `trace`)",
   diff:
@@ -777,8 +779,8 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "  follows the pinned rule (--pinned-older-than) even with a hillclimb label. A run whose status.json says running\n" +
     "  is kept while it is still being updated (COWORK_HARNESS_STATUS_STALE_MS, default 15s) or its process is alive\n" +
     "  (up to 24h), under every flag. --include-hillclimb ranks hillclimb runs with every\n" +
-    "  other run: it deletes the `hillclimb regrade` / `freeze-ref` evidence of EVERY flow under the runs root, a\n" +
-    "  loop still running included (freeze-ref re-reads a frozen reference's source run). Pass it only once every\n" +
+    "  other run, so the runs of EVERY flow under the runs root, a loop still running included, can lose the ones\n" +
+    "  `hillclimb regrade` / `freeze-ref` need (freeze-ref re-reads a frozen reference's source run). Pass it only once every\n" +
     "  climb is finished, or scope it with an explicit <runs-dir> (the --run-dir the climb used).\n" +
     "  Only dirs named local_ followed by lowercase letters and digits (a run's id) are ranked and deleted, and\n" +
     "  dirs named sess- followed by letters, digits, _ or - only under --pinned-older-than; every other dir under a\n" +
@@ -811,7 +813,7 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "         · a skill dir INSIDE a plugin (SKILL.md present, walking up finds an enclosing plugin manifest) → + that plugin's root agents/**/*.md, references/**/*.md AND commands/**/*.md\n" +
     '       MULTIPLE positionals are accepted (matches lint-skill\'s nargs="+"), each resolved independently (file/dir via the rules above, or a `*`-bearing target via a small hand-rolled glob matcher — `dir/*.md` shallow, `dir/**/*.md` recursive; no dependency, no engines bump).\n' +
     "       every positional's file set is UNIONed and deduped by resolved absolute path across the WHOLE invocation (a file reached both directly and via a dir/glob is analyzed once). ZERO scannable files across ALL positionals is a USAGE ERROR (exit 2), never a silent clean pass; an unresolvable single positional (bad path, unrecognized glob shape) fails the whole invocation the same way.\n" +
-    "       findings are WARNINGS: exit 0 by default even when findings are printed. --strict fails (exit 1) if ANY scanned file (across ALL positionals) has an unsuppressed error-severity finding (mirrors lint-skill's --strict). exit 2 = usage error. exit 3 = could-not-verify (an artifact candidate that couldn't be parsed/analyzed — always, --strict-independent; a strict error finding's exit 1 takes precedence).\n" +
+    "       findings are WARNINGS: exit 0 by default even when findings are printed. --strict fails (exit 1) if ANY scanned file (across ALL positionals) has an unsuppressed error-severity finding (mirrors lint-skill's --strict). exit 2 = usage error. exit 3 = could-not-verify (an artifact candidate that couldn't be parsed/analyzed — always, with or without --strict; a strict error finding's exit 1 takes precedence).\n" +
     "       interactive-artifact write-backs (Item 1): also scans .html/.htm/.js/.mjs/.py sources under the target (.ts/.tsx/.jsx are OUT OF SCOPE — the in-process parser cannot read TypeScript or JSX; such a target is reported under `unscannedArtifactSources`, never silently passed as clean) for a relative fetch/XHR/sendBeacon/<form method=post> write-back that is LOST under Cowork (the artifact is served from Cowork's own origin, so a relative write-back resolves non-ok and a page that doesn't check resp.ok shows a false 'Saved'). Rules: artifact-write-back-lost (error, gates under --strict), artifact-write-back-suspect (advisory), plus a could-not-verify channel. These are NOT silenced by the `analyze-skill: ignore` marker. --runtime adds an OPTIONAL headless-DOM confirmation (needs jsdom, dynamically imported; ENRICHMENT only — never changes the exit code; trusted-source scope).\n" +
     "       plain `analyze-skill` (no --strict) is ADVISORY ONLY — CI should invoke `analyze-skill ... --strict` to actually gate on findings, same as `lint-skill --strict`.\n" +
     "       a line containing `analyze-skill: ignore` (bare, or inside an HTML comment) anywhere in one of the scanned files silences EVERY path-fidelity finding for THAT file — even under --strict, even a genuine true positive (an explicit author override); it does not affect other scanned files.\n" +

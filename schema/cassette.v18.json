@@ -347,7 +347,7 @@
     },
     "deviceBridge": {
       "type": "object",
-      "description": "v17+: the run's RunResult.deviceBridge, frozen so replay reports what the recording modeled, not what a later build would. Present only on a `device_bridge: true` recording. What a `device_bridge` run modeled of the remote lane's device bridge, and where it differs from production. `served`: the device tools served; `alwaysLoad`: those that load without ToolSearch; `measuredOn`: the Desktop build both were read from; `egress`: the egress branch modeled (`allowlist`: the session allowlist through the proxy; `unrestricted`: everything through it, from `egress.unrestricted: true`, and then no `egress-allowlist` divergence); `folders`: name and mode only. `divergences` by id: `delete-refusal-libc` (the device refuses deletes made through the C library until the user allows them; a static binary or raw system call is caught only after the run) or, on an older recording, `delete-not-refused` (a delete succeeded on the device copy and was reported after the run), `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`, `device-tools-unserved`, `device-network-shared`, `decline-text`, `grant-without-prompt`, `rename-reads-as-delete` (and `shell-user` on a v17 recording). Absent when the scenario has no bridge.",
+      "description": "v17+: the run's RunResult.deviceBridge, frozen so replay reports what the recording modeled, not what a later build would. Present only on a `device_bridge: true` recording. What a `device_bridge` run modeled of the remote lane's device bridge, and where it differs from production. `served`: the device tools served; `alwaysLoad`: those that load without ToolSearch; `measuredOn`: the Desktop build both were read from; `egress`: the egress branch modeled (`allowlist`: the session allowlist through the proxy; `unrestricted`: everything through it, from `egress.unrestricted: true`, and then no `egress-allowlist` divergence); `folders`: name and mode only. `divergences` by id: `delete-refusal-libc` (the device refuses deletes made through the C library until the user allows them; a static binary or raw system call is caught only after the run) or `delete-not-refused` (on an older recording, or on any run whose delete-refusal canary did not pass: a delete succeeded on the device copy and was reported after the run), `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`, `device-tools-unserved`, `device-network-shared`, `decline-text`, `grant-without-prompt`, `rename-reads-as-delete` (and `shell-user` on a v17 recording). Absent when the scenario has no bridge.",
       "required": [
         "served",
         "alwaysLoad",
@@ -443,7 +443,7 @@
         "auditInconsistent": {
           "type": "integer",
           "minimum": 1,
-          "description": "Enforced runs only, when non-zero: audit lines claiming a granted delete the device tree contradicts; ignored."
+          "description": "Enforced runs only, when non-zero: audit lines that claim a granted delete in a folder deletion was never allowed in, that name a path outside their folder, or that claim a granted delete the device tree contradicts (the file is still there); ignored."
         },
         "auditUnreadable": {
           "type": "string",
@@ -567,7 +567,7 @@
           },
           "action": {
             "type": "object",
-            "description": "a host action's record: argv, exitCode, timedOut, durationMs, scrubbed stdout/stderr heads with sha256 and byte counts, produced files, assertions, pass"
+            "description": "a host action's record: argv, exitCode, timedOut, durationMs, scrubbed stdout/stderr heads with sha256 and byte counts, produced files, its egress decisions (host, allow/deny; container and microvm only, absent on protocol), `refused` (why the leg failed before or instead of running the command) when it did, assertions, pass"
           }
         }
       }

@@ -56,7 +56,8 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --include-untracked        snapshot a directory arm's untracked files too (the raw walk); not with a git: arm
   --allow-identical-arms     run even when both arms hash identically (an A/A noise run)
   --fail-on possible|confirmed  opt in to gating: exit 1 on a drop, or a metric that got worse, at this level. Without it no drop fails the
-                             eval (every row insufficient, or a judge disagreement, still exits 1). At --reps 5 a single collapsed row reaches
+                             eval (every row insufficient, a scenario that compared nothing, a metric row not compared, or a
+                             judge disagreement still exits 1; see exit codes below). At --reps 5 a single collapsed row reaches
                              'possible' but, with 13 or more rows under bh, cannot reach 'confirmed' alone; the
                              start-up notice prints how many rows 'confirmed' needs. An A/A run under
                              --fail-on possible can exit 1 on noise.
@@ -83,7 +84,9 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
        (under possible, also an insufficient_refusals row: the candidate refused ≥ 2 more semantic_matches
        grades for unavailable evidence than the baseline, and that excess took the row below the threshold; or an
        insufficient_unmeasured metric row, the same for metric values the scorer or a cap left out),
-       every row insufficient, a metric row not compared (a broken metric state), or the judge model differed across reps · 2 usage, or a refusal before any
+       every row insufficient, a scenario that compared nothing (every rep of both arms errored, or every rep of one arm
+       was an infrastructure failure), a metric row not compared (a broken metric state), or the judge model differed
+       across reps · 2 usage, or a refusal before any
        run (including the --max-budget-usd refusal) · 3 an arm snapshot could not be copied, or failed its staging
        preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above, or the
        temp dir is inside a git work tree, or git cannot tell whether it is (set TMPDIR)`;

@@ -35,6 +35,12 @@ received a question or permission request anyway; `events.jsonl` and `control-ou
 already does.
 <!-- END triage-canonical -->
 
+**A multi-leg run (`legs:`) is read one leg at a time.** `trace`, `verify-run` and `regrade` take
+`--leg <id>` (or the leg dir `<root>/legs/<id>` itself); `inspect` and `fixture export` take the leg dir. A
+multi-leg root without `--leg` is refused, and `trace` / `inspect` name its legs. A host-action leg has no
+agent session and is refused too — its record is `legs/<id>/action.json`. See
+[docs/scenario.md → Multi-leg scenarios](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#multi-leg-scenarios-legs).
+
 **`verify-run` never calls the semantic judge**, so it cannot re-grade a `semantic_matches` or `semantic_pairwise` assert. When the
 rubric changed (or you want another judge model) on a run you already paid for, use
 `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` instead: it re-grades those asserts against the

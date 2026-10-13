@@ -39,7 +39,7 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 > *Action* runs; which *CLI* it installs is the separate `version:` input below, which defaults to
 > `latest`. The two move independently — so a workflow whose `uses:` ref has not changed in months still
 > picks up a CLI **major** the moment one is promoted to `latest`. That is not hypothetical: `@v1` points
-> at 1.24.0 and has not moved, yet an `@v1` workflow without a `version:` input installs whichever major is `latest` today.
+> at 1.25.0, the last 1.x release, yet an `@v1` workflow without a `version:` input installs whichever major is `latest` today.
 > **To hold a major, pin the input** — `version: "^4"` for the current major, `"^3"`/`"^2"`/`"^1"` to stay on an
 > older one — not the `uses:` ref.
 >
@@ -82,8 +82,10 @@ delivered file of the skill) tells a job whether the skill changed since its las
 
 **A live pre-merge comparison.** [`eval`](./eval.md) runs your scenarios against the version on the base
 branch and the one in the PR, interleaved, on the same self-hosted runner the live lane needs. No drop
-fails it unless you pass `--fail-on possible|confirmed`; with it, exit `1` fails the job on a drop at that
-level. Exit `1` also follows when every row is `insufficient` or the judge model differed across reps. It is EXPERIMENTAL, and at 10 runs per scenario at the defaults it is a
+fails it unless you pass `--fail-on possible|confirmed`; with it, exit `1` fails the job on a drop, or on a
+metric row that got worse, at that level. Exit `1` also follows, with or without `--fail-on`, when every row
+(metric rows included) is `insufficient`, a scenario compared nothing, a metric row is `not compared`, or the
+judge model differed across reps. It is EXPERIMENTAL, and at 10 runs per scenario at the defaults it is a
 deliberate, priced step rather than a per-push check.
 
 **Scripting `replay` or `verify-cassettes` yourself (outside the Action):** in text mode both commands
