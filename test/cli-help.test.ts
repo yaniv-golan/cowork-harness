@@ -103,6 +103,11 @@ describe.skipIf(!can)("cli --help: sync names its organisation override", () => 
     expect(code).toBe(0);
     expect(text).toContain("--allow-org-change");
   });
+  it("`sync --help` documents --allow-missing-search-anchors", () => {
+    const { code, text } = help("sync");
+    expect(code).toBe(0);
+    expect(text).toContain("--allow-missing-search-anchors");
+  });
 });
 
 // Which STREAM carries what is load-bearing for anyone scripting a poll, and it is invisible from the

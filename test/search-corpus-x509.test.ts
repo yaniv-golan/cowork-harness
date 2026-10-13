@@ -128,6 +128,21 @@ describe("mintCertificates (an in-repo DER writer: a CA and one leaf for the API
     expect(san.map((n) => [n.tag, n.body.toString("latin1")])).toEqual([[0x82, SEARCH_CORPUS_HOST]]);
   });
 
+  it("embeds the leaf key's own SPKI", () => {
+    const l = parts(m.leafPem);
+    expect(l.tbs[6]!.raw).toEqual(leaf.publicKey.export({ type: "spki", format: "der" }));
+    expect(parts(m.caPem).tbs[6]!.raw).toEqual(ca.publicKey.export({ type: "spki", format: "der" }));
+  });
+
+  it("switches to GeneralizedTime from 2050, so validity never wraps to the 1950s", () => {
+    const late = mintCertificates(new Date("2049-12-31T23:55:00Z"));
+    const c = new X509Certificate(late.leafPem);
+    expect(Date.parse(c.validTo)).toBeGreaterThan(Date.parse(c.validFrom));
+    const [from, to] = children(parts(late.leafPem).tbs[4]!);
+    expect([from!.tag, to!.tag]).toEqual([0x17, 0x18]);
+    expect(to!.body.toString("latin1")).toMatch(/^2050\d{10}Z$/);
+  });
+
   it("mints fresh keys and serials every time", () => {
     const n = mintCertificates();
     expect(n.caPem).not.toBe(m.caPem);

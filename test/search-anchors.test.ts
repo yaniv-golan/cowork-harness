@@ -3,7 +3,15 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { extractSearchAnchors, searchAnchorsForSync, searchAnchorsRefusal, SEARCH_ANCHOR_CALL_SITE } from "../src/sync/search-anchors.js";
+import {
+  extractSearchAnchors,
+  searchAnchorsForSync,
+  searchAnchorsRefusal,
+  stagedForAnchors,
+  SEARCH_ANCHOR_CALL_SITE,
+} from "../src/sync/search-anchors.js";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { AgentSearchGates, PlatformBaseline, SearchAnchors } from "../src/types.js";
 import { buildNextAgentBinary, loadBaseline } from "../src/baseline.js";
 import { readdirSync } from "node:fs";
@@ -190,6 +198,12 @@ describe("searchAnchorsForSync — the decision table (refuse = sync's own refus
     expect(r.refuse).toBeNull();
     expect(r.notes.join("\n")).toMatch(/VM agent 2\.1\.300 agreed/);
   });
+  it("ELF ok + native ok, differing only in a no-request template, same version: refuse", () => {
+    const nr = bundle(callSite(), noRequestSite({ missing: "Error: a different missing-query text" }));
+    const r = call({ native: nr });
+    expect(r.anchors).toBeUndefined();
+    expect(r.refuse).toMatch(/differ/);
+  });
   it("ELF ok + native ok, different anchors, same version: refuse", () => {
     const r = call({ native: changed });
     expect(r.anchors).toBeUndefined();
@@ -224,6 +238,9 @@ describe("searchAnchorsForSync — the decision table (refuse = sync's own refus
       const same = call({ elf });
       expect(same.anchors).toBeUndefined();
       expect(same.refuse).toMatch(/VM agent/);
+      // an unreadable ELF is not an extractor finding; a broken one is
+      if (elf === unreadable) expect(same.refuse).not.toMatch(/extractor finding/);
+      else expect(same.refuse).toMatch(/extractor finding/);
     }
   });
   it("ELF extract-fails or unreadable + native extract-fails, unreadable or absent: refuse", () => {
@@ -245,13 +262,23 @@ describe("searchAnchorsForSync — the decision table (refuse = sync's own refus
     expect(r.anchors).toBeUndefined();
     expect(r.refuse).toMatch(/native agent/);
   });
-  it("no ELF + no readable native, same version, base has anchors: carried with the base's source, a note naming the VM version", () => {
-    for (const native of [unreadable, null]) {
-      const base = { ...anchors, source: "both" as const };
-      const r = call({ elf: null, native, nativeVersion: null, base });
-      expect(r.anchors).toEqual(base);
-      expect(r.refuse).toBeNull();
-      expect(r.notes.join("\n")).toMatch(/carried from the base for agent version 2\.1\.300/);
+  it("no ELF + no native staged, same version, base has anchors: carried with the base's source, a note naming the VM version", () => {
+    const base = { ...anchors, source: "both" as const };
+    const r = call({ elf: null, native: null, nativeVersion: null, base });
+    expect(r.anchors).toEqual(base);
+    expect(r.refuse).toBeNull();
+    expect(r.notes.join("\n")).toMatch(/carried from the base for agent version 2\.1\.300/);
+  });
+  it("no ELF + an unreadable native: refuse whatever the base holds (hostloop can run it, so its anchors must be confirmed)", () => {
+    for (const o of [
+      { base: { ...anchors, source: "both" as const } },
+      { base: undefined },
+      { base: anchors, baseAgentVersion: "2.1.295" },
+      { base: anchors, nativeVersion: "2.1.301" },
+    ]) {
+      const r = call({ elf: null, native: unreadable, ...o });
+      expect(r.anchors).toBeUndefined();
+      expect(r.refuse).toMatch(/native agent[\s\S]*could not be read \(EACCES\)/);
     }
   });
   it("no ELF + no readable native, same version, base WITHOUT anchors: refuse (never a silent anchorless write)", () => {
@@ -288,6 +315,23 @@ describe("committed baselines: the search blocks parse strictly (non-vacuous on 
     };
     expect(newest.agentBinary?.searchAnchors).toBeDefined();
     expect(newest.provenance?.agentSearchGates).toBeDefined();
+  });
+});
+
+describe("stagedForAnchors: the one reader of a staged agent", () => {
+  it("bytes when readable, null when absent, {unreadable} (never a throw) when it exists but cannot be read", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-anchors-"));
+    const f = join(dir, "claude");
+    writeFileSync(f, "bytes");
+    expect(stagedForAnchors(f)).toEqual(Buffer.from("bytes"));
+    expect(stagedForAnchors(join(dir, "absent"))).toBeNull();
+    chmodSync(f, 0o000);
+    try {
+      // root reads anything, so the unreadable case is only checkable as a normal user
+      if (process.getuid?.() !== 0) expect(stagedForAnchors(f)).toEqual({ unreadable: "EACCES" });
+    } finally {
+      chmodSync(f, 0o600);
+    }
   });
 });
 
@@ -358,6 +402,8 @@ describe("sync wiring (source text): every anchor path goes through searchAnchor
     const block = cli.slice(at, cli.indexOf("writeFileSync(baselinePath, JSON.stringify(next, null, 2));"));
     expect(block).toMatch(/if \(r\.fail\) return fail\("sync", "runtime", r\.fail, undefined, isJsonOutput\(normalizedArgs\), 1\);/);
     expect(block).toMatch(/if \(r\.log\) log\(/);
+    // --allow-empty does not reach it: nothing in the refusal block reads that flag
+    expect(block).not.toMatch(/allowEmpty/);
   });
   it("parses the flag as a sync boolean", () => {
     expect(cli).toMatch(/booleans: \[[^\]]*"--allow-missing-search-anchors"[^\]]*\]/);
@@ -374,6 +420,21 @@ describe("agentBinary.searchAnchors schema", () => {
   it("rejects any extra field, so no literal text can be published through it", () => {
     expect(SearchAnchors.safeParse({ ...anchors, systemSentence: { ...anchors.systemSentence, text: "x" } }).success).toBe(false);
     expect(SearchAnchors.safeParse({ ...anchors, note: "x" }).success).toBe(false);
+    expect(SearchAnchors.safeParse({ ...anchors, noRequest: { ...anchors.noRequest, text: "x" } }).success).toBe(false);
+    expect(
+      SearchAnchors.safeParse({
+        ...anchors,
+        noRequest: { ...anchors.noRequest, budgetPrefix: { ...anchors.noRequest!.budgetPrefix, text: "x" } },
+      }).success,
+    ).toBe(false);
+  });
+  it("accepts each source and no source, and nothing else", () => {
+    for (const source of ["elf", "native", "both", undefined]) expect(SearchAnchors.safeParse({ ...anchors, source }).success).toBe(true);
+    expect(SearchAnchors.safeParse({ ...anchors, source: "vm" }).success).toBe(false);
+  });
+  it("accepts a block without noRequest (a baseline written before it)", () => {
+    const { noRequest: _n, ...older } = anchors;
+    expect(SearchAnchors.safeParse(older).success).toBe(true);
   });
   it("buildNextAgentBinary writes the measured anchors and never the base's", () => {
     const next = buildNextAgentBinary(

@@ -191,11 +191,11 @@ function extracted(bin: Staged): Extracted {
     : { state: "fail", why: `its anchors could not be extracted (${r.defects.join("; ")})` };
 }
 
-/** `sync`'s decision for `agentBinary.searchAnchors`. Pure: the caller reads the binaries. The interceptor serves
- *  the NATIVE agent (hostloop runs it), so the native decides wherever it is readable; the VM ELF corroborates it on
- *  the same version and stands in for it only when no native is staged. `refuse` is sync's own refusal (exit 1,
- *  overridden only by `--allow-missing-search-anchors`): a run against a baseline without anchors is refused at
- *  load, so a baseline must not lose them silently. Notes never carry a literal's text.
+/** `sync`'s decision for `agentBinary.searchAnchors`. Pure: the caller reads the binaries. Hostloop runs the
+ *  NATIVE agent, so the native decides wherever one is staged, and an unreadable one refuses; the VM ELF corroborates
+ *  it on the same version and stands in for it only when no native is staged. `refuse` is sync's own refusal (exit 1,
+ *  overridden only by `--allow-missing-search-anchors`), so a baseline never loses its anchors silently and never
+ *  carries anchors a staged binary could contradict. Notes never carry a literal's text.
  *  - `elfVersion` is the VM agent's `.sdk-version` (the baseline's `agentVersion`); `nativeVersion` is the native
  *    agent's staged version, or null when none is staged; they stage on separate cadences. An unreadable ELF counts
  *    as an ELF whose anchors could not be extracted. */
@@ -234,16 +234,18 @@ export function searchAnchorsForSync(a: {
     }
     if (elf.state === "absent")
       return record(native.anchors, "native", [`searchAnchors from ${nat}; no VM agent is staged for ${a.elfVersion}`]);
-    if (sameVersion) return refuse(`${vm} ${elf.why}, while ${nat} at the same version extracted: an extractor finding`);
+    if (sameVersion)
+      return refuse(`${vm} ${elf.why}, while ${nat} at the same version extracted${elf.state === "fail" ? ": an extractor finding" : ""}`);
     return record(native.anchors, "native", [`searchAnchors from ${nat} (which hostloop runs); ${vm} ${elf.why}`]);
   }
-  // An unreadable native with no ELF falls through to the carry rule below: nothing staged can be read at all.
-  if (native.state === "fail" || (native.state === "unreadable" && elf.state !== "absent"))
+  // An unreadable native refuses whatever else is staged: hostloop can still run it, so the base's anchors cannot
+  // stand in for it.
+  if (native.state === "fail" || native.state === "unreadable")
     return refuse(`${nat} ${native.why}; hostloop runs it, so its anchors cannot be confirmed`);
   // No native agent is staged.
   if (elf.state === "ok")
     return record(elf.anchors, "elf", [
-      `searchAnchors from ${vm}; no native agent is staged, so hostloop cannot run until one is (its anchors are then checked at run time)`,
+      `searchAnchors from ${vm}; no native agent is staged, so hostloop cannot run until one is; re-run sync once it is staged`,
     ]);
   if (elf.state !== "absent") return refuse(`${vm} ${elf.why}, and no native agent is staged`);
   if (a.baseAgentVersion !== a.elfVersion)
@@ -257,7 +259,7 @@ export function searchAnchorsForSync(a: {
   return {
     anchors: a.base,
     notes: [
-      `searchAnchors carried from the base for agent version ${a.elfVersion} (the VM agent's .sdk-version); no agent binary is readable, so hostloop cannot run on this baseline until one is`,
+      `searchAnchors carried from the base for agent version ${a.elfVersion} (the VM agent's .sdk-version); no agent binary is staged, so hostloop cannot run on this baseline until one is`,
     ],
     refuse: null,
   };

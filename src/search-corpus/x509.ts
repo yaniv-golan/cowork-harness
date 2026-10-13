@@ -4,7 +4,7 @@
  * the ASN.1 types a v3 certificate needs, signed with ECDSA P-256 over SHA-256. No dependency and no host binary.
  *
  * The shape follows what a strict TLS stack checks: a positive, minimal serial of at most 20 bytes; ecdsa-with-SHA256
- * with its parameters absent, identical inside and outside the TBS; UTCTime with seconds; basicConstraints critical
+ * with its parameters absent, identical inside and outside the TBS; UTCTime with seconds (GeneralizedTime from 2050); basicConstraints critical
  * on the CA only; keyUsage critical on both; the leaf's AKI equal to the CA's SKI; a SAN dNSName and serverAuth on the
  * leaf. Valid from five minutes ago (clock skew) for 24 hours.
  */
@@ -48,10 +48,12 @@ function oid(dotted: string): Buffer {
   return tlv(0x06, Buffer.from(out));
 }
 
-function utcTime(d: Date): Buffer {
+/** RFC 5280 §4.1.2.5: UTCTime through 2049, GeneralizedTime from 2050 (UTCTime's two-digit year reads 50 as 1950). */
+function certTime(d: Date): Buffer {
   const p = (n: number) => String(n).padStart(2, "0");
-  const s = `${p(d.getUTCFullYear() % 100)}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
-  return tlv(0x17, Buffer.from(s, "latin1"));
+  const rest = `${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}Z`;
+  const y = d.getUTCFullYear();
+  return y < 2050 ? tlv(0x17, Buffer.from(`${p(y % 100)}${rest}`, "latin1")) : tlv(0x18, Buffer.from(`${y}${rest}`, "latin1"));
 }
 
 const ECDSA_SHA256 = seq(oid("1.2.840.10045.4.3.2"));
@@ -86,7 +88,7 @@ function certificate(a: {
     integer(serial),
     ECDSA_SHA256,
     name(a.issuer),
-    seq(utcTime(a.notBefore), utcTime(a.notAfter)),
+    seq(certTime(a.notBefore), certTime(a.notAfter)),
     name(a.subject),
     a.spki,
     explicit(3, seq(...a.extensions)),

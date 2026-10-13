@@ -50,6 +50,15 @@ describe.skipIf(!existsSync(CLI))("search-pool CLI end to end", () => {
     expect(cli(["search-pool", "import", file, join(mkdtempSync(join(tmpdir(), "cwh-sp-in-")), "p")]).code).toBe(0);
   });
 
+  it("names the served runs it did not harvest", () => {
+    const served = keptRun();
+    writeFileSync(join(served, "search-corpus.jsonl"), "");
+    const pool = join(mkdtempSync(join(tmpdir(), "cwh-sp-out-")), "pool");
+    const b = cli(["search-pool", "build", pool, "--from", keptRun(), "--from", served]);
+    expect(b.code, b.err).toBe(0);
+    expect(b.out + b.err).toMatch(/not harvested: 1 run\(s\) served from a frozen search corpus/);
+  });
+
   it("refuses a pool or export path inside a git work tree unless --allow-in-repo", () => {
     // A throwaway repo, so a guard that failed open could never write into this one.
     const repo = mkdtempSync(join(tmpdir(), "cwh-sp-repo-"));

@@ -178,6 +178,7 @@ At `hostloop`, the staged **Linux/arm64 ELF** gets the same patch tolerance: the
 
 ```bash
 cowork-harness sync --allow-empty   # force-write past an empty allowlist or unknown deltas
+cowork-harness sync --allow-missing-search-anchors   # write without web-search anchors that cannot be confirmed
 ```
 
 **Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — including the four refusals above, (a) a refused empty allowlist, (b) a `⚠ unknown deltas` refusal, (c) a capture-organisation refusal and (d) a search-anchors refusal, and a missing required version field in the Desktop install it derives from. (a) and (b) are overridable with `--allow-empty`; (c) only with `--allow-org-change`; (d) only with `--allow-missing-search-anchors`.
@@ -471,22 +472,24 @@ committed baseline and say why in that baseline's `$comment`.
    text's fixed prefix and the fixed fragment after its turn|session word. The tool type and the two literals are
    located by code shape inside the one call site that names the nested search, because the binary also holds
    string-table copies. The cloud route pieces are only checked to be present exactly once; they are constants.
-   Nothing in the harness reads the block yet; it exists so a later release can recognise the nested request.
+   No run reads the block yet (`sync` and `npm run preflight` check it); it exists so a later release can recognise
+   the nested request.
    - **Which binary decides.** The native build (the one hostloop runs) decides wherever it is readable; the VM
      ELF corroborates it when both are the same version and stands in for it only when no native is staged. The
      block's `source` says which: `both`, `native` or `elf`. The two stage on separate cadences, so when their
      versions differ the native's anchors are recorded with a note about the ELF.
-   - **Refused, not warned.** `sync` refuses the write (exit 1) when the native's anchors cannot be extracted or
-     the native cannot be read while an ELF is staged; when the two builds disagree, or one extracts and the other
-     does not, at the same version; when the ELF fails and no native extracts; and when nothing readable is
-     staged and the base cannot be carried (a changed agent version, or a base without anchors). With nothing
-     readable on an unchanged version the base's anchors are carried, with a note. Only
+   - **Refused, not warned.** `sync` refuses the write (exit 1) when a staged native's anchors cannot be extracted
+     or it cannot be read at all (hostloop can still run it); when the two builds disagree, or one extracts and the
+     other does not, at the same version; when the ELF fails and no native extracts; and when no agent is staged
+     and the base cannot be carried (a changed agent version, or a base without anchors). With no agent staged on
+     an unchanged version the base's anchors are carried, with a note. Only
      `--allow-missing-search-anchors` writes past the refusal, without anchors and with a `WARNING`; a `--diff`
      prints it as `would refuse: …`. Absent anchors mean unknown. `npm run preflight` refuses to release a newest
-     baseline without a schema-valid block; its `--allow-missing-search-anchors` downgrades that to a warning for an
+     baseline without a schema-valid block that carries `noRequest`; its `--allow-missing-search-anchors` downgrades that to a warning for an
      emergency release.
    - **Measured.** Every backed-up agent from 2.1.293 through 2.1.295 gives the same anchors, native and VM alike.
-     2.1.260 through 2.1.289 carry an older, session-only budget template, so a sync against one of them refuses.
+     2.1.260 through 2.1.289 carry an older, session-only budget template, so a sync against one of them refuses,
+     naming the remedy. 2.1.290 through 2.1.292 were not measured (no backed-up copy).
 
    **`provenance.captureOrg` → which organisation the gate cache was captured under.** Desktop rewrites its
    gate cache for the organisation it is signed in to, and some gates differ between organisations, so a re-sync
