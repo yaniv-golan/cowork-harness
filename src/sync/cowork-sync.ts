@@ -3193,12 +3193,29 @@ function templateBodiesIn(src: string): string[] {
  *  `manifest` is the manifest generator's own source with its interpolations canonicalized by the
  *  caller; `suffix` is the resolved string literal, looked up through the module's own binding rather
  *  than by a minified name. */
-export function extractSubagentComposition(files: Map<string, string>): { module: string; manifest: string; suffix: string } | null {
+/** The manifest's line for a folder the shell cannot reach. Through 2.31226.1 it was fixed template text;
+ *  from 2.37337.1 it is the DEFAULT arm of a ternary whose other arm is a policy-only message. */
+export const UNREACHABLE_FOLDER_PHRASE = "the shell cannot reach this folder";
+
+/** `(${<pred>?"<default>":<ns>.<id>})` — the unreachable-folder ternary (Desktop >=2.37337.1). */
+const UNREACHABLE_TERNARY = /\(\$\{([^?{}`"]+)\?"((?:[^"\\]|\\.)*)":([\w$]+(?:\.[\w$]+)?)\}\)/;
+
+export function extractSubagentComposition(files: Map<string, string>): {
+  module: string;
+  manifest: string;
+  suffix: string;
+  /** The ternary's default arm, when the unreachable-folder line is a ternary; undefined on older builds. */
+  defaultArm?: string;
+} | null {
   const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
   if (!module) return null;
   // Manifest: anchored on a fragment that is INSIDE the thing being fingerprinted (the lesson of B14 —
-  // an anchor outside its subject can silently select the wrong text).
-  const mAt = module.indexOf("(the shell cannot reach this folder)");
+  // an anchor outside its subject can silently select the wrong text). The bare phrase, not its
+  // parenthesized form: 2.37337.1 moved it into a ternary arm, where the parentheses enclose the
+  // interpolation instead. The outputs-folder line is the second anchor, so a reworded default arm still
+  // finds the generator and is then reported by the default-arm check, not as a vanished generator.
+  let mAt = module.indexOf(UNREACHABLE_FOLDER_PHRASE);
+  if (mAt < 0) mAt = module.indexOf("(this session's outputs folder; shell:");
   if (mAt < 0) return null;
   const fnSrc = enclosingFunctionSource(module, mAt);
   if (!fnSrc) return null;
@@ -3208,14 +3225,29 @@ export function extractSubagentComposition(files: Map<string, string>): { module
   // normalizer) tracks the prose the model actually receives and nothing else.
   const bodies = templateBodiesIn(fnSrc);
   if (bodies.length === 0) return null;
-  const manifest = bodies.join("\u0000");
+  // The normalizer collapses every interpolation to `${}`, which would erase both ternary arms and the
+  // predicate. So when the line is a ternary, append them: the predicate with identifiers canonicalized
+  // (its shape, not its minified names), the default arm, and the other arm's resolved text. A change
+  // to either arm or to the predicate then moves the fingerprint.
+  let defaultArm: string | undefined;
+  const parts = [...bodies];
+  const tern = UNREACHABLE_TERNARY.exec(fnSrc);
+  if (tern) {
+    const ref = resolveNamespaceRef(tern[3]!, module, files);
+    const alt = ref && ref.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(ref.local)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+    if (!alt) return null;
+    defaultArm = tern[2]!;
+    const pred = tern[1]!.replace(/[A-Za-z_$][\w$]*/g, (w) => (w === "void" || w === "null" || w === "undefined" ? w : "x"));
+    parts.push(pred, defaultArm, alt[1]!);
+  } else if (mAt !== module.indexOf(UNREACHABLE_FOLDER_PHRASE) || !fnSrc.includes(`(${UNREACHABLE_FOLDER_PHRASE})`)) return null;
+  const manifest = parts.join("\u0000");
   // Suffix: read the composition site, then resolve the trailing interpolation's identifier against
   // this module's own `<ident>="…"` binding. Never matched by name.
   const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\([^)]*\):""\}\$\{([\w$]+)\}`/);
   if (!comp) return null;
   const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[1])}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
   if (!decl) return null;
-  return { module, manifest, suffix: decl[1]! };
+  return { module, manifest, suffix: decl[1]!, ...(defaultArm !== undefined ? { defaultArm } : {}) };
 }
 
 /** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is
@@ -3364,6 +3396,13 @@ export function checkSubagentPromptFacts(
   if (!comp) {
     miss("composed append parts", "the folder-manifest generator and/or the trailing appended sentence could not be sliced");
   } else {
+    // (7a) Since 2.37337.1 the unreachable-folder line is a ternary whose other arm only a 3p deployment
+    // with a file-read-check policy reaches. The harness models the default arm, so it must still be the
+    // exact text the committed paraphrase was written against.
+    if (comp.defaultArm !== undefined && comp.defaultArm !== UNREACHABLE_FOLDER_PHRASE)
+      flags.push(
+        `subagent-append: the folder manifest's unreachable-folder default arm changed (now ${JSON.stringify(comp.defaultArm.slice(0, 80))}) — the default path a 1p sub-agent receives moved; re-derive the hl paraphrase, then add a new version entry`,
+      );
     // The manifest joins the path-gated builtin tool list. Assert the list itself by CONTENT — a tool
     // added to or removed from it changes what the sub-agent is told its file tools are, and would not
     // move the manifest's own prose fingerprint.

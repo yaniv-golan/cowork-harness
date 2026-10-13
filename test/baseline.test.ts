@@ -182,6 +182,7 @@ describe("decodeFcacheGates (GrowthBook fcache decode, binary-verified format)",
       "4200321681": { id: "4200321681", name: "autoModeOverridesAlwaysAllow", on: false, source: "absent", value: undefined },
       "1447478638": { id: "1447478638", name: "scheduledTaskToolsApprovableByAutoMode", on: false, source: "absent", value: undefined },
       "4074604942": { id: "4074604942", name: "1p-direct-mcp", on: false, source: "absent", value: undefined },
+      "3184956269": { id: "3184956269", name: "mcpAppsHost", on: false, source: "absent", value: undefined },
     });
   });
 
@@ -3140,12 +3141,13 @@ function subagentBundle(
   const tools = overrides.tools ?? `["Read","Write","Edit","Glob","Grep"]`;
   // The hl-only folder manifest (Desktop >=1.46388.3). Only the fragments the sentinel keys on are
   // verbatim — "(the shell cannot reach this folder)" (the slice anchor, deliberately INSIDE its own
-  // subject) and the `", "` tool-list join. The rest is paraphrased, and the committed golden below
+  // subject), the outputs-folder line's opening (the fallback anchor once that phrase is a ternary arm)
+  // and the `", "` tool-list join. The rest is paraphrased, and the committed golden below
   // derives from THIS text, so the suite stays self-consistent while the real manifest text lives only
   // in the baselines JSON.
   const manifest =
     overrides.manifest ??
-    'function mani(e,n,usf,mn,a){const o=nm(usf,!0),s=new Set(rc(usf,a));const c=[...r?[`- \\`${r}\\` (synthetic outputs folder; shell: \\`${e}/mnt/outputs/\\`)`]:[],...(i??[]).map(t=>s.has(t)?`- \\`${t}\\` (shell: \\`${e}/mnt/${o.get(t)}/\\`)`:`- \\`${t}\\` (the shell cannot reach this folder)`)];const l=NS.kw.join(", ");const u=`Synthetic relative-path clause naming \\`${n}\\`.`;return c.length===0?`\\n\\n${l} synthetic empty-list variant. ${u}`:`\\n\\n${l} synthetic list variant. ${u} Synthetic tail.\\n\\nSynthetic folder heading:\\n`+c.join(`\\n`)}';
+    'function mani(e,n,usf,mn,a){const o=nm(usf,!0),s=new Set(rc(usf,a));const c=[...r?[`- \\`${r}\\` (this session\'s outputs folder; shell: \\`${e}/mnt/outputs/\\`)`]:[],...(i??[]).map(t=>s.has(t)?`- \\`${t}\\` (shell: \\`${e}/mnt/${o.get(t)}/\\`)`:`- \\`${t}\\` (the shell cannot reach this folder)`)];const l=NS.kw.join(", ");const u=`Synthetic relative-path clause naming \\`${n}\\`.`;return c.length===0?`\\n\\n${l} synthetic empty-list variant. ${u}`:`\\n\\n${l} synthetic list variant. ${u} Synthetic tail.\\n\\nSynthetic folder heading:\\n`+c.join(`\\n`)}';
   const suffix = overrides.suffix ?? `var SUF="\\n\\nSynthetic trailing sentence appended to BOTH branches.";`;
   const call = overrides.call ?? '${h?mani(i,t,usf,mn,hof):""}';
   const delivery =
@@ -3374,6 +3376,59 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
       },
     } as unknown as typeof committed;
     expect(checkSubagentPromptFacts(genFiles(), withHistory)).toEqual([]);
+  });
+});
+
+// Desktop 2.37337.1: the unreachable-folder line became `(${<pred>?"<default>":NS.<id>})`. The other arm
+// is a policy-only message; the harness models the default arm, so that arm is asserted verbatim.
+describe("checkSubagentPromptFacts — the unreachable-folder ternary (Desktop 2.37337.1)", () => {
+  const PLAIN = "(the shell cannot reach this folder)";
+  const TERN = '(${pol.a()===void 0?"the shell cannot reach this folder":NS.ZJ})';
+  const ALT = 'Object.defineProperty(exports,"ZJ",{enumerable:!0,get:function(){return Zq}});var Zq="Synthetic policy-only message.";';
+  const plainManifest = (subagentBundle().match(/function mani\([\s\S]*?c\.join\(`\\n`\)\}/) ?? [""])[0];
+  const ternFiles = (edit: (s: string) => string = (s) => s) => {
+    const manifest = plainManifest.replace(PLAIN, TERN);
+    expect(manifest, "the fixture no longer contains the plain unreachable-folder line").not.toBe(plainManifest);
+    return new Map([["index.chunk-gen.js", edit(subagentBundle({ manifest }) + ALT)]]);
+  };
+  const base = extractSubagentComposition(ternFiles())!;
+  const committed = {
+    versions: {
+      "2.37337.1": {
+        hl: subagentBranchFingerprint(extractSubagentBranchSlices(ternFiles())!.hl),
+        vm: subagentBranchFingerprint(extractSubagentBranchSlices(ternFiles())!.vm),
+        manifest: subagentBranchFingerprint(base.manifest),
+        suffix: subagentBranchFingerprint(base.suffix),
+      },
+    },
+  };
+  const fp = (files: Map<string, string>) => subagentBranchFingerprint(extractSubagentComposition(files)!.manifest);
+
+  it("slices the ternary form and reports its default arm", () => {
+    expect(base.defaultArm).toBe("the shell cannot reach this folder");
+    expect(checkSubagentPromptFacts(ternFiles(), committed)).toEqual([]);
+  });
+  it("the plain form still slices, with no default arm", () => {
+    expect(extractSubagentComposition(genFiles())?.defaultArm).toBeUndefined();
+  });
+  it("a changed DEFAULT arm flags by name (the default path a 1p sub-agent receives)", () => {
+    const files = ternFiles((s) => s.replace('?"the shell cannot reach this folder":', '?"the shell reaches this folder":'));
+    expect(files.get("index.chunk-gen.js")).not.toContain('?"the shell cannot reach this folder":');
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/unreachable-folder default arm changed/);
+  });
+  it("a changed OTHER arm moves the manifest fingerprint", () => {
+    const files = ternFiles((s) => s.replace("Synthetic policy-only message.", "Synthetic policy-only message, reworded."));
+    expect(fp(files)).not.toBe(fp(ternFiles()));
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/folder-manifest text fingerprint drifted/);
+  });
+  it("a changed predicate moves the manifest fingerprint", () => {
+    const files = ternFiles((s) => s.replace("pol.a()===void 0?", "pol.a()!==void 0?"));
+    expect(fp(files)).not.toBe(fp(ternFiles()));
+  });
+  it("an other arm that cannot be resolved fails closed", () => {
+    const files = ternFiles((s) => s.replace('"ZJ",{enumerable', '"ZK",{enumerable'));
+    expect(extractSubagentComposition(files)).toBeNull();
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/composed append parts anchor missing/);
   });
 });
 
