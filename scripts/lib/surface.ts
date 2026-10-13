@@ -78,7 +78,11 @@ export const PRE_491_KINDS: readonly string[] = ["type", "enum", "const", "ref",
  *  - `items`, an `additionalProperties` schema, or a `$ref` added onto a property that existed;
  *  - an object-valued `const` or `enum` (recorded by flattening, but not matched as introduced);
  *  - a `required` naming a property its node does not declare in `properties`;
- *  - `multipleOf`, `format`, `uniqueItems`, `minProperties`, `maxProperties` (not recorded). */
+ *  - `multipleOf`, `format`, `uniqueItems`, `minProperties`, `maxProperties` (not recorded);
+ *  - an `allOf` or `anyOf` nested inside a branch that holds the old shape, and a new required child on an object
+ *    that declares no children.
+ *  Conservative (reads as a change though it may not narrow): a `type` added that the property's `enum` already
+ *  implied (`{enum: ["a"]}` gaining `type: "string"`), and a `oneOf` branch added even when disjoint from the rest. */
 export const INPUT_SCHEMAS: ReadonlySet<string> = new Set([
   "scenario.schema.json",
   "scenario-multi-leg.schema.json",

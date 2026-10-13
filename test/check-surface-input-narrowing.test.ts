@@ -226,3 +226,29 @@ describe("review round 2: a union that replaces a property's own constraints", (
     expect(diff(IN, { ".a": { exclusiveMaximum: 9 } }, { ".a": { maximum: 8 } }).ok).toBe(false);
   });
 });
+
+describe("review round 3: oneOf branches, and unions of one kind beside another", () => {
+  it("a branch appended to an existing oneOf can overlap and so narrows (conservative)", () => {
+    const base = { ".a": {}, ".a<oneOf:0>": { type: "string" } };
+    const d = diff(IN, base, { ...base, ".a<oneOf:1>": { type: "string", minLength: 2 } });
+    expect(d.ok).toBe(false);
+    expect(d.changed).toContain(k(IN, ".a<oneOf:1>.minLength"));
+  });
+  it("a new oneOf beside an anyOf that keeps the old shape still narrows", () => {
+    const d = diff(
+      IN,
+      { ".a": { type: "string" } },
+      { ".a": {}, ".a<anyOf:0>": { type: "string" }, ".a<anyOf:1>": { type: "number" }, ".a<oneOf:0>": { pattern: "^x" } },
+    );
+    expect(d.changed).toContain(k(IN, ".a<oneOf:0>.pattern"));
+  });
+  it("a first anyOf beside an existing oneOf narrows", () => {
+    const base = { ".a": {}, ".a<oneOf:0>": { type: "string" } };
+    const d = diff(IN, base, { ...base, ".a<anyOf:0>": { pattern: "^x" } });
+    expect(d.changed).toEqual([k(IN, ".a<anyOf:0>.pattern")]);
+  });
+  it("a first anyOf that does not keep the old shape narrows, even beside a oneOf that does", () => {
+    const d = diff(IN, { ".a": { type: "string" } }, { ".a": {}, ".a<oneOf:0>": { type: "string" }, ".a<anyOf:0>": { pattern: "^x" } });
+    expect(d.changed).toContain(k(IN, ".a<anyOf:0>.pattern"));
+  });
+});

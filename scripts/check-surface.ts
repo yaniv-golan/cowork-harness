@@ -135,7 +135,9 @@ function inputReclassify(
         // A first anyOf/oneOf is a widening only when one of its branches is the property's old shape moved there
         // intact (diffSurfaces' branch logic consumed its leaves): the other branches then only add what is accepted.
         const unionKeepsOld = [...consumedArmLeaves].some((x) => x.startsWith(`schemas.${file}.${prefix}<${kind}:`));
-        if (kind === "allOf" || (firstOfKind && !unionKeepsOld))
+        // A oneOf branch narrows wherever it appears: oneOf demands EXACTLY one match, so a branch that overlaps another
+        // rejects a value both accept (conservative: a oneOf that only adds disjoint values reads as a change too).
+        if (kind === "allOf" || kind === "oneOf" || (firstOfKind && !unionKeepsOld))
           for (const [kd, v] of Object.entries(cf[path]!)) leafKeys(file, path, kd, v).forEach((x) => narrow.add(x));
         break;
       }
