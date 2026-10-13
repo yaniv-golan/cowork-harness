@@ -342,7 +342,7 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
   CLAUDE_CODE_MCP_APPS_HOST: {
     class: "gate-conditional-off",
     reason:
-      'the host-loop launch writes "1" only when the session runs on the host loop, did not start through the host CLI launcher, and gate 3184956269 (default off, dark) is on; a separate MCP-apps helper also builds it, outside the spawn options; not modeled',
+      'the host-loop launch writes "1" only when the session runs on the host loop, did not start through the host CLI launcher, and gate 3184956269 (default off, dark) is on; the spawn env of the Claude Code tab also gets it from an MCP-apps helper, behind a different gate (513873720), not the Cowork host loop; not modeled',
     sites: ["post-write", "observed"],
   },
   CLAUDE_CODE_HOST_PROMPT_SUPERSEDES_RECORD: {
