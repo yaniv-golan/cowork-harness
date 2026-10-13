@@ -2053,6 +2053,14 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     it("a module-level spread of the object still flags, beside a shadowing inner local", () => {
       expect(facts(filesOf({ mod: MOD + INNER + "var w={...l};" }))).toContain("spread or assigned inside its own module");
     });
+    // Shapes a brace count cannot read, and an inner binding that may BE the module object: each must still flag.
+    it.each([
+      ["a regex character class holding a brace", "function h(){let l=1;x=/[{]/.test(y);return 2}var w={...l};"],
+      ["a nested template holding a brace", 'function h(){let l=1;x=`a${y?`{`:""}b`;return 2}var w={...l};'],
+      ["an inner binding read from the module's exports", "function g(){let l=exports.J;return{...l}}"],
+    ])("%s between the inner declaration and a spread → still flags", (_l, extra) => {
+      expect(facts(filesOf({ mod: MOD + extra }))).toContain("spread or assigned inside its own module");
+    });
     it("a parameter of the same name is not taken as shadowing (fails closed)", () => {
       expect(facts(filesOf({ mod: MOD + "function g(l){return{...l}}" }))).toContain("spread or assigned inside its own module");
     });
@@ -3477,7 +3485,12 @@ describe("checkSubagentPromptFacts — hl/vm sub-agent append sentinel", () => {
 describe("checkSubagentPromptFacts — the unreachable-folder ternary (Desktop 2.37337.1)", () => {
   const PLAIN = "(the shell cannot reach this folder)";
   const TERN = '(${pol.a()===void 0?"the shell cannot reach this folder":NS.ZJ})';
-  const ALT = 'Object.defineProperty(exports,"ZJ",{enumerable:!0,get:function(){return Zq}});var Zq="Synthetic policy-only message.";';
+  // The predicate's reader, with the first-party early return the check pins.
+  const READER =
+    'Object.defineProperty(exports,"a",{enumerable:!0,get:function(){return Zpol}});' +
+    'function Zpol(){if(zt.B2()&&zt.z2().type!=="3p")return;return zt.P0().workspace.fileReadCheck}';
+  const ALT =
+    'Object.defineProperty(exports,"ZJ",{enumerable:!0,get:function(){return Zq}});var Zq="Synthetic policy-only message.";' + READER;
   const plainManifest = (subagentBundle().match(/function mani\([\s\S]*?c\.join\(`\\n`\)\}/) ?? [""])[0];
   const ternFiles = (edit: (s: string) => string = (s) => s) => {
     const manifest = plainManifest.replace(PLAIN, TERN);
@@ -3517,6 +3530,16 @@ describe("checkSubagentPromptFacts — the unreachable-folder ternary (Desktop 2
   it("a changed predicate moves the manifest fingerprint", () => {
     const files = ternFiles((s) => s.replace("pol.a()===void 0?", "pol.a()!==void 0?"));
     expect(fp(files)).not.toBe(fp(ternFiles()));
+  });
+  it("a predicate re-pointed at a reader that does not resolve flags", () => {
+    const files = ternFiles((s) => s.replace("pol.a()===void 0?", "pol.zz()===void 0?"));
+    expect(files.get("index.chunk-gen.js")).toContain("pol.zz()===void 0?");
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/predicate's reader pol\.zz could not be resolved/);
+  });
+  it("a reader that lost its first-party early return flags (a 1p sub-agent could get the other arm)", () => {
+    const files = ternFiles((s) => s.replace('if(zt.B2()&&zt.z2().type!=="3p")return;', ""));
+    expect(files.get("index.chunk-gen.js")).not.toContain('type!=="3p")return;');
+    expect(checkSubagentPromptFacts(files, committed).join("\n")).toMatch(/no longer returns undefined first on a non-3p deployment/);
   });
   it("an other arm that cannot be resolved fails closed", () => {
     const files = ternFiles((s) => s.replace('"ZJ",{enumerable', '"ZK",{enumerable'));

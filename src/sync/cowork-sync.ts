@@ -1384,22 +1384,34 @@ export function resolveNamespaceRef(ref: string, siteChunk: string, files?: Map<
 
 /** True when the reference to `local` at `at` sits inside the block of a later let/const/var declaration
  *  of the same name, so it names that inner binding rather than the module-level one declared at `moduleAt`.
- *  Scans from the nearest preceding declaration to the reference, skipping string and template literals; the
- *  declaration's block encloses the reference when the brace depth never drops below where it started. */
+ *  The declaration's block encloses the reference when the brace depth, counted from the nearest preceding
+ *  declaration, never drops below where it started. Every doubt answers false, so the reference is counted:
+ *  - a backtick or `/` anywhere in that span (a nested template or a regex literal like `/[{]/` defeats a
+ *    brace count, and this is not a JS tokenizer);
+ *  - an initializer that reads `exports` or the name itself (the inner binding may BE the module object). */
 export function shadowedByInnerDeclaration(src: string, at: number, local: string, moduleAt: number): boolean {
   const decl = new RegExp(`\\b(?:let|const|var)\\s+(?:[^;{}]*?,)?(?<![\\w$.])${reEsc(local)}=(?!=)`, "g");
   let from = -1;
-  for (const m of src.slice(0, at).matchAll(decl)) if (m.index! > moduleAt + 1) from = m.index!;
+  let init = -1;
+  for (const m of src.slice(0, at).matchAll(decl))
+    if (m.index! > moduleAt + 1) {
+      from = m.index!;
+      init = m.index! + m[0].length;
+    }
   if (from < 0) return false;
+  const span = src.slice(from, at);
+  if (/[`/]/.test(span)) return false;
+  const value = sliceSpawnValue(src, init);
+  if (/(?<![\w$.])exports(?![\w$])/.test(value) || new RegExp(`(?<![\\w$.])${reEsc(local)}(?![\\w$])`).test(value)) return false;
   let depth = 0;
-  for (let i = from; i < at; i++) {
-    const c = src[i];
+  for (let i = 0; i < span.length; i++) {
+    const c = span[i];
     if (c === "\\") {
       i++;
       continue;
     }
-    if (c === '"' || c === "'" || c === "`") {
-      for (i++; i < at && src[i] !== c; i++) if (src[i] === "\\") i++;
+    if (c === '"' || c === "'") {
+      for (i++; i < span.length && span[i] !== c; i++) if (span[i] === "\\") i++;
       continue;
     }
     if (c === "{") depth++;
@@ -3232,6 +3244,8 @@ export function extractSubagentComposition(files: Map<string, string>): {
   suffix: string;
   /** The ternary's default arm, when the unreachable-folder line is a ternary; undefined on older builds. */
   defaultArm?: string;
+  /** The ternary's predicate source, as written; check 7a resolves its reader. */
+  predicate?: string;
 } | null {
   const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
   if (!module) return null;
@@ -3256,6 +3270,7 @@ export function extractSubagentComposition(files: Map<string, string>): {
   // (its shape, not its minified names), the default arm, and the other arm's resolved text. A change
   // to either arm or to the predicate then moves the fingerprint.
   let defaultArm: string | undefined;
+  let predicate: string | undefined;
   const parts = [...bodies];
   const tern = UNREACHABLE_TERNARY.exec(fnSrc);
   if (tern) {
@@ -3263,6 +3278,7 @@ export function extractSubagentComposition(files: Map<string, string>): {
     const alt = ref && ref.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(ref.local)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
     if (!alt) return null;
     defaultArm = tern[2]!;
+    predicate = tern[1]!;
     const pred = tern[1]!.replace(/[A-Za-z_$][\w$]*/g, (w) => (w === "void" || w === "null" || w === "undefined" ? w : "x"));
     parts.push(pred, defaultArm, alt[1]!);
   } else if (mAt !== module.indexOf(UNREACHABLE_FOLDER_PHRASE) || !fnSrc.includes(`(${UNREACHABLE_FOLDER_PHRASE})`)) return null;
@@ -3273,7 +3289,7 @@ export function extractSubagentComposition(files: Map<string, string>): {
   if (!comp) return null;
   const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[1])}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
   if (!decl) return null;
-  return { module, manifest, suffix: decl[1]!, ...(defaultArm !== undefined ? { defaultArm } : {}) };
+  return { module, manifest, suffix: decl[1]!, ...(defaultArm !== undefined ? { defaultArm, predicate } : {}) };
 }
 
 /** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is
@@ -3429,6 +3445,31 @@ export function checkSubagentPromptFacts(
       flags.push(
         `subagent-append: the folder manifest's unreachable-folder default arm changed (now ${JSON.stringify(comp.defaultArm.slice(0, 80))}) — the default path a 1p sub-agent receives moved; re-derive the hl paraphrase, then add a new version entry`,
       );
+    // ...and a 1p sub-agent must still GET that arm. The fingerprint canonicalizes the predicate's identifiers, so it
+    // cannot see the predicate re-pointed at another reader, or the reader losing its 1p early return. Resolve the
+    // reader and pin that return: `function <r>(){if(<initialized>()&&<deployment>().type!=="3p")return;…`, so on a
+    // first-party deployment it is undefined before any policy is read, and `<r>()===void 0` picks the default arm.
+    if (comp.predicate !== undefined) {
+      const call = /^([\w$]+(?:\.[\w$]+)?)\(\)===void 0$/.exec(comp.predicate);
+      const ref = call ? resolveNamespaceRef(call[1]!, comp.module, files) : null;
+      if (!call)
+        miss(
+          "unreachable-folder predicate",
+          "the ternary's predicate is no longer `<reader>()===void 0` — the arm a 1p sub-agent gets cannot be read",
+        );
+      else if (!ref)
+        miss(
+          "unreachable-folder predicate",
+          `the predicate's reader ${call[1]} could not be resolved — classify it before admitting the ternary`,
+        );
+      else if (
+        !new RegExp(`function ${reEsc(ref.local)}\\(\\)\\{if\\([\\w$.]+\\(\\)&&[\\w$.]+\\(\\)\\.type!=="3p"\\)return;`).test(ref.chunk)
+      )
+        miss(
+          "unreachable-folder predicate",
+          `the reader ${call[1]} no longer returns undefined first on a non-3p deployment — a 1p sub-agent may now get the policy arm`,
+        );
+    }
     // The manifest joins the path-gated builtin tool list. Assert the list itself by CONTENT — a tool
     // added to or removed from it changes what the sub-agent is told its file tools are, and would not
     // move the manifest's own prose fingerprint.
