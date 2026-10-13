@@ -505,5 +505,8 @@ does not apply here. Everything else in the normal flow does.
   every real step skipped and reported **success**; a green `scenario suite` check from before then is
   NOT evidence of live validation. `npm run preflight` raises its own `live-suite key reminder` WARN for
   the same reason.
-  Re-read this bullet if a key is ever added; the `build` + `test` + `image-recipe` + `boundary` stages
-  are what actually gate a release today.
+  Re-read this bullet if a key is ever added. What gates a release is the whole `ci.yml` run for the
+  tagged commit (see
+  [The live scenario suite is best-effort](#the-live-scenario-suite-is-best-effort-not-a-publish-gate)):
+  every job that runs and fails blocks it, `parity-drift` and `boundary` included, and only a skipped
+  job does not.

@@ -324,8 +324,9 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   the pass is refused. To re-score the flow with the edited script: rename the metric (`leak_scan` →
   `leak_scan_v2`) and drop the old declaration, approve the scenario change, merge the new `state-template` entry,
   then `hillclimb regrade <scenarios> --flow <dir> --variant all --allow-metric-commands`: every row of every variant
-  gets the new column from its kept run's events, with no agent spend. Do it before `prune` removes those runs (a
-  pruned row reads `command_not_allowed`).
+  gets the new column from its kept run's events, with no agent spend. Do it before a `prune --include-hillclimb`
+  removes those runs (a plain `prune` keeps them): a row whose kept run dir is gone is listed as evidence
+  unavailable, gains no value in the column, and the regrade exits 1.
 
 - **Everything that can refuse does so before the first judge call**, and then writes nothing: a host `claude`
   that cannot run the judge isolated (asked only when a judge would be called — again under the locks when a

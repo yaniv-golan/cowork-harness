@@ -7,7 +7,7 @@
 // instead of reading its first leg as the whole run.
 
 import { z } from "zod";
-import { Assertion, AnswerRule, FIDELITY_TIERS } from "../types.js";
+import { Assertion, AnswerRule, FIDELITY_TIERS, ScenarioObject } from "../types.js";
 import type { Assertion as AssertionT } from "../types.js";
 import { LEG_ID_RE } from "./turn-layout.js";
 
@@ -100,11 +100,23 @@ export type HostAction = z.infer<typeof HostAction>;
 
 export const Leg = z
   .strictObject({
-    id: z.string().regex(LEG_ID_RE, { message: "a leg id is 1-64 of [a-z0-9_-], starting with a letter or digit" }),
+    id: z
+      .string()
+      .regex(LEG_ID_RE, { message: "a leg id is 1-64 of [a-z0-9_-], starting with a letter or digit" })
+      .describe(
+        "the leg's id, unique within the scenario: 1-64 of [a-z0-9_-], starting with a letter or digit. It names the leg's run dir (legs/<id>) and is what --leg <id> takes",
+      ),
     prompt: z.string().optional().describe("the user turn of this leg's fresh agent session"),
     host_action: HostAction.optional().describe("a command run in the leg runtime; no agent, no tokens"),
     session: LegSessionOverlay.optional().describe("this leg's overlay on the scenario session"),
-    timeout_ms: z.number().int().positive().optional(),
+    timeout_ms: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "this prompt leg's wall-clock budget for its agent run, in ms; on expiry the harness kills the agent and the leg ends result:error / errorSource:timeout. Omitted = no timeout. Refused on a host_action leg, whose limit is host_action.timeout (seconds)",
+      ),
     assert: z.array(z.unknown()).default([]).describe("this leg's assertions"),
   })
   .superRefine((l, ctx) => {
@@ -131,27 +143,54 @@ export function hostActionAsserts(l: Leg): HostActionAssertion[] {
   return l.assert.map((a) => HostActionAssert.parse(a));
 }
 
+/** The description a key shares with the single-prompt scenario, where it means the same thing here. */
+const shared = (
+  k: "name" | "baseline" | "session" | "fidelity" | "answers" | "on_unanswered" | "skills" | "requires_capabilities" | "allow_host_hooks",
+) => ScenarioObject.shape[k].description ?? "";
+
 export const MultiLegScenarioObject = z.strictObject({
-  name: z.string().default(""),
-  baseline: z.string().default("latest"),
-  session: z.string().default("(inline)"),
-  fidelity: z.enum(FIDELITY_TIERS),
-  execution: z.enum(["local"], { message: "a multi-leg scenario runs locally (execution: local)" }).default("local"),
-  lane: z.enum(["local"], { message: "a multi-leg scenario runs on the local lane (lane: remote is refused)" }).default("local"),
+  name: z.string().default("").describe(shared("name")),
+  baseline: z.string().default("latest").describe(shared("baseline")),
+  session: z.string().default("(inline)").describe(shared("session")),
+  fidelity: z.enum(FIDELITY_TIERS).describe(shared("fidelity")),
+  execution: z
+    .enum(["local"], { message: "a multi-leg scenario runs locally (execution: local)" })
+    .default("local")
+    .describe("local only (the default): a multi-leg scenario runs locally"),
+  lane: z
+    .enum(["local"], { message: "a multi-leg scenario runs on the local lane (lane: remote is refused)" })
+    .default("local")
+    .describe("local only (the default): a multi-leg scenario runs on the local lane; lane: remote is refused"),
   workdir: z
     .enum(["persistent", "cowork-task"])
     .default("persistent")
     .describe(
       "persistent (default): every leg runs in the same session tree, so a leg sees earlier legs' files at the same paths — a persistent workspace, not Cowork. cowork-task: each prompt leg gets a new session root; connected folders carry over, outputs do not (a model of a new local Cowork task, unverified)",
     ),
-  legs: z.array(Leg).min(2),
-  answers: z.array(AnswerRule).default([]),
-  on_unanswered: z.enum(["fail", "prompt", "llm", "first"]).optional(),
-  expect_denied: z.array(z.string()).default([]),
-  skills: z.array(z.string()).default([]),
-  requires_capabilities: z.array(z.string()).default([]),
-  allow_host_hooks: z.boolean().optional(),
-  workspace_fixture: z.string().min(1).optional(),
+  legs: z
+    .array(Leg)
+    .min(2)
+    .describe(
+      "the legs, run in order, each a fresh agent session (prompt) or a host command (host_action): the first is a prompt leg, at least two are, and a leg after one that failed is skipped",
+    ),
+  answers: z.array(AnswerRule).default([]).describe(shared("answers")),
+  on_unanswered: z.enum(["fail", "prompt", "llm", "first"]).optional().describe(shared("on_unanswered")),
+  expect_denied: z
+    .array(z.string())
+    .default([])
+    .describe(
+      "hosts whose egress must have been DENIED: graded once for the scenario, over every leg's egress and every host action's, when every leg ran",
+    ),
+  skills: z.array(z.string()).default([]).describe(shared("skills")),
+  requires_capabilities: z.array(z.string()).default([]).describe(shared("requires_capabilities")),
+  allow_host_hooks: z.boolean().optional().describe(shared("allow_host_hooks")),
+  workspace_fixture: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "a directory (relative to the scenario file) whose contents are copied into the session's outputs/ before the first leg; a later leg starts from the previous leg's end state. The same rules as a single scenario's workspace_fixture",
+    ),
 });
 
 export const MultiLegScenario = MultiLegScenarioObject.superRefine((s, ctx) => {

@@ -665,6 +665,22 @@ unless `--allow-budget-stop`. `--rerecord-stale` with nothing stale prints `ok: 
 A refusal before the first recording (no credentials, an unresolved model, the budget pre-flight, a slug
 collision) prints the error envelope instead, as before.
 
+**`eval` and `hillclimb` exit codes.** `eval` (and `eval report`, which rebuilds the same report): `0` completed ·
+`1` with `--fail-on possible`, a `possible` or `confirmed` drop, an `insufficient_refusals` row, or a metric row
+`possible worse`, `confirmed worse` or `insufficient_unmeasured` (with `--fail-on confirmed`, a `confirmed` drop or a
+`confirmed worse` metric only), and, with or without `--fail-on`, every row `insufficient` (metric rows included), a
+scenario that compared nothing, a metric row `not compared`, or the judge model differing across reps · `2` usage, or
+a refusal before the first run (`--max-budget-usd` included) · `3` an arm snapshot could not be copied or failed its
+staging preflight. `eval --dry-run`: `0` the plan was printed · `2` any refusal the real eval would make before its
+first run · `3` as above, or the temp dir is inside a git work tree or git cannot tell. `hillclimb run`: `0` every
+attempt ok · `1` a failed attempt or a mid-run stop · `2` refused before spending. `hillclimb check`: `0` clean · `1`
+an error finding (one of the published schema's checks, a `_state.json` metric declaration, a changed frozen
+reference, or `metrics.sig_mixed`, a column whose rows carry two declaration signatures); its warnings and notes
+never change the exit code · `2` usage, a missing flow dir or a target that does not load. `hillclimb state-template`:
+`0` printed · `2` usage or refusal. `hillclimb freeze-ref`: `0` nothing refused · `1` a case refused · `2` usage.
+`hillclimb regrade`: `0` rewritten or nothing to do · `1` some rows listed (not re-graded) or a failure after the
+first judge call · `2` refused before any judge call.
+
 **`regrade`** re-grades a kept run's judged asserts (`semantic_matches`, `semantic_pairwise`) with the judge and prints one payload-shaped
 document, `{tool, version, command: "regrade", ok, runs: [...], error: null}`, described by
 **`schema/regrade.json`** (a §12-covered surface). Each `runs[]` entry is one run dir:
@@ -679,7 +695,13 @@ calls and is absent when none was priced (never `0` for unknown); `unpricedGrade
 `judgeModelRequested` (the model the re-grade asked for; `judgeModel` is the id the judge answered as); `notRegraded[]` lists
 every other assert as `{assertionIndex, keys}`. `metrics` (only when the scenario declares `metrics:`) is the
 `RunResult.metrics` shape re-read from the kept work dir; a file whose bytes differ from the run's recorded
-post-run hash (`RunResult.workspaceFiles`) is `unavailable: "pruned"`.
+post-run hash (`RunResult.workspaceFiles`) is `unavailable: "pruned"`. A command metric (`command:`, a script over the
+run's events) is never re-run without `--allow-metric-commands`: the run's own measurement, value or reason, is carried
+forward with `command.carried: true`, and it is `command_not_allowed` when the run recorded none. With or without the
+flag it is `command_changed` when its declaration's signature differs from the recorded one, and `pruned` when the
+turn's kept events do not hash to the run's recorded `eventsSha256`, when it recorded one (the bytes the script read); with the flag the script re-runs over the kept
+events (its stderr under `turns/<N>/regrade/metrics/`), and a value that differs from the recorded one is
+`nondeterministic`.
 
 `docMatchesLive` is `true` | `false` | `"scope_changed"` | `"unknown"` | `"live_refused"` | `"not_graded"`. **Per
 assert** it describes that assert's own document: whether the recomposed judged document equals, section for
@@ -830,6 +852,20 @@ signalHistogram, perAssertion: [{ index, key, passes, fails, sampleFailure? }], 
 nonDeterministicRuns }`. A `--max-budget-usd` early stop is a `::warning::`, not itself a failure — that
 batch is still judged on its own completed-runs `passRate`. A `--stop-on-diverge` early stop (both a pass
 and a fail observed) always fails that batch, regardless of the numeric rate.
+
+**A multi-leg (`legs:`) scenario** ([docs/scenario.md](docs/scenario.md#multi-leg-scenarios-legs)) publishes its
+scenario-level result beside the legs' own. `run` puts the prompt legs' `RunResult`s in `results[]` and the scenario
+result in `multiLeg` (`{schema, version, scenario, verdict, legs: [{id, kind, agentSessionId?, status, verdict?}],
+…}`, where a leg's `status` is `passed`, `failed` or `skipped` — a leg after the one that failed never runs); `ok` is
+`multiLeg.verdict.pass`, not `results.every(…)`, since a failed host action leaves no `RunResult` in `results[]`, and
+the exit code follows it (`0` pass, `1` fail). `record` publishes `results` (the prompt legs, as `publishedResult`
+projects them), `multiLeg` and `cassette`, with `ok` "the cassette was written", as for a single file;
+`record --dry-run` of a multi-leg scenario prints `dryRun: true`, `target`, `multiLeg: true` and the `cassette` path
+it would write. `replay` over one or more multi-leg cassettes adds `multiLegs` (one `{file, verdict: {pass}, legs}`
+per cassette, `pass` also false on staleness under `--strict` or `--fail-on-skill-drift`), and `ok` then needs every
+one to pass as well as every `results[]` entry. On disk the scenario result is `scenario-result.json` at the
+scenario root, written once after the last leg (or after the leg that stopped the scenario); its presence marks the
+run complete, and its `verdict` has a `RunResult` verdict's shape, so `.verdict.pass` reads the same.
 
 **`RunResult`** (`src/types.ts`):
 abridged to the fields most consumers branch on. The complete field list is

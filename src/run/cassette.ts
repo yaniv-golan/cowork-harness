@@ -7312,7 +7312,7 @@ async function writeReassertedAssertBlock(
   if (nextMetrics !== undefined) scn.metrics = nextMetrics;
   else delete scn.metrics;
   // A frozen command-metric value belongs to the declaration it was measured under: one the new block changed (or
-  // dropped) goes, so a later replay reads `command_changed` / nothing rather than the old scorer's number.
+  // dropped) goes, so a later replay reads `command_not_allowed` (nothing frozen) rather than the old scorer's number.
   const rc = rawCassette as { commandMetrics?: FrozenCommandMetric[] };
   if (rc.commandMetrics) {
     const now = ScenarioObject.shape.metrics.safeParse(nextMetrics);

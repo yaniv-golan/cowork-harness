@@ -220,8 +220,9 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   approve the sha, merge the new `state-template` entry, then
   `cowork-harness hillclimb regrade T --flow F --variant all --allow-metric-commands`. Every variant's rows get the
   new column from their kept runs at no agent cost, so the loop compares variants under one scorer again. Run it
-  before any `prune`: a row whose run is gone reads `command_not_allowed`. Never compare the old and new columns as a
-  delta.
+  before any `prune --include-hillclimb` (a plain `prune` keeps hillclimb runs): a row whose kept run dir is gone is
+  listed as evidence unavailable, gains no value in the new column, and the regrade exits 1. Never compare the old
+  and new columns as a delta.
 - **Pairwise saturation.** When `check` notes a variant scoring 0.9 or more against the newest reference:
   `cowork-harness hillclimb freeze-ref T --flow F --variant vN`, then
   `cowork-harness hillclimb regrade T --flow F --fill-refs` (no `--case`: rows of cases with no pairwise
