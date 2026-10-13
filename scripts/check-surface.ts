@@ -19,7 +19,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { computeSurface } from "./lib/surface.js";
+import { computeSurface, CONSTRAINT_KINDS, INPUT_SCHEMAS, PRE_491_KINDS } from "./lib/surface.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = join(REPO_ROOT, "test/fixtures/surface-baseline.json");
@@ -64,33 +64,151 @@ function flatten(value: unknown, prefix: string, out: Map<string, string>): void
   for (const key of keys) flatten(obj[key], prefix ? `${prefix}.${key}` : key, out);
 }
 
-/** The schemas a user WRITES (a scenario or session file), as opposed to the ones the harness writes for readers
- *  (run results, cassettes, reports, envelopes). `required` cuts the opposite way on each: on an input schema it
- *  constrains the author, so dropping it accepts every file the old schema did (a widening) and adding it can reject
- *  one that used to load (a narrowing); on an output schema it is a promise to readers, so dropping it is the break.
- *  - scenario.schema.json: a scenario file, authored by the user.
- *  - scenario-multi-leg.schema.json: the multi-leg form of the same file.
- *  - session.schema.json: a session file, authored by the user.
- *  Every other schema under schema/ is written by the harness (or exchanged with a decider: protocol.v1.json, whose
- *  both directions have readers), so a removed `required` there stays a break. */
-export const INPUT_SCHEMAS: ReadonlySet<string> = new Set([
-  "scenario.schema.json",
-  "scenario-multi-leg.schema.json",
-  "session.schema.json",
-]);
+export { INPUT_SCHEMAS } from "./lib/surface.js";
 
-/** For a `schemas.<file>.<path>.required` leaf of an input schema: the file and the property path. */
-function inputRequired(leaf: string): { file: string; prop: string } | undefined {
-  if (!leaf.startsWith("schemas.") || !leaf.endsWith(".required")) return undefined;
-  for (const file of INPUT_SCHEMAS)
-    if (leaf.startsWith(`schemas.${file}.`)) return { file, prop: leaf.slice(`schemas.${file}.`.length, -".required".length) };
-  return undefined;
+type Leaves = Record<string, Record<string, Record<string, unknown>>>;
+
+/** The surface with every schema leaf reduced to `kinds` (structured, before flattening: a flattened `.type[x]` key
+ *  cannot tell a leaf kind from a property named `type`). */
+function withKinds(surface: unknown, kinds: ReadonlySet<string>): unknown {
+  const s = surface as { schemas?: Leaves } | null;
+  if (!s || typeof s !== "object" || !s.schemas) return surface;
+  const schemas: Leaves = {};
+  for (const [file, leaves] of Object.entries(s.schemas)) {
+    schemas[file] = {};
+    for (const [path, leaf] of Object.entries(leaves)) {
+      const kept = Object.fromEntries(Object.entries(leaf).filter(([kind]) => kinds.has(kind)));
+      if (Object.keys(kept).length) schemas[file]![path] = kept;
+    }
+  }
+  return { ...s, schemas };
+}
+
+/** The flattened keys one leaf kind of one path produces (one per value for an array of scalars). */
+function leafKeys(file: string, path: string, kind: string, value: unknown): string[] {
+  const at = `schemas.${file}.${path}.${kind}`;
+  if (Array.isArray(value) && value.length && value.every((v) => v === null || typeof v !== "object"))
+    return value.map((v) => `${at}[${typeof v === "string" ? v : JSON.stringify(v)}]`);
+  return [at];
+}
+
+/** On the schemas a user writes (INPUT_SCHEMAS), which flattened keys a change WIDENS (accepts every file the old
+ *  schema did) and which it NARROWS (can reject a file that used to load). Read off the structured leaves:
+ *  - required: dropped widens; added narrows when its parent object existed (an old file may lack the field);
+ *  - closed, const, a value constraint: dropped widens; added narrows when the property itself existed;
+ *  - an enum introduced on a property that existed narrows (values added to an existing enum are plain additions);
+ *  - type: a new type set that keeps every old type (a scalar becoming an array that keeps it, or a one-element
+ *    array and the same scalar) widens;
+ *  - a numeric constraint loosened (min lowered, max raised) widens; tightened stays a change; a pattern change of
+ *    any kind stays a change (regex containment cannot be decided). */
+function inputReclassify(
+  base: unknown,
+  cur: unknown,
+  /** Branch leaves diffSurfaces read as an old shape moved intact into a union branch (a widening union). */
+  consumedArmLeaves: ReadonlySet<string> = new Set(),
+): { widen: Set<string>; narrow: Set<string> } {
+  const widen = new Set<string>();
+  const narrow = new Set<string>();
+  const B = ((base as { schemas?: Leaves })?.schemas ?? {}) as Leaves;
+  const C = ((cur as { schemas?: Leaves })?.schemas ?? {}) as Leaves;
+  for (const file of INPUT_SCHEMAS) {
+    const bf = B[file];
+    const cf = C[file];
+    if (!bf || !cf) continue;
+    const paths = Object.keys(bf);
+    const existed = (path: string) =>
+      path in bf || paths.some((p) => p.startsWith(path) && /^[.[<{]/.test(p.slice(path.length))) || (path === "" && paths.length > 0);
+    const parentOf = (path: string) => path.replace(/\.[^.]*$/, "");
+    // A union branch new on a property that existed: an `allOf` branch always narrows it (every branch must match);
+    // a first `anyOf`/`oneOf` narrows it when the property keeps its own constraints (at least one branch must now
+    // match on top of them). A property whose own constraints moved INTO the branches is the widening union shape,
+    // read by diffSurfaces' branch logic. A branch appended to an existing anyOf/oneOf is an addition (a widening).
+    for (const path of Object.keys(cf)) {
+      if (path in bf) continue;
+      for (const m of path.matchAll(/<(allOf|anyOf|oneOf):\d+>/g)) {
+        const arm = path.slice(0, m.index! + m[0].length);
+        if (paths.some((p) => p === arm || p.startsWith(arm))) continue; // the branch existed
+        const prefix = path.slice(0, m.index!);
+        if (!existed(prefix)) break; // a branch on a new property: an addition
+        const kind = m[1]!;
+        const firstOfKind = !paths.some((p) => p.startsWith(`${prefix}<${kind}:`));
+        // A first anyOf/oneOf is a widening only when one of its branches is the property's old shape moved there
+        // intact (diffSurfaces' branch logic consumed its leaves): the other branches then only add what is accepted.
+        const unionKeepsOld = [...consumedArmLeaves].some((x) => x.startsWith(`schemas.${file}.${prefix}<${kind}:`));
+        // A oneOf branch narrows wherever it appears: oneOf demands EXACTLY one match, so a branch that overlaps another
+        // rejects a value both accept (conservative: a oneOf that only adds disjoint values reads as a change too).
+        if (kind === "allOf" || kind === "oneOf" || (firstOfKind && !unionKeepsOld))
+          for (const [kd, v] of Object.entries(cf[path]!)) leafKeys(file, path, kd, v).forEach((x) => narrow.add(x));
+        break;
+      }
+    }
+    for (const path of new Set([...Object.keys(bf), ...Object.keys(cf)])) {
+      const b = bf[path] ?? {};
+      const c = cf[path] ?? {};
+      const keys = (leaf: Record<string, unknown>, kind: string) => leafKeys(file, path, kind, leaf[kind]);
+      for (const kind of ["required", "closed", "const", ...CONSTRAINT_KINDS]) {
+        const had = kind in b;
+        const has = kind in c;
+        if (had && !has) keys(b, kind).forEach((x) => widen.add(x));
+        else if (!had && has && (kind === "required" ? existed(parentOf(path)) : existed(path)))
+          keys(c, kind).forEach((x) => narrow.add(x));
+        else if (had && has && typeof b[kind] === "number" && typeof c[kind] === "number" && b[kind] !== c[kind]) {
+          const loosened = kind.toLowerCase().includes("min")
+            ? (c[kind] as number) < (b[kind] as number)
+            : (c[kind] as number) > (b[kind] as number);
+          if (loosened) keys(c, kind).forEach((x) => widen.add(x));
+        }
+      }
+      if (!("enum" in b) && "enum" in c && existed(path)) keys(c, "enum").forEach((x) => narrow.add(x));
+      // A type introduced on a property that existed rejects any value of another type.
+      if (!("type" in b) && "type" in c && existed(path)) keys(c, "type").forEach((x) => narrow.add(x));
+      // An enum dropped entirely from a property that is still there accepts any value it allowed.
+      if ("enum" in b && !("enum" in c) && path in cf) keys(b, "enum").forEach((x) => widen.add(x));
+      // An exclusive bound replaced by an inclusive one at or beyond it (`exclusiveMinimum: 0` → `minimum: 0`).
+      for (const [exc, inc, looser] of [
+        ["exclusiveMinimum", "minimum", (e: number, i: number) => i <= e],
+        ["exclusiveMaximum", "maximum", (e: number, i: number) => i >= e],
+      ] as const)
+        if (
+          typeof b[exc] === "number" &&
+          !(exc in c) &&
+          typeof c[inc] === "number" &&
+          !(inc in b) &&
+          looser(b[exc] as number, c[inc] as number)
+        ) {
+          keys(b, exc).forEach((x) => widen.add(x));
+          keys(c, inc).forEach((x) => {
+            widen.add(x);
+            narrow.delete(x);
+          });
+        }
+      if ("type" in b && "type" in c) {
+        const asSet = (t: unknown) => new Set((Array.isArray(t) ? t : [t]).map((v) => JSON.stringify(v)));
+        const bt = asSet(b.type);
+        const ct = asSet(c.type);
+        if ([...bt].every((t) => ct.has(t))) {
+          keys(b, "type").forEach((x) => widen.add(x));
+          // The old types in their new spelling are not additions; a type the new set adds is.
+          const old = new Set((Array.isArray(b.type) ? b.type : [b.type]).map((v) => (typeof v === "string" ? v : JSON.stringify(v))));
+          keys(c, "type")
+            .filter((x) => old.has(Array.isArray(c.type) ? x.slice(x.lastIndexOf("[") + 1, -1) : JSON.parse(JSON.stringify(c.type))))
+            .forEach((x) => widen.add(x));
+        }
+      }
+    }
+  }
+  return { widen, narrow };
 }
 
 /** Pure diff of two surfaces. `added` (a new leaf path) is fine at 1.0; `removed` and `changed` are
  *  breaking. A scalar leaf that moved under a union arm with the SAME value (`a.b.type` → `a.b<anyOf:0>.type`)
  *  is a widening — the old shape is still accepted — so it goes to `widened`, not `removed`. */
 export function diffSurfaces(baseline: unknown, current: unknown): SurfaceDiff {
+  // Only the leaf kinds the BASELINE recorded are compared: a kind the walker started recording later is not a
+  // change against a snapshot that never saw it.
+  const kinds = new Set((baseline as { leafKinds?: string[] } | null)?.leafKinds ?? PRE_491_KINDS);
+  baseline = withKinds(baseline, kinds);
+  current = withKinds(current, kinds);
   const baseFlat = new Map<string, string>();
   const curFlat = new Map<string, string>();
   flatten(baseline, "", baseFlat);
@@ -141,18 +259,13 @@ export function diffSurfaces(baseline: unknown, current: unknown): SurfaceDiff {
     (v === "widened" ? widened : v === "changed" ? changed : removed).push(path);
   }
   for (let i = added.length - 1; i >= 0; i--) if (consumedArmLeaves.has(added[i])) added.splice(i, 1);
-  // `required` on an input schema (INPUT_SCHEMAS): dropping it widens. Adding it narrows when the object it sits in
-  // already existed (an old file may lack the field); inside an object that is itself new, no old file has it.
-  for (let i = removed.length - 1; i >= 0; i--) if (inputRequired(removed[i]!)) widened.push(...removed.splice(i, 1));
+  // The schemas a user writes: a change that accepts every old file widens, one that can reject one narrows.
+  const { widen, narrow } = inputReclassify(baseline, current, consumedArmLeaves);
+  for (let i = removed.length - 1; i >= 0; i--) if (widen.has(removed[i]!)) widened.push(...removed.splice(i, 1));
+  for (let i = changed.length - 1; i >= 0; i--) if (widen.has(changed[i]!)) widened.push(...changed.splice(i, 1));
   for (let i = added.length - 1; i >= 0; i--) {
-    const r = inputRequired(added[i]!);
-    if (!r) continue;
-    const parent = r.prop.replace(/\.[^.]*$/, "");
-    const at = `schemas.${r.file}.${parent}`;
-    const parentExisted = [...baseFlat.keys()].some(
-      (k) => k.startsWith(at) && (k.length === at.length || /^[.[<]/.test(k.slice(at.length))),
-    );
-    if (parentExisted) changed.push(...added.splice(i, 1));
+    if (narrow.has(added[i]!)) changed.push(...added.splice(i, 1));
+    else if (widen.has(added[i]!)) added.splice(i, 1); // the new form of a widened leaf, not a separate addition
   }
 
   added.sort();
