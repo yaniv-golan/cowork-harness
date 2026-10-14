@@ -80,7 +80,17 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --max-budget-usd <x>       refuse before any run (exit 2) when the scenarios' worst observed runs, times the jobs
                              scheduled, exceed x. A pre-flight from history only: the eval is never stopped mid-way, and
                              judge spend is not counted. With no priced history the check is a LOWER BOUND, and says so.
-  --output-format text|json  json: {tool,version,command,ok,evalDir,arms,pins,sections,summary,cost,stoppedEarly,error};
+  --search-corpus <pool>     serve both arms' web searches from one recorded pool (search-pool build), copied into the
+                             eval dir and pinned by hash; hostloop only. A frozen corpus holds search fixed: it cannot
+                             evaluate a change to what or when the skill searches (evaluate that live; or run a live eval of
+                             the search change, then a frozen eval with a pool built evenly from both versions' live runs).
+                             Refused before any run when the pool's records come from one arm (or one arm holds more than
+                             60% of them); the report prints both arms' search metrics side by side and marks the
+                             comparison CONFOUNDED when they were served unequally (placeholder thresholds)
+  --search-corpus-miss empty|error, --search-corpus-min-score <n>   as on run
+  --allow-confounded-pool    run a pool drawn from one arm (or whose split cannot be bounded); every surface says CONFOUNDED
+  --allow-mixed-pool         accept a pool built with --mixed (several skills)
+  --output-format text|json  json: {tool,version,command,ok,evalDir,arms,pins,sections,summary,cost,stoppedEarly,searchCorpus?,error};
                              with --dry-run: {tool,version,command,ok,dryRun,plan,budget?,error}
   --quiet                    no per-job progress lines (a --dry-run's plan is its output, and still prints)
   --dotenv <path>, --run-dir <path>   as on every command
@@ -91,7 +101,7 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
        insufficient_unmeasured metric row, the same for metric values the scorer or a cap left out),
        every row insufficient, a scenario that compared nothing (every rep of both arms errored, or every rep of one arm
        was an infrastructure failure), a metric row not compared (a broken metric state), or the judge model differed
-       across reps · 2 usage, or a refusal before any
-       run (including the --max-budget-usd refusal) · 3 an arm snapshot could not be copied, or failed its staging
-       preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above, or the
+       across reps, or (with --search-corpus) any rep not served from the pinned pool · 2 usage, or a refusal before any
+       run (including the --max-budget-usd refusal, a one-sided or mixed pool, and a pool that cannot be read) · 3 an arm
+       snapshot or the pool copy could not be made, or failed its staging preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above, or the
        temp dir is inside a git work tree, or git cannot tell whether it is (set TMPDIR)`;

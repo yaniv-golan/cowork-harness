@@ -583,6 +583,16 @@ never for research quality.
   request bodies, and skips its managed-settings gateway pin; stdio MCP servers and other child processes inherit the
   proxy and are tunnelled through it unchanged. See [boundary.md](./boundary.md) and
   [fidelity-gaps.md](./fidelity-gaps.md#a-frozen-search-corpus-is-not-live-search).
+- **In `eval` and `hillclimb run`.** Both take `--search-corpus` (with `--search-corpus-miss` and
+  `--search-corpus-min-score`), copy the pool privately before the first run, pin its hash, and serve every rep from
+  the copy, refusing a rep whose copy does not match the pin. Before any spend they check where the pool's records came
+  from against the variants being compared, and refuse a pool drawn from one of them unless `--allow-confounded-pool`
+  (then CONFOUNDED on every surface); a mixed pool needs `--allow-mixed-pool`, and is never a hillclimb baseline's.
+  A rep with a refused search is excluded, never scored. `eval` prints both arms' search metrics side by side with an
+  asymmetry marker; `hillclimb run` refuses a pass beside rows served from another pool (or live) unless
+  `--allow-mixed-search`. See [eval.md](./eval.md#a-frozen-search-corpus---search-corpus) and
+  [hillclimb.md](./hillclimb.md#a-frozen-search-corpus---search-corpus). `stats` and the `--repeat` rollup leave a
+  run with a refused search out of the pass rate and count it.
 
 ### Exporting a run's outputs as a fixture (`fixture export`)
 

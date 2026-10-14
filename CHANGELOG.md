@@ -61,6 +61,40 @@ All notable changes to this project are documented here. The format is based on
   `liveServerTools`, `meanTopScore`, `shapeUnfenced`, `unattributedExpected` and `attributionUncertain`. A new warn
   signal, `search_corpus_attribution_uncertain`, fires when a pairing could not be settled; it never changes the
   verdict.
+- **`eval` and `hillclimb run` take `--search-corpus <pool>`** (with `--search-corpus-miss` and
+  `--search-corpus-min-score`). A frozen corpus holds search fixed, so it cannot evaluate a change to what or when a
+  skill searches: evaluate that live, or split it into a live eval of the search change and a frozen eval of the
+  steps after search, with a pool built evenly from both versions' live runs.
+  - **One private, pinned copy.** The pool is copied before the first run (into the eval dir; under the snapshot root
+    for hillclimb, never into the flow dir), its hash and miss mode are pinned, and every rep is served from the copy
+    and checks it before it starts. A rep whose copy does not match is refused before it spends, lands in a new
+    bucket `search_pool_mismatch` (a hillclimb `errors.jsonl` class of the same name), and makes `eval` and `eval
+    report` exit 1, with the count in `summary.searchPoolMismatch`.
+  - **Where the pool came from, before any spend.** The pool's records are matched to the compared arms (or
+    variants) by skill content signature, per scenario: `disjoint`, `balanced`, `one-sided` or `unknown`. A pool drawn
+    from one arm (or more than 60% of its records) is refused unless `--allow-confounded-pool`, which labels every
+    surface `CONFOUNDED: pool drawn from <arm>`; that includes a hillclimb pool built from the baseline's rounds judging
+    v1. A mixed pool needs `--allow-mixed-pool` and is never a hillclimb baseline's. A pool built or exported before
+    this release does not record its duplicate count, so one that would read balanced is refused: rebuild it, or
+    re-export it from a pool built by this harness.
+  - **A refused search excludes the rep.** A rep with `searchCorpus.metrics.refused > 0` is never scored: `eval`
+    buckets it `search_refused` (it outranks the agent's own failure), hillclimb writes a `search_refused` error row,
+    and `stats` and the `--repeat` rollup leave it out of the pass rate and count it.
+  - **Both arms' search metrics side by side.** `eval report` prints each arm's served, missed and refused searches,
+    miss rate and mean top score, per scenario and in total (`searchCorpus` in the JSON envelope and `report.json`),
+    and an asymmetry marker that says CONFOUNDED when the same pool served the arms unequally. Its thresholds (a
+    miss-rate gap of 0.10, a top-score ratio of 0.8) are placeholders, and a cell with fewer than 11 searches on a
+    side is not judged. CONFOUNDED never changes the exit code (`summary.confounded`).
+  - **hillclimb.** Every row carries `meta.search_corpus` (the pool, its provenance, the run's counts), and every
+    error row `meta.content_sig`. A pass beside rows served from another pool, or searched live, is refused unless
+    `--allow-mixed-search`. The cost line adds `search frozen: N served, M miss, R refused`. `hillclimb check` errors on
+    rows from more than one pool and on pool mismatches, and warns on a confounded pool, a judge on recorded searches
+    and an asymmetric variant.
+  - The `search_corpus_semantic_judge` warning is counted per arm in the eval report and in `hillclimb check`, and
+    `eval --dry-run` / `hillclimb --dry-run` pricing leaves frozen-corpus runs out of its history. An eval that pins a
+    corpus writes manifest `schemaVersion: 1`.
+- **The `stats` index row's `searchCorpus` gains `refused`**, written always (`0` included); `stats` names frozen rows
+  written before it as `searchRefusedUnrecorded`.
 - **`sync --allow-missing-search-anchors`** writes a baseline without web-search anchors when they cannot be confirmed
   from the staged agent (with a warning), and `npm run preflight` accepts the same flag to downgrade its anchors check.
 - **`agentBinary.searchAnchors` gains two optional fields:** `source` (`both`, `native` or `elf`: which staged agent the

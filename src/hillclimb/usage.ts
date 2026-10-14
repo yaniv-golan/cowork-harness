@@ -111,6 +111,13 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
                           several skills. It joins the harness sha, so changing it needs
                           --approve-harness; pass the same --skill on every pass
   --no-copy-inputs        do not copy session uploads into <flow>/inputs/
+  --search-corpus POOL    serve every rep's web searches from a recorded pool, copied under the snapshot root and
+                          pinned by hash (hostloop only); --search-corpus-miss and --search-corpus-min-score as on run.
+                          It holds search fixed, so it cannot climb a change to what or when the skill searches. Refused
+                          before spend when the pool's records come from one variant the flow compares (a pool from the
+                          baseline's own rounds judging v1 included) unless --allow-confounded-pool; a mixed pool is
+                          never the baseline's and otherwise needs --allow-mixed-pool
+  --allow-mixed-search    run beside rows served from another pool, or searched live (recorded on every row)
   --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)
   --output-format text|json   json: one envelope on stdout at exit
   --dotenv FILE  --run-dir DIR   as on every command`;
