@@ -521,6 +521,8 @@ cowork-harness search-pool export market-sizing --out ~/market-sizing-pool.json 
 cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy             # re-verifies both hashes
 ```
 
+- **Multi-leg runs.** A multi-leg run under a `--from` dir adds each prompt leg as its own source run (`legs/<id>/`);
+  a host-action leg has no searches.
 - **One skill per pool.** A run whose skill differs from the others, or that names no single skill, is refused. Pass
   `--skill <name>` to name the skill for runs that name none, or `--mixed` for a pool of several skills (a measured
   variant, never a baseline).

@@ -254,8 +254,9 @@ and rewrites each row through the same producer `run` writes it with. Pass the s
 `COWORK_HARNESS_RUNS_DIR` the runs were written with, or every row is listed as having no kept run dir. A runs root
 moved to where `--run-dir` now points is read from there; a COPY of it while the original still exists is refused
 row by row (point `--run-dir` at the original root instead). A bare
-`prune` keeps hillclimb-labelled runs; `prune --include-hillclimb` deletes them for every flow under the runs root,
-a loop still running included, and `freeze-ref` re-reads a frozen reference's source run, so pass it only once
+`prune` keeps hillclimb-labelled runs; `prune --include-hillclimb` ranks them with every other run under
+`--keep-last`, so the runs of every flow under the runs root, a loop still running included, can lose the ones
+a later re-grade or reference freeze needs (freezing a reference re-reads its source run). Pass it only once
 every climb there is finished.
 
 - **Default:** the row is rebuilt from the scenario as it is now, so a changed value, an added or a removed assert
