@@ -446,6 +446,9 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   scenario with neither a `semantic_matches` nor a `semantic_pairwise` assert is refused with `error.code: "no_semantic_asserts"` (category
   `usage`): nothing to re-grade, which a caller can treat as "nothing to do" rather than a failure. After a
   write failure it carries the run dirs already graded in `runs[]`.
+- **Signals.** When the run was served from a frozen search corpus, each `runs[]` entry and the regrade file carry
+  `signals: [{code: "search_corpus_semantic_judge", severity: "warn", message}]`, counting only the asserts a judge
+  read, and the warning is printed on stderr.
 - **Metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade file carry `metrics`, in the
   `RunResult.metrics` shape, re-read from the kept work dir as it is now. A file is read only while its bytes still
   equal the run's own recorded post-run hash (`RunResult.workspaceFiles`); a file edited since the run, or one the
@@ -465,7 +468,8 @@ experimental and may change in a minor release.
 `search-pool build <pool> --from <run-dir|runs-dir>` (repeat `--from` for more) collects the WebSearch results recorded in kept runs into a
 pool: one record per search, holding its query, its links and the search's prose summary, plus the source run's
 skill, skill commit, skill snapshot signature, agent and Desktop versions, model and start time. A multi-leg run's
-prompt legs (`legs/<id>/`) are found under its root and count as separate source runs. `run --search-corpus <pool>`
+prompt legs (`legs/<id>/`) are found under its root and count as separate source runs; a host-action leg has no
+searches. `run --search-corpus <pool>`
 (and `skill`) serves a run's searches from a pool: see [Serving a run's searches from a pool](#serving-a-runs-searches-from-a-pool---search-corpus).
 
 - **Where.** `<pool>` is a name under `~/.cowork-harness/search-pools/`, or a path. The pool dir is `0700` and its two
@@ -515,7 +519,8 @@ never for research quality.
   refused counts. A run that refused any search warns (`search_corpus_refused`; louder when it refused every one,
   which usually means an agent newer than the baseline's search anchors). A run whose judged assertions
   (`semantic_matches`, `semantic_pairwise`) graded a deliverable also warns (`search_corpus_semantic_judge`): the grade
-  is not evidence of research quality; `regrade` of such a run says the same. The label is printed wherever a
+  is not evidence of research quality; `regrade` of such a run says the same (on stderr, in its report's
+  `runs[].signals` and in the regrade file). The label is printed wherever a
   verdict is read: the run line, `verify-run`'s text output, `status --latest-for` (text, and `searchCorpusLabel` in its
   JSON), the `--repeat` rollup's `search:` line and the head of `trace --view subagent-research`; `stats` groups each
   pool on its own (see [stats](./stats.md)). `searchCorpus.metrics` counts the requests

@@ -133,6 +133,14 @@ describe.runIf(can)("--search-corpus refusals (CLI, $0)", () => {
     expect(readdirSync(f.runsDir)).toEqual([]);
   });
 
+  it("refuses record of a scenario carrying a search_corpus_* key, without --search-corpus", async () => {
+    const f = fixture();
+    const s = scenario(f, "rk.yaml", ["fidelity: hostloop", "assert:", "  - search_corpus_max_miss_rate: 0.5"]);
+    const r = await cli(f, ["record", s, "--model", "claude-sonnet-5"]);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/`search_corpus_max_miss_rate` needs --search-corpus <pool>/);
+  });
+
   it("refuses record, naming the cassette version", async () => {
     const f = fixture();
     const r = await cli(f, ["record", scenario(f, "r.yaml", ["fidelity: hostloop"]), "--search-corpus", "p"]);

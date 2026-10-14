@@ -530,7 +530,7 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
       },
       calls: [],
     };
-    const judged = [{ assertion: { semantic_matches: { rubric: ["x"] } }, pass: true }] as RunResult["assertions"];
+    const judged = [{ assertion: { semantic_matches: { rubric: ["x"] } }, pass: true, judgeModel: "m" }] as RunResult["assertions"];
     const v = computeVerdict(rr({ searchCorpus: sc, assertions: judged }), "live");
     expect(v.pass).toBe(true);
     const s = v.signals.find((x) => x.code === "search_corpus_semantic_judge");
@@ -539,11 +539,20 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
       /1 judged assertion\(s\) \(semantic_matches \/ semantic_pairwise\) on a run served from \[frozen search corpus p@aaaaaaaa\].*not evidence of research quality/,
     );
     // a pairwise judge counts too; no judge, or no corpus, warns nothing
-    const pairwise = [{ assertion: { semantic_pairwise: { refs: ["r"] } }, pass: true }] as RunResult["assertions"];
+    const pairwise = [
+      { assertion: { semantic_pairwise: { refs: ["r"] } }, pass: true, pairwise: [{ ref: "r", status: "graded" }] },
+    ] as RunResult["assertions"];
     expect(
       computeVerdict(rr({ searchCorpus: sc, assertions: pairwise }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge"),
     ).toBe(true);
     expect(computeVerdict(rr({ searchCorpus: sc }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge")).toBe(false);
+    // a judged key whose judge never ran (its evidence was refused) does not count
+    const refused = [
+      { assertion: { semantic_matches: { rubric: ["x"] } }, pass: false, semanticEvidence: { reason: "missing_evidence" } },
+    ] as unknown as RunResult["assertions"];
+    expect(
+      computeVerdict(rr({ searchCorpus: sc, assertions: refused }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge"),
+    ).toBe(false);
     // an assertion no model judges does not count
     const plain = [{ assertion: { result: "success" }, pass: true }] as RunResult["assertions"];
     expect(

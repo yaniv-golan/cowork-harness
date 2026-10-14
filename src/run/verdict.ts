@@ -256,6 +256,17 @@ function isDeliveryEvidenceUsable(result: RunResult): boolean {
   return true;
 }
 
+/** Whether a judge call actually ran for this assertion result: a semantic_matches grade records its judge model or the
+ *  document it judged, a semantic_pairwise one a graded (or invalid) outcome. An assert whose evidence was refused, or
+ *  that verify-run could not judge, records none. */
+export function judgeRan(a: { judgeModel?: string; judgedDoc?: unknown; pairwise?: ReadonlyArray<{ status: string }> }): boolean {
+  return (
+    a.judgeModel !== undefined ||
+    a.judgedDoc !== undefined ||
+    (a.pairwise ?? []).some((o) => o.status === "graded" || o.status === "invalid")
+  );
+}
+
 /** A judge graded a deliverable of a run served from a frozen search corpus: the searches it was built on were
  *  recorded answers, some to neighbouring queries, so the grade says nothing about research quality. Never blocks.
  *  The one source of this signal, for a run's verdict and for `regrade`. */
@@ -383,7 +394,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
 
   const judge = searchCorpusJudgeSignal(
     result.searchCorpus,
-    result.assertions.filter((a) => a.assertion !== undefined && judgedOpts(a.assertion) !== undefined).length,
+    result.assertions.filter((a) => a.assertion !== undefined && judgedOpts(a.assertion) !== undefined && judgeRan(a)).length,
   );
   if (judge) signals.push(judge);
 

@@ -196,4 +196,17 @@ describe("search_corpus_nearby_citations", () => {
       /no frozen search corpus/,
     );
   });
+
+  it("reads a self-titled link and an emphasised URL as the URL itself", () => {
+    for (const body of [
+      "[https://near.example/b](https://near.example/b)",
+      "**https://near.example/b**",
+      "*https://near.example/b*",
+      "_https://near.example/b_",
+    ]) {
+      const r = run(`Sources: https://exact.example/a and ${body}`);
+      expect(r.pass, body).toBe(false);
+      expect(r.message, body).toMatch(/1 cited URL\(s\) were served only on nearby rounds \(max 0\): https:\/\/near\.example\/b$/);
+    }
+  });
 });

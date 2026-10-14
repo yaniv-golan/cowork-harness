@@ -31,7 +31,7 @@ import { parseArgs } from "../cli-args.js";
 import { isolationRefusal } from "../decide/llm-transport.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
-import { searchCorpusJudgeSignal, type VerdictSignal } from "./verdict.js";
+import { judgeRan, searchCorpusJudgeSignal, type VerdictSignal } from "./verdict.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { coverageWhy, scrubCoverage } from "../scrub-set.js";
 import { runsWriteRoot } from "./trace-view.js";
@@ -1323,6 +1323,9 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     const spend = judgeSpend(rejudged);
     const invalidGrades = rejudged.filter((a) => a.judgeInvalid === true).length;
 
+    // Counts only the asserts a judge read in this re-grade, never a kept or refused one.
+    const judgeSignal = searchCorpusJudgeSignal(p.ctx.searchCorpus, rejudged.filter(judgeRan).length);
+    if (judgeSignal) warn(`::warning:: ${CMD}: ${p.dirAsGiven}: ${judgeSignal.message}\n`);
     const at = (opts.now ?? (() => new Date()))().toISOString();
     const stem = regradeFileStem(assertions, opts.judgeModel, at);
     const dir = join(turnWriteDir(p.runDir, p.turn), "regrade");
@@ -1348,6 +1351,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       original: { resultSha256: p.resultSha256, turn: p.turn },
       ...(metrics ? { metrics } : {}),
       ...(p.scrubAccepted ? { scrubAcceptedBy: opts.scrubAcceptedBy ?? "--allow-scrub-change" } : {}),
+      ...(judgeSignal ? { signals: [judgeSignal] } : {}),
     };
     // Scrubbed as a whole document, as result.json is: the rationales are scrubbed at grade time, but the
     // rubric and messages echo scenario text, and one pass over the serialized body leaves no field out.
@@ -1368,8 +1372,6 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
         completed: runs,
       };
     }
-    const judgeSignal = searchCorpusJudgeSignal(p.ctx.searchCorpus, semantic.length);
-    if (judgeSignal) warn(`::warning:: ${CMD}: ${p.dirAsGiven}: ${judgeSignal.message}\n`);
     runs.push({
       runDir: p.runDir,
       turn: p.turn,

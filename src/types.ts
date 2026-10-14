@@ -2360,6 +2360,8 @@ export interface SearchCorpusCall {
     sourceSkill: string | null;
     urls: string[];
   }[];
+  /** Every URL the served exact records carry, those a higher-ranked nearby round served first included. */
+  exactUrls?: string[];
   /** The pairing is the stream's and could not be confirmed. */
   provisional?: true;
   /** The request the stream paired this tool_use with (its agent, absent for the main loop, and number); the join moved

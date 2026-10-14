@@ -45,7 +45,9 @@ All notable changes to this project are documented here. The format is based on
   served plus missed requests; it fails by name when any search was refused, or when WebSearch calls were made but
   none reached the corpus, and a run that never searched passes. `search_corpus_nearby_citations: {path, max?}` counts
   the URLs a text deliverable cites that were served only on nearby rounds (a recorded search for a different query),
-  and fails by name when the deliverable is not text or cites none of the served URLs after a nearby round. Both are
+  and fails by name when the deliverable is not text or cites none of the served URLs after a nearby round. A
+  self-titled markdown link or an emphasised URL is read as the URL, and a URL any served exact record carries counts
+  as exact (`calls[].exactUrls`), even where a higher-ranked nearby round served it first. Both are
   refused at load without `--search-corpus` (in any leg of a multi-leg scenario too), and `verify-run` and `regrade`
   refuse them on a run that had no frozen corpus, or one recorded before it kept its tool-use counts. Live-only.
 - **`RunResult.searchCorpus.calls[]` records each search request with the WebSearch call it answered**, the agent

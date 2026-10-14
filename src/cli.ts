@@ -3907,7 +3907,7 @@ const SKILL_HASH_QUERY_MIN = 6;
  *  everything the row has (a metric with no telemetry in the group is simply absent, not "0").
  *  The identity suffix appears only under a non-default `--group-by`, so it composes with EVERY metric
  *  branch below (each builds on `base`) without changing the default line at all. */
-function formatStatsLine(s: StatsSummary, metric?: string): string {
+export function formatStatsLine(s: StatsSummary, metric?: string): string {
   const identity = [
     s.skillHash ? `skillHash=${s.skillHash}` : null,
     s.runLabel ? `label=${s.runLabel}` : null,

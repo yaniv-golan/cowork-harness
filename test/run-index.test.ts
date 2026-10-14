@@ -15,6 +15,7 @@ import {
   type RunIndexRow,
 } from "../src/run/run-index.js";
 import type { RunResult } from "../src/types.js";
+import { formatStatsLine } from "../src/cli.js";
 
 function muteStderr(): string[] {
   const lines: string[] = [];
@@ -1255,6 +1256,12 @@ describe("a frozen search corpus in the index and stats", () => {
       expect(s.find((x) => x.searchCorpus === undefined)?.passRate).toBe(1);
     },
   );
+  it("the stats text line ends with the pool's label", () => {
+    const rows = [row({ scenario: "a", pass: true, searchCorpus: { sha256: A, label: "frozen search corpus p@aaaaaaaa" } })];
+    const [s] = buildStats(rows, {}).summaries;
+    expect(formatStatsLine(s!)).toMatch(/^a \[frozen search corpus p@aaaaaaaa\]: 1 run\(s\), 100% pass/);
+  });
+
   it("a frozen row round-trips through the index; a malformed one is quarantined", () => {
     const dir = mkdtempSync(join(tmpdir(), "run-index-"));
     const good = indexRowFromResult(rr({ scenario: "a", searchCorpus: corpus(A) }), { command: "run", partial: false });

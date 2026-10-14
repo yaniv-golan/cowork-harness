@@ -5167,8 +5167,11 @@ function searchCorpusNearbyCitations(o: { path: string; max?: number }, ctx: Ass
   if (why) return { pass: false, message: `${key}: ${o.path} is not text (${why}), so its citations cannot be read` };
   const exact = new Set<string>();
   const nearby = new Set<string>();
-  for (const c of sc.calls)
+  for (const c of sc.calls) {
     for (const r of c.rounds ?? []) for (const u of r.urls) (r.match === "exact" ? exact : nearby).add(normalizeSearchUrl(u));
+    // A URL an exact record carries is exact, even where a higher-ranked nearby round served it first.
+    for (const u of c.exactUrls ?? []) exact.add(normalizeSearchUrl(u));
+  }
   if (nearby.size === 0) return { pass: true, evidence: "no nearby round was served" };
   const served = new Set([...exact, ...nearby]);
   const cited = new Set(urlCandidates(buf.toString("utf8")).map(normalizeSearchUrl));

@@ -70,13 +70,21 @@ export function extractUrls(text: string): string[] {
   return out;
 }
 
-/** Every URL-shaped token in free text, trimmed and given a scheme (a `www.` or bare-host hit is read as https), not
- *  yet normalized: each caller keys them with its own URL identity. */
+/** Every URL-shaped token in a deliverable's text, trimmed and given a scheme (a `www.` or bare-host hit is read as
+ *  https), not yet normalized: each caller keys them with its own URL identity. Unlike `extractUrls` (the agent's own
+ *  extraction, ported as it is), it also reads the markdown forms a model cites in: a self-titled link `[url](url)` is
+ *  split at `](`, and emphasis (`**`, `*`, `_`) around a URL is stripped. */
 export function urlCandidates(text: string): string[] {
   const out: string[] = [];
-  for (const m of text.matchAll(GEN)) out.push(trimMatch(m[0]));
-  for (const m of text.matchAll(LEN)) out.push(`https://${trimMatch(m[0])}`);
-  for (const m of text.matchAll(UEN)) out.push(`https://${trimMatch(m[0])}`);
+  const add = (raw: string, scheme: string) => {
+    for (const part of raw.split("](")) {
+      const t = trimMatch(part.replace(/[*_]+$/, ""));
+      if (t) out.push(scheme + t);
+    }
+  };
+  for (const m of text.matchAll(GEN)) add(m[0], "");
+  for (const m of text.matchAll(LEN)) add(m[0], "https://");
+  for (const m of text.matchAll(UEN)) add(m[0], "https://");
   return out;
 }
 

@@ -288,6 +288,9 @@ describe("regrade of a run served from a frozen search corpus", () => {
     const run = (out as Extract<typeof out, { ok: true }>).runs[0]!;
     expect(run.signals).toEqual([expect.objectContaining({ code: "search_corpus_semantic_judge", severity: "warn" })]);
     expect(err.text()).toMatch(/frozen search corpus p@aaaaaaaa.*not evidence of research quality/);
+    // and the regrade file on disk carries it too
+    const file = JSON.parse(readFileSync(run.regradeFile, "utf8"));
+    expect(file.signals).toEqual([expect.objectContaining({ code: "search_corpus_semantic_judge" })]);
     // a run without a corpus carries no such signal
     const plain = await keptRun({ author: writeReport });
     const o2 = await regradeRuns(opts(plain, { makeJudge: judgeFactory(() => true).make }));
