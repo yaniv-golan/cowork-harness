@@ -45,6 +45,9 @@ export type Classification =
       status: 200 | 400;
       why: string;
       query: string | null;
+      /** The search tool's domain lists, when the body could be read: they key the refusal's frame like a search's. */
+      allowedDomains?: string[];
+      blockedDomains?: string[];
       model?: string;
       stream?: boolean;
       agentId: string | null;
@@ -126,7 +129,18 @@ export function classifyRequest(r: InterceptedRequest, anchors: SearchAnchors | 
   const messages = Array.isArray(body.messages) ? (body.messages as { role?: unknown; content?: unknown }[]) : [];
   const userText = messages.length === 1 && messages[0]!.role === "user" ? textOf(messages[0]!.content) : null;
   const query = anchors && userText !== null ? startsWithHashed(userText, anchors.userPrefix) : null;
-  const refuse = (why: string): Classification => ({ kind: "refuse", status: 200, why, query, model, stream, agentId, retryKey });
+  const refuse = (why: string): Classification => ({
+    kind: "refuse",
+    status: 200,
+    why,
+    query,
+    ...(allowedDomains ? { allowedDomains } : {}),
+    ...(blockedDomains ? { blockedDomains } : {}),
+    model,
+    stream,
+    agentId,
+    retryKey,
+  });
 
   if (!anchors) return refuse("no recorded search anchors");
   if (tools.length !== 1) return refuse("the search tool is not the only tool");

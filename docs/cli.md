@@ -516,6 +516,28 @@ never for research quality.
   which usually means an agent newer than the baseline's search anchors). `searchCorpus.metrics` counts the requests
   served, missed and refused; served searches are not billed and do not appear in the agent's own cost or search
   count.
+- **Per call.** `searchCorpus.calls[]` holds one entry per search request: the agent that made it (absent for the main
+  loop), the WebSearch tool_use it answered, the query and domain lists, the verdict and the served rounds. A
+  sub-agent's result is paired with its request after the run, once the dispatch's result names the sub-agent; until
+  then its serve frame in `events.jsonl` is marked `provisional`. A pairing the join moved to another request with the
+  same served content is counted `reassigned`, and the call records the request the stream gave it
+  (`reassignedFrom: {agentId, ordinal}`). A call whose pairing could not be confirmed is marked `provisional` (or
+  `unpaired`, a result with no request) and counted `unattributed`: a result whose sub-agent could not be resolved, a
+  move that was refused, or a request a move left without a result. The run line shows "N reassigned" and
+  "N unattributed" when non-zero; neither changes the verdict. The run also warns
+  (`search_corpus_attribution_uncertain`) when the join could not settle a pairing: no request of the resolved
+  sub-agent could take it with the same served content (for example its agent id differs from the one its request
+  carried, or a refusal and a served request of one query crossed), or the dispatches named agents and none of the
+  parented results resolved to any of them. A single unresolved result while others resolved is only counted
+  `unattributed`. `metrics` also counts the agent's WebSearch calls
+  (`toolUses`, `noRequest`), the requests the agents' own records expect (`toolUsesExpected`), requests per agent
+  (`byAgent`), forwarded requests carrying the advisor server tool (`liveServerTools`, run live: the agent's one server
+  tool besides search, sent only when its advisor is enabled), the mean relevance of the served requests' best rounds
+  (`meanTopScore`), results whose answer could not be read so were paired by key alone (`shapeUnfenced`), refusals
+  whose body could not be read, which no result can take (`unattributedExpected`), and pairings the join could not
+  settle (`attributionUncertain`, the warning's count). A forked skill's or `Agent(fork)`'s searches count under its own agent in `byAgent`, as the
+  interceptor keys them, while the run's tool counts (`toolCounts.WebSearch`) count them under the main loop, as tool
+  calls of the skill; both are right for what they count.
 - **Misses.** A query whose best match falls below the pool's floor gets "No links found." (`--search-corpus-miss
   empty`, the default) or the agent's "Web search error: unavailable" (`--search-corpus-miss error`).
   `--search-corpus-min-score <n>` (between 0 and 1) overrides the pool's floor for this run and changes the hash the
@@ -530,7 +552,11 @@ never for research quality.
   and records served, and the request's model, `tool_choice` and `thinking` settings; never a header, a credential or
   the rest of the body. It is scrubbed with the run's other raw logs. `events.jsonl` gets one `{"_emu":"search_corpus_serve",…}` line
   per answered request, after the WebSearch result it produced (or at the end, for a sub-agent's search whose result
-  never reached the main stream). A `search-pool build` skips any run with either.
+  never reached the main stream). A sub-agent's frame carries `"attribution":"provisional"`: which sub-agent made it
+  is settled after the run, so its `ordinal` is pairing order, never attribution; read who asked from
+  `RunResult.searchCorpus.calls[]`. A WebSearch result with no answered request gets a frame with `"unpaired":true`
+  and no verdict. A command metric reading `events.jsonl` sees these lines verbatim. A `search-pool build` skips any
+  run with either.
 - **Refused, by name:** fidelity `protocol`, `container` and `microvm` (hostloop only, for now); `chat`, `record` (a
   cassette cannot carry the label yet), `critique` and `probe-dispatch`; `--resume` and `--session-id`; a multi-leg
   (`legs:`) or `device_bridge` scenario; the remote search route (`CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`, or a

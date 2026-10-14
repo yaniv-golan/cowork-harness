@@ -20,7 +20,9 @@ export interface FrameRound {
 }
 
 export interface RegistryInput {
-  /** `x-claude-code-agent-id`; null for the main loop (or a fork). */
+  /** `x-claude-code-agent-id`; null for the main loop and an inline skill. A Task sub-agent, an `Agent(fork)` and a
+   *  `context: fork` skill each send it and write their own transcript (measured on 2.1.295), so a fork is keyed like a
+   *  sub-agent here, unlike tool-call origin, where a fork counts as main. */
   agentId: string | null;
   route: "messages" | "ccr";
   verdict: "served" | "miss" | "refused";
@@ -132,10 +134,19 @@ export class SearchRegistry {
     return undefined;
   }
 
-  /** The earliest entry for this key the stream has not framed yet; it is then framed. */
-  take(key: SearchKey): RegistryEntry | undefined {
+  /** The earliest entry for this key the stream has not framed yet; it is then framed. A fence narrows it: a result in
+   *  the main loop's stream (`parented: false`) takes only an entry with no agent id (the main loop, an inline skill), a
+   *  parented one only an entry with one (a sub-agent or a fork); `verdicts` keeps only the answers the result shows. */
+  take(key: SearchKey, fence: { parented?: boolean; verdicts?: readonly RegistryEntry["verdict"][] } = {}): RegistryEntry | undefined {
     const k = keyOf(key);
-    const e = this.entries.find((x) => x.query !== null && !this.consumed.has(x) && keyOf(x as SearchKey) === k);
+    const e = this.entries.find(
+      (x) =>
+        x.query !== null &&
+        !this.consumed.has(x) &&
+        keyOf(x as SearchKey) === k &&
+        (fence.parented === undefined || (x.agentId !== null) === fence.parented) &&
+        (fence.verdicts === undefined || fence.verdicts.includes(x.verdict)),
+    );
     if (e) this.consumed.add(e);
     return e;
   }

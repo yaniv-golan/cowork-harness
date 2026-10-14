@@ -12,6 +12,8 @@
  * the same bytes, so the parser joins them. The reminder is kept as read, never hard-coded.
  */
 
+import { createHash } from "node:crypto";
+
 export interface SearchLink {
   title: string;
   url: string;
@@ -114,4 +116,42 @@ export function splitSearches(r: ParsedWebSearchResult): { links: SearchLink[]; 
   }
   if (out.length === 0) out.push({ links: [], text: lead });
   return out.map((s) => ({ links: s.links, text: s.text.join(SEP) }));
+}
+
+/** The agent's rendering of the harness's error answer (`error_code: "unavailable"`, a miss under
+ *  `--search-corpus-miss error` or a refusal), as sha256 + byte length: it is the agent's text, so src matches it by hash.
+ *  Measured on 2.1.295 and pinned by the local real-agent test. A different rendering only makes such a result
+ *  `unfenced` (counted), never another verdict. */
+export const SEARCH_ERROR_ANCHOR = {
+  sha256: "8a485fdcc27d67c9b82abdfcbb6d62b75aedb7a1c91aff730142548cdf610a8c",
+  bytes: 29,
+} as const;
+
+/** The kind of answer a WebSearch tool_result shows: a served link set, the no-links answer, the harness's error
+ *  answer, or `unfenced` when it cannot be read as one of them. Read only after the header for the tool_use's own
+ *  query, so a query that carries the separator or the error text can neither forge nor hide an entry. */
+export type ResultShape = "served" | "empty" | "error" | "unfenced";
+
+export function resultShape(content: unknown, query: string): ResultShape {
+  const t =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content) && content.length === 1 && (content[0] as { type?: unknown })?.type === "text"
+        ? (content[0] as { text?: unknown }).text
+        : undefined;
+  if (typeof t !== "string") return "unfenced";
+  const head = `${HEADER}${query}${HEADER_END}`;
+  if (!t.startsWith(head)) return "unfenced";
+  // The rest is the result as the agent renders it for any query: re-parse it under a query-free header.
+  const parsed = parseWebSearchResult(`${HEADER}${HEADER_END}${t.slice(head.length)}`);
+  if (!parsed.ok) return "unfenced";
+  const es = parsed.result.entries;
+  if (es.some((e) => e.kind === "links" && e.links.length > 0)) return "served";
+  if (es.length !== 1) return "unfenced";
+  const e = es[0]!;
+  if (e.kind === "links") return "empty";
+  const b = Buffer.from(e.text, "utf8");
+  return b.length === SEARCH_ERROR_ANCHOR.bytes && createHash("sha256").update(b).digest("hex") === SEARCH_ERROR_ANCHOR.sha256
+    ? "error"
+    : "unfenced";
 }

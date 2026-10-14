@@ -357,7 +357,7 @@
     "searchCorpus": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["poolId", "sha256", "label", "miss", "interposition", "credentialSource", "metrics"],
+      "required": ["poolId", "sha256", "label", "miss", "interposition", "credentialSource", "metrics", "calls"],
       "description": "Present when the run's web searches were served from a recorded pool (--search-corpus); absent otherwise. Searches served from a pool are not billed and do not appear in the agent's own cost or search count; these counts are the record of them.",
       "properties": {
         "poolId": { "type": "string" },
@@ -380,7 +380,25 @@
         "metrics": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["requests", "served", "miss", "refused", "retriesFolded", "unfinished", "passedThroughWithSearchTool"],
+          "required": [
+            "requests",
+            "served",
+            "miss",
+            "refused",
+            "retriesFolded",
+            "unfinished",
+            "passedThroughWithSearchTool",
+            "toolUses",
+            "noRequest",
+            "toolUsesExpected",
+            "byAgent",
+            "liveServerTools",
+            "shapeUnfenced",
+            "unattributed",
+            "unattributedExpected",
+            "reassigned",
+            "attributionUncertain"
+          ],
           "properties": {
             "requests": {
               "type": "integer",
@@ -404,6 +422,119 @@
               "type": "integer",
               "minimum": 0,
               "description": "Forwarded requests that carried a server search tool: 0 on every trustworthy run."
+            },
+            "toolUses": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "WebSearch tool_uses in the session stream (sub-agents' included, a query-less one included)."
+            },
+            "noRequest": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Of those, results that show no request was made (a validation refusal, the search budget, a harness denial)."
+            },
+            "toolUsesExpected": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Requests the agents' own records say were made: the frozen-promise check's side (main loop and transcripts)."
+            },
+            "byAgent": {
+              "type": "object",
+              "description": "Requests per agent (\"main\" for the main loop), by verdict.",
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["served", "miss", "refused"],
+                "properties": {
+                  "served": { "type": "integer", "minimum": 0 },
+                  "miss": { "type": "integer", "minimum": 0 },
+                  "refused": { "type": "integer", "minimum": 0 }
+                }
+              }
+            },
+            "liveServerTools": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Forwarded model requests that carried the advisor server tool (the agent's one server tool besides search): run live."
+            },
+            "meanTopScore": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "The mean over served requests of their best round's relevance; absent when nothing was served."
+            },
+            "shapeUnfenced": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Results whose answer could not be read, so they were paired by key alone."
+            },
+            "unattributed": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Calls whose pairing is not confirmed (marked provisional or unpaired in calls): an unpaired result, a result whose sub-agent could not be resolved or whose move the guard refused, or a request a move left without one."
+            },
+            "unattributedExpected": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Refusals whose body could not be read: never taken by a result, by design."
+            },
+            "reassigned": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Sub-agent results the post-run join paired with another request carrying the same serve record."
+            },
+            "attributionUncertain": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Pairings the harness could not settle; any is a warning."
+            }
+          }
+        },
+        "calls": {
+          "type": "array",
+          "description": "One entry per logical search request, with the WebSearch tool_use it answered; plus one per result with no request.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "agentId": { "type": "string", "description": "Absent for the main loop (and an inline skill)." },
+              "toolUseId": {
+                "type": "string",
+                "description": "The WebSearch tool_use it answered; absent when no result streamed for it."
+              },
+              "query": {
+                "type": ["string", "null"],
+                "description": "Null for a refusal whose body could not be read; absent on an unpaired result."
+              },
+              "allowedDomains": { "type": "array", "items": { "type": "string" } },
+              "blockedDomains": { "type": "array", "items": { "type": "string" } },
+              "verdict": { "type": "string", "enum": ["served", "miss", "refused"] },
+              "ordinal": { "type": "integer", "minimum": 1, "description": "The request's number within its agent." },
+              "rounds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["match", "nscore", "sourceQuery", "recordId", "sourceSkill", "urls"],
+                  "properties": {
+                    "match": { "type": "string", "enum": ["exact", "nearby"] },
+                    "nscore": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "sourceQuery": { "type": "string" },
+                    "recordId": { "type": "string" },
+                    "sourceSkill": { "type": ["string", "null"] },
+                    "urls": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              },
+              "provisional": { "const": true, "description": "The pairing is the stream's and could not be confirmed." },
+              "reassignedFrom": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["ordinal"],
+                "description": "The request the stream paired this tool_use with (its agent, absent for the main loop, and number); the join moved it here, to a request with the same serve record.",
+                "properties": { "agentId": { "type": "string" }, "ordinal": { "type": "integer", "minimum": 1 } }
+              },
+              "unpaired": { "const": true, "description": "A result with no intercepted request to take." }
             }
           }
         }
@@ -874,7 +1005,8 @@
                   "outputs_diff_unavailable",
                   "partly_scripted_gate",
                   "parked_at_question",
-                  "search_corpus_refused"
+                  "search_corpus_refused",
+                  "search_corpus_attribution_uncertain"
                 ]
               },
               "severity": {

@@ -406,6 +406,19 @@ describe("subagent_result_meta consumption — resolved child model from the dis
   });
 });
 
+describe("an envelope for a forked skill (agent id only) is not a sub-agent dispatch", () => {
+  it("adds no sub-agent and changes no sub-agent count", async () => {
+    const base = await driveRunOverEvents([toolUse("Skill", { skill: "forkskill" }, { toolUseId: "s1" })]);
+    const rec = await driveRunOverEvents([
+      toolUse("Skill", { skill: "forkskill" }, { toolUseId: "s1" }),
+      subagentResultMeta({ toolUseId: "s1", agentId: "ag1" }),
+    ]);
+    expect(rec.subagents).toEqual([]);
+    expect(rec.subagents.length).toBe(base.subagents.length);
+    expect(rec.toolCounts).toEqual(base.toolCounts);
+  });
+});
+
 describe("task_started family consumption (resolved child type + omission note)", () => {
   it("joins task_started to the dispatch by tool_use_id and records the RESOLVED type", async () => {
     const rec = await driveRunOverEvents([

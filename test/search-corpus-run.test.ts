@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { frozenPromiseError, searchCorpusLabel, searchCorpusRefusal, startRunSearchCorpus } from "../src/search-corpus/run.js";
@@ -182,6 +182,45 @@ describe("frozenPromiseError: the agent's own count against the interceptor's, p
     expect(check(runDir(denied), new SearchRegistry(), { denied: ["p2"] })).toBeNull();
   });
 
+  it("fails closed if a fork stopped sending its agent id: the search is keyed to main but counted in the fork's transcript", () => {
+    // Today a fork (Agent(fork), a context: fork skill) sends x-claude-code-agent-id and B3 counts it per agent. If a
+    // future agent dropped the header, its search would be intercepted under null: that must be an error, never a pass.
+    const r = new SearchRegistry();
+    r.record(entry(null));
+    const events = [use("w1", "q", "toolu_skill1"), res("w1", ok200("q"), "toolu_skill1")];
+    const err = check(runDir(events, { fork1: [use("w1", "q"), res("w1", ok200("q"))] }), r);
+    expect(err).toMatch(/the main agent made 0 search request\(s\).*interceptor saw 1/);
+    expect(err).toMatch(/sub-agent fork1 made 1 search request\(s\).*interceptor saw 0/);
+    // and with the header, as measured, it holds
+    const r2 = new SearchRegistry();
+    r2.record(entry("fork1"));
+    expect(check(runDir(events, { fork1: [use("w1", "q"), res("w1", ok200("q"))] }), r2)).toBeNull();
+  });
+
+  it("fails closed the other way too: an inline skill whose search started carrying an agent id turns red, never green", () => {
+    // An inline skill's search is unparented in events.jsonl and keyed null today. Keyed by an id with no transcript,
+    // the main loop's count and that agent's no longer balance.
+    const r = new SearchRegistry();
+    r.record(entry("x"));
+    const err = check(runDir([use("w1", "q"), res("w1", ok200("q"))]), r);
+    expect(err).toMatch(/the main agent made 1 search request\(s\).*interceptor saw 0/);
+    expect(err).toMatch(/sub-agent x made 0 search request\(s\).*interceptor saw 1/);
+  });
+
+  it("goes red when the run's own stream record is missing or unreadable while the interceptor saw requests", () => {
+    const r = new SearchRegistry();
+    r.record(entry("ag1"));
+    const d = runDir([], { ag1: [use("c1", "q"), res("c1", ok200("q"))] });
+    rmSync(join(d, "events.jsonl"));
+    expect(check(d, r)).toMatch(/events\.jsonl is missing/);
+    mkdirSync(join(d, "events.jsonl")); // exists, cannot be read as a file
+    expect(check(d, r)).toMatch(/events\.jsonl could not be read/);
+    // with nothing intercepted and no agent record, a run without a stream record has nothing to confirm
+    const empty = runDir([]);
+    rmSync(join(empty, "events.jsonl"));
+    expect(check(empty, new SearchRegistry())).toBeNull();
+  });
+
   it("goes red when the interceptor saw a request no agent record carries", () => {
     const r = new SearchRegistry();
     r.record(entry("ghost"));
@@ -303,6 +342,107 @@ describe("startRunSearchCorpus", () => {
     const all = readFileSync(join(outDir, "search-corpus.jsonl"), "utf8").replace(`q ${TOKEN}`, "");
     for (const form of [TOKEN, Buffer.from(TOKEN).toString("base64"), encodeURIComponent(TOKEN), JSON.stringify(TOKEN).slice(1, -1)])
       expect(all).not.toContain(form);
+  });
+
+  it("after finish, the result carries one call per request with its tool_use and agent, and the run's search metrics", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+    const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+    const r = (id: string, nscore: number) => ({
+      match: "exact" as const,
+      nscore,
+      sourceQuery: "q",
+      recordId: id,
+      sourceSkill: null,
+      urls: [`https://${id}`],
+    });
+    sc.registry.record({ ...entry(null, "served", "q"), rounds: [r("m1", 0.8), r("m2", 0.5)] });
+    sc.registry.record({ ...entry("ag1", "served", "q"), rounds: [r("s1", 1)] });
+    sc.registry.record({ ...entry("ag1", "miss", "gone"), rounds: [] });
+    const served = (q: string) =>
+      renderWebSearchResult({ query: q, entries: [{ kind: "links", links: [{ title: "t", url: "https://x" }] }], reminder: "REMINDER: x" });
+    const empty = (q: string) => renderWebSearchResult({ query: q, entries: [{ kind: "links", links: [] }], reminder: "REMINDER: x" });
+    const envelope = JSON.stringify({
+      type: "user",
+      tool_use_result: { agentId: "ag1", status: "completed" },
+      message: { content: [{ type: "tool_result", tool_use_id: "task1", content: "done" }] },
+    });
+    const events = [
+      use("m", "q"),
+      res("m", served("q")),
+      use("c1", "q", "task1"),
+      res("c1", served("q"), "task1"),
+      use("c2", "gone", "task1"),
+      res("c2", empty("gone"), "task1"),
+      envelope,
+    ];
+    for (const l of events) for (const f of sc.frames.observe(JSON.parse(l))) void f;
+    const runDir = (() => {
+      writeFileSync(join(outDir, "events.jsonl"), events.join("\n"));
+      const sub = join(outDir, "claude-config", "projects", "p", "s", "subagents");
+      mkdirSync(sub, { recursive: true });
+      writeFileSync(
+        join(sub, "agent-ag1.jsonl"),
+        [use("c1", "q"), res("c1", served("q")), use("c2", "gone"), res("c2", empty("gone"))].join("\n"),
+      );
+      return outDir;
+    })();
+    expect(await sc.finish(runDir)).toBeNull();
+    const out = sc.result();
+    expect(out.calls.map((c) => [c.agentId ?? "main", c.toolUseId, c.verdict, c.provisional ?? false])).toEqual([
+      ["main", "m", "served", false],
+      ["ag1", "c1", "served", false],
+      ["ag1", "c2", "miss", false],
+    ]);
+    expect(out.metrics).toMatchObject({
+      toolUses: 3,
+      noRequest: 0,
+      toolUsesExpected: 3,
+      byAgent: { main: { served: 1, miss: 0, refused: 0 }, ag1: { served: 1, miss: 1, refused: 0 } },
+      meanTopScore: 0.9,
+      liveServerTools: 0,
+      shapeUnfenced: 0,
+      unattributed: 0,
+      unattributedExpected: 0,
+      reassigned: 0,
+      attributionUncertain: 0,
+    });
+  });
+
+  it("finish never throws on a missing or unreadable stream record: the result carries the by-name error", async () => {
+    for (const make of [
+      (d: string) => rmSync(join(d, "events.jsonl"), { force: true }),
+      (d: string) => mkdirSync(join(d, "events.jsonl")),
+    ]) {
+      const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+      const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+      sc.registry.record(entry("ag1", "served", "q"));
+      const sub = join(outDir, "claude-config", "projects", "p", "s", "subagents");
+      mkdirSync(sub, { recursive: true });
+      writeFileSync(join(sub, "agent-ag1.jsonl"), [use("c1", "q"), res("c1", ok200("q"))].join("\n"));
+      make(outDir);
+      const err = await sc.finish(outDir);
+      expect(err).toMatch(/events\.jsonl (is missing|could not be read)/);
+      expect(sc.result().calls).toHaveLength(1);
+    }
+  });
+
+  it("an unreadable transcript is a by-name error, never a throw", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+    const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+    writeFileSync(join(outDir, "events.jsonl"), "");
+    const sub = join(outDir, "claude-config", "projects", "p", "s", "subagents");
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, "agent-ag1.jsonl"), "x", { mode: 0o000 });
+    // root reads anything, so the unreadable case is only checkable as a normal user
+    if (process.getuid?.() !== 0) expect(await sc.finish(outDir)).toMatch(/sub-agent ag1's transcript could not be read/);
+  });
+
+  it("meanTopScore is absent, never NaN, when nothing was served", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+    const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+    expect(await sc.finish(outDir)).toBeNull();
+    expect(sc.result().metrics).not.toHaveProperty("meanTopScore");
+    expect(sc.result().calls).toEqual([]);
   });
 
   it("keeps an operator's NODE_EXTRA_CA_CERTS, appended to the run's CA, and refuses one it cannot read", async () => {

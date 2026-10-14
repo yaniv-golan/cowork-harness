@@ -192,6 +192,26 @@ interface Block {
 
 const EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };
 
+/** The tool_use ids in a list of stream lines. With `sharesToolId`, how a transcript that names no dispatch (a forked
+ *  skill's) is matched to the dispatch whose parented events it shares a tool call with. Pure: the trace keeps its own
+ *  bookkeeping of which transcripts it used, and the search corpus's join uses the same two functions. */
+export function toolIds(lines: readonly string[]): Set<string> {
+  const ids = new Set<string>();
+  for (const l of lines)
+    try {
+      const c = (JSON.parse(l) as { type?: string; message?: { content?: unknown } }).message?.content;
+      if (Array.isArray(c)) for (const b of c as Block[]) if (b?.type === "tool_use" && b.id) ids.add(b.id);
+    } catch {
+      /* skip */
+    }
+  return ids;
+}
+
+export function sharesToolId(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  for (const id of a) if (b.has(id)) return true;
+  return false;
+}
+
 export function turnsFromEvents(input: TraceInput): TraceOutput {
   const cap = input.resultCapBytes ?? DEFAULT_CAP;
   const turns: Turn[] = [];
@@ -210,17 +230,6 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
     }
     if (typeof pid === "string" && pid) (parented.get(pid) ?? parented.set(pid, []).get(pid)!).push(line);
   }
-  const toolIds = (lines: readonly string[]): Set<string> => {
-    const ids = new Set<string>();
-    for (const l of lines)
-      try {
-        const c = (JSON.parse(l) as { type?: string; message?: { content?: unknown } }).message?.content;
-        if (Array.isArray(c)) for (const b of c as Block[]) if (b?.type === "tool_use" && b.id) ids.add(b.id);
-      } catch {
-        /* skip */
-      }
-    return ids;
-  };
   const unnamed = input.children.filter((c) => c.toolUseId === undefined).map((c) => ({ c, ids: toolIds(c.lines), used: false }));
   // Each transcript is inlined at most once: one that dispatches itself (agent-writable on container/microvm)
   // would otherwise recurse without end.
@@ -233,7 +242,7 @@ export function turnsFromEvents(input: TraceInput): TraceOutput {
       return named;
     }
     const mine = toolIds(parented.get(dispatchId) ?? []);
-    const hit = unnamed.find((u) => !u.used && [...mine].some((id) => u.ids.has(id)));
+    const hit = unnamed.find((u) => !u.used && sharesToolId(mine, u.ids));
     if (hit) hit.used = true;
     return hit?.c;
   };

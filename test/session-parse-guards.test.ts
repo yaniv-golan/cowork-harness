@@ -173,6 +173,14 @@ describe("subagent_result_meta — the dispatch's paired tool_use_result envelop
       status: "completed",
     });
   });
+  it("an envelope carrying only the agent id still emits the meta event (a forked skill's result)", () => {
+    const evs = parseMessage({
+      type: "user",
+      tool_use_result: { agentId: "agent_9" },
+      message: { content: [{ type: "tool_result", tool_use_id: "s1", content: "done" }] },
+    });
+    expect(evs.find((e) => e.type === "subagent_result_meta")).toMatchObject({ toolUseId: "s1", agentId: "agent_9" });
+  });
   it("a user message without the envelope emits no meta event", () => {
     const evs = parseMessage({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "x" }] } });
     expect(evs.some((e) => e.type === "subagent_result_meta")).toBe(false);

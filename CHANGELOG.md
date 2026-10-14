@@ -32,6 +32,15 @@ All notable changes to this project are documented here. The format is based on
   proxy; and a non-API `ANTHROPIC_BASE_URL`. The run dir gains `search-corpus.jsonl`, and `events.jsonl` one
   `search_corpus_serve` line per answered request.
 
+- **`RunResult.searchCorpus.calls[]` records each search request with the WebSearch call it answered**, the agent
+  that made it (absent for the main loop), its query, verdict and served rounds. A sub-agent's result is paired with
+  its request after the run, from the dispatch result that names the sub-agent; until then its serve frame is marked
+  `provisional`, and a result with no request gets an `unpaired` frame. A pairing moved between two requests with the
+  same served content is counted `reassigned`, and one that cannot be paired `unattributed`; the run line shows both
+  when non-zero. `searchCorpus.metrics` also gains `toolUses`, `noRequest`, `toolUsesExpected`, `byAgent`,
+  `liveServerTools`, `meanTopScore`, `shapeUnfenced`, `unattributedExpected` and `attributionUncertain`. A new warn
+  signal, `search_corpus_attribution_uncertain`, fires when a pairing could not be settled; it never changes the
+  verdict.
 - **`sync --allow-missing-search-anchors`** writes a baseline without web-search anchors when they cannot be confirmed
   from the staged agent (with a warning), and `npm run preflight` accepts the same flag to downgrade its anchors check.
 - **`agentBinary.searchAnchors` gains two optional fields:** `source` (`both`, `native` or `elf`: which staged agent the

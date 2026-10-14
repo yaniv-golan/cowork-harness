@@ -129,6 +129,13 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     ]);
   });
 
+  it("records a refusal with the domain lists it could read", () => {
+    const { c } = ctx();
+    const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 8, allowed_domains: ["x.com"] }];
+    serveRequest(post(nestedBody("q", { system: "another assistant", tools })), c);
+    expect(c.registry.all()[0]).toMatchObject({ verdict: "refused", query: "q", allowedDomains: ["x.com"] });
+  });
+
   it("folds a stream:false retry into the request it retries: same records, JSON shape, one logical request", () => {
     const { c, log } = ctx();
     serveRequest(post(nestedBody("electric vehicle market size europe")), c);
@@ -197,6 +204,42 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     expect(miss.kind === "respond" && JSON.parse(miss.http.body)).toEqual({ results: [] });
     const bad = serveRequest(post(Buffer.from("junk"), {}, "/v1/code/sessions/s/worker/web-search"), c);
     expect(bad.kind === "respond" && bad.http.status).toBe(400);
+  });
+
+  it("counts forwarded model requests that carry the advisor server tool; a client tool or a token count is not one", () => {
+    const { c } = ctx();
+    const body = (tools: unknown[]) => Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: "x" }], tools }));
+    // the shape the agent sends: its client tools, plus the advisor server tool when enabled
+    serveRequest(
+      post(
+        body([
+          { name: "Bash", input_schema: {} },
+          { type: "advisor_20260301", name: "advisor", model: "m" },
+        ]),
+      ),
+      c,
+    );
+    serveRequest(
+      post(
+        body([
+          { name: "Bash", input_schema: {} },
+          { name: "WebFetch", input_schema: {} },
+        ]),
+      ),
+      c,
+    );
+    serveRequest(
+      post(
+        body([
+          { type: "text_editor_20250728", name: "str_replace_based_edit_tool" },
+          { type: "bash_20250124", name: "bash" },
+        ]),
+      ),
+      c,
+    );
+    serveRequest(post(body([{ type: "advisor_20260301", name: "advisor", model: "m" }]), {}, "/v1/messages/count_tokens"), c);
+    expect(c.liveServerTools).toBe(1);
+    expect(c.passedThroughWithSearchTool).toBe(0);
   });
 
   it("the forward log checks every forwarded body's tools on its own: 0 under ordinary traffic, and a text mention is not a tool", () => {

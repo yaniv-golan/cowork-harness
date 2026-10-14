@@ -24,6 +24,7 @@ import { noRequestKind } from "./no-request.js";
 import { poolHash, readPool, resolvePoolDir } from "./pool.js";
 import { SearchRegistry } from "./registry.js";
 import { buildIndex } from "./retrieval.js";
+import { dispatchAgentIds, joinCalls, type JoinResult } from "./join.js";
 import type { ServeContext } from "./serve.js";
 
 export interface SearchCorpusOption {
@@ -186,10 +187,12 @@ export async function startRunSearchCorpus(o: {
     registry,
     noRequest: anchors?.noRequest,
     pool: { poolId: manifest.poolId, sha256 },
+    miss: o.option.miss,
     quiesce: () => ic.quiesce(5000),
   });
 
   let finished: Promise<string | null> | null = null;
+  let joined: { join: JoinResult; toolUsesExpected: number } | undefined;
   return {
     poolId: manifest.poolId,
     sha256,
@@ -206,6 +209,16 @@ export async function startRunSearchCorpus(o: {
     ctx,
     result() {
       const c = registry.counts();
+      const f = frames.counts();
+      // Before finish (a run that ended early), parented pairings stay unconfirmed: no dispatch is read.
+      const j = joined ?? {
+        join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents: new Map(), miss: o.option.miss }),
+        toolUsesExpected: 0,
+      };
+      const tops = registry
+        .all()
+        .filter((e) => e.verdict === "served" && e.rounds.length > 0)
+        .map((e) => Math.max(...e.rounds.map((r) => r.nscore)));
       return {
         poolId: manifest.poolId,
         sha256,
@@ -221,7 +234,19 @@ export async function startRunSearchCorpus(o: {
           retriesFolded: c.retriesFolded,
           unfinished: c.unfinished,
           passedThroughWithSearchTool: ctx.passedThroughWithSearchTool ?? 0,
+          toolUses: f.toolUses,
+          noRequest: f.noRequest,
+          toolUsesExpected: j.toolUsesExpected,
+          byAgent: c.byAgent,
+          liveServerTools: ctx.liveServerTools ?? 0,
+          ...(tops.length ? { meanTopScore: tops.reduce((a, b) => a + b, 0) / tops.length } : {}),
+          shapeUnfenced: f.shapeUnfenced,
+          unattributed: j.join.unattributed,
+          unattributedExpected: j.join.unattributedExpected,
+          reassigned: j.join.reassigned,
+          attributionUncertain: j.join.attributionUncertain,
         },
+        calls: j.join.calls,
       };
     },
     finish(outDir: string, configDir?: string) {
@@ -234,7 +259,16 @@ export async function startRunSearchCorpus(o: {
         const ts = new Date().toISOString();
         for (let i = 0; i < registry.counts().unfinished; i++)
           appendFileSync(logPath, JSON.stringify({ ts, verdict: "unfinished" }) + "\n");
-        return frozenPromiseError({ outDir, ...(configDir ? { configDir } : {}), registry, ctx, frames, noRequest: anchors?.noRequest });
+        const cfg = configDir ?? join(outDir, "claude-config");
+        const fp = frozenPromise({ outDir, configDir: cfg, registry, ctx, frames, noRequest: anchors?.noRequest });
+        // What the check above read, read once: the join only attributes, never changes that verdict, and never throws
+        // past it (an unreadable file is the check's by-name error, and the join sees nothing from it).
+        const dispatchAgents = dispatchAgentIds(fp.events, fp.transcripts);
+        joined = {
+          join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents, miss: o.option.miss }),
+          toolUsesExpected: fp.toolUsesExpected,
+        };
+        return fp.error;
       })();
       return finished;
     },
@@ -305,7 +339,12 @@ function transcripts(dir: string, out: string[] = []): string[] {
 }
 
 /** The frozen-promise check over a finished run dir. Null when it holds. */
-export function frozenPromiseError(o: {
+export function frozenPromiseError(o: Parameters<typeof frozenPromise>[0]): string | null {
+  return frozenPromise(o).error;
+}
+
+/** The frozen-promise check, and the requests the agents' own records say were made (main loop and transcripts). */
+export function frozenPromise(o: {
   outDir: string;
   /** The agent's config dir (default `<outDir>/claude-config`). */
   configDir?: string;
@@ -313,7 +352,13 @@ export function frozenPromiseError(o: {
   ctx: Pick<ServeContext, "passedThroughWithSearchTool">;
   frames: Pick<ServeFrames, "deniedIds">;
   noRequest: Parameters<typeof noRequestKind>[1];
-}): string | null {
+}): {
+  error: string | null;
+  toolUsesExpected: number;
+  /** What it read, for the join to reuse: the stream record's lines, and each transcript's. */
+  events: string[];
+  transcripts: { agentId: string; lines: string[] }[];
+} {
   const problems: string[] = [];
   if ((o.ctx.passedThroughWithSearchTool ?? 0) > 0)
     problems.push(`${o.ctx.passedThroughWithSearchTool} request(s) carrying a server search tool were forwarded upstream`);
@@ -324,13 +369,32 @@ export function frozenPromiseError(o: {
     return c ? c.served + c.miss + c.refused : 0;
   };
   const eventsPath = join(o.outDir, "events.jsonl");
-  const events = existsSync(eventsPath) ? readFileSync(eventsPath, "utf8").split("\n") : [];
+  // The run's own stream record: without it, a sub-agent-only run would balance on its transcripts alone, and the
+  // parented floor below would read nothing. Any intercepted request makes its absence an error.
+  let events: string[] = [];
+  if (!existsSync(eventsPath)) {
+    if (counts.requests > 0) problems.push("events.jsonl is missing, so the run's own record of its searches cannot be read");
+  } else
+    try {
+      events = readFileSync(eventsPath, "utf8").split("\n");
+    } catch (e) {
+      problems.push(`events.jsonl could not be read (${(e as NodeJS.ErrnoException).code ?? "error"})`);
+    }
   const main = agentSide(events, { mainOnly: true, noRequest: o.noRequest, denied });
   const sides: [string, number][] = [["main", main.expected]];
   let inTranscripts = 0;
+  const read: { agentId: string; lines: string[] }[] = [];
   for (const f of transcripts(join(o.configDir ?? join(o.outDir, "claude-config"), "projects"))) {
     const id = /^agent-(.+)\.jsonl$/.exec(basename(f))![1]!;
-    const expected = agentSide(readFileSync(f, "utf8").split("\n"), { noRequest: o.noRequest, denied }).expected;
+    let lines: string[];
+    try {
+      lines = readFileSync(f, "utf8").split("\n");
+    } catch (e) {
+      problems.push(`sub-agent ${id}'s transcript could not be read (${(e as NodeJS.ErrnoException).code ?? "error"})`);
+      continue;
+    }
+    read.push({ agentId: id, lines });
+    const expected = agentSide(lines, { noRequest: o.noRequest, denied }).expected;
     inTranscripts += expected;
     sides.push([id, expected]);
   }
@@ -349,5 +413,10 @@ export function frozenPromiseError(o: {
       );
   }
   if (counts.unfinished) problems.push(`${counts.unfinished} request(s) were still being classified when the run closed`);
-  return problems.length ? `search corpus: the frozen promise could not be confirmed: ${problems.join("; ")}` : null;
+  return {
+    error: problems.length ? `search corpus: the frozen promise could not be confirmed: ${problems.join("; ")}` : null,
+    toolUsesExpected: main.expected + inTranscripts,
+    events,
+    transcripts: read,
+  };
 }

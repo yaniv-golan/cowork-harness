@@ -469,7 +469,26 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
       miss: "empty" as const,
       interposition: "proxy-env+ca" as const,
       credentialSource: "env" as const,
-      metrics: { requests: served + refused, served, miss: 0, refused, retriesFolded: 0, unfinished: 0, passedThroughWithSearchTool: 0 },
+      metrics: {
+        requests: served + refused,
+        served,
+        miss: 0,
+        refused,
+        retriesFolded: 0,
+        unfinished: 0,
+        passedThroughWithSearchTool: 0,
+        toolUses: served + refused,
+        noRequest: 0,
+        toolUsesExpected: served + refused,
+        byAgent: {},
+        liveServerTools: 0,
+        shapeUnfenced: 0,
+        unattributed: 0,
+        unattributedExpected: 0,
+        reassigned: 0,
+        attributionUncertain: 0,
+      },
+      calls: [],
     });
     const some = computeVerdict(rr({ searchCorpus: sc(2, 1) }), "live");
     expect(some.pass).toBe(true);
@@ -480,6 +499,46 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     expect(all?.severity).toBe("warn");
     expect(all?.message).toMatch(/EVERY search request \(3\) was refused.*no search evidence/);
     expect(computeVerdict(rr({ searchCorpus: sc(3, 0) }), "live").signals.some((x) => x.code === "search_corpus_refused")).toBe(false);
+  });
+
+  it("warns, never fails, when the harness could not settle which search request a sub-agent result answered", () => {
+    const sc = (attributionUncertain: number, unattributed = attributionUncertain) => ({
+      poolId: "p",
+      sha256: "a".repeat(64),
+      label: "frozen search corpus p@aaaaaaaa",
+      miss: "empty" as const,
+      interposition: "proxy-env+ca" as const,
+      credentialSource: "env" as const,
+      metrics: {
+        requests: 2,
+        served: 2,
+        miss: 0,
+        refused: 0,
+        retriesFolded: 0,
+        unfinished: 0,
+        passedThroughWithSearchTool: 0,
+        toolUses: 2,
+        noRequest: 0,
+        toolUsesExpected: 2,
+        byAgent: {},
+        liveServerTools: 0,
+        shapeUnfenced: 0,
+        unattributed,
+        unattributedExpected: 0,
+        reassigned: 0,
+        attributionUncertain,
+      },
+      calls: [],
+    });
+    const v = computeVerdict(rr({ searchCorpus: sc(1) }), "live");
+    expect(v.pass).toBe(true);
+    const s = v.signals.find((x) => x.code === "search_corpus_attribution_uncertain");
+    expect(s?.severity).toBe("warn");
+    expect(s?.message).toMatch(/1 search result\(s\).*could not be settled.*calls\[\]/);
+    // unattributed alone (an unpaired result, an unresolved sub-agent) is a run-line note, not this signal
+    expect(
+      computeVerdict(rr({ searchCorpus: sc(0, 2) }), "live").signals.some((x) => x.code === "search_corpus_attribution_uncertain"),
+    ).toBe(false);
   });
 
   it("still hard-fails when a sidecar death accompanies a failed exec", () => {

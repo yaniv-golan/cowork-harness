@@ -11,7 +11,9 @@ import { mintCertificates } from "../src/search-corpus/x509.js";
 import { SearchRegistry } from "../src/search-corpus/registry.js";
 import { buildIndex, DEFAULT_RETRIEVAL } from "../src/search-corpus/retrieval.js";
 import { recordId, type PoolRecord } from "../src/search-corpus/harvest.js";
-import { renderWebSearchResult } from "../src/search-corpus/render.js";
+import { renderWebSearchResult, resultShape, type ResultShape } from "../src/search-corpus/render.js";
+import type { SearchAnchors } from "../src/types.js";
+import { dispatchAgentIds, joinCalls } from "../src/search-corpus/join.js";
 import { extractSearchAnchors } from "../src/sync/search-anchors.js";
 import { ServeFrames } from "../src/search-corpus/frames.js";
 import { frozenPromiseError } from "../src/search-corpus/run.js";
@@ -116,7 +118,9 @@ interface Seen {
 
 /** A stub API host: scripts the main loop; answers a nested search itself only when one reaches it (the mutation). */
 type Turn = (model: string) => string;
-async function stub(opts: { task?: boolean; turns?: Turn[] } = {}) {
+/** Scripts every non-search API call: the model, the request's messages as JSON, and its agent id header. */
+type Route = (model: string, messages: string, agentId: string | undefined) => string;
+async function stub(opts: { task?: boolean; turns?: Turn[]; route?: Route } = {}) {
   let mainCalls = 0;
   const gzipped: string[] = [];
   const c = mintCertificates();
@@ -154,7 +158,9 @@ async function stub(opts: { task?: boolean; turns?: Turn[] } = {}) {
           const hasResult = msgs.some(
             (m) => Array.isArray(m.content) && (m.content as { type?: string }[]).some((b) => b.type === "tool_result"),
           );
-          if (tools.some((t) => t.type?.startsWith("web_search_")))
+          if (opts.route && !tools.some((t) => t.type?.startsWith("web_search_")))
+            out = { status: 200, type: "text/event-stream", text: opts.route(model, JSON.stringify(msgs), agentId) };
+          else if (tools.some((t) => t.type?.startsWith("web_search_")))
             out = { status: 200, type: "text/event-stream", text: endTurn(model, "Live search answer from the stub.") };
           else if (opts.turns && !agentId && tools.length > 0)
             out = { status: 200, type: "text/event-stream", text: (opts.turns[mainCalls++] ?? ((m: string) => endTurn(m, "done")))(model) };
@@ -187,6 +193,13 @@ async function runAgent(o: {
   withCa?: boolean;
   task?: boolean;
   turns?: Turn[];
+  route?: Route;
+  prompt?: string;
+  /** Write into the agent's config dir before it starts (a user skill). */
+  setup?: (config: string) => void;
+  allowedTools?: string;
+  /** Serve with these anchors instead of the agent's own (a refusal of every search). */
+  anchors?: (a: SearchAnchors) => SearchAnchors;
   env?: Record<string, string>;
   deny?: boolean;
 }) {
@@ -195,11 +208,11 @@ async function runAgent(o: {
     if (!r.ok) throw new Error(r.defects.join("; "));
     return r.anchors;
   })();
-  const up = await stub({ task: o.task, ...(o.turns ? { turns: o.turns } : {}) });
+  const up = await stub({ task: o.task, ...(o.turns ? { turns: o.turns } : {}), ...(o.route ? { route: o.route } : {}) });
   const registry = new SearchRegistry();
   const ctx: ServeContext = {
     index: buildIndex(o.pool ?? [record], DEFAULT_RETRIEVAL),
-    anchors,
+    anchors: o.anchors ? o.anchors(anchors) : anchors,
     registry,
     miss: o.miss ?? "empty",
     log: () => {},
@@ -225,6 +238,7 @@ async function runAgent(o: {
   const dir = mkdtempSync(join(tmpdir(), "cwh-agent-"));
   const config = join(dir, "config");
   mkdirSync(config);
+  o.setup?.(config);
   const caFile = join(dir, "ca.pem");
   writeFileSync(caFile, ic.caPem, { mode: 0o600 });
   const env: NodeJS.ProcessEnv = {
@@ -245,12 +259,12 @@ async function runAgent(o: {
     AGENT,
     [
       "-p",
-      ...(o.deny ? ["--input-format", "stream-json", "--permission-prompt-tool", "stdio"] : [`Search the web for: ${QUERY}`]),
+      ...(o.deny ? ["--input-format", "stream-json", "--permission-prompt-tool", "stdio"] : [o.prompt ?? `Search the web for: ${QUERY}`]),
       "--output-format",
       "stream-json",
       "--verbose",
       // Pre-approved except in the deny case, where the permission must reach the stdio channel.
-      ...(o.deny ? [] : ["--allowedTools", "WebSearch"]),
+      ...(o.deny ? [] : ["--allowedTools", o.allowedTools ?? "WebSearch"]),
       "--model",
       "claude-sonnet-4-6",
       // No permission classifier: the stub cannot answer its request. The deny case answers on the stdio channel.
@@ -307,6 +321,7 @@ async function runAgent(o: {
     registry,
     noRequest: anchors.noRequest,
     pool: { poolId: "p", sha256: "a".repeat(64) },
+    miss: o.miss ?? "empty",
     quiesce: async () => ({ abandoned: 0 }),
   });
   const frameLines = lines.flatMap((l) => {
@@ -316,11 +331,73 @@ async function runAgent(o: {
       return [];
     }
   });
-  // Every intercepted request gets exactly one frame: streamed after its result, or at close.
-  const allFrames = frameLines.length + (await frames.finish()).length;
+  // Every intercepted request gets exactly one frame: streamed after its result, or at close. A result with no
+  // intercepted request (a search that slipped past, or a denial this helper does not report) gets an unpaired frame.
+  const paired = [...frameLines, ...(await frames.finish())].filter((l) => !JSON.parse(l).unpaired).length;
   const fc = registry.counts();
-  expect(allFrames, "frames == served + miss + refused").toBe(fc.served + fc.miss + fc.refused);
+  expect(paired, "paired frames == served + miss + refused").toBe(fc.served + fc.miss + fc.refused);
   return { code, stderr, lines, seen: up.seen, gzipped: up.gzipped, registry, ctx, dir, config, frameLines, anchors, frames };
+}
+
+const toolUse = (model: string, id: string, name: string, input: unknown) =>
+  sse([
+    start(model),
+    ["content_block_start", { index: 0, content_block: { type: "tool_use", id, name, input: {} } }],
+    ["content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } }],
+    ["content_block_stop", { index: 0 }],
+    ["message_delta", { delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 1 } }],
+    ["message_stop", {}],
+  ]);
+const searched = (messages: string) => messages.includes('"tool_use_id":"toolu_ws1"');
+const skillDir = (config: string, name: string, frontmatter: string) => {
+  mkdirSync(join(config, "skills", name), { recursive: true });
+  writeFileSync(
+    join(config, "skills", name, "SKILL.md"),
+    `---\nname: ${name}\ndescription: looks one thing up\n${frontmatter}---\nSearch the web once, then stop.\n`,
+  );
+};
+type Ran = Awaited<ReturnType<typeof runAgent>>;
+/** A fork, as measured on 2.1.295: its search carries the agent id header, the dispatch's result envelope names the
+ *  same id, its own transcript is agent-<that id>.jsonl, and the frozen promise holds per agent. */
+function expectForkAttributed(r: Ran, dispatchId: string) {
+  const entries = r.registry.all();
+  expect(entries).toHaveLength(1);
+  const header = entries[0]!.agentId;
+  expect(header, "the fork's search carries x-claude-code-agent-id").toEqual(expect.any(String));
+  const msgs = r.lines.map((l) => JSON.parse(l));
+  const envelope = msgs.find(
+    (m) => m.type === "user" && m.message?.content?.some?.((b: { tool_use_id?: string }) => b.tool_use_id === dispatchId),
+  )?.tool_use_result?.agentId;
+  expect(envelope, "envelope agentId == header").toBe(header);
+  const transcripts = readdirSync(r.config, { recursive: true, encoding: "utf8" }).filter((p) => /subagents\/agent-[^/]+\.jsonl$/.test(p));
+  expect(
+    transcripts.map((p) => /agent-([^/]+)\.jsonl$/.exec(p)![1]),
+    "transcript stem == header",
+  ).toEqual([header]);
+  const search = msgs.find((m) => m.type === "assistant" && m.message?.content?.some?.((b: { name?: string }) => b.name === "WebSearch"));
+  expect(search?.parent_tool_use_id, "the fork's search is parented to its dispatch").toBe(dispatchId);
+  expect(
+    frozenPromiseError({
+      outDir: r.dir,
+      configDir: r.config,
+      registry: r.registry,
+      ctx: r.ctx,
+      frames: r.frames,
+      noRequest: r.anchors.noRequest,
+    }),
+  ).toBeNull();
+  // And through the harness's own path: the stream parser reads the dispatch's agent from events.jsonl, and the
+  // post-run join gives the search's call that agent, confirmed (not provisional).
+  const kids = transcripts.map((p) => ({
+    agentId: /agent-([^/]+)\.jsonl$/.exec(p)![1]!,
+    lines: readFileSync(join(r.config, p), "utf8").split("\n"),
+  }));
+  const dispatchAgents = dispatchAgentIds(r.lines, kids);
+  expect(dispatchAgents.get(dispatchId), "the harness parser resolves the dispatch's agent").toBe(header);
+  const { calls } = joinCalls({ entries: r.registry.all(), pairings: r.frames.pairings(), dispatchAgents, miss: "empty" });
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ agentId: header, toolUseId: "toolu_ws1", verdict: "served" });
+  expect(calls[0]).not.toHaveProperty("provisional");
 }
 
 describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_SEARCH_CORPUS_AGENT=1)", () => {
@@ -384,6 +461,16 @@ describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_S
       }),
       diag,
     ).toBeNull();
+    // the Task dispatch's own result names the same agent, read through the harness's parser and the join
+    const kids = transcripts.map((p) => ({
+      agentId: /agent-([^/]+)\.jsonl$/.exec(p)![1]!,
+      lines: readFileSync(join(r.config, "projects", p), "utf8").split("\n"),
+    }));
+    const dispatchAgents = dispatchAgentIds(r.lines, kids);
+    expect(dispatchAgents.get("toolu_task1"), diag).toBe(entries[0]!.agentId);
+    const { calls } = joinCalls({ entries, pairings: r.frames.pairings(), dispatchAgents, miss: "empty" });
+    expect(calls, diag).toEqual([expect.objectContaining({ agentId: entries[0]!.agentId, toolUseId: "toolu_stub1", verdict: "served" })]);
+    expect(calls[0]).not.toHaveProperty("provisional");
   }, 180_000);
 
   // The no-request result shapes, confirmed on the real agent at $0: the agent answers each WebSearch itself, no request made.
@@ -564,4 +651,103 @@ describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_S
     // and it failed for the reason under test: the run's CA was not trusted
     expect(r.lines.join("\n")).toMatch(/certificate verification failed/i);
   }, 120_000);
+  it("an Agent(fork)'s search carries its agent id, which names its envelope and its own transcript; the frozen promise holds", async () => {
+    const r = await runAgent({
+      prompt: "Research this in a fork.",
+      allowedTools: "WebSearch,Agent",
+      env: { CLAUDE_CODE_FORK_SUBAGENT: "1" },
+      route: (m, msgs, agentId) =>
+        agentId
+          ? searched(msgs)
+            ? endTurn(m, "fork done")
+            : toolUse(m, "toolu_ws1", "WebSearch", { query: QUERY })
+          : msgs.includes('"tool_use_id":"toolu_fork1"')
+            ? endTurn(m, "main done")
+            : toolUse(m, "toolu_fork1", "Agent", { description: "fork research", subagent_type: "fork", prompt: "Search the web once." }),
+    });
+    expect(r.code).toBe(0);
+    expectForkAttributed(r, "toolu_fork1");
+  }, 120_000);
+
+  it("a context: fork skill's search carries its agent id too; an inline skill's is keyed to main with no parent", async () => {
+    const fork = await runAgent({
+      prompt: "Use the forkskill skill.",
+      allowedTools: "WebSearch,Skill",
+      setup: (config) => skillDir(config, "forkskill", "context: fork\n"),
+      route: (m, msgs, agentId) =>
+        agentId
+          ? searched(msgs)
+            ? endTurn(m, "fork done")
+            : toolUse(m, "toolu_ws1", "WebSearch", { query: QUERY })
+          : msgs.includes('"tool_use_id":"toolu_skill1"')
+            ? endTurn(m, "main done")
+            : toolUse(m, "toolu_skill1", "Skill", { skill: "forkskill" }),
+    });
+    expect(fork.code).toBe(0);
+    expectForkAttributed(fork, "toolu_skill1");
+
+    const inline = await runAgent({
+      prompt: "Use the inlineskill skill.",
+      allowedTools: "WebSearch,Skill",
+      setup: (config) => skillDir(config, "inlineskill", ""),
+      route: (m, msgs) =>
+        searched(msgs)
+          ? endTurn(m, "main done")
+          : msgs.includes('"tool_use_id":"toolu_skill1"')
+            ? toolUse(m, "toolu_ws1", "WebSearch", { query: QUERY })
+            : toolUse(m, "toolu_skill1", "Skill", { skill: "inlineskill" }),
+    });
+    expect(inline.code).toBe(0);
+    expect(inline.registry.all().map((e) => e.agentId)).toEqual([null]);
+    const search = inline.lines
+      .map((l) => JSON.parse(l))
+      .find((m) => m.type === "assistant" && m.message?.content?.some?.((b: { name?: string }) => b.name === "WebSearch"));
+    expect(search?.parent_tool_use_id ?? null).toBeNull();
+    expect(readdirSync(inline.config, { recursive: true, encoding: "utf8" }).filter((p) => /subagents\//.test(p))).toEqual([]);
+    expect(
+      frozenPromiseError({
+        outDir: inline.dir,
+        configDir: inline.config,
+        registry: inline.registry,
+        ctx: inline.ctx,
+        frames: inline.frames,
+        noRequest: inline.anchors.noRequest,
+      }),
+    ).toBeNull();
+  }, 240_000);
+
+  it("the agent's rendering of each answer reads as its kind, on the main loop and in a sub-agent; each frame takes its own verdict", async () => {
+    const other: PoolRecord = {
+      ...record,
+      query: "solar panel prices",
+      id: "e".repeat(64),
+      links: [{ title: "Sun", url: "https://sun.example" }],
+      text: "Sun.",
+    };
+    const wrongSentence = (a: SearchAnchors) => ({ ...a, systemSentence: { ...a.systemSentence, sha256: "0".repeat(64) } });
+    const cases: [string, Parameters<typeof runAgent>[0], ResultShape, string][] = [
+      ["served", {}, "served", "served"],
+      ["empty miss", { pool: [other] }, "empty", "miss"],
+      ["error miss", { pool: [other], miss: "error" }, "error", "miss"],
+      ["refused", { anchors: wrongSentence }, "error", "refused"],
+      ["sub-agent error miss", { pool: [other], miss: "error", task: true }, "error", "miss"],
+    ];
+    for (const [label, o, shape, verdict] of cases) {
+      const r = await runAgent(o);
+      const msgs = r.lines.map((l) => JSON.parse(l));
+      const res = msgs.flatMap((m) =>
+        m.type === "user" && Array.isArray(m.message?.content)
+          ? m.message.content.filter(
+              (b: { type?: string; tool_use_id?: string }) => b.type === "tool_result" && b.tool_use_id === "toolu_stub1",
+            )
+          : [],
+      );
+      expect(res, label).toHaveLength(1);
+      expect(res[0].is_error, `${label}: never is_error`).toBeUndefined();
+      expect(resultShape(res[0].content, QUERY), label).toBe(shape);
+      const frame = r.frameLines.map((l: string) => JSON.parse(l)).find((f: { toolUseId?: string }) => f.toolUseId === "toolu_stub1");
+      expect(frame, label).toMatchObject({ verdict, streamed: true });
+      expect(r.frames.counts(), label).toMatchObject({ shapeUnfenced: 0, unpaired: 0 });
+    }
+  }, 600_000);
 });

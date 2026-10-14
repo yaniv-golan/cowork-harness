@@ -8,12 +8,17 @@
  *
  * A tool_result is joined to its registry entry by key: the query and the domain lists from its WebSearch tool_use.
  * Retrieval is deterministic given those and the pool, so two same-key requests name the same records whichever
- * pairing is taken. A tool_result that shows no request was made (`noRequestKind`) never takes an entry, so it cannot
+ * pairing is taken. The take is fenced: a result in the main loop's stream takes only an entry with no agent id, a
+ * parented result only one with an agent id, and the answer the result shows (`resultShape`) keeps only the verdicts
+ * that render that way. A parented frame is `attribution: "provisional"`: which sub-agent it belongs to is resolved
+ * after the run, so its `ordinal` is pairing order, never attribution. A result with no eligible entry gets an
+ * `unpaired` frame. A tool_result that shows no request was made (`noRequestKind`) never takes an entry, so it cannot
  * steal a later request's frame. Frames carry no credential, header or host path.
  */
 
 import { noRequestKind, type NoRequestAnchors } from "./no-request.js";
 import type { RegistryEntry, SearchRegistry } from "./registry.js";
+import { resultShape, type ResultShape } from "./render.js";
 
 export const SERVE_FRAME = "search_corpus_serve";
 
@@ -24,19 +29,45 @@ interface PendingUse {
   parentToolUseId?: string;
 }
 
+/** One streamed frame's pairing, kept for the post-run join. */
+export interface FramePairing {
+  toolUseId: string;
+  parentToolUseId?: string;
+  shape: ResultShape;
+  /** The entry the stream took; absent for an unpaired frame. */
+  entry?: RegistryEntry;
+}
+
+/** The verdicts a result showing this answer can be, under the run's miss mode; undefined (any) when it could not be
+ *  read. A served record with no links and no text renders as the no-links answer alone, so that answer can also be a
+ *  serve (one key never yields both a serve and an empty miss in one run: retrieval is deterministic over a fixed
+ *  pool); with text after it, the result reads as unfenced. */
+export function shapeVerdicts(shape: ResultShape, miss: "empty" | "error"): readonly RegistryEntry["verdict"][] | undefined {
+  if (shape === "unfenced") return undefined;
+  if (shape === "served") return ["served"];
+  if (shape === "empty") return miss === "empty" ? ["miss", "served"] : ["served"];
+  return miss === "error" ? ["refused", "miss"] : ["refused"];
+}
+
 const strings = (v: unknown) => (Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined);
 
 export class ServeFrames {
   private readonly uses = new Map<string, PendingUse>();
   private readonly deniedIds_ = new Set<string>();
+  private readonly pairings_: FramePairing[] = [];
+  private readonly queryless = new Set<string>();
   private toolUses = 0;
   private noRequest = 0;
+  private shapeUnfenced = 0;
+  private unpaired = 0;
 
   constructor(
     private readonly o: {
       registry: SearchRegistry;
       noRequest: NoRequestAnchors | undefined;
       pool: { poolId: string; sha256: string };
+      /** What a miss answers (`--search-corpus-miss`): which verdicts an error-shaped result can be. */
+      miss: "empty" | "error";
       quiesce: () => Promise<{ abandoned: number }>;
     },
   ) {}
@@ -55,9 +86,12 @@ export class ServeFrames {
     const out: string[] = [];
     for (const b of content as Record<string, unknown>[]) {
       if (m.type === "assistant" && b?.type === "tool_use" && b.name === "WebSearch" && typeof b.id === "string") {
-        const input = (b.input ?? {}) as Record<string, unknown>;
-        if (typeof input.query !== "string") continue;
         this.toolUses++;
+        const input = (b.input ?? {}) as Record<string, unknown>;
+        if (typeof input.query !== "string") {
+          this.queryless.add(b.id);
+          continue;
+        }
         const allowedDomains = strings(input.allowed_domains);
         const blockedDomains = strings(input.blocked_domains);
         this.uses.set(b.id, {
@@ -67,6 +101,16 @@ export class ServeFrames {
           ...(parent ? { parentToolUseId: parent } : {}),
         });
       } else if (m.type === "user" && b?.type === "tool_result" && typeof b.tool_use_id === "string") {
+        // A query-less call never makes a request; its result is counted as the agent-side count counts it.
+        if (this.queryless.delete(b.tool_use_id)) {
+          if (
+            noRequestKind({ content: b.content, ...(b.is_error === true ? { is_error: true } : {}) }, this.o.noRequest, {
+              deniedByHarness: this.deniedIds_.has(b.tool_use_id),
+            })
+          )
+            this.noRequest++;
+          continue;
+        }
         const use = this.uses.get(b.tool_use_id);
         if (!use) continue;
         this.uses.delete(b.tool_use_id);
@@ -77,15 +121,38 @@ export class ServeFrames {
           this.noRequest++;
           continue;
         }
-        const e = this.o.registry.take(use);
-        if (!e) continue;
-        out.push(
-          this.line(e, {
-            streamed: true,
-            toolUseId: b.tool_use_id,
-            ...(use.parentToolUseId ? { parentToolUseId: use.parentToolUseId } : {}),
-          }),
-        );
+        const shape = resultShape(b.content, use.query);
+        if (shape === "unfenced") this.shapeUnfenced++;
+        const parented = use.parentToolUseId !== undefined;
+        const verdicts = shapeVerdicts(shape, this.o.miss);
+        const e = this.o.registry.take(use, { parented, ...(verdicts ? { verdicts } : {}) });
+        const head = {
+          streamed: true,
+          toolUseId: b.tool_use_id,
+          ...(parented ? { parentToolUseId: use.parentToolUseId, attribution: "provisional" } : {}),
+        };
+        this.pairings_.push({
+          toolUseId: b.tool_use_id,
+          ...(parented ? { parentToolUseId: use.parentToolUseId } : {}),
+          shape,
+          ...(e ? { entry: e } : {}),
+        });
+        if (e) out.push(this.line(e, head));
+        else {
+          this.unpaired++;
+          out.push(
+            JSON.stringify({
+              _emu: SERVE_FRAME,
+              streamed: true,
+              toolUseId: b.tool_use_id,
+              ...(parented ? { parentToolUseId: use.parentToolUseId } : {}),
+              query: use.query,
+              ...(use.allowedDomains ? { allowedDomains: use.allowedDomains } : {}),
+              ...(use.blockedDomains ? { blockedDomains: use.blockedDomains } : {}),
+              unpaired: true,
+            }),
+          );
+        }
       }
     }
     return out;
@@ -102,9 +169,15 @@ export class ServeFrames {
     return this.deniedIds_;
   }
 
-  /** WebSearch tool_uses seen in the stream, and how many of their results made no request. */
-  counts(): { toolUses: number; noRequest: number } {
-    return { toolUses: this.toolUses, noRequest: this.noRequest };
+  /** WebSearch tool_uses seen in the stream (a query-less one included), how many of their results made no request,
+   *  how many results could not be read as an answer (fenced by key alone), and how many found no entry. */
+  counts(): { toolUses: number; noRequest: number; shapeUnfenced: number; unpaired: number } {
+    return { toolUses: this.toolUses, noRequest: this.noRequest, shapeUnfenced: this.shapeUnfenced, unpaired: this.unpaired };
+  }
+
+  /** Every streamed frame's pairing, in stream order. */
+  pairings(): readonly FramePairing[] {
+    return this.pairings_;
   }
 
   private line(e: RegistryEntry, head: Record<string, unknown>): string {
