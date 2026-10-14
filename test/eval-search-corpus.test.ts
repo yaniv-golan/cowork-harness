@@ -362,3 +362,24 @@ describe("eval --search-corpus: per-arm metrics and the asymmetry marker", () =>
     expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toMatch(/5 rep\(s\) graded by a judge on recorded searches/);
   });
 });
+
+describe("the pin evidence channels, each on its own", () => {
+  it("the line's searchPoolMismatch record alone buckets the rep (the revived error is the other channel)", async () => {
+    const { classifyRep } = await import("../src/eval/classify.js");
+    const { repEvidenceOf } = await import("../src/eval/runs.js");
+    const line = {
+      v: 0 as const,
+      index: 0,
+      arm: "after",
+      scenario: "csv-metrics",
+      rep: 1,
+      runId: "x",
+      runDir: null,
+      searchPoolMismatch: { expected: { sha256: "a".repeat(64), miss: "empty" }, got: null, message: "unreadable copy" },
+      grades: [],
+    };
+    const ev = repEvidenceOf(line);
+    expect(ev.searchPoolMismatch).toEqual(line.searchPoolMismatch);
+    expect(classifyRep(ev, {}).bucket).toBe("search_pool_mismatch");
+  });
+});
