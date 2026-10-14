@@ -27,7 +27,8 @@ All notable changes to this project are documented here. The format is based on
   and `--search-corpus-min-score` overrides the pool's floor. The run fails (`infraErrors` source `search-corpus`)
   unless each agent's own count of its searches, sub-agents included, equals what the harness answered. Refused, by
   name: fidelity `protocol`, `container` and `microvm`; `chat`, `record`, `critique` and `probe-dispatch`; `--resume`
-  and `--session-id`; a multi-leg or `device_bridge` scenario; the remote search route; a baseline without the web-search anchors; a credential not in the environment; an agent
+  and `--session-id`; a multi-leg or `device_bridge` scenario; the remote search route; an agent whose web-search anchors differ from the baseline's
+  (checked on the exact binary about to launch, before it starts); a baseline without the web-search anchors; a credential not in the environment; an agent
   proxy; and a non-API `ANTHROPIC_BASE_URL`. The run dir gains `search-corpus.jsonl`, and `events.jsonl` one
   `search_corpus_serve` line per answered request.
 

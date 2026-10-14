@@ -1,3 +1,4 @@
+import { UsageError } from "../errors.js";
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
 import { registerCleanup, removeContainer } from "../egress/sidecar.js";
@@ -243,6 +244,9 @@ export function hostLoopSidecarEnv(egressProxy?: string): Record<string, string>
 
 /** spawnHostLoop's options. */
 export interface HostLoopSpawnOpts {
+  /** `--search-corpus`: given the exact agent binary this spawn resolved, why it cannot be served from the baseline's
+   *  web-search anchors (refused by name, before the agent is spawned), or null. */
+  searchAnchorsCheck?: (binary: string) => string | null;
   /** `--search-corpus`: the interceptor's proxy and CA keys, layered onto the agent's env after everything else. */
   searchCorpusEnv?: Record<string, string>;
   systemPromptAppend?: string;
@@ -339,6 +343,9 @@ function spawnHostLoopTracked(
   const claudePluginRootHost = resolveClaudePluginRootHostPath(plan, mntHost);
 
   const agentNativeHost = resolveHostAgentBinary(baseline);
+  // `--search-corpus`: the binary about to run must give the baseline's search anchors, or every search would be refused.
+  const anchorsRefusal = opts.searchAnchorsCheck?.(agentNativeHost);
+  if (anchorsRefusal) throw new UsageError(anchorsRefusal);
   // Bind-mounted into the bash sidecar for parity; not run by any harness-spawned process here (sidecar CMD
   // is a keep-alive, bash is `docker exec … bash -c`, the executed agent is agentNativeHost above — model bash
   // could invoke it inside the hardened sidecar, an accepted patch-only residual). So tolerate a patch-newer

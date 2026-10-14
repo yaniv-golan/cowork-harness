@@ -1,7 +1,13 @@
 import { warn, writeTextAtomic } from "../io.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
-import { searchCorpusRefusal, startRunSearchCorpus, type RunSearchCorpus, type SearchCorpusOption } from "../search-corpus/run.js";
+import {
+  agentAnchorsRefusal,
+  searchCorpusRefusal,
+  startRunSearchCorpus,
+  type RunSearchCorpus,
+  type SearchCorpusOption,
+} from "../search-corpus/run.js";
 import { runtimeAuthEnv } from "../runtime/host-env.js";
 import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
@@ -1540,7 +1546,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           process.stderr.write(`[${searchCorpus.label}]\n`);
         }
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
-          ...(searchCorpus ? { searchCorpusEnv: searchCorpus.env } : {}),
+          ...(searchCorpus
+            ? {
+                searchCorpusEnv: searchCorpus.env,
+                searchAnchorsCheck: (binary: string) => agentAnchorsRefusal(binary, baseline.agentBinary!.searchAnchors!),
+              }
+            : {}),
           systemPromptAppend: prompts.systemPromptAppend,
           runToken,
           egressProxy: sidecar?.proxyUrl,
