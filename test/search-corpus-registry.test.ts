@@ -39,6 +39,17 @@ describe("SearchRegistry: the interceptor's synchronous record of every intercep
     expect(r.take({ query: "a", allowedDomains: ["x.com"] })).toBe(scoped);
   });
 
+  it("a take can be fenced: main-loop or sub-agent entries only, and only some verdicts", () => {
+    const r = new SearchRegistry();
+    const sub = r.record(served("a", { agentId: "ag1" }));
+    const refused = r.record(served("a", { verdict: "refused", rounds: [] }));
+    const main = r.record(served("a"));
+    expect(r.take({ query: "a" }, { parented: false, verdicts: ["served"] })).toBe(main);
+    expect(r.take({ query: "a" }, { parented: false, verdicts: ["served"] })).toBeUndefined();
+    expect(r.take({ query: "a" }, { parented: false, verdicts: ["refused", "miss"] })).toBe(refused);
+    expect(r.take({ query: "a" }, { parented: true })).toBe(sub);
+  });
+
   it("a miss and a refusal are entries like a serve; a keyless refusal is never taken by key", () => {
     const r = new SearchRegistry();
     const miss = r.record(served("m", { verdict: "miss", rounds: [] }));

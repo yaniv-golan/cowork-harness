@@ -11,7 +11,8 @@ import { mintCertificates } from "../src/search-corpus/x509.js";
 import { SearchRegistry } from "../src/search-corpus/registry.js";
 import { buildIndex, DEFAULT_RETRIEVAL } from "../src/search-corpus/retrieval.js";
 import { recordId, type PoolRecord } from "../src/search-corpus/harvest.js";
-import { renderWebSearchResult } from "../src/search-corpus/render.js";
+import { renderWebSearchResult, resultShape, type ResultShape } from "../src/search-corpus/render.js";
+import type { SearchAnchors } from "../src/types.js";
 import { extractSearchAnchors } from "../src/sync/search-anchors.js";
 import { ServeFrames } from "../src/search-corpus/frames.js";
 import { frozenPromiseError } from "../src/search-corpus/run.js";
@@ -196,6 +197,8 @@ async function runAgent(o: {
   /** Write into the agent's config dir before it starts (a user skill). */
   setup?: (config: string) => void;
   allowedTools?: string;
+  /** Serve with these anchors instead of the agent's own (a refusal of every search). */
+  anchors?: (a: SearchAnchors) => SearchAnchors;
   env?: Record<string, string>;
   deny?: boolean;
 }) {
@@ -208,7 +211,7 @@ async function runAgent(o: {
   const registry = new SearchRegistry();
   const ctx: ServeContext = {
     index: buildIndex(o.pool ?? [record], DEFAULT_RETRIEVAL),
-    anchors,
+    anchors: o.anchors ? o.anchors(anchors) : anchors,
     registry,
     miss: o.miss ?? "empty",
     log: () => {},
@@ -317,6 +320,7 @@ async function runAgent(o: {
     registry,
     noRequest: anchors.noRequest,
     pool: { poolId: "p", sha256: "a".repeat(64) },
+    miss: o.miss ?? "empty",
     quiesce: async () => ({ abandoned: 0 }),
   });
   const frameLines = lines.flatMap((l) => {
@@ -326,10 +330,11 @@ async function runAgent(o: {
       return [];
     }
   });
-  // Every intercepted request gets exactly one frame: streamed after its result, or at close.
-  const allFrames = frameLines.length + (await frames.finish()).length;
+  // Every intercepted request gets exactly one frame: streamed after its result, or at close. A result with no
+  // intercepted request (a search that slipped past, or a denial this helper does not report) gets an unpaired frame.
+  const paired = [...frameLines, ...(await frames.finish())].filter((l) => !JSON.parse(l).unpaired).length;
   const fc = registry.counts();
-  expect(allFrames, "frames == served + miss + refused").toBe(fc.served + fc.miss + fc.refused);
+  expect(paired, "paired frames == served + miss + refused").toBe(fc.served + fc.miss + fc.refused);
   return { code, stderr, lines, seen: up.seen, gzipped: up.gzipped, registry, ctx, dir, config, frameLines, anchors, frames };
 }
 
@@ -687,4 +692,39 @@ describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_S
       }),
     ).toBeNull();
   }, 240_000);
+
+  it("the agent's rendering of each answer reads as its kind, on the main loop and in a sub-agent; each frame takes its own verdict", async () => {
+    const other: PoolRecord = {
+      ...record,
+      query: "solar panel prices",
+      id: "e".repeat(64),
+      links: [{ title: "Sun", url: "https://sun.example" }],
+      text: "Sun.",
+    };
+    const wrongSentence = (a: SearchAnchors) => ({ ...a, systemSentence: { ...a.systemSentence, sha256: "0".repeat(64) } });
+    const cases: [string, Parameters<typeof runAgent>[0], ResultShape, string][] = [
+      ["served", {}, "served", "served"],
+      ["empty miss", { pool: [other] }, "empty", "miss"],
+      ["error miss", { pool: [other], miss: "error" }, "error", "miss"],
+      ["refused", { anchors: wrongSentence }, "error", "refused"],
+      ["sub-agent error miss", { pool: [other], miss: "error", task: true }, "error", "miss"],
+    ];
+    for (const [label, o, shape, verdict] of cases) {
+      const r = await runAgent(o);
+      const msgs = r.lines.map((l) => JSON.parse(l));
+      const res = msgs.flatMap((m) =>
+        m.type === "user" && Array.isArray(m.message?.content)
+          ? m.message.content.filter(
+              (b: { type?: string; tool_use_id?: string }) => b.type === "tool_result" && b.tool_use_id === "toolu_stub1",
+            )
+          : [],
+      );
+      expect(res, label).toHaveLength(1);
+      expect(res[0].is_error, `${label}: never is_error`).toBeUndefined();
+      expect(resultShape(res[0].content, QUERY), label).toBe(shape);
+      const frame = r.frameLines.map((l: string) => JSON.parse(l)).find((f: { toolUseId?: string }) => f.toolUseId === "toolu_stub1");
+      expect(frame, label).toMatchObject({ verdict, streamed: true });
+      expect(r.frames.counts(), label).toMatchObject({ shapeUnfenced: 0, unpaired: 0 });
+    }
+  }, 600_000);
 });

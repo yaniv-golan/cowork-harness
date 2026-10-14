@@ -129,6 +129,13 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     ]);
   });
 
+  it("records a refusal with the domain lists it could read", () => {
+    const { c } = ctx();
+    const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: 8, allowed_domains: ["x.com"] }];
+    serveRequest(post(nestedBody("q", { system: "another assistant", tools })), c);
+    expect(c.registry.all()[0]).toMatchObject({ verdict: "refused", query: "q", allowedDomains: ["x.com"] });
+  });
+
   it("folds a stream:false retry into the request it retries: same records, JSON shape, one logical request", () => {
     const { c, log } = ctx();
     serveRequest(post(nestedBody("electric vehicle market size europe")), c);

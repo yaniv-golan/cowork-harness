@@ -53,7 +53,7 @@ const tick = () => new Promise((r) => setTimeout(r, 20));
 describe("LiveAgentSession with a search corpus", () => {
   it("writes the serve frame directly after the WebSearch tool_result line", async () => {
     const registry = new SearchRegistry();
-    const frames = new ServeFrames({ registry, noRequest: undefined, pool, quiesce: async () => ({ abandoned: 0 }) });
+    const frames = new ServeFrames({ registry, noRequest: undefined, pool, miss: "empty", quiesce: async () => ({ abandoned: 0 }) });
     const lines = await run(frames, async (proc) => {
       send(proc, use("t1", "q"));
       registry.record({ agentId: null, route: "messages", verdict: "served", query: "q", rounds: [round], retryKey: "k" });
@@ -68,7 +68,13 @@ describe("LiveAgentSession with a search corpus", () => {
   it("frames an intercepted request whose result never streamed at close, before the stream ends (the killed-agent case)", async () => {
     const registry = new SearchRegistry();
     let quiesced = false;
-    const frames = new ServeFrames({ registry, noRequest: undefined, pool, quiesce: async () => ((quiesced = true), { abandoned: 0 }) });
+    const frames = new ServeFrames({
+      registry,
+      noRequest: undefined,
+      pool,
+      miss: "empty",
+      quiesce: async () => ((quiesced = true), { abandoned: 0 }),
+    });
     const lines = await run(frames, async (proc) => {
       send(proc, use("t1", "q"));
       // the interceptor served it, but the agent dies before the tool_result
@@ -81,7 +87,7 @@ describe("LiveAgentSession with a search corpus", () => {
 
   it("a harness denial of a WebSearch permission marks the tool_use: its result takes no entry", async () => {
     const registry = new SearchRegistry();
-    const frames = new ServeFrames({ registry, noRequest: undefined, pool, quiesce: async () => ({ abandoned: 0 }) });
+    const frames = new ServeFrames({ registry, noRequest: undefined, pool, miss: "empty", quiesce: async () => ({ abandoned: 0 }) });
     const lines = await run(frames, async (proc, session) => {
       send(proc, use("t1", "q"));
       send(proc, {

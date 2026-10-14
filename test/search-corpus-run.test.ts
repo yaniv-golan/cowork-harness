@@ -197,6 +197,16 @@ describe("frozenPromiseError: the agent's own count against the interceptor's, p
     expect(check(runDir(events, { fork1: [use("w1", "q"), res("w1", ok200("q"))] }), r2)).toBeNull();
   });
 
+  it("fails closed the other way too: an inline skill whose search started carrying an agent id turns red, never green", () => {
+    // An inline skill's search is unparented in events.jsonl and keyed null today. Keyed by an id with no transcript,
+    // the main loop's count and that agent's no longer balance.
+    const r = new SearchRegistry();
+    r.record(entry("x"));
+    const err = check(runDir([use("w1", "q"), res("w1", ok200("q"))]), r);
+    expect(err).toMatch(/the main agent made 1 search request\(s\).*interceptor saw 0/);
+    expect(err).toMatch(/sub-agent x made 0 search request\(s\).*interceptor saw 1/);
+  });
+
   it("goes red when the interceptor saw a request no agent record carries", () => {
     const r = new SearchRegistry();
     r.record(entry("ghost"));

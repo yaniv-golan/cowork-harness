@@ -86,6 +86,10 @@ describe("classifyRequest", () => {
     expect(req(nested({ messages: [{ role: "user", content: "no prefix" }] }))).toMatchObject({ kind: "refuse", status: 200, query: null });
   });
 
+  it("a refusal keeps the tool's domain lists, so its result is framed by the same key as a served search", () => {
+    expect(req(nested({ system: "other" }))).toMatchObject({ kind: "refuse", query: "ev market size 2026", allowedDomains: ["a.com"] });
+  });
+
   it("inflates a gzipped body to classify it, and refuses one it cannot decode with the neutral 400", () => {
     const gz = gzipSync(Buffer.from(JSON.stringify(nested())));
     expect(req(null, { raw: gz, headers: { "content-encoding": "gzip" } })).toMatchObject({ kind: "search", query: "ev market size 2026" });

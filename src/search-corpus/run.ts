@@ -186,6 +186,7 @@ export async function startRunSearchCorpus(o: {
     registry,
     noRequest: anchors?.noRequest,
     pool: { poolId: manifest.poolId, sha256 },
+    miss: o.option.miss,
     quiesce: () => ic.quiesce(5000),
   });
 

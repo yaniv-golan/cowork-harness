@@ -178,6 +178,8 @@ export function serveRequest(r: InterceptedRequest, ctx: ServeContext): ServeDec
     route: "messages",
     verdict: "refused",
     query: c.query,
+    ...(c.allowedDomains ? { allowedDomains: c.allowedDomains } : {}),
+    ...(c.blockedDomains ? { blockedDomains: c.blockedDomains } : {}),
     rounds: [],
     retryKey: c.retryKey,
   });
