@@ -127,14 +127,30 @@ packaged Action's inputs/outputs): a backwards-incompatible change to a covered 
 fix is a **patch**. Human-readable text output is explicitly NOT covered.
 
 **Surface drift is partly automated.** `test/surface-contract.test.ts` snapshots the *structured*
-surfaces — every `schema/*.json` (field paths + enums, including exit-code enums), `action.yml`
-inputs/outputs, and the documented `COWORK_*` env-var set — into `test/fixtures/surface-baseline.json`.
-Any change to those reds CI until you regenerate (`npm run gen:surface`) and review the diff; at `1.0.0`
-a *removal or type/enum change* means a **major** bump. `npm run check:surface` prints the
-added/removed/changed breakdown against that committed snapshot. Every PR regenerates the snapshot, so at
+surfaces — every `schema/*.json` (field paths + enums, including exit-code enums, plus `required`, `closed`,
+`const` and `$ref`, and on the input schemas the value constraints), `action.yml` inputs/outputs, and the
+documented `COWORK_*` env-var set — into `test/fixtures/surface-baseline.json`. The snapshot's `leafKinds` says
+which kinds it recorded; a kind an older snapshot never recorded is not compared against it. Any change to those
+reds CI until you regenerate (`npm run gen:surface`) and review the diff; a removed or changed leaf means a
+**major** bump.
+
+On the three schemas a user writes (`scenario`, `scenario-multi-leg`, `session`), the check reads the
+*direction*, because tightening validation on a previously-valid document is breaking ([SPEC.md §12](./SPEC.md#12-versioning--the-10-compatibility-contract)).
+Each of these is a **narrowing** and counts as changed:
+- a field made required on an existing object;
+- a closed object, a `const`, a `type`, a new `enum`, or a new pattern, length, range or item-count limit on an
+  existing property;
+- an `allOf` branch on an existing property;
+- a new `anyOf` on an existing property, unless one branch keeps the property's old shape unchanged;
+- any added `oneOf` branch.
+
+The reverse is a **widening** and never breaks: a field no longer required, a dropped `enum`, a looser limit, or
+a type kept inside a wider set of types. `npm run check:surface` prints the breakdown against that committed
+snapshot as `+added -removed ~changed`, plus any widenings. Every PR regenerates the snapshot, so at
 release time that diff reads +0 whatever changed since the last release; `npm run check:surface -- --since-tag`
 diffs against the snapshot as of the last release tag (the highest `vX.Y.Z` tag that is an ancestor of HEAD)
-instead, and fails on a removed or changed leaf unless `package.json` is a major bump over that tag.
+instead, printing `surface since <tag>: +N −M ~K, W widened`. It fails on a removed or changed leaf unless
+`package.json` is a major bump over that tag; additions and widenings never fail it.
 
 **1.0.0 surface-freeze review (one-time, MANUAL — the surfaces the snapshot can't cover).** Before
 tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-readable source:

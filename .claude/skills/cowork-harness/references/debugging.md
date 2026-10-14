@@ -1,6 +1,6 @@
 # Debugging a run
 
-Tracks `cowork-harness 4.9.0` (baseline `desktop-2.37337.1`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
+Tracks `cowork-harness 4.9.1` (baseline `desktop-2.37337.1`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
 
 ## Part III — Debug
 
@@ -38,7 +38,8 @@ already does.
 **A multi-leg run (`legs:`) is read one leg at a time.** `trace`, `verify-run` and `regrade` take
 `--leg <id>` (or the leg dir `<root>/legs/<id>` itself); `inspect` and `fixture export` take the leg dir. A
 multi-leg root without `--leg` is refused, and `trace` / `inspect` name its legs. A host-action leg has no
-agent session and is refused too — its record is `legs/<id>/action.json`. See
+agent session and is refused too — its record is `legs/<id>/action.json`. `search-pool build --from <root>` is the
+exception: it reads every prompt leg of the root, each as its own source run. See
 [docs/scenario.md → Multi-leg scenarios](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#multi-leg-scenarios-legs).
 
 **`verify-run` never calls the semantic judge**, so it cannot re-grade a `semantic_matches` or `semantic_pairwise` assert. When the

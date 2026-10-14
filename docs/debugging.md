@@ -69,7 +69,8 @@ already happened.
 **A multi-leg run (`legs:`) is read one leg at a time.** `trace`, `verify-run` and `regrade` take
 `--leg <id>` (or the leg dir `<root>/legs/<id>` itself); `inspect` and `fixture export` take the leg dir. A
 multi-leg root without `--leg` is refused, and `trace` / `inspect` name its legs. A host-action leg has no
-agent session and is refused too — its record is `legs/<id>/action.json`. See
+agent session and is refused too — its record is `legs/<id>/action.json`. `search-pool build --from <root>` is the
+exception: it reads every prompt leg of the root, each as its own source run. See
 [scenario.md → Multi-leg scenarios](./scenario.md#multi-leg-scenarios-legs).
 
 1. **`inspect` — what did it produce?** The artifacts the run wrote, plus a shallow field preview of each

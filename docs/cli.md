@@ -18,7 +18,7 @@ companion skill, CI). This page is the CLI one.
 **Install from npm:**
 
 ```bash
-npm install -g "cowork-harness@^4.9.0"    # puts the `cowork-harness` command on your PATH
+npm install -g "cowork-harness@^4.9.1"    # puts the `cowork-harness` command on your PATH
 ```
 
 **Or build from source:**
@@ -38,7 +38,7 @@ node dist/cli.js replay examples/replays/example-pdf-skill.cassette.json
 
 > **Installed globally instead?** Once linked/installed, the same command is `cowork-harness replay
 > <cassette>` — but the relative path above only resolves from a source checkout's `examples/replays/`.
-> From a global install (`npm i -g "cowork-harness@^4.9.0"`), point at the package root instead:
+> From a global install (`npm i -g "cowork-harness@^4.9.1"`), point at the package root instead:
 > `cowork-harness replay "$(npm root -g)/cowork-harness/examples/replays/example-pdf-skill.cassette.json"`
 > (or copy the cassette into your own project and pass that path).
 
@@ -48,7 +48,7 @@ Live `run`/`skill` need the prerequisites in the next section — note the `prot
 > - **Replay only (zero setup):** `cowork-harness replay <cassette>` — no token, no Docker, no agent. The command above.
 > - **`protocol` (real model, no Docker):** needs only the auth token (item 3 below).
 > - **Live `container` / `microvm` / `hostloop` / `cowork`:** needs Docker (or Lima for `microvm`), a staged agent, and the token — run `cowork-harness doctor` first.
-> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^4.9.0"`.
+> - **Invocation:** from a source checkout, `node dist/cli.js <cmd>` (or `npm link` to get the `cowork-harness` command); from a global install, `cowork-harness <cmd>`; the companion skill falls back to `npx "cowork-harness@^4.9.1"`.
 
 Two more worked examples worth knowing about: `examples/scenarios/protocol-smoke.yaml` (zero-Docker smoke
 test) and `examples/scenarios/skill-loads.yaml` (container-tier acceptance check) — see
@@ -126,7 +126,7 @@ The parts people ask about. **`package.json`'s `files[]` is the exhaustive, mach
 this table is the readable summary of it, and deliberately omits the infrastructure that always ships
 (`baselines/`, `schema/`, `fixtures/`, `scripts/`, `docker/`).
 
-| What ships | npm global (`npm install -g "cowork-harness@^4.9.0"`) | Source checkout (`git clone` + `npm ci`) |
+| What ships | npm global (`npm install -g "cowork-harness@^4.9.1"`) | Source checkout (`git clone` + `npm ci`) |
 |---|---|---|
 | CLI, `scenario.py` + assertion keys (enough for `lint` in CI) | ✓ | ✓ |
 | `SKILL.md`, all of `docs/`, `SPEC.md`/`DESIGN.md`/`AGENTS.md` | ✓ | ✓ |
@@ -141,7 +141,7 @@ since a global install puts nothing in your working directory. The matrix, answe
 examples are the only ones that still need a source checkout. The **marketplace skill install** is
 narrower again — it pulls only `.claude/skills/cowork-harness/` (SKILL.md + `references/` +
 `scenario.py`/assertion keys, per `.claude-plugin/marketplace.json`'s `source`); everything in the npm column
-arrives when the skill's first command self-bootstraps `npx "cowork-harness@^4.9.0"` — the last row stays
+arrives when the skill's first command self-bootstraps `npx "cowork-harness@^4.9.1"` — the last row stays
 ✗ either way, since `matrices/`, `answer-policies/` and `probes/` are not published at all. See
 [docs/companion-skill.md](./companion-skill.md) for that install path.
 
@@ -693,7 +693,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too, and on one prompt leg of a [multi-leg run](./scenario.md#multi-leg-scenarios-legs) given as `<root>/legs/<id>` (the multi-leg root itself and a host-action leg are refused) | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |
 | `scaffold <run-id>` | Turn a kept run into a starter scenario YAML (gates→answers, artifacts→`file_exists`) | authoring a scenario from a real run instead of guessing |
 | `scaffold --name <name> --prompt "<p>" [--skill <dir>] …` | Generate a starter scenario skeleton from flags alone (the bundled `scenario.py scaffold`, self-linted; `scaffold --help` lists its flags) | starting a new scenario when you have no prior run |
-| `lint <scenario.yaml \| dir/>…` | Check scenarios for silent false-greens — assertions on the wrong CI lane, mixed content/live keys, missing `controlOut`-required keys (bundled `scenario.py`; needs python3) — and that each file loads (the `run`/`record` loader's own checks, plus a named `baseline:`). `--json` / `--min-severity`: see [Flags worth knowing](#flags-worth-knowing) | before committing a new scenario or after changing assertions |
+| `lint <scenario.yaml \| dir/>…` | Check scenarios for silent false-greens — assertions on the wrong CI lane, mixed content/live keys, missing `controlOut`-required keys (bundled `scenario.py`; needs python3) — and that each file loads (the `run`/`record` loader's own checks, plus a named `baseline:`). Its key, enum and hook-event lists come from the bundled `assertion-keys.json`; a missing or malformed list falls back to a built-in copy with a warning naming the field (`npm run schema` regenerates the file), except a malformed live-verified hook-event list, which verifies no hook event. `--json` / `--min-severity`: see [Flags worth knowing](#flags-worth-knowing) | before committing a new scenario or after changing assertions |
 | `lint-skill <SKILL.md \| skill-dir/>…` | Lint a skill body (and any sibling `hooks.json`) for two Cowork host-loop footguns, statically resolve pinned `subagent_type` values against the enclosing plugin, and size the skill corpus against the `critique` evidence ceiling (bundled `scenario.py`; needs python3). Severities, `--strict` and per-rule suppression (`--suppressions <file>`, `--ignore-rule`, `ignore-start`/`ignore-end` markers; `--strict-ignores`): see [Flags worth knowing](#flags-worth-knowing) | authoring or reviewing a skill before a paid Cowork host-loop run exposes the footgun, or before a pinned `subagent_type` typo breaks a `Task` dispatch |
 | `python3 …/scenario.py resolve-agent-types <plugin-dir> [--json]` | Token-free: print a plugin's valid `<plugin>:<agent>` subagent types, resolved from `.claude-plugin/plugin.json` + `agents/*.md` frontmatter (filename-stem fallback when an agent file has no `name:`); the `…` is `.claude/skills/cowork-harness/scripts/` | "does `founder-skills:deck-review` resolve within this plugin?" without a live dispatch |
 | `analyze-skill <SKILL.md \| skill-dir/ \| glob>…` | Token-free ADVISORY scan for two defect classes: a `/sessions/...` path handed to a file tool or dispatch output (DENIED on host-loop), and an interactive artifact whose write-back is silently lost under Cowork. Ignore markers, glob/walk rules, `--strict` and `--runtime`: see [Flags worth knowing](#flags-worth-knowing) and [docs/subagents.md](./subagents.md#static-path-fidelity-check-analyze-skill) | catching the exact "skill hands `/sessions/...` to a file tool" defect — or an artifact whose Submit silently fails under Cowork — statically, before paying for a live run to discover it |

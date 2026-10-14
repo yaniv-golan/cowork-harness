@@ -200,8 +200,9 @@ Three things live outside the flow dir, and the loop needs all three for the who
   `hillclimb regrade` and `hillclimb freeze-ref` find them by each row's `meta.run_id`, and `meta.run_dir`
   points into them (redacted when the runs root is outside your home directory). Pass the same
   `--run-dir` to every command. `prune` keeps hillclimb-labelled runs, outside `--keep-last`; run
-  `prune --include-hillclimb` only after the climb ends, since it removes that evidence for every flow under the
-  runs root, live ones included.
+  `prune --include-hillclimb` only after the climb ends: it ranks them with every other run under `--keep-last`, so
+  the runs of every flow under the runs root, a running climb included, can lose the ones a later re-grade or
+  reference freeze needs.
 - **The per-variant snapshots** in `~/.cowork-harness/hillclimb-snapshots` (`COWORK_HARNESS_HILLCLIMB_SNAPSHOTS`
   moves them). A resumed or appended rep runs its variant's snapshot. They are keyed by the flow dir's real path,
   so moving, renaming or copying the flow dir orphans them: on the copy, a pass of a variant that already has rows

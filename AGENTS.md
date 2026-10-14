@@ -58,8 +58,10 @@ here**, and the failure is silent. Every one below was hit by an agent working i
   hand-maintained** — `cassette.v*.json`, `run-result.json`, `doctor.json`, `protocol.v1.json`,
   `critique-report.json`, `verify-cassettes.json`, `regrade.json`, `schedule-cost.json`. Adding a field to those means editing the TS type **and**
   the JSON by hand; nothing syncs them. Then regenerate the surface baseline (below).
-- **Surface-baseline ordering:** edit the schema → `npm run check:surface` (review the diff, expect
-  `+N -0 ~0`) → `npm run gen:surface` → `check:surface` again (now `+0 -0 ~0`). Running `gen:surface`
+- **Surface-baseline ordering:** edit the schema → `npm run check:surface` (review the diff: a new property or
+  an output-schema addition reads `+N -0 ~0`; a tightened constraint on the scenario or session schema reads `~N`
+  by design and needs a major, see RELEASING.md; a loosened one is listed as widened) → `npm run gen:surface` →
+  `check:surface` again (now `+0 -0 ~0`). Running `gen:surface`
   first hides the very diff you were supposed to review.
 - **A `RunResult` field is a 5-call-site change.** `assembleRunResult` has **5** call sites across
   `assemble-run-result.ts` / `execute.ts` / `cassette.ts` / `chat-result.ts`, plus the TS type, the
