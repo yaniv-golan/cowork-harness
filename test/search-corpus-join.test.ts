@@ -159,6 +159,21 @@ describe("joinCalls: no false moves, and no request left unmarked", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(j.attributionUncertain).toBeGreaterThan(0);
   });
+  it("a stream pairing whose request cannot show the answer the result showed is not confirmed", () => {
+    // The stream applies the same table, so this only guards the join against a pairing it did not make itself.
+    const r = new SearchRegistry();
+    const refused = r.record(input("ag1", "q", { verdict: "refused", rounds: [] }));
+    r.record(input("ag1", "q", { verdict: "refused", rounds: [] }));
+    const j = joinCalls({
+      entries: r.all(),
+      pairings: [pair("c1", refused, "t1", "served")],
+      dispatchAgents: new Map([["t1", "ag1"]]),
+      miss: "empty",
+    });
+    expect(j.calls.find((c) => c.toolUseId === "c1")?.provisional).toBe(true);
+    expect(j).toMatchObject({ unattributed: 1, attributionUncertain: 1 });
+  });
+
   it("one sub-agent: a stream pairing that is already right is confirmed, whatever the order of its requests", () => {
     const r = new SearchRegistry();
     const miss = r.record(input("ag1", "q", { verdict: "miss", rounds: [] }));
