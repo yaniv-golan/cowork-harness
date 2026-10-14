@@ -206,6 +206,16 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     expect(bad.kind === "respond" && bad.http.status).toBe(400);
   });
 
+  it("counts forwarded model requests that carry a server tool other than search; a client tool is not one", () => {
+    const { c } = ctx();
+    const body = (tools: unknown[]) => Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: "x" }], tools }));
+    serveRequest(post(body([{ type: "web_fetch_20250910", name: "web_fetch" }])), c);
+    serveRequest(post(body([{ name: "Bash", input_schema: {} }])), c);
+    serveRequest(post(body([{ type: "code_execution_20250825", name: "code_execution" }]), {}, "/v1/messages/count_tokens"), c);
+    expect(c.liveServerTools).toBe(1);
+    expect(c.passedThroughWithSearchTool).toBe(0);
+  });
+
   it("the forward log checks every forwarded body's tools on its own: 0 under ordinary traffic, and a text mention is not a tool", () => {
     const { c } = ctx();
     const mention = Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: '{"type":"web_search_20250305"}' }] }));

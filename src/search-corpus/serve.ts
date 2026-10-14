@@ -46,6 +46,8 @@ export interface ServeContext {
   /** Requests forwarded upstream, and how many of them carried a server search tool (must stay 0). */
   forwarded?: number;
   passedThroughWithSearchTool?: number;
+  /** Forwarded model requests that carried a server tool other than search (run live: out of the corpus's scope). */
+  liveServerTools?: number;
 }
 
 export type ServeDecision = { kind: "forward" } | { kind: "respond"; http: SynthHttp };
@@ -71,28 +73,31 @@ function servedOutcome(ctx: ServeContext, query: string, domains: { allowed?: st
   return { sel, rounds, outcome };
 }
 
-function searchToolForwarded(r: InterceptedRequest): boolean {
+/** The `type` of every server tool a forwarded body carries (a versioned `<name>_<yyyymmdd>`); a client tool has none. */
+function forwardedServerTools(r: InterceptedRequest): string[] {
   try {
     const enc = Object.entries(r.headers)
       .find(([k]) => k.toLowerCase() === "content-encoding")?.[1]
       ?.toLowerCase();
     const raw = enc === "gzip" || enc === "x-gzip" ? gunzipSync(r.body) : r.body;
     const tools = (JSON.parse(raw.toString("utf8")) as { tools?: unknown }).tools;
-    return (
-      Array.isArray(tools) &&
-      tools.some((t) => typeof (t as { type?: unknown })?.type === "string" && (t as { type: string }).type.startsWith("web_search_"))
-    );
+    if (!Array.isArray(tools)) return [];
+    return tools
+      .map((t) => (t as { type?: unknown })?.type)
+      .filter((t): t is string => typeof t === "string" && /^[a-z][a-z0-9_]*_\d{8}$/.test(t));
   } catch {
-    return false;
+    return [];
   }
 }
 
 function forward(r: InterceptedRequest, ctx: ServeContext): ServeDecision {
   ctx.forwarded = (ctx.forwarded ?? 0) + 1;
   // Only a model request runs a search; the same path test as the classifier's (a token count carries tools too).
-  if (r.method.toUpperCase() === "POST" && r.path.split("?")[0] === "/v1/messages" && searchToolForwarded(r))
-    ctx.passedThroughWithSearchTool = (ctx.passedThroughWithSearchTool ?? 0) + 1;
+  const model = r.method.toUpperCase() === "POST" && r.path.split("?")[0] === "/v1/messages";
+  const server = model ? forwardedServerTools(r) : [];
+  if (server.some((t) => t.startsWith("web_search_"))) ctx.passedThroughWithSearchTool = (ctx.passedThroughWithSearchTool ?? 0) + 1;
   else ctx.passedThroughWithSearchTool ??= 0;
+  if (server.some((t) => !t.startsWith("web_search_"))) ctx.liveServerTools = (ctx.liveServerTools ?? 0) + 1;
   return { kind: "forward" };
 }
 

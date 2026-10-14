@@ -24,6 +24,7 @@ import { noRequestKind } from "./no-request.js";
 import { poolHash, readPool, resolvePoolDir } from "./pool.js";
 import { SearchRegistry } from "./registry.js";
 import { buildIndex } from "./retrieval.js";
+import { dispatchAgentIds, joinCalls, type JoinResult } from "./join.js";
 import type { ServeContext } from "./serve.js";
 
 export interface SearchCorpusOption {
@@ -191,6 +192,7 @@ export async function startRunSearchCorpus(o: {
   });
 
   let finished: Promise<string | null> | null = null;
+  let joined: { join: JoinResult; toolUsesExpected: number } | undefined;
   return {
     poolId: manifest.poolId,
     sha256,
@@ -207,6 +209,16 @@ export async function startRunSearchCorpus(o: {
     ctx,
     result() {
       const c = registry.counts();
+      const f = frames.counts();
+      // Before finish (a run that ended early), parented pairings stay unconfirmed: no dispatch is read.
+      const j = joined ?? {
+        join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents: new Map() }),
+        toolUsesExpected: 0,
+      };
+      const tops = registry
+        .all()
+        .filter((e) => e.verdict === "served" && e.rounds.length > 0)
+        .map((e) => Math.max(...e.rounds.map((r) => r.nscore)));
       return {
         poolId: manifest.poolId,
         sha256,
@@ -222,7 +234,19 @@ export async function startRunSearchCorpus(o: {
           retriesFolded: c.retriesFolded,
           unfinished: c.unfinished,
           passedThroughWithSearchTool: ctx.passedThroughWithSearchTool ?? 0,
+          toolUses: f.toolUses,
+          noRequest: f.noRequest,
+          toolUsesExpected: j.toolUsesExpected,
+          byAgent: c.byAgent,
+          liveServerTools: ctx.liveServerTools ?? 0,
+          ...(tops.length ? { meanTopScore: tops.reduce((a, b) => a + b, 0) / tops.length } : {}),
+          shapeUnfenced: f.shapeUnfenced,
+          unattributed: j.join.unattributed,
+          unattributedExpected: j.join.unattributedExpected,
+          reassigned: j.join.reassigned,
+          attributionUncertain: j.join.attributionUncertain,
         },
+        calls: j.join.calls,
       };
     },
     finish(outDir: string, configDir?: string) {
@@ -235,7 +259,19 @@ export async function startRunSearchCorpus(o: {
         const ts = new Date().toISOString();
         for (let i = 0; i < registry.counts().unfinished; i++)
           appendFileSync(logPath, JSON.stringify({ ts, verdict: "unfinished" }) + "\n");
-        return frozenPromiseError({ outDir, ...(configDir ? { configDir } : {}), registry, ctx, frames, noRequest: anchors?.noRequest });
+        const cfg = configDir ?? join(outDir, "claude-config");
+        const fp = frozenPromise({ outDir, configDir: cfg, registry, ctx, frames, noRequest: anchors?.noRequest });
+        const eventsPath = join(outDir, "events.jsonl");
+        const events = existsSync(eventsPath) ? readFileSync(eventsPath, "utf8").split("\n") : [];
+        const kids = transcripts(join(cfg, "projects")).map((p) => ({
+          agentId: /^agent-(.+)\.jsonl$/.exec(basename(p))![1]!,
+          lines: readFileSync(p, "utf8").split("\n"),
+        }));
+        joined = {
+          join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents: dispatchAgentIds(events, kids) }),
+          toolUsesExpected: fp.toolUsesExpected,
+        };
+        return fp.error;
       })();
       return finished;
     },
@@ -306,7 +342,12 @@ function transcripts(dir: string, out: string[] = []): string[] {
 }
 
 /** The frozen-promise check over a finished run dir. Null when it holds. */
-export function frozenPromiseError(o: {
+export function frozenPromiseError(o: Parameters<typeof frozenPromise>[0]): string | null {
+  return frozenPromise(o).error;
+}
+
+/** The frozen-promise check, and the requests the agents' own records say were made (main loop and transcripts). */
+export function frozenPromise(o: {
   outDir: string;
   /** The agent's config dir (default `<outDir>/claude-config`). */
   configDir?: string;
@@ -314,7 +355,7 @@ export function frozenPromiseError(o: {
   ctx: Pick<ServeContext, "passedThroughWithSearchTool">;
   frames: Pick<ServeFrames, "deniedIds">;
   noRequest: Parameters<typeof noRequestKind>[1];
-}): string | null {
+}): { error: string | null; toolUsesExpected: number } {
   const problems: string[] = [];
   if ((o.ctx.passedThroughWithSearchTool ?? 0) > 0)
     problems.push(`${o.ctx.passedThroughWithSearchTool} request(s) carrying a server search tool were forwarded upstream`);
@@ -350,5 +391,8 @@ export function frozenPromiseError(o: {
       );
   }
   if (counts.unfinished) problems.push(`${counts.unfinished} request(s) were still being classified when the run closed`);
-  return problems.length ? `search corpus: the frozen promise could not be confirmed: ${problems.join("; ")}` : null;
+  return {
+    error: problems.length ? `search corpus: the frozen promise could not be confirmed: ${problems.join("; ")}` : null,
+    toolUsesExpected: main.expected + inTranscripts,
+  };
 }

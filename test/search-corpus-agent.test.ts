@@ -13,6 +13,7 @@ import { buildIndex, DEFAULT_RETRIEVAL } from "../src/search-corpus/retrieval.js
 import { recordId, type PoolRecord } from "../src/search-corpus/harvest.js";
 import { renderWebSearchResult, resultShape, type ResultShape } from "../src/search-corpus/render.js";
 import type { SearchAnchors } from "../src/types.js";
+import { dispatchAgentIds, joinCalls } from "../src/search-corpus/join.js";
 import { extractSearchAnchors } from "../src/sync/search-anchors.js";
 import { ServeFrames } from "../src/search-corpus/frames.js";
 import { frozenPromiseError } from "../src/search-corpus/run.js";
@@ -385,6 +386,18 @@ function expectForkAttributed(r: Ran, dispatchId: string) {
       noRequest: r.anchors.noRequest,
     }),
   ).toBeNull();
+  // And through the harness's own path: the stream parser reads the dispatch's agent from events.jsonl, and the
+  // post-run join gives the search's call that agent, confirmed (not provisional).
+  const kids = transcripts.map((p) => ({
+    agentId: /agent-([^/]+)\.jsonl$/.exec(p)![1]!,
+    lines: readFileSync(join(r.config, p), "utf8").split("\n"),
+  }));
+  const dispatchAgents = dispatchAgentIds(r.lines, kids);
+  expect(dispatchAgents.get(dispatchId), "the harness parser resolves the dispatch's agent").toBe(header);
+  const { calls } = joinCalls({ entries: r.registry.all(), pairings: r.frames.pairings(), dispatchAgents });
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ agentId: header, toolUseId: "toolu_ws1", verdict: "served" });
+  expect(calls[0]).not.toHaveProperty("provisional");
 }
 
 describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_SEARCH_CORPUS_AGENT=1)", () => {

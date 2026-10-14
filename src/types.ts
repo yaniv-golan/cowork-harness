@@ -2289,7 +2289,60 @@ export interface RunSearchCorpusResult {
     unfinished: number;
     /** Forwarded requests that carried a server search tool: 0 on every trustworthy run. */
     passedThroughWithSearchTool: number;
+    /** WebSearch tool_uses in the session stream (sub-agents' included, a query-less one included). */
+    toolUses: number;
+    /** Of those, results that show no request was made (a validation refusal, the search budget, a harness denial). */
+    noRequest: number;
+    /** Requests the agents' own records say were made: the frozen-promise check's side (main loop and transcripts). */
+    toolUsesExpected: number;
+    /** Requests per agent ("main" for the main loop), by verdict. */
+    byAgent: Record<string, { served: number; miss: number; refused: number }>;
+    /** Forwarded model requests that carried a server tool other than search (web fetch, code execution): run live. */
+    liveServerTools: number;
+    /** The mean over served requests of their best round's relevance; absent when nothing was served. */
+    meanTopScore?: number;
+    /** Results whose answer could not be read, so they were paired by key alone. */
+    shapeUnfenced: number;
+    /** Results whose request could not be confirmed: unpaired, an unresolved sub-agent, or a move the guard refused. */
+    unattributed: number;
+    /** Refusals whose body could not be read: never taken by a result, by design. */
+    unattributedExpected: number;
+    /** Sub-agent results the post-run join paired with another request carrying the same serve record. */
+    reassigned: number;
+    /** Pairings the harness could not settle; any is a warning. */
+    attributionUncertain: number;
   };
+  /** One entry per logical search request, with the tool_use it answered; plus one per result with no request. */
+  calls: SearchCorpusCall[];
+}
+
+/** One search request in `RunSearchCorpusResult.calls`. */
+export interface SearchCorpusCall {
+  /** Absent for the main loop (and an inline skill). */
+  agentId?: string;
+  /** The WebSearch tool_use it answered; absent when no result streamed for it (a deeper sub-agent's). */
+  toolUseId?: string;
+  /** Null for a refusal whose body could not be read. Absent on an unpaired result. */
+  query?: string | null;
+  allowedDomains?: string[];
+  blockedDomains?: string[];
+  verdict?: "served" | "miss" | "refused";
+  /** The request's number within its agent. */
+  ordinal?: number;
+  rounds?: {
+    match: "exact" | "nearby";
+    nscore: number;
+    sourceQuery: string;
+    recordId: string;
+    sourceSkill: string | null;
+    urls: string[];
+  }[];
+  /** The pairing is the stream's and could not be confirmed. */
+  provisional?: true;
+  /** The stream paired this tool_use with the request numbered so; the join moved it here (same serve record). */
+  reassignedFrom?: number;
+  /** A result with no intercepted request to take. */
+  unpaired?: true;
 }
 
 export type InfraErrorSource =

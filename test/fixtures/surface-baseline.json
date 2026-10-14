@@ -5958,6 +5958,86 @@
         "type": "object",
         "closed": true
       },
+      ".searchCorpus.calls": {
+        "type": "array",
+        "required": true
+      },
+      ".searchCorpus.calls[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".searchCorpus.calls[].agentId": {
+        "type": "string"
+      },
+      ".searchCorpus.calls[].allowedDomains": {
+        "type": "array"
+      },
+      ".searchCorpus.calls[].allowedDomains[]": {
+        "type": "string"
+      },
+      ".searchCorpus.calls[].blockedDomains": {
+        "type": "array"
+      },
+      ".searchCorpus.calls[].blockedDomains[]": {
+        "type": "string"
+      },
+      ".searchCorpus.calls[].ordinal": {
+        "type": "integer"
+      },
+      ".searchCorpus.calls[].provisional": {
+        "const": true
+      },
+      ".searchCorpus.calls[].query": {
+        "type": ["string", "null"]
+      },
+      ".searchCorpus.calls[].reassignedFrom": {
+        "type": "integer"
+      },
+      ".searchCorpus.calls[].rounds": {
+        "type": "array"
+      },
+      ".searchCorpus.calls[].rounds[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".searchCorpus.calls[].rounds[].match": {
+        "type": "string",
+        "enum": ["exact", "nearby"],
+        "required": true
+      },
+      ".searchCorpus.calls[].rounds[].nscore": {
+        "type": "number",
+        "required": true
+      },
+      ".searchCorpus.calls[].rounds[].recordId": {
+        "type": "string",
+        "required": true
+      },
+      ".searchCorpus.calls[].rounds[].sourceQuery": {
+        "type": "string",
+        "required": true
+      },
+      ".searchCorpus.calls[].rounds[].sourceSkill": {
+        "type": ["string", "null"],
+        "required": true
+      },
+      ".searchCorpus.calls[].rounds[].urls": {
+        "type": "array",
+        "required": true
+      },
+      ".searchCorpus.calls[].rounds[].urls[]": {
+        "type": "string"
+      },
+      ".searchCorpus.calls[].toolUseId": {
+        "type": "string"
+      },
+      ".searchCorpus.calls[].unpaired": {
+        "const": true
+      },
+      ".searchCorpus.calls[].verdict": {
+        "type": "string",
+        "enum": ["served", "miss", "refused"]
+      },
       ".searchCorpus.credentialSource": {
         "type": "string",
         "enum": ["env"],
@@ -5977,11 +6057,50 @@
         "closed": true,
         "required": true
       },
+      ".searchCorpus.metrics.attributionUncertain": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.byAgent": {
+        "type": "object",
+        "required": true
+      },
+      ".searchCorpus.metrics.byAgent{}": {
+        "type": "object",
+        "closed": true
+      },
+      ".searchCorpus.metrics.byAgent{}.miss": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.byAgent{}.refused": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.byAgent{}.served": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.liveServerTools": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.meanTopScore": {
+        "type": "number"
+      },
       ".searchCorpus.metrics.miss": {
         "type": "integer",
         "required": true
       },
+      ".searchCorpus.metrics.noRequest": {
+        "type": "integer",
+        "required": true
+      },
       ".searchCorpus.metrics.passedThroughWithSearchTool": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.reassigned": {
         "type": "integer",
         "required": true
       },
@@ -5998,6 +6117,26 @@
         "required": true
       },
       ".searchCorpus.metrics.served": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.shapeUnfenced": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.toolUses": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.toolUsesExpected": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.unattributed": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.unattributedExpected": {
         "type": "integer",
         "required": true
       },

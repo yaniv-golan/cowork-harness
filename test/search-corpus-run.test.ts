@@ -330,6 +330,78 @@ describe("startRunSearchCorpus", () => {
       expect(all).not.toContain(form);
   });
 
+  it("after finish, the result carries one call per request with its tool_use and agent, and the run's search metrics", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+    const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+    const r = (id: string, nscore: number) => ({
+      match: "exact" as const,
+      nscore,
+      sourceQuery: "q",
+      recordId: id,
+      sourceSkill: null,
+      urls: [`https://${id}`],
+    });
+    sc.registry.record({ ...entry(null, "served", "q"), rounds: [r("m1", 0.8), r("m2", 0.5)] });
+    sc.registry.record({ ...entry("ag1", "served", "q"), rounds: [r("s1", 1)] });
+    sc.registry.record({ ...entry("ag1", "miss", "gone"), rounds: [] });
+    const served = (q: string) =>
+      renderWebSearchResult({ query: q, entries: [{ kind: "links", links: [{ title: "t", url: "https://x" }] }], reminder: "REMINDER: x" });
+    const empty = (q: string) => renderWebSearchResult({ query: q, entries: [{ kind: "links", links: [] }], reminder: "REMINDER: x" });
+    const envelope = JSON.stringify({
+      type: "user",
+      tool_use_result: { agentId: "ag1", status: "completed" },
+      message: { content: [{ type: "tool_result", tool_use_id: "task1", content: "done" }] },
+    });
+    const events = [
+      use("m", "q"),
+      res("m", served("q")),
+      use("c1", "q", "task1"),
+      res("c1", served("q"), "task1"),
+      use("c2", "gone", "task1"),
+      res("c2", empty("gone"), "task1"),
+      envelope,
+    ];
+    for (const l of events) for (const f of sc.frames.observe(JSON.parse(l))) void f;
+    const runDir = (() => {
+      writeFileSync(join(outDir, "events.jsonl"), events.join("\n"));
+      const sub = join(outDir, "claude-config", "projects", "p", "s", "subagents");
+      mkdirSync(sub, { recursive: true });
+      writeFileSync(
+        join(sub, "agent-ag1.jsonl"),
+        [use("c1", "q"), res("c1", served("q")), use("c2", "gone"), res("c2", empty("gone"))].join("\n"),
+      );
+      return outDir;
+    })();
+    expect(await sc.finish(runDir)).toBeNull();
+    const out = sc.result();
+    expect(out.calls.map((c) => [c.agentId ?? "main", c.toolUseId, c.verdict, c.provisional ?? false])).toEqual([
+      ["main", "m", "served", false],
+      ["ag1", "c1", "served", false],
+      ["ag1", "c2", "miss", false],
+    ]);
+    expect(out.metrics).toMatchObject({
+      toolUses: 3,
+      noRequest: 0,
+      toolUsesExpected: 3,
+      byAgent: { main: { served: 1, miss: 0, refused: 0 }, ag1: { served: 1, miss: 1, refused: 0 } },
+      meanTopScore: 0.9,
+      liveServerTools: 0,
+      shapeUnfenced: 0,
+      unattributed: 0,
+      unattributedExpected: 0,
+      reassigned: 0,
+      attributionUncertain: 0,
+    });
+  });
+
+  it("meanTopScore is absent, never NaN, when nothing was served", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+    const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+    expect(await sc.finish(outDir)).toBeNull();
+    expect(sc.result().metrics).not.toHaveProperty("meanTopScore");
+    expect(sc.result().calls).toEqual([]);
+  });
+
   it("keeps an operator's NODE_EXTRA_CA_CERTS, appended to the run's CA, and refuses one it cannot read", async () => {
     const p = pool();
     const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));

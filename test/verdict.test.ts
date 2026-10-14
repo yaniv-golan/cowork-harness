@@ -469,7 +469,26 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
       miss: "empty" as const,
       interposition: "proxy-env+ca" as const,
       credentialSource: "env" as const,
-      metrics: { requests: served + refused, served, miss: 0, refused, retriesFolded: 0, unfinished: 0, passedThroughWithSearchTool: 0 },
+      metrics: {
+        requests: served + refused,
+        served,
+        miss: 0,
+        refused,
+        retriesFolded: 0,
+        unfinished: 0,
+        passedThroughWithSearchTool: 0,
+        toolUses: served + refused,
+        noRequest: 0,
+        toolUsesExpected: served + refused,
+        byAgent: {},
+        liveServerTools: 0,
+        shapeUnfenced: 0,
+        unattributed: 0,
+        unattributedExpected: 0,
+        reassigned: 0,
+        attributionUncertain: 0,
+      },
+      calls: [],
     });
     const some = computeVerdict(rr({ searchCorpus: sc(2, 1) }), "live");
     expect(some.pass).toBe(true);

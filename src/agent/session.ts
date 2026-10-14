@@ -1415,7 +1415,13 @@ export function parseMessage(msg: any): AgentEvent[] {
           const toolUseId =
             tr && (tr as Record<string, unknown>).tool_use_id ? String((tr as Record<string, unknown>).tool_use_id) : undefined;
           const e = env as Record<string, unknown>;
-          const has = typeof e.resolvedModel === "string" || typeof e.agentType === "string" || typeof e.status === "string";
+          // A forked skill's envelope carries only the agent id: still emitted, for the search corpus's join. Every
+          // consumer joins by a recorded dispatch's id, so an envelope for a Skill call is a no-op for them.
+          const has =
+            typeof e.resolvedModel === "string" ||
+            typeof e.agentType === "string" ||
+            typeof e.status === "string" ||
+            typeof e.agentId === "string";
           if (toolUseId && has)
             ev.push({
               type: "subagent_result_meta",

@@ -8,6 +8,7 @@ import { LiveAgentSession } from "../src/agent/session.js";
 import { ServeFrames } from "../src/search-corpus/frames.js";
 import { SearchRegistry } from "../src/search-corpus/registry.js";
 import { renderWebSearchResult } from "../src/search-corpus/render.js";
+import { dispatchAgentIds } from "../src/search-corpus/join.js";
 
 // The session seam: the session stream is the one writer of serve frames (after the matching tool_result, or at close).
 function fakeProc() {
@@ -113,5 +114,41 @@ describe("LiveAgentSession with a search corpus", () => {
       await tick();
     });
     expect(lines.some((l) => l._emu)).toBe(false);
+  });
+
+  it("events.jsonl holds the lines the live parser read: the post-run join finds the same dispatch agents the live run saw", async () => {
+    const proc = fakeProc();
+    const outDir = mkdtempSync(join(tmpdir(), "sc-session-"));
+    const session = new LiveAgentSession(proc, outDir);
+    const live: { toolUseId: string; agentId?: string }[] = [];
+    const done = (async () => {
+      for await (const ev of session.start({}))
+        if (ev.type === "subagent_result_meta") live.push({ toolUseId: ev.toolUseId, agentId: ev.agentId });
+    })();
+    const envelope = (id: string, e: Record<string, unknown>) => ({
+      type: "user",
+      tool_use_result: e,
+      message: { content: [{ type: "tool_result", tool_use_id: id, content: "done" }] },
+    });
+    send(proc, {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "tool_use", id: "task1", name: "Task", input: { description: "d", prompt: "p", subagent_type: "general-purpose" } },
+        ],
+      },
+    });
+    send(proc, { type: "assistant", message: { content: [{ type: "tool_use", id: "skill1", name: "Skill", input: { skill: "s" } }] } });
+    send(proc, envelope("task1", { agentId: "ag1", status: "completed", resolvedModel: "m" }));
+    send(proc, envelope("skill1", { agentId: "ag2" }));
+    await tick();
+    proc.stdout.end();
+    await done;
+    const lines = readFileSync(join(outDir, "events.jsonl"), "utf8").split("\n");
+    expect(live.filter((m) => m.agentId).map((m) => [m.toolUseId, m.agentId])).toEqual([...dispatchAgentIds(lines, [])]);
+    expect([...dispatchAgentIds(lines, [])]).toEqual([
+      ["task1", "ag1"],
+      ["skill1", "ag2"],
+    ]);
   });
 });
