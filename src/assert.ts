@@ -5148,8 +5148,8 @@ function searchCorpusNearbyCitations(o: { artifact: string; max?: number }, ctx:
   const key = "search_corpus_nearby_citations";
   const max = o.max ?? 0;
   const sc = ctx.searchCorpus;
-  if (!sc) return { pass: false, message: `${key}: ${NO_CORPUS}` };
   if (ctx.lane === "remote") return { pass: false, message: remoteLaneBodyRefusal(key, "scan") };
+  if (!sc) return { pass: false, message: `${key}: ${NO_CORPUS}` };
   // The artifact is read under artifact_text's rules: the same gate, the same cap.
   const gate = artifactBodyGate(ctx, o.artifact);
   if (gate.kind === "unsafe")
