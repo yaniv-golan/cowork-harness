@@ -521,8 +521,7 @@ cowork-harness search-pool export market-sizing --out ~/market-sizing-pool.json 
 cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy             # re-verifies both hashes
 ```
 
-- **Multi-leg runs.** A multi-leg run under a `--from` dir adds each prompt leg as its own source run (`legs/<id>/`);
-  a host-action leg has no searches.
+- **Multi-leg runs.** Each prompt leg under a `--from` dir is its own source run (`legs/<id>/`).
 - **One skill per pool.** A run whose skill differs from the others, or that names no single skill, is refused. Pass
   `--skill <name>` to name the skill for runs that name none, or `--mixed` for a pool of several skills (a measured
   variant, never a baseline).
@@ -546,18 +545,18 @@ search corpus <pool>@<hash>`.
 cowork-harness --dotenv .env run market-sizing.yaml --search-corpus market-sizing
 ```
 
-- **Hostloop only**, with the agent's credential from the environment or a `.env` (the harness sees the request in
-  cleartext, so it never uses your own login). `protocol`, `container`, `microvm`, `chat`, `record`, `critique`,
-  `probe-dispatch`, `--resume`/`--session-id`, a multi-leg (`legs:`) scenario and a `device_bridge` scenario are
-  refused, by name, as is the remote search route (`CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`). So is a baseline without the
-  web-search anchors (re-run `sync`), an agent proxy (`HTTPS_PROXY`) and an `ANTHROPIC_BASE_URL` other than the API.
+- **Hostloop only**, with the agent's credential from the environment or a `.env` (never your own login). Refused by
+  name: `protocol`, `container`, `microvm`, `chat`, `record`, `critique`, `probe-dispatch`, `--resume`/`--session-id`,
+  `legs:`, `device_bridge`, `CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`, a baseline without web-search anchors (re-run
+  `sync`), `HTTPS_PROXY` and a non-API `ANTHROPIC_BASE_URL`.
 - **A query the pool cannot answer** gets "No links found." by default, or `--search-corpus-miss error` for the
   agent's "Web search error: unavailable". `--search-corpus-min-score <n>` overrides the pool's floor for the run (and
   changes the hash the result records).
-- **The run fails if a search could have reached the live API**: the agent's own count of searches, per agent
-  (sub-agents included), must equal what the harness answered (`infraErrors` source `search-corpus`). Searches served
-  this way are not billed and do not show in the agent's cost; `searchCorpus.metrics` counts them, and
-  `search-corpus.jsonl` in the run dir logs each one (no headers, no credential).
+- **The run fails if a search could have reached the live API** (`infraErrors` source `search-corpus`); the check,
+  the counts in `searchCorpus.metrics` and the per-search log are in
+  [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md#serving-a-runs-searches-from-a-pool---search-corpus).
+- **Assert on it** with `search_corpus_max_miss_rate` and `search_corpus_nearby_citations` (live-only; refused
+  without `--search-corpus`). A judged assertion on such a run warns `search_corpus_semantic_judge`.
 
 ## Recipe 10 — A skill that parks and resumes in a later session (`legs:`)
 
