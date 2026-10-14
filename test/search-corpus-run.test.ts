@@ -44,7 +44,7 @@ describe("searchCorpusRefusal: every refusal names what it refuses", () => {
       { baseline: { ...latest, agentBinary: { ...latest.agentBinary!, searchAnchors: undefined } } },
       /has none: re-run `cowork-harness sync`/,
     ],
-    [{ baseline: withAnchors(false) }, /searchAnchors\.noRequest.*predates them/],
+    [{ baseline: withAnchors(false) }, /searchAnchors\.noRequest.*predates them: open Cowork once/],
     [{ authEnv: {} }, /credential from the environment.*\.env/],
     [{ agentEnv: { HTTPS_PROXY: "http://corp:3128" } }, /cannot chain an existing proxy: HTTPS_PROXY/],
     [{ agentEnv: { ANTHROPIC_BASE_URL: "https://gateway.example" } }, /ANTHROPIC_BASE_URL points the agent elsewhere/],

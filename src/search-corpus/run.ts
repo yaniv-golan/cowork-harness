@@ -64,7 +64,7 @@ export function searchCorpusRefusal(o: {
   if (!anchors)
     return `--search-corpus needs the baseline's web-search anchors, and ${o.baseline.appVersion ? `desktop-${o.baseline.appVersion}` : "this baseline"} has none: re-run \`cowork-harness sync\` with the agent staged`;
   if (!anchors.noRequest)
-    return `--search-corpus needs the baseline's no-search result anchors (searchAnchors.noRequest), and ${o.baseline.appVersion ? `desktop-${o.baseline.appVersion}` : "this baseline"} predates them: re-run \`cowork-harness sync\` with a current cowork-harness`;
+    return `--search-corpus needs the baseline's no-search result anchors (searchAnchors.noRequest), and ${o.baseline.appVersion ? `desktop-${o.baseline.appVersion}` : "this baseline"} predates them: open Cowork once so the agent is staged, then re-run \`cowork-harness sync\` with a current cowork-harness`;
   if (!o.authEnv.CLAUDE_CODE_OAUTH_TOKEN && !o.authEnv.ANTHROPIC_API_KEY)
     return `--search-corpus needs the agent's credential from the environment (the interceptor sees it in cleartext, so it must be one the harness already holds, never your own login): ${ENV_RECIPE}`;
   if (o.resume)
