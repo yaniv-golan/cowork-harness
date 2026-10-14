@@ -34,7 +34,30 @@
         "sessionsPath": "/v1/code/sessions/",
         "workerPath": "/worker/",
         "searchRoute": "web-search"
-      }
+      },
+      "noRequest": {
+        "missingQuery": {
+          "sha256": "e99f1407fb027b3d92e4ae09587c52208dfdbe5e1684bef63274ad63d91e23c5",
+          "bytes": 20
+        },
+        "bothDomainLists": {
+          "sha256": "ab9a874750218938668401113ff681df94bdf57b81332a7b4318159acbcff4f0",
+          "bytes": 82
+        },
+        "budgetPrefix": {
+          "sha256": "0f589be1827dccb9e0c59f9d0d39451450d0c6179787cb67b7a464fb17a39836",
+          "bytes": 35
+        },
+        "budgetFragment": {
+          "sha256": "121c85b8ef303c8772d3294f8b1f61c89e9be3d0be75238d547d5b3602b659f0",
+          "bytes": 33
+        },
+        "inputValidationPrefix": {
+          "sha256": "0badd2b58e40d6971d600c6def5170888a8b77b12997dc823e70f40a558f863f",
+          "bytes": 22
+        }
+      },
+      "source": "both"
     }
   },
   "guest": {
@@ -357,8 +380,8 @@
       "CLAUDE_CODE_SESSION_LOG"
     ]
   },
-  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-10-13 on macOS arm64.",
-  "capturedAt": "2026-10-13",
+  "$comment": "Platform baseline auto-derived by `cowork-harness sync` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured 2026-10-14 on macOS arm64.",
+  "capturedAt": "2026-10-14",
   "platform": "darwin-arm64",
   "settings": {
     "autoMountFolders": {
@@ -646,9 +669,9 @@
     ],
     "spawnEnvSpreadCount": 38,
     "fcache": {
-      "content16": "807d63ac96e93f22",
-      "embeddedTimestamp": 1791926344621,
-      "featureCount": 423
+      "content16": "4cc97df3da602616",
+      "embeddedTimestamp": 1791967560187,
+      "featureCount": 428
     },
     "asarGateIds": [
       "17519066",
@@ -1295,7 +1318,7 @@
       "nativeAgentVersions": [
         "2.1.295"
       ],
-      "sessions": 1,
+      "sessions": 7,
       "keysAll": [
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_CUSTOM_HEADERS",
@@ -1370,7 +1393,7 @@
     "agentSearchGates": {
       "observed": true,
       "files": 1,
-      "newestDate": "2026-10-13",
+      "newestDate": "2026-10-14",
       "values": {
         "tengu_plum_vx3": true,
         "tengu_sleepy_shore": {

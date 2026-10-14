@@ -35,6 +35,10 @@ All notable changes to this project are documented here. The format is based on
   without them, with a warning; `sync --diff` reports the refusal as `would refuse: …` and does not fail. A staged
   VM agent that cannot be read is now reported instead of crashing `sync`.
 
+- **For maintainers: the shipped `desktop-2.37337.1` baseline was re-synced** and carries
+  `agentBinary.searchAnchors.source` (`both`) and `noRequest`, so `npm run preflight` accepts it as the newest
+  baseline. Nothing else in it moved beyond provenance, so the committed cassettes stay current.
+
 - **`search-pool build` skips a run served from a frozen search corpus** (its result pins one, or its dir holds
   `search-corpus.jsonl`) and counts it in the summary, so a pool's own output is never harvested back in as sourced
   records.
