@@ -52,18 +52,18 @@ describe("--search-corpus wiring (source text)", () => {
     expect(execute).toMatch(/record\.infraErrors\.push\(\{ source: "search-corpus", message: searchCorpusError \}\)/);
   });
 
-  it("the anchor check reads the exact binary the spawn resolved, before the agent is spawned", () => {
-    const resolved = hostloop.indexOf("const agentNativeHost = resolveHostAgentBinary(baseline);");
-    const check = hostloop.indexOf("opts.searchAnchorsCheck?.(agentNativeHost)");
-    expect(resolved).toBeGreaterThan(-1);
+  it("the anchor check resolves the binary once, before the run dir exists, and the spawn launches that same path", () => {
+    const resolved = execute.indexOf("const searchCorpusAgentBinary = opts.searchCorpus ? resolveHostAgentBinary(baseline) : undefined;");
+    const check = execute.indexOf("agentAnchorsRefusal(searchCorpusAgentBinary, baseline.agentBinary!.searchAnchors!)");
+    expect(resolved).toBeGreaterThan(execute.indexOf("searchCorpusRefusal({"));
     expect(check).toBeGreaterThan(resolved);
-    expect(check).toBeLessThan(hostloop.indexOf("const child = spawn("));
-    // and a refusal stops the spawn, by name
-    expect(hostloop.slice(check, check + 200)).toMatch(/if \(anchorsRefusal\) throw new UsageError\(anchorsRefusal\);/);
-    // execute supplies it only under --search-corpus, against the baseline's anchors
-    expect(execute).toMatch(
-      /searchAnchorsCheck: \(binary(?:: string)?\) => agentAnchorsRefusal\(binary, baseline\.agentBinary!\.searchAnchors!\)/,
-    );
+    expect(check).toBeLessThan(execute.indexOf("const turnNumber = beginTurn(outDir);"));
+    expect(execute.slice(check, check + 200)).toMatch(/if \(drift\) throw new UsageError\(drift\);/);
+    // the checked path reaches the spawn; hostloop resolves only when none is given
+    const spawn = execute.indexOf("const hl = spawnHostLoop(");
+    expect(execute.slice(spawn, spawn + 300)).toMatch(/agentNativeHost: searchCorpusAgentBinary!/);
+    expect(hostloop).toMatch(/const agentNativeHost = opts\.agentNativeHost \?\? resolveHostAgentBinary\(baseline\);/);
+    expect(execute.match(/resolveHostAgentBinary\(/g)).toHaveLength(1);
   });
 
   it("hostloop layers the interceptor env after buildHostLoopNativeEnv and before the spawn; sync's comparison never sees it", () => {

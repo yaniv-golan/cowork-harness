@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
 import { CLI, POSIX, exited, makeStubFixture, spawnCli, type StubFixture } from "./helpers/stub-agent.js";
@@ -61,6 +61,19 @@ describe.runIf(can)("--search-corpus refusals (CLI, $0)", () => {
     );
     const r = await cli(f, ["run", s, "--model", "claude-sonnet-5", "--search-corpus", "p"]);
     expect(r.text).toMatch(/searchAnchors\.noRequest.*re-run `cowork-harness sync`/);
+  });
+
+  it("refuses an agent whose search anchors differ from the baseline's, before the run dir exists", async () => {
+    const f = fixture();
+    // An agent binary with no search anchors at all: the check reads the exact file the spawn would launch.
+    const agent = join(f.root, "other-agent");
+    writeFileSync(agent, "not an agent");
+    const r = await cli(f, ["run", scenario(f, "d.yaml", ["fidelity: hostloop"]), "--model", "claude-sonnet-5", "--search-corpus", "p"], {
+      COWORK_HOST_AGENT_BINARY: agent,
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/web-search anchors could not be read from it, the agent this run would launch/);
+    expect(readdirSync(f.runsDir)).toEqual([]);
   });
 
   it("refuses a multi-leg scenario by name", async () => {

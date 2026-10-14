@@ -1,4 +1,3 @@
-import { UsageError } from "../errors.js";
 import { warn } from "../io.js";
 import { spawn } from "node:child_process";
 import { registerCleanup, removeContainer } from "../egress/sidecar.js";
@@ -244,9 +243,9 @@ export function hostLoopSidecarEnv(egressProxy?: string): Record<string, string>
 
 /** spawnHostLoop's options. */
 export interface HostLoopSpawnOpts {
-  /** `--search-corpus`: given the exact agent binary this spawn resolved, why it cannot be served from the baseline's
-   *  web-search anchors (refused by name, before the agent is spawned), or null. */
-  searchAnchorsCheck?: (binary: string) => string | null;
+  /** The agent binary to launch, when the caller already resolved it (`--search-corpus` checks its search anchors
+   *  before the run dir exists, and the spawn must run that same file). Absent: resolved from the baseline here. */
+  agentNativeHost?: string;
   /** `--search-corpus`: the interceptor's proxy and CA keys, layered onto the agent's env after everything else. */
   searchCorpusEnv?: Record<string, string>;
   systemPromptAppend?: string;
@@ -342,10 +341,7 @@ function spawnHostLoopTracked(
   // `hostLoopPluginPathRewrites`).
   const claudePluginRootHost = resolveClaudePluginRootHostPath(plan, mntHost);
 
-  const agentNativeHost = resolveHostAgentBinary(baseline);
-  // `--search-corpus`: the binary about to run must give the baseline's search anchors, or every search would be refused.
-  const anchorsRefusal = opts.searchAnchorsCheck?.(agentNativeHost);
-  if (anchorsRefusal) throw new UsageError(anchorsRefusal);
+  const agentNativeHost = opts.agentNativeHost ?? resolveHostAgentBinary(baseline);
   // Bind-mounted into the bash sidecar for parity; not run by any harness-spawned process here (sidecar CMD
   // is a keep-alive, bash is `docker exec … bash -c`, the executed agent is agentNativeHost above — model bash
   // could invoke it inside the hardened sidecar, an accepted patch-only residual). So tolerate a patch-newer

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentAnchorsRefusal } from "../src/search-corpus/run.js";
+import { loadBaseline } from "../src/baseline.js";
 import { extractSearchAnchors } from "../src/sync/search-anchors.js";
 import type { SearchAnchors } from "../src/types.js";
 import { bundle, callSite, noRequestSite } from "./helpers/search-anchor-bundle.js";
@@ -46,9 +47,9 @@ describe("agentAnchorsRefusal: the binary hostloop will spawn against the baseli
 
   it("never quotes agent text in the refusal", () => {
     const moved = bundle(callSite("A different prefix entirely: "));
-    const why = agentAnchorsRefusal(write(moved), base)!;
+    const why = agentAnchorsRefusal(write(moved), base);
+    expect(why).toMatch(/different web-search anchors/);
     expect(why).not.toContain("A different prefix");
-    expect(readFileSync(write(moved)).length).toBeGreaterThan(0);
   });
 });
 
@@ -60,5 +61,8 @@ describe.skipIf(!existsSync(NATIVE) || !existsSync(ELF))("agentAnchorsRefusal on
   it("the native 2.1.295 agent passes against 2.1.295's anchors, and against 2.1.293's (a version change alone never refuses)", () => {
     expect(agentAnchorsRefusal(NATIVE, anchorsOf(readFileSync(ELF)))).toBeNull();
     if (existsSync(OLDER)) expect(agentAnchorsRefusal(NATIVE, anchorsOf(readFileSync(OLDER)))).toBeNull();
+  });
+  it("the native 2.1.295 agent passes against the newest committed baseline's block, the object a real run passes", () => {
+    expect(agentAnchorsRefusal(NATIVE, loadBaseline("latest").agentBinary!.searchAnchors!)).toBeNull();
   });
 });

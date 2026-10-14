@@ -535,7 +535,7 @@ never for research quality.
   cassette cannot carry the label yet), `critique` and `probe-dispatch`; `--resume` and `--session-id`; a multi-leg
   (`legs:`) or `device_bridge` scenario; the remote search route (`CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`, or a
   `session_`/`cse_` `CLAUDE_CODE_SESSION_ID`); an agent whose web-search anchors differ from the baseline's (checked on
-  the exact binary about to launch, before it starts: about half a second; re-sync with it staged); a
+  the exact binary about to launch, before it starts: about a second; re-sync with it staged); a
   baseline without the web-search anchors (re-run `sync`); a run whose agent credential is not in the environment or a
   `.env` (the harness sees requests in cleartext, so it never uses your own login); an agent proxy (`HTTPS_PROXY`,
   `HTTP_PROXY`, `ALL_PROXY`); and an `ANTHROPIC_BASE_URL` other than `api.anthropic.com`.
