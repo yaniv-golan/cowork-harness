@@ -8,6 +8,7 @@ import { SearchRegistry, type RegistryInput } from "../src/search-corpus/registr
 import { assemblePool, writePool, DEFAULT_RETRIEVAL } from "../src/search-corpus/pool.js";
 import { renderWebSearchResult } from "../src/search-corpus/render.js";
 import { loadBaseline } from "../src/baseline.js";
+import { buildHostLoopNativeEnv } from "../src/runtime/hostloop.js";
 import type { PlatformBaseline } from "../src/types.js";
 
 const hh = (t: string) => ({ sha256: createHash("sha256").update(t, "utf8").digest("hex"), bytes: Buffer.byteLength(t) });
@@ -58,6 +59,16 @@ describe("searchCorpusRefusal: every refusal names what it refuses", () => {
   it("an ordinary session id does not reach the remote search route", () => {
     expect(searchCorpusRefusal({ ...ok, agentEnv: { CLAUDE_CODE_SESSION_ID: "2b1c-local-uuid" } })).toBeNull();
   });
+  it("judges the env the agent will really get: a key the baseline's spawn env sets is refused like an operator export", () => {
+    const b = withAnchors();
+    const spawned = {
+      ...b,
+      spawn: { ...b.spawn!, env: { ...(b.spawn?.env ?? {}), CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY: "1" } },
+    } as PlatformBaseline;
+    const agentEnv = buildHostLoopNativeEnv(spawned, { configDir: "/x", folderHostPaths: [], extra: {}, operatorEnv: {} });
+    expect(searchCorpusRefusal({ ...ok, baseline: spawned, agentEnv })).toMatch(/CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY/);
+  });
+
   it("accepts ANTHROPIC_BASE_URL when it is the API host itself", () => {
     expect(searchCorpusRefusal({ ...ok, agentEnv: { ANTHROPIC_BASE_URL: "https://api.anthropic.com" } })).toBeNull();
   });

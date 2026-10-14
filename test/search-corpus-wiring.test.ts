@@ -18,6 +18,16 @@ describe("--search-corpus wiring (source text)", () => {
     expect(execute.slice(at, at + 400)).toMatch(/authEnv: runtimeAuthEnv\(\)/);
   });
 
+  it("execute judges the refusals over the agent's real env (operator, baseline spawn env, session knobs), not the shell's", () => {
+    const at = execute.indexOf("searchCorpusRefusal({");
+    expect(execute).toMatch(
+      /const searchCorpusAgentEnv = opts\.searchCorpus\s*\? buildHostLoopNativeEnv\(baseline, \{[\s\S]{0,300}agentEnv: agentEnvOverrides\(session\.agent_env\)/,
+    );
+    expect(execute.slice(at, at + 400)).toMatch(/agentEnv: searchCorpusAgentEnv!/);
+    // and the run starts with the same env (an operator or baseline NODE_EXTRA_CA_CERTS is kept)
+    expect(execute).toMatch(/startRunSearchCorpus\(\{[^}]*agentEnv: searchCorpusAgentEnv!/);
+  });
+
   it("execute starts the corpus before the hostloop spawn and hands it the interceptor env", () => {
     const start = execute.indexOf("searchCorpus = await startRunSearchCorpus(");
     const spawn = execute.indexOf("const hl = spawnHostLoop(");

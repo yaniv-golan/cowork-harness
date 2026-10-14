@@ -82,6 +82,7 @@ import {
   expandHome,
   strippedEnv,
   workBaseOf,
+  agentEnvOverrides,
   type LaunchPlan,
   type LegStage,
 } from "../session.js";
@@ -94,7 +95,13 @@ import {
 } from "./hook-failure-blocks.js";
 import { currentTurnAgentVersions } from "./recorded-agent-version.js";
 import { spawnContainer } from "../runtime/container.js";
-import { hostLoopSessionRoots, spawnHostLoop, WORKSPACE_TOOL_ALIASES, VM_LOOP_TOOL_ALIASES } from "../runtime/hostloop.js";
+import {
+  buildHostLoopNativeEnv,
+  hostLoopSessionRoots,
+  spawnHostLoop,
+  WORKSPACE_TOOL_ALIASES,
+  VM_LOOP_TOOL_ALIASES,
+} from "../runtime/hostloop.js";
 import { snapshotHostLoopWorkspace } from "../runtime/hostloop-stage.js";
 import { checkHostLoopWriteConsent, logHostWriteNotice } from "../hostloop/safety.js";
 import { warnUnservedHookEvents, warnAmbiguousHookOutput, checkHostHookConsent, logHostHookNotice } from "./hook-events.js";
@@ -902,14 +909,24 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const vacuous = tierVacuityRefusal(scenario, baseline);
   if (vacuous) throw new UsageError(vacuous);
 
-  // `--search-corpus`: refused before the run dir exists when the frozen promise cannot hold for this run.
+  // `--search-corpus`: refused before the run dir exists when the frozen promise cannot hold for this run. Judged over
+  // the env the agent will actually get at hostloop: the operator layer, the baseline's spawn env and the session's
+  // knobs, built the way the spawn builds it (paths are placeholders; only the key values matter here).
+  const searchCorpusAgentEnv = opts.searchCorpus
+    ? buildHostLoopNativeEnv(baseline, {
+        configDir: "/search-corpus-refusal-check",
+        folderHostPaths: [],
+        extra: runtimeAuthEnv(),
+        agentEnv: agentEnvOverrides(session.agent_env),
+      })
+    : undefined;
   if (opts.searchCorpus) {
     const why = searchCorpusRefusal({
       fidelity: effectiveFidelity,
       deviceBridge: scenario.device_bridge === true,
       baseline,
       authEnv: runtimeAuthEnv(),
-      agentEnv: process.env,
+      agentEnv: searchCorpusAgentEnv!,
       resume: !!opts.resume || opts.sessionId !== undefined,
     });
     if (why) throw new UsageError(why);
@@ -1519,7 +1536,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       let sentSystemAppend = prompts.systemPromptAppend ?? "";
       if (effectiveFidelity === "hostloop") {
         if (opts.searchCorpus) {
-          searchCorpus = await startRunSearchCorpus({ option: opts.searchCorpus, baseline, outDir, agentEnv: process.env });
+          searchCorpus = await startRunSearchCorpus({ option: opts.searchCorpus, baseline, outDir, agentEnv: searchCorpusAgentEnv! });
           process.stderr.write(`[${searchCorpus.label}]\n`);
         }
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
