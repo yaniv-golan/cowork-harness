@@ -156,6 +156,14 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     expect(c.registry.all()).toEqual([]);
   });
 
+  it("the forward log fires on its own when a search-tool request is forwarded (a classifier that lets one through)", () => {
+    const { c } = ctx();
+    c.classify = () => ({ kind: "pass" });
+    expect(serveRequest(post(nestedBody("solar panel prices")), c)).toEqual({ kind: "forward" });
+    expect(c.passedThroughWithSearchTool).toBe(1);
+    expect(c.registry.all()).toEqual([]);
+  });
+
   it("the forward log counts only model requests: a token count carrying the search tool runs no search", () => {
     const { c } = ctx();
     serveRequest(post(nestedBody("solar panel prices"), {}, "/v1/messages/count_tokens"), c);

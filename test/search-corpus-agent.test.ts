@@ -533,6 +533,10 @@ describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_S
   it("with the classifier mutated, the search reaches upstream and the agent-side count goes red", async () => {
     const r = await runAgent({ mutate: true });
     expect(r.registry.counts().requests).toBe(0);
+    // the search did reach upstream (the channel was armed), and the forward log's own check saw it
+    expect(r.seen.filter((x) => (x.body?.tools ?? []).some((t: { type?: string }) => t.type?.startsWith("web_search_")))).toHaveLength(1);
+    expect(r.ctx.passedThroughWithSearchTool).toBe(1);
+    // the agent-side count goes red on its own, with the forward log blinded
     expect(
       frozenPromiseError({
         outDir: r.dir,
@@ -542,6 +546,10 @@ describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_S
         noRequest: r.anchors.noRequest,
       }),
     ).toMatch(/the main agent made 1 search request\(s\) by its own record, and the interceptor saw 0/);
+    // and with both checks live, both are named
+    expect(
+      frozenPromiseError({ outDir: r.dir, registry: r.registry, ctx: r.ctx, frames: r.frames, noRequest: r.anchors.noRequest }),
+    ).toMatch(/1 request\(s\) carrying a server search tool were forwarded upstream; the main agent made 1/);
   }, 120_000);
 
   it("negative control: without the CA the agent cannot reach the API through the interceptor", async () => {
