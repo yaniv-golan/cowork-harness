@@ -447,6 +447,41 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     expect(soft.signals.find((s) => s.code === "infra_error")).toBeUndefined();
   });
 
+  it("hard-fails a search-corpus infra error: the run's frozen promise could not be confirmed", () => {
+    const v = computeVerdict(
+      rr({
+        infraErrors: [
+          { source: "search-corpus", message: "the main agent made 2 search request(s) by its own record, and the interceptor saw 1" },
+        ],
+      }),
+      "live",
+    );
+    expect(v.pass).toBe(false);
+    expect(v.signals.find((s) => s.code === "infra_error")?.severity).toBe("fail");
+    expect(v.signals.find((s) => s.code === "infra_error")?.message).toContain("interceptor saw 1");
+  });
+
+  it("warns, never fails, when a frozen-corpus run refused searches; louder when it refused every one", () => {
+    const sc = (served: number, refused: number) => ({
+      poolId: "p",
+      sha256: "a".repeat(64),
+      label: "frozen search corpus p@aaaaaaaa",
+      miss: "empty" as const,
+      interposition: "proxy-env+ca" as const,
+      credentialSource: "env" as const,
+      metrics: { requests: served + refused, served, miss: 0, refused, retriesFolded: 0, unfinished: 0, passedThroughWithSearchTool: 0 },
+    });
+    const some = computeVerdict(rr({ searchCorpus: sc(2, 1) }), "live");
+    expect(some.pass).toBe(true);
+    const s = some.signals.find((x) => x.code === "search_corpus_refused");
+    expect(s?.severity).toBe("warn");
+    expect(s?.message).toMatch(/1 of 3 search request\(s\) were refused/);
+    const all = computeVerdict(rr({ searchCorpus: sc(0, 3) }), "live").signals.find((x) => x.code === "search_corpus_refused");
+    expect(all?.severity).toBe("warn");
+    expect(all?.message).toMatch(/EVERY search request \(3\) was refused.*no search evidence/);
+    expect(computeVerdict(rr({ searchCorpus: sc(3, 0) }), "live").signals.some((x) => x.code === "search_corpus_refused")).toBe(false);
+  });
+
   it("still hard-fails when a sidecar death accompanies a failed exec", () => {
     const v = computeVerdict(
       rr({

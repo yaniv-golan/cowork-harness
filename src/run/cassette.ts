@@ -4934,6 +4934,15 @@ export async function cmdRecord(args: string[]) {
   // Computed up front (isJsonOutput, not a bare p.options read) so every error path — including a
   // parseArgs throw before options are known — emits the shared JSON error envelope in JSON mode.
   const asJson = isJsonOutput(args);
+  // A cassette cannot carry the frozen-corpus label yet: an older harness would replay it as a live-search run.
+  if (args.some((a) => /^--search-corpus(-miss|-min-score)?(=|$)/.test(a)))
+    return fail(
+      "record",
+      "usage",
+      "record --search-corpus is refused: a cassette of a frozen-corpus run needs cassette version 19, which this version cannot write yet (an older harness would replay it as a live-search run). Use run --search-corpus.",
+      undefined,
+      asJson,
+    );
   let p;
   try {
     p = parseArgs(
@@ -6731,6 +6740,7 @@ function replayErrorResult(file: string): RunResult {
     command: "replay", // #48
     lane: undefined, // unreadable cassette — no scenario to read a lane from
     answerChannel: undefined,
+    searchCorpus: undefined,
     metrics: undefined, // nothing was driven, so nothing is measured
     scratchpadEvidenceComplete: false, // no run happened; nothing was observed
     referencesRead: undefined, // synthetic error result for an unreadable cassette — no re-drive, nothing to derive
@@ -9962,6 +9972,7 @@ export async function replayCassette(
       // replaying machine's. Absent on a cassette recorded before the axis existed ⇒ local.
       lane: cassette.scenario.lane,
       answerChannel: cassette.answerChannel,
+      searchCorpus: undefined, // `record --search-corpus` is refused, so no cassette carries a corpus yet
       // A replay materializes a recorded tree; it runs no scratchpad walk of its own, so it cannot answer
       // the undelivered question — cannot-tell, never a clean read.
       scratchpadEvidenceComplete: false,

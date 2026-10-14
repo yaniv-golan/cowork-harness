@@ -34,7 +34,8 @@ export interface VerdictSignal {
     | "undelivered_deliverables"
     | "delivery_unobservable"
     | "partly_scripted_gate"
-    | "parked_at_question";
+    | "parked_at_question"
+    | "search_corpus_refused";
   severity: "fail" | "warn";
   message: string;
 }
@@ -338,6 +339,21 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       message: `tool-call infrastructure error(s) — the affected command(s) failed, the run's evidence is otherwise intact: ${execInfra.map((e) => e.message).join("; ")}`,
     });
   }
+
+  // A frozen-corpus run whose searches were refused: the harness could not recognise the agent's search requests
+  // (typically an agent newer than the baseline's anchors, which a patch-level skew lets run). The skill then worked
+  // with no search evidence while the run reads as frozen, so say so on every surface; it never blocks (a refusal is
+  // a frozen answer, not a leak, and the frozen-promise check already guards the leak).
+  const sc = result.searchCorpus?.metrics;
+  if (sc && sc.refused > 0)
+    signals.push({
+      code: "search_corpus_refused",
+      severity: "warn",
+      message:
+        sc.refused === sc.requests
+          ? `EVERY search request (${sc.refused}) was refused by the frozen search corpus: the skill ran with no search evidence. The agent likely differs from the baseline's search anchors; re-run \`cowork-harness sync\` with this agent staged.`
+          : `${sc.refused} of ${sc.requests} search request(s) were refused by the frozen search corpus (answered "Web search error: unavailable"), not served.`,
+    });
 
   // a run that ended on an unanswered plain-text question or request for input is a hard fail on BOTH lanes (the flag is
   // re-derived by run.ts's detector on the live run AND the replay re-drive, so a recorded stall fails replay

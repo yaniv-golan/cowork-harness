@@ -197,6 +197,24 @@ For the full catalog of what the harness deliberately does NOT reproduce vs real
   - **Update (2026-06-18):** *manual* behavioral capture — asking the running Cowork agent to describe its own system prompt — IS available, and was used to add a reconstructed `<identity>` section to the append (Cowork self-identifies as "Claude … the Cowork assistant, not Claude Code"; the base `claude_code` preset alone would say "Claude Code").
   - The "IPC locked" caveat applies to automated diffing, not manual capture.
 
+## A frozen search corpus intercepts the API host (`--search-corpus`)
+
+With `run --search-corpus <pool>` (hostloop only), the harness puts a loopback CONNECT proxy between the native agent
+and the network for that run. Every host but `api.anthropic.com` is a blind tunnel. For `api.anthropic.com` the proxy
+terminates TLS with a certificate from a CA made for that run, so it reads every API request in cleartext: the
+credential, the system prompt, every message and every upload excerpt. It answers only the agent's nested web-search
+requests itself and forwards every other request's raw bytes upstream over its own TLS connection (the system trust
+store), returning the response unchanged.
+
+- **The CA** is created per run and trusted only by the agent process, through `NODE_EXTRA_CA_CERTS`; it is never
+  added to a keychain or a system store. Its private key never leaves memory; only the CA certificate is written, to a
+  `0600` file in a `0700` temp dir that is removed when the run ends (or on Ctrl-C).
+- **Nothing decrypted is written** except the search records: `search-corpus.jsonl` and the serve lines in
+  `events.jsonl` carry queries, verdicts and the pool records served (and, in the log, each request's model,
+  `tool_choice` and `thinking` settings), never a header, a credential or the rest of a body.
+- **The credential** must come from the environment or a `.env`, so the proxy only ever sees one the harness already
+  holds; a run that would use your own login is refused.
+
 ## Sandboxing: container vs. the real VM (moved from README)
 
 Local Cowork runs the agent in an **Apple Virtualization.framework microVM** (separate kernel). The harness's default `container` tier uses an OS container (shared kernel, namespaces/cgroups). For **testing skills you wrote**, that's faithful where it counts — same agent binary, same cowork mode, same mount layout, same egress allowlist, same permission protocol — because skill behavior is agent-loop + tool behavior, all kernel-invisible. The container is the right default precisely because it's CI-native; a VM needs nested virtualization most shared CI runners don't have.

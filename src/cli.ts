@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { ANSWER_CHANNEL_NONE_LABEL } from "./answer-channel.js";
+import type { SearchCorpusOption } from "./search-corpus/run.js";
 import { InterruptedError, interrupt } from "./termination.js";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
@@ -538,6 +539,13 @@ Output:
   --dotenv <path>                  load a .env for this run (see Auth below). Before or after the subcommand.
   --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
                                    removed, to check whether the agent "succeeds" even without them
+  --search-corpus <pool>           serve the agent's web searches from a recorded pool (search-pool build) instead
+                                   of live search. It holds search fixed, so it is NOT for evaluating a change to
+                                   what or when the skill searches (run that live). Hostloop only, env credential
+                                   only. Labelled on every result; the run fails if any search could have reached
+                                   the live API
+  --search-corpus-miss empty|error what a query the pool cannot answer gets (default empty: "No links found.")
+  --search-corpus-min-score <n>    override the pool's relevance floor (0–1; changes the pool hash)
   --allow-missing-capability       don't fail the verdict when the (partial 'core') image omits a capability
                                    the skill used but real Cowork ships — open-ended-run equivalent of a
                                    scenario asserting allow_missing_capability: true
@@ -648,6 +656,13 @@ Output:
                                    "runs →" header (runs stay durable)
   --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
                                    removed, to check whether the agent "succeeds" even without them
+  --search-corpus <pool>           serve the agent's web searches from a recorded pool (search-pool build) instead
+                                   of live search. It holds search fixed, so it is NOT for evaluating a change to
+                                   what or when the skill searches (run that live). Hostloop only, env credential
+                                   only. Labelled on every result; the run fails if any search could have reached
+                                   the live API
+  --search-corpus-miss empty|error what a query the pool cannot answer gets (default empty: "No links found.")
+  --search-corpus-min-score <n>    override the pool's relevance floor (0–1; changes the pool hash)
   --run-dir <path>                 relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. Before or after the subcommand.
   --dotenv <path>                  load a .env for this run (see Auth below). Before or after the subcommand.
@@ -1125,6 +1140,9 @@ interface CommonFlags {
   deciderCmd?: string; // --decider-cmd: spawn a helper that answers each decision (external channel B)
   deciderDir?: string; // --decider-dir: file-rendezvous for a driving agent's Monitor (external channel C)
   label?: string; // --label: generation tag for the iterate-across-fixes loop (surfaced in RunResult/index/inspect)
+  searchCorpus?: string; // --search-corpus <pool>: serve web searches from a recorded pool (hostloop only)
+  searchCorpusMiss?: "empty" | "error"; // --search-corpus-miss: what a query below the pool's floor gets
+  searchCorpusMinScore?: number; // --search-corpus-min-score: override the pool's floor (changes the served hash)
 }
 /** Validate `--output-format` is text|json for the ad-hoc commands (trace/decide/gates) the way the
  *  common parser already does for run/skill — an invalid value is a usage error, not a silent text degrade. */
@@ -1229,6 +1247,15 @@ function rejectUnknownFlags(command: string, args: string[], knownFlags: string[
  * and fell through to the per-command unknown-flag guard. Booleans (`--quiet`/`--verbose`) reject an
  * equals value the way parseArgs does.
  */
+/** The `--search-corpus*` flags as the run option. */
+function searchCorpusOption(flags: CommonFlags): SearchCorpusOption {
+  return {
+    pool: flags.searchCorpus!,
+    miss: flags.searchCorpusMiss ?? "empty",
+    ...(flags.searchCorpusMinScore !== undefined ? { minScore: flags.searchCorpusMinScore } : {}),
+  };
+}
+
 function takeCommonFlags(args: string[], commandName: string = "skill"): { rest: string[]; flags: CommonFlags } {
   const rest: string[] = [];
   const defaultOutput: "text" | "json" = envOutputFormat();
@@ -1271,7 +1298,29 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
     else if (a === "--compact") flags.compact = true;
     else if (a === "--demo") flags.demo = true;
     else if (a === "--ablate-skill") flags.ablateSkill = true;
-    else if (name === "--decider-cmd") {
+    else if (name === "--search-corpus") {
+      const v = readVal();
+      if (eqVal === undefined && v.startsWith("-"))
+        fail(commandName, "usage", `--search-corpus: missing value (got flag-looking "${v}")`, undefined, isJsonOutput(args));
+      flags.searchCorpus = v;
+    } else if (name === "--search-corpus-miss") {
+      const v = readVal();
+      if (v !== "empty" && v !== "error")
+        fail(commandName, "usage", `--search-corpus-miss must be "empty" or "error" (got "${v}")`, undefined, isJsonOutput(args));
+      flags.searchCorpusMiss = v;
+    } else if (name === "--search-corpus-min-score") {
+      const v = readVal();
+      const n = Number(v);
+      if (!/^\d*\.?\d+$/.test(v) || !(n > 0 && n < 1))
+        fail(
+          commandName,
+          "usage",
+          `--search-corpus-min-score must be a number between 0 and 1, exclusive (got "${v}")`,
+          undefined,
+          isJsonOutput(args),
+        );
+      flags.searchCorpusMinScore = n;
+    } else if (name === "--decider-cmd") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
         fail(commandName, "usage", `--decider-cmd: missing value (got flag-looking "${v}")`, undefined, isJsonOutput(args));
@@ -1302,6 +1351,14 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
   if (flags.deciderDir != null && flags.deciderCmd != null)
     fail(commandName, "usage", "--decider-dir conflicts with --decider-cmd (one terminal channel).", undefined, isJsonOutput(args));
   validateOnUnanswered(commandName, flags, args);
+  if ((flags.searchCorpusMiss !== undefined || flags.searchCorpusMinScore !== undefined) && flags.searchCorpus === undefined)
+    fail(
+      commandName,
+      "usage",
+      "--search-corpus-miss and --search-corpus-min-score need --search-corpus <pool>",
+      undefined,
+      isJsonOutput(args),
+    );
   return { rest, flags };
 }
 
@@ -1504,6 +1561,7 @@ async function runOneScenario(p: {
       hooks: renderer ? [renderer] : [],
       compact: !!(flags.compact || flags.demo), // --demo implies --compact
       ablateSkill: flags.ablateSkill,
+      ...(flags.searchCorpus ? { searchCorpus: searchCorpusOption(flags) } : {}),
       runLabel: flags.label, // --label generation tag (iterate-across-fixes loop)
       translateRef,
     });
@@ -1676,6 +1734,8 @@ async function runMultiLegFile(
       ...(deciderModel !== undefined ? { llmModel: deciderModel } : {}),
       // Passed through so executeMultiLeg refuses it: a negative control must never quietly run with the skill.
       ...(flags.ablateSkill ? { ablateSkill: true } : {}),
+      // Passed through so executeMultiLeg refuses it by name.
+      ...(flags.searchCorpus ? { searchCorpus: searchCorpusOption(flags) } : {}),
     });
   } catch (e) {
     if (e instanceof UnansweredError)
@@ -2833,6 +2893,14 @@ Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-f
 async function cmdProbeDispatch(rawArgs: string[]) {
   if (hasHelp(rawArgs)) return void log(PROBE_DISPATCH_HELP);
   const { rest: args, flags } = takeCommonFlags(rawArgs, "probe-dispatch");
+  if (flags.searchCorpus !== undefined || flags.searchCorpusMiss !== undefined || flags.searchCorpusMinScore !== undefined)
+    fail(
+      "probe-dispatch",
+      "usage",
+      "--search-corpus is not available on probe-dispatch: use it with run or skill",
+      undefined,
+      flags.output === "json",
+    );
   const isJson = flags.output === "json";
   const positional: string[] = [];
   const extraPlugins: string[] = [];

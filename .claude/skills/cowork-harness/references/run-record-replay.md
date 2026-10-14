@@ -369,7 +369,7 @@ Recognize these before "fixing" a non-bug:
   A recording made under the key freezes `answerChannel: "none"` at the cassette's top level and stamps v15, so
   replay runs with the channel still absent and an older build refuses the cassette as too new.
 
-The full 27-code signal table (severity + per-signal opt-out) is in
+The full 28-code signal table (severity + per-signal opt-out) is in
 [`references/assertion-catalog.md`](./assertion-catalog.md); [`docs/scenario.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md) (repo-only) carries
 the fuller narrative.
 

@@ -69,8 +69,18 @@
     "hookFailureBlocks": {
       "description": "The events this run may have a hook on that BLOCKS when it fails (`onFailure: \"block\"`, agent 2.1.295+), read after the run from every hook source the agent could load: `{events}` (sorted; often empty), or `{unknown: true, why}` when a source exists but could not be read or parsed. A failed or timed-out hook frame of a listed event is unreadable to the hook keys. A run whose agents are all 2.1.293 or older (no `onFailure`) gets `{events: []}` without a scan. Event names only (an unknown inventory's `why` gives a count of the sources it could not read). Absent on a result.json from an older build.",
       "oneOf": [
-        { "type": "object", "required": ["events"], "properties": { "events": { "type": "array", "items": { "type": "string" } } }, "additionalProperties": false },
-        { "type": "object", "required": ["unknown", "why"], "properties": { "unknown": { "const": true }, "why": { "type": "string" } }, "additionalProperties": false }
+        {
+          "type": "object",
+          "required": ["events"],
+          "properties": { "events": { "type": "array", "items": { "type": "string" } } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["unknown", "why"],
+          "properties": { "unknown": { "const": true }, "why": { "type": "string" } },
+          "additionalProperties": false
+        }
       ]
     },
     "deviceBridge": {
@@ -125,10 +135,7 @@
         },
         "egress": {
           "type": "string",
-          "enum": [
-            "allowlist",
-            "unrestricted"
-          ]
+          "enum": ["allowlist", "unrestricted"]
         },
         "deleteRefusal": {
           "type": "string",
@@ -172,21 +179,14 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": [
-              "name",
-              "mode"
-            ],
+            "required": ["name", "mode"],
             "properties": {
               "name": {
                 "type": "string"
               },
               "mode": {
                 "type": "string",
-                "enum": [
-                  "r",
-                  "rw",
-                  "rwd"
-                ]
+                "enum": ["r", "rw", "rwd"]
               }
             },
             "additionalProperties": false
@@ -354,6 +354,61 @@
       "enum": ["none"],
       "description": "\"none\" when the session declared `answer_channel: none`: a headless run in which nobody answers the agent's questions or permission prompts (the agent was spawned with `--permission-prompts none`). Not Cowork, which always has an answer channel. Absent otherwise."
     },
+    "searchCorpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["poolId", "sha256", "label", "miss", "interposition", "credentialSource", "metrics"],
+      "description": "Present when the run's web searches were served from a recorded pool (--search-corpus); absent otherwise. Searches served from a pool are not billed and do not appear in the agent's own cost or search count; these counts are the record of them.",
+      "properties": {
+        "poolId": { "type": "string" },
+        "sha256": {
+          "type": "string",
+          "description": "The served pool's hash: its records and retrieval parameters, an overridden floor included."
+        },
+        "label": { "type": "string", "description": "The label every verdict surface prints for this run." },
+        "miss": { "type": "string", "enum": ["empty", "error"], "description": "What a query below the pool's floor was answered with." },
+        "interposition": {
+          "type": "string",
+          "enum": ["proxy-env+ca"],
+          "description": "How the run was interposed: at hostloop, a proxy env plus the run's own CA."
+        },
+        "credentialSource": {
+          "type": "string",
+          "enum": ["env"],
+          "description": "The agent's credential came from the environment, never the operator's own login."
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["requests", "served", "miss", "refused", "retriesFolded", "unfinished", "passedThroughWithSearchTool"],
+          "properties": {
+            "requests": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Logical search requests the interceptor classified (unfinished ones included; folded retries not)."
+            },
+            "served": { "type": "integer", "minimum": 0 },
+            "miss": { "type": "integer", "minimum": 0 },
+            "refused": { "type": "integer", "minimum": 0 },
+            "retriesFolded": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Non-streaming retries folded into the request they retried."
+            },
+            "unfinished": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Requests still being classified when the run closed (each one also fails the run)."
+            },
+            "passedThroughWithSearchTool": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Forwarded requests that carried a server search tool: 0 on every trustworthy run."
+            }
+          }
+        }
+      }
+    },
     "execution": {
       "type": "object",
       "properties": {
@@ -496,14 +551,22 @@
     },
     "infraErrors": {
       "type": "array",
-      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died \u2014 a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'device-container' (the device_bridge container) is the same class, and so is 'device-shim' (the device's delete refusal could not be proven: its image could not be built, or its canary delete was not refused). 'hostloop-exec' is a single failed container exec, and 'device-exec' a single failed device_bash exec: the tool call failed, the run did not, so it only warns.",
+      "description": "Infrastructure errors, tagged by origin. 'hostloop-sidecar'/'egress-sidecar' mean a supervising process died \u2014 a hard verdict fail on BOTH lanes, NOT author-suppressible, because the run's evidence is contaminated. 'device-container' (the device_bridge container) is the same class, and so is 'device-shim' (the device's delete refusal could not be proven: its image could not be built, or its canary delete was not refused). 'hostloop-exec' is a single failed container exec, and 'device-exec' a single failed device_bash exec: the tool call failed, the run did not, so it only warns. 'search-corpus' means a run served from a frozen search corpus could not confirm that no search reached the live API (the agent's own count of search requests differs from the interceptor's, or one carrying a server search tool was forwarded): a hard fail.",
       "items": {
         "type": "object",
         "required": ["source", "message"],
         "properties": {
           "source": {
             "type": "string",
-            "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-shim", "device-exec"]
+            "enum": [
+              "hostloop-sidecar",
+              "hostloop-exec",
+              "egress-sidecar",
+              "device-container",
+              "device-shim",
+              "device-exec",
+              "search-corpus"
+            ]
           },
           "message": {
             "type": "string"
@@ -810,7 +873,8 @@
                   "outputs_delete_unconfirmed",
                   "outputs_diff_unavailable",
                   "partly_scripted_gate",
-                  "parked_at_question"
+                  "parked_at_question",
+                  "search_corpus_refused"
                 ]
               },
               "severity": {
@@ -1265,12 +1329,56 @@
         "properties": {
           "id": { "type": "string" },
           "value": { "type": "number" },
-          "unavailable": { "type": "string", "enum": ["missing_artifact", "missing_path", "not_json", "not_a_number", "readonly", "size", "remote", "pruned", "pre_run", "no_manifest", "command_failed", "command_timeout", "command_output", "command_changed", "command_missing", "command_not_allowed", "nondeterministic", "no_events"] },
-          "command": { "type": "object", "additionalProperties": false, "required": ["sig", "script", "scriptSha256"], "properties": { "sig": { "type": "string" }, "script": { "type": "string" }, "scriptSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "eventsSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "interpreter": { "type": "string" }, "durationMs": { "type": "number" }, "carried": { "const": true }, "frozen": { "const": true } } }
+          "unavailable": {
+            "type": "string",
+            "enum": [
+              "missing_artifact",
+              "missing_path",
+              "not_json",
+              "not_a_number",
+              "readonly",
+              "size",
+              "remote",
+              "pruned",
+              "pre_run",
+              "no_manifest",
+              "command_failed",
+              "command_timeout",
+              "command_output",
+              "command_changed",
+              "command_missing",
+              "command_not_allowed",
+              "nondeterministic",
+              "no_events"
+            ]
+          },
+          "command": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sig", "script", "scriptSha256"],
+            "properties": {
+              "sig": { "type": "string" },
+              "script": { "type": "string" },
+              "scriptSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "eventsSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "interpreter": { "type": "string" },
+              "durationMs": { "type": "number" },
+              "carried": { "const": true },
+              "frozen": { "const": true }
+            }
+          }
         },
         "oneOf": [
-          { "required": ["value"], "properties": { "value": {} }, "not": { "required": ["unavailable"], "properties": { "unavailable": {} } } },
-          { "required": ["unavailable"], "properties": { "unavailable": {} }, "not": { "required": ["value"], "properties": { "value": {} } } }
+          {
+            "required": ["value"],
+            "properties": { "value": {} },
+            "not": { "required": ["unavailable"], "properties": { "unavailable": {} } }
+          },
+          {
+            "required": ["unavailable"],
+            "properties": { "unavailable": {} },
+            "not": { "required": ["value"], "properties": { "value": {} } }
+          }
         ]
       }
     },

@@ -18,6 +18,19 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`run --search-corpus <pool>` serves a hostloop run's web searches from a recorded pool** (also on `skill`). The
+  agent's WebSearch tool makes its own model request carrying the server search tool; the harness answers that request
+  locally with the best-matching recorded searches, their links and their prose, and forwards every other API request
+  unchanged. It is not live search, so it is for the steps around research, never research quality. Every result is
+  labelled `frozen search corpus <pool>@<hash8>` (`RunResult.searchCorpus`, with the counts served, missed and
+  refused; served searches are not billed). `--search-corpus-miss empty|error` sets what an unanswerable query gets,
+  and `--search-corpus-min-score` overrides the pool's floor. The run fails (`infraErrors` source `search-corpus`)
+  unless each agent's own count of its searches, sub-agents included, equals what the harness answered. Refused, by
+  name: fidelity `protocol`, `container` and `microvm`; `chat`, `record`, `critique` and `probe-dispatch`; `--resume`
+  and `--session-id`; a multi-leg or `device_bridge` scenario; the remote search route; a baseline without the web-search anchors; a credential not in the environment; an agent
+  proxy; and a non-API `ANTHROPIC_BASE_URL`. The run dir gains `search-corpus.jsonl`, and `events.jsonl` one
+  `search_corpus_serve` line per answered request.
+
 - **`sync --allow-missing-search-anchors`** writes a baseline without web-search anchors when they cannot be confirmed
   from the staged agent (with a warning), and `npm run preflight` accepts the same flag to downgrade its anchors check.
 - **`agentBinary.searchAnchors` gains two optional fields:** `source` (`both`, `native` or `elf`: which staged agent the

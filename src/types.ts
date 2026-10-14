@@ -2266,7 +2266,41 @@ export interface DeviceBridgeRecord {
 /** Where an infrastructure error came from. A supervising process dying contaminates the whole run's
  *  evidence; a single failed `docker exec` does not. Keeping the origin lets the verdict treat them
  *  differently instead of collapsing both into one fatal class. */
-export type InfraErrorSource = "hostloop-sidecar" | "hostloop-exec" | "egress-sidecar" | "device-container" | "device-shim" | "device-exec";
+/** `RunResult.searchCorpus`: which pool served the run's web searches, the label every verdict surface prints, and
+ *  the interceptor's counts. Searches served from a pool are not billed and do not appear in the agent's own cost or
+ *  search count; these counts are the record of them. */
+export interface RunSearchCorpusResult {
+  poolId: string;
+  /** The served pool's hash (its records and retrieval parameters, an overridden floor included). */
+  sha256: string;
+  label: string;
+  miss: "empty" | "error";
+  /** How the run was interposed: at hostloop, a proxy env plus the run's CA. */
+  interposition: "proxy-env+ca";
+  /** The agent's credential came from the environment, never the operator's own login. */
+  credentialSource: "env";
+  metrics: {
+    /** Logical requests the interceptor classified (unfinished ones included; folded retries not). */
+    requests: number;
+    served: number;
+    miss: number;
+    refused: number;
+    retriesFolded: number;
+    unfinished: number;
+    /** Forwarded requests that carried a server search tool: 0 on every trustworthy run. */
+    passedThroughWithSearchTool: number;
+  };
+}
+
+export type InfraErrorSource =
+  | "hostloop-sidecar"
+  | "hostloop-exec"
+  | "egress-sidecar"
+  | "device-container"
+  | "device-shim"
+  | "device-exec"
+  /** A run served from a frozen search corpus whose frozen promise could not be confirmed. */
+  | "search-corpus";
 
 /** See `RunResult.fsDiff`. `findings` are `[fs-diff] output file removed post-run: <path>` strings. */
 export interface OutputsFsDiff {
@@ -2318,6 +2352,9 @@ export interface RunResult {
   /** `"none"` when the session declared `answer_channel: none` (a headless run with nobody to answer the agent — not
    *  Cowork). Absent otherwise, so every existing result keeps its meaning. Stats never pool the two. */
   answerChannel?: "none";
+  /** Present when the run's web searches were served from a recorded pool (`--search-corpus`); absent otherwise, so
+   *  every existing result keeps its meaning. */
+  searchCorpus?: RunSearchCorpusResult;
   scenario: string;
   prompt?: string; // the prompt that was run — persisted so `scaffold <run-dir>` can reconstruct the scenario
   /** A keyed fingerprint of the scrub set this run's records were scrubbed with (`src/scrub-set.ts`): one HMAC per
@@ -2760,7 +2797,8 @@ export interface RunResult {
         | "undelivered_deliverables"
         | "delivery_unobservable"
         | "partly_scripted_gate"
-        | "parked_at_question";
+        | "parked_at_question"
+        | "search_corpus_refused";
       severity: "fail" | "warn";
       message: string;
     }>;

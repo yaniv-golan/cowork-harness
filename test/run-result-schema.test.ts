@@ -50,6 +50,15 @@ const full: RunResult = {
   ablated: false,
   mode: "run",
   execution: { location: "local" },
+  searchCorpus: {
+    poolId: "ms",
+    sha256: "a".repeat(64),
+    label: "frozen search corpus ms@aaaaaaaa — recorded results",
+    miss: "empty",
+    interposition: "proxy-env+ca",
+    credentialSource: "env",
+    metrics: { requests: 2, served: 1, miss: 1, refused: 0, retriesFolded: 0, unfinished: 0, passedThroughWithSearchTool: 0 },
+  },
   scenario: "example",
   prompt: "do the thing",
   fidelity: "container",
@@ -227,6 +236,13 @@ describe("schema/run-result.json", () => {
     expect(validateStrict(withExtra)).toBe(false);
     // the published (permissive) schema does NOT catch this — that's exactly the gap the strict pass closes
     expect(validatePublished(withExtra)).toBe(true);
+  });
+
+  it("searchCorpus is closed, inside and in its metrics, so no request text or header can ride along", () => {
+    const sc = full.searchCorpus!;
+    expect(validatePublished({ ...full, searchCorpus: { ...sc, query: "x" } })).toBe(false);
+    expect(validatePublished({ ...full, searchCorpus: { ...sc, metrics: { ...sc.metrics, headers: 1 } } })).toBe(false);
+    expect(validatePublished({ ...full, searchCorpus: { ...sc, miss: "pass" } })).toBe(false);
   });
 
   it("the harness-side spend and retry fields reject negative or fractional counts", () => {

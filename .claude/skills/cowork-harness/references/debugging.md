@@ -131,7 +131,9 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
 - **`result.json` carries the raw fields** the assertions read: `verdict`, `lane` (which Cowork delivery
   contract the run was held to — see gotcha 24 in `gotchas.md`), `answerChannel` (`"none"` on a run with nobody to
   answer; such a run is labelled `[headless, no answer channel — not Cowork]`, and `stats` lists it as its own row
-  under every `--group-by`), `scratchpadEvidenceComplete` (did a COMPLETE scratchpad
+  under every `--group-by`), `searchCorpus` (present when `--search-corpus` served the run's web searches from a pool:
+  the pool, its hash, the `frozen search corpus …` label and the counts served, missed and refused),
+  `scratchpadEvidenceComplete` (did a COMPLETE scratchpad
   walk observe this run — what distinguishes "nothing was left undelivered" from "cannot tell"), `cost` (`cost.usd` = the SDK's
   `total_cost_usd` for the run — the authoritative single-run spend of the agent session, which leaves out the `semantic_matches` judge and the LLM decider calls; NOT the same source as summing
   `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),
