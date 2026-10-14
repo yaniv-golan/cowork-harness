@@ -182,6 +182,21 @@ describe("frozenPromiseError: the agent's own count against the interceptor's, p
     expect(check(runDir(denied), new SearchRegistry(), { denied: ["p2"] })).toBeNull();
   });
 
+  it("fails closed if a fork stopped sending its agent id: the search is keyed to main but counted in the fork's transcript", () => {
+    // Today a fork (Agent(fork), a context: fork skill) sends x-claude-code-agent-id and B3 counts it per agent. If a
+    // future agent dropped the header, its search would be intercepted under null: that must be an error, never a pass.
+    const r = new SearchRegistry();
+    r.record(entry(null));
+    const events = [use("w1", "q", "toolu_skill1"), res("w1", ok200("q"), "toolu_skill1")];
+    const err = check(runDir(events, { fork1: [use("w1", "q"), res("w1", ok200("q"))] }), r);
+    expect(err).toMatch(/the main agent made 0 search request\(s\).*interceptor saw 1/);
+    expect(err).toMatch(/sub-agent fork1 made 1 search request\(s\).*interceptor saw 0/);
+    // and with the header, as measured, it holds
+    const r2 = new SearchRegistry();
+    r2.record(entry("fork1"));
+    expect(check(runDir(events, { fork1: [use("w1", "q"), res("w1", ok200("q"))] }), r2)).toBeNull();
+  });
+
   it("goes red when the interceptor saw a request no agent record carries", () => {
     const r = new SearchRegistry();
     r.record(entry("ghost"));

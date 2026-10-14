@@ -20,7 +20,9 @@ export interface FrameRound {
 }
 
 export interface RegistryInput {
-  /** `x-claude-code-agent-id`; null for the main loop (or a fork). */
+  /** `x-claude-code-agent-id`; null for the main loop and an inline skill. A Task sub-agent, an `Agent(fork)` and a
+   *  `context: fork` skill each send it and write their own transcript (measured on 2.1.295), so a fork is keyed like a
+   *  sub-agent here, unlike tool-call origin, where a fork counts as main. */
   agentId: string | null;
   route: "messages" | "ccr";
   verdict: "served" | "miss" | "refused";
