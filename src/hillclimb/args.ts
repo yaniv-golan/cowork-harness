@@ -12,6 +12,8 @@ import { SESSION_EFFORT_TOKENS, type SessionConfig } from "../session.js";
 import { envOutputFormat, parseOutputFormat } from "../run/envelope.js";
 import { VARIANT_DIR_RE } from "./schema-check.js";
 import { HILLCLIMB_RUN_BOOLEAN_FLAGS, HILLCLIMB_RUN_REPEATED_FLAGS, HILLCLIMB_RUN_VALUE_FLAGS } from "./usage.js";
+import { parseSearchCorpusFlag, searchCorpusDependentFlagRefusal } from "../search-corpus/flags.js";
+import type { SearchCorpusOption } from "../search-corpus/run.js";
 
 /** The scaffold's defaults (runner-scaffold.mjs l.181-183). `--reps 1` will be a covered default once the command is wired. */
 export const HILLCLIMB_RUN_DEFAULTS = {
@@ -46,6 +48,12 @@ export interface HillclimbRunArgs {
   /** The plugin skill the `skill_invoked` column tracks (`skills/<name>/` of the variant's snapshot). */
   skill?: string;
   outputFormat: "text" | "json";
+  /** `--search-corpus <pool>` (and its miss mode and floor): every rep of the pass served from a private copy of it. */
+  searchCorpus?: SearchCorpusOption;
+  allowConfoundedPool: boolean;
+  allowMixedPool: boolean;
+  /** `--allow-mixed-search`: run beside rows served from another pool, or searched live; printed on every row. */
+  allowMixedSearch: boolean;
   globals: Array<{ flag: "--dotenv" | "--run-dir"; value: string }>;
 }
 
@@ -93,6 +101,10 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
       i++;
     }
     if (v.trim() === "") throw new UsageError(`${name} requires a non-empty value`);
+    if (name.startsWith("--search-corpus")) {
+      const r = parseSearchCorpusFlag(name, v, eq <= 0);
+      if (!r.ok) throw new UsageError(r.message);
+    }
     if (name === "--dotenv" || name === "--run-dir") {
       if (globals.some((g) => g.flag === name)) throw new UsageError(`${name} given more than once`);
       globals.push({ flag: name, value: v });
@@ -160,9 +172,31 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
       `--concurrency ${concurrency}${explicitConcurrency ? "" : " (the default)"} cannot be combined with a decider: the answer channel is shared across jobs and is not safe for concurrent gate answers; pass --concurrency 1.`,
     );
 
+  const allowConfoundedPool = booleans.has("--allow-confounded-pool");
+  const allowMixedPool = booleans.has("--allow-mixed-pool");
+  const allowMixedSearch = booleans.has("--allow-mixed-search");
+  const scDependent = searchCorpusDependentFlagRefusal({
+    searchCorpus: values["--search-corpus"] !== undefined,
+    miss: values["--search-corpus-miss"] !== undefined,
+    minScore: values["--search-corpus-min-score"] !== undefined,
+    allow: [...(allowConfoundedPool ? ["--allow-confounded-pool"] : []), ...(allowMixedPool ? ["--allow-mixed-pool"] : [])],
+  });
+  if (scDependent) throw new UsageError(scDependent);
   return {
     help: false,
     target: positionals[0],
+    ...(values["--search-corpus"] !== undefined
+      ? {
+          searchCorpus: {
+            pool: values["--search-corpus"],
+            miss: (values["--search-corpus-miss"] as "empty" | "error" | undefined) ?? "empty",
+            ...(values["--search-corpus-min-score"] !== undefined ? { minScore: Number(values["--search-corpus-min-score"]) } : {}),
+          },
+        }
+      : {}),
+    allowConfoundedPool,
+    allowMixedPool,
+    allowMixedSearch,
     flow: values["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow,
     variant,
     ...(values["--model"] !== undefined ? { model: values["--model"] } : {}),

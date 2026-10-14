@@ -17,14 +17,20 @@ export interface EvalJobSpec {
   /** `eval:<eval-id>:<arm>`. */
   runLabel: string;
   judgeModelOverride?: string;
+  /** The eval's frozen search corpus: the private copy every rep is served from, pinned to its effective hash. */
+  searchCorpus?: NonNullable<ExecuteOptions["searchCorpus"]>;
 }
 
 /** The ExecuteOptions a job's run takes: the arm's session, the pre-assigned run id, and the judge override. */
-export function evalJobExecuteOptions(spec: EvalJobSpec): Pick<ExecuteOptions, "session" | "runId" | "judgeModelOverride"> {
+export function evalJobExecuteOptions(
+  spec: EvalJobSpec,
+): Pick<ExecuteOptions, "session" | "runId" | "judgeModelOverride" | "searchCorpus"> {
   return {
     session: spec.session,
     runId: spec.job.runId,
     ...(spec.judgeModelOverride !== undefined ? { judgeModelOverride: spec.judgeModelOverride } : {}),
+    // Through the job's options, never the shared flags: every rep is served from the pinned copy, never the source.
+    ...(spec.searchCorpus !== undefined ? { searchCorpus: spec.searchCorpus } : {}),
   };
 }
 

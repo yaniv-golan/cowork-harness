@@ -41,7 +41,10 @@ export interface PoolManifest {
   mixed: boolean;
   skills: string[];
   sources: PoolSource[];
-  counts: { records: number; urls: number; runs: number };
+  /** `crossRunDuplicates`: records dropped because another run produced the same id. Each kept record carries its
+   *  FIRST contributor's source, so this bounds how far per-variant record shares can be off. Absent on a pool built
+   *  before the field existed: its shares cannot be bounded. */
+  counts: { records: number; urls: number; runs: number; crossRunDuplicates?: number };
   retrieval: RetrievalParams;
 }
 
@@ -256,6 +259,32 @@ export interface BuildSummary {
 
 export class PoolBuildError extends Error {}
 
+/** A rep about to be served from a pool copy whose effective hash or miss mode is not the one the eval or hillclimb
+ *  pass pinned: refused before the interceptor starts, so the rep spends nothing. `got` is null when the copy could
+ *  not be read at all. */
+export class SearchPoolPinError extends Error {
+  constructor(
+    readonly expected: { sha256: string; miss: string },
+    readonly got: { sha256: string; miss: string } | null,
+    message: string,
+  ) {
+    super(message);
+    this.name = "SearchPoolPinError";
+  }
+}
+
+/** The pool as a run serves it: `--search-corpus-min-score` overrides the floor and so changes the hash (what is
+ *  served changed). The one derivation of the effective hash; nothing else recomputes it. */
+export function effectivePool(
+  dir: string,
+  minScore: number | undefined,
+): { manifest: PoolManifest; records: PoolRecord[]; params: RetrievalParams; sha256: string } {
+  const { manifest, records } = readPool(dir);
+  const params = minScore === undefined ? manifest.retrieval : { ...manifest.retrieval, minScore };
+  const sha256 = minScore === undefined ? manifest.sha256 : poolHash(records, params);
+  return { manifest, records, params, sha256 };
+}
+
 /** Assemble a pool from run dirs. Pure apart from reads; writes nothing. */
 export function assemblePool(a: {
   poolId: string;
@@ -337,7 +366,12 @@ export function assemblePool(a: {
     mixed: skills.length > 1 || skills.includes("(unknown)"),
     skills,
     sources: kept.sort((x, y) => (x.runRef < y.runRef ? -1 : 1)),
-    counts: { records: records.length, urls: new Set(records.flatMap((r) => r.links.map((l) => l.url))).size, runs: runsWithSearches },
+    counts: {
+      records: records.length,
+      urls: new Set(records.flatMap((r) => r.links.map((l) => l.url))).size,
+      runs: runsWithSearches,
+      crossRunDuplicates,
+    },
     retrieval: a.retrieval,
   };
   const manifest: PoolManifest = { ...manifestBase, contentSha256: contentHash(manifestBase, records) };

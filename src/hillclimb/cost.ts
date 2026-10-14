@@ -16,6 +16,7 @@
 //   5. anything else (a bearer ANTHROPIC_AUTH_TOKEN, none/none, account frames that disagree) → ambiguous
 // The account's identity fields (`email`, `organization`, `subscriptionType`'s value) are never copied.
 
+import { searchCorpusCostClause } from "./search-corpus.js";
 import { normalizeModelId } from "../run/model-provenance.js";
 import type { FlowSnapshot } from "./schema-check.js";
 
@@ -181,6 +182,9 @@ export interface CostSummary {
   scoredCostRows: number;
   /** Every `meta.billing.cost_basis` the rows record. */
   costBases: Set<string>;
+  /** The frozen search corpus clause, over every row carrying `meta.search_corpus` (scored and error rows alike):
+   *  printed on the cost line, never a summary.json key. */
+  searchFrozen?: string;
 }
 
 type Row = Record<string, unknown> & { meta?: Record<string, unknown> };
@@ -269,6 +273,21 @@ export function costSummary(results: string | null | undefined, errors: string |
     },
     scoredCostRows: scoredCosts.length,
     costBases,
+    ...(() => {
+      const frozen = searchCorpusCostClause(
+        [
+          ...parseRows(results).map((r) => ({ r, file: "results" as const })),
+          ...parseRows(errors).map((r) => ({ r, file: "errors" as const })),
+        ].map(({ r, file }) => ({
+          variant: "",
+          file,
+          caseId: "",
+          meta: isObj(r.meta) ? r.meta : {},
+          ...(typeof r.failure_class === "string" ? { failureClass: r.failure_class } : {}),
+        })),
+      );
+      return frozen ? { searchFrozen: frozen } : {};
+    })(),
   };
 }
 
@@ -306,6 +325,7 @@ export function costLine(variant: string, s: CostSummary): string {
     parts.push(`regrade judge ${usd(k.regrade_judge_usd_total)} (the last regrade per row — a floor)`);
   // A decider call that threw is never priced (RunResult.deciderCostUsd), so this is always a floor.
   if (k.decider_usd_total !== undefined) parts.push(`decider ${usd(k.decider_usd_total)} (a floor)`);
+  if (s.searchFrozen) parts.push(s.searchFrozen);
   return `[${variant}] cost (variant total; ${basis}): ${parts.join("; ")}`;
 }
 

@@ -2,7 +2,15 @@
 // usage-guard registry in src/run/cassette.ts imports these, so this module must not import anything that
 // imports cassette.ts.
 
-export const HILLCLIMB_RUN_BOOLEAN_FLAGS = ["--approve-harness", "--ablate", "--dry-run", "--no-copy-inputs"] as const;
+export const HILLCLIMB_RUN_BOOLEAN_FLAGS = [
+  "--approve-harness",
+  "--ablate",
+  "--dry-run",
+  "--no-copy-inputs",
+  "--allow-confounded-pool",
+  "--allow-mixed-pool",
+  "--allow-mixed-search",
+] as const;
 export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--flow",
   "--variant",
@@ -18,6 +26,9 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--output-format",
   "--dotenv",
   "--run-dir",
+  "--search-corpus",
+  "--search-corpus-miss",
+  "--search-corpus-min-score",
 ] as const;
 export const HILLCLIMB_RUN_REPEATED_FLAGS = ["--case"] as const;
 /** `hillclimb regrade`'s own booleans (its value flags are a subset of run's). */

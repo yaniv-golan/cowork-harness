@@ -54,6 +54,14 @@ import {
 import { resolveAgentPins, resolveJudgePins } from "./pins.js";
 import { buildSchedule, type ScheduledJob } from "./schedule.js";
 import { appendRunsLine, buildRunsLine, RUNS_FILE } from "./runs.js";
+import { parseSearchCorpusFlag, searchCorpusDependentFlagRefusal } from "../search-corpus/flags.js";
+import { effectivePool, PoolBuildError, resolvePoolDir } from "../search-corpus/pool.js";
+import { copyPinnedPool } from "../search-corpus/pool-copy.js";
+import { classifyProvenance, provenanceLine, provenanceRefusal, type PoolProvenance } from "../search-corpus/provenance.js";
+import type { SearchCorpusOption } from "../search-corpus/run.js";
+import { searchCorpusLabel } from "../search-corpus/label.js";
+import { searchCorpusPreflight } from "../run/execute.js";
+import { NoFollowRoot } from "../hillclimb/fs.js";
 import { evidenceFacts } from "./invocation.js";
 import { evalJobRunDir, salvagedResult, type EvalJobSpec } from "./job-runner.js";
 import { MANIFEST_FILE, type EvalManifest, type ManifestArm, type ManifestScenario } from "./manifest.js";
@@ -109,6 +117,12 @@ export interface EvalArgs {
   targetEffectPp?: number;
   /** `--max-budget-usd`: a pre-flight refusal from cost history, before any run (never a mid-run stop). */
   maxBudgetUsd?: number;
+  /** `--search-corpus <pool>` with its miss mode and floor override: one pool for both arms, eval-level. */
+  searchCorpus?: SearchCorpusOption;
+  /** `--allow-confounded-pool`: run a pool drawn from one arm, labelled CONFOUNDED everywhere. */
+  allowConfoundedPool: boolean;
+  /** `--allow-mixed-pool`: a pool built with `--mixed` (several skills). */
+  allowMixedPool: boolean;
   /** `--dotenv` / `--run-dir` after the subcommand, for the caller to apply. */
   globals: Array<{ flag: "--dotenv" | "--run-dir"; value: string }>;
 }
@@ -171,6 +185,10 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
       i++;
     }
     if (v.trim() === "") throw new UsageError(`${name} requires a non-empty value`);
+    if (name.startsWith("--search-corpus")) {
+      const r = parseSearchCorpusFlag(name, v, eq <= 0);
+      if (!r.ok) throw new UsageError(r.message);
+    }
     if (name === "--dotenv" || name === "--run-dir") {
       if (globals.some((g) => g.flag === name)) throw new UsageError(`${name} given more than once`);
       globals.push({ flag: name, value: v });
@@ -244,9 +262,29 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
     throw new UsageError(
       `--concurrency ${concurrency}${explicitConcurrency ? "" : " (the default)"} cannot be combined with --decider-dir/--decider-cmd: the channel is shared across jobs and is not safe for concurrent gate answers. Pass --concurrency 1.`,
     );
+  const allowConfoundedPool = booleans.has("--allow-confounded-pool");
+  const allowMixedPool = booleans.has("--allow-mixed-pool");
+  const scDependent = searchCorpusDependentFlagRefusal({
+    searchCorpus: values["--search-corpus"] !== undefined,
+    miss: values["--search-corpus-miss"] !== undefined,
+    minScore: values["--search-corpus-min-score"] !== undefined,
+    allow: [...(allowConfoundedPool ? ["--allow-confounded-pool"] : []), ...(allowMixedPool ? ["--allow-mixed-pool"] : [])],
+  });
+  if (scDependent) throw new UsageError(scDependent);
+  const searchCorpus: SearchCorpusOption | undefined =
+    values["--search-corpus"] !== undefined
+      ? {
+          pool: values["--search-corpus"],
+          miss: (values["--search-corpus-miss"] as "empty" | "error" | undefined) ?? "empty",
+          ...(values["--search-corpus-min-score"] !== undefined ? { minScore: Number(values["--search-corpus-min-score"]) } : {}),
+        }
+      : undefined;
   return {
     target,
     arms: repeated["--arm"],
+    ...(searchCorpus ? { searchCorpus } : {}),
+    allowConfoundedPool,
+    allowMixedPool,
     reps,
     allowUnderpowered,
     ...(values["--model"] !== undefined ? { model: values["--model"] } : {}),
@@ -296,6 +334,9 @@ export interface EvalDeps {
   onSnapshotRoot?: (dir: string) => void;
   /** Called with the plan as soon as it is computed — before any later check can refuse. */
   onPlan?: (plan: EvalPlan) => void;
+  /** The frozen corpus's per-run refusals, per (arm, scenario), before any spend (default: `searchCorpusPreflight`,
+   *  which reads the credential and the agent binary). Returns the refusal, or null. */
+  searchCorpusPreflight?: (a: { scenario: Scenario; session: SessionConfig; fidelity: string }) => string | null;
 }
 
 export interface EvalOutcome {
@@ -485,6 +526,95 @@ interface PreparedArms {
   skill: string | null;
   evalFiles: string[];
   plan?: EvalPlan;
+  searchCorpus?: PreparedSearchCorpus;
+}
+
+/** The eval's frozen corpus once it has passed every pre-spend check: the pin, the copy every rep serves from, its
+ *  label and where its records came from. */
+interface PreparedSearchCorpus {
+  pin: NonNullable<EvalManifest["pins"]["searchCorpus"]>;
+  copyDir: string;
+  label: string;
+  provenance: PoolProvenance;
+}
+
+/** `--search-corpus` before any spend: the pool loads and hashes; a mixed pool needs --allow-mixed-pool; each (arm,
+ *  scenario) passes the run's own corpus refusals; the pool's provenance against the two arms (a one-sided pool needs
+ *  --allow-confounded-pool); then the private copy under `root`, which every rep is served from. */
+function prepareSearchCorpus(
+  args: EvalArgs,
+  deps: EvalDeps,
+  ctx: EvalContext,
+  snaps: Array<{ spec: ArmSpec }>,
+  sessions: Map<string, SessionConfig>,
+  sigs: Array<Record<string, string>>,
+  root: string,
+): PreparedSearchCorpus {
+  const opt = args.searchCorpus!;
+  const src = resolvePoolDir(opt.pool);
+  let pool: ReturnType<typeof effectivePool>;
+  try {
+    pool = effectivePool(src, opt.minScore);
+  } catch (e) {
+    if (e instanceof PoolBuildError || (e as NodeJS.ErrnoException)?.code)
+      throw new UsageError(`--search-corpus ${opt.pool}: the pool cannot be read: ${(e as Error).message}`);
+    throw e;
+  }
+  if (pool.manifest.mixed && !args.allowMixedPool)
+    throw new UsageError(
+      `--search-corpus ${opt.pool} is a mixed pool (${pool.manifest.skills.join(", ")}): a pool of several skills is a measured variant, not evidence for one skill; pass --allow-mixed-pool to use it`,
+    );
+  const check =
+    deps.searchCorpusPreflight ??
+    ((a: { scenario: Scenario; session: SessionConfig; fidelity: string }) => {
+      const r = searchCorpusPreflight({
+        scenario: a.scenario,
+        session: a.session as Parameters<typeof searchCorpusPreflight>[0]["session"],
+        baseline: loadBaseline(a.scenario.baseline),
+        effectiveFidelity: a.fidelity,
+      });
+      return "refusal" in r ? r.refusal : null;
+    });
+  for (const snap of snaps)
+    for (const s of ctx.scenarios) {
+      const why = check({
+        scenario: s.scenario,
+        session: sessions.get(`${snap.spec.label}\0${s.scenario.name}`)!,
+        fidelity: effectiveTier(s.scenario.fidelity, loadBaseline(s.scenario.baseline)),
+      });
+      if (why) throw new UsageError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${why}`);
+    }
+  const provenance = classifyProvenance(
+    pool.manifest,
+    pool.records,
+    ctx.scenarios.map((s) => s.scenario.name),
+    snaps.map((s, i) => ({ label: s.spec.label, sigs: sigs[i] })),
+  );
+  const refusal = provenanceRefusal(provenance);
+  if (refusal && !args.allowConfoundedPool) throw new UsageError(`--search-corpus ${opt.pool}: ${refusal}`);
+  if (refusal) provenance.allowConfoundedPool = true;
+  let copyDir: string;
+  try {
+    copyDir = copyPinnedPool(NoFollowRoot.open(root), src, join(root, "search-pool"), opt.minScore).dir;
+  } catch (e) {
+    if (e instanceof InterruptedError) throw e;
+    throw new EvalStagingError(`--search-corpus ${opt.pool}: the pool could not be copied into the eval: ${(e as Error).message}`);
+  }
+  const label = searchCorpusLabel(pool.manifest.poolId, pool.sha256);
+  ctx.say(`[eval] [${label}]`);
+  ctx.say(`[eval] ${provenanceLine(provenance)}`);
+  return {
+    pin: {
+      poolId: pool.manifest.poolId,
+      sha256: pool.sha256,
+      ...(opt.minScore !== undefined ? { minScore: opt.minScore } : {}),
+      miss: opt.miss,
+      copy: "search-pool",
+    },
+    copyDir,
+    label,
+    provenance,
+  };
 }
 
 /** Everything that can refuse before the first run, with the arm snapshots under `armsRoot`. Never exits and
@@ -605,6 +735,7 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
     throw new UsageError(
       `the two arms are identical (same content signature) — nothing to compare. Pass --allow-identical-arms for an A/A noise run.`,
     );
+  const searchCorpus = args.searchCorpus ? prepareSearchCorpus(args, deps, ctx, snaps, sessions, sigs, armsRoot) : undefined;
 
   // The plan: computed here — it needs arm A's signatures and the pins — and BEFORE every later refusal, so
   // a refusal below still carries the numbers. One index read feeds both the plan and the budget gate, so
@@ -703,7 +834,7 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
   // `--max-budget-usd`: the batch gate `record` uses, over this schedule (2 x reps runs of every scenario).
   if (args.maxBudgetUsd !== undefined) budgetGate(args, deps, indexRows, runsDir, plan!);
 
-  return { snaps, sessions, sigs, skill, evalFiles, ...(plan ? { plan } : {}) };
+  return { snaps, sessions, sigs, skill, evalFiles, ...(plan ? { plan } : {}), ...(searchCorpus ? { searchCorpus } : {}) };
 }
 
 /** The eval's `--max-budget-usd` pre-flight. Same decision as `record`'s batch gate (`checkBatchBudget`: the
@@ -744,7 +875,19 @@ function budgetGate(
 
 /** The rate history of a cost-only plan: nothing read, every row unknown. */
 function noRates(): RowHistoryLoad {
-  const zero = { notRun: 0, command: 0, tier: 0, baseline: 0, turn: 0, hillclimb: 0, ablated: 0, model: 0, pruned: 0, unreadable: 0 };
+  const zero = {
+    notRun: 0,
+    command: 0,
+    tier: 0,
+    baseline: 0,
+    turn: 0,
+    hillclimb: 0,
+    searchCorpus: 0,
+    ablated: 0,
+    model: 0,
+    pruned: 0,
+    unreadable: 0,
+  };
   return {
     rows: [],
     basis: "relaxed",
@@ -879,7 +1022,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   }
 
   async function afterEvalDir(): Promise<EvalOutcome> {
-    const { snaps, sessions, sigs, skill, evalFiles } = prepareArms(args, deps, ctx, evalDir, "run");
+    const { snaps, sessions, sigs, skill, evalFiles, searchCorpus } = prepareArms(args, deps, ctx, evalDir, "run");
     // Everything above is synchronous, so a signal that arrived during it is still pending: yield once so the
     // handler runs now — discarding the snapshots and exiting — rather than after the manifest, when the eval
     // would be kept as started with no run. Parking covers a handler that is still finishing.
@@ -914,7 +1057,8 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
       sigs: sigs[i],
     })) as [ManifestArm, ManifestArm];
     const manifest: EvalManifest = {
-      schemaVersion: 0,
+      // A frozen-corpus eval is unreadable by a reader that would report it without its pin and label.
+      schemaVersion: searchCorpus ? 1 : 0,
       evalId,
       startedAt: now.toISOString(),
       harnessVersion: pkgVersion(),
@@ -932,7 +1076,8 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
         includeUntracked: args.includeUntracked,
         allowIdenticalArms: args.allowIdenticalArms,
       },
-      pins: { agent: agentPins, judge: judgePins },
+      pins: { agent: agentPins, judge: judgePins, ...(searchCorpus ? { searchCorpus: searchCorpus.pin } : {}) },
+      ...(searchCorpus ? { searchCorpusProvenance: searchCorpus.provenance } : {}),
       skill,
       answerKeyGuard: { evalFiles: evalFiles.length, findings: 0 },
     };
@@ -968,6 +1113,16 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           session,
           runLabel: `eval:${evalId}:${job.arm}`,
           ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
+          ...(searchCorpus
+            ? {
+                searchCorpus: {
+                  pool: searchCorpus.copyDir,
+                  miss: searchCorpus.pin.miss,
+                  ...(searchCorpus.pin.minScore !== undefined ? { minScore: searchCorpus.pin.minScore } : {}),
+                  expect: { sha256: searchCorpus.pin.sha256, miss: searchCorpus.pin.miss },
+                },
+              }
+            : {}),
         });
       } catch (e) {
         // The operator's interrupt, learned from a probe inside the run: it stops the eval, not this rep.
@@ -994,6 +1149,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           result,
           thrown,
           evidence,
+          ...(searchCorpus ? { searchPin: { sha256: searchCorpus.pin.sha256, miss: searchCorpus.pin.miss } } : {}),
         }),
       );
       done++;
@@ -1043,5 +1199,6 @@ export function evalEnvelopePayload(evalDir: string, report: EvalReport): Record
     summary: report.summary,
     cost: report.cost,
     stoppedEarly: report.stoppedEarly,
+    ...(report.searchCorpus ? { searchCorpus: report.searchCorpus } : {}),
   };
 }

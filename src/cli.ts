@@ -102,6 +102,7 @@ import { cmdHillclimb } from "./hillclimb/cli.js";
 import { HILLCLIMB_USAGE } from "./hillclimb/usage.js";
 import { FIXTURE_USAGE } from "./fixture/usage.js";
 import { cmdSearchPool, SEARCH_POOL_USAGE } from "./search-corpus/cli.js";
+import { parseSearchCorpusFlag, searchCorpusDependentFlagRefusal } from "./search-corpus/flags.js";
 import { cmdRef } from "./refs/cli.js";
 import { REF_USAGE } from "./refs/cli-usage.js";
 import { resolveInputs } from "./run/inputs.js";
@@ -1298,28 +1299,12 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
     else if (a === "--compact") flags.compact = true;
     else if (a === "--demo") flags.demo = true;
     else if (a === "--ablate-skill") flags.ablateSkill = true;
-    else if (name === "--search-corpus") {
-      const v = readVal();
-      if (eqVal === undefined && v.startsWith("-"))
-        fail(commandName, "usage", `--search-corpus: missing value (got flag-looking "${v}")`, undefined, isJsonOutput(args));
-      flags.searchCorpus = v;
-    } else if (name === "--search-corpus-miss") {
-      const v = readVal();
-      if (v !== "empty" && v !== "error")
-        fail(commandName, "usage", `--search-corpus-miss must be "empty" or "error" (got "${v}")`, undefined, isJsonOutput(args));
-      flags.searchCorpusMiss = v;
-    } else if (name === "--search-corpus-min-score") {
-      const v = readVal();
-      const n = Number(v);
-      if (!/^\d*\.?\d+$/.test(v) || !(n > 0 && n < 1))
-        fail(
-          commandName,
-          "usage",
-          `--search-corpus-min-score must be a number between 0 and 1, exclusive (got "${v}")`,
-          undefined,
-          isJsonOutput(args),
-        );
-      flags.searchCorpusMinScore = n;
+    else if (name === "--search-corpus" || name === "--search-corpus-miss" || name === "--search-corpus-min-score") {
+      const r = parseSearchCorpusFlag(name, readVal(), eqVal === undefined);
+      if (!r.ok) fail(commandName, "usage", r.message, undefined, isJsonOutput(args));
+      else if (name === "--search-corpus") flags.searchCorpus = r.value as string;
+      else if (name === "--search-corpus-miss") flags.searchCorpusMiss = r.value as "empty" | "error";
+      else flags.searchCorpusMinScore = r.value as number;
     } else if (name === "--decider-cmd") {
       const v = readVal();
       if (eqVal === undefined && v.startsWith("-"))
@@ -1351,14 +1336,12 @@ function takeCommonFlags(args: string[], commandName: string = "skill"): { rest:
   if (flags.deciderDir != null && flags.deciderCmd != null)
     fail(commandName, "usage", "--decider-dir conflicts with --decider-cmd (one terminal channel).", undefined, isJsonOutput(args));
   validateOnUnanswered(commandName, flags, args);
-  if ((flags.searchCorpusMiss !== undefined || flags.searchCorpusMinScore !== undefined) && flags.searchCorpus === undefined)
-    fail(
-      commandName,
-      "usage",
-      "--search-corpus-miss and --search-corpus-min-score need --search-corpus <pool>",
-      undefined,
-      isJsonOutput(args),
-    );
+  const scDependent = searchCorpusDependentFlagRefusal({
+    searchCorpus: flags.searchCorpus !== undefined,
+    miss: flags.searchCorpusMiss !== undefined,
+    minScore: flags.searchCorpusMinScore !== undefined,
+  });
+  if (scDependent) fail(commandName, "usage", scDependent, undefined, isJsonOutput(args));
   return { rest, flags };
 }
 
@@ -1600,7 +1583,13 @@ export function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBu
     `  provenance: model=${r.provenance.models.join(",") || "unknown"}  skill=${r.provenance.skills.join(",") || "unknown"}  ` +
       `ablated=${r.provenance.ablatedRuns}/${r.completed}`,
   );
-  if (r.provenance.searchCorpus) lines.push(`  search: ${r.provenance.searchCorpus.map((l) => `[${l}]`).join(" ")}`);
+  if (r.provenance.searchCorpus)
+    lines.push(
+      `  search: ${r.provenance.searchCorpus.map((l) => `[${l}]`).join(" ")}` +
+        (r.provenance.searchRefusedRuns
+          ? ` · ${r.provenance.searchRefusedRuns} run(s) with refused searches excluded from the pass rate`
+          : ""),
+    );
   const signals = Object.entries(r.signalHistogram);
   if (signals.length) lines.push(`  signals: ${signals.map(([code, n]) => `${code}×${n}`).join(", ")}`);
   const failingAssertions = r.perAssertion.filter((a) => a.fails > 0);
@@ -3918,7 +3907,10 @@ export function formatStatsLine(s: StatsSummary, metric?: string): string {
     .join(" ");
   const channel =
     (s.answerChannel === "none" ? ` [${ANSWER_CHANNEL_NONE_LABEL}]` : "") + (s.searchCorpus ? ` [${s.searchCorpus.label}]` : "");
-  const base = `${s.scenario}${identity ? ` (${identity})` : ""}${channel}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
+  const refusedNote =
+    (s.searchRefusedRuns ? ` (${s.searchRefusedRuns} run(s) with refused searches excluded)` : "") +
+    (s.searchRefusedUnrecorded ? ` (${s.searchRefusedUnrecorded} frozen run(s) predate the refused count)` : "");
+  const base = `${s.scenario}${identity ? ` (${identity})` : ""}${channel}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass${refusedNote}`;
   const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
   const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
   if (metric === "pass-rate") return base;

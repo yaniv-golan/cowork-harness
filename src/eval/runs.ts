@@ -4,14 +4,15 @@
 // (computed at run time, while the run dir is certainly there).
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.js";
+import { SearchPoolPinError } from "../search-corpus/pool.js";
 import type { RunResult } from "../types.js";
-import type { ClassifiableResult, RepEvidence } from "./classify.js";
+import { thrownKind, type ClassifiableResult, type RepEvidence, type SearchPoolMismatchRecord, type ThrownKind } from "./classify.js";
 import { tildeify } from "../io.js";
 import { collectSecrets, scrub } from "../secrets.js";
 
 export const RUNS_FILE = "runs.jsonl";
 
-export type ThrownKind = "boundary" | "unanswered" | "decider_timeout" | "other";
+export type { ThrownKind };
 
 /** A per-rep fact: observed true/false, or not observable from this run's record. */
 export type Fact = boolean | "unobservable";
@@ -48,6 +49,8 @@ export interface RunsLine {
   runDir: string | null;
   /** What the job threw, if anything. */
   thrown?: { kind: ThrownKind; message: string };
+  /** The rep was refused before it ran: its pool copy was not the pinned one (or could not be read). */
+  searchPoolMismatch?: SearchPoolMismatchRecord;
   /** The result's classification inputs (no assertions — those are in `grades`). Absent when no result. */
   result?: Omit<ClassifiableResult, "assertions"> & { judgeCostUsd?: number };
   errorSource?: string;
@@ -58,16 +61,14 @@ export interface RunsLine {
   grades: Grade[];
 }
 
-export function thrownKind(e: unknown): ThrownKind {
-  if (e instanceof DeciderTimeoutError) return "decider_timeout";
-  if (e instanceof BoundaryError) return "boundary";
-  if (e instanceof UnansweredError) return "unanswered";
-  return "other";
-}
+export { thrownKind };
 
-/** Rebuild an error the classifier recognises by class, from its persisted kind. */
-export function reviveThrown(t: { kind: ThrownKind; message: string }): unknown {
+/** Rebuild an error the classifier recognises by class, from its persisted kind (and, for a pool pin refusal, the
+ *  line's record of it). */
+export function reviveThrown(t: { kind: ThrownKind; message: string }, pin?: SearchPoolMismatchRecord): unknown {
   switch (t.kind) {
+    case "search_pool_pin":
+      return new SearchPoolPinError(pin?.expected ?? { sha256: "", miss: "" }, pin?.got ?? null, t.message);
     case "decider_timeout":
       return new DeciderTimeoutError(t.message, "", "decider-cmd");
     case "boundary":
@@ -96,6 +97,8 @@ export function buildRunsLine(args: {
   result: RunResult | undefined;
   thrown: unknown;
   evidence: EvidenceFacts | undefined;
+  /** The eval's pinned pool, recorded with a pin refusal whose error carries none (a copy that could not be read). */
+  searchPin?: { sha256: string; miss: string };
 }): RunsLine {
   const r = args.result;
   const assertions: GradedAssertion[] = (r?.assertions ?? []).map((a) => ({
@@ -136,6 +139,15 @@ export function buildRunsLine(args: {
     ...(args.thrown !== undefined
       ? { thrown: { kind: thrownKind(args.thrown), message: String((args.thrown as Error)?.message ?? args.thrown) } }
       : {}),
+    ...(args.thrown !== undefined && thrownKind(args.thrown) === "search_pool_pin"
+      ? {
+          searchPoolMismatch: {
+            expected: args.thrown instanceof SearchPoolPinError ? args.thrown.expected : (args.searchPin ?? { sha256: "", miss: "" }),
+            got: args.thrown instanceof SearchPoolPinError ? args.thrown.got : null,
+            message: String((args.thrown as Error).message),
+          },
+        }
+      : {}),
     ...(r
       ? {
           result: {
@@ -159,6 +171,25 @@ export function buildRunsLine(args: {
             ...(r.cost?.usd !== undefined ? { cost: { usd: r.cost.usd } } : {}),
             ...(r.usage?.turns !== undefined ? { usage: { turns: r.usage.turns } } : {}),
             ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
+            // The frozen corpus the rep was served from, its counts and its `search_corpus_*` warnings: the pin
+            // bucket, the refused-search exclusion, the per-arm metrics and the asymmetry marker are rebuilt from it.
+            ...(r.searchCorpus
+              ? {
+                  searchCorpus: {
+                    sha256: r.searchCorpus.sha256,
+                    miss: r.searchCorpus.miss,
+                    metrics: {
+                      served: r.searchCorpus.metrics.served,
+                      miss: r.searchCorpus.metrics.miss,
+                      refused: r.searchCorpus.metrics.refused,
+                      ...(r.searchCorpus.metrics.toolUses !== undefined ? { toolUses: r.searchCorpus.metrics.toolUses } : {}),
+                      ...(r.searchCorpus.metrics.noRequest !== undefined ? { noRequest: r.searchCorpus.metrics.noRequest } : {}),
+                      ...(r.searchCorpus.metrics.meanTopScore !== undefined ? { meanTopScore: r.searchCorpus.metrics.meanTopScore } : {}),
+                    },
+                    signals: (r.verdict?.signals ?? []).map((x) => x.code).filter((c) => c.startsWith("search_corpus_")),
+                  },
+                }
+              : {}),
             // Each declared metric's value or unavailable reason, verbatim: the metric rows are graded from these.
             ...(r.metrics !== undefined
               ? {
@@ -194,6 +225,8 @@ export function scrubRunsLineText(line: RunsLine, secrets: string[] = collectSec
   if (!secrets.length) return line;
   const out: RunsLine = { ...line };
   if (line.thrown) out.thrown = { ...line.thrown, message: scrub(line.thrown.message, secrets) };
+  if (line.searchPoolMismatch)
+    out.searchPoolMismatch = { ...line.searchPoolMismatch, message: scrub(line.searchPoolMismatch.message, secrets) };
   if (line.result) {
     const r = { ...line.result };
     if (typeof r.finalMessage === "string") r.finalMessage = scrub(r.finalMessage, secrets);
@@ -242,6 +275,7 @@ export function repEvidenceOf(line: RunsLine): RepEvidence {
   const grade = line.grades[0];
   return {
     ...(line.result ? { result: { ...line.result, assertions: grade?.assertions ?? [] } } : {}),
-    ...(line.thrown ? { thrown: reviveThrown(line.thrown) } : {}),
+    ...(line.thrown ? { thrown: reviveThrown(line.thrown, line.searchPoolMismatch) } : {}),
+    ...(line.searchPoolMismatch ? { searchPoolMismatch: line.searchPoolMismatch } : {}),
   };
 }

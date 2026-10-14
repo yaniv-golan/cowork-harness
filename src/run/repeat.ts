@@ -29,6 +29,8 @@ export interface RepeatRollup {
     ablatedRuns: number;
     /** The frozen search corpus labels the batch's runs were served from; absent when none was. */
     searchCorpus?: string[];
+    /** Runs with a refused search, left out of `passes` and `passRate`; absent when there is no frozen corpus. */
+    searchRefusedRuns?: number;
   };
 }
 
@@ -51,9 +53,12 @@ export function buildRepeatRollup(
   results: RunResult[],
   stoppedEarly?: "budget" | "diverged" | "unanswered" | "error",
 ): RepeatRollup {
-  const verdicts = results.map((r) => computeVerdict(r, "live"));
+  // A frozen-corpus run with a refused search worked from different evidence: out of passes and the rate, counted.
+  const refused = (r: RunResult) => (r.searchCorpus?.metrics.refused ?? 0) > 0;
+  const scored = results.filter((r) => !refused(r));
+  const verdicts = scored.map((r) => computeVerdict(r, "live"));
   const passes = verdicts.filter((v) => v.pass).length;
-  const passRate = results.length ? passes / results.length : 0;
+  const passRate = scored.length ? passes / scored.length : 0;
 
   const signalHistogram: Partial<Record<VerdictSignal["code"], number>> = {};
   for (const v of verdicts) for (const s of v.signals) signalHistogram[s.code] = (signalHistogram[s.code] ?? 0) + 1;
@@ -96,7 +101,10 @@ export function buildRepeatRollup(
     skills: uniq(provs.map((p) => p.skill)),
     ablatedRuns: provs.filter((p) => p.ablated).length,
     ...(results.some((r) => r.searchCorpus)
-      ? { searchCorpus: uniq(results.flatMap((r) => (r.searchCorpus ? [r.searchCorpus.label] : []))) }
+      ? {
+          searchCorpus: uniq(results.flatMap((r) => (r.searchCorpus ? [r.searchCorpus.label] : []))),
+          searchRefusedRuns: results.filter(refused).length,
+        }
       : {}),
   };
 

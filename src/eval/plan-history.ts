@@ -45,7 +45,7 @@ const isFirstTurn = (r: RunIndexRow) => r.turn === undefined || r.turn <= 1;
 /** The cost basis for one scenario (index only), with how many runs each filter left out, plus — kept apart
  *  — the budget gate's own wider worst-observed figure. */
 export function loadCostHistory(rows: readonly RunIndexRow[], f: HistoryFilters): CostHistory {
-  const excluded = { notRun: 0, tier: 0, baseline: 0, turn: 0, hillclimb: 0 };
+  const excluded = { notRun: 0, tier: 0, baseline: 0, turn: 0, hillclimb: 0, searchCorpus: 0 };
   const basis = rows
     .filter((r) => r.scenario === f.scenario)
     .filter((r) => {
@@ -54,6 +54,8 @@ export function loadCostHistory(rows: readonly RunIndexRow[], f: HistoryFilters)
       if (r.baseline !== f.baseline) return (void excluded.baseline++, false);
       if (!isFirstTurn(r)) return (void excluded.turn++, false);
       if (f.includeHillclimb !== true && isHillclimb(r)) return (void excluded.hillclimb++, false);
+      // A frozen-corpus run's searches were not billed and its pass rate was earned on recorded search: not live history.
+      if (r.searchCorpus !== undefined) return (void excluded.searchCorpus++, false);
       return true;
     });
   // The gate's basis, not the filtered one: the figure `--max-budget-usd` refuses on. Carried separately;
@@ -104,6 +106,8 @@ export interface ExcludedByKey {
   baseline: number;
   turn: number;
   hillclimb: number;
+  /** Frozen-search-corpus runs: their searches were not billed and their pass rate was earned on recorded search. */
+  searchCorpus: number;
   ablated: number;
   model: number;
   pruned: number;
@@ -231,6 +235,7 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
     baseline: 0,
     turn: 0,
     hillclimb: 0,
+    searchCorpus: 0,
     ablated: 0,
     model: 0,
     pruned: 0,
@@ -252,6 +257,7 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
       if (r.baseline !== o.baseline) return (void ex.baseline++, false);
       if (!isFirstTurn(r)) return (void ex.turn++, false);
       if (o.includeHillclimb !== true && isHillclimb(r)) return (void ex.hillclimb++, false);
+      if (r.searchCorpus !== undefined) return (void ex.searchCorpus++, false);
       return true;
     })
     .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));

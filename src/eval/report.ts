@@ -2,6 +2,17 @@
 // and `eval report <dir>` call — so the two are byte-identical by construction. Pure apart from reading and
 // writing the eval dir: no clock, no environment beyond $HOME (for `~` redaction).
 import { writeFileSync } from "node:fs";
+import { INFRA_EXCLUDED } from "./classify.js";
+import {
+  asymmetry,
+  asymmetryLine,
+  ASYMMETRY_THRESHOLDS,
+  sideMetrics,
+  type AsymmetryCell,
+  type CorpusSideMetrics,
+} from "../search-corpus/asymmetry.js";
+import { provenanceLine, type PoolProvenance } from "../search-corpus/provenance.js";
+import { searchCorpusLabel } from "../search-corpus/label.js";
 import { join } from "node:path";
 import {
   classifyRep,
@@ -220,15 +231,37 @@ export interface EvalReport {
     judgeDisagreement: boolean;
     missingJobs: number;
     tornFinalLine: boolean;
+    /** Reps whose evidence was not the pinned pool's (refused before they ran, or served off another pool). Any
+     *  makes the eval exit 1. Absent without a pinned corpus. */
+    searchPoolMismatch?: { reps: number; byArm: Record<string, number> };
+    /** The comparison is CONFOUNDED: the pool was drawn from one arm (or from unknown sources), or the arms were served
+     *  asymmetrically. Never changes the exit code. Absent when neither applies. */
+    confounded?: { provenance?: string; asymmetry?: true };
     exitCode: 0 | 1;
   };
   cost: { agentUsd: number; judgeUsd: number };
   stoppedEarly: null;
   redactedHostPaths: number;
+  /** Present when the eval pinned a frozen search corpus. */
+  searchCorpus?: ReportSearchCorpus;
 }
 
 const SCORED: ReadonlySet<RepBucket> = new Set(["valid", "judge_invalid", "errored_agent"]);
-const ERRORED: ReadonlySet<RepBucket> = new Set(["errored_infra", "errored_agent"]);
+/** The agent's errors and every infrastructure exclusion: an (arm, scenario) whose every rep is in this set errored. */
+const ERRORED: ReadonlySet<RepBucket> = new Set(["errored_infra", "errored_agent", ...INFRA_EXCLUDED]);
+
+/** The frozen search corpus, side by side per arm (from each scored rep's persisted counts). */
+export interface ReportSearchCorpus {
+  label: string;
+  pin: NonNullable<EvalManifest["pins"]["searchCorpus"]>;
+  provenance: PoolProvenance | null;
+  provenanceLine: string;
+  arms: Record<
+    string,
+    { total: CorpusSideMetrics; perScenario: Record<string, CorpusSideMetrics>; refusedReps: number; judgeWarned: number }
+  >;
+  asymmetry: { total: AsymmetryCell; perScenario: Record<string, AsymmetryCell>; thresholds: typeof ASYMMETRY_THRESHOLDS };
+}
 
 interface ClassifiedLine {
   line: RunsLine;
@@ -705,7 +738,11 @@ export function buildEvalReport(evalDir: string): EvalReport {
   const sigFor = (arm: string, scenario: string) => m.arms.find((a) => a.label === arm)?.sigs[scenario];
   const classified: ClassifiedLine[] = lines.map((line) => ({
     line,
-    c: classifyRep(repEvidenceOf(line), { contentSig: sigFor(line.arm, line.scenario), judgePromptHash: m.pins.judge.promptHash }),
+    c: classifyRep(repEvidenceOf(line), {
+      contentSig: sigFor(line.arm, line.scenario),
+      judgePromptHash: m.pins.judge.promptHash,
+      ...(m.pins.searchCorpus ? { searchCorpus: { sha256: m.pins.searchCorpus.sha256, miss: m.pins.searchCorpus.miss } } : {}),
+    }),
   }));
   const threshold = insufficientThreshold(m.settings.reps, m.settings.allowUnderpowered);
   const tunedNames = m.scenarios.filter((s) => !s.heldOut).map((s) => s.name);
@@ -723,7 +760,8 @@ export function buildEvalReport(evalDir: string): EvalReport {
   for (const sc of m.scenarios) {
     const per = m.arms.map((a) => allErrored(a.label, sc.name));
     const both = per.every((x) => x !== null);
-    const anyAllInfra = per.some((x) => x !== null && x.every((y) => y.c.bucket === "errored_infra"));
+    // Infrastructure in any mix (a pool mismatch, a refused search, an infra error): that arm never ran on the evidence.
+    const anyAllInfra = per.some((x) => x !== null && x.every((y) => INFRA_EXCLUDED.has(y.c.bucket)));
     m.arms.forEach((a, i) => {
       const mine = per[i];
       if (mine === null) return;
@@ -872,6 +910,24 @@ export function buildEvalReport(evalDir: string): EvalReport {
   });
   const refusalImbalances = [...(tuned?.refusalImbalances ?? []), ...(heldOut?.refusalImbalances ?? [])];
   const judgeDisagreement = judgeDisagreements.length > 0;
+  const searchCorpus = m.pins.searchCorpus ? corpusSection(m, classified) : undefined;
+  const mismatched = classified.filter((x) => x.c.bucket === "search_pool_mismatch");
+  const searchPoolMismatch = m.pins.searchCorpus
+    ? {
+        reps: mismatched.length,
+        byArm: Object.fromEntries(m.arms.map((a) => [a.label, mismatched.filter((x) => x.line.arm === a.label).length])),
+      }
+    : undefined;
+  const confoundedBy = searchCorpus
+    ? {
+        ...(searchCorpus.provenance && (searchCorpus.provenance.class === "one-sided" || searchCorpus.provenance.class === "unknown")
+          ? { provenance: searchCorpus.provenance.class }
+          : {}),
+        ...([searchCorpus.asymmetry.total, ...Object.values(searchCorpus.asymmetry.perScenario)].some((c) => c.judged && c.fires)
+          ? { asymmetry: true as const }
+          : {}),
+      }
+    : {};
   const recordedIdx = new Set(lines.map((l) => l.index));
   const missingJobs = m.settings.reps * m.scenarios.length * 2 - recordedIdx.size;
   return {
@@ -910,7 +966,17 @@ export function buildEvalReport(evalDir: string): EvalReport {
       missingJobs,
       tornFinalLine,
       refusalImbalances,
-      exitCode: failOnHit || allInsufficient || judgeDisagreement || comparedNothing.size > 0 || notCompared > 0 ? 1 : 0,
+      ...(searchPoolMismatch ? { searchPoolMismatch } : {}),
+      ...(Object.keys(confoundedBy).length ? { confounded: confoundedBy } : {}),
+      exitCode:
+        failOnHit ||
+        allInsufficient ||
+        judgeDisagreement ||
+        comparedNothing.size > 0 ||
+        notCompared > 0 ||
+        (searchPoolMismatch?.reps ?? 0) > 0
+          ? 1
+          : 0,
     },
     cost: {
       agentUsd: sumFinite(lines.map((l) => l.result?.cost?.usd)),
@@ -918,6 +984,53 @@ export function buildEvalReport(evalDir: string): EvalReport {
     },
     stoppedEarly: null,
     redactedHostPaths: 0,
+    ...(searchCorpus ? { searchCorpus } : {}),
+  };
+}
+
+/** Per arm, per scenario and in total, over the arm's SCORED reps; plus the asymmetry marker between the two arms. */
+function corpusSection(m: EvalManifest, classified: ClassifiedLine[]): ReportSearchCorpus {
+  const pin = m.pins.searchCorpus!;
+  const counts = (xs: ClassifiedLine[]) =>
+    xs.flatMap((x) => {
+      const sc = x.line.result?.searchCorpus;
+      return sc
+        ? [
+            {
+              served: sc.metrics.served,
+              miss: sc.metrics.miss,
+              ...(sc.metrics.meanTopScore !== undefined ? { meanTopScore: sc.metrics.meanTopScore } : {}),
+            },
+          ]
+        : [];
+    });
+  const arms: ReportSearchCorpus["arms"] = {};
+  for (const a of m.arms) {
+    const mine = classified.filter((x) => x.line.arm === a.label);
+    const scored = mine.filter((x) => SCORED.has(x.c.bucket));
+    arms[a.label] = {
+      total: sideMetrics(counts(scored)),
+      perScenario: Object.fromEntries(
+        m.scenarios.map((sc) => [sc.name, sideMetrics(counts(scored.filter((x) => x.line.scenario === sc.name)))]),
+      ),
+      refusedReps: mine.filter((x) => x.c.bucket === "search_refused").length,
+      judgeWarned: scored.filter((x) => x.line.result?.searchCorpus?.signals?.includes("search_corpus_semantic_judge")).length,
+    };
+  }
+  const [A, B] = m.arms;
+  const cell = (f: (l: string) => CorpusSideMetrics) => asymmetry({ label: A.label, m: f(A.label) }, { label: B.label, m: f(B.label) });
+  const provenance = m.searchCorpusProvenance ?? null;
+  return {
+    label: searchCorpusLabel(pin.poolId, pin.sha256),
+    pin,
+    provenance,
+    provenanceLine: provenance ? provenanceLine(provenance) : "pool provenance: not recorded",
+    arms,
+    asymmetry: {
+      total: cell((l) => arms[l]!.total),
+      perScenario: Object.fromEntries(m.scenarios.map((sc) => [sc.name, cell((l) => arms[l]!.perScenario[sc.name]!)])),
+      thresholds: ASYMMETRY_THRESHOLDS,
+    },
   };
 }
 
@@ -1061,6 +1174,10 @@ function renderMetrics(s: ReportSection, rep: EvalReport): string[] {
 /** What to check first, from the most frequent bucket and rule of an all-errored arm. */
 export function erroredHint(d: { bucket: RepBucket; rule: string }): string {
   if (d.bucket === "errored_agent") return "The agent failed in every rep: read the run dirs.";
+  if (d.bucket === "search_pool_mismatch")
+    return "The reps were refused before they ran, or served off another pool: the eval's pool copy (search-pool/ in the eval dir) changed. Re-run the eval.";
+  if (d.bucket === "search_refused")
+    return "Searches were refused in every rep, so the arm worked from different evidence: read each run's search-corpus.jsonl for the refusal reason.";
   switch (d.rule) {
     case "auth":
       return "The agent could not sign in: check its credential for this tier (`cowork-harness doctor --tier <tier>`).";
@@ -1112,6 +1229,21 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   );
   if (!rep.summary.metricsRecorded)
     L.push("Metrics: not recorded in this eval dir (written before eval graded `metrics:`); re-run the eval to grade them.");
+  if (rep.searchCorpus) {
+    const sc = rep.searchCorpus;
+    L.push(`Search: [${sc.label}]. Both arms were served from one private copy of the pool, pinned to its hash.`);
+    L.push(
+      `${sc.provenanceLine}. A frozen corpus holds search fixed: it cannot evaluate a change to what or when the skill searches (evaluate that live).`,
+    );
+    L.push(`Total: ${asymmetryLine(sc.asymmetry.total, sc.arms[A.label]!.total, sc.arms[B.label]!.total)}.`);
+    if (Object.keys(sc.asymmetry.perScenario).length > 1)
+      for (const [name, cell] of Object.entries(sc.asymmetry.perScenario))
+        L.push(`- ${name}: ${asymmetryLine(cell, sc.arms[A.label]!.perScenario[name]!, sc.arms[B.label]!.perScenario[name]!)}`);
+    if (rep.summary.confounded)
+      L.push(
+        `**CONFOUNDED** (${[rep.summary.confounded.provenance ? `pool ${rep.summary.confounded.provenance}` : "", rep.summary.confounded.asymmetry ? "asymmetric service" : ""].filter(Boolean).join(", ")}): read the comparison as the arms' behaviour on unequal evidence, not as the edit's effect.`,
+      );
+  }
   L.push(`Host paths redacted: ${REDACTION_PLACEHOLDER}.`, "");
 
   L.push("### Reps per arm", "");
@@ -1159,6 +1291,17 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
       L.push(
         `  - **⚠ metric states that break the comparison: ${states(a.metricStates.notCompared)}** — a harness defect; those metric rows are not compared (exit 1).`,
       );
+    const sca = rep.searchCorpus?.arms[a.label];
+    if (sca) {
+      const t = sca.total;
+      L.push(
+        `  - search (scored reps): ${t.served} served, ${t.miss} miss, miss rate ${t.missRate === undefined ? "—" : t.missRate.toFixed(2)}, mean top score ${t.meanTopScore === undefined ? "—" : t.meanTopScore.toFixed(2)}; ${sca.refusedReps} rep(s) excluded for a refused search`,
+      );
+      if (sca.judgeWarned > 0)
+        L.push(
+          `  - ⚠ ${sca.judgeWarned} rep(s) graded by a judge on recorded searches: a grade there is not evidence of research quality.`,
+        );
+    }
     const md = a.medians;
     L.push(
       `  - medians over ${md.eligibleReps} scored rep(s): cost ${fmtUsd(md.costUsd.median)} (n=${md.costUsd.n}), judge ${fmtUsd(md.judgeCostUsd.median)} (n=${md.judgeCostUsd.n}), turns ${md.turns.median ?? "—"} (n=${md.turns.n}), duration ${md.durationMs.median === undefined ? "—" : `${Math.round(md.durationMs.median / 1000)}s`} (n=${md.durationMs.n})`,
@@ -1174,6 +1317,15 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
           ? `Nothing was compared: ${e.scenario}'s rows are insufficient (exit 1). `
           : "Each of those reps is scored as failing every row (the other arm ran). ") +
         erroredHint(e.dominant),
+      "",
+    );
+  const pm = rep.summary.searchPoolMismatch;
+  if (pm && pm.reps > 0)
+    L.push(
+      `**⚠ ${pm.reps} rep(s) were not served from the pinned pool** (${Object.entries(pm.byArm)
+        .map(([k, v]) => `${k} ${v}`)
+        .join(", ")}): each was refused before it ran, or its evidence came from another pool. They are excluded and the eval exits 1. ` +
+        erroredHint({ bucket: "search_pool_mismatch", rule: "" }),
       "",
     );
   for (const r of rep.summary.refusalImbalances) {

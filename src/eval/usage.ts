@@ -7,6 +7,8 @@ export const EVAL_BOOLEAN_FLAGS = [
   "--allow-identical-arms",
   "--quiet",
   "--dry-run",
+  "--allow-confounded-pool",
+  "--allow-mixed-pool",
 ] as const;
 export const EVAL_VALUE_FLAGS = [
   "--reps",
@@ -26,6 +28,9 @@ export const EVAL_VALUE_FLAGS = [
   "--run-dir",
   "--target-effect",
   "--max-budget-usd",
+  "--search-corpus",
+  "--search-corpus-miss",
+  "--search-corpus-min-score",
 ] as const;
 export const EVAL_REPEATED_FLAGS = ["--arm", "--holdout"] as const;
 
