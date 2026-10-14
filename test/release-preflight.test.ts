@@ -277,7 +277,7 @@ describe("checkSearchAnchorsPresent (check 7c)", () => {
     systemSentence: h,
     userPrefix: h,
     ccr: { sessionsPath: "/v1/code/sessions/", workerPath: "/worker/", searchRoute: "web-search" },
-    noRequest: { missingQuery: h, bothDomainLists: h, budgetPrefix: h, budgetFragment: h },
+    noRequest: { missingQuery: h, bothDomainLists: h, budgetPrefix: h, budgetFragment: h, inputValidationPrefix: h },
   };
 
   it("passes a schema-valid block, with or without source", () => {

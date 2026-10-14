@@ -469,7 +469,9 @@ committed baseline and say why in that baseline's `$comment`.
    request: the server tool type, the system sentence and the user-message prefix (as `sha256` and UTF-8 byte
    length only, never the text), and the cloud search route's path pieces. `noRequest` holds, the same way, the
    agent-side results that show no search was made: the two fixed input-validation messages, and the budget-cap
-   text's fixed prefix and the fixed fragment after its turn|session word. The tool type and the two literals are
+   text's fixed prefix and the fixed fragment after its turn|session word, and the tool runner's schema-failure prefix (a
+   query too short for the tool's input schema is refused before the tool runs; located from the runner's one
+   schema-failure marker, outside the WebSearch tool). The tool type and the two literals are
    located by code shape inside the one call site that names the nested search, because the binary also holds
    string-table copies. The cloud route pieces are only checked to be present exactly once; they are constants.
    No run reads the block yet (`sync` and `npm run preflight` check it); it exists so a later release can recognise

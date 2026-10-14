@@ -45,6 +45,11 @@ const BOTH_DOMAIN_LISTS = new RegExp(`return\\{result:!1,message:${LIT},errorCod
 const SEGMENT = "((?:(?!\\$\\{)[^`\\\\\\n])*)";
 /** The budget-cap result: fixed P1, the turn|session variable, fixed P2, then the next substitution. */
 const BUDGET = new RegExp(`results:\\[\`${SEGMENT}\\$\\{(${IDENT})\\}${SEGMENT}\\$\\{`, "g");
+/** The tool runner's schema-failure result: located from its one ZOD_VALIDATION telemetry marker (runner code shared by
+ *  every tool, far from the WebSearch tool), then the one wrapped result built just after it. */
+const ZOD_MARKER = new RegExp(`errorCode:${IDENT}\\("ZOD_VALIDATION"\\)`, "g");
+const ZOD_WINDOW_AFTER = 1500;
+const INPUT_VALIDATION_RESULT = new RegExp(`content:\`<tool_use_error>${SEGMENT}\\$\\{${IDENT}\\}</tool_use_error>\``, "g");
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const CCR = {
@@ -108,6 +113,27 @@ function budgetTemplate(window: string, defects: string[]): { p1: string; p2: st
   return { p1: p1!, p2: p2! };
 }
 
+function inputValidationPrefix(buf: Buffer, defects: string[]): string | undefined {
+  const name = "noRequest.inputValidationPrefix";
+  const text = buf.toString("latin1");
+  const marks = [...text.matchAll(ZOD_MARKER)];
+  if (marks.length !== 1) {
+    defects.push(`${name}: ${marks.length} schema-failure markers in the agent binary (expected exactly 1)`);
+    return undefined;
+  }
+  const window = text.slice(marks[0]!.index!, marks[0]!.index! + ZOD_WINDOW_AFTER);
+  const hits = [...window.matchAll(INPUT_VALIDATION_RESULT)].map((m) => m[1]!);
+  if (hits.length !== 1) {
+    defects.push(`${name}: ${hits.length} wrapped results after the schema-failure marker (expected exactly 1)`);
+    return undefined;
+  }
+  if (!/^[\x20-\x7e]+$/.test(hits[0]!)) {
+    defects.push(`${name}: the prefix is empty or not printable ASCII`);
+    return undefined;
+  }
+  return hits[0];
+}
+
 /** Extract the web-search anchors from an agent binary's bytes. Pure. Never returns any literal's text. */
 export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
   const defects: string[] = [];
@@ -140,6 +166,7 @@ export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
   const missingQuery = oneLiteral(nrWindow, MISSING_QUERY, "noRequest.missingQuery", defects);
   const bothDomainLists = oneLiteral(nrWindow, BOTH_DOMAIN_LISTS, "noRequest.bothDomainLists", defects);
   const budget = budgetTemplate(nrWindow, defects);
+  const ivPrefix = inputValidationPrefix(buf, defects);
 
   if (
     defects.length ||
@@ -147,7 +174,8 @@ export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
     sentence === undefined ||
     missingQuery === undefined ||
     bothDomainLists === undefined ||
-    budget === undefined
+    budget === undefined ||
+    ivPrefix === undefined
   )
     return { ok: false, defects };
   return {
@@ -162,6 +190,7 @@ export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
         bothDomainLists: hashed(bothDomainLists),
         budgetPrefix: hashed(budget.p1),
         budgetFragment: hashed(budget.p2),
+        inputValidationPrefix: hashed(ivPrefix),
       },
     },
   };

@@ -42,8 +42,8 @@ export const SearchAnchors = z.strictObject({
    *  Absent on a baseline written before this field: extracted from the ELF, with the native agreeing or absent. */
   source: z.enum(["elf", "native", "both"]).optional(),
   /** The agent-side WebSearch results that show no request was made, as hashes: the two fixed `validateInput`
-   *  messages (they reach the agent inside the tool runner's `<tool_use_error>` wrapper), and the budget-cap text's
-   *  fixed prefix and the fixed fragment after its turn|session word. A permission denial is recognised from the
+   *  messages (they reach the agent inside the tool runner's `<tool_use_error>` wrapper), the budget-cap text's fixed
+   *  prefix and the fixed fragment after its turn|session word, and the runner's schema-failure prefix. A permission denial is recognised from the
    *  harness's own decision, so it has no anchor. Absent on a baseline written before this field; a run cannot serve
    *  a frozen search corpus without it. */
   noRequest: z
@@ -52,6 +52,9 @@ export const SearchAnchors = z.strictObject({
       bothDomainLists: HashedLiteral,
       budgetPrefix: HashedLiteral,
       budgetFragment: HashedLiteral,
+      /** The tool runner's schema-failure result prefix (shared by every tool): a query too short for the input schema
+       *  is refused before the tool runs. */
+      inputValidationPrefix: HashedLiteral,
     })
     .optional(),
 });

@@ -47,8 +47,16 @@ const noRequestSite = (o: { missing?: string; both?: string; p1?: string; p2?: s
 // The string table holds a second copy of literals, far from the call site.
 const stringTable = `\0web_search_20250305\0${PREFIX}\0${SENTENCE}\0`;
 const pad = (n: number) => "x".repeat(n);
-const bundle = (site = callSite(), nr = noRequestSite()) =>
-  Buffer.from(stringTable + pad(20000) + ccr + pad(9000) + nr + pad(1200) + site + pad(500));
+// The tool runner's schema-failure result (shared by every tool), far from the WebSearch tool: a ZOD_VALIDATION
+// telemetry marker, then the result whose fixed prefix is anchored. Invented text, the runner's shape.
+const IVE = "Bad tool input here: ";
+const zodSite = (o: { prefix?: string; marker?: string } = {}) =>
+  `i("tengu_tool_use_error",{error:b("X"),errorCode:b("${o.marker ?? "ZOD_VALIDATION"}")});` +
+  'return[{message:xe({content:[{type:"tool_result",content:`<tool_use_error>' +
+  (o.prefix ?? IVE) +
+  "${Eo}</tool_use_error>`,is_error:!0}]})}]";
+const bundle = (site = callSite(), nr = noRequestSite(), zod = zodSite()) =>
+  Buffer.from(stringTable + zod + pad(20000) + ccr + pad(9000) + nr + pad(1200) + site + pad(500));
 const sha = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
 
 describe("extractSearchAnchors", () => {
@@ -69,7 +77,13 @@ describe("extractSearchAnchors", () => {
     const r = extractSearchAnchors(bundle());
     if (!r.ok) throw new Error(r.defects.join("; "));
     const h = (t: string) => ({ sha256: sha(t), bytes: Buffer.byteLength(t) });
-    expect(r.anchors.noRequest).toEqual({ missingQuery: h(MISSING), bothDomainLists: h(BOTH), budgetPrefix: h(P1), budgetFragment: h(P2) });
+    expect(r.anchors.noRequest).toEqual({
+      missingQuery: h(MISSING),
+      bothDomainLists: h(BOTH),
+      budgetPrefix: h(P1),
+      budgetFragment: h(P2),
+      inputValidationPrefix: h(IVE),
+    });
     for (const t of [MISSING, BOTH, P1.trim(), P2.trim()]) expect(JSON.stringify(r.anchors)).not.toContain(t);
   });
 
@@ -97,6 +111,16 @@ describe("extractSearchAnchors", () => {
     // too far before the call site to be the same tool
     const far = Buffer.from(stringTable + pad(20000) + ccr + pad(9000) + noRequestSite() + pad(9000) + callSite() + pad(500));
     expect(extractSearchAnchors(far).ok).toBe(false);
+  });
+
+  it("fails when the tool runner's schema-failure result is missing, doubled or reshaped", () => {
+    const defects = (zod: string) => {
+      const r = extractSearchAnchors(bundle(callSite(), noRequestSite(), zod));
+      return r.ok ? [] : r.defects;
+    };
+    expect(defects(zodSite({ marker: "OTHER" }))).toEqual([expect.stringMatching(/^noRequest\.inputValidationPrefix: 0 /)]);
+    expect(defects(zodSite() + zodSite())).toEqual([expect.stringMatching(/^noRequest\.inputValidationPrefix: 2 /)]);
+    expect(defects(zodSite({ prefix: "has \\ escape " }))).toEqual([expect.stringMatching(/^noRequest\.inputValidationPrefix/)]);
   });
 
   it("ignores the string-table copies outside the call site", () => {
