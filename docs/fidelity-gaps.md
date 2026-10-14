@@ -1397,8 +1397,8 @@ host-side is not visible to the in-VM agent. See [plugin-root.md](./plugin-root.
 against the agent's query. Real Cowork searches the live web, and the search's prose is written by a model for that
 exact query. Here the links are real and the prose is real model output, but written for a neighbouring query: a
 figure in it can belong to another geography, segment or year. Use a frozen run for the steps around research (gates,
-dispatch, hand-offs, compose), never to judge research quality. Every surface labels such a run `frozen search corpus
-<pool>@<hash8>`.
+dispatch, hand-offs, compose), never to judge research quality, and never to evaluate a change to what or when a skill
+searches (evaluate that live). Every surface labels such a run `frozen search corpus <pool>@<hash8>`.
 
 - **Not billed, not counted by the agent.** A served search costs nothing and the agent's own cost and search count
   leave it out; `RunResult.searchCorpus.metrics` counts it.

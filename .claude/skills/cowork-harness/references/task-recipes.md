@@ -532,7 +532,11 @@ cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy  
 - **`--min-score <n>`** sets the relevance floor a query must clear to be served (default `0.4`). It is part of the pool
   hash, so two pools with different floors are different pools.
 
-**Serve a run's searches from a pool.** `run <scenario> --search-corpus <pool>` (or `skill … --search-corpus <pool>`)
+**Serve a run's searches from a pool.** Not for evaluating a change to WHAT or WHEN a skill searches: a frozen pool holds
+search fixed, so new queries get misses or neighbouring records and a pool from the old version makes any rewording
+read as a regression. Evaluate a search change live (no corpus, more reps); for a frozen look at the downstream steps
+too, run that separately with a pool built evenly from both versions' live runs.
+`run <scenario> --search-corpus <pool>` (or `skill … --search-corpus <pool>`)
 answers every web search the agent makes from the pool: the best-matching recorded searches, their links and their
 prose, ranked locally. It is not live search: the prose answers a neighbouring query, so use it for the steps around
 research (gates, dispatch, hand-offs, compose), never to judge research quality. Every result is labelled `frozen

@@ -495,6 +495,13 @@ prompt legs (`legs/<id>/`) are found under its root and count as separate source
 
 #### Serving a run's searches from a pool (`--search-corpus`)
 
+> **Not for evaluating a change to how the skill searches.** A frozen corpus holds search fixed. A skill version that
+> asks different queries, or searches in other steps, gets misses or records written for someone else's queries, and
+> a pool built from the old version makes any rewording read as a regression. Evaluate a search change **live** (no
+> corpus, more reps). If you also want a frozen evaluation of what happens after the searches, split it: a live
+> evaluation of the search change, then a frozen one of the downstream steps, with a pool built evenly from both
+> versions' live runs.
+
 `run <scenario> --search-corpus <pool>` (and `skill … --search-corpus <pool>`) answers every web search the agent makes
 from the pool instead of the live web. The agent's WebSearch tool makes its own model request that carries the server
 search tool; the harness recognises that request and answers it locally with the best-matching recorded searches (up

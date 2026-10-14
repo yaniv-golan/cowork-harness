@@ -540,8 +540,10 @@ Output:
   --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
                                    removed, to check whether the agent "succeeds" even without them
   --search-corpus <pool>           serve the agent's web searches from a recorded pool (search-pool build) instead
-                                   of live search; hostloop only, env credential only. Labelled on every result;
-                                   the run fails if any search could have reached the live API
+                                   of live search. It holds search fixed, so it is NOT for evaluating a change to
+                                   what or when the skill searches (run that live). Hostloop only, env credential
+                                   only. Labelled on every result; the run fails if any search could have reached
+                                   the live API
   --search-corpus-miss empty|error what a query the pool cannot answer gets (default empty: "No links found.")
   --search-corpus-min-score <n>    override the pool's relevance floor (0–1; changes the pool hash)
   --allow-missing-capability       don't fail the verdict when the (partial 'core') image omits a capability
@@ -655,8 +657,10 @@ Output:
   --ablate-skill                   negative control: re-run the same prompt with the skill(s)-under-test
                                    removed, to check whether the agent "succeeds" even without them
   --search-corpus <pool>           serve the agent's web searches from a recorded pool (search-pool build) instead
-                                   of live search; hostloop only, env credential only. Labelled on every result;
-                                   the run fails if any search could have reached the live API
+                                   of live search. It holds search fixed, so it is NOT for evaluating a change to
+                                   what or when the skill searches (run that live). Hostloop only, env credential
+                                   only. Labelled on every result; the run fails if any search could have reached
+                                   the live API
   --search-corpus-miss empty|error what a query the pool cannot answer gets (default empty: "No links found.")
   --search-corpus-min-score <n>    override the pool's relevance floor (0–1; changes the pool hash)
   --run-dir <path>                 relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
