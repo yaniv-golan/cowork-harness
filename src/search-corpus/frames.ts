@@ -38,11 +38,15 @@ export interface FramePairing {
   entry?: RegistryEntry;
 }
 
-const VERDICTS: Record<Exclude<ResultShape, "unfenced">, (miss: "empty" | "error") => RegistryEntry["verdict"][]> = {
-  served: () => ["served"],
-  empty: (miss) => (miss === "empty" ? ["miss"] : []),
-  error: (miss) => (miss === "error" ? ["refused", "miss"] : ["refused"]),
-};
+/** The verdicts a result showing this answer can be, under the run's miss mode; undefined (any) when it could not be
+ *  read. A served record with no links renders as the no-links answer, so that answer can also be a serve (one key
+ *  never yields both a serve and an empty miss in one run: retrieval is deterministic over a fixed pool). */
+export function shapeVerdicts(shape: ResultShape, miss: "empty" | "error"): readonly RegistryEntry["verdict"][] | undefined {
+  if (shape === "unfenced") return undefined;
+  if (shape === "served") return ["served"];
+  if (shape === "empty") return miss === "empty" ? ["miss", "served"] : ["served"];
+  return miss === "error" ? ["refused", "miss"] : ["refused"];
+}
 
 const strings = (v: unknown) => (Array.isArray(v) && v.every((x) => typeof x === "string") ? (v as string[]) : undefined);
 
@@ -50,6 +54,7 @@ export class ServeFrames {
   private readonly uses = new Map<string, PendingUse>();
   private readonly deniedIds_ = new Set<string>();
   private readonly pairings_: FramePairing[] = [];
+  private readonly queryless = new Set<string>();
   private toolUses = 0;
   private noRequest = 0;
   private shapeUnfenced = 0;
@@ -82,7 +87,10 @@ export class ServeFrames {
       if (m.type === "assistant" && b?.type === "tool_use" && b.name === "WebSearch" && typeof b.id === "string") {
         this.toolUses++;
         const input = (b.input ?? {}) as Record<string, unknown>;
-        if (typeof input.query !== "string") continue;
+        if (typeof input.query !== "string") {
+          this.queryless.add(b.id);
+          continue;
+        }
         const allowedDomains = strings(input.allowed_domains);
         const blockedDomains = strings(input.blocked_domains);
         this.uses.set(b.id, {
@@ -92,6 +100,16 @@ export class ServeFrames {
           ...(parent ? { parentToolUseId: parent } : {}),
         });
       } else if (m.type === "user" && b?.type === "tool_result" && typeof b.tool_use_id === "string") {
+        // A query-less call never makes a request; its result is counted as the agent-side count counts it.
+        if (this.queryless.delete(b.tool_use_id)) {
+          if (
+            noRequestKind({ content: b.content, ...(b.is_error === true ? { is_error: true } : {}) }, this.o.noRequest, {
+              deniedByHarness: this.deniedIds_.has(b.tool_use_id),
+            })
+          )
+            this.noRequest++;
+          continue;
+        }
         const use = this.uses.get(b.tool_use_id);
         if (!use) continue;
         this.uses.delete(b.tool_use_id);
@@ -105,7 +123,8 @@ export class ServeFrames {
         const shape = resultShape(b.content, use.query);
         if (shape === "unfenced") this.shapeUnfenced++;
         const parented = use.parentToolUseId !== undefined;
-        const e = this.o.registry.take(use, { parented, ...(shape === "unfenced" ? {} : { verdicts: VERDICTS[shape](this.o.miss) }) });
+        const verdicts = shapeVerdicts(shape, this.o.miss);
+        const e = this.o.registry.take(use, { parented, ...(verdicts ? { verdicts } : {}) });
         const head = {
           streamed: true,
           toolUseId: b.tool_use_id,

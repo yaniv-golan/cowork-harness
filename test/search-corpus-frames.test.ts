@@ -163,8 +163,17 @@ describe("ServeFrames: one frame per intercepted request, written by the session
   it("counts every WebSearch tool_use, a query-less one included; only a result with a query can take an entry", () => {
     const { frames } = setup();
     frames.observe({ type: "assistant", message: { content: [{ type: "tool_use", id: "nq", name: "WebSearch", input: {} }] } });
-    expect(frames.counts()).toMatchObject({ toolUses: 1 });
-    expect(frames.observe(result("nq", "x"))).toEqual([]);
+    expect(frames.counts()).toMatchObject({ toolUses: 1, noRequest: 0 });
+    // its validation refusal made no request, counted as the frozen-promise check counts it
+    expect(frames.observe(result("nq", `<tool_use_error>${IVE}[]</tool_use_error>`, undefined, true))).toEqual([]);
+    expect(frames.counts()).toMatchObject({ toolUses: 1, noRequest: 1 });
+  });
+
+  it("a served record with no links renders as the no-links answer, and still takes its serve", () => {
+    const { registry, frames } = setup();
+    registry.record(entry("q", { verdict: "served", rounds: [{ ...round, urls: [] }] }));
+    frames.observe(use("x", "q"));
+    expect(parse(frames.observe(result("x", empty("q"))))[0]).toMatchObject({ verdict: "served" });
   });
 
   it("keeps each streamed frame's pairing for the post-run join", () => {

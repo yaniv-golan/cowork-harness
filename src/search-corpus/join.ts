@@ -11,7 +11,7 @@
 
 import { parseMessage } from "../agent/session.js";
 import { sharesToolId, toolIds } from "../hillclimb/trace.js";
-import type { FramePairing } from "./frames.js";
+import { shapeVerdicts, type FramePairing } from "./frames.js";
 import type { RegistryEntry } from "./registry.js";
 import type { SearchCorpusCall } from "../types.js";
 
@@ -28,14 +28,6 @@ export interface JoinResult {
   /** Pairings the harness could not settle (a refused move, no request left, or dispatches that resolved to other agents). */
   attributionUncertain: number;
 }
-
-type Verdicts = readonly RegistryEntry["verdict"][];
-const VERDICTS: Record<FramePairing["shape"], Verdicts> = {
-  served: ["served"],
-  empty: ["miss"],
-  error: ["refused", "miss"],
-  unfenced: ["served", "miss", "refused"],
-};
 
 const list = (xs: string[] | undefined) => JSON.stringify(xs ?? []);
 const keyOf = (e: { query: string | null; allowedDomains?: string[]; blockedDomains?: string[] }) =>
@@ -86,63 +78,69 @@ export function joinCalls(o: {
   entries: readonly RegistryEntry[];
   pairings: readonly FramePairing[];
   dispatchAgents: ReadonlyMap<string, string>;
+  /** The run's miss mode: which verdicts an error-shaped or empty result can be. */
+  miss: "empty" | "error";
 }): JoinResult {
   const toolUseOf = new Map<RegistryEntry, { toolUseId: string; provisional?: true; reassignedFrom?: number }>();
   const extra: SearchCall[] = [];
   let reassigned = 0;
   let unattributed = 0;
   let uncertain = 0;
-  let unresolved = 0;
-  let resolved = 0;
+  const allowed = (p: FramePairing, e: RegistryEntry) => shapeVerdicts(p.shape, o.miss)?.includes(e.verdict) ?? true;
+  const resolvedPairs: { p: FramePairing; agent: string }[] = [];
+  const unresolvedPairs: FramePairing[] = [];
 
-  // A parented pairing's group: its resolved agent, its key and the answer it showed.
-  const groups = new Map<string, FramePairing[]>();
   for (const p of o.pairings) {
     if (!p.entry) {
       extra.push({ toolUseId: p.toolUseId, unpaired: true });
       unattributed++;
-      continue;
+    } else if (p.parentToolUseId === undefined) toolUseOf.set(p.entry, { toolUseId: p.toolUseId });
+    else {
+      const agent = o.dispatchAgents.get(p.parentToolUseId);
+      if (agent === undefined) unresolvedPairs.push(p);
+      else resolvedPairs.push({ p, agent });
     }
-    if (p.parentToolUseId === undefined) {
-      toolUseOf.set(p.entry, { toolUseId: p.toolUseId });
-      continue;
-    }
-    const agent = o.dispatchAgents.get(p.parentToolUseId);
-    if (agent === undefined) {
-      toolUseOf.set(p.entry, { toolUseId: p.toolUseId, provisional: true });
-      unattributed++;
-      unresolved++;
-      continue;
-    }
-    resolved++;
-    const g = `${agent}\0${keyOf(p.entry)}\0${p.shape}`;
-    (groups.get(g) ?? groups.set(g, []).get(g)!).push(p);
   }
-  for (const [g, ps] of groups) {
-    const [agent, , shape] = g.split("\0") as [string, string, FramePairing["shape"]];
-    const key = keyOf(ps[0]!.entry!);
-    const candidates = o.entries.filter((e) => e.agentId === agent && keyOf(e) === key && VERDICTS[shape].includes(e.verdict));
-    ps.forEach((p, i) => {
-      const streamed = p.entry!;
-      const target = candidates[i];
-      if (target === streamed && !toolUseOf.has(target)) {
-        toolUseOf.set(target, { toolUseId: p.toolUseId });
-        return;
-      }
-      if (target && !toolUseOf.has(target) && serveRecord(target) === serveRecord(streamed)) {
-        toolUseOf.set(target, { toolUseId: p.toolUseId, reassignedFrom: streamed.ordinal });
-        reassigned++;
-        return;
-      }
-      // Not moved: the stream's pairing stays, unconfirmed.
-      if (!toolUseOf.has(streamed)) toolUseOf.set(streamed, { toolUseId: p.toolUseId, provisional: true });
-      else extra.push({ toolUseId: p.toolUseId, provisional: true });
+  // First, every stream pairing that is already right (the entry is its resolved agent's, and free) is confirmed.
+  const pending: { p: FramePairing; agent: string }[] = [];
+  for (const r of resolvedPairs) {
+    const e = r.p.entry!;
+    if (e.agentId === r.agent && !toolUseOf.has(e) && allowed(r.p, e)) toolUseOf.set(e, { toolUseId: r.p.toolUseId });
+    else pending.push(r);
+  }
+  // Then each other one moves, in result order, to its agent's earliest free request with the same key, an answer it
+  // can be, and the same serve record. One that cannot move stays unconfirmed.
+  const failed: FramePairing[] = [];
+  for (const { p, agent } of pending) {
+    const streamed = p.entry!;
+    const target = o.entries.find(
+      (e) =>
+        e.agentId === agent &&
+        !toolUseOf.has(e) &&
+        keyOf(e) === keyOf(streamed) &&
+        allowed(p, e) &&
+        serveRecord(e) === serveRecord(streamed),
+    );
+    if (target) {
+      toolUseOf.set(target, { toolUseId: p.toolUseId, reassignedFrom: streamed.ordinal });
+      reassigned++;
+    } else {
+      failed.push(p);
       unattributed++;
       uncertain++;
-    });
+    }
   }
   // Dispatches resolved to agents, yet none of the parented results resolved: a renamed id would look like this.
-  if (unresolved > 0 && resolved === 0 && o.dispatchAgents.size > 0) uncertain += unresolved;
+  if (unresolvedPairs.length > 0 && resolvedPairs.length === 0 && o.dispatchAgents.size > 0) uncertain += unresolvedPairs.length;
+  // What could not be confirmed keeps the stream's pairing, marked; where that request is now another result's, the
+  // result is its own call.
+  for (const p of [...failed, ...unresolvedPairs]) {
+    if (!failed.includes(p)) unattributed++;
+    if (!toolUseOf.has(p.entry!)) toolUseOf.set(p.entry!, { toolUseId: p.toolUseId, provisional: true });
+    else extra.push({ toolUseId: p.toolUseId, provisional: true });
+  }
+  // A request the stream gave a result to, left with none by a move: its result is uncertain, so it is marked.
+  const leftBare = new Set(o.pairings.map((p) => p.entry).filter((e): e is RegistryEntry => !!e && !toolUseOf.has(e)));
 
   let unattributedExpected = 0;
   const calls: SearchCall[] = o.entries.map((e) => {
@@ -157,7 +155,7 @@ export function joinCalls(o: {
       verdict: e.verdict,
       ordinal: e.ordinal,
       rounds: e.rounds.map((r) => ({ ...r, urls: [...r.urls] })),
-      ...(t?.provisional ? { provisional: true as const } : {}),
+      ...(t?.provisional || leftBare.has(e) ? { provisional: true as const } : {}),
       ...(t?.reassignedFrom !== undefined ? { reassignedFrom: t.reassignedFrom } : {}),
     };
   });

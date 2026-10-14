@@ -394,7 +394,7 @@ function expectForkAttributed(r: Ran, dispatchId: string) {
   }));
   const dispatchAgents = dispatchAgentIds(r.lines, kids);
   expect(dispatchAgents.get(dispatchId), "the harness parser resolves the dispatch's agent").toBe(header);
-  const { calls } = joinCalls({ entries: r.registry.all(), pairings: r.frames.pairings(), dispatchAgents });
+  const { calls } = joinCalls({ entries: r.registry.all(), pairings: r.frames.pairings(), dispatchAgents, miss: "empty" });
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({ agentId: header, toolUseId: "toolu_ws1", verdict: "served" });
   expect(calls[0]).not.toHaveProperty("provisional");
@@ -461,6 +461,16 @@ describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_S
       }),
       diag,
     ).toBeNull();
+    // the Task dispatch's own result names the same agent, read through the harness's parser and the join
+    const kids = transcripts.map((p) => ({
+      agentId: /agent-([^/]+)\.jsonl$/.exec(p)![1]!,
+      lines: readFileSync(join(r.config, "projects", p), "utf8").split("\n"),
+    }));
+    const dispatchAgents = dispatchAgentIds(r.lines, kids);
+    expect(dispatchAgents.get("toolu_task1"), diag).toBe(entries[0]!.agentId);
+    const { calls } = joinCalls({ entries, pairings: r.frames.pairings(), dispatchAgents, miss: "empty" });
+    expect(calls, diag).toEqual([expect.objectContaining({ agentId: entries[0]!.agentId, toolUseId: "toolu_stub1", verdict: "served" })]);
+    expect(calls[0]).not.toHaveProperty("provisional");
   }, 180_000);
 
   // The no-request result shapes, confirmed on the real agent at $0: the agent answers each WebSearch itself, no request made.

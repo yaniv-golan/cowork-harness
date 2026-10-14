@@ -521,8 +521,9 @@ never for research quality.
   sub-agent's result is paired with its request after the run, once the dispatch's result names the sub-agent; until
   then its serve frame in `events.jsonl` is marked `provisional`. A pairing the join moved between two requests with
   the same served content is counted `reassigned` (the run line shows "N reassigned"; it never changes the verdict);
-  a result it could not pair is counted `unattributed` (shown the same way). When it could not settle a pairing at
-  all it warns (`search_corpus_attribution_uncertain`). `metrics` also counts the agent's WebSearch calls
+  a result it could not pair, or whose sub-agent could not be resolved, is counted `unattributed` (shown the same way).
+  When no request of the resolved sub-agent had the same served content, or the dispatches named agents none of the
+  results resolved to, it also warns (`search_corpus_attribution_uncertain`). `metrics` also counts the agent's WebSearch calls
   (`toolUses`, `noRequest`), the requests the agents' own records expect (`toolUsesExpected`), requests per agent
   (`byAgent`), forwarded requests carrying another server tool (`liveServerTools`, run live) and the mean relevance
   of the served requests' best rounds (`meanTopScore`).

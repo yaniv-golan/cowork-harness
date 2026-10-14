@@ -39,7 +39,7 @@ describe("joinCalls", () => {
   it("one call per request; a main-loop pairing is final and names its tool_use", () => {
     const r = new SearchRegistry();
     const e = r.record(input(null, "q"));
-    const j = joinCalls({ entries: r.all(), pairings: [pair("t1", e)], dispatchAgents: new Map() });
+    const j = joinCalls({ entries: r.all(), pairings: [pair("t1", e)], dispatchAgents: new Map(), miss: "empty" });
     expect(j.calls).toEqual([{ toolUseId: "t1", query: "q", verdict: "served", ordinal: 1, rounds: [round("r1")] }]);
     expect(j).toMatchObject({ reassigned: 0, unattributed: 0, unattributedExpected: 0, attributionUncertain: 0 });
   });
@@ -47,7 +47,12 @@ describe("joinCalls", () => {
   it("a sub-agent's call carries its agent id; its pairing is confirmed when the dispatch's agent matches", () => {
     const r = new SearchRegistry();
     const e = r.record(input("ag1", "q"));
-    const j = joinCalls({ entries: r.all(), pairings: [pair("c1", e, "task1")], dispatchAgents: new Map([["task1", "ag1"]]) });
+    const j = joinCalls({
+      entries: r.all(),
+      pairings: [pair("c1", e, "task1")],
+      dispatchAgents: new Map([["task1", "ag1"]]),
+      miss: "empty",
+    });
     expect(j.calls[0]).toMatchObject({ agentId: "ag1", toolUseId: "c1", verdict: "served" });
     expect(j.calls[0]).not.toHaveProperty("provisional");
     expect(j.reassigned).toBe(0);
@@ -65,6 +70,7 @@ describe("joinCalls", () => {
         ["taskA", "agA"],
         ["taskB", "agB"],
       ]),
+      miss: "empty",
     });
     expect(j.calls.map((c) => [c.agentId, c.toolUseId, c.reassignedFrom])).toEqual([
       ["agA", "cA", 1],
@@ -85,6 +91,7 @@ describe("joinCalls", () => {
         ["taskA", "agA"],
         ["taskB", "agB"],
       ]),
+      miss: "error",
     });
     expect(j).toMatchObject({ reassigned: 0, unattributed: 2, attributionUncertain: 2 });
     // nothing moved: each entry keeps the stream's tool_use, marked provisional
@@ -97,18 +104,23 @@ describe("joinCalls", () => {
   it("a parented pairing whose dispatch names no agent stays provisional and unattributed; with others resolved and none re-paired, uncertain", () => {
     const r = new SearchRegistry();
     const e = r.record(input("ag1", "q"));
-    const lone = joinCalls({ entries: r.all(), pairings: [pair("c1", e, "task1")], dispatchAgents: new Map() });
+    const lone = joinCalls({ entries: r.all(), pairings: [pair("c1", e, "task1")], dispatchAgents: new Map(), miss: "empty" });
     expect(lone.calls[0]).toMatchObject({ agentId: "ag1", toolUseId: "c1", provisional: true });
     expect(lone).toMatchObject({ unattributed: 1, attributionUncertain: 0 });
     // envelopes did resolve agents, yet none of them is this frame's: a renamed id would look like this
-    const odd = joinCalls({ entries: r.all(), pairings: [pair("c1", e, "task1")], dispatchAgents: new Map([["task9", "ag9"]]) });
+    const odd = joinCalls({
+      entries: r.all(),
+      pairings: [pair("c1", e, "task1")],
+      dispatchAgents: new Map([["task9", "ag9"]]),
+      miss: "empty",
+    });
     expect(odd).toMatchObject({ unattributed: 1, attributionUncertain: 1 });
   });
 
   it("an unpaired result is its own call, unattributed; a keyless refusal is expected unattributed, never uncertain", () => {
     const r = new SearchRegistry();
     r.record(input("ag1", null, { verdict: "refused", rounds: [] }));
-    const j = joinCalls({ entries: r.all(), pairings: [pair("x", undefined)], dispatchAgents: new Map() });
+    const j = joinCalls({ entries: r.all(), pairings: [pair("x", undefined)], dispatchAgents: new Map(), miss: "empty" });
     expect(j.calls).toContainEqual({ toolUseId: "x", unpaired: true });
     expect(j.calls).toContainEqual({ agentId: "ag1", query: null, verdict: "refused", ordinal: 1, rounds: [] });
     expect(j).toMatchObject({ unattributed: 1, unattributedExpected: 1, attributionUncertain: 0 });
@@ -117,9 +129,60 @@ describe("joinCalls", () => {
   it("a request no result streamed for (a deeper sub-agent's) is a call with its agent and no tool_use; not unattributed", () => {
     const r = new SearchRegistry();
     r.record(input("ag2", "deep"));
-    const j = joinCalls({ entries: r.all(), pairings: [], dispatchAgents: new Map() });
+    const j = joinCalls({ entries: r.all(), pairings: [], dispatchAgents: new Map(), miss: "empty" });
     expect(j.calls).toEqual([{ agentId: "ag2", query: "deep", verdict: "served", ordinal: 1, rounds: [round("r1")] }]);
     expect(j.unattributed).toBe(0);
+  });
+});
+
+describe("joinCalls: no false moves, and no request left unmarked", () => {
+  it("three sub-agents, same key, crossed by the stream: every request ends paired or marked provisional, never bare", () => {
+    const r = new SearchRegistry();
+    const e = r.record(input("agX", "q", { rounds: [round("r1")] }));
+    const s = r.record(input("agZ", "q", { rounds: [round("r2")] }));
+    const t = r.record(input("agY", "q", { rounds: [round("r1")] }));
+    const dispatchAgents = new Map([
+      ["tX", "agX"],
+      ["tY", "agY"],
+      ["tZ", "agZ"],
+    ]);
+    const j = joinCalls({
+      entries: r.all(),
+      pairings: [pair("cY", e, "tY"), pair("cX", s, "tX"), pair("cZ", t, "tZ")],
+      dispatchAgents,
+      miss: "empty",
+    });
+    for (const c of j.calls.filter((c) => c.query !== undefined))
+      expect(c.toolUseId !== undefined || c.provisional === true, JSON.stringify(c)).toBe(true);
+    // each tool_use is named at most once
+    const ids = j.calls.map((c) => c.toolUseId).filter(Boolean);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(j.attributionUncertain).toBeGreaterThan(0);
+  });
+  it("one sub-agent: a stream pairing that is already right is confirmed, whatever the order of its requests", () => {
+    const r = new SearchRegistry();
+    const miss = r.record(input("ag1", "q", { verdict: "miss", rounds: [] }));
+    const refused = r.record(input("ag1", "q", { verdict: "refused", rounds: [] }));
+    // under --search-corpus-miss empty an error-shaped result can only be the refusal
+    const j = joinCalls({
+      entries: r.all(),
+      pairings: [pair("c1", refused, "t1", "error"), pair("c2", miss, "t1", "empty")],
+      dispatchAgents: new Map([["t1", "ag1"]]),
+      miss: "empty",
+    });
+    expect(j).toMatchObject({ reassigned: 0, unattributed: 0, attributionUncertain: 0 });
+    expect(j.calls.map((c) => c.toolUseId)).toEqual(["c2", "c1"]);
+    // two served requests, one result read as unfenced: both stream pairings stand
+    const r2 = new SearchRegistry();
+    const a = r2.record(input("ag1", "q"));
+    const b = r2.record(input("ag1", "q"));
+    const j2 = joinCalls({
+      entries: r2.all(),
+      pairings: [pair("c1", a, "t1", "served"), pair("c2", b, "t1", "unfenced")],
+      dispatchAgents: new Map([["t1", "ag1"]]),
+      miss: "empty",
+    });
+    expect(j2).toMatchObject({ reassigned: 0, unattributed: 0, attributionUncertain: 0 });
   });
 });
 

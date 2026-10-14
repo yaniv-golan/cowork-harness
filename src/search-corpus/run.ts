@@ -212,7 +212,7 @@ export async function startRunSearchCorpus(o: {
       const f = frames.counts();
       // Before finish (a run that ended early), parented pairings stay unconfirmed: no dispatch is read.
       const j = joined ?? {
-        join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents: new Map() }),
+        join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents: new Map(), miss: o.option.miss }),
         toolUsesExpected: 0,
       };
       const tops = registry
@@ -261,14 +261,16 @@ export async function startRunSearchCorpus(o: {
           appendFileSync(logPath, JSON.stringify({ ts, verdict: "unfinished" }) + "\n");
         const cfg = configDir ?? join(outDir, "claude-config");
         const fp = frozenPromise({ outDir, configDir: cfg, registry, ctx, frames, noRequest: anchors?.noRequest });
+        // The same files the check above just read; the join only attributes, never changes that verdict.
         const eventsPath = join(outDir, "events.jsonl");
         const events = existsSync(eventsPath) ? readFileSync(eventsPath, "utf8").split("\n") : [];
         const kids = transcripts(join(cfg, "projects")).map((p) => ({
           agentId: /^agent-(.+)\.jsonl$/.exec(basename(p))![1]!,
           lines: readFileSync(p, "utf8").split("\n"),
         }));
+        const dispatchAgents = dispatchAgentIds(events, kids);
         joined = {
-          join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents: dispatchAgentIds(events, kids) }),
+          join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents, miss: o.option.miss }),
           toolUsesExpected: fp.toolUsesExpected,
         };
         return fp.error;
