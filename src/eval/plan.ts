@@ -419,6 +419,9 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
       c.excluded.baseline ? `${c.excluded.baseline} on other baselines` : "",
     ].filter(Boolean);
     if (elsewhere.length) L.push(`  left out of the cost basis: ${elsewhere.join(", ")} (the budget gate still counts them)`);
+    // stats keeps a frozen-corpus run in its own group, so it never enters the group the hint below names.
+    if (c.excluded.searchCorpus)
+      L.push(`  left out: ${c.excluded.searchCorpus} frozen-search-corpus run(s) (their searches were not billed and not live)`);
     const left = [
       c.excluded.turn ? `${c.excluded.turn} resumed turn(s)` : "",
       c.excluded.hillclimb ? `${c.excluded.hillclimb} hillclimb run(s)` : "",
