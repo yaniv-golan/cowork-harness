@@ -1221,3 +1221,50 @@ describe("answer_channel: none in the index and stats", () => {
     },
   );
 });
+
+describe("a frozen search corpus in the index and stats", () => {
+  const corpus = (sha: string) => ({
+    poolId: "p",
+    sha256: sha,
+    label: `frozen search corpus p@${sha.slice(0, 8)} — recorded results`,
+    miss: "empty" as const,
+    interposition: "proxy-env+ca" as const,
+    credentialSource: "env" as const,
+    metrics: {} as never,
+    calls: [],
+  });
+  const A = "a".repeat(64);
+  const B = "a".repeat(8) + "b".repeat(56); // the same 8-hex display prefix, a different pool
+  it("the row carries the pool's full hash and label, and omits it for a live run", () => {
+    const r = indexRowFromResult(rr({ searchCorpus: corpus(A) }), { command: "run", partial: false });
+    expect(r.searchCorpus).toEqual({ sha256: A, label: corpus(A).label });
+    expect("searchCorpus" in indexRowFromResult(rr({}), { command: "run", partial: false })).toBe(false);
+  });
+  it.each(["scenario", "fidelity", "label", "skill-hash"] as const)(
+    "never pools frozen with live, nor two pools, even with the same 8-hex prefix (--group-by %s)",
+    (groupBy) => {
+      const rows = [
+        row({ scenario: "a", pass: true, runLabel: "L", skillHash: "h" }),
+        row({ scenario: "a", pass: false, runLabel: "L", skillHash: "h", searchCorpus: { sha256: A, label: "la" } }),
+        row({ scenario: "a", pass: true, runLabel: "L", skillHash: "h", searchCorpus: { sha256: B, label: "lb" } }),
+      ];
+      const s = buildStats(rows, { groupBy }).summaries.filter((x) => x.scenario === "a");
+      expect(s).toHaveLength(3);
+      expect(s.find((x) => x.searchCorpus?.sha256 === A)?.passRate).toBe(0);
+      expect(s.find((x) => x.searchCorpus?.sha256 === B)?.passRate).toBe(1);
+      expect(s.find((x) => x.searchCorpus === undefined)?.passRate).toBe(1);
+    },
+  );
+  it("a frozen row round-trips through the index; a malformed one is quarantined", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const good = indexRowFromResult(rr({ scenario: "a", searchCorpus: corpus(A) }), { command: "run", partial: false });
+    const bad = {
+      ...indexRowFromResult(rr({ scenario: "b" }), { command: "run", partial: false }),
+      searchCorpus: { sha256: "short", label: "x" },
+    };
+    writeFileSync(join(dir, "index.jsonl"), JSON.stringify(good) + "\n" + JSON.stringify(bad) + "\n");
+    const rows = muteStderr() && readIndex(dir);
+    expect(rows.map((r) => r.scenario)).toEqual(["a"]);
+    expect(rows[0]!.searchCorpus?.sha256).toBe(A);
+  });
+});
