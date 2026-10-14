@@ -21,12 +21,14 @@ const noRequest = {
   inputValidationPrefix: hh("Bad tool input here: "),
 };
 const latest = loadBaseline("latest");
+// The latest baseline may already carry noRequest; strip it, so `false` builds one that predates it either way.
+const { noRequest: _latestNoRequest, ...latestAnchors } = latest.agentBinary!.searchAnchors!;
 const withAnchors = (nr = true): PlatformBaseline =>
   ({
     ...latest,
     agentBinary: {
       ...latest.agentBinary!,
-      searchAnchors: { ...latest.agentBinary!.searchAnchors!, ...(nr ? { noRequest } : {}) },
+      searchAnchors: { ...latestAnchors, ...(nr ? { noRequest } : {}) },
     },
   }) as PlatformBaseline;
 const ok = { fidelity: "hostloop", deviceBridge: false, baseline: withAnchors(), authEnv: { CLAUDE_CODE_OAUTH_TOKEN: "x" }, agentEnv: {} };
