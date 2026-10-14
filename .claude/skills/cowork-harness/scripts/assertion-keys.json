@@ -58,6 +58,8 @@
     "reference_read",
     "replay_protocol_fidelity",
     "result",
+    "search_corpus_max_miss_rate",
+    "search_corpus_nearby_citations",
     "self_heal_ran",
     "semantic_matches",
     "semantic_pairwise",

@@ -63,12 +63,20 @@ function trimMatch(m: string): string {
 /** Port of `Ien`: extract+normalize all URL-shaped tokens from free text. */
 export function extractUrls(text: string): string[] {
   const out: string[] = [];
-  const push = (s: string | null) => {
-    if (s) out.push(s);
-  };
-  for (const m of text.matchAll(GEN)) push(normalizeUrl(trimMatch(m[0])));
-  for (const m of text.matchAll(LEN)) push(normalizeUrl(`https://${trimMatch(m[0])}`));
-  for (const m of text.matchAll(UEN)) push(normalizeUrl(`https://${trimMatch(m[0])}`));
+  for (const c of urlCandidates(text)) {
+    const n = normalizeUrl(c);
+    if (n) out.push(n);
+  }
+  return out;
+}
+
+/** Every URL-shaped token in free text, trimmed and given a scheme (a `www.` or bare-host hit is read as https), not
+ *  yet normalized: each caller keys them with its own URL identity. */
+export function urlCandidates(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(GEN)) out.push(trimMatch(m[0]));
+  for (const m of text.matchAll(LEN)) out.push(`https://${trimMatch(m[0])}`);
+  for (const m of text.matchAll(UEN)) out.push(`https://${trimMatch(m[0])}`);
   return out;
 }
 

@@ -32,6 +32,13 @@ All notable changes to this project are documented here. The format is based on
   proxy; and a non-API `ANTHROPIC_BASE_URL`. The run dir gains `search-corpus.jsonl`, and `events.jsonl` one
   `search_corpus_serve` line per answered request.
 
+- **Two assertion keys for a `--search-corpus` run.** `search_corpus_max_miss_rate: <0..1>` bounds misses over
+  served plus missed requests; it fails by name when any search was refused, or when WebSearch calls were made but
+  none reached the corpus, and a run that never searched passes. `search_corpus_nearby_citations: {path, max?}` counts
+  the URLs a text deliverable cites that were served only on nearby rounds (a recorded search for a different query),
+  and fails by name when the deliverable is not text or cites none of the served URLs after a nearby round. Both are
+  refused at load without `--search-corpus` (in any leg of a multi-leg scenario too), and `verify-run` and `regrade`
+  refuse them on a run that had no frozen corpus, or one recorded before it kept its tool-use counts. Live-only.
 - **`RunResult.searchCorpus.calls[]` records each search request with the WebSearch call it answered**, the agent
   that made it (absent for the main loop), its query, verdict and served rounds. A sub-agent's result is paired with
   its request after the run, from the dispatch result that names the sub-agent; until then its serve frame is marked

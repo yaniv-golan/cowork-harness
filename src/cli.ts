@@ -5071,6 +5071,7 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
     { title: "Skills / connectors", match: (k) => k.includes("skill_") || k === "no_skill_triggered" || k === "connector_available" },
     { title: "Tasks", match: (k) => k.startsWith("task_") || k === "all_tasks_completed" },
     { title: "Egress", match: (k) => k.startsWith("egress_") },
+    { title: "Frozen search corpus", match: (k) => k.startsWith("search_corpus_") },
     { title: "Files / artifacts / delivery", match: (k) => FILE_FAMILY.has(k) || k.startsWith("computer_links_") },
     { title: "Budgets", match: (k) => k.startsWith("max_") },
     { title: "Verdict modifiers (no-op passes on replay)", match: (k) => k.startsWith("allow_") || k === "replay_protocol_fidelity" },

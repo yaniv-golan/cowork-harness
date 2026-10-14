@@ -7701,6 +7701,25 @@
         "type": "string",
         "enum": ["success", "error"]
       },
+      ".assert[].search_corpus_max_miss_rate": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      ".assert[].search_corpus_nearby_citations": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].search_corpus_nearby_citations.max": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      ".assert[].search_corpus_nearby_citations.path": {
+        "type": "string",
+        "required": true,
+        "minLength": 1
+      },
       ".assert[].self_heal_ran": {
         "type": "boolean"
       },

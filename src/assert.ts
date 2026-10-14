@@ -40,6 +40,8 @@ import {
   type WalkBounds,
 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
+import { urlCandidates } from "./hostloop/provenance.js";
+import { normalizeUrl as normalizeSearchUrl } from "./search-corpus/retrieval.js";
 import { anyGlobMatches, artifactGlobSegments, globCouldMatchBelow, globToRegExp, isArtifactGlob } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
 import { isVmSessionsPath } from "./vm-paths.js";
@@ -812,6 +814,9 @@ export interface AssertContext {
    *  tier never sampled (protocol/replay, a run shorter than one sample interval, or an unavailable probe
    *  tool) — the evidence-unavailable signal for max_peak_rss_bytes; never a vacuous pass. */
   resources?: RunResult["resources"];
+  /** RunResult.searchCorpus — the frozen search corpus that served the run's searches. Undefined when the run had
+   *  none: the `search_corpus_*` keys then cannot verify (and are refused at load before a run gets here). */
+  searchCorpus?: RunResult["searchCorpus"];
   /** Companion malformed-telemetry counters (see RunResult.evidenceErrors). A >0 count makes the dependent
    *  assertion fail "malformed" instead of silently dropping the bad entries. */
   evidenceErrors?: RunResult["evidenceErrors"];
@@ -3819,6 +3824,8 @@ function check(
       results.push(ctx.mcpErrors.length === 0 ? ok() : fail(`no_mcp_error: server "${bad!.server}" failed: ${bad!.message}`));
     }
   }
+  if (a.search_corpus_max_miss_rate !== undefined) results.push(searchCorpusMissRate(a.search_corpus_max_miss_rate, ctx));
+  if (a.search_corpus_nearby_citations !== undefined) results.push(searchCorpusNearbyCitations(a.search_corpus_nearby_citations, ctx));
   if (a.max_peak_rss_bytes !== undefined) {
     if (ctx.resources === undefined)
       results.push(fail(`max_peak_rss_bytes: live-only — no resource sampling on this lane (replay/protocol) — cannot verify`));
@@ -5090,4 +5097,85 @@ function check(
     .filter(Boolean)
     .join("; ");
   return withClaims(evidence ? { assertion: a, pass: true, evidence } : { assertion: a, pass: true });
+}
+
+const NO_CORPUS = "this run had no frozen search corpus (--search-corpus) — cannot verify";
+
+/** `search_corpus_max_miss_rate`: misses over served + misses. A refusal is never read as clean, and calls that never
+ *  reached the corpus fail by name; only a run that never searched passes with no rate. */
+function searchCorpusMissRate(bound: number, ctx: AssertContext): KeyResult {
+  const key = "search_corpus_max_miss_rate";
+  const sc = ctx.searchCorpus;
+  if (!sc) return { pass: false, message: `${key}: ${NO_CORPUS}` };
+  const m = sc.metrics;
+  if (typeof m.toolUses !== "number")
+    return {
+      pass: false,
+      message: `${key}: the run was recorded by an older harness without the search tool-use counts — cannot verify; re-run it`,
+    };
+  if (m.refused > 0) return { pass: false, message: `${key}: ${m.refused} search request(s) refused; the miss rate is not judged` };
+  const judged = m.served + m.miss;
+  if (judged > 0) {
+    const rate = m.miss / judged;
+    return rate <= bound
+      ? { pass: true, evidence: `miss rate ${+rate.toFixed(4)} (${m.miss} of ${judged}) <= ${bound}` }
+      : { pass: false, message: `${key}: miss rate ${+rate.toFixed(4)} (${m.miss} of ${judged}) > ${bound}` };
+  }
+  if (m.toolUses > 0)
+    return { pass: false, message: `${key}: ${m.toolUses} WebSearch call(s), none reached the corpus (${m.noRequest} made no request)` };
+  return { pass: true, evidence: "0 searches" };
+}
+
+/** Why a deliverable's bytes are not text a citation scan can read, or undefined. */
+function notText(buf: Buffer): string | undefined {
+  if (buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04)
+    return "a zip container: docx, xlsx, pptx";
+  if (buf.subarray(0, 5).toString("latin1") === "%PDF-") return "a PDF";
+  if (buf.includes(0)) return "it holds a NUL byte";
+  if (!isLosslessUtf8(buf)) return "not valid UTF-8";
+  return undefined;
+}
+
+/** `search_corpus_nearby_citations`: the deliverable's cited URLs that were served only on nearby rounds. Both sides
+ *  are keyed by the URL identity that keys served links. */
+function searchCorpusNearbyCitations(o: { path: string; max?: number }, ctx: AssertContext): KeyResult {
+  const key = "search_corpus_nearby_citations";
+  const max = o.max ?? 0;
+  const sc = ctx.searchCorpus;
+  if (!sc) return { pass: false, message: `${key}: ${NO_CORPUS}` };
+  const file = containedPath(ctx.workRoot, o.path);
+  if (!file) return { pass: false, message: `${key}: unsafe path "${o.path}" — must stay under the work root (no absolute paths or "..")` };
+  const real = containedRealPath(ctx.workRoot, file);
+  if (!real) return { pass: false, message: `${key}: unsafe path "${o.path}" — symlink target escapes the work root` };
+  if (!existsSync(real)) return { pass: false, message: `${key}: file not found: ${o.path} (under ${ctx.workRoot})` };
+  if (isSpecialFile(real)) return { pass: false, message: `${key}: ${o.path} is not a regular file` };
+  let buf: Buffer;
+  try {
+    const size = statSync(real).size;
+    if (size > 10 * 1024 * 1024) return { pass: false, message: `${key}: file too large to scan (${size} bytes, limit 10 MiB)` };
+    buf = readFileSync(real);
+  } catch (e) {
+    return { pass: false, message: `${key}: ${o.path} could not be read: ${(e as Error).message}` };
+  }
+  const why = notText(buf);
+  if (why) return { pass: false, message: `${key}: ${o.path} is not text (${why}), so its citations cannot be read` };
+  const exact = new Set<string>();
+  const nearby = new Set<string>();
+  for (const c of sc.calls)
+    for (const r of c.rounds ?? []) for (const u of r.urls) (r.match === "exact" ? exact : nearby).add(normalizeSearchUrl(u));
+  if (nearby.size === 0) return { pass: true, evidence: "no nearby round was served" };
+  const served = new Set([...exact, ...nearby]);
+  const cited = new Set(urlCandidates(buf.toString("utf8")).map(normalizeSearchUrl));
+  if (![...cited].some((u) => served.has(u)))
+    return {
+      pass: false,
+      message: `${key}: ${o.path} cites none of the ${served.size} served URL(s), so nearby citations cannot be judged`,
+    };
+  const only = [...cited].filter((u) => nearby.has(u) && !exact.has(u)).sort();
+  return only.length <= max
+    ? { pass: true, evidence: `${only.length} cited URL(s) served only on nearby rounds (max ${max})` }
+    : {
+        pass: false,
+        message: `${key}: ${only.length} cited URL(s) were served only on nearby rounds (max ${max}): ${only.slice(0, 5).join(", ")}${only.length > 5 ? ", …" : ""}`,
+      };
 }

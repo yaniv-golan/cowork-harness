@@ -76,6 +76,15 @@ describe.runIf(can)("--search-corpus refusals (CLI, $0)", () => {
     expect(readdirSync(f.runsDir)).toEqual([]);
   });
 
+  it("refuses a search_corpus_* assertion without --search-corpus, before the run dir exists", async () => {
+    const f = fixture();
+    const s = scenario(f, "k.yaml", ["fidelity: hostloop", "assert:", "  - search_corpus_max_miss_rate: 0.5"]);
+    const r = await cli(f, ["run", s, "--model", "claude-sonnet-5"]);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(/`search_corpus_max_miss_rate` needs --search-corpus <pool>/);
+    expect(readdirSync(f.runsDir)).toEqual([]);
+  });
+
   it("refuses a multi-leg scenario by name", async () => {
     const f = fixture();
     const p = join(f.cwd, "legs.yaml");
@@ -95,6 +104,33 @@ describe.runIf(can)("--search-corpus refusals (CLI, $0)", () => {
     );
     const r = await cli(f, ["run", p, "--model", "claude-sonnet-5", "--search-corpus", "p"]);
     expect(r.text).toMatch(/--search-corpus is not supported with a multi-leg scenario/);
+  });
+
+  it("refuses a search_corpus_* assertion in any leg of a multi-leg scenario before the first leg runs", async () => {
+    const f = fixture();
+    const p = join(f.cwd, "legs2.yaml");
+    writeFileSync(
+      p,
+      [
+        "name: ml",
+        "baseline: latest",
+        "session: ./s.yaml",
+        "fidelity: container",
+        "legs:",
+        "  - id: one",
+        "    prompt: first",
+        "  - id: two",
+        "    prompt: second",
+        "    assert:",
+        "      - search_corpus_nearby_citations: {path: outputs/r.md}",
+      ].join("\n") + "\n",
+    );
+    const r = await cli(f, ["run", p, "--model", "claude-sonnet-5"]);
+    expect(r.code).not.toBe(0);
+    expect(r.text).toMatch(
+      /leg "two": `search_corpus_nearby_citations` needs --search-corpus, which a multi-leg scenario does not support/,
+    );
+    expect(readdirSync(f.runsDir)).toEqual([]);
   });
 
   it("refuses record, naming the cassette version", async () => {

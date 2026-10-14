@@ -213,6 +213,8 @@ LIVE_ONLY_KEYS = {
     "semantic_matches",
     "semantic_pairwise",
     "no_lost_write_back",
+    "search_corpus_max_miss_rate",
+    "search_corpus_nearby_citations",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
 # container-only: promotion/leak semantics exist only at fidelity: container. Production's host-loop

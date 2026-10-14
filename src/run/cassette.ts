@@ -9173,6 +9173,10 @@ export const LIVE_ONLY_KEYS: (keyof Assertion)[] = [
   // genuine follow-up (re-derive authorship from cassette.preRunHashes vs the manifest); its value is capped
   // by the 64 KiB body cap (self-contained interactive HTML routinely exceeds it) + the assert-embed cost.
   "no_lost_write_back",
+  // LIVE-ONLY: read RunResult.searchCorpus, which only a live `--search-corpus` run writes; a cassette cannot carry
+  // one yet (record refuses the flag).
+  "search_corpus_max_miss_rate",
+  "search_corpus_nearby_citations",
 ];
 
 /** Replay a cassette through Run and re-evaluate the content assertions. With a `cassette.artifacts`
@@ -9685,6 +9689,8 @@ export async function replayCassette(
       // live-only — replay never spawns a sandbox to sample; no resource telemetry to fold from a
       // frozen event stream (same reasoning as mcpErrors above).
       resources: undefined,
+      // live-only — a cassette carries no frozen search corpus; the search_corpus_* keys are LIVE_ONLY_KEYS.
+      searchCorpus: undefined,
       // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
       // (excludes hook_blocked/no_hook_blocked loud, never a vacuous pass).
       hookEvents: replayHookEvents,
