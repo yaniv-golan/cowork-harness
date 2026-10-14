@@ -54,7 +54,7 @@ export interface CostHistory {
   distinctSkillHashes: number;
   distinctTiers: number;
   /** Runs of this scenario each cost-basis filter left out (from the loader). */
-  excluded?: { notRun: number; tier: number; baseline: number; turn: number; hillclimb: number };
+  excluded?: { notRun: number; tier: number; baseline: number; turn: number; hillclimb: number; searchCorpus?: number };
 }
 
 export interface PerRepCost {
