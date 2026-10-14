@@ -397,7 +397,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                Advisory — a discovery lead, not an independent attestation. The folder may be
                                git:<ref>:<path> (a commit); 'critique --compare <reports…>' lines several
                                critiques up side by side, with no verdicts.
-                               exit codes: 0 the critique ran (findings never gate) · 2 no critique produced, or usage
+                               exit codes: 0 the critique ran (findings never gate) · 1 operator interrupt · 2 no critique produced, or usage
   scaffold <run-id | run-dir>  turn a kept run into a starter scenario YAML (gates→answers, artifacts→file_exists)
       [--out <file.yaml>]      write to a file (default: stdout)
   scaffold --name <n> --prompt "<p>" [--skill <dir>] [--tier …] [--tool …]… [--out <file.yaml>]

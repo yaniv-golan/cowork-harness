@@ -21,10 +21,16 @@ All notable changes to this project are documented here. The format is based on
   - The sub-agent's folder list gained a second wording for a folder the shell cannot reach, used only by a
     third-party deployment that configures a file-read check. The sub-agent append's fingerprint is updated; the
     text a first-party sub-agent receives is unchanged.
+  - The egress resolver gained a branch for a third-party deployment policy: with the CLI on the host, it leaves out
+    the telemetry host. With no policy it resolves as before, so the first-party allowlist is unchanged.
+  - The spawn tool list gained a trailing spread for host-loop sessions. `sync` admits it only while its list is
+    empty, which it is, so the tool lists are unchanged.
   - Two descriptions of the cloud tool `device_commit_files` were reworded; the harness does not serve that tool.
-  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.31226.1 → 2.37337.1
-    since record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it.
-    The bundled cassettes are re-stamped to `2.37337.1`.
+  - The agent search gates the baseline records now show the fast search profile on (provenance only).
+  - **Cassettes:** `verify-cassettes` reports one recorded through `baseline: latest` as `[stale] baseline moved
+    2.31226.1 → 2.37337.1 since record — re-record`, and `replay --strict` (the Action's `strict` input) fails on it.
+    Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it. The bundled cassettes are
+    re-stamped to `2.37337.1`.
 
 - **Help text and docs now match the code in several places.** No behaviour changed.
   - `--help`:
@@ -33,16 +39,18 @@ All notable changes to this project are documented here. The format is based on
     - `hillclimb check` names `metrics.sig_mixed` as an error finding.
     - `eval` lists every exit-1 cause.
     - `regrade` names the stderr file a consented command-metric re-run writes.
-    - `critique`'s exit codes are no longer printed under `diff`.
+    - `diff`'s flags and exit codes are no longer printed under `critique`, which now lists its own exit codes.
     - `analyze-skill` no longer reads as if `--strict-independent` were a flag.
   - `search-pool --help` and docs/cli.md say `--min-score` is between 0 and 1, and that `build` and `import` refuse
     a pool dir that is not empty.
-  - A command metric's script environment is listed in full, including `COWORK_HARNESS_METRIC_ID`, as is the
-    `timeout_ms` floor of 1000.
+  - A command metric's script environment is listed in full (`PYTHONIOENCODING`, `PYTHONDONTWRITEBYTECODE`, and
+    nothing beyond the named variables), as are the sandbox's rule on listing directories and the `timeout_ms`
+    floor of 1000.
   - A multi-leg leg with no usable snapshot is described as the code treats it: under `workdir: persistent`, every
     leg but the last of a finished scenario is refused outright.
   - The schemas' descriptions of the device-bridge audit counts, the `delete-not-refused` divergence, command-metric
-    records and a host action's record are corrected.
+    records, a host action's record, a critique comparison's lexical groups, a host action's `expect` equality rule
+    and a command metric's tracked-file rule are corrected.
 
 ### Fixed
 
@@ -60,19 +68,19 @@ All notable changes to this project are documented here. The format is based on
     list with a warning that names the field. Before, a string where a list belonged was read one character at a
     time, and the hook-event lists fell back without a warning.
   - A malformed `liveVerifiedHookEvents` list now counts no hook event as live-verified, rather than restoring the
-    built-in list. A malformed `enums` field falls back to its own built-in values alone.
+    built-in list. A malformed entry inside `enums` falls back to that field's built-in values alone.
 - **For maintainers: `check:surface` reads a narrowing of the scenario or session schema as a change.** Each of
   these can reject a file that used to load, and each was missed or read as an addition, so it passed
-  `--since-tag` without a major bump:
-  - a field made required on an existing object;
-  - a closed object, a `const`, a new `enum`, or a new pattern, length, range or item-count limit on an existing
-    property;
+  `--since-tag` without a major bump. (A field made required on an existing object already read as a change.)
+  - a closed object, a `const`, a `type`, a new `enum`, or a new pattern, length, range or item-count limit on an
+    existing property;
   - an `allOf` branch on an existing property;
-  - a new `anyOf`/`oneOf` on an existing property, unless one branch keeps the property's old shape unchanged;
+  - a new `anyOf` on an existing property, unless one branch keeps the property's old shape unchanged;
   - any added `oneOf` branch, since `oneOf` rejects a value two branches both accept.
 
-  The reverse reads as a widening and never as breaking: a field no longer required, a type kept inside a wider set
-  of types, a looser limit, or a dropped `enum`.
+  The reverse reads as a widening and never as breaking: a type kept inside a wider set of types, a looser limit, or
+  a dropped `enum`. These constraint kinds are compared only against a snapshot that records them, so
+  `--since-tag` against 4.9.0's snapshot cannot see such a narrowing; the next release's can.
 
 ## [4.9.0] — 2026-10-13
 
