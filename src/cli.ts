@@ -1585,7 +1585,7 @@ async function runOneScenario(p: {
  *  the signal histogram, per-assertion attribution (only rows with at least one failure — an all-passing
  *  assertion across every iteration doesn't need a line), and cost/token/non-determinism totals when
  *  present. */
-function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetStop: boolean): string {
+export function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetStop: boolean): string {
   const lines: string[] = [];
   const verdict = rollupPasses(r, minPassRate, allowBudgetStop) ? "PASS" : "FAIL";
   const stopNote = r.stoppedEarly ? ` (stopped early: ${r.stoppedEarly}, ${r.completed}/${r.requested} completed)` : "";
@@ -1600,6 +1600,7 @@ function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetSto
     `  provenance: model=${r.provenance.models.join(",") || "unknown"}  skill=${r.provenance.skills.join(",") || "unknown"}  ` +
       `ablated=${r.provenance.ablatedRuns}/${r.completed}`,
   );
+  if (r.provenance.searchCorpus) lines.push(`  search: ${r.provenance.searchCorpus.map((l) => `[${l}]`).join(" ")}`);
   const signals = Object.entries(r.signalHistogram);
   if (signals.length) lines.push(`  signals: ${signals.map(([code, n]) => `${code}×${n}`).join(", ")}`);
   const failingAssertions = r.perAssertion.filter((a) => a.fails > 0);
@@ -4479,7 +4480,11 @@ async function cmdStatusLatestFor(scenarioArg: string, json: boolean): Promise<n
     // json); the raw outDir is the LAST line specifically, mirroring statusLine's `[status] <outDir>`
     // convention (execute.ts) so a driving script capturing stderr can grab it without parsing the
     // summary line above it.
-    log(`${found.scenario} · ${found.createdAt}` + (found.verdict ? ` · ${found.verdict.pass ? "PASS" : "FAIL"}` : ""));
+    log(
+      `${found.scenario} · ${found.createdAt}` +
+        (found.verdict ? ` · ${found.verdict.pass ? "PASS" : "FAIL"}` : "") +
+        (found.searchCorpusLabel ? ` [${found.searchCorpusLabel}]` : ""),
+    );
     log(found.outDir);
   }
   return process.exit(0);
@@ -4990,6 +4995,7 @@ async function cmdVerifyRun(args: string[]) {
     for (const s of verdict.signals.filter((s) => s.code !== "assertion"))
       log(`${s.severity === "fail" ? "✗" : "·"} ${s.code}: ${s.message}`);
     if (answerCoverage) log(`· answer coverage: ${answerCoverage.matched}/${answerCoverage.total} gate(s) matched a scripted answer`);
+    if (judged.searchCorpus) log(`· [${judged.searchCorpus.label}]`);
     log(
       verdict.pass
         ? `✓ verify-run: all ${assertions.length} assertion(s) pass (no live agent)`

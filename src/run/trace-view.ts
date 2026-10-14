@@ -862,6 +862,8 @@ export function resultUnavailableReason(
 export interface SubagentResearchView {
   available: boolean;
   reason?: string;
+  /** The frozen search corpus label, when the run's searches were served from a pool rather than searched live. */
+  searchCorpusLabel?: string;
   /** One row per dispatch that has ANY capture state worth showing. `webSearches: undefined` = the
    *  live-lane child transcript never joined (or replay) — unavailable, not zero. */
   rows: Array<{
@@ -877,6 +879,7 @@ export function buildSubagentResearchView(file: string): SubagentResearchView {
   const subs = result.subagents ?? [];
   return {
     available: true,
+    ...(result.searchCorpus ? { searchCorpusLabel: result.searchCorpus.label } : {}),
     rows: subs.map((s) => ({
       label: s.resolvedAgentType ?? s.dispatchAgentType ?? s.description ?? s.toolUseId,
       webSearches: s.webSearches,
@@ -887,8 +890,9 @@ export function buildSubagentResearchView(file: string): SubagentResearchView {
 
 export function formatSubagentResearchView(v: SubagentResearchView): string {
   if (!v.available) return `subagent-research UNAVAILABLE — ${v.reason}`;
-  if (!v.rows.length) return "(no sub-agent dispatches in this run)";
   const lines: string[] = [];
+  if (v.searchCorpusLabel) lines.push(`[${v.searchCorpusLabel}] — these results were served from the pool, not searched live`);
+  if (!v.rows.length) return [...lines, "(no sub-agent dispatches in this run)"].join("\n");
   for (const r of v.rows) {
     if (r.webSearches === undefined) {
       lines.push(`▷ ${r.label}: research UNAVAILABLE (no child transcript joined — replay, or capture never ran)`);
