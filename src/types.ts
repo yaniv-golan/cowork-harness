@@ -2297,7 +2297,7 @@ export interface RunSearchCorpusResult {
     toolUsesExpected: number;
     /** Requests per agent ("main" for the main loop), by verdict. */
     byAgent: Record<string, { served: number; miss: number; refused: number }>;
-    /** Forwarded model requests that carried a server tool other than search (web fetch, code execution): run live. */
+    /** Forwarded model requests that carried the advisor server tool (the agent's one server tool besides search): run live. */
     liveServerTools: number;
     /** The mean over served requests of their best round's relevance; absent when nothing was served. */
     meanTopScore?: number;

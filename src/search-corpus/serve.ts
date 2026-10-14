@@ -73,9 +73,9 @@ function servedOutcome(ctx: ServeContext, query: string, domains: { allowed?: st
   return { sel, rounds, outcome };
 }
 
-/** The `type` of every server tool a forwarded body carries that this run counts: search (never to be forwarded), and
- *  web fetch and code execution (run live). Anthropic's versioned client tools (text editor, bash, memory) also carry a
- *  dated `type` and are not counted. */
+/** The `type` of every server tool a forwarded body carries that the agent sends: search (never to be forwarded) and
+ *  the advisor (run live). Read from the agent itself: 2.1.295 sends only these two dated server tool types (the
+ *  advisor behind an opt-in env), and its WebFetch is a client tool. A dated client tool type is not counted. */
 function forwardedServerTools(r: InterceptedRequest): string[] {
   try {
     const enc = Object.entries(r.headers)
@@ -86,7 +86,7 @@ function forwardedServerTools(r: InterceptedRequest): string[] {
     if (!Array.isArray(tools)) return [];
     return tools
       .map((t) => (t as { type?: unknown })?.type)
-      .filter((t): t is string => typeof t === "string" && /^(?:web_search|web_fetch|code_execution)_\d{8}$/.test(t));
+      .filter((t): t is string => typeof t === "string" && /^(?:web_search|advisor)_\d{8}$/.test(t));
   } catch {
     return [];
   }

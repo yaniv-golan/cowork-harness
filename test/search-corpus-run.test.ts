@@ -408,6 +408,35 @@ describe("startRunSearchCorpus", () => {
     });
   });
 
+  it("finish never throws on a missing or unreadable stream record: the result carries the by-name error", async () => {
+    for (const make of [
+      (d: string) => rmSync(join(d, "events.jsonl"), { force: true }),
+      (d: string) => mkdirSync(join(d, "events.jsonl")),
+    ]) {
+      const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+      const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+      sc.registry.record(entry("ag1", "served", "q"));
+      const sub = join(outDir, "claude-config", "projects", "p", "s", "subagents");
+      mkdirSync(sub, { recursive: true });
+      writeFileSync(join(sub, "agent-ag1.jsonl"), [use("c1", "q"), res("c1", ok200("q"))].join("\n"));
+      make(outDir);
+      const err = await sc.finish(outDir);
+      expect(err).toMatch(/events\.jsonl (is missing|could not be read)/);
+      expect(sc.result().calls).toHaveLength(1);
+    }
+  });
+
+  it("an unreadable transcript is a by-name error, never a throw", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+    const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+    writeFileSync(join(outDir, "events.jsonl"), "");
+    const sub = join(outDir, "claude-config", "projects", "p", "s", "subagents");
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(join(sub, "agent-ag1.jsonl"), "x", { mode: 0o000 });
+    // root reads anything, so the unreadable case is only checkable as a normal user
+    if (process.getuid?.() !== 0) expect(await sc.finish(outDir)).toMatch(/sub-agent ag1's transcript could not be read/);
+  });
+
   it("meanTopScore is absent, never NaN, when nothing was served", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
     const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });

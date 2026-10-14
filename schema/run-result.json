@@ -455,7 +455,7 @@
             "liveServerTools": {
               "type": "integer",
               "minimum": 0,
-              "description": "Forwarded model requests that carried a server tool other than search (web fetch, code execution): run live."
+              "description": "Forwarded model requests that carried the advisor server tool (the agent's one server tool besides search): run live."
             },
             "meanTopScore": {
               "type": "number",

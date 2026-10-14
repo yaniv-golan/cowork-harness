@@ -206,11 +206,28 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     expect(bad.kind === "respond" && bad.http.status).toBe(400);
   });
 
-  it("counts forwarded model requests that carry a server tool other than search; a client tool is not one", () => {
+  it("counts forwarded model requests that carry the advisor server tool; a client tool or a token count is not one", () => {
     const { c } = ctx();
     const body = (tools: unknown[]) => Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: "x" }], tools }));
-    serveRequest(post(body([{ type: "web_fetch_20250910", name: "web_fetch" }])), c);
-    serveRequest(post(body([{ name: "Bash", input_schema: {} }])), c);
+    // the shape the agent sends: its client tools, plus the advisor server tool when enabled
+    serveRequest(
+      post(
+        body([
+          { name: "Bash", input_schema: {} },
+          { type: "advisor_20260301", name: "advisor", model: "m" },
+        ]),
+      ),
+      c,
+    );
+    serveRequest(
+      post(
+        body([
+          { name: "Bash", input_schema: {} },
+          { name: "WebFetch", input_schema: {} },
+        ]),
+      ),
+      c,
+    );
     serveRequest(
       post(
         body([
@@ -220,7 +237,7 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
       ),
       c,
     );
-    serveRequest(post(body([{ type: "code_execution_20250825", name: "code_execution" }]), {}, "/v1/messages/count_tokens"), c);
+    serveRequest(post(body([{ type: "advisor_20260301", name: "advisor", model: "m" }]), {}, "/v1/messages/count_tokens"), c);
     expect(c.liveServerTools).toBe(1);
     expect(c.passedThroughWithSearchTool).toBe(0);
   });

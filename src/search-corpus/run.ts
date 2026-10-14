@@ -261,14 +261,9 @@ export async function startRunSearchCorpus(o: {
           appendFileSync(logPath, JSON.stringify({ ts, verdict: "unfinished" }) + "\n");
         const cfg = configDir ?? join(outDir, "claude-config");
         const fp = frozenPromise({ outDir, configDir: cfg, registry, ctx, frames, noRequest: anchors?.noRequest });
-        // The same files the check above just read; the join only attributes, never changes that verdict.
-        const eventsPath = join(outDir, "events.jsonl");
-        const events = existsSync(eventsPath) ? readFileSync(eventsPath, "utf8").split("\n") : [];
-        const kids = transcripts(join(cfg, "projects")).map((p) => ({
-          agentId: /^agent-(.+)\.jsonl$/.exec(basename(p))![1]!,
-          lines: readFileSync(p, "utf8").split("\n"),
-        }));
-        const dispatchAgents = dispatchAgentIds(events, kids);
+        // What the check above read, read once: the join only attributes, never changes that verdict, and never throws
+        // past it (an unreadable file is the check's by-name error, and the join sees nothing from it).
+        const dispatchAgents = dispatchAgentIds(fp.events, fp.transcripts);
         joined = {
           join: joinCalls({ entries: registry.all(), pairings: frames.pairings(), dispatchAgents, miss: o.option.miss }),
           toolUsesExpected: fp.toolUsesExpected,
@@ -357,7 +352,13 @@ export function frozenPromise(o: {
   ctx: Pick<ServeContext, "passedThroughWithSearchTool">;
   frames: Pick<ServeFrames, "deniedIds">;
   noRequest: Parameters<typeof noRequestKind>[1];
-}): { error: string | null; toolUsesExpected: number } {
+}): {
+  error: string | null;
+  toolUsesExpected: number;
+  /** What it read, for the join to reuse: the stream record's lines, and each transcript's. */
+  events: string[];
+  transcripts: { agentId: string; lines: string[] }[];
+} {
   const problems: string[] = [];
   if ((o.ctx.passedThroughWithSearchTool ?? 0) > 0)
     problems.push(`${o.ctx.passedThroughWithSearchTool} request(s) carrying a server search tool were forwarded upstream`);
@@ -382,9 +383,18 @@ export function frozenPromise(o: {
   const main = agentSide(events, { mainOnly: true, noRequest: o.noRequest, denied });
   const sides: [string, number][] = [["main", main.expected]];
   let inTranscripts = 0;
+  const read: { agentId: string; lines: string[] }[] = [];
   for (const f of transcripts(join(o.configDir ?? join(o.outDir, "claude-config"), "projects"))) {
     const id = /^agent-(.+)\.jsonl$/.exec(basename(f))![1]!;
-    const expected = agentSide(readFileSync(f, "utf8").split("\n"), { noRequest: o.noRequest, denied }).expected;
+    let lines: string[];
+    try {
+      lines = readFileSync(f, "utf8").split("\n");
+    } catch (e) {
+      problems.push(`sub-agent ${id}'s transcript could not be read (${(e as NodeJS.ErrnoException).code ?? "error"})`);
+      continue;
+    }
+    read.push({ agentId: id, lines });
+    const expected = agentSide(lines, { noRequest: o.noRequest, denied }).expected;
     inTranscripts += expected;
     sides.push([id, expected]);
   }
@@ -406,5 +416,7 @@ export function frozenPromise(o: {
   return {
     error: problems.length ? `search corpus: the frozen promise could not be confirmed: ${problems.join("; ")}` : null,
     toolUsesExpected: main.expected + inTranscripts,
+    events,
+    transcripts: read,
   };
 }

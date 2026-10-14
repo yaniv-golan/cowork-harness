@@ -529,10 +529,13 @@ never for research quality.
   sub-agent could take it with the same served content (for example its agent id differs from the one its request
   carried, or a refusal and a served request of one query crossed), or the dispatches named agents and none of the
   parented results resolved to any of them. A single unresolved result while others resolved is only counted
-  `unattributed`. `metrics` also counts the agent's WebSearch calls (`toolUses`, `noRequest`), the requests the agents'
-  own records expect (`toolUsesExpected`), requests per agent (`byAgent`), forwarded requests carrying a web fetch or
-  code execution server tool (`liveServerTools`, run live) and the mean relevance of the served requests' best rounds
-  (`meanTopScore`). A forked skill's or `Agent(fork)`'s searches count under its own agent in `byAgent`, as the
+  `unattributed`. `metrics` also counts the agent's WebSearch calls
+  (`toolUses`, `noRequest`), the requests the agents' own records expect (`toolUsesExpected`), requests per agent
+  (`byAgent`), forwarded requests carrying the advisor server tool (`liveServerTools`, run live: the agent's one server
+  tool besides search, sent only when its advisor is enabled), the mean relevance of the served requests' best rounds
+  (`meanTopScore`), results whose answer could not be read so were paired by key alone (`shapeUnfenced`), refusals
+  whose body could not be read, which no result can take (`unattributedExpected`), and pairings the join could not
+  settle (`attributionUncertain`, the warning's count). A forked skill's or `Agent(fork)`'s searches count under its own agent in `byAgent`, as the
   interceptor keys them, while the run's tool counts (`toolCounts.WebSearch`) count them under the main loop, as tool
   calls of the skill; both are right for what they count.
 - **Misses.** A query whose best match falls below the pool's floor gets "No links found." (`--search-corpus-miss
