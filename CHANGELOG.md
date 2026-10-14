@@ -48,7 +48,8 @@ All notable changes to this project are documented here. The format is based on
   and fails by name when the deliverable is not text or cites none of the served URLs after a nearby round. A
   self-titled markdown link or an emphasised URL is read as the URL, and a URL any served exact record carries counts
   as exact (`calls[].exactUrls`), even where a higher-ranked nearby round served it first. Both are
-  refused at load without `--search-corpus` (in any leg of a multi-leg scenario too), and `verify-run` and `regrade`
+  refused before the run starts without `--search-corpus` (in any leg of a multi-leg scenario too, before the first
+  leg), and `verify-run` and `regrade`
   refuse them on a run that had no frozen corpus, or one recorded before it kept its tool-use counts. `record
   --dry-run` refuses them as the run would, and `lint` notes them (INFO: lint cannot know the run's flags). Live-only.
 - **`RunResult.searchCorpus.calls[]` records each search request with the WebSearch call it answered**, the agent

@@ -527,7 +527,9 @@ never for research quality.
   served, missed and refused; served searches are not billed and do not appear in the agent's own cost or search
   count.
 - **Per call.** `searchCorpus.calls[]` holds one entry per search request: the agent that made it (absent for the main
-  loop), the WebSearch tool_use it answered, the query and domain lists, the verdict and the served rounds. A
+  loop), the WebSearch tool_use it answered, the query and domain lists, the verdict, the served rounds (each with
+  `match`: `exact` or `nearby`, its relevance and URLs) and `exactUrls` (every URL a served exact record carries, those a
+  higher-ranked nearby round served first included). A
   sub-agent's result is paired with its request after the run, once the dispatch's result names the sub-agent; until
   then its serve frame in `events.jsonl` is marked `provisional`. A pairing the join moved to another request with the
   same served content is counted `reassigned`, and the call records the request the stream gave it

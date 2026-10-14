@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate, type AssertContext } from "../src/assert.js";
+import { laneRemoteLoadRefusal } from "../src/run/lane-notice.js";
 import type { RunSearchCorpusResult, SearchCorpusCall } from "../src/types.js";
 
 // The two frozen-corpus assertion keys, over a run's RunResult.searchCorpus.
@@ -200,6 +201,19 @@ describe("search_corpus_nearby_citations", () => {
     expect(r.message).toMatch(
       /evidence unavailable: search_corpus_nearby_citations target "outputs\/report\.md" .*read-only connected-folder input/,
     );
+  });
+  it("is refused on lane: remote, as artifact_text is: a remote container's filesystem has no body to scan", () => {
+    const r = one(
+      { search_corpus_nearby_citations: { artifact: "outputs/report.md" } },
+      { workRoot: work("https://near.example/b"), lane: "remote", searchCorpus: sc({ served: 3, toolUses: 3 }, calls) },
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(/search_corpus_nearby_citations cannot be evaluated on `lane: remote`/);
+  });
+  it("a lane: remote scenario carrying it is refused at load, as artifact_text is", () => {
+    expect(
+      laneRemoteLoadRefusal({ lane: "remote", assert: [{ search_corpus_nearby_citations: { artifact: "outputs/r.md" } }] } as never),
+    ).toMatch(/`search_corpus_nearby_citations` cannot pass on `lane: remote`/);
   });
   it("cannot verify without a frozen corpus", () => {
     expect(one({ search_corpus_nearby_citations: { artifact: "outputs/report.md" } }, { workRoot: work("x") }).message).toMatch(

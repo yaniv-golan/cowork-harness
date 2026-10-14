@@ -28,16 +28,16 @@ export function normalizeUrl(raw: string): string | null {
   return u.href;
 }
 
-const GEN = /https?:\/\/[^\s<>"'`]+/g; // full URLs
-const LEN = /www\.[^\s<>"'`]+/g; // www.-prefixed bare hosts
+export const GEN = /https?:\/\/[^\s<>"'`]+/g; // full URLs
+export const LEN = /www\.[^\s<>"'`]+/g; // www.-prefixed bare hosts
 // bare `domain.tld(/path)?` at a token boundary (conservative port of `uen`)
-const UEN = /(?<![\w@.])(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:\/[^\s<>"'`]*)?/g;
+export const UEN = /(?<![\w@.])(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:\/[^\s<>"'`]*)?/g;
 
 const TRAIL = new Set([".", ",", ";", ":", "!", "?", "'", '"', "`"]);
 const CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
 
 /** Port of `ZHA`: strip trailing punctuation; drop an unbalanced trailing closing bracket. */
-function trimMatch(m: string): string {
+export function trimMatch(m: string): string {
   let e = m.length;
   while (e > 0) {
     const ch = m[e - 1];
@@ -63,28 +63,12 @@ function trimMatch(m: string): string {
 /** Port of `Ien`: extract+normalize all URL-shaped tokens from free text. */
 export function extractUrls(text: string): string[] {
   const out: string[] = [];
-  for (const c of urlCandidates(text)) {
-    const n = normalizeUrl(c);
-    if (n) out.push(n);
-  }
-  return out;
-}
-
-/** Every URL-shaped token in a deliverable's text, trimmed and given a scheme (a `www.` or bare-host hit is read as
- *  https), not yet normalized: each caller keys them with its own URL identity. Unlike `extractUrls` (the agent's own
- *  extraction, ported as it is), it also reads the markdown forms a model cites in: a self-titled link `[url](url)` is
- *  split at `](`, and emphasis (`**`, `*`, `_`) around a URL is stripped. */
-export function urlCandidates(text: string): string[] {
-  const out: string[] = [];
-  const add = (raw: string, scheme: string) => {
-    for (const part of raw.split("](")) {
-      const t = trimMatch(part.replace(/[*_]+$/, ""));
-      if (t) out.push(scheme + t);
-    }
+  const push = (s: string | null) => {
+    if (s) out.push(s);
   };
-  for (const m of text.matchAll(GEN)) add(m[0], "");
-  for (const m of text.matchAll(LEN)) add(m[0], "https://");
-  for (const m of text.matchAll(UEN)) add(m[0], "https://");
+  for (const m of text.matchAll(GEN)) push(normalizeUrl(trimMatch(m[0])));
+  for (const m of text.matchAll(LEN)) push(normalizeUrl(`https://${trimMatch(m[0])}`));
+  for (const m of text.matchAll(UEN)) push(normalizeUrl(`https://${trimMatch(m[0])}`));
   return out;
 }
 

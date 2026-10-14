@@ -40,7 +40,7 @@ import {
   type WalkBounds,
 } from "./run/artifacts.js";
 import { analyzeArtifacts } from "./run/analyze-artifact.js";
-import { urlCandidates } from "./hostloop/provenance.js";
+import { citationUrls } from "./search-corpus/citations.js";
 import { normalizeUrl as normalizeSearchUrl } from "./search-corpus/retrieval.js";
 import { anyGlobMatches, artifactGlobSegments, globCouldMatchBelow, globToRegExp, isArtifactGlob } from "./glob.js";
 import { toolNameSpellings } from "./run/tool-name-canonicalization.js";
@@ -2703,7 +2703,7 @@ function authorshipCheck(ctx: AssertContext, p: string, key: string): { pass: tr
  *  The metrics extractor refuses the same reads on this lane (src/metrics.ts). One function, so the two keys read
  *  alike. Not the whole set of local-tree reads on this lane: `no_unexpected_files`, `input_unmodified` and the
  *  semantic judges' file evidence still read the local tree there. */
-function remoteLaneBodyRefusal(key: "artifact_text" | "artifact_json", verb: "scan" | "parse"): string {
+function remoteLaneBodyRefusal(key: "artifact_text" | "artifact_json" | "search_corpus_nearby_citations", verb: "scan" | "parse"): string {
   return `${key} cannot be evaluated on \`lane: remote\` — a remote container's filesystem is not locally observable, so there is no body to ${verb}. Assert on the agent's own statement of the content (\`transcript_matches\`), or use \`lane: local\``;
 }
 
@@ -5149,6 +5149,7 @@ function searchCorpusNearbyCitations(o: { artifact: string; max?: number }, ctx:
   const max = o.max ?? 0;
   const sc = ctx.searchCorpus;
   if (!sc) return { pass: false, message: `${key}: ${NO_CORPUS}` };
+  if (ctx.lane === "remote") return { pass: false, message: remoteLaneBodyRefusal(key, "scan") };
   // The artifact is read under artifact_text's rules: the same gate, the same cap.
   const gate = artifactBodyGate(ctx, o.artifact);
   if (gate.kind === "unsafe")
@@ -5185,7 +5186,7 @@ function searchCorpusNearbyCitations(o: { artifact: string; max?: number }, ctx:
   }
   if (nearby.size === 0) return { pass: true, evidence: "no nearby round was served" };
   const served = new Set([...exact, ...nearby]);
-  const cited = new Set(urlCandidates(buf.toString("utf8")).map(normalizeSearchUrl));
+  const cited = new Set(citationUrls(buf.toString("utf8")).map(normalizeSearchUrl));
   if (![...cited].some((u) => served.has(u)))
     return {
       pass: false,
