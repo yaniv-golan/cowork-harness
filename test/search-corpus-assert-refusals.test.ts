@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { assertContextFromRunDir } from "../src/run/verify-context.js";
+import { assertContextFromRunDir, reevaluateRun } from "../src/run/verify-context.js";
+import { regradeRuns } from "../src/run/regrade.js";
+import { reevaluateFromRun } from "../src/hillclimb/regrade.js";
 import { capturePreRunManifest, readPreRunManifestHashes } from "../src/run/pre-run-manifest.js";
 import type { LaunchPlan } from "../src/session.js";
 import type { Scenario } from "../src/types.js";
@@ -92,5 +94,29 @@ describe("re-grading a search_corpus_* key", () => {
     expect(r.ok).toBe(true);
     expect((r as { ctx: { searchCorpus?: unknown } }).ctx.searchCorpus).toMatchObject({ poolId: "p" });
     expect(assertContextFromRunDir(keptRun(), scenario([{ result: "success" }])).ok).toBe(true);
+  });
+});
+
+describe("every re-grade entry point refuses a search_corpus_* key on a run with no frozen corpus", () => {
+  const sc = scenario([{ search_corpus_max_miss_rate: 0.5 }]);
+  it("verify-run", () => {
+    expect(reevaluateRun(keptRun(), sc)).toMatchObject({ ok: false, kind: "usage" });
+  });
+  it("regrade", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cwh-scr-sc-"));
+    const f = join(dir, "s.yaml");
+    writeFileSync(
+      f,
+      "name: sc\nprompt: p\nfidelity: container\nassert:\n  - search_corpus_max_miss_rate: 0.5\n  - semantic_matches:\n      rubric: [x]\n",
+    );
+    const r = await regradeRuns({ runDirs: [keptRun()], scenarioFile: f, checkOnly: true });
+    expect(r).toMatchObject({ ok: false, kind: "usage" });
+    expect((r as { message: string }).message).toMatch(/search_corpus_max_miss_rate` needs a run served from a frozen search corpus/);
+  });
+  it("hillclimb regrade", async () => {
+    const r = await reevaluateFromRun(keptRun(), { scenario: sc } as Parameters<typeof reevaluateFromRun>[1]);
+    expect(r).toMatchObject({
+      listed: expect.stringMatching(/^refused: .*search_corpus_max_miss_rate` needs a run served from a frozen search corpus/),
+    });
   });
 });

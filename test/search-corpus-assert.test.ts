@@ -132,7 +132,24 @@ describe("search_corpus_nearby_citations", () => {
     expect(run("Source: https://both.example/c").pass).toBe(true);
   });
   it("a bare-host or www. citation is read as https and matched", () => {
-    expect(run("Source: near2.example/d").pass).toBe(false);
+    const bare = run("Sources: https://exact.example/a and near2.example/d");
+    expect(bare.pass).toBe(false);
+    expect(bare.message).toMatch(/1 cited URL\(s\).*https:\/\/near2\.example\/d/);
+    const www = one(
+      { search_corpus_nearby_citations: { path: "outputs/report.md" } },
+      {
+        workRoot: work("Sources: https://exact.example/a and www.near3.example/e"),
+        searchCorpus: sc({ served: 1, toolUses: 1 }, [
+          {
+            query: "q",
+            verdict: "served",
+            ordinal: 1,
+            rounds: [round("exact", ["https://exact.example/a"]), round("nearby", ["https://www.near3.example/e"])],
+          },
+        ]),
+      },
+    );
+    expect(www.message).toMatch(/https:\/\/www\.near3\.example\/e/);
   });
   it("a deliverable citing none of the served URLs cannot be judged after a nearby round: fails, never passes blind", () => {
     const r = run("Built from README.md and deck.pdf, see https://unrelated.example.");
