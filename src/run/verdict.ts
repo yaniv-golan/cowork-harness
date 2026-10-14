@@ -36,7 +36,8 @@ export interface VerdictSignal {
     | "partly_scripted_gate"
     | "parked_at_question"
     | "search_corpus_refused"
-    | "search_corpus_attribution_uncertain";
+    | "search_corpus_attribution_uncertain"
+    | "search_corpus_semantic_judge";
   severity: "fail" | "warn";
   message: string;
 }
@@ -254,6 +255,21 @@ function isDeliveryEvidenceUsable(result: RunResult): boolean {
   return true;
 }
 
+/** The assertion keys a model judges. */
+const JUDGED_KEYS = ["semantic_matches", "semantic_pairwise"] as const;
+
+/** A judge graded a deliverable of a run served from a frozen search corpus: the searches it was built on were
+ *  recorded answers, some to neighbouring queries, so the grade says nothing about research quality. Never blocks.
+ *  The one source of this signal, for a run's verdict and for `regrade`. */
+export function searchCorpusJudgeSignal(sc: RunResult["searchCorpus"], judged: number): VerdictSignal | undefined {
+  if (!sc || judged === 0) return undefined;
+  return {
+    code: "search_corpus_semantic_judge",
+    severity: "warn",
+    message: `${judged} judged assertion(s) graded a run served from a ${sc.label.split(" — ")[0]}: its searches were recorded answers, some to neighbouring queries, so the grade is not evidence of research quality.`,
+  };
+}
+
 export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verdict {
   const signals: VerdictSignal[] = [];
 
@@ -366,6 +382,13 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       severity: "warn",
       message: `${sc.attributionUncertain} search result(s) from a sub-agent could not be settled to the request they answered; their entries in searchCorpus.calls[] are marked provisional. The served content is unaffected.`,
     });
+
+  const judge = searchCorpusJudgeSignal(
+    result.searchCorpus,
+    result.assertions.filter((a) => JUDGED_KEYS.some((k) => (a.assertion as Record<string, unknown> | undefined)?.[k] !== undefined))
+      .length,
+  );
+  if (judge) signals.push(judge);
 
   // a run that ended on an unanswered plain-text question or request for input is a hard fail on BOTH lanes (the flag is
   // re-derived by run.ts's detector on the live run AND the replay re-drive, so a recorded stall fails replay

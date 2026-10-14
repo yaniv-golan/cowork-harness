@@ -131,6 +131,8 @@ describe("search_corpus_nearby_citations", () => {
   it("a URL served on both an exact and a nearby round does not count", () => {
     expect(run("Source: https://both.example/c").pass).toBe(true);
   });
+  // A `www.` citation is matched by the bare-host pattern too (it is a valid host), so it is given https whether or not
+  // the `www.` pattern also prefixes it: dropping that prefix alone changes nothing a test can see.
   it("a bare-host or www. citation is read as https and matched", () => {
     const bare = run("Sources: https://exact.example/a and near2.example/d");
     expect(bare.pass).toBe(false);

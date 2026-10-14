@@ -4864,6 +4864,27 @@
       "definitions.Run.scrubAcceptedBy": {
         "type": "string"
       },
+      "definitions.Run.signals": {
+        "type": "array"
+      },
+      "definitions.Run.signals[]": {
+        "type": "object",
+        "closed": true
+      },
+      "definitions.Run.signals[].code": {
+        "type": "string",
+        "enum": ["search_corpus_semantic_judge"],
+        "required": true
+      },
+      "definitions.Run.signals[].message": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.Run.signals[].severity": {
+        "type": "string",
+        "enum": ["warn"],
+        "required": true
+      },
       "definitions.Run.turn": {
         "type": "integer",
         "required": true
@@ -6645,7 +6666,8 @@
           "partly_scripted_gate",
           "parked_at_question",
           "search_corpus_refused",
-          "search_corpus_attribution_uncertain"
+          "search_corpus_attribution_uncertain",
+          "search_corpus_semantic_judge"
         ],
         "required": true
       },

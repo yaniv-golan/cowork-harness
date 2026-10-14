@@ -32,6 +32,10 @@ All notable changes to this project are documented here. The format is based on
   proxy; and a non-API `ANTHROPIC_BASE_URL`. The run dir gains `search-corpus.jsonl`, and `events.jsonl` one
   `search_corpus_serve` line per answered request.
 
+- **A new warn signal, `search_corpus_semantic_judge`**, fires when a judge (`semantic_matches` or
+  `semantic_pairwise`) graded a deliverable of a `--search-corpus` run: its searches were recorded answers, so the
+  grade is not evidence of research quality. `regrade` of such a run warns too and carries it in `runs[].signals`. It
+  never changes the verdict.
 - **Two assertion keys for a `--search-corpus` run.** `search_corpus_max_miss_rate: <0..1>` bounds misses over
   served plus missed requests; it fails by name when any search was refused, or when WebSearch calls were made but
   none reached the corpus, and a run that never searched passes. `search_corpus_nearby_citations: {path, max?}` counts

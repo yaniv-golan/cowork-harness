@@ -778,10 +778,10 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 #### Verdict signals
 
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
-are twenty-nine codes. Twelve are **fail**-severity — they flip the run's pass/exit code even though
+are thirty codes. Twelve are **fail**-severity — they flip the run's pass/exit code even though
 `result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
 `result.verdict.signals[].severity` or the run's exit code instead.
-Only seventeen codes are **warn**-severity (informational, never flip pass/fail):
+Only eighteen codes are **warn**-severity (informational, never flip pass/fail):
 
 - `outputs_delete_unconfirmed` (**warn**, live lane) — a delete-shaped command near `mnt/outputs` that
   nothing confirms: no output present at turn start was deleted, and no flagged delete has an outputs path as
@@ -878,6 +878,11 @@ Only seventeen codes are **warn**-severity (informational, never flip pass/fail)
   any of them. A single unresolved result while others resolved is only counted `unattributed` on the run line. Those
   entries in `searchCorpus.calls[]` stay `provisional`; the served content and the counts are unaffected. It never
   changes the verdict.
+- `search_corpus_semantic_judge` (**warn**, `--search-corpus`) — a judge (`semantic_matches` or `semantic_pairwise`)
+  graded a deliverable of a run served from a frozen search corpus. Its searches were recorded answers, some written
+  for neighbouring queries, so the grade is evidence for the steps around research, not for research quality. `regrade`
+  of such a run carries the same signal in its report (`runs[].signals`) and warns on stderr. It never changes the
+  verdict.
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see
   [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion

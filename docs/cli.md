@@ -513,7 +513,9 @@ never for research quality.
 - **Labelled.** The run line and `RunResult.searchCorpus.label` say `frozen search corpus <pool>@<hash8> — recorded
   results, harness ranking, searches not billed; not live search; …`, and the run line adds the served, missed and
   refused counts. A run that refused any search warns (`search_corpus_refused`; louder when it refused every one,
-  which usually means an agent newer than the baseline's search anchors). `searchCorpus.metrics` counts the requests
+  which usually means an agent newer than the baseline's search anchors). A run whose judged assertions
+  (`semantic_matches`, `semantic_pairwise`) graded a deliverable also warns (`search_corpus_semantic_judge`): the grade
+  is not evidence of research quality; `regrade` of such a run says the same. `searchCorpus.metrics` counts the requests
   served, missed and refused; served searches are not billed and do not appear in the agent's own cost or search
   count.
 - **Per call.** `searchCorpus.calls[]` holds one entry per search request: the agent that made it (absent for the main

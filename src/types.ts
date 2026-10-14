@@ -2876,7 +2876,8 @@ export interface RunResult {
         | "partly_scripted_gate"
         | "parked_at_question"
         | "search_corpus_refused"
-        | "search_corpus_attribution_uncertain";
+        | "search_corpus_attribution_uncertain"
+        | "search_corpus_semantic_judge";
       severity: "fail" | "warn";
       message: string;
     }>;

@@ -52,7 +52,7 @@ predicates neither can express.
 
 **VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; twelve
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`) and seventeen are **warn**-severity (informational, never flip pass/fail). All twenty-nine signal
+`"success"`) and eighteen are **warn**-severity (informational, never flip pass/fail). All thirty signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 | Code | Severity | Meaning |
@@ -84,9 +84,10 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `partly_scripted_gate` | warn | A question batch (one `AskUserQuestion` with several sub-questions) that the scenario's `answers:` matched only PART of. Answers are delivered atomically, so the whole batch went to the `on_unanswered` fallback and the matched answers were NOT delivered — the fallback may contradict them. The message names the matched and unmatched sub-questions and who answered instead; `result.partlyScriptedGates` carries the full lists. Fires only on a partial match within one batch (a single-question gate no rule matched is the ordinary unanswered case). Re-derived on `replay` (from the cassette's frozen answers) and `verify-run` (from the current scenario). Fix: script every sub-question of the batch |
 | `search_corpus_refused` | warn | A `--search-corpus` run refused some searches ("Web search error: unavailable"); all refused usually means an agent newer than the baseline's anchors: re-sync. Never changes the verdict; details in docs/scenario.md |
 | `search_corpus_attribution_uncertain` | warn | A `--search-corpus` run in which some sub-agent search results could not be settled to their request; those `searchCorpus.calls[]` entries stay `provisional`. Never changes the verdict; details in docs/scenario.md |
+| `search_corpus_semantic_judge` | warn | A judge (`semantic_matches`/`semantic_pairwise`) graded a `--search-corpus` run: its searches were recorded answers, so the grade is not research quality. Also from `regrade`. Never changes the verdict; details in docs/scenario.md |
 | `parked_at_question` | warn | The session declares `answer_channel: none` and the run ended on a question nobody can answer: its last message ends in `?`, even after tools ran (a finished answer ending on an offer warns too; a request without `?` does not fire). Takes the place of the `stalled` fail and never changes the verdict: with no answer channel, stopping at the question is the contract. Completion is judged from the file assertions such a scenario must carry (refused at load without one). No opt-out needed |
 | `exec_infra_error` | warn | Host-loop, or a `device_bash` call under `device_bridge`: one or more container `exec` calls failed for infrastructure reasons, so those tool calls returned an error to the agent. Warns rather than fails because the run's other evidence is intact — unlike `infra_error`, where a dead supervisor contaminates everything. Caveat: if *every* exec failed, the agent ran nothing and this still only warns — check `result.infraErrors` |
 
 A **fail**-severity signal does not change `result.result` (still `"success"`), but it DOES fail the
 overall run verdict and exit code — `assert result: success` alone won't catch it; check
-`result.verdict.signals[].severity` or the run's exit code. Only the seventeen **warn** codes are truly benign.
+`result.verdict.signals[].severity` or the run's exit code. Only the eighteen **warn** codes are truly benign.
