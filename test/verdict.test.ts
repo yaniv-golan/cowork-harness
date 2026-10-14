@@ -544,6 +544,11 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
       computeVerdict(rr({ searchCorpus: sc, assertions: pairwise }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge"),
     ).toBe(true);
     expect(computeVerdict(rr({ searchCorpus: sc }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge")).toBe(false);
+    // an assertion no model judges does not count
+    const plain = [{ assertion: { result: "success" }, pass: true }] as RunResult["assertions"];
+    expect(
+      computeVerdict(rr({ searchCorpus: sc, assertions: plain }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge"),
+    ).toBe(false);
     expect(computeVerdict(rr({ assertions: judged }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge")).toBe(false);
   });
 
