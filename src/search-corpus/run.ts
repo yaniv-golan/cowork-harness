@@ -14,7 +14,8 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import type { PlatformBaseline, RunSearchCorpusResult } from "../types.js";
+import type { PlatformBaseline, RunSearchCorpusResult, SearchAnchors } from "../types.js";
+import { extractSearchAnchors } from "../sync/search-anchors.js";
 import { registerCleanup } from "../egress/sidecar.js";
 import { UsageError } from "../errors.js";
 import { ServeFrames } from "./frames.js";
@@ -87,6 +88,38 @@ export function searchCorpusRefusal(o: {
     if (host !== "api.anthropic.com")
       return "--search-corpus intercepts api.anthropic.com only, and ANTHROPIC_BASE_URL points the agent elsewhere: unset it for this run";
   }
+  return null;
+}
+
+/** Sorted-key JSON, so two anchor blocks compare by content whatever order their keys were written in. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (v && typeof v === "object")
+    return `{${Object.keys(v as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`)
+      .join(",")}}`;
+  return JSON.stringify(v);
+}
+
+/** Why the agent binary a run is about to launch cannot be served from this baseline's anchors, or null. Its web-search
+ *  anchors (the whole block, the no-request templates included) must equal the baseline's: otherwise the interceptor
+ *  would refuse every search and the skill would run with no search evidence. Read from the exact binary the spawn
+ *  resolved; a version change alone never refuses (the anchors have held across agent versions). Never quotes agent
+ *  text. */
+export function agentAnchorsRefusal(binaryPath: string, baselineAnchors: SearchAnchors): string | null {
+  let buf: Buffer;
+  try {
+    buf = readFileSync(binaryPath);
+  } catch (e) {
+    return `--search-corpus: the agent this run would launch (${binaryPath}) could not be read (${(e as NodeJS.ErrnoException).code ?? "error"}), so its web-search anchors cannot be checked`;
+  }
+  const got = extractSearchAnchors(buf);
+  if (!got.ok)
+    return `--search-corpus: the web-search anchors could not be read from it, the agent this run would launch (${binaryPath}); re-run \`cowork-harness sync\` with it staged`;
+  const { source: _s, ...want } = baselineAnchors;
+  if (canonical(got.anchors) !== canonical(want))
+    return `--search-corpus: the agent this run would launch (${binaryPath}) has different web-search anchors from the baseline's, so every search would be refused; re-run \`cowork-harness sync\` with it staged`;
   return null;
 }
 

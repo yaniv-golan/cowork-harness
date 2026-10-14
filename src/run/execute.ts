@@ -1,7 +1,13 @@
 import { warn, writeTextAtomic } from "../io.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
-import { searchCorpusRefusal, startRunSearchCorpus, type RunSearchCorpus, type SearchCorpusOption } from "../search-corpus/run.js";
+import {
+  agentAnchorsRefusal,
+  searchCorpusRefusal,
+  startRunSearchCorpus,
+  type RunSearchCorpus,
+  type SearchCorpusOption,
+} from "../search-corpus/run.js";
 import { runtimeAuthEnv } from "../runtime/host-env.js";
 import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
@@ -64,7 +70,7 @@ import { buildFingerprint, skillCommit } from "./cassette.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { deriveOutcome } from "./outcome.js";
-import { loadBaseline, stampedOutputsMountMode } from "../baseline.js";
+import { loadBaseline, resolveHostAgentBinary, stampedOutputsMountMode } from "../baseline.js";
 import { laneRemoteLoadRefusal, maybePrintLaneNotice } from "./lane-notice.js";
 import { outputsCheckArmed } from "./outputs-delete-tier.js";
 import {
@@ -931,6 +937,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     });
     if (why) throw new UsageError(why);
   }
+  // `--search-corpus`: the binary the spawn will launch, resolved once here so it is checked before the run dir exists
+  // and the spawn runs exactly what was checked. Its search anchors must be the baseline's, or every search would be
+  // refused.
+  const searchCorpusAgentBinary = opts.searchCorpus ? resolveHostAgentBinary(baseline) : undefined;
+  if (searchCorpusAgentBinary) {
+    const drift = agentAnchorsRefusal(searchCorpusAgentBinary, baseline.agentBinary!.searchAnchors!);
+    if (drift) throw new UsageError(drift);
+  }
 
   // `answer_channel: none` and `agent_env.artifacts_root`: refused before the run dir exists, like the checks above.
   // Only what the USER chose counts as a decider here (`onUnansweredFlag`, not a caller's resolved `onUnanswered`).
@@ -1540,7 +1554,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           process.stderr.write(`[${searchCorpus.label}]\n`);
         }
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
-          ...(searchCorpus ? { searchCorpusEnv: searchCorpus.env } : {}),
+          ...(searchCorpus
+            ? {
+                searchCorpusEnv: searchCorpus.env,
+                agentNativeHost: searchCorpusAgentBinary!,
+              }
+            : {}),
           systemPromptAppend: prompts.systemPromptAppend,
           runToken,
           egressProxy: sidecar?.proxyUrl,

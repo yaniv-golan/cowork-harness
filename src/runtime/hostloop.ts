@@ -243,6 +243,9 @@ export function hostLoopSidecarEnv(egressProxy?: string): Record<string, string>
 
 /** spawnHostLoop's options. */
 export interface HostLoopSpawnOpts {
+  /** The agent binary to launch, when the caller already resolved it (`--search-corpus` checks its search anchors
+   *  before the run dir exists, and the spawn must run that same file). Absent: resolved from the baseline here. */
+  agentNativeHost?: string;
   /** `--search-corpus`: the interceptor's proxy and CA keys, layered onto the agent's env after everything else. */
   searchCorpusEnv?: Record<string, string>;
   systemPromptAppend?: string;
@@ -338,7 +341,7 @@ function spawnHostLoopTracked(
   // `hostLoopPluginPathRewrites`).
   const claudePluginRootHost = resolveClaudePluginRootHostPath(plan, mntHost);
 
-  const agentNativeHost = resolveHostAgentBinary(baseline);
+  const agentNativeHost = opts.agentNativeHost ?? resolveHostAgentBinary(baseline);
   // Bind-mounted into the bash sidecar for parity; not run by any harness-spawned process here (sidecar CMD
   // is a keep-alive, bash is `docker exec … bash -c`, the executed agent is agentNativeHost above — model bash
   // could invoke it inside the hardened sidecar, an accepted patch-only residual). So tolerate a patch-newer
