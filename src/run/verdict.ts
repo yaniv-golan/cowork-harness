@@ -35,7 +35,8 @@ export interface VerdictSignal {
     | "delivery_unobservable"
     | "partly_scripted_gate"
     | "parked_at_question"
-    | "search_corpus_refused";
+    | "search_corpus_refused"
+    | "search_corpus_attribution_uncertain";
   severity: "fail" | "warn";
   message: string;
 }
@@ -353,6 +354,17 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
         sc.refused === sc.requests
           ? `EVERY search request (${sc.refused}) was refused by the frozen search corpus: the skill ran with no search evidence. The agent likely differs from the baseline's search anchors; re-run \`cowork-harness sync\` with this agent staged.`
           : `${sc.refused} of ${sc.requests} search request(s) were refused by the frozen search corpus (answered "Web search error: unavailable"), not served.`,
+    });
+
+  // Which search request a sub-agent's result answered could not be settled for some results: the post-run join
+  // refused a move between requests with different serve records, or the dispatches named agents none of the
+  // results resolved to. Counts are unaffected (the frozen-promise check covers them); the per-call record is not
+  // sure for these, so say so. It never blocks.
+  if (sc && sc.attributionUncertain > 0)
+    signals.push({
+      code: "search_corpus_attribution_uncertain",
+      severity: "warn",
+      message: `${sc.attributionUncertain} search result(s) from a sub-agent could not be settled to the request they answered; their entries in searchCorpus.calls[] are marked provisional. The served content is unaffected.`,
     });
 
   // a run that ended on an unanswered plain-text question or request for input is a hard fail on BOTH lanes (the flag is

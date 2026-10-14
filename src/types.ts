@@ -2851,7 +2851,8 @@ export interface RunResult {
         | "delivery_unobservable"
         | "partly_scripted_gate"
         | "parked_at_question"
-        | "search_corpus_refused";
+        | "search_corpus_refused"
+        | "search_corpus_attribution_uncertain";
       severity: "fail" | "warn";
       message: string;
     }>;

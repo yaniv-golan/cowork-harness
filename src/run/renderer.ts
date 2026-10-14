@@ -296,7 +296,10 @@ export function renderFooter(
   const channel =
     (r.answerChannel === "none" ? ` [${ANSWER_CHANNEL_NONE_LABEL}]` : "") +
     (r.searchCorpus
-      ? ` [${r.searchCorpus.label} · served ${r.searchCorpus.metrics.served}, missed ${r.searchCorpus.metrics.miss}, refused ${r.searchCorpus.metrics.refused}]`
+      ? ` [${r.searchCorpus.label} · served ${r.searchCorpus.metrics.served}, missed ${r.searchCorpus.metrics.miss}, refused ${r.searchCorpus.metrics.refused}` +
+        (r.searchCorpus.metrics.reassigned ? ` · ${r.searchCorpus.metrics.reassigned} reassigned` : "") +
+        (r.searchCorpus.metrics.unattributed ? ` · ${r.searchCorpus.metrics.unattributed} unattributed` : "") +
+        "]"
       : "");
   const meta = `[${r.fidelity}]${channel} · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}${cost}`;
   // Iterate-across-fixes discoverability hook: fires on exploratory (skill-lane, `scaffoldTip`) runs that

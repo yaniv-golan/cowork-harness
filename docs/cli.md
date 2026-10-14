@@ -516,6 +516,16 @@ never for research quality.
   which usually means an agent newer than the baseline's search anchors). `searchCorpus.metrics` counts the requests
   served, missed and refused; served searches are not billed and do not appear in the agent's own cost or search
   count.
+- **Per call.** `searchCorpus.calls[]` holds one entry per search request: the agent that made it (absent for the main
+  loop), the WebSearch tool_use it answered, the query and domain lists, the verdict and the served rounds. A
+  sub-agent's result is paired with its request after the run, once the dispatch's result names the sub-agent; until
+  then its serve frame in `events.jsonl` is marked `provisional`. A pairing the join moved between two requests with
+  the same served content is counted `reassigned` (the run line shows "N reassigned"; it never changes the verdict);
+  a result it could not pair is counted `unattributed` (shown the same way). When it could not settle a pairing at
+  all it warns (`search_corpus_attribution_uncertain`). `metrics` also counts the agent's WebSearch calls
+  (`toolUses`, `noRequest`), the requests the agents' own records expect (`toolUsesExpected`), requests per agent
+  (`byAgent`), forwarded requests carrying another server tool (`liveServerTools`, run live) and the mean relevance
+  of the served requests' best rounds (`meanTopScore`).
 - **Misses.** A query whose best match falls below the pool's floor gets "No links found." (`--search-corpus-miss
   empty`, the default) or the agent's "Web search error: unavailable" (`--search-corpus-miss error`).
   `--search-corpus-min-score <n>` (between 0 and 1) overrides the pool's floor for this run and changes the hash the
@@ -530,7 +540,11 @@ never for research quality.
   and records served, and the request's model, `tool_choice` and `thinking` settings; never a header, a credential or
   the rest of the body. It is scrubbed with the run's other raw logs. `events.jsonl` gets one `{"_emu":"search_corpus_serve",…}` line
   per answered request, after the WebSearch result it produced (or at the end, for a sub-agent's search whose result
-  never reached the main stream). A `search-pool build` skips any run with either.
+  never reached the main stream). A sub-agent's frame carries `"attribution":"provisional"`: which sub-agent made it
+  is settled after the run, so its `ordinal` is pairing order, never attribution; read who asked from
+  `RunResult.searchCorpus.calls[]`. A WebSearch result with no answered request gets a frame with `"unpaired":true`
+  and no verdict. A command metric reading `events.jsonl` sees these lines verbatim. A `search-pool build` skips any
+  run with either.
 - **Refused, by name:** fidelity `protocol`, `container` and `microvm` (hostloop only, for now); `chat`, `record` (a
   cassette cannot carry the label yet), `critique` and `probe-dispatch`; `--resume` and `--session-id`; a multi-leg
   (`legs:`) or `device_bridge` scenario; the remote search route (`CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`, or a

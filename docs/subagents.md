@@ -605,8 +605,10 @@ wildcard-fallback trap (see [The type-less dispatch trap](#the-type-less-dispatc
 **Resolved model and output — the `toolUseResult` envelope / `subagent_result_meta`.** The child's `user`
 message carrying its `tool_result` also carries a TOP-LEVEL sibling field on the raw frame,
 `tool_use_result` (the `subagent_result_meta` variant of `AgentEvent` in `src/agent/session.ts`) — the
-wire's `toolUseResult` envelope. When it carries `resolvedModel`/`agentType`/`status`, the harness parses
-it into a `subagent_result_meta` event (`parseMessage`'s `case "user"` handling of `msg.tool_use_result`
+wire's `toolUseResult` envelope. When it carries `resolvedModel`/`agentType`/`status`/`agentId`, the harness parses
+it into a `subagent_result_meta` event (a forked skill's envelope carries only `agentId`: it is parsed too, and the
+`--search-corpus` join reads it to attribute the skill's searches; every consumer below joins by a recorded dispatch,
+so it changes nothing for them) (`parseMessage`'s `case "user"` handling of `msg.tool_use_result`
 in `src/agent/session.ts`), joined by the paired `tool_result` block's `tool_use_id`. That event
 feeds `subagents[].resolvedModel` directly, and only *corroborates* `resolvedAgentType` — it never
 overwrites stronger evidence `task_started` already set (`Run.drive`'s `case "subagent_result_meta"`

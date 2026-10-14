@@ -776,10 +776,10 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 #### Verdict signals
 
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
-are twenty-eight codes. Twelve are **fail**-severity — they flip the run's pass/exit code even though
+are twenty-nine codes. Twelve are **fail**-severity — they flip the run's pass/exit code even though
 `result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
 `result.verdict.signals[].severity` or the run's exit code instead.
-Only sixteen codes are **warn**-severity (informational, never flip pass/fail):
+Only seventeen codes are **warn**-severity (informational, never flip pass/fail):
 
 - `outputs_delete_unconfirmed` (**warn**, live lane) — a delete-shaped command near `mnt/outputs` that
   nothing confirms: no output present at turn start was deleted, and no flagged delete has an outputs path as
@@ -869,6 +869,10 @@ Only sixteen codes are **warn**-severity (informational, never flip pass/fail):
   skill ran with no search evidence at all. The usual cause is an agent newer than the baseline's search anchors:
   re-run `cowork-harness sync` with that agent staged. It never changes the verdict; the run line shows the served,
   missed and refused counts.
+- `search_corpus_attribution_uncertain` (**warn**, `--search-corpus`) — the harness could not settle which search
+  request some sub-agent results answered: two sub-agents asked the same thing at once and their answers differed, or
+  the dispatches named agents none of the results resolved to. Those entries in `searchCorpus.calls[]` stay
+  `provisional`; the served content and the counts are unaffected. It never changes the verdict.
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see
   [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion

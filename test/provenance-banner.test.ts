@@ -192,6 +192,15 @@ describe("renderFooter — the banner is on every verdict", () => {
       { write: counted.write },
     );
     expect(counted.text()).toContain("served 0, missed 0, refused 2");
+    // a reassigned or unattributed result is named on the same line; a clean run adds nothing
+    const noted = sink();
+    renderFooter(
+      { ...measured, searchCorpus: { ...sc, metrics: { ...sc.metrics, reassigned: 2, unattributed: 1 } } } as RunResult,
+      plan(),
+      { write: noted.write },
+    );
+    expect(noted.text()).toContain("served 1, missed 0, refused 0 · 2 reassigned · 1 unattributed]");
+    expect(counted.text()).not.toMatch(/reassigned|unattributed/);
     const plain = sink();
     renderFooter(measured, plan(), { write: plain.write });
     expect(plain.text()).not.toContain("frozen search corpus");

@@ -6636,7 +6636,8 @@
           "outputs_diff_unavailable",
           "partly_scripted_gate",
           "parked_at_question",
-          "search_corpus_refused"
+          "search_corpus_refused",
+          "search_corpus_attribution_uncertain"
         ],
         "required": true
       },
