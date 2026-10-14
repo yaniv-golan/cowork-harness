@@ -21,7 +21,7 @@ export interface JoinResult {
   calls: SearchCall[];
   /** Pairings the join moved to another request with an equal serve record. */
   reassigned: number;
-  /** Results whose request could not be confirmed: unpaired, unresolved, or a move the guard refused. */
+  /** Calls whose pairing is not confirmed: a provisional result or request, or an unpaired result. */
   unattributed: number;
   /** Refusals whose body could not be read: they can never be taken by a result, by design. */
   unattributedExpected: number;
@@ -81,10 +81,12 @@ export function joinCalls(o: {
   /** The run's miss mode: which verdicts an error-shaped or empty result can be. */
   miss: "empty" | "error";
 }): JoinResult {
-  const toolUseOf = new Map<RegistryEntry, { toolUseId: string; provisional?: true; reassignedFrom?: number }>();
+  const toolUseOf = new Map<
+    RegistryEntry,
+    { toolUseId: string; provisional?: true; reassignedFrom?: { agentId?: string; ordinal: number } }
+  >();
   const extra: SearchCall[] = [];
   let reassigned = 0;
-  let unattributed = 0;
   let uncertain = 0;
   const allowed = (p: FramePairing, e: RegistryEntry) => shapeVerdicts(p.shape, o.miss)?.includes(e.verdict) ?? true;
   const resolvedPairs: { p: FramePairing; agent: string }[] = [];
@@ -93,7 +95,6 @@ export function joinCalls(o: {
   for (const p of o.pairings) {
     if (!p.entry) {
       extra.push({ toolUseId: p.toolUseId, unpaired: true });
-      unattributed++;
     } else if (p.parentToolUseId === undefined) toolUseOf.set(p.entry, { toolUseId: p.toolUseId });
     else {
       const agent = o.dispatchAgents.get(p.parentToolUseId);
@@ -122,11 +123,13 @@ export function joinCalls(o: {
         serveRecord(e) === serveRecord(streamed),
     );
     if (target) {
-      toolUseOf.set(target, { toolUseId: p.toolUseId, reassignedFrom: streamed.ordinal });
+      toolUseOf.set(target, {
+        toolUseId: p.toolUseId,
+        reassignedFrom: { ...(streamed.agentId ? { agentId: streamed.agentId } : {}), ordinal: streamed.ordinal },
+      });
       reassigned++;
     } else {
       failed.push(p);
-      unattributed++;
       uncertain++;
     }
   }
@@ -135,7 +138,6 @@ export function joinCalls(o: {
   // What could not be confirmed keeps the stream's pairing, marked; where that request is now another result's, the
   // result is its own call.
   for (const p of [...failed, ...unresolvedPairs]) {
-    if (!failed.includes(p)) unattributed++;
     if (!toolUseOf.has(p.entry!)) toolUseOf.set(p.entry!, { toolUseId: p.toolUseId, provisional: true });
     else extra.push({ toolUseId: p.toolUseId, provisional: true });
   }
@@ -159,5 +161,9 @@ export function joinCalls(o: {
       ...(t?.reassignedFrom !== undefined ? { reassignedFrom: t.reassignedFrom } : {}),
     };
   });
-  return { calls: [...calls, ...extra], reassigned, unattributed, unattributedExpected, attributionUncertain: uncertain };
+  const all = [...calls, ...extra];
+  // Every call whose pairing is not confirmed: a provisional one (a result, or a request a move left without one) or an
+  // unpaired result.
+  const unattributed = all.filter((c) => c.provisional || c.unpaired).length;
+  return { calls: all, reassigned, unattributed, unattributedExpected, attributionUncertain: uncertain };
 }

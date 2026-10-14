@@ -2303,7 +2303,8 @@ export interface RunSearchCorpusResult {
     meanTopScore?: number;
     /** Results whose answer could not be read, so they were paired by key alone. */
     shapeUnfenced: number;
-    /** Results whose request could not be confirmed: unpaired, an unresolved sub-agent, or a move the guard refused. */
+    /** Calls whose pairing is not confirmed (marked `provisional` or `unpaired` in `calls`): an unpaired result, a
+     *  result whose sub-agent could not be resolved or whose move the guard refused, or a request a move left without one. */
     unattributed: number;
     /** Refusals whose body could not be read: never taken by a result, by design. */
     unattributedExpected: number;
@@ -2339,8 +2340,9 @@ export interface SearchCorpusCall {
   }[];
   /** The pairing is the stream's and could not be confirmed. */
   provisional?: true;
-  /** The stream paired this tool_use with the request numbered so; the join moved it here (same serve record). */
-  reassignedFrom?: number;
+  /** The request the stream paired this tool_use with (its agent, absent for the main loop, and number); the join moved
+   *  it here, to a request with the same serve record. */
+  reassignedFrom?: { agentId?: string; ordinal: number };
   /** A result with no intercepted request to take. */
   unpaired?: true;
 }

@@ -211,6 +211,15 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     const body = (tools: unknown[]) => Buffer.from(JSON.stringify({ model: "m", messages: [{ role: "user", content: "x" }], tools }));
     serveRequest(post(body([{ type: "web_fetch_20250910", name: "web_fetch" }])), c);
     serveRequest(post(body([{ name: "Bash", input_schema: {} }])), c);
+    serveRequest(
+      post(
+        body([
+          { type: "text_editor_20250728", name: "str_replace_based_edit_tool" },
+          { type: "bash_20250124", name: "bash" },
+        ]),
+      ),
+      c,
+    );
     serveRequest(post(body([{ type: "code_execution_20250825", name: "code_execution" }]), {}, "/v1/messages/count_tokens"), c);
     expect(c.liveServerTools).toBe(1);
     expect(c.passedThroughWithSearchTool).toBe(0);

@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { SearchRegistry, type RegistryInput, type FrameRound } from "../src/search-corpus/registry.js";
 import { joinCalls, dispatchAgentIds } from "../src/search-corpus/join.js";
-import type { FramePairing } from "../src/search-corpus/frames.js";
+import { ServeFrames, type FramePairing } from "../src/search-corpus/frames.js";
+import { renderWebSearchResult } from "../src/search-corpus/render.js";
+import { readChildTranscripts, turnsFromEvents } from "../src/hillclimb/trace.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // The post-run join: one call per intercepted request, with the tool_use that asked for it. A main-loop pairing is
 // final; a parented one is re-paired within its resolved agent, by key and the answer it shows, in result order.
@@ -73,8 +77,8 @@ describe("joinCalls", () => {
       miss: "empty",
     });
     expect(j.calls.map((c) => [c.agentId, c.toolUseId, c.reassignedFrom])).toEqual([
-      ["agA", "cA", 1],
-      ["agB", "cB", 1],
+      ["agA", "cA", { agentId: "agB", ordinal: 1 }],
+      ["agB", "cB", { agentId: "agA", ordinal: 1 }],
     ]);
     expect(j).toMatchObject({ reassigned: 2, unattributed: 0, attributionUncertain: 0 });
   });
@@ -138,9 +142,10 @@ describe("joinCalls", () => {
 describe("joinCalls: no false moves, and no request left unmarked", () => {
   it("three sub-agents, same key, crossed by the stream: every request ends paired or marked provisional, never bare", () => {
     const r = new SearchRegistry();
-    const e = r.record(input("agX", "q", { rounds: [round("r1")] }));
-    const s = r.record(input("agZ", "q", { rounds: [round("r2")] }));
-    const t = r.record(input("agY", "q", { rounds: [round("r1")] }));
+    // one key serves one record; a refusal of it (a request that missed the predicate) differs by verdict
+    const e = r.record(input("agX", "q"));
+    const s = r.record(input("agZ", "q", { verdict: "refused", rounds: [] }));
+    const t = r.record(input("agY", "q"));
     const dispatchAgents = new Map([
       ["tX", "agX"],
       ["tY", "agY"],
@@ -148,7 +153,7 @@ describe("joinCalls: no false moves, and no request left unmarked", () => {
     ]);
     const j = joinCalls({
       entries: r.all(),
-      pairings: [pair("cY", e, "tY"), pair("cX", s, "tX"), pair("cZ", t, "tZ")],
+      pairings: [pair("cY", e, "tY", "unfenced"), pair("cX", s, "tX", "unfenced"), pair("cZ", t, "tZ", "unfenced")],
       dispatchAgents,
       miss: "empty",
     });
@@ -158,6 +163,8 @@ describe("joinCalls: no false moves, and no request left unmarked", () => {
     const ids = j.calls.map((c) => c.toolUseId).filter(Boolean);
     expect(new Set(ids).size).toBe(ids.length);
     expect(j.attributionUncertain).toBeGreaterThan(0);
+    // unattributed counts exactly the calls marked provisional or unpaired
+    expect(j.unattributed).toBe(j.calls.filter((c) => c.provisional || c.unpaired).length);
   });
   it("a stream pairing whose request cannot show the answer the result showed is not confirmed", () => {
     // The stream applies the same table, so this only guards the join against a pairing it did not make itself.
@@ -227,5 +234,62 @@ describe("dispatchAgentIds: the agent behind each dispatch, from the harness's o
     expect([...dispatchAgentIds([parented], [{ agentId: "ag7", lines: child }])]).toEqual([["skill1", "ag7"]]);
     // an envelope wins over the fallback
     expect(dispatchAgentIds([parented, env("skill1", { agentId: "ag1" })], [{ agentId: "ag7", lines: child }]).get("skill1")).toBe("ag1");
+  });
+});
+
+describe("the join driven through the stream's own pairing", () => {
+  it("two parallel sub-agents asking the same query: the stream crosses them, the join puts them back", () => {
+    const r = new SearchRegistry();
+    const frames = new ServeFrames({ registry: r, noRequest: undefined, pool, miss: "empty", quiesce: async () => ({ abandoned: 0 }) });
+    // each sub-agent's request is intercepted (A first), then B's result streams first
+    r.record(input("agA", "q"));
+    r.record(input("agB", "q"));
+    const served = renderWebSearchResult({
+      query: "q",
+      entries: [{ kind: "links", links: [{ title: "t", url: "https://r1" }] }],
+      reminder: "REMINDER: x",
+    });
+    const use = (id: string, parent: string) => ({
+      type: "assistant",
+      parent_tool_use_id: parent,
+      message: { content: [{ type: "tool_use", id, name: "WebSearch", input: { query: "q" } }] },
+    });
+    const res = (id: string, parent: string) => ({
+      type: "user",
+      parent_tool_use_id: parent,
+      message: { content: [{ type: "tool_result", tool_use_id: id, content: served }] },
+    });
+    for (const m of [use("cA", "tA"), use("cB", "tB"), res("cB", "tB"), res("cA", "tA")]) frames.observe(m);
+    const j = joinCalls({
+      entries: r.all(),
+      pairings: frames.pairings(),
+      dispatchAgents: new Map([
+        ["tA", "agA"],
+        ["tB", "agB"],
+      ]),
+      miss: "empty",
+    });
+    expect(j.calls.map((c) => [c.agentId, c.toolUseId])).toEqual([
+      ["agA", "cA"],
+      ["agB", "cB"],
+    ]);
+    expect(j).toMatchObject({ reassigned: 2, unattributed: 0, attributionUncertain: 0 });
+  });
+});
+
+describe("one derivation: the trace and the search join match a forked skill's transcript the same way", () => {
+  it("the same parent stream and transcript give the trace's inlined fork and the join's dispatch agent", () => {
+    const dir = join(import.meta.dirname, "fixtures", "hillclimb-runs", "forked-skill");
+    const events = readFileSync(join(dir, "events.jsonl"), "utf8").trim().split("\n");
+    const children = readChildTranscripts(join(dir, "subagents"));
+    expect(children).toHaveLength(1);
+    // the trace inlines the transcript under the Skill call
+    const { turns } = turnsFromEvents({ events, prompt: "p", children, sidecarPrefix: "x/", redact: (t) => t });
+    expect(turns.some((t) => t.role === "tool_call" && t.content.startsWith("[forked skill example-fork-skill#1] "))).toBe(true);
+    // the join, with no envelope naming the agent, matches the same transcript to the same Skill call
+    const m = dispatchAgentIds(events, [{ agentId: "synthetic0fork", lines: children[0]!.lines }]);
+    expect([...m]).toEqual([["toolu_synthetic_skill_0001", "synthetic0fork"]]);
+    // and with that transcript's tool ids gone, neither matches
+    expect(dispatchAgentIds(events, [{ agentId: "synthetic0fork", lines: [] }]).size).toBe(0);
   });
 });

@@ -169,6 +169,22 @@ describe("ServeFrames: one frame per intercepted request, written by the session
     expect(frames.counts()).toMatchObject({ toolUses: 1, noRequest: 1 });
   });
 
+  it("a served record with no links but some text renders as the no-links answer plus text: read as unfenced, counted", () => {
+    const { registry, frames } = setup();
+    registry.record(entry("q", { verdict: "served", rounds: [{ ...round, urls: [] }] }));
+    frames.observe(use("x", "q"));
+    const both = renderWebSearchResult({
+      query: "q",
+      entries: [
+        { kind: "links", links: [] },
+        { kind: "text", text: "prose" },
+      ],
+      reminder: "REMINDER: x",
+    });
+    expect(parse(frames.observe(result("x", both)))[0]).toMatchObject({ verdict: "served" });
+    expect(frames.counts()).toMatchObject({ shapeUnfenced: 1 });
+  });
+
   it("a served record with no links renders as the no-links answer, and still takes its serve", () => {
     const { registry, frames } = setup();
     registry.record(entry("q", { verdict: "served", rounds: [{ ...round, urls: [] }] }));

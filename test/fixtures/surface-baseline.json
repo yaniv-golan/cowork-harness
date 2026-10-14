@@ -5991,7 +5991,15 @@
         "type": ["string", "null"]
       },
       ".searchCorpus.calls[].reassignedFrom": {
-        "type": "integer"
+        "type": "object",
+        "closed": true
+      },
+      ".searchCorpus.calls[].reassignedFrom.agentId": {
+        "type": "string"
+      },
+      ".searchCorpus.calls[].reassignedFrom.ordinal": {
+        "type": "integer",
+        "required": true
       },
       ".searchCorpus.calls[].rounds": {
         "type": "array"

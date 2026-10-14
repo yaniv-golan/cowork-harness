@@ -39,8 +39,9 @@ export interface FramePairing {
 }
 
 /** The verdicts a result showing this answer can be, under the run's miss mode; undefined (any) when it could not be
- *  read. A served record with no links renders as the no-links answer, so that answer can also be a serve (one key
- *  never yields both a serve and an empty miss in one run: retrieval is deterministic over a fixed pool). */
+ *  read. A served record with no links and no text renders as the no-links answer alone, so that answer can also be a
+ *  serve (one key never yields both a serve and an empty miss in one run: retrieval is deterministic over a fixed
+ *  pool); with text after it, the result reads as unfenced. */
 export function shapeVerdicts(shape: ResultShape, miss: "empty" | "error"): readonly RegistryEntry["verdict"][] | undefined {
   if (shape === "unfenced") return undefined;
   if (shape === "served") return ["served"];

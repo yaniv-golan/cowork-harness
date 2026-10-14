@@ -368,7 +368,17 @@ export function frozenPromise(o: {
     return c ? c.served + c.miss + c.refused : 0;
   };
   const eventsPath = join(o.outDir, "events.jsonl");
-  const events = existsSync(eventsPath) ? readFileSync(eventsPath, "utf8").split("\n") : [];
+  // The run's own stream record: without it, a sub-agent-only run would balance on its transcripts alone, and the
+  // parented floor below would read nothing. Any intercepted request makes its absence an error.
+  let events: string[] = [];
+  if (!existsSync(eventsPath)) {
+    if (counts.requests > 0) problems.push("events.jsonl is missing, so the run's own record of its searches cannot be read");
+  } else
+    try {
+      events = readFileSync(eventsPath, "utf8").split("\n");
+    } catch (e) {
+      problems.push(`events.jsonl could not be read (${(e as NodeJS.ErrnoException).code ?? "error"})`);
+    }
   const main = agentSide(events, { mainOnly: true, noRequest: o.noRequest, denied });
   const sides: [string, number][] = [["main", main.expected]];
   let inTranscripts = 0;

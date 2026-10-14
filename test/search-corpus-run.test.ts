@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { frozenPromiseError, searchCorpusLabel, searchCorpusRefusal, startRunSearchCorpus } from "../src/search-corpus/run.js";
@@ -205,6 +205,20 @@ describe("frozenPromiseError: the agent's own count against the interceptor's, p
     const err = check(runDir([use("w1", "q"), res("w1", ok200("q"))]), r);
     expect(err).toMatch(/the main agent made 1 search request\(s\).*interceptor saw 0/);
     expect(err).toMatch(/sub-agent x made 0 search request\(s\).*interceptor saw 1/);
+  });
+
+  it("goes red when the run's own stream record is missing or unreadable while the interceptor saw requests", () => {
+    const r = new SearchRegistry();
+    r.record(entry("ag1"));
+    const d = runDir([], { ag1: [use("c1", "q"), res("c1", ok200("q"))] });
+    rmSync(join(d, "events.jsonl"));
+    expect(check(d, r)).toMatch(/events\.jsonl is missing/);
+    mkdirSync(join(d, "events.jsonl")); // exists, cannot be read as a file
+    expect(check(d, r)).toMatch(/events\.jsonl could not be read/);
+    // with nothing intercepted and no agent record, a run without a stream record has nothing to confirm
+    const empty = runDir([]);
+    rmSync(join(empty, "events.jsonl"));
+    expect(check(empty, new SearchRegistry())).toBeNull();
   });
 
   it("goes red when the interceptor saw a request no agent record carries", () => {

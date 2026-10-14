@@ -870,11 +870,12 @@ Only seventeen codes are **warn**-severity (informational, never flip pass/fail)
   re-run `cowork-harness sync` with that agent staged. It never changes the verdict; the run line shows the served,
   missed and refused counts.
 - `search_corpus_attribution_uncertain` (**warn**, `--search-corpus`) — the harness could not settle which search
-  request some sub-agent results answered: none of the resolved sub-agent's requests had the same served content (for
-  example two sub-agents asked the same thing at once and their answers differed), or the dispatches named agents none
-  of the results resolved to. A result whose sub-agent alone could not be resolved is only counted `unattributed` on
-  the run line. Those entries in `searchCorpus.calls[]` stay
-  `provisional`; the served content and the counts are unaffected. It never changes the verdict.
+  request some sub-agent results answered: no request of the resolved sub-agent could take the result with the same
+  served content (for example the agent id its dispatch named differs from the one its request carried, or a refusal and
+  a served request of one query crossed), or the dispatches named agents and none of the parented results resolved to
+  any of them. A single unresolved result while others resolved is only counted `unattributed` on the run line. Those
+  entries in `searchCorpus.calls[]` stay `provisional`; the served content and the counts are unaffected. It never
+  changes the verdict.
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see
   [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion

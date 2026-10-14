@@ -94,7 +94,7 @@ const full: RunResult = {
         ordinal: 1,
         rounds: [],
         provisional: true,
-        reassignedFrom: 2,
+        reassignedFrom: { agentId: "ag2", ordinal: 2 },
       },
       { toolUseId: "t3", unpaired: true },
     ],

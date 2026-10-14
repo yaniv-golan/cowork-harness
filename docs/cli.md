@@ -519,14 +519,22 @@ never for research quality.
 - **Per call.** `searchCorpus.calls[]` holds one entry per search request: the agent that made it (absent for the main
   loop), the WebSearch tool_use it answered, the query and domain lists, the verdict and the served rounds. A
   sub-agent's result is paired with its request after the run, once the dispatch's result names the sub-agent; until
-  then its serve frame in `events.jsonl` is marked `provisional`. A pairing the join moved between two requests with
-  the same served content is counted `reassigned` (the run line shows "N reassigned"; it never changes the verdict);
-  a result it could not pair, or whose sub-agent could not be resolved, is counted `unattributed` (shown the same way).
-  When no request of the resolved sub-agent had the same served content, or the dispatches named agents none of the
-  results resolved to, it also warns (`search_corpus_attribution_uncertain`). `metrics` also counts the agent's WebSearch calls
-  (`toolUses`, `noRequest`), the requests the agents' own records expect (`toolUsesExpected`), requests per agent
-  (`byAgent`), forwarded requests carrying another server tool (`liveServerTools`, run live) and the mean relevance
-  of the served requests' best rounds (`meanTopScore`).
+  then its serve frame in `events.jsonl` is marked `provisional`. A pairing the join moved to another request with the
+  same served content is counted `reassigned`, and the call records the request the stream gave it
+  (`reassignedFrom: {agentId, ordinal}`). A call whose pairing could not be confirmed is marked `provisional` (or
+  `unpaired`, a result with no request) and counted `unattributed`: a result whose sub-agent could not be resolved, a
+  move that was refused, or a request a move left without a result. The run line shows "N reassigned" and
+  "N unattributed" when non-zero; neither changes the verdict. The run also warns
+  (`search_corpus_attribution_uncertain`) when the join could not settle a pairing: no request of the resolved
+  sub-agent could take it with the same served content (for example its agent id differs from the one its request
+  carried, or a refusal and a served request of one query crossed), or the dispatches named agents and none of the
+  parented results resolved to any of them. A single unresolved result while others resolved is only counted
+  `unattributed`. `metrics` also counts the agent's WebSearch calls (`toolUses`, `noRequest`), the requests the agents'
+  own records expect (`toolUsesExpected`), requests per agent (`byAgent`), forwarded requests carrying a web fetch or
+  code execution server tool (`liveServerTools`, run live) and the mean relevance of the served requests' best rounds
+  (`meanTopScore`). A forked skill's or `Agent(fork)`'s searches count under its own agent in `byAgent`, as the
+  interceptor keys them, while the run's tool counts (`toolCounts.WebSearch`) count them under the main loop, as tool
+  calls of the skill; both are right for what they count.
 - **Misses.** A query whose best match falls below the pool's floor gets "No links found." (`--search-corpus-miss
   empty`, the default) or the agent's "Web search error: unavailable" (`--search-corpus-miss error`).
   `--search-corpus-min-score <n>` (between 0 and 1) overrides the pool's floor for this run and changes the hash the

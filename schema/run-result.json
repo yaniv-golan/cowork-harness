@@ -471,7 +471,7 @@
             "unattributed": {
               "type": "integer",
               "minimum": 0,
-              "description": "Results whose request could not be confirmed: unpaired, an unresolved sub-agent, or a move the guard refused."
+              "description": "Calls whose pairing is not confirmed (marked provisional or unpaired in calls): an unpaired result, a result whose sub-agent could not be resolved or whose move the guard refused, or a request a move left without one."
             },
             "unattributedExpected": {
               "type": "integer",
@@ -528,9 +528,11 @@
               },
               "provisional": { "const": true, "description": "The pairing is the stream's and could not be confirmed." },
               "reassignedFrom": {
-                "type": "integer",
-                "minimum": 1,
-                "description": "The stream paired this tool_use with the request numbered so; the join moved it here (same serve record)."
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["ordinal"],
+                "description": "The request the stream paired this tool_use with (its agent, absent for the main loop, and number); the join moved it here, to a request with the same serve record.",
+                "properties": { "agentId": { "type": "string" }, "ordinal": { "type": "integer", "minimum": 1 } }
               },
               "unpaired": { "const": true, "description": "A result with no intercepted request to take." }
             }

@@ -119,7 +119,7 @@ export function splitSearches(r: ParsedWebSearchResult): { links: SearchLink[]; 
 }
 
 /** The agent's rendering of the harness's error answer (`error_code: "unavailable"`, a miss under
- *  `--search-corpus-miss error` or a refusal), as sha256 + byte length: it is the agent's text, never stored verbatim.
+ *  `--search-corpus-miss error` or a refusal), as sha256 + byte length: it is the agent's text, so src matches it by hash.
  *  Measured on 2.1.295 and pinned by the local real-agent test. A different rendering only makes such a result
  *  `unfenced` (counted), never another verdict. */
 export const SEARCH_ERROR_ANCHOR = {

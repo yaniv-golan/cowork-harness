@@ -6,6 +6,7 @@ import { parseMessage } from "../src/agent/session.js";
 import { sliceTurnEvents } from "../src/metric-command/slice.js";
 import { currentTurnEventLines } from "../src/run/turn-events.js";
 import { harvestRun } from "../src/search-corpus/harvest.js";
+import { turnEventsBytes } from "../src/metric-command/live.js";
 
 // The serve frames this release adds, provisional (a sub-agent's, not yet resolved) and unpaired (a result with no
 // request), through the readers that see events.jsonl: none acts on them, attributes by their ordinal, or drops them.
@@ -47,6 +48,12 @@ describe("provisional and unpaired serve frames through the events.jsonl readers
     expect(one.bytes.toString("utf8")).toBe([use, provisional, unpaired].join("\n") + "\n");
     const two = sliceTurnEvents(raw, 2) as { bytes: Buffer };
     expect(two.bytes.toString("utf8")).toBe(provisional + "\n");
+  });
+  it("a live command metric's events read passes both through verbatim", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-frames-"));
+    writeFileSync(join(d, "events.jsonl"), [use, provisional, unpaired].join("\n") + "\n");
+    const got = turnEventsBytes(d, 1) as { bytes: Buffer };
+    expect(got.bytes.toString("utf8")).toBe([use, provisional, unpaired].join("\n") + "\n");
   });
   it("the current-turn reader keeps them and splits only on a turn marker", () => {
     expect(currentTurnEventLines([use, provisional, unpaired, turn2, unpaired])).toEqual([unpaired]);
