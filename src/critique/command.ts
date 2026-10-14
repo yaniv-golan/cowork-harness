@@ -229,6 +229,7 @@ Not accepted (each errors with its reason rather than being silently ignored):
   --session-id / --resume   critique mints and manages its own session internally
   --repeat + companions     fixed two-turn protocol — loop critique itself; read the reports side by side with critique --compare
   --ablate-skill            grading a skill you removed is incoherent
+  --search-corpus[-miss|-min-score]   a frozen search corpus is not a research-quality signal
   --quiet/--verbose/--compact/--demo/--dry-run   inner-turn rendering or preview — no effect on the report
                                                  (which already collapses host paths to ~)
 

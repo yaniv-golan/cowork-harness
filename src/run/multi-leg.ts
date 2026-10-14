@@ -340,6 +340,7 @@ export async function executeMultiLeg(
   if (opts.sessionId !== undefined || opts.resume)
     throw new UsageError("--session-id and --resume take a single-prompt scenario; a multi-leg run's legs are new sessions by design");
   if (opts.ablateSkill) throw new UsageError("--ablate-skill is not supported with a multi-leg scenario");
+  if (opts.searchCorpus) throw new UsageError("--search-corpus is not supported with a multi-leg scenario");
   const baseline = loadBaseline(ms.baseline);
   const tier = effectiveTier(ms.fidelity, baseline);
   if (ms.fidelity === "cowork" || !MULTI_LEG_TIERS.has(tier))

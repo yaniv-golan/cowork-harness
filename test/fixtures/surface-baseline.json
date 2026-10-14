@@ -5491,7 +5491,7 @@
       },
       ".infraErrors[].source": {
         "type": "string",
-        "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-shim", "device-exec"],
+        "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-shim", "device-exec", "search-corpus"],
         "required": true
       },
       ".l0HostConfigContamination": {
@@ -5953,6 +5953,70 @@
       },
       ".scrubSetUnavailable": {
         "type": "string"
+      },
+      ".searchCorpus": {
+        "type": "object",
+        "closed": true
+      },
+      ".searchCorpus.credentialSource": {
+        "type": "string",
+        "enum": ["env"],
+        "required": true
+      },
+      ".searchCorpus.interposition": {
+        "type": "string",
+        "enum": ["proxy-env+ca"],
+        "required": true
+      },
+      ".searchCorpus.label": {
+        "type": "string",
+        "required": true
+      },
+      ".searchCorpus.metrics": {
+        "type": "object",
+        "closed": true,
+        "required": true
+      },
+      ".searchCorpus.metrics.miss": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.passedThroughWithSearchTool": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.refused": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.requests": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.retriesFolded": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.served": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.metrics.unfinished": {
+        "type": "integer",
+        "required": true
+      },
+      ".searchCorpus.miss": {
+        "type": "string",
+        "enum": ["empty", "error"],
+        "required": true
+      },
+      ".searchCorpus.poolId": {
+        "type": "string",
+        "required": true
+      },
+      ".searchCorpus.sha256": {
+        "type": "string",
+        "required": true
       },
       ".skillActivity": {
         "type": "array"

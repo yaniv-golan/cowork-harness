@@ -243,6 +243,8 @@ export function hostLoopSidecarEnv(egressProxy?: string): Record<string, string>
 
 /** spawnHostLoop's options. */
 export interface HostLoopSpawnOpts {
+  /** `--search-corpus`: the interceptor's proxy and CA keys, layered onto the agent's env after everything else. */
+  searchCorpusEnv?: Record<string, string>;
   systemPromptAppend?: string;
   runToken?: string;
   egressProxy?: string;
@@ -407,6 +409,9 @@ function spawnHostLoopTracked(
     // The tier-uniform agent_env knob — wins over both the (scrubbed) operator layer and baseline spawn.env.
     agentEnv: plan.agentEnv,
   });
+  // Layered here, after buildHostLoopNativeEnv, so sync's comparison with Desktop's spawn (which calls that builder)
+  // never sees them: the harness sets them only under --search-corpus.
+  if (opts.searchCorpusEnv) Object.assign(nativeEnv, opts.searchCorpusEnv);
 
   // The PreToolUse path-containment gate config. hostCwd = the harness-owned outputs dir (production's
   // `hostCwd = getOutputsDir(e)`), the base a relative path resolves against in both eras;

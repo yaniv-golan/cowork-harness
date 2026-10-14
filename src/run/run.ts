@@ -14,7 +14,8 @@ function isInfraErrorSource(s: unknown): s is InfraErrorSource {
     s === "egress-sidecar" ||
     s === "device-container" ||
     s === "device-shim" ||
-    s === "device-exec"
+    s === "device-exec" ||
+    s === "search-corpus"
   );
 }
 import { questionKey, questionLabel, canon } from "../agent/session.js";

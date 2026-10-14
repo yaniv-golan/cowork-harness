@@ -385,7 +385,8 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
   },
   NODE_EXTRA_CA_CERTS: {
     class: "host-derived",
-    reason: "Jp's alternative to NODE_USE_SYSTEM_CA when Desktop has a CA bundle",
+    reason:
+      "Jp's alternative to NODE_USE_SYSTEM_CA when Desktop has a CA bundle; the harness sets it only under --search-corpus (the run's CA)",
     sites: ["observed"],
   },
   GRPC_DEFAULT_SSL_ROOTS_FILE_PATH: { class: "host-derived", reason: "the host gRPC CA bundle path", sites: ["observed"] },
@@ -406,7 +407,8 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
   // their values are private, and the oracle never reads a value. Any other name that transform adds stays withheld.
   HTTPS_PROXY: {
     class: "host-loop-unmodeled",
-    reason: "Desktop's proxy transform, from the system or managed proxy; untriaged, follow-up",
+    reason:
+      "Desktop's proxy transform, from the system or managed proxy; untriaged, follow-up. The harness sets it only under --search-corpus (its loopback interceptor)",
     sites: ["observed"],
   },
   HTTP_PROXY: {
@@ -416,7 +418,8 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
   },
   NO_PROXY: {
     class: "host-loop-unmodeled",
-    reason: "Desktop's proxy transform, from the system or managed proxy; untriaged, follow-up",
+    reason:
+      "Desktop's proxy transform, from the system or managed proxy; untriaged, follow-up. The harness sets it only under --search-corpus (loopback)",
     sites: ["observed"],
   },
   CLAUDE_CODE_USE_GATEWAY: {

@@ -22,6 +22,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     command: undefined,
     lane: undefined,
     answerChannel: undefined,
+    searchCorpus: undefined,
     scratchpadEvidenceComplete: undefined,
     execution: undefined,
     finalMessage: undefined,

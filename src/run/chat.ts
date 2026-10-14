@@ -113,6 +113,10 @@ function chatUsage(): string {
  * hatch; egress sandbox NOT applied — and all file/fidelity options are rejected in `--raw`).
  */
 export async function cmdChat(args: string[]) {
+  if (args.some((a) => /^--search-corpus(-miss|-min-score)?(=|$)/.test(a))) {
+    log("chat --search-corpus is not available: a frozen search corpus runs with run or skill\n");
+    process.exit(2);
+  }
   const positional: string[] = [];
   let raw = false;
   // The env defaults (COWORK_HARNESS_FIDELITY / _MODEL) are resolved AFTER the flag loop, so a --dotenv given

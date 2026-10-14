@@ -216,6 +216,16 @@ export interface HookBundle {
  *  fact instead of trusting it blindly. `Run.drive()` (run.ts) is that caller today. */
 export type DecisionDelivery = { delivered: boolean; reason?: "session-closing" | "unknown-decision" };
 
+/** The frozen search corpus's hooks into the session stream (`src/search-corpus/frames.ts`): the stream is the one
+ *  writer of its serve frames. `observe` returns the frame lines to write directly after a stream line; `finish`
+ *  (bounded by the interceptor's quiesce) returns the frames for requests whose result never streamed; `denied`
+ *  records a WebSearch tool_use the harness denied, whose result therefore made no request. */
+export interface SessionSearchCorpus {
+  observe(msg: unknown): string[];
+  finish(): Promise<string[]>;
+  denied(toolUseId: string): void;
+}
+
 export interface AgentSession {
   /** write `initialize` before the first user turn (idempotent; `start()` also calls it).
    *  Optional — replay sessions (cassette) have no live control channel and omit it. */
@@ -225,6 +235,8 @@ export interface AgentSession {
     sdkMcp?: SdkMcp;
     hooks?: HookBundle;
     toolAliases?: Record<string, string>;
+    /** Present only under `--search-corpus`; without it the stream is unchanged. */
+    searchCorpus?: SessionSearchCorpus;
   }): AsyncIterable<AgentEvent>;
   sendUserTurn(text: string): void;
   respond(decisionId: string, r: DecisionResponse): DecisionDelivery;
@@ -704,6 +716,7 @@ export class LiveAgentSession implements AgentSession {
   private reconciledUndelivered = new Set<string>();
   /** See {@link observeFrames}. */
   private frameObserver?: (msg: unknown) => void;
+  private searchCorpus?: SessionSearchCorpus;
 
   constructor(
     private proc: ChildProcessByStdio<Writable, Readable, Readable>,
@@ -775,9 +788,16 @@ export class LiveAgentSession implements AgentSession {
   }
 
   async *start(
-    opts: { subagentAppend?: string; sdkMcp?: SdkMcp; hooks?: HookBundle; toolAliases?: Record<string, string> } = {},
+    opts: {
+      subagentAppend?: string;
+      sdkMcp?: SdkMcp;
+      hooks?: HookBundle;
+      toolAliases?: Record<string, string>;
+      searchCorpus?: SessionSearchCorpus;
+    } = {},
   ): AsyncIterable<AgentEvent> {
     this.init(opts); // idempotent — a no-op if drive() already wrote init-1 before the first user turn
+    this.searchCorpus = opts.searchCorpus;
 
     // race-approach latch — `errorPromise` rejects when proc emits an error, which is
     // outside the readline loop. We race each rl.next() against it so the generator yields a
@@ -828,6 +848,8 @@ export class LiveAgentSession implements AgentSession {
         } catch {
           /* an observer never breaks the stream */
         }
+        // A serve frame goes directly after the tool_result line it answers (this stream is its only writer).
+        if (this.searchCorpus && !this.closing) for (const f of this.searchCorpus.observe(msg)) this.events.write(f + "\n");
         try {
           for await (const ev of this.translate(msg)) {
             this.timeline.record(ev, lineIndex);
@@ -854,6 +876,15 @@ export class LiveAgentSession implements AgentSession {
       }
     } finally {
       this.rejectError = undefined; // generator is done; stop routing errors here
+      // Frames for intercepted requests whose result never streamed: after the interceptor has quiesced (bounded),
+      // and before `closing`, so they land in events.jsonl ahead of its end (and of any command metric's slice).
+      if (this.searchCorpus) {
+        try {
+          for (const f of await this.searchCorpus.finish()) this.events.write(f + "\n");
+        } catch (e) {
+          warn(`::warning:: search corpus: the unstreamed serve frames could not be written (${(e as Error)?.message ?? e})\n`);
+        }
+      }
       this.closing = true; // discard any late write() from translate()'s async hook/mcp paths
       await this.drainAll(); // queue empty + all callbacks confirmed before ending either stream
       // AWAIT the stream flush before the generator resolves. executeScenario reads/scans/scrubs
@@ -1033,6 +1064,9 @@ export class LiveAgentSession implements AgentSession {
     // DecisionDelivery's doc comment) can be traced back to this decision and reconciled via
     // `hasUndeliveredReconciliation`, even though the `delivered:true` returned below is only a
     // synchronous "queued successfully" signal, not stdin write confirmation.
+    // A WebSearch the harness denies makes no nested request: the frozen-corpus frames must not expect one.
+    if (req.kind === "permission" && req.tool === "WebSearch" && req.toolUseId && (r.kind !== "permission" || r.behavior === "deny"))
+      this.searchCorpus?.denied(req.toolUseId);
     const delivered = this.write(serializeDecision(req, r), decisionId);
     // Invariant: each decision id is answered at most once. Delete after the write (a successfully
     // serialized response) so stale entries don't accumulate (live sessions may process thousands of

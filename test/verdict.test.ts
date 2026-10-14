@@ -447,6 +447,20 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     expect(soft.signals.find((s) => s.code === "infra_error")).toBeUndefined();
   });
 
+  it("hard-fails a search-corpus infra error: the run's frozen promise could not be confirmed", () => {
+    const v = computeVerdict(
+      rr({
+        infraErrors: [
+          { source: "search-corpus", message: "the main agent made 2 search request(s) by its own record, and the interceptor saw 1" },
+        ],
+      }),
+      "live",
+    );
+    expect(v.pass).toBe(false);
+    expect(v.signals.find((s) => s.code === "infra_error")?.severity).toBe("fail");
+    expect(v.signals.find((s) => s.code === "infra_error")?.message).toContain("interceptor saw 1");
+  });
+
   it("still hard-fails when a sidecar death accompanies a failed exec", () => {
     const v = computeVerdict(
       rr({

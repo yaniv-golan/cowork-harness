@@ -165,6 +165,30 @@ describe("renderFooter — the banner is on every verdict", () => {
     expect(s.text()).not.toContain("[provenance]");
   });
 
+  it("a run served from a frozen search corpus prints its label on the meta line, pass or fail, live or replay", () => {
+    const sc = {
+      poolId: "ms",
+      sha256: "abcdef0123456789",
+      label: "frozen search corpus ms@abcdef01 — recorded results, harness ranking, searches not billed; not live search",
+      miss: "empty" as const,
+      interposition: "proxy-env+ca" as const,
+      credentialSource: "env" as const,
+      metrics: { requests: 1, served: 1, miss: 0, refused: 0, retriesFolded: 0, unfinished: 0, passedThroughWithSearchTool: 0 },
+    };
+    for (const lane of ["live", "replay"] as const)
+      for (const run of [
+        { ...measured, searchCorpus: sc },
+        { ...measured, searchCorpus: sc, assertions: [{ assertion: { tool_called: "Bash" }, pass: false, message: "no" }] },
+      ]) {
+        const s = sink();
+        renderFooter(run as RunResult, plan(), { write: s.write, lane });
+        expect(s.text()).toContain(`[${sc.label}]`);
+      }
+    const plain = sink();
+    renderFooter(measured, plan(), { write: plain.write });
+    expect(plain.text()).not.toContain("frozen search corpus");
+  });
+
   it("an ablated run says so on the line", () => {
     const s = sink();
     renderFooter(r({ models: ["claude-opus-5"], context: { availableSkills: [] }, skillsInvoked: [], ablated: true }), plan(), {

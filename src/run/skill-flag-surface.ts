@@ -150,6 +150,12 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
     arity: 0,
     critique: { kind: "reject", reason: "grading a skill you removed is incoherent (and ablate+resume is rejected anyway)" },
   },
+  // A frozen search corpus is for the steps around research, never its quality, and critique judges the deliverable.
+  ...(["--search-corpus", "--search-corpus-miss", "--search-corpus-min-score"] as const).map((flag): SkillFlagSpec => ({
+    flag,
+    arity: 1,
+    critique: { kind: "reject", reason: "a frozen search corpus is not a research-quality signal, and critique judges the deliverable" },
+  })),
   ...(["--quiet", "-q", "--verbose", "--compact", "--demo"] as const).map((flag): SkillFlagSpec => ({
     flag,
     arity: 0,

@@ -1,6 +1,8 @@
 import { warn, writeTextAtomic } from "../io.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
+import { searchCorpusRefusal, startRunSearchCorpus, type RunSearchCorpus, type SearchCorpusOption } from "../search-corpus/run.js";
+import { runtimeAuthEnv } from "../runtime/host-env.js";
 import { hostCliSupportsPermissionPrompts } from "../runtime/host-cli-probe.js";
 import { metricsFor } from "../metrics.js";
 import { resolveCommandMetrics, resolvedCommand } from "../metric-command/resolve.js";
@@ -261,6 +263,9 @@ export interface ExecuteOptions {
    *  discovery is stripped so nothing mounts and the agent answers from its own priors; the result is
    *  stamped `ablated:true` so a consumer never reads it as a real run. */
   ablateSkill?: boolean;
+  /** `--search-corpus`: serve the agent's web searches from a recorded pool (hostloop only). Refused at load where it
+   *  cannot hold: see `searchCorpusRefusal`. */
+  searchCorpus?: SearchCorpusOption;
   /** `--label` generation tag for the iterate-across-fixes loop (skill/run lanes). Surfaced in RunResult +
    *  the run-index row + `inspect`; undefined when not passed. Ergonomics only — see RunResult.runLabel. */
   runLabel?: string;
@@ -897,6 +902,19 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   const vacuous = tierVacuityRefusal(scenario, baseline);
   if (vacuous) throw new UsageError(vacuous);
 
+  // `--search-corpus`: refused before the run dir exists when the frozen promise cannot hold for this run.
+  if (opts.searchCorpus) {
+    const why = searchCorpusRefusal({
+      fidelity: effectiveFidelity,
+      deviceBridge: scenario.device_bridge === true,
+      baseline,
+      authEnv: runtimeAuthEnv(),
+      agentEnv: process.env,
+      resume: !!opts.resume || opts.sessionId !== undefined,
+    });
+    if (why) throw new UsageError(why);
+  }
+
   // `answer_channel: none` and `agent_env.artifacts_root`: refused before the run dir exists, like the checks above.
   // Only what the USER chose counts as a decider here (`onUnansweredFlag`, not a caller's resolved `onUnanswered`).
   const channelRefusal =
@@ -1306,6 +1324,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let hostloopPathGateFired: Set<string> | undefined; // tool_use_ids the path gate actually saw
   let hostloopInfraErrors: { source: InfraErrorSource; message: string }[] | undefined; // spawnHostLoop's live infra sink (sidecar crash + failed execs, tagged by origin) — folded into record.infraErrors below
   let hostloopMarkTearingDown: (() => void) | undefined; // call BEFORE this run's own `docker rm -f` so that forced exit isn't misreported as a crash
+  let searchCorpus: RunSearchCorpus | undefined; // `--search-corpus`: the run's interceptor, frames and frozen-promise check
+  let searchCorpusError: string | null = null; // the frozen-promise check's verdict, folded into record.infraErrors below
   let deviceBridge: ReturnType<typeof startDeviceBridge> | undefined; // device_bridge's second container: removed after the agent's, before the network
   let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
   let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
@@ -1498,7 +1518,12 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // which adds its shell section and reports what it passed.
       let sentSystemAppend = prompts.systemPromptAppend ?? "";
       if (effectiveFidelity === "hostloop") {
+        if (opts.searchCorpus) {
+          searchCorpus = await startRunSearchCorpus({ option: opts.searchCorpus, baseline, outDir, agentEnv: process.env });
+          process.stderr.write(`[${searchCorpus.label}]\n`);
+        }
         const hl = spawnHostLoop(scenario, baseline, plan, outDir, sessionId, {
+          ...(searchCorpus ? { searchCorpusEnv: searchCorpus.env } : {}),
           systemPromptAppend: prompts.systemPromptAppend,
           runToken,
           egressProxy: sidecar?.proxyUrl,
@@ -1656,6 +1681,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
             // gate that put the workspace server there is on. Tied to the SAME `viaApiOn` that drives the
             // disallow in spawnContainer — an alias to a server this run never registered would resolve a
             // bare WebFetch onto nothing.
+            ...(searchCorpus ? { searchCorpus: searchCorpus.frames } : {}),
             ...(effectiveFidelity === "hostloop"
               ? { toolAliases: WORKSPACE_TOOL_ALIASES }
               : effectiveFidelity === "container" && viaApiOn
@@ -1692,6 +1718,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         child,
         deregister: deregisterAgent,
       });
+      // The agent (and the children it started, which inherit the proxy) has stopped and the session has written every
+      // serve frame: stop the interceptor and check the frozen promise.
+      if (searchCorpus) searchCorpusError = await searchCorpus.finish(outDir, plan.configDir);
       // mark BEFORE the forced removal below — this run's own `docker rm -f` makes the hostloop sidecar
       // exit too, and that intentional-shutdown exit must not be misreported as a mid-run infra failure
       // (see watchHostLoopSidecar's doc comment — a naive fix that skips this reds every hostloop run).
@@ -1733,6 +1762,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (hostloopInfraErrors?.length) record.infraErrors.push(...hostloopInfraErrors);
     // The device container's crash and failed device_bash execs, from its own live sink, for the same reason.
     if (deviceBridge?.infraErrors.length) record.infraErrors.push(...deviceBridge.infraErrors);
+    // A run served from a frozen search corpus whose promise could not be confirmed is not a frozen run.
+    if (searchCorpusError) record.infraErrors.push({ source: "search-corpus", message: searchCorpusError });
 
     // snapshot the gate rendezvous wire shapes (req/resp/.done) into the run dir BEFORE the caller
     // closes (and wipes) the channel — the forensic evidence you want after a gate bug survives --keep.
@@ -2380,6 +2411,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       mode: "run",
       lane: scenario.lane,
       answerChannel: plan.answerChannel,
+      searchCorpus: searchCorpus?.result(),
       metrics,
       scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
       command: opts.command ?? "run", // #48: persist the originating command (skill/record share mode:"run")
@@ -3543,6 +3575,9 @@ export function buildPartialResult(args: {
     command: undefined, // #48: reconstruction lane — the originating command isn't in `args`; reindex falls back to the prior index row
     lane: args.lane, // the scenario's declared Cowork lane, threaded so a salvaged partial keeps its contract
     answerChannel: args.answerChannel,
+    // Not threaded into a salvaged partial's args: `--search-corpus` with --resume salvage is out of scope (record
+    // refuses it; a partial run is ungraded).
+    searchCorpus: undefined,
     metrics: undefined, // a partial run is not graded, so nothing is measured either
     scratchpadEvidenceComplete: scratchpadEvidenceComplete(wfHealth),
     runLabel: args.runLabel, // run-identity: threaded through so a salvaged partial keeps its generation label
@@ -3715,6 +3750,8 @@ export function scrubRawRunLogs(outDir: string, secrets: string[]): void {
   scrubFileInPlace(join(outDir, "events.jsonl"), secrets);
   scrubFileInPlace(join(outDir, "control-out.jsonl"), secrets);
   scrubFileInPlace(join(outDir, "agent.stderr.log"), secrets);
+  // --search-corpus's per-query log: queries the agent wrote, which can quote an upload or a secret like any other text.
+  scrubFileInPlace(join(outDir, "search-corpus.jsonl"), secrets);
 }
 
 /**

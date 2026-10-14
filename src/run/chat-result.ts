@@ -80,6 +80,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     mode: "chat",
     lane: "local", // the chat lane is a local interactive session by construction
     answerChannel: undefined, // chat builds its own session from flags and cannot declare answer_channel
+    searchCorpus: undefined, // chat refuses --search-corpus
     metrics: undefined, // a chat session has no scenario, so no metrics
     scratchpadEvidenceComplete: false, // chat passes no scratchpad root — the walk never runs
     command: "chat", // #48
