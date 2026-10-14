@@ -19,12 +19,16 @@ describe("--search-corpus wiring (source text)", () => {
   });
 
   it("execute judges the refusals over the agent's real env (operator, baseline spawn env, session knobs), not the shell's", () => {
-    const at = execute.indexOf("searchCorpusRefusal({");
-    expect(execute).toMatch(
-      /const searchCorpusAgentEnv = opts\.searchCorpus\s*\? buildHostLoopNativeEnv\(baseline, \{[\s\S]{0,300}agentEnv: agentEnvOverrides\(session\.agent_env\)/,
+    // One preflight, shared with eval and hillclimb: the env is built the way the spawn builds it, and the refusals are
+    // judged over that env.
+    const fn = execute.indexOf("export function searchCorpusPreflight(");
+    const body = execute.slice(fn, fn + 1500);
+    expect(body).toMatch(
+      /const agentEnv = buildHostLoopNativeEnv\(o\.baseline, \{[\s\S]{0,300}agentEnv: agentEnvOverrides\(o\.session\.agent_env\)/,
     );
-    expect(execute.slice(at, at + 400)).toMatch(/agentEnv: searchCorpusAgentEnv!/);
-    // and the run starts with the same env (an operator or baseline NODE_EXTRA_CA_CERTS is kept)
+    expect(body).toMatch(/searchCorpusRefusal\(\{[\s\S]{0,300}agentEnv,/);
+    // the run calls it, and starts with the same env (an operator or baseline NODE_EXTRA_CA_CERTS is kept)
+    expect(execute).toMatch(/const searchCorpusAgentEnv = preflight\?\.agentEnv;/);
     expect(execute).toMatch(/startRunSearchCorpus\(\{[^}]*agentEnv: searchCorpusAgentEnv!/);
   });
 
@@ -53,12 +57,19 @@ describe("--search-corpus wiring (source text)", () => {
   });
 
   it("the anchor check resolves the binary once, before the run dir exists, and the spawn launches that same path", () => {
-    const resolved = execute.indexOf("const searchCorpusAgentBinary = opts.searchCorpus ? resolveHostAgentBinary(baseline) : undefined;");
-    const check = execute.indexOf("agentAnchorsRefusal(searchCorpusAgentBinary, baseline.agentBinary!.searchAnchors!)");
-    expect(resolved).toBeGreaterThan(execute.indexOf("searchCorpusRefusal({"));
+    const fn = execute.indexOf("export function searchCorpusPreflight(");
+    const body = execute.slice(fn, fn + 1500);
+    const resolved = body.indexOf("const agentBinary = resolveHostAgentBinary(o.baseline);");
+    const check = body.indexOf("agentAnchorsRefusal(agentBinary, o.baseline.agentBinary!.searchAnchors!)");
+    expect(resolved).toBeGreaterThan(body.indexOf("searchCorpusRefusal({"));
     expect(check).toBeGreaterThan(resolved);
-    expect(check).toBeLessThan(execute.indexOf("const turnNumber = beginTurn(outDir);"));
-    expect(execute.slice(check, check + 200)).toMatch(/if \(drift\) throw new UsageError\(drift\);/);
+    expect(body.slice(check, check + 200)).toMatch(/if \(drift\) return \{ refusal: drift \};/);
+    // the run's preflight sits before the run dir, and a refusal throws there
+    const call = execute.indexOf("searchCorpusPreflight({", fn + 100);
+    expect(call).toBeGreaterThan(-1);
+    expect(call).toBeLessThan(execute.indexOf("const turnNumber = beginTurn(outDir);"));
+    expect(execute).toMatch(/if \(preflight && "refusal" in preflight\) throw new UsageError\(preflight\.refusal\);/);
+    expect(execute).toMatch(/const searchCorpusAgentBinary = preflight\?\.agentBinary;/);
     // the checked path reaches the spawn; hostloop resolves only when none is given
     const spawn = execute.indexOf("const hl = spawnHostLoop(");
     expect(execute.slice(spawn, spawn + 300)).toMatch(/agentNativeHost: searchCorpusAgentBinary!/);

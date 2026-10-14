@@ -99,6 +99,31 @@ describe("the frozen-corpus label on the reading surfaces", () => {
     expect(formatRepeatRollup(live, 1, false)).not.toContain("search:");
   });
 
+  it("a --repeat rollup leaves a run with a refused search out of passes and the rate, and names the count", () => {
+    const rr = (over: Partial<RunResult>): RunResult =>
+      ({
+        scenario: "t",
+        fidelity: "hostloop",
+        baseline: "x",
+        result: "success",
+        decisions: [],
+        egress: [],
+        assertions: [],
+        outDir: "/tmp/x",
+        ...over,
+      }) as RunResult;
+    const refused = { ...sc, metrics: { ...sc.metrics, refused: 1 } };
+    const r = buildRepeatRollup("t", 3, [
+      rr({ searchCorpus: sc as unknown as RunResult["searchCorpus"] }),
+      rr({ searchCorpus: sc as unknown as RunResult["searchCorpus"] }),
+      rr({ searchCorpus: refused as unknown as RunResult["searchCorpus"] }),
+    ]);
+    expect(r.passes).toBe(2);
+    expect(r.passRate).toBe(1);
+    expect(r.provenance.searchRefusedRuns).toBe(1);
+    expect(formatRepeatRollup(r, 1, false)).toMatch(/1 run\(s\) with refused searches excluded from the pass rate/);
+  });
+
   const CLI = resolve("dist/cli.js");
   it.skipIf(!existsSync(CLI))("verify-run's text output prints the label", () => {
     const dir = runDir({ searchCorpus: sc });

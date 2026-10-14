@@ -228,6 +228,7 @@ describe("loadRowHistory — hard keys, each exclusion counted", () => {
       baseline: 1,
       turn: 1,
       hillclimb: 1,
+      searchCorpus: 0,
       ablated: 1,
       model: 0,
       pruned: 1,
@@ -625,11 +626,25 @@ describe("loadCostHistory — exclusion counts and the hillclimb seam", () => {
     ];
     const f = { scenario: SCEN, baseline: BASELINE, tier: "container" };
     const h = loadCostHistory(rows, f);
-    expect(h.excluded).toEqual({ notRun: 1, tier: 1, baseline: 1, turn: 1, hillclimb: 1 });
+    expect(h.excluded).toEqual({ notRun: 1, tier: 1, baseline: 1, turn: 1, hillclimb: 1, searchCorpus: 0 });
     expect(perRepCost(h).pricedRuns).toBe(1);
     const withHc = loadCostHistory(rows, { ...f, includeHillclimb: true });
     expect(withHc.excluded?.hillclimb).toBe(0);
     expect(perRepCost(withHc).pricedRuns).toBe(2);
+  });
+});
+
+describe("plan history leaves frozen-search-corpus runs out", () => {
+  it("prices and rates from live runs only, and counts the frozen ones", () => {
+    const frozen = { searchCorpus: { sha256: "a".repeat(64), label: "frozen search corpus p@aaaaaaaa", refused: 0 } };
+    const rows = [run(passing(), { costUsd: 1 }), run(passing(), { costUsd: 0.2, ...frozen })];
+    const f = { scenario: SCEN, baseline: BASELINE, tier: "container" };
+    const cost = loadCostHistory(rows, f);
+    expect(cost.excluded?.searchCorpus).toBe(1);
+    expect(perRepCost(cost).pricedRuns).toBe(1);
+    const rates = loadRowHistory(rows, opts());
+    expect(rates.excludedByKey.searchCorpus).toBe(1);
+    expect(rates.reps).toBe(1);
   });
 });
 

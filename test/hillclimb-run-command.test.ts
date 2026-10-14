@@ -33,6 +33,8 @@ import { freezeRef } from "../src/refs/store.js";
 import { pairwiseComposeKey } from "../src/run/pairwise-prepass.js";
 import type { SessionConfig } from "../src/session.js";
 import type { RunResult, Scenario } from "../src/types.js";
+import { SearchPoolPinError } from "../src/search-corpus/pool.js";
+import { poolRecord, writeFixturePool } from "./search-corpus-fixture-pool.js";
 
 const FX = join(import.meta.dirname, "fixtures");
 const excerpt = JSON.parse(readFileSync(join(FX, "eval-classify", "success-semantic.json"), "utf8")) as RunResult;
@@ -2111,5 +2113,141 @@ describe("an interrupt learned from a probe", () => {
       throw new InterruptedError("SIGINT", "claude --help");
     };
     await expect(runHillclimbCommand(args(), deps({ isolationCheck: interrupted }))).rejects.toThrow(InterruptedError);
+  });
+});
+
+describe("hillclimb run --search-corpus", () => {
+  // Synthetic pools only; the fake agent reports the corpus it was handed, as a real run does.
+  const frozen = (over: (extra: Record<string, unknown>, r: RunResult) => RunResult = (_e, r) => r): Partial<RunCommandDeps> => {
+    const base = deps().runScenario;
+    return {
+      searchCorpusPreflight: () => null,
+      runScenario: async (a) => {
+        const r = await base(a);
+        const sc = (a.extra as { searchCorpus?: { expect?: { sha256: string }; miss: string } }).searchCorpus;
+        const withCorpus = sc
+          ? ({
+              ...r,
+              searchCorpus: {
+                poolId: "fixture",
+                sha256: sc.expect!.sha256,
+                label: "frozen search corpus fixture@test",
+                miss: sc.miss,
+                metrics: { requests: 3, served: 3, miss: 0, refused: 0, meanTopScore: 0.6 },
+              },
+            } as unknown as RunResult)
+          : r;
+        return over(a.extra as Record<string, unknown>, withCorpus);
+      },
+    };
+  };
+  const pool = (name: string, variantHash: string | null, n = 3) => {
+    const dir = join(cwd, name);
+    writeFixturePool(
+      dir,
+      Array.from({ length: n }, () => poolRecord({ scenario: "Alpha", variantHash })),
+      { dups: 0 },
+    );
+    return dir;
+  };
+  const approve = async (...a: string[]) => runHillclimbCommand(args("--approve-harness", "--dry-run", ...a), deps(frozen()));
+  const errorsOf = (v: string) =>
+    existsSync(join(cwd, "flow", v, "errors.jsonl"))
+      ? readFileSync(join(cwd, "flow", v, "errors.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .map((l) => JSON.parse(l) as Record<string, any>)
+      : [];
+
+  it("serves every rep from a copy under the snapshot root, pinned, and records the pool on each row", async () => {
+    const p = pool("pool", "third");
+    expect((await approve("--search-corpus", p)).exitCode).toBe(0);
+    // the dry run verified the source and copied nothing
+    expect(existsSync(join(snaps, readdirSync(snaps)[0] ?? "x", "search-pools"))).toBe(false);
+    expect((await runHillclimbCommand(args("--search-corpus", p), deps(frozen()))).exitCode).toBe(0);
+    const sc = calls[calls.length - 1].extra.searchCorpus as { pool: string; expect: { sha256: string } };
+    expect(sc.pool).toMatch(new RegExp(`^${snaps}/[0-9a-f]{16}/search-pools/[0-9a-f]{64}$`));
+    expect(sc.expect.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(rows()[0].meta).toMatchObject({
+      search_corpus: { sha256: sc.expect.sha256, provenance: "disjoint", served: 3, miss: 0, refused: 0 },
+    });
+    // the flow dir gained nothing
+    expect(readdirSync(join(cwd, "flow")).filter((e) => e.includes("search"))).toEqual([]);
+  });
+
+  it("a rep refused before it ran is a search_pool_mismatch error row carrying the pool, and the pass fails", async () => {
+    const p = pool("pool", "third");
+    await approve("--search-corpus", p);
+    const out = await runHillclimbCommand(
+      args("--search-corpus", p),
+      deps({
+        ...frozen(),
+        runScenario: async (a) => {
+          const sc = (a.extra as { searchCorpus: { expect: { sha256: string; miss: string } } }).searchCorpus;
+          throw new SearchPoolPinError(sc.expect, null, "the pinned search pool copy could not be read");
+        },
+      }),
+    );
+    expect(out.exitCode).toBe(1);
+    const e = errorsOf("baseline")[0]!;
+    expect(e.failure_class).toBe("search_pool_mismatch");
+    expect(e.meta.search_corpus.pool_mismatch).toMatchObject({ got: null });
+    expect(e.meta.content_sig).toMatch(/^[0-9a-f]+$/); // a variant whose every row errored still names its snapshot
+    expect(checkFlowDir(join(cwd, "flow"), { profile: "harness" }).findings.filter((f) => /failure_class/.test(f.message))).toEqual([]);
+  });
+
+  it("a refused search makes the rep an error row, never scored", async () => {
+    const p = pool("pool", "third");
+    await approve("--search-corpus", p);
+    await runHillclimbCommand(
+      args("--search-corpus", p),
+      deps(
+        frozen(
+          (_e, r) => ({ ...r, searchCorpus: { ...r.searchCorpus!, metrics: { ...r.searchCorpus!.metrics, refused: 2 } } }) as RunResult,
+        ),
+      ),
+    );
+    expect(errorsOf("baseline")[0]).toMatchObject({ failure_class: "search_refused", meta: { search_corpus: { refused: 2 } } });
+    expect(existsSync(join(cwd, "flow", "baseline", "results.jsonl"))).toBe(false);
+  });
+
+  it("a pool built from the baseline's own rounds, used for v1, is one-sided and refused without --allow-confounded-pool", async () => {
+    const live = pool("live-pool", "third");
+    await approve("--search-corpus", live);
+    await runHillclimbCommand(args("--search-corpus", live), deps(frozen()));
+    const baselineSig = rows()[0].meta as { content_sig: string };
+    const fromBaseline = pool("baseline-pool", baselineSig.content_sig);
+    writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nround 2\n");
+    const r = await runHillclimbCommand(args("--variant", "v1", "--search-corpus", fromBaseline, "--allow-mixed-search"), deps(frozen()));
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/come from baseline.*--allow-confounded-pool/);
+  });
+
+  it("a pass on another pool than the flow's rows is refused without --allow-mixed-search", async () => {
+    const p1 = pool("pool1", "third");
+    const p2 = pool("pool2", "third", 4);
+    await approve("--search-corpus", p1);
+    await runHillclimbCommand(args("--search-corpus", p1), deps(frozen()));
+    const r = await runHillclimbCommand(args("--reps", "2", "--search-corpus", p2), deps(frozen()));
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/served from pool .* --allow-mixed-search/);
+    // a live pass beside frozen rows is the same mix
+    const live = await runHillclimbCommand(args("--reps", "2"), deps(frozen()));
+    expect(live.exitCode).toBe(2);
+  });
+
+  it("a mixed pool is never the baseline's", async () => {
+    const dir = join(cwd, "mixed");
+    writeFixturePool(dir, [poolRecord({ scenario: "Alpha", variantHash: "x" })], { dups: 0, mixed: true });
+    await approve();
+    const r = await runHillclimbCommand(args("--search-corpus", dir, "--allow-mixed-pool"), deps(frozen()));
+    expect(r.error?.message).toMatch(/never the baseline/);
+  });
+
+  it("the cost line counts served, miss and refused over every row with a corpus", async () => {
+    const p = pool("pool", "third");
+    await approve("--search-corpus", p);
+    await runHillclimbCommand(args("--search-corpus", p), deps(frozen()));
+    expect(err.join("\n")).toMatch(/search frozen: 3 served, 0 miss, 0 refused over 1 row\(s\) \[frozen search corpus fixture@/);
   });
 });
