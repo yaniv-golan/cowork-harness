@@ -58,6 +58,8 @@ describe("--search-corpus wiring (source text)", () => {
     expect(resolved).toBeGreaterThan(-1);
     expect(check).toBeGreaterThan(resolved);
     expect(check).toBeLessThan(hostloop.indexOf("const child = spawn("));
+    // and a refusal stops the spawn, by name
+    expect(hostloop.slice(check, check + 200)).toMatch(/if \(anchorsRefusal\) throw new UsageError\(anchorsRefusal\);/);
     // execute supplies it only under --search-corpus, against the baseline's anchors
     expect(execute).toMatch(
       /searchAnchorsCheck: \(binary(?:: string)?\) => agentAnchorsRefusal\(binary, baseline\.agentBinary!\.searchAnchors!\)/,
