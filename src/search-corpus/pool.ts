@@ -244,6 +244,8 @@ export function insideGitWorkTree(dir: string, env: NodeJS.ProcessEnv = process.
 export interface BuildSummary {
   runs: number;
   runsWithSearches: number;
+  /** Runs served from a frozen search corpus, which are never harvested. */
+  servedRuns: number;
   harvest: HarvestCounts;
   /** Records dropped because another run produced the same id (their sources are kept in pool.json). */
   crossRunDuplicates: number;
@@ -272,10 +274,12 @@ export function assemblePool(a: {
   const sources = new Map<string, PoolSource>();
   const contributors = new Map<string, Set<string>>(); // record id -> every run that produced it
   let runsWithSearches = 0;
+  let servedRuns = 0;
   let crossRunDuplicates = 0;
   for (const d of a.runDirs) {
     const h = harvestRun(d);
     for (const k of Object.keys(harvest) as (keyof HarvestCounts)[]) harvest[k] += h.counts[k];
+    if (h.served) servedRuns++;
     if (h.records.length) runsWithSearches++;
     for (const r of h.records) {
       sources.set(r.source.runRef, {
@@ -343,6 +347,7 @@ export function assemblePool(a: {
     summary: {
       runs: a.runDirs.length,
       runsWithSearches,
+      servedRuns,
       harvest,
       crossRunDuplicates,
       excluded: a.exclude.size,

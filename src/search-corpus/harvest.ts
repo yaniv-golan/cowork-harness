@@ -221,9 +221,16 @@ export function sourceOf(runDir: string, eventLines: string[]): RecordSource {
   };
 }
 
-/** Harvest one kept run dir. Pure apart from reads. */
-export function harvestRun(runDir: string): { records: PoolRecord[]; counts: HarvestCounts } {
+/** A run served from a frozen search corpus: its result pins one, or its dir holds the serve frames' file. Its
+ *  WebSearch results came from a pool, and harvesting them would feed a pool's output back in as sourced records. */
+export function servedFromCorpus(runDir: string): boolean {
+  return existsSync(join(runDir, "search-corpus.jsonl")) || resultOf(runDir)?.searchCorpus != null;
+}
+
+/** Harvest one kept run dir. Pure apart from reads. A served run harvests nothing and says so. */
+export function harvestRun(runDir: string): { records: PoolRecord[]; counts: HarvestCounts; served: boolean } {
   const counts: HarvestCounts = { results: 0, records: 0, errorResults: 0, unparsed: 0, queryMismatch: 0, searchErrors: 0, duplicates: 0 };
+  if (servedFromCorpus(runDir)) return { records: [], counts, served: true };
   const records: PoolRecord[] = [];
   const eventsPath = join(runDir, "events.jsonl");
   const eventLines = existsSync(eventsPath) && statSync(eventsPath).isFile() ? readFileSync(eventsPath, "utf8").split("\n") : [];
@@ -272,5 +279,5 @@ export function harvestRun(runDir: string): { records: PoolRecord[]; counts: Har
   const unique = records.filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)));
   counts.duplicates = records.length - unique.length;
   counts.records = unique.length;
-  return { records: unique, counts };
+  return { records: unique, counts, served: false };
 }

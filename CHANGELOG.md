@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **`sync` now refuses a baseline whose web-search anchors cannot be confirmed (exit 1).** Before, it warned and
+  wrote the baseline without them. Open Cowork once so the agent is staged, then re-run `sync`; to write without
+  anchors anyway, pass `--allow-missing-search-anchors`. `--allow-empty` does not cover this refusal, and
+  `npm run preflight` fails a newest baseline without anchors, or with anchors that predate the no-search templates
+  below (the same flag downgrades it to a warning).
+  An agent from 2.1.260 through 2.1.289 has an older budget message, so `sync` against a Desktop that stages one
+  refuses, saying so; update Claude Desktop, or pass `--allow-missing-search-anchors`.
+
+### Added
+
+- **`sync --allow-missing-search-anchors`** writes a baseline without web-search anchors when they cannot be confirmed
+  from the staged agent (with a warning), and `npm run preflight` accepts the same flag to downgrade its anchors check.
+- **`agentBinary.searchAnchors` gains two optional fields:** `source` (`both`, `native` or `elf`: which staged agent the
+  anchors came from) and `noRequest` (hashes of the agent-side WebSearch results that show no search was made).
+
+### Changed
+
+- **`sync` decides the web-search anchors from the native agent, which hostloop runs, and refuses what it cannot
+  confirm.** The VM agent corroborates the native on the same version and stands in only when no native is staged;
+  the block records which in a new optional `source` (`both`, `native` or `elf`). It also records, as hashes, the
+  agent-side WebSearch results that show no search was made (`noRequest`), so an agent from 2.1.260 through 2.1.289, whose
+  budget-cap text has another shape, refuses. `sync` refuses the write when the
+  native's anchors cannot be extracted or read, when the two builds disagree at the same version, or when no agent
+  is staged and the base's anchors cannot be carried. The new `--allow-missing-search-anchors` writes
+  without them, with a warning; `sync --diff` reports the refusal as `would refuse: …` and does not fail. A staged
+  VM agent that cannot be read is now reported instead of crashing `sync`.
+
+- **`search-pool build` skips a run served from a frozen search corpus** (its result pins one, or its dir holds
+  `search-corpus.jsonl`) and counts it in the summary, so a pool's own output is never harvested back in as sourced
+  records.
+
 ## [4.9.1] — 2026-10-14
 
 ### Changed

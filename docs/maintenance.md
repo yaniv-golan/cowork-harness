@@ -80,6 +80,7 @@ show in the diff even when nothing substantive moved — ignore them as noise.)
 
 **`--diff` interactions worth knowing:**
 - It is a pure preview: even when the sync would hit `⚠ unknown deltas` (below), `--diff` prints the deltas and exits **0** without writing anything — the hard exit-1 refusal only applies to a real (non-`--diff`) write.
+- A search-anchors refusal (d, below) does not refuse a `--diff`: it prints `would refuse: …` with the reason and exits as `--diff` does, because that defect is what you are diagnosing.
 - It does **not** bypass the empty-`allowDomains` refusal: an empty derived allowlist still hard-fails (exit 1) with `--diff` passed. You still need `--allow-empty` to force through that specific case (the empty-allowlist check runs before, and independently of, the diff/write branch).
 
 Then commit:
@@ -173,13 +174,14 @@ For the `hostloop` tier's separate **native macOS** binary (`claude-code/<ver>/c
 
 At `hostloop`, the staged **Linux/arm64 ELF** gets the same patch tolerance: there it is bind-mounted into the bash sidecar only for parity and is not run by any harness-spawned process, so a same-major.minor patch-newer sibling is auto-accepted (loud stderr note, advisory sha) via `resolveAgentBinary(baseline, { parityMount: true })` — matching the native binary's policy above. `cowork` gets this same tolerance **only when the synced baseline gate resolves it to host-loop** (`decideLoopFromBaseline(baseline) === "host"`, mirroring `execute.ts`'s dispatch); `doctor --tier cowork` checks that resolution before deciding whether to ask for the tolerant or strict form, so it never reports the ELF `ok` when the real run would hard-fail. On a `cowork` baseline that resolves to **VM-loop**, the ELF is executed directly — same as `container`/`microvm`, which always keep the strict sha-pinned exact-version requirement described earlier in this section, because the ELF is the executed agent there. By the same resolved-loop logic, `doctor --tier cowork` requires the separate **native macOS** binary only when `cowork` resolves to host-loop (where it's the executed agent); a VM-loop-resolving `cowork` runs the ELF instead, so a missing native binary no longer blocks that rig (the mirror of the ELF case — doctor neither false-greens nor false-not-readies on either resolution).
 
-`sync` refuses to write a baseline in **three** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set). Since `allowDomains` is **pinned** (carried forward from the newest committed baseline, never re-derived), empty here means that baseline was missing, unparseable, or carried no allowlist; (b) `⚠ unknown deltas` (see below); and (c) a gate cache captured under a different organisation from the one this machine last synced under, one whose organisation Desktop's logs cannot tell once this machine has synced, or an unreadable record of that organisation (`provenance.captureOrg`, below). `--allow-empty` (alias `--force`) overrides (a) and (b) and force-writes the baseline anyway — use it only when you understand the impact. Only `--allow-org-change` overrides (c), and the check runs before `--diff`, so `sync --diff` is refused too:
+`sync` refuses to write a baseline in **four** cases: (a) an empty `allowDomains` allowlist — an empty egress allowlist is a safety tripwire (it would silently produce a baseline that permits nothing/everything rather than the real Desktop set). Since `allowDomains` is **pinned** (carried forward from the newest committed baseline, never re-derived), empty here means that baseline was missing, unparseable, or carried no allowlist; (b) `⚠ unknown deltas` (see below); and (c) a gate cache captured under a different organisation from the one this machine last synced under, one whose organisation Desktop's logs cannot tell once this machine has synced, or an unreadable record of that organisation (`provenance.captureOrg`, below); and (d) web-search anchors that cannot be confirmed from the staged agent (`agentBinary.searchAnchors`, below). `--allow-empty` (alias `--force`) overrides (a) and (b) and force-writes the baseline anyway — use it only when you understand the impact. Only `--allow-org-change` overrides (c), and the check runs before `--diff`, so `sync --diff` is refused too. Only `--allow-missing-search-anchors` overrides (d), which writes the baseline without anchors; a `--diff` reports (d) without refusing:
 
 ```bash
 cowork-harness sync --allow-empty   # force-write past an empty allowlist or unknown deltas
+cowork-harness sync --allow-missing-search-anchors   # write without web-search anchors that cannot be confirmed
 ```
 
-**Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — including the three refusals above, (a) a refused empty allowlist, (b) a `⚠ unknown deltas` refusal and (c) a capture-organisation refusal, and (d) a missing required version field in the Desktop install it derives from. (a) and (b) are overridable with `--allow-empty`; (c) only with `--allow-org-change`.
+**Hard-failure exit codes (for CI scripts):** `sync` exits **1** (not 2) on its hard failures — including the four refusals above, (a) a refused empty allowlist, (b) a `⚠ unknown deltas` refusal, (c) a capture-organisation refusal and (d) a search-anchors refusal, and a missing required version field in the Desktop install it derives from. (a) and (b) are overridable with `--allow-empty`; (c) only with `--allow-org-change`; (d) only with `--allow-missing-search-anchors`.
 
 ## Why the egress allowlist is pinned
 
@@ -465,16 +467,31 @@ committed baseline and say why in that baseline's `$comment`.
    **`agentBinary.searchAnchors` → how the agent's WebSearch tool asks for a search.** The agent's WebSearch tool
    makes its own nested model request, and `sync` records, from the staged agent, the facts that identify that
    request: the server tool type, the system sentence and the user-message prefix (as `sha256` and UTF-8 byte
-   length only, never the text), and the cloud search route's path pieces. The tool type and the two literals are
+   length only, never the text), and the cloud search route's path pieces. `noRequest` holds, the same way, the
+   agent-side results that show no search was made: the two fixed input-validation messages, and the budget-cap
+   text's fixed prefix and the fixed fragment after its turn|session word, and the tool runner's schema-failure prefix (a
+   query too short for the tool's input schema is refused before the tool runs; located from the runner's one
+   schema-failure marker, outside the WebSearch tool). The tool type and the two literals are
    located by code shape inside the one call site that names the nested search, because the binary also holds
    string-table copies. The cloud route pieces are only checked to be present exactly once; they are constants.
-   Nothing in the harness reads the block yet; it exists so a later release can recognise the nested request.
-   - **Warning, not blocking.** When a staged agent's anchors cannot be extracted, or its native build (the one
-     hostloop runs) gives different anchors from the VM ELF, whatever the two builds' versions, `sync` prints a
-     `WARNING` and records no anchors. It does not block the write, because nothing reads the block yet. Absent
-     anchors mean unknown. Same lifecycle as `stringSentinels` otherwise: carried from the
-     base only on a re-sync of the same agent version when the ELF is not staged.
-   - **Measured.** Every backed-up agent from 2.1.260 through 2.1.295 gives the same anchors.
+   No run reads the block yet (`sync` and `npm run preflight` check it); it exists so a later release can recognise
+   the nested request.
+   - **Which binary decides.** The native build (the one hostloop runs) decides wherever it is readable; the VM
+     ELF corroborates it when both are the same version and stands in for it only when no native is staged. The
+     block's `source` says which: `both`, `native` or `elf`. The two stage on separate cadences, so when their
+     versions differ the native's anchors are recorded with a note about the ELF.
+   - **Refused, not warned.** `sync` refuses the write (exit 1) when a staged native's anchors cannot be extracted
+     or it cannot be read at all (hostloop can still run it); when the two builds disagree, or one extracts and the
+     other does not, at the same version; when the ELF fails and no native extracts; and when no agent is staged
+     and the base cannot be carried (a changed agent version, or a base without anchors). With no agent staged on
+     an unchanged version the base's anchors are carried, with a note. Only
+     `--allow-missing-search-anchors` writes past the refusal, without anchors and with a `WARNING`; a `--diff`
+     prints it as `would refuse: …`. Absent anchors mean unknown. `npm run preflight` refuses to release a newest
+     baseline without a schema-valid block that carries `noRequest`; its `--allow-missing-search-anchors` downgrades that to a warning for an
+     emergency release.
+   - **Measured.** Every backed-up agent from 2.1.293 through 2.1.295 gives the same anchors, native and VM alike.
+     2.1.260 through 2.1.289 carry an older, session-only budget template, so a sync against one of them refuses,
+     naming the remedy. 2.1.290 through 2.1.292 were not measured (no backed-up copy).
 
    **`provenance.captureOrg` → which organisation the gate cache was captured under.** Desktop rewrites its
    gate cache for the organisation it is signed in to, and some gates differ between organisations, so a re-sync

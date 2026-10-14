@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { compareBaselineVersions } from "../src/baseline.js";
+import { SearchAnchors } from "../src/types.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -13,6 +15,8 @@ import {
   ALLOW_UNOBSERVED_INIT_SURFACE_FLAG,
   checkSpawnEnvObserved,
   ALLOW_UNOBSERVED_SPAWN_ENV_FLAG,
+  ALLOW_MISSING_SEARCH_ANCHORS_FLAG,
+  checkSearchAnchorsPresent,
 } from "../scripts/release-preflight.js";
 
 describe("isValidSemver", () => {
@@ -259,5 +263,59 @@ describe("changelogPlaceholderLines", () => {
     const versions = [...text.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]!);
     expect(versions.length).toBeGreaterThan(10);
     for (const v of versions) expect(changelogPlaceholderLines(text, v), v).toEqual([]);
+  });
+});
+
+describe("checkSearchAnchorsPresent (check 7c)", () => {
+  const nb = (anchors: unknown) => ({
+    name: "desktop-9.json",
+    json: { agentBinary: anchors === undefined ? {} : { searchAnchors: anchors } },
+  });
+  const h = { sha256: "a".repeat(64), bytes: 10 };
+  const good = {
+    toolType: "web_search_20250305",
+    systemSentence: h,
+    userPrefix: h,
+    ccr: { sessionsPath: "/v1/code/sessions/", workerPath: "/worker/", searchRoute: "web-search" },
+    noRequest: { missingQuery: h, bothDomainLists: h, budgetPrefix: h, budgetFragment: h, inputValidationPrefix: h },
+  };
+
+  it("passes a schema-valid block, with or without source", () => {
+    expect(checkSearchAnchorsPresent(nb(good), false).status).toBe("PASS");
+    expect(checkSearchAnchorsPresent(nb({ ...good, source: "native" }), false).status).toBe("PASS");
+  });
+
+  it("FAILS a missing or malformed block, naming the dedicated override (never --allow-empty)", () => {
+    const { noRequest: _n, ...withoutNoRequest } = good;
+    for (const bad of [undefined, { ...good, text: "leak" }, { ...good, source: "vm" }, withoutNoRequest]) {
+      const r = checkSearchAnchorsPresent(nb(bad), false);
+      expect(r.status).toBe("FAIL");
+      expect(r.detail).toContain(ALLOW_MISSING_SEARCH_ANCHORS_FLAG);
+      expect(r.detail).not.toContain("--allow-empty");
+    }
+  });
+
+  it("the override downgrades to WARN, never PASS", () => {
+    expect(checkSearchAnchorsPresent(nb(undefined), true).status).toBe("WARN");
+  });
+
+  it("names the missing no-request templates and the re-sync that adds them", () => {
+    const { noRequest: _n, ...withoutNoRequest } = good;
+    expect(checkSearchAnchorsPresent(nb(withoutNoRequest), false).detail).toMatch(/noRequest[\s\S]*re-run `cowork-harness sync`/);
+  });
+
+  it("the remedy for a block without noRequest says to stage the agent first (a re-sync with nothing staged carries the old block)", () => {
+    const { noRequest: _n, ...withoutNoRequest } = good;
+    expect(checkSearchAnchorsPresent(nb(withoutNoRequest), false).detail).toMatch(/open Cowork once.*then re-run `cowork-harness sync`/);
+  });
+
+  it("the shipped newest baseline's block is schema-valid (whether it already carries noRequest is a release-time check)", () => {
+    const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "baselines");
+    const newest = readdirSync(dir)
+      .filter((f) => /^desktop-.+\.json$/.test(f))
+      .sort(compareBaselineVersions)
+      .at(-1)!;
+    const json = JSON.parse(readFileSync(join(dir, newest), "utf8"));
+    expect(SearchAnchors.safeParse(json.agentBinary.searchAnchors).success).toBe(true);
   });
 });

@@ -326,7 +326,7 @@ describe("deriveNativeStagedPath (sync)", () => {
     const h = home();
     stage([{ ver: "2.1.205" }], rootIn(h));
     const r = deriveNativeStagedPath({ nativeRoot: rootIn(h), homeDir: h, oldNativeStagedPath: "", agentVersion: "2.1.202" });
-    expect(r).toEqual({ path: `${T}/2.1.205/claude.app/Contents/MacOS/claude`, warnings: [] });
+    expect(r).toEqual({ path: `${T}/2.1.205/claude.app/Contents/MacOS/claude`, version: "2.1.205", warnings: [] });
   });
 
   it("nested layout → the full build path, which exists", () => {
@@ -336,6 +336,18 @@ describe("deriveNativeStagedPath (sync)", () => {
     expect(r.path).toBe(`${T}/2.1.286/${A}/claude.app/Contents/MacOS/claude`);
     expect(existsSync(r.path.replace(/^~/, h))).toBe(true);
     expect(r.warnings).toEqual([]);
+  });
+
+  it("returns the native's own staged version, which may differ from the VM agent's; null when nothing is staged", () => {
+    const h = home();
+    stage([{ ver: "2.1.290", build: A }], rootIn(h));
+    expect(deriveNativeStagedPath({ nativeRoot: rootIn(h), homeDir: h, oldNativeStagedPath: "", agentVersion: "2.1.286" }).version).toBe(
+      "2.1.290",
+    );
+    const empty = home();
+    const r = deriveNativeStagedPath({ nativeRoot: rootIn(empty), homeDir: empty, oldNativeStagedPath: "", agentVersion: "2.1.286" });
+    expect(r.version).toBeNull();
+    expect(r.path).toContain("/2.1.286/");
   });
 
   it("several builds: the asar manifest's build wins when its version matches, even if older", () => {

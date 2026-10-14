@@ -1061,7 +1061,7 @@ them. See §11.1.
 > asserting egress behavior at `protocol` fidelity). It is distinct from the **`boundary-check` command**,
 > whose own probe failures follow the assertion convention and exit **`1`** (a failed sandbox probe is a
 > failing check, not a usage/typed error). Likewise `sync` hard failures (missing baseline versions, a
-> refused empty allowlist, a `⚠ unknown deltas` refusal, a capture-organisation refusal) exit `1`.
+> refused empty allowlist, a `⚠ unknown deltas` refusal, a capture-organisation refusal, a search-anchors refusal) exit `1`.
 
 ### 11.1 `verify-cassettes` — dedicated envelope (NOT the RunResult shape)
 

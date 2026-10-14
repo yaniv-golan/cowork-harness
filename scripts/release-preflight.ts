@@ -5,6 +5,7 @@
 //   npx tsx scripts/release-preflight.ts --for-tag    # ALSO run the tag-time HEAD/CI check (hard fail)
 //   npx tsx scripts/release-preflight.ts --allow-unobserved-init-surface   # emergency: downgrade check 7 to WARN
 //   npx tsx scripts/release-preflight.ts --allow-unobserved-spawn-env      # emergency: downgrade check 7b to WARN
+//   npx tsx scripts/release-preflight.ts --allow-missing-search-anchors    # emergency: downgrade check 7c to WARN
 //
 // Checks 1-4 mirror (and check 2 tightens) the gates release.yml enforces after the tag push:
 //   1. check:versions passes (scripts/check-versions.ts).
@@ -24,6 +25,9 @@
 //      (dedicated on purpose: never --allow-empty, which would waive sync's other guards).
 //   7b. The NEWEST baseline's provenance.observedSpawnEnv is observed (HARD fail on `no-session` or a missing or
 //      malformed block; WARN on a declared `lane-gone`). Emergency override: --allow-unobserved-spawn-env.
+//   7c. The NEWEST baseline carries a schema-valid agentBinary.searchAnchors with its noRequest templates (HARD fail). A run against a baseline
+//      without anchors cannot serve a frozen search corpus. Emergency override: --allow-missing-search-anchors (the
+//      same name as sync's own override for the anchors refusal).
 //   8. The covered surface since the last release tag (scripts/check-surface.ts --since-tag): a removed or
 //      changed leaf FAILS unless the package.json version is a MAJOR bump over that tag. The per-PR snapshot
 //      cannot catch this — every PR regenerates it, so it reads +0 at release time. Before the bump
@@ -37,7 +41,7 @@ import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
 import { checkSurfaceSinceLastTag } from "./check-surface.js";
 import { compareBaselineVersions } from "../src/baseline.js";
-import { ObservedSpawnEnv } from "../src/types.js";
+import { ObservedSpawnEnv, SearchAnchors } from "../src/types.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const r = (p: string) => readFileSync(join(REPO_ROOT, p), "utf8");
@@ -222,6 +226,29 @@ export function checkSpawnEnvObserved(newest: { name: string; json: unknown }, a
       detail: `${why} (overridden by ${ALLOW_UNOBSERVED_SPAWN_ENV_FLAG} — ship notes should say the spawn env is unverified)`,
     };
   return { name, status: "FAIL", detail: `${why}. Emergency override: ${ALLOW_UNOBSERVED_SPAWN_ENV_FLAG}` };
+}
+
+export const ALLOW_MISSING_SEARCH_ANCHORS_FLAG = "--allow-missing-search-anchors";
+
+/** Check 7c — pure over the newest baseline's parsed JSON. */
+export function checkSearchAnchorsPresent(newest: { name: string; json: unknown }, allowMissing: boolean): CheckResult {
+  const name = "newest baseline carries the web-search anchors";
+  const raw = (newest.json as { agentBinary?: { searchAnchors?: unknown } } | null)?.agentBinary?.searchAnchors;
+  const parsed = raw === undefined ? undefined : SearchAnchors.safeParse(raw);
+  if (parsed?.success && parsed.data.noRequest) return { name, status: "PASS", detail: `${newest.name}: present` };
+  const why =
+    raw === undefined
+      ? `${newest.name} carries no agentBinary.searchAnchors — stage the agent (open Cowork once), then re-run \`cowork-harness sync\``
+      : !parsed?.success
+        ? `${newest.name}'s agentBinary.searchAnchors fails its schema — re-sync it`
+        : `${newest.name}'s agentBinary.searchAnchors predates the no-request templates (noRequest) — open Cowork once so the agent is staged, then re-run \`cowork-harness sync\` with a current cowork-harness (a re-sync with nothing staged carries the old block)`;
+  if (allowMissing)
+    return {
+      name,
+      status: "WARN",
+      detail: `${why} (overridden by ${ALLOW_MISSING_SEARCH_ANCHORS_FLAG} — ship notes should say no run against it can serve a frozen search corpus)`,
+    };
+  return { name, status: "FAIL", detail: `${why}. Emergency override: ${ALLOW_MISSING_SEARCH_ANCHORS_FLAG}` };
 }
 
 function newestBaseline(): { name: string; json: unknown } {
@@ -477,6 +504,7 @@ function main(): void {
   const forTag = process.argv.includes("--for-tag");
   const allowUnobserved = process.argv.includes(ALLOW_UNOBSERVED_INIT_SURFACE_FLAG);
   const allowUnobservedSpawnEnv = process.argv.includes(ALLOW_UNOBSERVED_SPAWN_ENV_FLAG);
+  const allowMissingSearchAnchors = process.argv.includes(ALLOW_MISSING_SEARCH_ANCHORS_FLAG);
   const pkg = json("package.json");
   const version = pkg.version as string;
   if (!isValidSemver(version)) {
@@ -495,6 +523,7 @@ function main(): void {
     checkWorkingTreeClean(),
     checkInitSurfaceObserved(newestBaseline(), allowUnobserved),
     checkSpawnEnvObserved(newestBaseline(), allowUnobservedSpawnEnv),
+    checkSearchAnchorsPresent(newestBaseline(), allowMissingSearchAnchors),
     checkReleaseSurface(version),
   ];
   const warnResults = [checkRulesetContexts(), checkLiveSuiteKeyReminder()];

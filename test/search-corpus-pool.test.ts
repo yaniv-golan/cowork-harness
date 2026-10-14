@@ -77,6 +77,17 @@ const base = {
 };
 
 describe("assemblePool", () => {
+  it("counts a served run as skipped and harvests nothing from it", () => {
+    const root = mkdtempSync(join(tmpdir(), "cwh-pool-"));
+    const a = run(root, { skill: "ms", searches: [["ev market", "https://a/1", "Big."]] });
+    const served = run(root, { skill: "ms", searches: [["other q", "https://b/1", "Pool text."]] });
+    writeFileSync(join(served, "search-corpus.jsonl"), "");
+    const { records, summary, manifest } = assemblePool({ ...base, runDirs: [a, served] });
+    expect(records.map((r) => r.query)).toEqual(["ev market"]);
+    expect(summary).toMatchObject({ runs: 2, runsWithSearches: 1, servedRuns: 1 });
+    expect(manifest.sources).toHaveLength(1);
+  });
+
   it("builds one skill's pool, merging duplicate searches and keeping every contributing run as a source", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-pool-"));
     const a = run(root, { skill: "ms", searches: [["ev market", "https://a/1", "Big."]] });

@@ -25,6 +25,8 @@ const ALLOWLIST: Record<string, string> = {
     "only `sync --diff`, which compares a live Claude Desktop install with the shipped baseline: baseline maintenance, not skill testing",
   "--allow-org-change":
     "only `sync`, writing a baseline whose gate cache was captured under a different organisation from the previous one: baseline maintenance, not skill testing",
+  "--allow-missing-search-anchors":
+    "only `sync`, writing a baseline whose web-search anchors cannot be confirmed from the staged agent: baseline maintenance, not skill testing",
   "--spawn-env-unobservable":
     "only `sync`, recording that no local Cowork task can run on the synced Desktop build: baseline maintenance, not skill testing",
 };

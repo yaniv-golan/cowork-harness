@@ -3,10 +3,10 @@
  *
  * The agent's WebSearch tool makes a NESTED model request that carries the `web_search_*` server tool, a fixed
  * system sentence, and one user message made of a fixed prefix plus the query. A later release's search interceptor
- * will recognise that request by those three facts, so `sync` records them per agent version. Until something reads
- * them, anchors that moved or vanished are a sync warning and are not recorded; once the interceptor reads them, that
- * becomes a write-blocking delta (a silent fallback to pass-through would let a live search into a run labelled
- * frozen).
+ * will recognise that request by those three facts, so `sync` records them per agent version. Anchors that moved,
+ * vanished or disagree refuse the write (`searchAnchorsForSync`'s `refuse`), overridden only by
+ * `--allow-missing-search-anchors`: a silent fallback to pass-through would let a live search into a run labelled
+ * frozen.
  *
  * The two prose literals are agent text, so only their sha256 and UTF-8 byte length are recorded, never the text.
  * The tool type and the CCR route pieces are identifiers and are recorded as they are.
@@ -17,6 +17,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import type { SearchAnchors } from "../types.js";
 
 /** The marker that names the nested search request's query source. It occurs once in the agent's JS. */
@@ -34,6 +35,22 @@ const LIT = '(["`])((?:(?!\\1|\\$\\{)[^\\\\\\n])*)\\1';
 const USER_PREFIX = new RegExp(`\\(\\{content:${LIT}\\+${IDENT}\\}\\)`, "g");
 const SYSTEM_SENTENCE = new RegExp(`systemPrompt:${IDENT}\\(\\[${LIT}\\]\\)`, "g");
 const TOOL_TYPE = /type:(["`])(web_search_[0-9A-Za-z_]+)\1/g;
+
+/** The no-request templates sit in the same tool definition, before the call-site marker (~1.6 KB for the budget
+ *  template and ~3.2 KB for `validateInput` in 2.1.295). */
+const NO_REQUEST_WINDOW_BEFORE = 6000;
+const MISSING_QUERY = new RegExp(`if\\(!${IDENT}\\.length\\)return\\{result:!1,message:${LIT},errorCode:1\\}`, "g");
+const BOTH_DOMAIN_LISTS = new RegExp(`return\\{result:!1,message:${LIT},errorCode:2\\}`, "g");
+/** A fixed segment of a template literal: no backtick, escape, newline or substitution. */
+const SEGMENT = "((?:(?!\\$\\{)[^`\\\\\\n])*)";
+/** The budget-cap result: fixed P1, the turn|session variable, fixed P2, then the next substitution. */
+const BUDGET = new RegExp(`results:\\[\`${SEGMENT}\\$\\{(${IDENT})\\}${SEGMENT}\\$\\{`, "g");
+/** The tool runner's schema-failure result: located from its one ZOD_VALIDATION telemetry marker (runner code shared by
+ *  every tool, far from the WebSearch tool), then the one wrapped result built just after it. */
+const ZOD_MARKER = new RegExp(`errorCode:${IDENT}\\("ZOD_VALIDATION"\\)`, "g");
+const ZOD_WINDOW_AFTER = 1500;
+const INPUT_VALIDATION_RESULT = new RegExp(`content:\`<tool_use_error>${SEGMENT}\\$\\{${IDENT}\\}</tool_use_error>\``, "g");
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const CCR = {
   workerPath: { needle: "/worker/${", value: "/worker/" },
@@ -72,6 +89,51 @@ function oneLiteral(window: string, re: RegExp, name: string, defects: string[])
   return hits[0];
 }
 
+/** The budget-cap template's two fixed segments: exactly one match, both printable ASCII, and the variable between
+ *  them assigned the turn|session choice in the same window. */
+function budgetTemplate(window: string, defects: string[]): { p1: string; p2: string } | undefined {
+  const hits = [...window.matchAll(BUDGET)];
+  if (hits.length !== 1) {
+    defects.push(`noRequest.budget: ${hits.length} matches in the nested-search tool (expected exactly 1)`);
+    return undefined;
+  }
+  const [, p1, ident, p2] = hits[0]!;
+  const scope = new RegExp(`[,;{(\\s]${escapeRe(ident!)}=${IDENT}\\(\\)\\?"turn":"session"`, "g");
+  if ([...window.matchAll(scope)].length !== 1) {
+    // Agents 2.1.260-2.1.289 put a call count here (a session-only template); a user syncing against one meets this.
+    defects.push(
+      "noRequest.budget: this agent's budget message predates the supported template (the variable after its prefix is not the turn|session choice); update Claude Desktop, or pass --allow-missing-search-anchors",
+    );
+    return undefined;
+  }
+  if (!/^[\x20-\x7e]+$/.test(p1!) || !/^[\x20-\x7e]+$/.test(p2!)) {
+    defects.push("noRequest.budget: a fixed segment is empty or not printable ASCII");
+    return undefined;
+  }
+  return { p1: p1!, p2: p2! };
+}
+
+function inputValidationPrefix(buf: Buffer, defects: string[]): string | undefined {
+  const name = "noRequest.inputValidationPrefix";
+  const text = buf.toString("latin1");
+  const marks = [...text.matchAll(ZOD_MARKER)];
+  if (marks.length !== 1) {
+    defects.push(`${name}: ${marks.length} schema-failure markers in the agent binary (expected exactly 1)`);
+    return undefined;
+  }
+  const window = text.slice(marks[0]!.index!, marks[0]!.index! + ZOD_WINDOW_AFTER);
+  const hits = [...window.matchAll(INPUT_VALIDATION_RESULT)].map((m) => m[1]!);
+  if (hits.length !== 1) {
+    defects.push(`${name}: ${hits.length} wrapped results after the schema-failure marker (expected exactly 1)`);
+    return undefined;
+  }
+  if (!/^[\x20-\x7e]+$/.test(hits[0]!)) {
+    defects.push(`${name}: the prefix is empty or not printable ASCII`);
+    return undefined;
+  }
+  return hits[0];
+}
+
 /** Extract the web-search anchors from an agent binary's bytes. Pure. Never returns any literal's text. */
 export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
   const defects: string[] = [];
@@ -100,7 +162,22 @@ export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
     if (n !== 1) defects.push(`ccr.sessionsPath: ${n} matches just before the worker route (expected exactly 1)`);
   }
 
-  if (defects.length || prefix === undefined || sentence === undefined) return { ok: false, defects };
+  const nrWindow = buf.subarray(Math.max(0, at - NO_REQUEST_WINDOW_BEFORE), at).toString("latin1");
+  const missingQuery = oneLiteral(nrWindow, MISSING_QUERY, "noRequest.missingQuery", defects);
+  const bothDomainLists = oneLiteral(nrWindow, BOTH_DOMAIN_LISTS, "noRequest.bothDomainLists", defects);
+  const budget = budgetTemplate(nrWindow, defects);
+  const ivPrefix = inputValidationPrefix(buf, defects);
+
+  if (
+    defects.length ||
+    prefix === undefined ||
+    sentence === undefined ||
+    missingQuery === undefined ||
+    bothDomainLists === undefined ||
+    budget === undefined ||
+    ivPrefix === undefined
+  )
+    return { ok: false, defects };
   return {
     ok: true,
     anchors: {
@@ -108,46 +185,137 @@ export function extractSearchAnchors(buf: Buffer): SearchAnchorResult {
       systemSentence: hashed(sentence),
       userPrefix: hashed(prefix),
       ccr: { sessionsPath: CCR_SESSIONS.value, workerPath: CCR.workerPath.value, searchRoute: CCR.searchRoute.value },
+      noRequest: {
+        missingQuery: hashed(missingQuery),
+        bothDomainLists: hashed(bothDomainLists),
+        budgetPrefix: hashed(budget.p1),
+        budgetFragment: hashed(budget.p2),
+        inputValidationPrefix: hashed(ivPrefix),
+      },
     },
   };
 }
 
-/** `sync`'s decision for `agentBinary.searchAnchors`. Pure: the caller reads the binaries.
- *  - `elf` present: extract. A failure records NO anchors and a warning.
- *  - `native` present: its anchors must equal the ELF's, since hostloop runs it. A mismatch, an unreadable native
- *    agent, or one the extractor cannot read records NO anchors and a warning.
- *  - `elf` absent: carry the base's anchors only for the same agent version (the ELF is immutable per version),
- *    else record nothing.
- *  Absent anchors mean unknown, and whatever reads them must refuse on unknown. Warnings, not write-blocking
- *  deltas, while nothing reads the anchors: a Desktop release should not stall sync over a block no feature uses. */
-export function searchAnchorsForSync(a: {
-  elf: Buffer | null;
-  native: Buffer | { unreadable: string } | null;
-  sameVersionAsBase: boolean;
-  base: SearchAnchors | undefined;
-}): { anchors: SearchAnchors | undefined; warnings: string[] } {
-  if (!a.elf) return { anchors: a.sameVersionAsBase ? a.base : undefined, warnings: [] };
-  const elf = extractSearchAnchors(a.elf);
-  if (!elf.ok) return { anchors: undefined, warnings: elf.defects.map((d) => `agentBinary.searchAnchors not recorded: ${d}`) };
-  if (a.native && !Buffer.isBuffer(a.native))
-    return {
-      anchors: undefined,
-      warnings: [`agentBinary.searchAnchors not recorded: the native agent could not be read (${a.native.unreadable})`],
-    };
-  if (a.native) {
-    const native = extractSearchAnchors(a.native);
-    if (!native.ok)
-      return {
-        anchors: undefined,
-        warnings: [
-          `agentBinary.searchAnchors not recorded: the native agent's anchors could not be extracted (${native.defects.join("; ")})`,
-        ],
-      };
-    if (JSON.stringify(native.anchors) !== JSON.stringify(elf.anchors))
-      return {
-        anchors: undefined,
-        warnings: ["agentBinary.searchAnchors not recorded: the native agent's anchors differ from the VM ELF's"],
-      };
+type Staged = Buffer | { unreadable: string } | null;
+
+/** A staged agent binary for `searchAnchorsForSync`: its bytes, `{unreadable}` when it exists but cannot be read
+ *  (an EACCES binary is a finding, never an uncaught throw), or null when it is not staged. */
+export function stagedForAnchors(path: string): Staged {
+  if (!existsSync(path)) return null;
+  try {
+    return readFileSync(path);
+  } catch (e) {
+    return { unreadable: (e as NodeJS.ErrnoException).code ?? "error" };
   }
-  return { anchors: elf.anchors, warnings: [] };
+}
+type Extracted =
+  { state: "ok"; anchors: SearchAnchors } | { state: "fail"; why: string } | { state: "unreadable"; why: string } | { state: "absent" };
+
+function extracted(bin: Staged): Extracted {
+  if (bin === null) return { state: "absent" };
+  if (!Buffer.isBuffer(bin)) return { state: "unreadable", why: `could not be read (${bin.unreadable})` };
+  const r = extractSearchAnchors(bin);
+  return r.ok
+    ? { state: "ok", anchors: r.anchors }
+    : { state: "fail", why: `its anchors could not be extracted (${r.defects.join("; ")})` };
+}
+
+/** `sync`'s decision for `agentBinary.searchAnchors`. Pure: the caller reads the binaries. Hostloop runs the
+ *  NATIVE agent, so the native decides wherever one is staged, and an unreadable one refuses; the VM ELF corroborates
+ *  it on the same version and stands in for it only when no native is staged. `refuse` is sync's own refusal (exit 1,
+ *  overridden only by `--allow-missing-search-anchors`), so a baseline never loses its anchors silently and never
+ *  carries anchors a staged binary could contradict. Notes never carry a literal's text.
+ *  - `elfVersion` is the VM agent's `.sdk-version` (the baseline's `agentVersion`); `nativeVersion` is the native
+ *    agent's staged version, or null when none is staged; they stage on separate cadences. An unreadable ELF counts
+ *    as an ELF whose anchors could not be extracted. */
+export function searchAnchorsForSync(a: {
+  elf: Staged;
+  native: Staged;
+  elfVersion: string;
+  nativeVersion: string | null;
+  baseAgentVersion: string | undefined;
+  base: SearchAnchors | undefined;
+}): { anchors: SearchAnchors | undefined; notes: string[]; refuse: string | null } {
+  const elf = extracted(a.elf);
+  const native = extracted(a.native);
+  const sameVersion = a.nativeVersion !== null && a.nativeVersion === a.elfVersion;
+  const record = (anchors: SearchAnchors, source: "elf" | "native" | "both", notes: string[] = []) => ({
+    anchors: { ...anchors, source },
+    notes,
+    refuse: null,
+  });
+  const refuse = (why: string) => ({ anchors: undefined, notes: [], refuse: `agentBinary.searchAnchors: ${why}` });
+  const vm = `the VM agent ${a.elfVersion}`;
+  const nat = `the native agent${a.nativeVersion ? ` ${a.nativeVersion}` : ""}`;
+
+  if (native.state === "ok") {
+    if (elf.state === "ok") {
+      const equal = JSON.stringify(elf.anchors) === JSON.stringify(native.anchors);
+      if (sameVersion)
+        return equal
+          ? record(native.anchors, "both")
+          : refuse(`${nat}'s anchors differ from ${vm}'s, at the same version: an extractor finding`);
+      return record(native.anchors, "native", [
+        equal
+          ? `searchAnchors from ${nat} (which hostloop runs); ${vm} agreed`
+          : `searchAnchors from ${nat} (which hostloop runs); ${vm}'s anchors differ (the two stage on separate cadences)`,
+      ]);
+    }
+    if (elf.state === "absent")
+      return record(native.anchors, "native", [`searchAnchors from ${nat}; no VM agent is staged for ${a.elfVersion}`]);
+    if (sameVersion)
+      return refuse(`${vm} ${elf.why}, while ${nat} at the same version extracted${elf.state === "fail" ? ": an extractor finding" : ""}`);
+    return record(native.anchors, "native", [`searchAnchors from ${nat} (which hostloop runs); ${vm} ${elf.why}`]);
+  }
+  // An unreadable native refuses whatever else is staged: hostloop can still run it, so the base's anchors cannot
+  // stand in for it.
+  if (native.state === "fail" || native.state === "unreadable")
+    return refuse(`${nat} ${native.why}; hostloop runs it, so its anchors cannot be confirmed`);
+  // No native agent is staged.
+  if (elf.state === "ok")
+    return record(elf.anchors, "elf", [
+      `searchAnchors from ${vm}; no native agent is staged, so hostloop cannot run until one is; re-run sync once it is staged`,
+    ]);
+  if (elf.state !== "absent") return refuse(`${vm} ${elf.why}, and no native agent is staged`);
+  if (a.baseAgentVersion !== a.elfVersion)
+    return refuse(
+      `no agent binary is staged for ${a.elfVersion} (the base is ${a.baseAgentVersion ?? "unknown"}); open Cowork once to stage it, then re-run sync`,
+    );
+  if (!a.base)
+    return refuse(
+      `no agent binary is staged for ${a.elfVersion} and the base has no anchors to carry; open Cowork once to stage it, then re-run sync`,
+    );
+  return {
+    anchors: a.base,
+    notes: [
+      `searchAnchors carried from the base for agent version ${a.elfVersion} (the VM agent's .sdk-version); no agent binary is staged, so hostloop cannot run on this baseline until one is`,
+      // A carried block cannot gain fields: re-syncing with nothing staged would carry it again, forever.
+      ...(a.base.noRequest
+        ? []
+        : [
+            "the carried anchors predate the no-request templates (noRequest): open Cowork once so the agent is staged, then re-run sync to record them",
+          ]),
+    ],
+    refuse: null,
+  };
+}
+
+/** How `sync` acts on `searchAnchorsForSync`'s `refuse`. Its own path, never an unknown delta, so `--allow-empty`
+ *  does not cover it: a `--diff` prints it as "would refuse" and exits as `--diff` does (the defect is what a
+ *  maintainer diagnoses); `--allow-missing-search-anchors` writes without anchors and warns; otherwise it fails. */
+export function searchAnchorsRefusal(
+  refuse: string | null,
+  o: { diff: boolean; allow: boolean },
+): { fail: string | null; log: string | null } {
+  if (refuse === null) return { fail: null, log: null };
+  if (o.diff) return { fail: null, log: `would refuse: ${refuse} (--allow-missing-search-anchors writes without anchors)` };
+  if (o.allow)
+    return {
+      fail: null,
+      log: `WARNING: ${refuse}; written without agentBinary.searchAnchors under --allow-missing-search-anchors, so no run against this baseline can serve a frozen search corpus`,
+    };
+  return {
+    fail: `ERROR: ${refuse} — refusing to write baseline. Fix it, or pass --allow-missing-search-anchors to write without anchors (--allow-empty does not cover it).`,
+    log: null,
+  };
 }
