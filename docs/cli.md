@@ -465,8 +465,8 @@ experimental and may change in a minor release.
 `search-pool build <pool> --from <run-dir|runs-dir>` (repeat `--from` for more) collects the WebSearch results recorded in kept runs into a
 pool: one record per search, holding its query, its links and the search's prose summary, plus the source run's
 skill, skill commit, skill snapshot signature, agent and Desktop versions, model and start time. A multi-leg run's
-prompt legs (`legs/<id>/`) are found under its root and count as separate source runs. Nothing serves a pool
-yet; a later release will let an eval or hillclimb run answer its searches from one.
+prompt legs (`legs/<id>/`) are found under its root and count as separate source runs. `run --search-corpus <pool>`
+(and `skill`) serves a run's searches from a pool: see [Serving a run's searches from a pool](#serving-a-runs-searches-from-a-pool---search-corpus).
 
 - **Where.** `<pool>` is a name under `~/.cowork-harness/search-pools/`, or a path. The pool dir is `0700` and its two
   files (`pool.json`, `records.jsonl`) are `0600`. A path inside a git work tree is refused unless `--allow-in-repo`:
@@ -492,6 +492,49 @@ yet; a later release will let an eval or hillclimb run answer its searches from 
   a notice, the manifest and the records; it refuses an existing file and, like `build` and `import`, a path inside a
   git work tree unless `--allow-in-repo`. `search-pool import <file> <pool>` re-verifies every record, both hashes and
   the secret scan before writing.
+
+#### Serving a run's searches from a pool (`--search-corpus`)
+
+`run <scenario> --search-corpus <pool>` (and `skill … --search-corpus <pool>`) answers every web search the agent makes
+from the pool instead of the live web. The agent's WebSearch tool makes its own model request that carries the server
+search tool; the harness recognises that request and answers it locally with the best-matching recorded searches (up
+to three, by a local ranking over the agent's query and its domain lists), their links and their recorded prose. Every
+other request goes to the API unchanged, byte for byte. It is **not live search**: the prose was written for a
+neighbouring query, so a frozen run is evidence for the steps around research (gates, dispatch, hand-offs, compose),
+never for research quality.
+
+- **Labelled.** The run line and `RunResult.searchCorpus.label` say `frozen search corpus <pool>@<hash8> — recorded
+  results, harness ranking, searches not billed; not live search; …`. `searchCorpus.metrics` counts the requests
+  served, missed and refused; served searches are not billed and do not appear in the agent's own cost or search
+  count.
+- **Misses.** A query whose best match falls below the pool's floor gets "No links found." (`--search-corpus-miss
+  empty`, the default) or the agent's "Web search error: unavailable" (`--search-corpus-miss error`).
+  `--search-corpus-min-score <n>` (between 0 and 1) overrides the pool's floor for this run and changes the hash the
+  result records.
+- **The frozen promise.** No request carrying a server search tool reaches the API while a corpus is active: a search
+  request the harness cannot read is refused, never forwarded. After the run, each agent's own record of its searches
+  (the main loop's from `events.jsonl`, each sub-agent's from its transcript), less the results that show no request
+  was made, must equal what the harness answered for that agent. If not, the run fails with an `infraErrors` entry of
+  source `search-corpus`. A search denied by a rule the agent applies itself, with no harness decision, also fails it:
+  a false red, never a false green.
+- **Records.** `search-corpus.jsonl` in the run dir has one line per answered request: the query, verdict, candidates
+  and records served, and the request's model, `tool_choice` and `thinking` settings; never a header, a credential or
+  the rest of the body. It is scrubbed with the run's other raw logs. `events.jsonl` gets one `{"_emu":"search_corpus_serve",…}` line
+  per answered request, after the WebSearch result it produced (or at the end, for a sub-agent's search whose result
+  never reached the main stream). A `search-pool build` skips any run with either.
+- **Refused, by name:** fidelity `protocol`, `container` and `microvm` (hostloop only, for now); `chat`, `record` (a
+  cassette cannot carry the label yet), `critique` and `probe-dispatch`; `--resume` and `--session-id`; a multi-leg
+  (`legs:`) or `device_bridge` scenario; the remote search route (`CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`, or a
+  `session_`/`cse_` `CLAUDE_CODE_SESSION_ID`); a
+  baseline without the web-search anchors (re-run `sync`); a run whose agent credential is not in the environment or a
+  `.env` (the harness sees requests in cleartext, so it never uses your own login); an agent proxy (`HTTPS_PROXY`,
+  `HTTP_PROXY`, `ALL_PROXY`); and an `ANTHROPIC_BASE_URL` other than `api.anthropic.com`.
+- **What changes for the agent** (hostloop): it gets `HTTPS_PROXY`/`https_proxy` pointing at the harness's loopback
+  interceptor, `NO_PROXY` for loopback, and `NODE_EXTRA_CA_CERTS` naming a per-run CA (your own `NODE_EXTRA_CA_CERTS`
+  is kept, appended). With a proxy set the agent sends its API requests through a proxy dispatcher, does not compress
+  request bodies, and skips its managed-settings gateway pin; stdio MCP servers and other child processes inherit the
+  proxy and are tunnelled through it unchanged. See [boundary.md](./boundary.md) and
+  [fidelity-gaps.md](./fidelity-gaps.md#a-frozen-search-corpus-is-not-live-search).
 
 ### Exporting a run's outputs as a fixture (`fixture export`)
 
@@ -689,7 +732,7 @@ Skill testing is the headline use, but the tool is a general harness over the Co
 | `verify-run <run-dir> <scenario.yaml> [--leg <id>] [--allow-metric-commands]` | Re-evaluate a scenario's `assert:` (and, when the scenario declares `answers:`, whether they still match the run's actual gates) against an already-kept run dir — **no live agent, no tokens, no Docker** (~1s). It also re-measures the scenario's `metrics:` from the kept work dir (`results[0].metrics`), reading a file only while its bytes equal the run's recorded post-run hash (else `pruned`) — the $0 re-measure route, including for a scenario with no `semantic_matches` or `semantic_pairwise` assert, which `regrade` refuses. A command metric is never re-run without `--allow-metric-commands`: the run's own measurement is carried forward (marked `carried`) while its signature and the events it read still match; see [scenario.md → Command metrics](./scenario.md#command-metrics). With a [multi-leg scenario](./scenario.md#multi-leg-scenarios-legs), `--leg <id>` re-evaluates that prompt leg against its own `legs/<id>` dir (see [Re-grading a kept run](#re-grading-a-kept-run-regrade)). The stall signals (`stalled`, `parked_at_question`) come from the flag recorded in the run's `result.json`; the stall detector is not re-run, so a run recorded by an earlier build shows no `parked_at_question` here, while `replay` of its cassette does | iterating on a wrong assertion or a drifted `answer` without a full live re-record |
 | `regrade <run-dir>… --scenario <scenario.yaml>` | Re-grade a kept run's `semantic_matches` and `semantic_pairwise` asserts with the judge — **no live agent**; the judge call is the only spend. Writes a new file beside the run and never touches `result.json`; reports whether the judge read the same document the live judge did. See [Re-grading a kept run](#re-grading-a-kept-run-regrade) | you changed a rubric (or want a different judge model) and need the new grade on runs you already paid for `--allow-metric-commands` re-runs each command metric over the kept events; without it a command metric is carried forward from the run, never executed. |
 | `fixture export <run-dir> --out <dir>` | Copy a kept run's outputs tree, byte-for-byte, into a directory a scenario can start from. Refuses (writing nothing) on a secret in any file or its name, or a host path in a text file or a file name, and alters no byte except the opt-in `--session-paths` rewrite of the run's own session roots; `--exclude` leaves files out; compressed or binary formats are copied without inspection. A prompt leg of a [multi-leg run](./scenario.md#multi-leg-scenarios-legs) exports from its own `<root>/legs/<id>` dir (its end-of-leg snapshot; without one, from its session tree: under `workdir: persistent` only the last leg of a finished scenario can use it (later legs changed the shared tree), and every other leg is refused; that last leg, and every `cowork-task` leg, is refused when its tree changed after the leg ended, or when there is no post-run manifest to check it against); the multi-leg root itself and a host-action leg are refused. See [Exporting a run's outputs as a fixture](#exporting-a-runs-outputs-as-a-fixture-fixture-export) | turning a run that stopped after step N into the starting state for a test of step N+1 |
-| `search-pool build <pool> --from <run-dir\|runs-dir>` (repeatable) · `search-pool export <pool> --out <file>` · `search-pool import <file> <pool>` | Build a pool of the WebSearch results recorded in kept runs (one record per search: its query, links and the search's prose summary, with the source run's skill and versions); move a pool between machines. Nothing serves a pool yet. See [Search pools](#search-pools-search-pool) | after runs whose searches you want to keep for later |
+| `search-pool build <pool> --from <run-dir\|runs-dir>` (repeatable) · `search-pool export <pool> --out <file>` · `search-pool import <file> <pool>` | Build a pool of the WebSearch results recorded in kept runs (one record per search: its query, links and the search's prose summary, with the source run's skill and versions); move a pool between machines. `run --search-corpus <pool>` serves a run's searches from one. See [Search pools](#search-pools-search-pool) | after runs whose searches you want to keep for later |
 | `ref freeze <run-dir> --scenario <scenario.yaml> --out <store>` · `ref verify <store>…` | Freeze a kept run's judged document as a frozen reference for `semantic_pairwise`, once, never rewritten; re-hash a store's documents. See [Frozen references](#frozen-references-for-semantic_pairwise-ref) | setting the baseline a pairwise judge compares later runs with |
 | `trace <run-id> [--leg <id>]` | Digest a run's `events.jsonl` through one of eight `--view`s (tools, questions, dispatches, tool-durations, tool-errors, files, usage, subagent-research). Per-view detail: see [Flags worth knowing](#flags-worth-knowing) | "how many sub-agents *actually* dispatched, and which?" — plus per-tool timings, per-call stderr, a workspace-file diff, per-model cost, or each dispatch's WebSearch query+result |
 | `inspect <run-id>` | Show what a run **produced**: the artifacts + a shallow field preview of each JSON artifact (`--output-format json` for a digest). Works on a salvaged partial run too, and on one prompt leg of a [multi-leg run](./scenario.md#multi-leg-scenarios-legs) given as `<root>/legs/<id>` (the multi-leg root itself and a host-action leg are refused) | "did it do the job?" — without hand-parsing `…/mnt/outputs/…` |

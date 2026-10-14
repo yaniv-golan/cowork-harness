@@ -159,7 +159,8 @@ The same file grows with the skill:
   [Numeric metrics](./docs/scenario.md#numeric-metrics-metrics) and
   [Command metrics](./docs/scenario.md#command-metrics).
 - **Searches kept for later.** `search-pool` builds a pool of the WebSearch results recorded in kept runs, and
-  exports and imports it between machines; nothing serves a pool to a run. See
+  exports and imports it between machines. `run --search-corpus <pool>` then answers a hostloop run's web searches
+  from the pool instead of the live web, labelled as such (for the steps around research, not its quality). See
   [Search pools](./docs/cli.md#search-pools-search-pool).
 
 **Two runs are often worth more than one.** The same scenario at two fidelity tiers, diffed, is a

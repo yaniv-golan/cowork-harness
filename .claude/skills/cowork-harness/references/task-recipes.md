@@ -513,7 +513,7 @@ is graded by the status file the skill writes ([docs/headless-no-answer.md](http
 
 When a skill researches on the web, its kept runs hold every WebSearch result: the query, the links and the search's
 prose summary. `search-pool build` collects them into a pool, one record per search, with the run's skill and
-versions. Nothing serves a pool yet; build one now to inspect what a skill searched for and found.
+versions. `run --search-corpus <pool>` then serves a run's searches from it instead of the live web (below).
 
 ```bash
 cowork-harness search-pool build market-sizing --from ~/.cowork-harness/runs/my-scenario   # repeat --from for more
@@ -531,6 +531,29 @@ cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy  
   git work tree is refused unless `--allow-in-repo`.
 - **`--min-score <n>`** sets the relevance floor a query must clear to be served (default `0.4`). It is part of the pool
   hash, so two pools with different floors are different pools.
+
+**Serve a run's searches from a pool.** `run <scenario> --search-corpus <pool>` (or `skill … --search-corpus <pool>`)
+answers every web search the agent makes from the pool: the best-matching recorded searches, their links and their
+prose, ranked locally. It is not live search: the prose answers a neighbouring query, so use it for the steps around
+research (gates, dispatch, hand-offs, compose), never to judge research quality. Every result is labelled `frozen
+search corpus <pool>@<hash>`.
+
+```bash
+cowork-harness --dotenv .env run market-sizing.yaml --search-corpus market-sizing
+```
+
+- **Hostloop only**, with the agent's credential from the environment or a `.env` (the harness sees the request in
+  cleartext, so it never uses your own login). `protocol`, `container`, `microvm`, `chat`, `record`, `critique`,
+  `probe-dispatch`, `--resume`/`--session-id`, a multi-leg (`legs:`) scenario and a `device_bridge` scenario are
+  refused, by name, as is the remote search route (`CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`). So is a baseline without the
+  web-search anchors (re-run `sync`), an agent proxy (`HTTPS_PROXY`) and an `ANTHROPIC_BASE_URL` other than the API.
+- **A query the pool cannot answer** gets "No links found." by default, or `--search-corpus-miss error` for the
+  agent's "Web search error: unavailable". `--search-corpus-min-score <n>` overrides the pool's floor for the run (and
+  changes the hash the result records).
+- **The run fails if a search could have reached the live API**: the agent's own count of searches, per agent
+  (sub-agents included), must equal what the harness answered (`infraErrors` source `search-corpus`). Searches served
+  this way are not billed and do not show in the agent's cost; `searchCorpus.metrics` counts them, and
+  `search-corpus.jsonl` in the run dir logs each one (no headers, no credential).
 
 ## Recipe 10 — A skill that parks and resumes in a later session (`legs:`)
 

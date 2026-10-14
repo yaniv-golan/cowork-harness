@@ -21,7 +21,7 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 38 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 39 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
@@ -30,7 +30,7 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 38 o
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Thinking forced on for managed-config models](#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
 - **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
-- **Permissions & limits** — [`answer_channel: none` has no Cowork counterpart](#answer_channel-none-has-no-cowork-counterpart) · [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
+- **Permissions & limits** — [A frozen search corpus is not live search](#a-frozen-search-corpus-is-not-live-search) · [`answer_channel: none` has no Cowork counterpart](#answer_channel-none-has-no-cowork-counterpart) · [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
 ## Which Cowork LANE this harness models — read first, it scopes everything below
 
@@ -1390,6 +1390,25 @@ arrive.
 host-side is not visible to the in-VM agent. See [plugin-root.md](./plugin-root.md).)
 
 ---
+
+## A frozen search corpus is not live search
+
+`run --search-corpus <pool>` answers the agent's web searches from searches recorded in earlier runs, ranked locally
+against the agent's query. Real Cowork searches the live web, and the search's prose is written by a model for that
+exact query. Here the links are real and the prose is real model output, but written for a neighbouring query: a
+figure in it can belong to another geography, segment or year. Use a frozen run for the steps around research (gates,
+dispatch, hand-offs, compose), never to judge research quality. Every surface labels such a run `frozen search corpus
+<pool>@<hash8>`.
+
+- **Not billed, not counted by the agent.** A served search costs nothing and the agent's own cost and search count
+  leave it out; `RunResult.searchCorpus.metrics` counts it.
+- **WebFetch stays live.** Only WebSearch is served; a page the agent fetches is fetched live, as usual.
+- **The agent runs with a proxy.** At hostloop the agent gets `HTTPS_PROXY`, `NO_PROXY` and `NODE_EXTRA_CA_CERTS`
+  (Cowork sets neither for an ordinary task). With them it sends API requests through a proxy dispatcher, turns request
+  body compression off where the baseline serves it on, and skips its managed-settings gateway pin with a warning;
+  stdio MCP servers and other child processes inherit the proxy and are tunnelled through it.
+- **Not at every tier.** `protocol`, `container`, `microvm` and `chat` are refused; so are `record` and a multi-leg or
+  `device_bridge` scenario.
 
 ## `answer_channel: none` has no Cowork counterpart
 
