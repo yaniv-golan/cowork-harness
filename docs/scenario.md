@@ -1598,7 +1598,12 @@ metrics:
 The script is run as `<interpreter> <script> <events-file> [args…]`: the events path is always the first argument,
 the author's args follow it literally, and no shell is involved. The events file is this turn's slice of the run's
 `events.jsonl` (turn 1 is everything before the first `turn_start` marker; a later turn with no marker has none),
-with the run's secrets already scrubbed. The script must print exactly one JSON number on stdout (ASCII whitespace
+with the run's secrets already scrubbed. The slice carries the harness's own `_emu` rows verbatim beside the agent's
+frames: the `turn_start` markers bound the slices and are left out, but `stdin_error`, `spawn_error`,
+`control_undelivered` and, under `--search-corpus`, one `{"_emu":"search_corpus_serve",…}` line per answered search
+stay in. A serve line from a sub-agent is `"attribution":"provisional"`: its `ordinal` is pairing order, never which
+agent asked (read that from `RunResult.searchCorpus.calls[]`); a line with `"unpaired":true` answers no request and has
+no verdict. A script that counts the agent's frames should skip lines with an `_emu` key. The script must print exactly one JSON number on stdout (ASCII whitespace
 around it is fine; `1e3` and `-0.5` are numbers; `+1`, `01`, `.5`, `NaN`, `1,000` and a second line are not). See
 [`examples/scenarios/csv-metrics-command.yaml`](../examples/scenarios/csv-metrics-command.yaml).
 

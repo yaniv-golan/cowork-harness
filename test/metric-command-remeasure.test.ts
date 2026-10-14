@@ -129,3 +129,36 @@ describe("remeasureCommandMetrics", () => {
     expect(r.command?.carried).toBeUndefined();
   });
 });
+
+describe("serve frames from a frozen search corpus and the recorded events sha", () => {
+  const frame = (o: object) => JSON.stringify({ _emu: "search_corpus_serve", ...o });
+  it("frames written before the measurement (streamed, provisional, unpaired and at close) re-measure clean: never pruned", async () => {
+    writeFileSync(
+      join(run, "events.jsonl"),
+      [
+        '{"a":1}',
+        frame({ streamed: true, toolUseId: "t1", query: "q", ordinal: 1, verdict: "served", rounds: [] }),
+        frame({
+          streamed: true,
+          toolUseId: "c1",
+          parentToolUseId: "task1",
+          attribution: "provisional",
+          query: "q",
+          ordinal: 2,
+          verdict: "served",
+          rounds: [],
+        }),
+        frame({ streamed: true, toolUseId: "c2", query: "q", unpaired: true }),
+        frame({ streamed: false, agentId: "ag9", query: "deep", ordinal: 1, verdict: "miss", rounds: [] }),
+      ].join("\n") + "\n",
+    );
+    const recorded = await recordLive(decl());
+    expect(recorded[0]!.value).toBe(5); // the frames are in the slice the script read, verbatim
+    const r = await remeasure(decl(), recorded, true);
+    expect(r.unavailable).toBeUndefined();
+    expect(r.value).toBe(5);
+    // a frame appended after the measurement is what the sha exists to catch
+    appendFileSync(join(run, "events.jsonl"), frame({ streamed: false, query: "late", ordinal: 3, verdict: "served", rounds: [] }) + "\n");
+    expect((await remeasure(decl(), recorded, true)).unavailable).toBe("pruned");
+  });
+});
