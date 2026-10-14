@@ -19,6 +19,8 @@ export interface LatestRunInfo {
   /** ISO-8601 — the recency signal that won: `.origin`'s `createdAt`, else `result.json`'s mtime, else
    *  `status.json`'s `startedAt`. */
   createdAt: string;
+  /** The frozen search corpus label, when the run's searches were served from a pool (`RunResult.searchCorpus`). */
+  searchCorpusLabel?: string;
   /** Read opportunistically from a persisted `result.json`'s `RunResult.verdict` (a subset — pass/exit/
    *  failures) — omitted when absent (older result.json, or one this reader couldn't parse). Never re-derived. */
   verdict?: { pass: boolean; exitCode: 0 | 1; failures: Array<{ assertion?: string; message: string }> };
@@ -79,7 +81,7 @@ function statusStartedAt(dir: string): string | undefined {
  *  `scenario` name and the (optional) persisted `verdict`. Never throws; a missing/malformed file (or a
  *  `legacy`/`mixed`/`none` dir, where `latestTurn` has no addressable turn to read) just means both stay
  *  at their fallback — a root read here silently dropped `scenario`/`verdict` on every current-layout dir. */
-function readResultJson(dir: string): { scenario?: string; verdict?: LatestRunInfo["verdict"] } {
+function readResultJson(dir: string): { scenario?: string; verdict?: LatestRunInfo["verdict"]; searchCorpusLabel?: string } {
   if (classifyRunDir(dir).kind === "legs") {
     const sr = readScenarioResult(dir);
     return sr ? { scenario: sr.scenario, verdict: sr.verdict as LatestRunInfo["verdict"] } : {};
@@ -89,10 +91,11 @@ function readResultJson(dir: string): { scenario?: string; verdict?: LatestRunIn
   const p = turnArtifactPath(dir, turn, "result.json");
   if (!existsSync(p)) return {};
   try {
-    const raw = JSON.parse(readFileSync(p, "utf8")) as { scenario?: unknown; verdict?: unknown };
+    const raw = JSON.parse(readFileSync(p, "utf8")) as { scenario?: unknown; verdict?: unknown; searchCorpus?: { label?: unknown } };
     const scenario = typeof raw.scenario === "string" ? raw.scenario : undefined;
     const verdict = raw.verdict && typeof raw.verdict === "object" ? (raw.verdict as LatestRunInfo["verdict"]) : undefined;
-    return { scenario, verdict };
+    const label = typeof raw.searchCorpus?.label === "string" ? raw.searchCorpus.label : undefined;
+    return { scenario, verdict, ...(label ? { searchCorpusLabel: label } : {}) };
   } catch {
     return {};
   }
@@ -161,8 +164,14 @@ export function findLatestRunForScenario(runsRoot: string, arg: string): LatestR
   }
   if (!best) return undefined;
 
-  const { scenario, verdict } = readResultJson(best.outDir);
-  return { scenario: scenario ?? arg, outDir: best.outDir, createdAt: best.createdAt, verdict };
+  const { scenario, verdict, searchCorpusLabel } = readResultJson(best.outDir);
+  return {
+    scenario: scenario ?? arg,
+    outDir: best.outDir,
+    createdAt: best.createdAt,
+    verdict,
+    ...(searchCorpusLabel ? { searchCorpusLabel } : {}),
+  };
 }
 
 /** The newest run/session dir at most TWO levels under `root`, by actual RUN TIME (same recency signal

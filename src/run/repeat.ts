@@ -23,7 +23,13 @@ export interface RepeatRollup {
    *  exists to catch, and collapsing to the first run would hide it. `ablatedRuns` is a count, not a
    *  boolean, so a partially-ablated batch (which no flag can currently produce, but a resumed or
    *  hand-assembled run set could) cannot read as either arm. */
-  provenance: { models: string[]; skills: string[]; ablatedRuns: number };
+  provenance: {
+    models: string[];
+    skills: string[];
+    ablatedRuns: number;
+    /** The frozen search corpus labels the batch's runs were served from; absent when none was. */
+    searchCorpus?: string[];
+  };
 }
 
 /** The first DEFINED field name on an assertion object — the same "one behavior name" convention the
@@ -89,6 +95,9 @@ export function buildRepeatRollup(
     models: uniq(provs.map((p) => p.model)),
     skills: uniq(provs.map((p) => p.skill)),
     ablatedRuns: provs.filter((p) => p.ablated).length,
+    ...(results.some((r) => r.searchCorpus)
+      ? { searchCorpus: uniq(results.flatMap((r) => (r.searchCorpus ? [r.searchCorpus.label] : []))) }
+      : {}),
   };
 
   return {

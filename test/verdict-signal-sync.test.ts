@@ -127,6 +127,7 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
     "stalled", // covered at length by the gate/answer-scripting sections
     "search_corpus_refused", // --search-corpus only; covered in docs/cli.md and the scenario signal list
     "search_corpus_attribution_uncertain", // --search-corpus only; covered in docs/cli.md and the scenario signal list
+    "search_corpus_semantic_judge", // --search-corpus only; covered in docs/cli.md and the scenario signal list
   ]);
 
   it("every signal run-record-replay.md names is a real code (catches a stale or renamed one lingering)", () => {

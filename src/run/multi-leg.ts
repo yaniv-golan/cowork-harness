@@ -9,6 +9,7 @@
 // executeScenario with a LegRunContext. A failing leg stops the scenario: every later leg is reported `skipped`, never
 // run on bad state. The scenario's verdict, its one index row and its per-leg verdicts go to scenario-result.json.
 
+import { searchCorpusAssertKey } from "../search-corpus/assert-keys.js";
 import { mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -356,6 +357,8 @@ export async function executeMultiLeg(
     const s = overlaySession(baseSession, leg.session);
     const scn = legScenario(ms, leg);
     const named = (why: string) => new UsageError(`leg "${leg.id}": ${why}`);
+    const scKey = searchCorpusAssertKey(scn.assert);
+    if (scKey) throw named(`\`${scKey}\` needs --search-corpus, which a multi-leg scenario does not support`);
     if (i > 0 && s.answer_channel === "none") {
       const r = vacuousLegBlockRefusal(leg, scn.assert);
       if (r) throw new UsageError(r);

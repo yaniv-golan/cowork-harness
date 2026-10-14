@@ -3,6 +3,7 @@ import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { InfraErrorSource, RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
+import { judgedOpts } from "../assert.js";
 import { endsOnRequestForInput } from "./input-request.js";
 import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified, outputsCheckArmed } from "./outputs-delete-tier.js";
 
@@ -36,7 +37,8 @@ export interface VerdictSignal {
     | "partly_scripted_gate"
     | "parked_at_question"
     | "search_corpus_refused"
-    | "search_corpus_attribution_uncertain";
+    | "search_corpus_attribution_uncertain"
+    | "search_corpus_semantic_judge";
   severity: "fail" | "warn";
   message: string;
 }
@@ -254,6 +256,29 @@ function isDeliveryEvidenceUsable(result: RunResult): boolean {
   return true;
 }
 
+/** Whether a judge call actually ran for this assertion result: a semantic_matches grade records its judge model or the
+ *  document it judged, a semantic_pairwise one a graded (or invalid) outcome. An assert whose evidence was refused, or
+ *  that verify-run could not judge, records none. */
+export function judgeRan(a: { judgeModel?: string; judgedDoc?: unknown; pairwise?: ReadonlyArray<{ status: string }> }): boolean {
+  return (
+    a.judgeModel !== undefined ||
+    a.judgedDoc !== undefined ||
+    (a.pairwise ?? []).some((o) => o.status === "graded" || o.status === "invalid")
+  );
+}
+
+/** A judge graded a deliverable of a run served from a frozen search corpus: the searches it was built on were
+ *  recorded answers, some to neighbouring queries, so the grade says nothing about research quality. Never blocks.
+ *  The one source of this signal, for a run's verdict and for `regrade`. */
+export function searchCorpusJudgeSignal(sc: RunResult["searchCorpus"], judged: number): VerdictSignal | undefined {
+  if (!sc || judged === 0) return undefined;
+  return {
+    code: "search_corpus_semantic_judge",
+    severity: "warn",
+    message: `${judged} judged assertion(s) (semantic_matches / semantic_pairwise) on a run served from [${sc.label}]: its searches were recorded answers, some to neighbouring queries, so a grade is not evidence of research quality.`,
+  };
+}
+
 export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verdict {
   const signals: VerdictSignal[] = [];
 
@@ -366,6 +391,12 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
       severity: "warn",
       message: `${sc.attributionUncertain} search result(s) from a sub-agent could not be settled to the request they answered; their entries in searchCorpus.calls[] are marked provisional. The served content is unaffected.`,
     });
+
+  const judge = searchCorpusJudgeSignal(
+    result.searchCorpus,
+    result.assertions.filter((a) => a.assertion !== undefined && judgedOpts(a.assertion) !== undefined && judgeRan(a)).length,
+  );
+  if (judge) signals.push(judge);
 
   // a run that ended on an unanswered plain-text question or request for input is a hard fail on BOTH lanes (the flag is
   // re-derived by run.ts's detector on the live run AND the replay re-drive, so a recorded stall fails replay

@@ -213,6 +213,8 @@ LIVE_ONLY_KEYS = {
     "semantic_matches",
     "semantic_pairwise",
     "no_lost_write_back",
+    "search_corpus_max_miss_rate",
+    "search_corpus_nearby_citations",
 }
 EGRESS_KEYS = {"egress_denied", "egress_allowed"}
 # container-only: promotion/leak semantics exist only at fidelity: container. Production's host-loop
@@ -237,6 +239,7 @@ LANE_REMOTE_INCOMPATIBLE_FIXES = {
     "user_visible_artifact": _DELIVERY_FIX,
     "artifact_text": "Assert the written path with `file_exists` and the agent's own statement of the content with `transcript_matches`, or set `lane: local`.",
     "artifact_json": "Assert the written path with `file_exists` and the agent's own statement of the content with `transcript_matches`, or set `lane: local`.",
+    "search_corpus_nearby_citations": "Assert the agent's own statement of its sources with `transcript_matches`, or set `lane: local`.",
     "file_absent": "Assert the agent's own statement with `transcript_not_matches`, or set `lane: local`.",
     "no_unexpected_files": "Assert the agent's own statement with `transcript_not_matches`, or set `lane: local`.",
     "computer_links_resolve": "Assert the written path plus the agent's own statement of it (`file_exists` + `transcript_matches`), or set `lane: local`.",

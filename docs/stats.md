@@ -16,7 +16,7 @@ reads it back.
   `stats`/`trace`/`scaffold` too — see [docs/cli.md → Commands at a glance](./cli.md#commands-at-a-glance).
 
 Each row: `{v, ts, command, scenario, slug, runId, fidelity, effectiveFidelity, baseline, result, pass,
-runLabel?, answerChannel?, multiLeg?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
+runLabel?, answerChannel?, searchCorpus?, multiLeg?, skillHash?, turn?, critiqueRole?, skill?, critiqueTotalUsd?, signals, costUsd?, tokens?, turns?,
 cacheReadTokens?, modelCostUsd?, judgeCostUsd?, deciderCostUsd?, durationMs?, partial, nonDeterministic, outDir, git:{branch, sha}}`.
 
 `costUsd` is the run's `cost.usd`: the agent session's own SDK-reported spend. It does **not** include
@@ -133,6 +133,11 @@ low-frequency scenario out of the window entirely once a high-frequency one domi
 group is a scenario unless `--group-by` says otherwise; see *Grouping by generation* below. A run made under
 `answer_channel: none` is always its own group, under every `--group-by`: its summary carries
 `answerChannel: "none"` and its text line the `[headless, no answer channel — not Cowork]` label.
+
+A run served from a frozen search corpus (`run --search-corpus`) is its own group too, per pool: the row carries
+`searchCorpus: {sha256, label}`, the group is keyed on the pool's full hash (two pools whose labels share the 8-hex
+prefix still never pool), and the text line ends with the label. Frozen never pools with live search. Rows written
+before the field existed read as live; `stats --reindex` rebuilds them from each run's `result.json`.
 
 `--metric` is a text-mode-only view narrower — `--output-format json` always returns every field for every
 scenario regardless of `--metric`, the same convention `--quiet`/`--verbose` already follow elsewhere in

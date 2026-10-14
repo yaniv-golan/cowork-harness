@@ -966,6 +966,33 @@ export const Assertion = z.strictObject({
     .nonnegative()
     .optional()
     .describe("the SDK-reported (or fallback-counted) turn count ≤ N — replay-checkable (the re-drive recounts turns deterministically)"),
+  search_corpus_max_miss_rate: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .describe(
+      "a `--search-corpus` run: misses / (served + misses) <= N. Fails by name when any search was refused (the rate is not judged on a run that worked from different evidence), and when WebSearch calls were made but none reached the corpus; a run that never searched passes. Needs `--search-corpus`: refused at load without it. Live-only",
+    ),
+  search_corpus_nearby_citations: z
+    .strictObject({
+      artifact: z
+        .string()
+        .min(1)
+        .describe(
+          "relative path to the deliverable under the work root (e.g. outputs/report.md) — a literal path, not a glob, as in artifact_text",
+        ),
+      max: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("the most cited URLs that may have been served only on nearby rounds (default 0)"),
+    })
+    .optional()
+    .describe(
+      "a `--search-corpus` run: the deliverable at `artifact` cites at most `max` distinct URLs that were served only on `nearby` rounds (a recorded search for a different query); a URL also served on an exact round does not count. Fails by name when the run served a nearby round and the deliverable cites none of the served URLs (it cannot be judged), and when the deliverable is not text. Needs `--search-corpus`: refused at load without it. Live-only",
+    ),
   max_peak_rss_bytes: z
     .number()
     .int()
@@ -2338,6 +2365,8 @@ export interface SearchCorpusCall {
     sourceSkill: string | null;
     urls: string[];
   }[];
+  /** Every URL the served exact records carry, those a higher-ranked nearby round served first included. */
+  exactUrls?: string[];
   /** The pairing is the stream's and could not be confirmed. */
   provisional?: true;
   /** The request the stream paired this tool_use with (its agent, absent for the main loop, and number); the join moved
@@ -2854,7 +2883,8 @@ export interface RunResult {
         | "partly_scripted_gate"
         | "parked_at_question"
         | "search_corpus_refused"
-        | "search_corpus_attribution_uncertain";
+        | "search_corpus_attribution_uncertain"
+        | "search_corpus_semantic_judge";
       severity: "fail" | "warn";
       message: string;
     }>;

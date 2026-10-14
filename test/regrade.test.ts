@@ -252,6 +252,52 @@ function regradeFiles(k: Kept): string[] {
   return existsSync(d) ? readdirSync(d).sort() : [];
 }
 
+describe("regrade of a run served from a frozen search corpus", () => {
+  it("warns that the judge graded a deliverable built on recorded searches, in the report and on stderr", async () => {
+    const k = await keptRun({ author: writeReport });
+    const r = JSON.parse(readFileSync(k.resultPath, "utf8"));
+    r.searchCorpus = {
+      poolId: "p",
+      sha256: "a".repeat(64),
+      label: "frozen search corpus p@aaaaaaaa",
+      miss: "empty",
+      interposition: "proxy-env+ca",
+      credentialSource: "env",
+      metrics: {
+        requests: 0,
+        served: 0,
+        miss: 0,
+        refused: 0,
+        retriesFolded: 0,
+        unfinished: 0,
+        passedThroughWithSearchTool: 0,
+        toolUses: 0,
+        noRequest: 0,
+      },
+      calls: [],
+    };
+    writeFileSync(k.resultPath, JSON.stringify(r));
+    const err = captureStderr();
+    let out: Awaited<ReturnType<typeof regradeRuns>>;
+    try {
+      out = await regradeRuns(opts(k, { makeJudge: judgeFactory(() => true).make }));
+    } finally {
+      err.restore();
+    }
+    expect(out.ok).toBe(true);
+    const run = (out as Extract<typeof out, { ok: true }>).runs[0]!;
+    expect(run.signals).toEqual([expect.objectContaining({ code: "search_corpus_semantic_judge", severity: "warn" })]);
+    expect(err.text()).toMatch(/frozen search corpus p@aaaaaaaa.*not evidence of research quality/);
+    // and the regrade file on disk carries it too
+    const file = JSON.parse(readFileSync(run.regradeFile, "utf8"));
+    expect(file.signals).toEqual([expect.objectContaining({ code: "search_corpus_semantic_judge" })]);
+    // a run without a corpus carries no such signal
+    const plain = await keptRun({ author: writeReport });
+    const o2 = await regradeRuns(opts(plain, { makeJudge: judgeFactory(() => true).make }));
+    expect((o2 as Extract<typeof o2, { ok: true }>).runs[0]!.signals).toBeUndefined();
+  });
+});
+
 describe("regrade: writes a new grade beside the run, never over it", () => {
   it("the regrade file carries the new grade; result.json is byte-identical; no run-index row", async () => {
     const k = await keptRun({ author: writeReport }); // live judge failed every claim

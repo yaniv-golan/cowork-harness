@@ -4864,6 +4864,27 @@
       "definitions.Run.scrubAcceptedBy": {
         "type": "string"
       },
+      "definitions.Run.signals": {
+        "type": "array"
+      },
+      "definitions.Run.signals[]": {
+        "type": "object",
+        "closed": true
+      },
+      "definitions.Run.signals[].code": {
+        "type": "string",
+        "enum": ["search_corpus_semantic_judge"],
+        "required": true
+      },
+      "definitions.Run.signals[].message": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.Run.signals[].severity": {
+        "type": "string",
+        "enum": ["warn"],
+        "required": true
+      },
       "definitions.Run.turn": {
         "type": "integer",
         "required": true
@@ -5981,6 +6002,12 @@
       ".searchCorpus.calls[].blockedDomains[]": {
         "type": "string"
       },
+      ".searchCorpus.calls[].exactUrls": {
+        "type": "array"
+      },
+      ".searchCorpus.calls[].exactUrls[]": {
+        "type": "string"
+      },
       ".searchCorpus.calls[].ordinal": {
         "type": "integer"
       },
@@ -6645,7 +6672,8 @@
           "partly_scripted_gate",
           "parked_at_question",
           "search_corpus_refused",
-          "search_corpus_attribution_uncertain"
+          "search_corpus_attribution_uncertain",
+          "search_corpus_semantic_judge"
         ],
         "required": true
       },
@@ -7700,6 +7728,25 @@
       ".assert[].result": {
         "type": "string",
         "enum": ["success", "error"]
+      },
+      ".assert[].search_corpus_max_miss_rate": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      },
+      ".assert[].search_corpus_nearby_citations": {
+        "type": "object",
+        "closed": true
+      },
+      ".assert[].search_corpus_nearby_citations.artifact": {
+        "type": "string",
+        "required": true,
+        "minLength": 1
+      },
+      ".assert[].search_corpus_nearby_citations.max": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
       },
       ".assert[].self_heal_ran": {
         "type": "boolean"

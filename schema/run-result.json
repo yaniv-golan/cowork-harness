@@ -526,6 +526,11 @@
                   }
                 }
               },
+              "exactUrls": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Every URL the served exact records carry, those a higher-ranked nearby round served first included."
+              },
               "provisional": { "const": true, "description": "The pairing is the stream's and could not be confirmed." },
               "reassignedFrom": {
                 "type": "object",
@@ -1006,7 +1011,8 @@
                   "partly_scripted_gate",
                   "parked_at_question",
                   "search_corpus_refused",
-                  "search_corpus_attribution_uncertain"
+                  "search_corpus_attribution_uncertain",
+                  "search_corpus_semantic_judge"
                 ]
               },
               "severity": {

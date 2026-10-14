@@ -501,6 +501,66 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     expect(computeVerdict(rr({ searchCorpus: sc(3, 0) }), "live").signals.some((x) => x.code === "search_corpus_refused")).toBe(false);
   });
 
+  it("warns, never fails, when a judge graded a deliverable in a frozen-corpus run", () => {
+    const sc = {
+      poolId: "p",
+      sha256: "a".repeat(64),
+      label: "frozen search corpus p@aaaaaaaa",
+      miss: "empty" as const,
+      interposition: "proxy-env+ca" as const,
+      credentialSource: "env" as const,
+      metrics: {
+        requests: 0,
+        served: 0,
+        miss: 0,
+        refused: 0,
+        retriesFolded: 0,
+        unfinished: 0,
+        passedThroughWithSearchTool: 0,
+        toolUses: 0,
+        noRequest: 0,
+        toolUsesExpected: 0,
+        byAgent: {},
+        liveServerTools: 0,
+        shapeUnfenced: 0,
+        unattributed: 0,
+        unattributedExpected: 0,
+        reassigned: 0,
+        attributionUncertain: 0,
+      },
+      calls: [],
+    };
+    const judged = [{ assertion: { semantic_matches: { rubric: ["x"] } }, pass: true, judgeModel: "m" }] as RunResult["assertions"];
+    const v = computeVerdict(rr({ searchCorpus: sc, assertions: judged }), "live");
+    expect(v.pass).toBe(true);
+    const s = v.signals.find((x) => x.code === "search_corpus_semantic_judge");
+    expect(s?.severity).toBe("warn");
+    expect(s?.message).toMatch(
+      /1 judged assertion\(s\) \(semantic_matches \/ semantic_pairwise\) on a run served from \[frozen search corpus p@aaaaaaaa\].*not evidence of research quality/,
+    );
+    // a pairwise judge counts too; no judge, or no corpus, warns nothing
+    const pairwise = [
+      { assertion: { semantic_pairwise: { refs: ["r"] } }, pass: true, pairwise: [{ ref: "r", status: "graded" }] },
+    ] as RunResult["assertions"];
+    expect(
+      computeVerdict(rr({ searchCorpus: sc, assertions: pairwise }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge"),
+    ).toBe(true);
+    expect(computeVerdict(rr({ searchCorpus: sc }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge")).toBe(false);
+    // a judged key whose judge never ran (its evidence was refused) does not count
+    const refused = [
+      { assertion: { semantic_matches: { rubric: ["x"] } }, pass: false, semanticEvidence: { reason: "missing_evidence" } },
+    ] as unknown as RunResult["assertions"];
+    expect(
+      computeVerdict(rr({ searchCorpus: sc, assertions: refused }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge"),
+    ).toBe(false);
+    // an assertion no model judges does not count
+    const plain = [{ assertion: { result: "success" }, pass: true }] as RunResult["assertions"];
+    expect(
+      computeVerdict(rr({ searchCorpus: sc, assertions: plain }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge"),
+    ).toBe(false);
+    expect(computeVerdict(rr({ assertions: judged }), "live").signals.some((x) => x.code === "search_corpus_semantic_judge")).toBe(false);
+  });
+
   it("warns, never fails, when the harness could not settle which search request a sub-agent result answered", () => {
     const sc = (attributionUncertain: number, unattributed = attributionUncertain) => ({
       poolId: "p",

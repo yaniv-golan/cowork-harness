@@ -31,6 +31,8 @@ export interface RegistryInput {
   allowedDomains?: string[];
   blockedDomains?: string[];
   rounds: FrameRound[];
+  /** Every URL the served exact records carry, those deduped out of their round included (see `Selection.exactUrls`). */
+  exactUrls?: string[];
   /** What identifies a retry of this request (its body without `stream`); null when it has none. */
   retryKey: string | null;
 }
@@ -114,6 +116,7 @@ export class SearchRegistry {
       ...(input.allowedDomains ? { allowedDomains: [...input.allowedDomains] } : {}),
       ...(input.blockedDomains ? { blockedDomains: [...input.blockedDomains] } : {}),
       rounds: input.rounds.map((r) => ({ ...r, urls: [...r.urls] })),
+      ...(input.exactUrls ? { exactUrls: [...input.exactUrls] } : {}),
       ordinal,
     });
     this.entries.push(entry);

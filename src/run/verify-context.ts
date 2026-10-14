@@ -6,6 +6,7 @@
  * Refusals are returned, never thrown and never printed: the caller owns the envelope and the exit code.
  * Every message is the text `verify-run` has always printed; `opts.command` only swaps the leading label.
  */
+import { searchCorpusAssertKey } from "../search-corpus/assert-keys.js";
 import { resolveHookFailureBlocks } from "./hook-failure-blocks.js";
 import { runDirAgentVersions } from "./recorded-agent-version.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -293,6 +294,16 @@ export function assertContextFromRunDir(
   } else {
     scenario = scenarioOrLoader;
   }
+  // A `search_corpus_*` key reads the run's frozen corpus record. A run with none could never have been graded on it
+  // (usage); a record from before the corpus kept its tool-use counts and calls cannot be (runtime). Neither passes.
+  const scKey = searchCorpusAssertKey(scenario.assert);
+  if (scKey && !result.searchCorpus)
+    return refuse("usage", `${cmd}: \`${scKey}\` needs a run served from a frozen search corpus (--search-corpus); ${runDir} had none`);
+  if (scKey && (typeof result.searchCorpus!.metrics?.toolUses !== "number" || !Array.isArray(result.searchCorpus!.calls)))
+    return refuse(
+      "runtime",
+      `${cmd}: ${runDir} was recorded by an older harness without the search corpus's tool-use counts and calls, so \`${scKey}\` cannot be judged — re-run it. (can't verify ⇒ not green)`,
+    );
 
   if (snap) result = { ...result, workDir: snap };
   const workRoot = result.workDir ?? "";
@@ -525,6 +536,7 @@ export function assertContextFromRunDir(
     hookFailureBlocks: resolveHookFailureBlocks(result.hookFailureBlocks, runDirAgentVersions(runDir)),
     mcpErrors: result.mcpErrors,
     resources: result.resources,
+    searchCorpus: result.searchCorpus,
     hookEvents: result.hookEvents,
     fileToolAttempts: result.fileToolAttempts,
     pathDenials: result.pathDenials,

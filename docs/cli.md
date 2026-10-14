@@ -205,7 +205,7 @@ cowork-harness lint examples/scenarios/*.yaml --strict --min-severity INFO --cas
 > | Always | `transcript_*`, `tool_*`, `subagent_*`, `no_vm_path_file_op`, `dispatch_count_max`, `skill_triggered`/`no_skill_triggered`, `reference_read`/`no_observed_reference_access`, `max_cost_usd`/`max_tokens`/`tool_calls_max`/`max_turns` (against the *frozen recording's* spend, not fresh spend — a live `run` catches a real budget regression), `max_tool_errors`, `max_redundant_tool_calls`, `skill_available`, `connector_available`, `skill_tool_used`, `compaction_occurred`, `hook_event_fired`/`hook_event_blocked`/`no_hook_event_blocked`/`hook_decision`, `hook_output_contains`/`hook_output_not_contains`, `all_tasks_completed`, `task_count_min`, `task_status`, `no_scratchpad_leak`, `present_files_called`, `result`, the verdict modifiers |
 > | Only if the cassette carries `controlOut` | `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` |
 > | Only if the cassette carries an `artifacts` manifest | `file_exists`, `artifact_text`, `user_visible_artifact`, `artifact_json`, `computer_links_resolve`, `computer_links_resolve_if_present`, `no_unexpected_files`, `input_unmodified` |
-> | Always skipped (live-only) | `file_absent`, `egress_*`, `expect_denied`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`, `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `semantic_pairwise`, `no_lost_write_back` — keep these in a periodic live `run` |
+> | Always skipped (live-only) | `file_absent`, `egress_*`, `expect_denied`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`, `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `semantic_pairwise`, `no_lost_write_back`, `search_corpus_max_miss_rate`, `search_corpus_nearby_citations` — keep these in a periodic live `run` |
 >
 > Authoritative list: `ALWAYS_CONTENT_KEYS` / `QUESTION_GATE_KEYS` / `MANIFEST_KEYS` (composed per-replay) / `LIVE_ONLY_KEYS` (excluded) in `src/run/cassette.ts`. Full per-key reference:
 > [docs/cassette.md → Assertion table](./cassette.md#assertion-table). Full rules/rationale:
@@ -446,6 +446,9 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   scenario with neither a `semantic_matches` nor a `semantic_pairwise` assert is refused with `error.code: "no_semantic_asserts"` (category
   `usage`): nothing to re-grade, which a caller can treat as "nothing to do" rather than a failure. After a
   write failure it carries the run dirs already graded in `runs[]`.
+- **Signals.** When the run was served from a frozen search corpus, each `runs[]` entry and the regrade file carry
+  `signals: [{code: "search_corpus_semantic_judge", severity: "warn", message}]`, counting only the asserts a judge
+  read, and the warning is printed on stderr.
 - **Metrics.** When the scenario declares `metrics:`, each `runs[]` entry and the regrade file carry `metrics`, in the
   `RunResult.metrics` shape, re-read from the kept work dir as it is now. A file is read only while its bytes still
   equal the run's own recorded post-run hash (`RunResult.workspaceFiles`); a file edited since the run, or one the
@@ -465,7 +468,8 @@ experimental and may change in a minor release.
 `search-pool build <pool> --from <run-dir|runs-dir>` (repeat `--from` for more) collects the WebSearch results recorded in kept runs into a
 pool: one record per search, holding its query, its links and the search's prose summary, plus the source run's
 skill, skill commit, skill snapshot signature, agent and Desktop versions, model and start time. A multi-leg run's
-prompt legs (`legs/<id>/`) are found under its root and count as separate source runs. `run --search-corpus <pool>`
+prompt legs (`legs/<id>/`) are found under its root and count as separate source runs; a host-action leg has no
+searches. `run --search-corpus <pool>`
 (and `skill`) serves a run's searches from a pool: see [Serving a run's searches from a pool](#serving-a-runs-searches-from-a-pool---search-corpus).
 
 - **Where.** `<pool>` is a name under `~/.cowork-harness/search-pools/`, or a path. The pool dir is `0700` and its two
@@ -513,11 +517,19 @@ never for research quality.
 - **Labelled.** The run line and `RunResult.searchCorpus.label` say `frozen search corpus <pool>@<hash8> — recorded
   results, harness ranking, searches not billed; not live search; …`, and the run line adds the served, missed and
   refused counts. A run that refused any search warns (`search_corpus_refused`; louder when it refused every one,
-  which usually means an agent newer than the baseline's search anchors). `searchCorpus.metrics` counts the requests
+  which usually means an agent newer than the baseline's search anchors). A run whose judged assertions
+  (`semantic_matches`, `semantic_pairwise`) graded a deliverable also warns (`search_corpus_semantic_judge`): the grade
+  is not evidence of research quality; `regrade` of such a run says the same (on stderr, in its report's
+  `runs[].signals` and in the regrade file). The label is printed wherever a
+  verdict is read: the run line, `verify-run`'s text output, `status --latest-for` (text, and `searchCorpusLabel` in its
+  JSON), the `--repeat` rollup's `search:` line and the head of `trace --view subagent-research`; `stats` groups each
+  pool on its own (see [stats](./stats.md)). `searchCorpus.metrics` counts the requests
   served, missed and refused; served searches are not billed and do not appear in the agent's own cost or search
   count.
 - **Per call.** `searchCorpus.calls[]` holds one entry per search request: the agent that made it (absent for the main
-  loop), the WebSearch tool_use it answered, the query and domain lists, the verdict and the served rounds. A
+  loop), the WebSearch tool_use it answered, the query and domain lists, the verdict, the served rounds (each with
+  `match`: `exact` or `nearby`, its relevance and URLs) and `exactUrls` (every URL a served exact record carries, those a
+  higher-ranked nearby round served first included). A
   sub-agent's result is paired with its request after the run, once the dispatch's result names the sub-agent; until
   then its serve frame in `events.jsonl` is marked `provisional`. A pairing the join moved to another request with the
   same served content is counted `reassigned`, and the call records the request the stream gave it

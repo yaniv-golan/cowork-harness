@@ -84,6 +84,7 @@ const full: RunResult = {
         verdict: "served",
         ordinal: 1,
         rounds: [{ match: "nearby", nscore: 0.75, sourceQuery: "q2", recordId: "r", sourceSkill: null, urls: ["https://a"] }],
+        exactUrls: ["https://a"],
       },
       {
         agentId: "ag1",

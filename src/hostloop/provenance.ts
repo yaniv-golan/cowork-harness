@@ -28,16 +28,16 @@ export function normalizeUrl(raw: string): string | null {
   return u.href;
 }
 
-const GEN = /https?:\/\/[^\s<>"'`]+/g; // full URLs
-const LEN = /www\.[^\s<>"'`]+/g; // www.-prefixed bare hosts
+export const GEN = /https?:\/\/[^\s<>"'`]+/g; // full URLs
+export const LEN = /www\.[^\s<>"'`]+/g; // www.-prefixed bare hosts
 // bare `domain.tld(/path)?` at a token boundary (conservative port of `uen`)
-const UEN = /(?<![\w@.])(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:\/[^\s<>"'`]*)?/g;
+export const UEN = /(?<![\w@.])(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(?:\/[^\s<>"'`]*)?/g;
 
 const TRAIL = new Set([".", ",", ";", ":", "!", "?", "'", '"', "`"]);
 const CLOSERS: Record<string, string> = { ")": "(", "]": "[", "}": "{" };
 
 /** Port of `ZHA`: strip trailing punctuation; drop an unbalanced trailing closing bracket. */
-function trimMatch(m: string): string {
+export function trimMatch(m: string): string {
   let e = m.length;
   while (e > 0) {
     const ch = m[e - 1];

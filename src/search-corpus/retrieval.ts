@@ -179,6 +179,9 @@ export interface Selection {
   /** Top score over `maxScore` (0 with no candidate). */
   nscore: number;
   rounds: ServedRound[];
+  /** Every URL the chosen exact records carry (after the domain filter), in order, those an earlier round already served
+   *  included: a URL deduped out of an exact round is still one an exact record vouches for. */
+  exactUrls: string[];
   /** The top candidates, for the per-query log. */
   candidates: { id: string; score: number }[];
 }
@@ -191,15 +194,18 @@ export function select(idx: PoolIndex, query: string, domains: { allowed?: strin
   const top = ranked[0];
   const max = maxScore(idx, query);
   const nscore = top && max > 0 ? top.score / max : 0;
-  if (!top || nscore < p.minScore) return { verdict: "miss", nscore, rounds: [], candidates };
+  if (!top || nscore < p.minScore) return { verdict: "miss", nscore, rounds: [], exactUrls: [], candidates };
   const chosen = [top, ...ranked.slice(1, p.maxRecords).filter((c) => c.score >= p.roundShare * top.score)];
   const seen = new Set<string>();
   const want = queryTokenSet(query);
   const rounds: ServedRound[] = [];
+  const exactUrls: string[] = [];
   for (const c of chosen) {
     const record = idx.records[c.index]!;
+    const exact = queryTokenSet(record.query) === want;
     const links: SearchLink[] = [];
     for (const l of filterLinks(record.links, domains)) {
+      if (exact && !exactUrls.includes(l.url)) exactUrls.push(l.url);
       const key = normalizeUrl(l.url);
       if (seen.has(key) || links.length >= p.maxLinks) continue;
       seen.add(key);
@@ -207,7 +213,7 @@ export function select(idx: PoolIndex, query: string, domains: { allowed?: strin
     }
     // A later round whose links were all served earlier adds nothing a live search would show twice; drop it.
     if (rounds.length > 0 && links.length === 0) continue;
-    rounds.push({ record, score: c.score, links, match: queryTokenSet(record.query) === want ? "exact" : "nearby" });
+    rounds.push({ record, score: c.score, links, match: exact ? "exact" : "nearby" });
   }
-  return { verdict: "served", nscore, rounds, candidates };
+  return { verdict: "served", nscore, rounds, exactUrls, candidates };
 }

@@ -73,4 +73,20 @@ describe("--search-corpus wiring (source text)", () => {
     expect(layer).toBeLessThan(hostloop.indexOf("const child = spawn("));
     expect(observed).not.toMatch(/searchCorpusEnv/);
   });
+
+  it("every serve frame is in events.jsonl before a command metric measures it: written at session close, before the stream ends, and the run measures after the drive", () => {
+    const session = src("src/agent/session.ts");
+    const atClose = session.indexOf("for (const f of await this.searchCorpus.finish()) this.events.write(f");
+    expect(atClose).toBeGreaterThan(-1);
+    expect(atClose).toBeLessThan(session.indexOf("this.events.end("));
+    expect(execute.indexOf("record = await run.drive(scenario.prompt, {")).toBeLessThan(
+      execute.indexOf("measureCommandMetrics(scenario.metrics"),
+    );
+  });
+
+  it("the run's assertions read the corpus record after its finish", () => {
+    const at = execute.indexOf("searchCorpus: searchCorpus?.result(),");
+    expect(at).toBeGreaterThan(execute.indexOf("const assertCtx: AssertContext = {"));
+    expect(at).toBeGreaterThan(execute.indexOf("searchCorpusError = await searchCorpus.finish(outDir, plan.configDir)"));
+  });
 });

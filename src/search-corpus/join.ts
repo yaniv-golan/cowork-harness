@@ -157,6 +157,7 @@ export function joinCalls(o: {
       verdict: e.verdict,
       ordinal: e.ordinal,
       rounds: e.rounds.map((r) => ({ ...r, urls: [...r.urls] })),
+      ...(e.exactUrls?.length ? { exactUrls: [...e.exactUrls] } : {}),
       ...(t?.provisional || leftBare.has(e) ? { provisional: true as const } : {}),
       ...(t?.reassignedFrom !== undefined ? { reassignedFrom: t.reassignedFrom } : {}),
     };

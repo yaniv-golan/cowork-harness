@@ -1585,7 +1585,7 @@ async function runOneScenario(p: {
  *  the signal histogram, per-assertion attribution (only rows with at least one failure — an all-passing
  *  assertion across every iteration doesn't need a line), and cost/token/non-determinism totals when
  *  present. */
-function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetStop: boolean): string {
+export function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetStop: boolean): string {
   const lines: string[] = [];
   const verdict = rollupPasses(r, minPassRate, allowBudgetStop) ? "PASS" : "FAIL";
   const stopNote = r.stoppedEarly ? ` (stopped early: ${r.stoppedEarly}, ${r.completed}/${r.requested} completed)` : "";
@@ -1600,6 +1600,7 @@ function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetSto
     `  provenance: model=${r.provenance.models.join(",") || "unknown"}  skill=${r.provenance.skills.join(",") || "unknown"}  ` +
       `ablated=${r.provenance.ablatedRuns}/${r.completed}`,
   );
+  if (r.provenance.searchCorpus) lines.push(`  search: ${r.provenance.searchCorpus.map((l) => `[${l}]`).join(" ")}`);
   const signals = Object.entries(r.signalHistogram);
   if (signals.length) lines.push(`  signals: ${signals.map(([code, n]) => `${code}×${n}`).join(", ")}`);
   const failingAssertions = r.perAssertion.filter((a) => a.fails > 0);
@@ -2202,6 +2203,7 @@ async function cmdRun(rawArgs: string[]) {
         quiet: true,
         ablateSkill: flags.ablateSkill,
         unloadableBaseline: "skip",
+        searchCorpus: flags.searchCorpus !== undefined,
       });
       if (refusal) badInputs.push({ file: files[i], message: refusal.message, hint: refusal.hint });
     }
@@ -3906,7 +3908,7 @@ const SKILL_HASH_QUERY_MIN = 6;
  *  everything the row has (a metric with no telemetry in the group is simply absent, not "0").
  *  The identity suffix appears only under a non-default `--group-by`, so it composes with EVERY metric
  *  branch below (each builds on `base`) without changing the default line at all. */
-function formatStatsLine(s: StatsSummary, metric?: string): string {
+export function formatStatsLine(s: StatsSummary, metric?: string): string {
   const identity = [
     s.skillHash ? `skillHash=${s.skillHash}` : null,
     s.runLabel ? `label=${s.runLabel}` : null,
@@ -3914,7 +3916,8 @@ function formatStatsLine(s: StatsSummary, metric?: string): string {
   ]
     .filter(Boolean)
     .join(" ");
-  const channel = s.answerChannel === "none" ? ` [${ANSWER_CHANNEL_NONE_LABEL}]` : "";
+  const channel =
+    (s.answerChannel === "none" ? ` [${ANSWER_CHANNEL_NONE_LABEL}]` : "") + (s.searchCorpus ? ` [${s.searchCorpus.label}]` : "");
   const base = `${s.scenario}${identity ? ` (${identity})` : ""}${channel}: ${s.runs} run(s), ${(s.passRate * 100).toFixed(0)}% pass`;
   const fmtCost = (v?: number) => (v !== undefined ? `$${v.toFixed(4)}` : "n/a");
   const fmtMs = (v?: number) => (v !== undefined ? `${(v / 1000).toFixed(1)}s` : "n/a");
@@ -4472,6 +4475,7 @@ async function cmdStatusLatestFor(scenarioArg: string, json: boolean): Promise<n
         outDir: found.outDir,
         createdAt: found.createdAt,
         ...(found.verdict !== undefined ? { verdict: found.verdict } : {}),
+        ...(found.searchCorpusLabel !== undefined ? { searchCorpusLabel: found.searchCorpusLabel } : {}),
       }),
     );
   } else {
@@ -4479,7 +4483,11 @@ async function cmdStatusLatestFor(scenarioArg: string, json: boolean): Promise<n
     // json); the raw outDir is the LAST line specifically, mirroring statusLine's `[status] <outDir>`
     // convention (execute.ts) so a driving script capturing stderr can grab it without parsing the
     // summary line above it.
-    log(`${found.scenario} · ${found.createdAt}` + (found.verdict ? ` · ${found.verdict.pass ? "PASS" : "FAIL"}` : ""));
+    log(
+      `${found.scenario} · ${found.createdAt}` +
+        (found.verdict ? ` · ${found.verdict.pass ? "PASS" : "FAIL"}` : "") +
+        (found.searchCorpusLabel ? ` [${found.searchCorpusLabel}]` : ""),
+    );
     log(found.outDir);
   }
   return process.exit(0);
@@ -4990,6 +4998,7 @@ async function cmdVerifyRun(args: string[]) {
     for (const s of verdict.signals.filter((s) => s.code !== "assertion"))
       log(`${s.severity === "fail" ? "✗" : "·"} ${s.code}: ${s.message}`);
     if (answerCoverage) log(`· answer coverage: ${answerCoverage.matched}/${answerCoverage.total} gate(s) matched a scripted answer`);
+    if (judged.searchCorpus) log(`· [${judged.searchCorpus.label}]`);
     log(
       verdict.pass
         ? `✓ verify-run: all ${assertions.length} assertion(s) pass (no live agent)`
@@ -5071,6 +5080,7 @@ export function groupAssertionKeys<T extends { key: string }>(keys: T[]): { titl
     { title: "Skills / connectors", match: (k) => k.includes("skill_") || k === "no_skill_triggered" || k === "connector_available" },
     { title: "Tasks", match: (k) => k.startsWith("task_") || k === "all_tasks_completed" },
     { title: "Egress", match: (k) => k.startsWith("egress_") },
+    { title: "Frozen search corpus", match: (k) => k.startsWith("search_corpus_") },
     { title: "Files / artifacts / delivery", match: (k) => FILE_FAMILY.has(k) || k.startsWith("computer_links_") },
     { title: "Budgets", match: (k) => k.startsWith("max_") },
     { title: "Verdict modifiers (no-op passes on replay)", match: (k) => k.startsWith("allow_") || k === "replay_protocol_fidelity" },

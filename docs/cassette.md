@@ -707,7 +707,8 @@ to sample, so `RunResult.resources` is absent on replay), `semantic_matches` and
 calls — never evaluable from a frozen cassette), `no_lost_write_back` (needs the run's authored-file set, which the replay
 `AssertContext` has no `authoredFiles` for — a manifest-keyed classification would hard-fail every embedding
 cassette's replay; re-deriving authorship from the cassette manifest is a deferred follow-up capped by the
-64 KiB body cap)
+64 KiB body cap), `search_corpus_max_miss_rate` and `search_corpus_nearby_citations` (they read the run's frozen
+search corpus record, which only a live `--search-corpus` run writes; `record` refuses the flag)
 (and `expect_denied` — a **scenario-level shorthand** that expands to `egress_denied` assertions, not an
 assertion key in its own right).
 

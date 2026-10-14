@@ -276,6 +276,7 @@ describe("every key refused at load on lane: remote also refuses at assertion ti
     computer_links_resolve: { computer_links_resolve: true },
     computer_links_resolve_if_present: { computer_links_resolve_if_present: true },
     no_lost_write_back: { no_lost_write_back: true },
+    search_corpus_nearby_citations: { search_corpus_nearby_citations: { artifact: "outputs/report.md" } },
   } as Record<keyof typeof LANE_REMOTE_INCOMPATIBLE, Assertion>;
   it("covers the whole load list", () => expect(Object.keys(SAMPLE).sort()).toEqual(Object.keys(LANE_REMOTE_INCOMPATIBLE).sort()));
   for (const [key, a] of Object.entries(SAMPLE))

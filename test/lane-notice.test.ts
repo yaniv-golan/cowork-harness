@@ -78,6 +78,7 @@ describe("one list: every `lane: remote` degradation in assert.ts is an environm
     // authored: true — file_exists / artifact_text / artifact_json / user_visible_artifact all take it
     authorshipOf: ["file_exists", "artifact_text", "artifact_json", "user_visible_artifact"],
     evalComputerLinks: ["computer_links_resolve", "computer_links_resolve_if_present"],
+    searchCorpusNearbyCitations: ["search_corpus_nearby_citations"],
     // the judge's evidence: semantic keys are not environment-shaped (they load on remote), so they are checked
     // against the documented exemption below instead
     scopeAuthoredEvidence: [],

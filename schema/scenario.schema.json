@@ -688,6 +688,33 @@
             "minimum": 0,
             "maximum": 9007199254740991
           },
+          "search_corpus_max_miss_rate": {
+            "description": "a `--search-corpus` run: misses / (served + misses) <= N. Fails by name when any search was refused (the rate is not judged on a run that worked from different evidence), and when WebSearch calls were made but none reached the corpus; a run that never searched passes. Needs `--search-corpus`: refused at load without it. Live-only",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "search_corpus_nearby_citations": {
+            "description": "a `--search-corpus` run: the deliverable at `artifact` cites at most `max` distinct URLs that were served only on `nearby` rounds (a recorded search for a different query); a URL also served on an exact round does not count. Fails by name when the run served a nearby round and the deliverable cites none of the served URLs (it cannot be judged), and when the deliverable is not text. Needs `--search-corpus`: refused at load without it. Live-only",
+            "type": "object",
+            "properties": {
+              "artifact": {
+                "type": "string",
+                "minLength": 1,
+                "description": "relative path to the deliverable under the work root (e.g. outputs/report.md) — a literal path, not a glob, as in artifact_text"
+              },
+              "max": {
+                "description": "the most cited URLs that may have been served only on nearby rounds (default 0)",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "artifact"
+            ],
+            "additionalProperties": false
+          },
           "max_peak_rss_bytes": {
             "description": "peak sampled RSS of the agent sandbox <= N bytes — live-only (container/hostloop/microvm); evidence-unavailable on replay/protocol or when sampling captured no RSS",
             "type": "integer",

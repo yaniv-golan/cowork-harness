@@ -163,6 +163,9 @@ metrics:                            # OPTIONAL — numbers read from JSON files 
                                     # hillclimb regrade carry it forward unless --allow-metric-commands. Its own reasons:
                                     # command_failed/_timeout/_output/_changed/_missing/_not_allowed, nondeterministic,
                                     # no_events. Editing the script mid-flow changes its signature: new id or new flow.
+                                    # The slice keeps the harness's own `_emu` rows (under --search-corpus, a
+                                    # search_corpus_serve line per answered search; a sub-agent's is provisional):
+                                    # skip lines with an `_emu` key to count the agent's frames.
 ```
 
 **Writing a scorer (a command metric's script).** The script measures; it never judges.

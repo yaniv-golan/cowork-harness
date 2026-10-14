@@ -250,4 +250,74 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     expect(c.forwarded).toBe(1);
     expect(c.passedThroughWithSearchTool).toBe(0);
   });
+
+  it("a URL an exact record carries counts as exact even when a higher-ranked nearby round served it first", async () => {
+    const two = (query: string, urls: string[], text: string): PoolRecord => {
+      const links = urls.map((url) => ({ title: "t", url }));
+      return { ...rec(query, urls[0]!, text), id: recordId({ query, links, text }), links };
+    };
+    const pool = [
+      two("ev market size", ["https://shared.example/x", "https://exact.example/y"], "EV."),
+      two(
+        "ev market size europe ev market size ev",
+        ["https://shared.example/x", "https://near.example/z"],
+        "ev market size ev market size ev market size europe",
+      ),
+    ];
+    const c: ServeContext = {
+      index: buildIndex(pool, DEFAULT_RETRIEVAL),
+      anchors,
+      registry: new SearchRegistry(),
+      miss: "empty",
+      log: () => {},
+    };
+    serveRequest(post(nestedBody("ev market size")), c);
+    const [e] = c.registry.all();
+    // the real ranking puts the nearby record first, so the exact round no longer serves the shared URL
+    expect(e!.rounds.map((r) => [r.match, r.urls])).toEqual([
+      ["nearby", ["https://shared.example/x", "https://near.example/z"]],
+      ["exact", ["https://exact.example/y"]],
+    ]);
+    expect(e!.exactUrls).toEqual(["https://shared.example/x", "https://exact.example/y"]);
+    // and the citation key, over the join's calls, does not count the shared URL as nearby-only
+    const { joinCalls } = await import("../src/search-corpus/join.js");
+    const { evaluate } = await import("../src/assert.js");
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const root = mkdtempSync(join(tmpdir(), "cwh-exactany-"));
+    mkdirSync(join(root, "outputs"));
+    writeFileSync(join(root, "outputs", "r.md"), "Source: https://shared.example/x");
+    const calls = joinCalls({ entries: c.registry.all(), pairings: [], dispatchAgents: new Map(), miss: "empty" }).calls;
+    const [r] = evaluate([{ search_corpus_nearby_citations: { artifact: "outputs/r.md" } }], {
+      transcript: "",
+      toolsCalled: new Set(),
+      subagentTools: new Set(),
+      egress: [],
+      result: "success",
+      workRoot: root,
+      userVisiblePrefixes: ["outputs"],
+      outputsDeletes: [],
+      questions: [],
+      hostPathLeaked: false,
+      selfHealRan: false,
+      subagents: [],
+      gateDeliveries: [],
+      toolResultTexts: [],
+      skillsInvoked: [],
+      skillToolAvailable: true,
+      slashInvokedSkills: [],
+      searchCorpus: {
+        poolId: "p",
+        sha256: "a".repeat(64),
+        label: "l",
+        miss: "empty",
+        interposition: "proxy-env+ca",
+        credentialSource: "env",
+        metrics: {} as never,
+        calls,
+      },
+    });
+    expect(r).toMatchObject({ pass: true, evidence: expect.stringMatching(/^0 cited URL\(s\) served only on nearby rounds/) });
+  });
 });

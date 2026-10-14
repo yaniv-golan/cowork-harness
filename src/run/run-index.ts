@@ -59,6 +59,11 @@ export interface RunIndexRow {
   /** `"none"` for a run whose session declared `answer_channel: none` (RunResult.answerChannel). Absent = the
    *  stdio channel, which is also what every row written before the field means. `stats` never pools the two. */
   answerChannel?: "none";
+  /** The frozen search corpus a run's searches were served from: the pool's full hash (the stats key) and its label
+   *  (for display). Absent = live search, which is also what every row written before the field means; a row written
+   *  by an older build is rebuilt from result.json by `stats --reindex`. `stats` never pools frozen with live, nor two
+   *  pools. */
+  searchCorpus?: { sha256: string; label: string };
   /** Set on the ONE row a multi-leg (`legs:`) scenario run gets: its scenario verdict, from scenario-result.json.
    *  The legs get no rows of their own, so a two-leg pass counts once. */
   multiLeg?: true;
@@ -170,6 +175,7 @@ export function indexRowFromResult(
     turn: result.turn,
     critiqueRole: critiqueRoleFor(runId, result.turn),
     ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
+    ...(result.searchCorpus ? { searchCorpus: { sha256: result.searchCorpus.sha256, label: result.searchCorpus.label } } : {}),
     signals: verdict.signals.map((s) => s.code),
     costUsd: budget.costUsd,
     tokens: budget.tokensTotal,
@@ -243,6 +249,18 @@ function isValidRunIndexRow(x: unknown): x is RunIndexRow {
   if (r.runLabel !== undefined && typeof r.runLabel !== "string") return false;
   // Consumed by the stats group key, like the two above.
   if (r.answerChannel !== undefined && r.answerChannel !== "none") return false;
+  // Consumed by the stats group key, like the two above.
+  if (r.searchCorpus !== undefined) {
+    const c = r.searchCorpus as { sha256?: unknown; label?: unknown } | null;
+    if (
+      typeof c !== "object" ||
+      c === null ||
+      typeof c.sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(c.sha256) ||
+      typeof c.label !== "string"
+    )
+      return false;
+  }
   // Interpolated into rowIdentity, like `turn` and `critiqueRole`.
   if (r.multiLeg !== undefined && r.multiLeg !== true) return false;
   if (typeof r.git !== "object" || r.git === null) return false;
@@ -732,6 +750,8 @@ export interface StatsSummary {
   scenario: string;
   /** `"none"` on the group of runs made with no answer channel — always its own group (see resolveGroups). */
   answerChannel?: "none";
+  /** The frozen search corpus the group's runs were served from — always its own group, per pool (see resolveGroups). */
+  searchCorpus?: { sha256: string; label: string };
   /** Set only when grouping by that field — the group's identity, NOT folded into `scenario` (which
    *  stays exactly what it always was, so a consumer matching on it keeps working). */
   skillHash?: string;
@@ -839,6 +859,7 @@ function skillHashMatches(rowHash: string | undefined, query: string): boolean {
 interface StatsGroup {
   scenario: string;
   answerChannel?: "none";
+  searchCorpus?: { sha256: string; label: string };
   skillHash?: string;
   runLabel?: string;
   fidelity?: string;
@@ -938,7 +959,11 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
   // A run with no answer channel models a different host (not Cowork), so it NEVER pools with a default-channel run
   // of the same scenario, under any grouping: the channel is part of every key.
   const keyOf = (r: RunIndexRow, identity: string | undefined) =>
-    (groupBy === "scenario" ? r.scenario : `${r.scenario}\0${identity}`) + (r.answerChannel === "none" ? "\0answer_channel:none" : "");
+    (groupBy === "scenario" ? r.scenario : `${r.scenario}\0${identity}`) +
+    (r.answerChannel === "none" ? "\0answer_channel:none" : "") +
+    // A frozen search corpus answers searches with recorded results: never pooled with live search, nor across
+    // pools. Keyed on the pool's full hash: the 8-hex label prefix is for display only.
+    (r.searchCorpus ? `\0search_corpus:${r.searchCorpus.sha256}` : "");
 
   // Rows lacking the grouping field are DROPPED, not bucketed under a blank key — counted so the caller
   // can say so out loud rather than silently under-reporting. Counted over RUN rows only, which is what
@@ -961,6 +986,7 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
         ...(groupBy === "label" ? { runLabel: identity } : {}),
         ...(groupBy === "fidelity" ? { fidelity: identity } : {}),
         ...(r.answerChannel === "none" ? { answerChannel: "none" as const } : {}),
+        ...(r.searchCorpus ? { searchCorpus: r.searchCorpus } : {}),
         rows: [],
         spend: [],
       };
@@ -1005,7 +1031,7 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
 export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsResult {
   const { groups, hashlessRuns } = resolveGroups(rows, filters);
   const summaries: StatsSummary[] = [];
-  for (const { scenario, answerChannel, skillHash, runLabel, fidelity, rows: group, spend } of groups.values()) {
+  for (const { scenario, answerChannel, searchCorpus, skillHash, runLabel, fidelity, rows: group, spend } of groups.values()) {
     // Roll-ups are IN here and nowhere else above — see `carriesSpend`. `undefined`, not 0, when nothing
     // in the group was priced: the house rule is that an unpriced row is skipped rather than counted as
     // zero, and a `$0.0000` total would read as "this was free" instead of "we could not tell".
@@ -1028,6 +1054,7 @@ export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsRes
       scenario,
       // A separate group per channel (see resolveGroups' key); named so the two lines are distinguishable.
       ...(answerChannel !== undefined ? { answerChannel } : {}),
+      ...(searchCorpus !== undefined ? { searchCorpus } : {}),
       // undefined-valued keys are dropped by JSON.stringify, so these appear only when grouped on.
       ...(skillHash !== undefined ? { skillHash } : {}),
       ...(runLabel !== undefined ? { runLabel } : {}),

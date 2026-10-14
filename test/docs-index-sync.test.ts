@@ -169,12 +169,12 @@ describe("verdict-signals docs ↔ code", () => {
   // 14 as of `device_delete_unconfirmed`: it fires only under an enforced device_bridge, where a file is gone from a
   // folder never granted on a filesystem that cannot tell that from a rename followed by an edit.
   // 15 as of `device_audit_unreadable`: the device shell replaced the shim's delete log.
-  // 17 as of `search_corpus_attribution_uncertain`: a sub-agent search result the post-run join could not settle.
-  it('the docs\' "only seventeen warn-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 18 as of `search_corpus_semantic_judge`: a judge graded a deliverable of a frozen-corpus run.
+  it('the docs\' "only eighteen warn-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     const warnCount = [...verdictSrc.matchAll(/severity:\s*"warn"/g)].length;
-    expect(warnCount).toBe(17);
-    expect(scenarioMdText).toMatch(/Only seventeen codes are \*\*warn\*\*-severity/);
+    expect(warnCount).toBe(18);
+    expect(scenarioMdText).toMatch(/Only eighteen codes are \*\*warn\*\*-severity/);
   });
   // 12 as of `device_delete_bypassed`: a delete in a connected folder past the device's refusal, under an enforced
   // device_bridge only.

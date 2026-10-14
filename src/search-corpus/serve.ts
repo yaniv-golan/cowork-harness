@@ -160,6 +160,7 @@ export function serveRequest(r: InterceptedRequest, ctx: ServeContext): ServeDec
       ...(c.allowedDomains ? { allowedDomains: c.allowedDomains } : {}),
       ...(c.blockedDomains ? { blockedDomains: c.blockedDomains } : {}),
       rounds,
+      ...(sel.exactUrls.length ? { exactUrls: sel.exactUrls } : {}),
       retryKey: c.retryKey,
     });
     answers.set(e, outcome);

@@ -11,6 +11,7 @@
 // session file (and the mounts it names), an absolute `baseline:` path, environment knobs read at run time,
 // and the tier-dependent pre-spawn refusals. A consumer's token-free lint lane often runs where the scenario
 // never will.
+import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { loadBaseline as realLoadBaseline } from "../baseline.js";
@@ -279,6 +280,17 @@ export function loaderFindings(files: string[], deps: LoaderDeps = {}): LintFind
           continue;
         }
         out.push(...fixtureFindings(file, scenario));
+        // The run refuses a search_corpus_* key without --search-corpus; lint cannot know the run's flags, so it notes it.
+        const scKeyRefusal = searchCorpusAssertRefusal(scenario.assert);
+        if (scKeyRefusal)
+          out.push({
+            severity: "INFO",
+            rule: "search-corpus-key-needs-flag",
+            message: scKeyRefusal,
+            fix: "Run it with `--search-corpus <pool>` (hostloop); without the flag `run` and `record` refuse it before any spend.",
+            file,
+            line: null,
+          });
         name = scenario.baseline;
       }
       // `latest` always resolves on a packaged install; an absolute path is a file on some machine, which the

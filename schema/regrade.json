@@ -194,6 +194,20 @@
         },
         "pass": { "type": "boolean" },
         "invalidGrades": { "type": "integer", "minimum": 0 },
+        "signals": {
+          "type": "array",
+          "description": "Warnings about what this grade can mean, in the verdict's signal shape: search_corpus_semantic_judge when the run was served from a frozen search corpus. Absent when there are none.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "severity", "message"],
+            "properties": {
+              "code": { "type": "string", "enum": ["search_corpus_semantic_judge"] },
+              "severity": { "type": "string", "enum": ["warn"] },
+              "message": { "type": "string" }
+            }
+          }
+        },
         "judgeCostUsd": { "type": "number" },
         "unpricedGrades": { "type": "integer", "minimum": 0 },
         "uncheckedCount": {

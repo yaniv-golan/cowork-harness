@@ -453,7 +453,7 @@ Every envelope, like the CLI's own output, is secret-scrubbed with the same set 
   distinct field); without it replay excludes the key with the same loud-warning treatment. On older,
   manifest-less cassettes they are skipped (loud) — absent from `assertions[]`, not present-and-passing.
 - **Egress / live-only assertions** (`file_absent`, `no_delete_in_outputs`, `no_delete_in_mounts`, `self_heal_ran`, `transcript_no_host_path`,
-  `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `semantic_pairwise`, `no_lost_write_back`, `egress_*`, `expect_denied`) are always skipped on replay — absent
+  `no_mcp_error`, `max_peak_rss_bytes`, `semantic_matches`, `semantic_pairwise`, `no_lost_write_back`, `search_corpus_max_miss_rate`, `search_corpus_nearby_citations`, `egress_*`, `expect_denied`) are always skipped on replay — absent
   from `assertions[]`. The count of skipped (full / partial) assertions is reported in
   `RunResult.skippedAssertions`, so a JSON consumer doesn't read a green replay as having evaluated
   everything.

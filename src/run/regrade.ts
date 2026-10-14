@@ -31,6 +31,7 @@ import { parseArgs } from "../cli-args.js";
 import { isolationRefusal } from "../decide/llm-transport.js";
 import { defaultJudgeModel, judgesForRun } from "../decide/semantic-judge.js";
 import { tildeify, warn, writeAllSync } from "../io.js";
+import { judgeRan, searchCorpusJudgeSignal, type VerdictSignal } from "./verdict.js";
 import { collectSecrets, scrub } from "../secrets.js";
 import { coverageWhy, scrubCoverage } from "../scrub-set.js";
 import { runsWriteRoot } from "./trace-view.js";
@@ -171,6 +172,9 @@ export interface RegradeRunReport extends JudgeSpend {
   /** Set when a part of the judge's input could not be proven scrubbed with a set covering the run's and was sent
    *  anyway: the flag that accepted it (`--allow-scrub-change`). Absent when every part was proven. */
   scrubAcceptedBy?: string;
+  /** Warnings about what this grade can mean, in the verdict's signal shape: `search_corpus_semantic_judge` when the
+   *  run was served from a frozen search corpus. Absent when there are none. */
+  signals?: VerdictSignal[];
 }
 
 export type RegradeOutcome =
@@ -1319,6 +1323,9 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     const spend = judgeSpend(rejudged);
     const invalidGrades = rejudged.filter((a) => a.judgeInvalid === true).length;
 
+    // Counts only the asserts a judge read in this re-grade, never a kept or refused one.
+    const judgeSignal = searchCorpusJudgeSignal(p.ctx.searchCorpus, rejudged.filter(judgeRan).length);
+    if (judgeSignal) warn(`::warning:: ${CMD}: ${p.dirAsGiven}: ${judgeSignal.message}\n`);
     const at = (opts.now ?? (() => new Date()))().toISOString();
     const stem = regradeFileStem(assertions, opts.judgeModel, at);
     const dir = join(turnWriteDir(p.runDir, p.turn), "regrade");
@@ -1344,6 +1351,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       original: { resultSha256: p.resultSha256, turn: p.turn },
       ...(metrics ? { metrics } : {}),
       ...(p.scrubAccepted ? { scrubAcceptedBy: opts.scrubAcceptedBy ?? "--allow-scrub-change" } : {}),
+      ...(judgeSignal ? { signals: [judgeSignal] } : {}),
     };
     // Scrubbed as a whole document, as result.json is: the rationales are scrubbed at grade time, but the
     // rubric and messages echo scenario text, and one pass over the serialized body leaves no field out.
@@ -1382,6 +1390,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       authoredCapture: p.budget,
       ...(metrics ? { metrics } : {}),
       ...(p.scrubAccepted ? { scrubAcceptedBy: opts.scrubAcceptedBy ?? "--allow-scrub-change" } : {}),
+      ...(judgeSignal ? { signals: [judgeSignal] } : {}),
     });
   }
   return { ok: true, exitCode: runs.every((r) => r.pass) ? 0 : 1, runs };

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { renderWebSearchResult } from "../src/search-corpus/render.js";
+import { SEARCH_POOL_USAGE } from "../src/search-corpus/cli.js";
 
 const CLI = resolve("dist/cli.js");
 const cli = (args: string[], env: NodeJS.ProcessEnv = {}) => {
@@ -73,5 +74,12 @@ describe.skipIf(!existsSync(CLI))("search-pool CLI end to end", () => {
     expect(ex.code).toBe(2);
     expect(existsSync(join(repo, "p.json"))).toBe(false);
     expect(cli(["search-pool", "export", pool, "--out", join(repo, "p.json"), "--allow-in-repo"]).code).toBe(0);
+  });
+});
+
+describe("search-pool help", () => {
+  it("says a run serves a pool, never that nothing does", () => {
+    expect(SEARCH_POOL_USAGE).toContain("`run --search-corpus <pool>`");
+    expect(SEARCH_POOL_USAGE).not.toMatch(/Nothing serves a pool/);
   });
 });

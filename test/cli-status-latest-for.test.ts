@@ -123,4 +123,16 @@ describe.skipIf(!can)("cowork-harness status --latest-for", () => {
     expect(r.code).toBe(0);
     expect(r.out).toContain("--latest-for");
   });
+
+  it("names the frozen search corpus the newest run was served from, in the text line and the JSON", () => {
+    const root = runsRoot();
+    const label = "frozen search corpus p@aaaaaaaa — recorded results";
+    const dir = seedRun(root, "sc", "r1", { resultJson: { scenario: "sc", searchCorpus: { label } } });
+    const r = run(["status", "--latest-for", "sc"], root);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toContain(`[${label}]`);
+    expect(r.out).toContain(dir);
+    const j = run(["status", "--latest-for", "sc", "--output-format", "json"], root);
+    expect(JSON.parse(j.stdout)).toMatchObject({ searchCorpusLabel: label });
+  });
 });

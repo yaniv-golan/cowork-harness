@@ -1,4 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
+import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
 import {
@@ -937,6 +938,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     });
     if (why) throw new UsageError(why);
   }
+  // A `search_corpus_*` key reads the frozen corpus's record: without one the run could only fail it, so it is refused
+  // before any spend.
+  const scKeyRefusal = opts.searchCorpus ? undefined : searchCorpusAssertRefusal(scenario.assert);
+  if (scKeyRefusal) throw new UsageError(scKeyRefusal);
   // `--search-corpus`: the binary the spawn will launch, resolved once here so it is checked before the run dir exists
   // and the spawn runs exactly what was checked. Its search anchors must be the baseline's, or every search would be
   // refused.
@@ -2165,6 +2170,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       availableTools: record.context?.tools,
       contextEvents: record.contextEvents,
       hookFailureBlocks,
+      // The frozen search corpus's record, read after its finish(): undefined on a run without one.
+      searchCorpus: searchCorpus?.result(),
       // Always defined live — an empty array is a real "no MCP errors" signal, distinct from replay's
       // undefined (mcp round-trips are harness-computed, not in the cassette's frozen stdout stream).
       mcpErrors: record.mcpErrors,
@@ -3167,6 +3174,8 @@ export type ScenarioInputCheckOptions = {
   unloadableBaseline?: "throw" | "skip" | "report";
   /** The session the run will actually use, when the caller substitutes one (see launchSourcesPreflight). */
   session?: ReturnType<typeof loadSession>;
+  /** The run will be given `--search-corpus`: a `search_corpus_*` key is then not refused. */
+  searchCorpus?: boolean;
 };
 
 /** The parts of {@link scenarioInputRefusal}, from ONE resolution, for a caller that treats them
@@ -3204,6 +3213,9 @@ export function scenarioInputFindings(
     else if (e instanceof UsageError) inputs = e;
     else throw e;
   }
+  // The run refuses a search_corpus_* key without --search-corpus before any spend; a pre-flight says the same.
+  const scKeyRefusal = opts.searchCorpus ? undefined : searchCorpusAssertRefusal(scenario.assert);
+  if (scKeyRefusal && !inputs) inputs = new UsageError(scKeyRefusal);
   return {
     ...(session ? { session } : {}),
     ...(vacuous ? { vacuity: new UsageError(vacuous) } : {}),

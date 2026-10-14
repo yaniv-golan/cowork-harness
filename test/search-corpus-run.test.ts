@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { evaluate } from "../src/assert.js";
 import { frozenPromiseError, searchCorpusLabel, searchCorpusRefusal, startRunSearchCorpus } from "../src/search-corpus/run.js";
 import { SearchRegistry, type RegistryInput } from "../src/search-corpus/registry.js";
 import { assemblePool, writePool, DEFAULT_RETRIEVAL } from "../src/search-corpus/pool.js";
@@ -435,6 +436,65 @@ describe("startRunSearchCorpus", () => {
     writeFileSync(join(sub, "agent-ag1.jsonl"), "x", { mode: 0o000 });
     // root reads anything, so the unreadable case is only checkable as a normal user
     if (process.getuid?.() !== 0) expect(await sc.finish(outDir)).toMatch(/sub-agent ag1's transcript could not be read/);
+  });
+
+  it("the run's own record grades both keys", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "cwh-run-"));
+    const sc = await startRunSearchCorpus({ option: { pool: pool(), miss: "empty" }, baseline: withAnchors(), outDir, agentEnv: {} });
+    const r = (id: string, match: "exact" | "nearby", urls: string[]) => ({
+      match,
+      nscore: 1,
+      sourceQuery: "q",
+      recordId: id,
+      sourceSkill: null,
+      urls,
+    });
+    sc.registry.record({
+      ...entry(null, "served", "q"),
+      rounds: [r("e", "exact", ["https://exact.example/a"]), r("n", "nearby", ["https://near.example/b"])],
+    });
+    sc.registry.record({ ...entry(null, "miss", "gone"), rounds: [] });
+    const served = renderWebSearchResult({
+      query: "q",
+      entries: [{ kind: "links", links: [{ title: "t", url: "https://exact.example/a" }] }],
+      reminder: "REMINDER: x",
+    });
+    const empty = renderWebSearchResult({ query: "gone", entries: [{ kind: "links", links: [] }], reminder: "REMINDER: x" });
+    const events = [use("m1", "q"), res("m1", served), use("m2", "gone"), res("m2", empty)];
+    for (const l of events) sc.frames.observe(JSON.parse(l));
+    writeFileSync(join(outDir, "events.jsonl"), events.join("\n"));
+    expect(await sc.finish(outDir)).toBeNull();
+    mkdirSync(join(outDir, "outputs"), { recursive: true });
+    writeFileSync(join(outDir, "outputs", "r.md"), "See https://exact.example/a and https://near.example/b.");
+    const ctx = {
+      transcript: "",
+      toolsCalled: new Set<string>(),
+      subagentTools: new Set<string>(),
+      egress: [],
+      result: "success" as const,
+      workRoot: outDir,
+      userVisiblePrefixes: ["outputs"],
+      outputsDeletes: [],
+      questions: [],
+      hostPathLeaked: false,
+      selfHealRan: false,
+      subagents: [],
+      gateDeliveries: [],
+      toolResultTexts: [],
+      skillsInvoked: [],
+      skillToolAvailable: true,
+      slashInvokedSkills: [],
+      searchCorpus: sc.result(),
+    };
+    const [rate, cites] = evaluate(
+      [{ search_corpus_max_miss_rate: 0.5 }, { search_corpus_nearby_citations: { artifact: "outputs/r.md" } }],
+      ctx,
+    );
+    expect(rate).toMatchObject({ pass: true, evidence: expect.stringMatching(/miss rate 0\.5 \(1 of 2\)/) });
+    expect(cites).toMatchObject({
+      pass: false,
+      message: expect.stringMatching(/1 cited URL\(s\) were served only on nearby rounds.*near\.example\/b/),
+    });
   });
 
   it("meanTopScore is absent, never NaN, when nothing was served", async () => {
