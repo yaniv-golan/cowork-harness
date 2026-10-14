@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { pythonGate } from "./helpers/python-gate.js";
 
 // The companion skill must pass its own size lint. After a context compaction the agent re-attaches
 // only the first ~19,900 characters of an invoked skill, so a SKILL.md body past the cap loses its tail —
@@ -32,8 +33,26 @@ describe("the companion skill fits the agent's size caps", () => {
     expect(readFileSync(resolve(SKILL_DIR, "SKILL.md"), "utf8")).toMatch(/^---\n[\s\S]*?\n---\n/);
   });
 
-  it.skipIf(!havePython)("`lint-skill --strict` exits 0 on the companion skill", () => {
+  const gate = pythonGate(havePython, process.env.CI);
+  it.skipIf(gate === "skip")("`lint-skill --strict` exits 0 on the companion skill", () => {
+    // Under CI a missing python3 fails here rather than skipping: the critique evidence ceiling is enforced by this test.
+    expect(gate, `${py} is not available under CI, so the skill's size lint cannot run`).toBe("run");
     const r = spawnSync(py, [SCRIPT, "lint-skill", "--strict", SKILL_DIR], { encoding: "utf8" });
     expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+  });
+});
+
+describe("pythonGate: a check that needs python3 never passes by skipping under CI", () => {
+  it.each([
+    [true, undefined, "run"],
+    [true, "true", "run"],
+    [false, undefined, "skip"],
+    [false, "", "skip"],
+    [false, "false", "skip"],
+    [false, "0", "skip"],
+    [false, "true", "fail"],
+    [false, "1", "fail"],
+  ] as const)("python3 %s, CI=%s → %s", (have, ci, want) => {
+    expect(pythonGate(have, ci)).toBe(want);
   });
 });
