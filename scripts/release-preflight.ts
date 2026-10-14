@@ -241,7 +241,7 @@ export function checkSearchAnchorsPresent(newest: { name: string; json: unknown 
       ? `${newest.name} carries no agentBinary.searchAnchors — stage the agent (open Cowork once), then re-run \`cowork-harness sync\``
       : !parsed?.success
         ? `${newest.name}'s agentBinary.searchAnchors fails its schema — re-sync it`
-        : `${newest.name}'s agentBinary.searchAnchors predates the no-request templates (noRequest) — re-run \`cowork-harness sync\` with a current cowork-harness`;
+        : `${newest.name}'s agentBinary.searchAnchors predates the no-request templates (noRequest) — open Cowork once so the agent is staged, then re-run \`cowork-harness sync\` with a current cowork-harness (a re-sync with nothing staged carries the old block)`;
   if (allowMissing)
     return {
       name,

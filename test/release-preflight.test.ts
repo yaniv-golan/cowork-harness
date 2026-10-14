@@ -304,6 +304,11 @@ describe("checkSearchAnchorsPresent (check 7c)", () => {
     expect(checkSearchAnchorsPresent(nb(withoutNoRequest), false).detail).toMatch(/noRequest[\s\S]*re-run `cowork-harness sync`/);
   });
 
+  it("the remedy for a block without noRequest says to stage the agent first (a re-sync with nothing staged carries the old block)", () => {
+    const { noRequest: _n, ...withoutNoRequest } = good;
+    expect(checkSearchAnchorsPresent(nb(withoutNoRequest), false).detail).toMatch(/open Cowork once.*then re-run `cowork-harness sync`/);
+  });
+
   it("the shipped newest baseline's block is schema-valid (whether it already carries noRequest is a release-time check)", () => {
     const dir = join(dirname(fileURLToPath(import.meta.url)), "..", "baselines");
     const newest = readdirSync(dir)

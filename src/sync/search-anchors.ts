@@ -289,6 +289,12 @@ export function searchAnchorsForSync(a: {
     anchors: a.base,
     notes: [
       `searchAnchors carried from the base for agent version ${a.elfVersion} (the VM agent's .sdk-version); no agent binary is staged, so hostloop cannot run on this baseline until one is`,
+      // A carried block cannot gain fields: re-syncing with nothing staged would carry it again, forever.
+      ...(a.base.noRequest
+        ? []
+        : [
+            "the carried anchors predate the no-request templates (noRequest): open Cowork once so the agent is staged, then re-run sync to record them",
+          ]),
     ],
     refuse: null,
   };

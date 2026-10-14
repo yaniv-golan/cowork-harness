@@ -293,6 +293,15 @@ describe("searchAnchorsForSync — the decision table (refuse = sync's own refus
     expect(r.refuse).toBeNull();
     expect(r.notes.join("\n")).toMatch(/carried from the base for agent version 2\.1\.300/);
   });
+  it("carrying a base block that predates noRequest says to stage the agent, or a re-sync with nothing staged loops", () => {
+    const { noRequest: _n, ...older } = anchors;
+    const r = call({ elf: null, native: null, nativeVersion: null, base: older });
+    expect(r.anchors).toEqual(older);
+    expect(r.notes.join("\n")).toMatch(/predate the no-request templates.*open Cowork once/);
+    const current = call({ elf: null, native: null, nativeVersion: null, base: anchors });
+    expect(current.notes.join("\n")).not.toMatch(/predate/);
+  });
+
   it("no ELF + an unreadable native: refuse whatever the base holds (hostloop can run it, so its anchors must be confirmed)", () => {
     for (const o of [
       { base: { ...anchors, source: "both" as const } },
