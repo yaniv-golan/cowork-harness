@@ -126,6 +126,10 @@ describe("ServeFrames: one frame per intercepted request, written by the session
     expect(parse(frames.observe(result("a", served("q"))))[0]).toMatchObject({ verdict: "served", ordinal: 2 });
     expect(parse(frames.observe(result("b", errored("q"))))[0]).toMatchObject({ verdict: "refused", ordinal: 1 });
     // an empty result never takes a refusal; an error result takes a miss only under --search-corpus-miss error
+    const ref = setup("empty");
+    ref.registry.record(entry("q", { verdict: "refused", rounds: [] }));
+    ref.frames.observe(use("x", "q"));
+    expect(parse(ref.frames.observe(result("x", empty("q"))))[0]).toMatchObject({ unpaired: true });
     const e = setup("empty");
     e.registry.record(entry("q", { verdict: "miss", rounds: [] }));
     e.frames.observe(use("x", "q"));
