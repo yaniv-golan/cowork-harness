@@ -3,6 +3,7 @@ import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { InfraErrorSource, RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
+import { judgedOpts } from "../assert.js";
 import { endsOnRequestForInput } from "./input-request.js";
 import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified, outputsCheckArmed } from "./outputs-delete-tier.js";
 
@@ -255,9 +256,6 @@ function isDeliveryEvidenceUsable(result: RunResult): boolean {
   return true;
 }
 
-/** The assertion keys a model judges. */
-const JUDGED_KEYS = ["semantic_matches", "semantic_pairwise"] as const;
-
 /** A judge graded a deliverable of a run served from a frozen search corpus: the searches it was built on were
  *  recorded answers, some to neighbouring queries, so the grade says nothing about research quality. Never blocks.
  *  The one source of this signal, for a run's verdict and for `regrade`. */
@@ -266,7 +264,7 @@ export function searchCorpusJudgeSignal(sc: RunResult["searchCorpus"], judged: n
   return {
     code: "search_corpus_semantic_judge",
     severity: "warn",
-    message: `${judged} judged assertion(s) graded a run served from a ${sc.label.split(" — ")[0]}: its searches were recorded answers, some to neighbouring queries, so the grade is not evidence of research quality.`,
+    message: `${judged} judged assertion(s) (semantic_matches / semantic_pairwise) on a run served from [${sc.label}]: its searches were recorded answers, some to neighbouring queries, so a grade is not evidence of research quality.`,
   };
 }
 
@@ -385,8 +383,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
 
   const judge = searchCorpusJudgeSignal(
     result.searchCorpus,
-    result.assertions.filter((a) => JUDGED_KEYS.some((k) => (a.assertion as Record<string, unknown> | undefined)?.[k] !== undefined))
-      .length,
+    result.assertions.filter((a) => a.assertion !== undefined && judgedOpts(a.assertion) !== undefined).length,
   );
   if (judge) signals.push(judge);
 

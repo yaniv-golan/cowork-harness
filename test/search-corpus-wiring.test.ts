@@ -83,4 +83,10 @@ describe("--search-corpus wiring (source text)", () => {
       execute.indexOf("measureCommandMetrics(scenario.metrics"),
     );
   });
+
+  it("the run's assertions read the corpus record after its finish", () => {
+    const at = execute.indexOf("searchCorpus: searchCorpus?.result(),");
+    expect(at).toBeGreaterThan(execute.indexOf("const assertCtx: AssertContext = {"));
+    expect(at).toBeGreaterThan(execute.indexOf("searchCorpusError = await searchCorpus.finish(outDir, plan.configDir)"));
+  });
 });

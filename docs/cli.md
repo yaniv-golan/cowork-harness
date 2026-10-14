@@ -515,7 +515,10 @@ never for research quality.
   refused counts. A run that refused any search warns (`search_corpus_refused`; louder when it refused every one,
   which usually means an agent newer than the baseline's search anchors). A run whose judged assertions
   (`semantic_matches`, `semantic_pairwise`) graded a deliverable also warns (`search_corpus_semantic_judge`): the grade
-  is not evidence of research quality; `regrade` of such a run says the same. `searchCorpus.metrics` counts the requests
+  is not evidence of research quality; `regrade` of such a run says the same. The label is printed wherever a
+  verdict is read: the run line, `verify-run`'s text output, `status --latest-for` (text, and `searchCorpusLabel` in its
+  JSON), the `--repeat` rollup's `search:` line and the head of `trace --view subagent-research`; `stats` groups each
+  pool on its own (see [stats](./stats.md)). `searchCorpus.metrics` counts the requests
   served, missed and refused; served searches are not billed and do not appear in the agent's own cost or search
   count.
 - **Per call.** `searchCorpus.calls[]` holds one entry per search request: the agent that made it (absent for the main

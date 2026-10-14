@@ -87,6 +87,9 @@ describe("search_corpus_max_miss_rate", () => {
     const r = one({ search_corpus_max_miss_rate: 0 }, { searchCorpus: sc({ toolUses: 3, noRequest: 3 }) });
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/3 WebSearch call\(s\), none reached the corpus \(3 made no request\)/);
+    const some = one({ search_corpus_max_miss_rate: 1 }, { searchCorpus: sc({ served: 1, toolUses: 5, noRequest: 4 }) });
+    expect(some.pass).toBe(true);
+    expect(some.evidence).toMatch(/of 5 WebSearch call\(s\), 4 made no request/);
     const zero = one({ search_corpus_max_miss_rate: 0 }, { searchCorpus: sc() });
     expect(zero.pass).toBe(true);
     expect(zero.evidence).toMatch(/0 searches/);
@@ -126,7 +129,10 @@ describe("search_corpus_nearby_citations", () => {
     const r = run("See https://near.example/b and [x](https://near.example/b#frag) and https://exact.example/a.");
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/1 cited URL\(s\) were served only on nearby rounds \(max 0\): https:\/\/near\.example\/b/);
-    expect(run("See https://near.example/b.", 1).pass).toBe(true);
+    const one = run("See https://near.example/b and https://unserved.example/z.", 1);
+    expect(one.pass).toBe(true);
+    // the evidence says how many cited URLs matched a served one: an unmatched citation is not judged
+    expect(one.evidence).toMatch(/1 of 2 cited URL\(s\) matched a served URL/);
   });
   it("a URL served on both an exact and a nearby round does not count", () => {
     expect(run("Source: https://both.example/c").pass).toBe(true);

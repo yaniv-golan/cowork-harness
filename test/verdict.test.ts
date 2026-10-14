@@ -535,7 +535,9 @@ describe("computeVerdict's failures[] (the unified RunResult.verdict projection 
     expect(v.pass).toBe(true);
     const s = v.signals.find((x) => x.code === "search_corpus_semantic_judge");
     expect(s?.severity).toBe("warn");
-    expect(s?.message).toMatch(/1 judged assertion\(s\).*frozen search corpus p@aaaaaaaa.*not evidence of research quality/);
+    expect(s?.message).toMatch(
+      /1 judged assertion\(s\) \(semantic_matches \/ semantic_pairwise\) on a run served from \[frozen search corpus p@aaaaaaaa\].*not evidence of research quality/,
+    );
     // a pairwise judge counts too; no judge, or no corpus, warns nothing
     const pairwise = [{ assertion: { semantic_pairwise: { refs: ["r"] } }, pass: true }] as RunResult["assertions"];
     expect(

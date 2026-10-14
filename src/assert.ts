@@ -5118,11 +5118,17 @@ function searchCorpusMissRate(bound: number, ctx: AssertContext): KeyResult {
   if (judged > 0) {
     const rate = m.miss / judged;
     return rate <= bound
-      ? { pass: true, evidence: `miss rate ${+rate.toFixed(4)} (${m.miss} of ${judged}) <= ${bound}` }
+      ? {
+          pass: true,
+          evidence: `miss rate ${+rate.toFixed(4)} (${m.miss} of ${judged}) <= ${bound}; of ${m.toolUses} WebSearch call(s), ${m.noRequest ?? 0} made no request`,
+        }
       : { pass: false, message: `${key}: miss rate ${+rate.toFixed(4)} (${m.miss} of ${judged}) > ${bound}` };
   }
   if (m.toolUses > 0)
-    return { pass: false, message: `${key}: ${m.toolUses} WebSearch call(s), none reached the corpus (${m.noRequest} made no request)` };
+    return {
+      pass: false,
+      message: `${key}: ${m.toolUses} WebSearch call(s), none reached the corpus (${m.noRequest ?? 0} made no request)`,
+    };
   return { pass: true, evidence: "0 searches" };
 }
 
@@ -5172,8 +5178,12 @@ function searchCorpusNearbyCitations(o: { path: string; max?: number }, ctx: Ass
       message: `${key}: ${o.path} cites none of the ${served.size} served URL(s), so nearby citations cannot be judged`,
     };
   const only = [...cited].filter((u) => nearby.has(u) && !exact.has(u)).sort();
+  // A citation that matches no served URL is not judged (a variant the URL identity does not fold counts low), so the
+  // evidence says how many were.
+  const matched = [...cited].filter((u) => served.has(u)).length;
+  const coverage = `${matched} of ${cited.size} cited URL(s) matched a served URL`;
   return only.length <= max
-    ? { pass: true, evidence: `${only.length} cited URL(s) served only on nearby rounds (max ${max})` }
+    ? { pass: true, evidence: `${only.length} cited URL(s) served only on nearby rounds (max ${max}); ${coverage}` }
     : {
         pass: false,
         message: `${key}: ${only.length} cited URL(s) were served only on nearby rounds (max ${max}): ${only.slice(0, 5).join(", ")}${only.length > 5 ? ", …" : ""}`,

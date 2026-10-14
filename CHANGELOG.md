@@ -32,6 +32,11 @@ All notable changes to this project are documented here. The format is based on
   proxy; and a non-API `ANTHROPIC_BASE_URL`. The run dir gains `search-corpus.jsonl`, and `events.jsonl` one
   `search_corpus_serve` line per answered request.
 
+- **The frozen-corpus label on every surface a verdict is read from:** `verify-run`'s text output, `status
+  --latest-for` (its text line and `searchCorpusLabel` in its JSON), the `--repeat` rollup (a `search:` line and
+  `provenance.searchCorpus`) and `trace --view subagent-research`. `stats` keeps a frozen-corpus run in its own group,
+  per pool: the index row and the summary carry `searchCorpus: {sha256, label}`, keyed on the pool's full hash, so
+  frozen never pools with live search nor two pools with each other.
 - **A new warn signal, `search_corpus_semantic_judge`**, fires when a judge (`semantic_matches` or
   `semantic_pairwise`) graded a deliverable of a `--search-corpus` run: its searches were recorded answers, so the
   grade is not evidence of research quality. `regrade` of such a run warns too and carries it in `runs[].signals`. It

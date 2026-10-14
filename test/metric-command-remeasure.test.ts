@@ -153,7 +153,7 @@ describe("serve frames from a frozen search corpus and the recorded events sha",
       ].join("\n") + "\n",
     );
     const recorded = await recordLive(decl());
-    expect(recorded[0]!.value).toBe(5); // the frames are in the slice the script read, verbatim
+    expect((recorded[0] as { value?: number }).value).toBe(5); // the frames are in the slice the script read, verbatim
     const r = await remeasure(decl(), recorded, true);
     expect(r.unavailable).toBeUndefined();
     expect(r.value).toBe(5);

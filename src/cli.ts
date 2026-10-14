@@ -4474,6 +4474,7 @@ async function cmdStatusLatestFor(scenarioArg: string, json: boolean): Promise<n
         outDir: found.outDir,
         createdAt: found.createdAt,
         ...(found.verdict !== undefined ? { verdict: found.verdict } : {}),
+        ...(found.searchCorpusLabel !== undefined ? { searchCorpusLabel: found.searchCorpusLabel } : {}),
       }),
     );
   } else {
