@@ -294,7 +294,10 @@ export function renderFooter(
   const cost = costUsd !== undefined ? ` · $${costUsd.toFixed(4)}` : "";
   // A run with no answer channel is not a Cowork run: say so on the line every reader sees, pass or fail.
   const channel =
-    (r.answerChannel === "none" ? ` [${ANSWER_CHANNEL_NONE_LABEL}]` : "") + (r.searchCorpus ? ` [${r.searchCorpus.label}]` : "");
+    (r.answerChannel === "none" ? ` [${ANSWER_CHANNEL_NONE_LABEL}]` : "") +
+    (r.searchCorpus
+      ? ` [${r.searchCorpus.label} · served ${r.searchCorpus.metrics.served}, missed ${r.searchCorpus.metrics.miss}, refused ${r.searchCorpus.metrics.refused}]`
+      : "");
   const meta = `[${r.fidelity}]${channel} · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}${cost}`;
   // Iterate-across-fixes discoverability hook: fires on exploratory (skill-lane, `scaffoldTip`) runs that
   // are non-deterministic — the exact signature of a `--decider-llm --intent` loop run — in BOTH the pass

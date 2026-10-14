@@ -182,8 +182,16 @@ describe("renderFooter — the banner is on every verdict", () => {
       ]) {
         const s = sink();
         renderFooter(run as RunResult, plan(), { write: s.write, lane });
-        expect(s.text()).toContain(`[${sc.label}]`);
+        expect(s.text()).toContain(`[${sc.label} · served 1, missed 0, refused 0]`);
       }
+    // the counts ride on the label line, so an all-refused run never reads as a clean frozen pass
+    const counted = sink();
+    renderFooter(
+      { ...measured, searchCorpus: { ...sc, metrics: { ...sc.metrics, served: 0, refused: 2, requests: 2 } } } as RunResult,
+      plan(),
+      { write: counted.write },
+    );
+    expect(counted.text()).toContain("served 0, missed 0, refused 2");
     const plain = sink();
     renderFooter(measured, plan(), { write: plain.write });
     expect(plain.text()).not.toContain("frozen search corpus");

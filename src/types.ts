@@ -2797,7 +2797,8 @@ export interface RunResult {
         | "undelivered_deliverables"
         | "delivery_unobservable"
         | "partly_scripted_gate"
-        | "parked_at_question";
+        | "parked_at_question"
+        | "search_corpus_refused";
       severity: "fail" | "warn";
       message: string;
     }>;

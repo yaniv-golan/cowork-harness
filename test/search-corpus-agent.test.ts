@@ -316,6 +316,10 @@ async function runAgent(o: {
       return [];
     }
   });
+  // Every intercepted request gets exactly one frame: streamed after its result, or at close.
+  const allFrames = frameLines.length + (await frames.finish()).length;
+  const fc = registry.counts();
+  expect(allFrames, "frames == served + miss + refused").toBe(fc.served + fc.miss + fc.refused);
   return { code, stderr, lines, seen: up.seen, gzipped: up.gzipped, registry, ctx, dir, config, frameLines, anchors, frames };
 }
 
@@ -517,7 +521,8 @@ describe.runIf(run)("the real agent through the interceptor (local, $0, COWORK_S
       env: { CLAUDE_CODE_GZIP_REQUEST_BODIES: "1" },
       turns: [(m) => searchTurn(m, { query: long }, "toolu_stub1")],
     });
-    expect(rr.registry.counts().requests, `stderr ${rr.stderr.slice(-300)}`).toBe(1);
+    // served, not merely intercepted: a refusal would also count as a request
+    expect(rr.registry.counts(), `stderr ${rr.stderr.slice(-300)}`).toMatchObject({ requests: 1, served: 1 });
     // record what the agent actually sent: under the proxy env it may still not compress (then this run covers identity only)
     expect(encodings).toHaveLength(1);
     // Measured on 2.1.295: the forced compression reaches the main loop through the proxy (the stub inflates it) and the

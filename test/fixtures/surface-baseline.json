@@ -6496,7 +6496,8 @@
           "outputs_delete_unconfirmed",
           "outputs_diff_unavailable",
           "partly_scripted_gate",
-          "parked_at_question"
+          "parked_at_question",
+          "search_corpus_refused"
         ],
         "required": true
       },

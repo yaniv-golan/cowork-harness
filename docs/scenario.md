@@ -776,10 +776,10 @@ errors at load. See [docs/cassette.md](./cassette.md) for the O7 guard.
 #### Verdict signals
 
 Beyond pass/fail assertions, a run can surface **verdict signals** in `result.verdict.signals`. There
-are twenty-seven codes. Twelve are **fail**-severity — they flip the run's pass/exit code even though
+are twenty-eight codes. Twelve are **fail**-severity — they flip the run's pass/exit code even though
 `result.result` itself stays `"success"`, so `assert result: success` alone won't catch them; check
 `result.verdict.signals[].severity` or the run's exit code instead.
-Only fifteen codes are **warn**-severity (informational, never flip pass/fail):
+Only sixteen codes are **warn**-severity (informational, never flip pass/fail):
 
 - `outputs_delete_unconfirmed` (**warn**, live lane) — a delete-shaped command near `mnt/outputs` that
   nothing confirms: no output present at turn start was deleted, and no flagged delete has an outputs path as
@@ -864,6 +864,11 @@ Only fifteen codes are **warn**-severity (informational, never flip pass/fail):
   stopping at the question is the contract the run models, so it takes the place of the `stalled` fail and never
   changes the verdict. A finished answer ending on an offer warns too, and a request without a `?` does not; completion is judged from the file assertions such a scenario must
   carry (see [headless-no-answer.md](./headless-no-answer.md)).
+- `search_corpus_refused` (**warn**, `--search-corpus`) — the frozen search corpus refused some of the agent's search
+  requests instead of serving them (the agent read "Web search error: unavailable"); when it refused every one, the
+  skill ran with no search evidence at all. The usual cause is an agent newer than the baseline's search anchors:
+  re-run `cowork-harness sync` with that agent staged. It never changes the verdict; the run line shows the served,
+  missed and refused counts.
 - `delivery_unobservable` (**warn**, `lane: remote`) — the run produced file(s) whose delivery could not
   be assessed at all, because the harness serves no delivery tool on that lane (see
   [fidelity-gaps.md](./fidelity-gaps.md), "File delivery"). This is the honest "cannot verify" companion

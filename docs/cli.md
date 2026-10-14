@@ -511,7 +511,9 @@ neighbouring query, so a frozen run is evidence for the steps around research (g
 never for research quality.
 
 - **Labelled.** The run line and `RunResult.searchCorpus.label` say `frozen search corpus <pool>@<hash8> — recorded
-  results, harness ranking, searches not billed; not live search; …`. `searchCorpus.metrics` counts the requests
+  results, harness ranking, searches not billed; not live search; …`, and the run line adds the served, missed and
+  refused counts. A run that refused any search warns (`search_corpus_refused`; louder when it refused every one,
+  which usually means an agent newer than the baseline's search anchors). `searchCorpus.metrics` counts the requests
   served, missed and refused; served searches are not billed and do not appear in the agent's own cost or search
   count.
 - **Misses.** A query whose best match falls below the pool's floor gets "No links found." (`--search-corpus-miss

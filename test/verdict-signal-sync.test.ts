@@ -125,6 +125,7 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
     "l0_host_config_contamination", // L0/protocol-tier specific; covered by the fidelity sections
     "infra_error", // a dead supervisor — nothing an author can do but re-run
     "stalled", // covered at length by the gate/answer-scripting sections
+    "search_corpus_refused", // --search-corpus only; covered in docs/cli.md and the scenario signal list
   ]);
 
   it("every signal run-record-replay.md names is a real code (catches a stale or renamed one lingering)", () => {
@@ -171,6 +172,7 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
     "thirteen",
     "fourteen",
     "fifteen",
+    "sixteen",
   ];
 
   it("the schema reference's prose fail/warn counts match the table it introduces", () => {
@@ -193,6 +195,7 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
       25: "twenty-five",
       26: "twenty-six",
       27: "twenty-seven",
+      28: "twenty-eight",
     };
     const total = WORDS_TOTAL[CODES.length];
     expect(total, `no word for ${CODES.length} — extend WORDS_TOTAL`).toBeDefined();
@@ -228,6 +231,7 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
       "thirteen",
       "fourteen",
       "fifteen",
+      "sixteen",
     ];
     expect(scenarioMd).toContain(`Only ${WORDS[warnCodes.length]} codes are **warn**-severity`);
   });
