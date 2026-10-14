@@ -2173,6 +2173,9 @@ describe("hillclimb run --search-corpus", () => {
     });
     // the flow dir gained nothing
     expect(readdirSync(join(cwd, "flow")).filter((e) => e.includes("search"))).toEqual([]);
+    // the pass's start lines name the corpus and its provenance
+    expect(err).toContainEqual(expect.stringMatching(/^\[baseline\] \[frozen search corpus fixture@[0-9a-f]{8}/));
+    expect(err).toContain("[baseline] pool provenance: disjoint");
   });
 
   it("a rep refused before it ran is a search_pool_mismatch error row carrying the pool, and the pass fails", async () => {

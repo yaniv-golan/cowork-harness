@@ -157,6 +157,28 @@ describe("eval --search-corpus: the pin and the copy", () => {
     expect(out.report.summary.searchPoolMismatch).toEqual({ reps: 0, byArm: { before: 0, after: 0 } });
   });
 
+  it("the eval's own start lines name the corpus and its provenance", async () => {
+    const { scen, a, b } = setup();
+    const log: string[] = [];
+    // without --quiet, which silences every start line (the report still carries both)
+    const loud = parseEvalArgs([
+      scen,
+      "--arm",
+      `before=${a}`,
+      "--arm",
+      `after=${b}`,
+      "--out",
+      join(root, "eval"),
+      "--concurrency",
+      "1",
+      "--search-corpus",
+      disjointPool(),
+    ]);
+    await runEval(loud, deps(fakeRunner(), log));
+    expect(log).toContainEqual(expect.stringMatching(/^\[eval\] \[frozen search corpus fixture@[0-9a-f]{8} — recorded results/));
+    expect(log).toContain("[eval] pool provenance: disjoint");
+  });
+
   it("a manifest without the pin under schemaVersion 1 is refused as inconsistent", async () => {
     const { scen, a, b } = setup();
     const out = await runEval(args(scen, a, b, ["--search-corpus", disjointPool()]), deps(fakeRunner()));
