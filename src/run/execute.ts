@@ -1,5 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
-import { searchCorpusAssertKey } from "../search-corpus/assert-keys.js";
+import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
 import {
@@ -940,8 +940,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   }
   // A `search_corpus_*` key reads the frozen corpus's record: without one the run could only fail it, so it is refused
   // before any spend.
-  const scKey = opts.searchCorpus ? undefined : searchCorpusAssertKey(scenario.assert);
-  if (scKey) throw new UsageError(`\`${scKey}\` needs --search-corpus <pool>: it reads the frozen search corpus's record of the run`);
+  const scKeyRefusal = opts.searchCorpus ? undefined : searchCorpusAssertRefusal(scenario.assert);
+  if (scKeyRefusal) throw new UsageError(scKeyRefusal);
   // `--search-corpus`: the binary the spawn will launch, resolved once here so it is checked before the run dir exists
   // and the spawn runs exactly what was checked. Its search anchors must be the baseline's, or every search would be
   // refused.
@@ -3174,6 +3174,8 @@ export type ScenarioInputCheckOptions = {
   unloadableBaseline?: "throw" | "skip" | "report";
   /** The session the run will actually use, when the caller substitutes one (see launchSourcesPreflight). */
   session?: ReturnType<typeof loadSession>;
+  /** The run will be given `--search-corpus`: a `search_corpus_*` key is then not refused. */
+  searchCorpus?: boolean;
 };
 
 /** The parts of {@link scenarioInputRefusal}, from ONE resolution, for a caller that treats them
@@ -3211,6 +3213,9 @@ export function scenarioInputFindings(
     else if (e instanceof UsageError) inputs = e;
     else throw e;
   }
+  // The run refuses a search_corpus_* key without --search-corpus before any spend; a pre-flight says the same.
+  const scKeyRefusal = opts.searchCorpus ? undefined : searchCorpusAssertRefusal(scenario.assert);
+  if (scKeyRefusal && !inputs) inputs = new UsageError(scKeyRefusal);
   return {
     ...(session ? { session } : {}),
     ...(vacuous ? { vacuity: new UsageError(vacuous) } : {}),

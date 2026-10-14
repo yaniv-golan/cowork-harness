@@ -121,7 +121,7 @@ describe("search_corpus_nearby_citations", () => {
   ];
   const run = (body: string | Buffer, max?: number) =>
     one(
-      { search_corpus_nearby_citations: { path: "outputs/report.md", ...(max !== undefined ? { max } : {}) } },
+      { search_corpus_nearby_citations: { artifact: "outputs/report.md", ...(max !== undefined ? { max } : {}) } },
       { workRoot: work(body), searchCorpus: sc({ served: 3, toolUses: 3 }, calls) },
     );
 
@@ -144,7 +144,7 @@ describe("search_corpus_nearby_citations", () => {
     expect(bare.pass).toBe(false);
     expect(bare.message).toMatch(/1 cited URL\(s\).*https:\/\/near2\.example\/d/);
     const www = one(
-      { search_corpus_nearby_citations: { path: "outputs/report.md" } },
+      { search_corpus_nearby_citations: { artifact: "outputs/report.md" } },
       {
         workRoot: work("Sources: https://exact.example/a and www.near3.example/e"),
         searchCorpus: sc({ served: 1, toolUses: 1 }, [
@@ -166,7 +166,7 @@ describe("search_corpus_nearby_citations", () => {
   });
   it("with no nearby round served there is nothing to cite from one: passes", () => {
     const r = one(
-      { search_corpus_nearby_citations: { path: "outputs/report.md" } },
+      { search_corpus_nearby_citations: { artifact: "outputs/report.md" } },
       {
         workRoot: work("no links"),
         searchCorpus: sc({ served: 1, toolUses: 1 }, [
@@ -183,16 +183,26 @@ describe("search_corpus_nearby_citations", () => {
     expect(run(Buffer.from([0x68, 0x00, 0x69])).message).toMatch(/not text \(it holds a NUL byte/);
     expect(run(Buffer.from([0xff, 0xfe, 0x41])).message).toMatch(/not text \(not valid UTF-8/);
     const missing = one(
-      { search_corpus_nearby_citations: { path: "outputs/nope.md" } },
+      { search_corpus_nearby_citations: { artifact: "outputs/nope.md" } },
       { workRoot: work("x"), searchCorpus: sc({ served: 3, toolUses: 3 }, calls) },
     );
     expect(missing.message).toMatch(/file not found: outputs\/nope\.md/);
     expect(
-      one({ search_corpus_nearby_citations: { path: "../escape.md" } }, { workRoot: work("x"), searchCorpus: sc({}, calls) }).message,
+      one({ search_corpus_nearby_citations: { artifact: "../escape.md" } }, { workRoot: work("x"), searchCorpus: sc({}, calls) }).message,
     ).toMatch(/must stay under the work root/);
   });
+  it("reads the artifact under artifact_text's rules: a read-only connected-folder input has no body to judge", () => {
+    const r = one(
+      { search_corpus_nearby_citations: { artifact: "outputs/report.md" } },
+      { workRoot: work("https://near.example/b"), readonlyFolderRoots: ["outputs"], searchCorpus: sc({ served: 3, toolUses: 3 }, calls) },
+    );
+    expect(r.pass).toBe(false);
+    expect(r.message).toMatch(
+      /evidence unavailable: search_corpus_nearby_citations target "outputs\/report\.md" .*read-only connected-folder input/,
+    );
+  });
   it("cannot verify without a frozen corpus", () => {
-    expect(one({ search_corpus_nearby_citations: { path: "outputs/report.md" } }, { workRoot: work("x") }).message).toMatch(
+    expect(one({ search_corpus_nearby_citations: { artifact: "outputs/report.md" } }, { workRoot: work("x") }).message).toMatch(
       /no frozen search corpus/,
     );
   });

@@ -122,7 +122,7 @@ describe.runIf(can)("--search-corpus refusals (CLI, $0)", () => {
         "  - id: two",
         "    prompt: second",
         "    assert:",
-        "      - search_corpus_nearby_citations: {path: outputs/r.md}",
+        "      - search_corpus_nearby_citations: {artifact: outputs/r.md}",
       ].join("\n") + "\n",
     );
     const r = await cli(f, ["run", p, "--model", "claude-sonnet-5"]);
@@ -139,6 +139,12 @@ describe.runIf(can)("--search-corpus refusals (CLI, $0)", () => {
     const r = await cli(f, ["record", s, "--model", "claude-sonnet-5"]);
     expect(r.code).not.toBe(0);
     expect(r.text).toMatch(/`search_corpus_max_miss_rate` needs --search-corpus <pool>/);
+    // the dry run, which promises the pre-spend refusals, refuses it the same way
+    const dry = await cli(f, ["record", s, "--model", "claude-sonnet-5", "--dry-run"]);
+    expect(dry.code).toBe(r.code);
+    expect(dry.text).toMatch(
+      /`search_corpus_max_miss_rate` needs --search-corpus <pool>: it reads the frozen search corpus's record of the run/,
+    );
   });
 
   it("refuses record, naming the cassette version", async () => {

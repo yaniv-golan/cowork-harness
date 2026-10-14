@@ -166,3 +166,18 @@ describe("the pre-pass never throws", () => {
     expect(fs[0].message).toMatch(/readdir exploded/);
   });
 });
+
+describe("lint on a search_corpus_* key", () => {
+  it("notes (INFO) that a single scenario carrying one needs --search-corpus: lint cannot know the run's flags", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lint-sc-"));
+    const p = file(dir, "s.yaml", [...HEAD, "assert:", "  - search_corpus_max_miss_rate: 0.5"]);
+    const f = loaderFindings([p]).filter((x) => x.rule === "search-corpus-key-needs-flag");
+    expect(f).toEqual([
+      expect.objectContaining({
+        severity: "INFO",
+        message: expect.stringMatching(/`search_corpus_max_miss_rate` needs --search-corpus <pool>/),
+      }),
+    ]);
+    expect(loaderFindings([file(dir, "plain.yaml", HEAD)]).some((x) => x.rule === "search-corpus-key-needs-flag")).toBe(false);
+  });
+});

@@ -9,3 +9,10 @@ export function searchCorpusAssertKey(assert: readonly object[] | undefined): st
   for (const a of assert ?? []) for (const k of SEARCH_CORPUS_ASSERT_KEYS) if ((a as Record<string, unknown>)[k] !== undefined) return k;
   return undefined;
 }
+
+/** The refusal a run without `--search-corpus` gives a scenario carrying one of these keys, or undefined. The same text
+ *  at load and in every pre-flight that answers before a run (a dry run, a batch pre-flight). */
+export function searchCorpusAssertRefusal(assert: readonly object[] | undefined): string | undefined {
+  const key = searchCorpusAssertKey(assert);
+  return key === undefined ? undefined : `\`${key}\` needs --search-corpus <pool>: it reads the frozen search corpus's record of the run`;
+}

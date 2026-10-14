@@ -70,7 +70,7 @@ describe("re-grading a search_corpus_* key", () => {
       ...base,
       metrics: { requests: 1, served: 1, miss: 0, refused: 0, retriesFolded: 0, unfinished: 0, passedThroughWithSearchTool: 0 },
     };
-    const r = assertContextFromRunDir(keptRun(old), scenario([{ search_corpus_nearby_citations: { path: "outputs/r.md" } }]));
+    const r = assertContextFromRunDir(keptRun(old), scenario([{ search_corpus_nearby_citations: { artifact: "outputs/r.md" } }]));
     expect(r).toMatchObject({ ok: false, kind: "runtime" });
     expect((r as { message: string }).message).toMatch(/recorded by an older harness.*re-run it/);
   });

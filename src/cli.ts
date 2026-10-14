@@ -2203,6 +2203,7 @@ async function cmdRun(rawArgs: string[]) {
         quiet: true,
         ablateSkill: flags.ablateSkill,
         unloadableBaseline: "skip",
+        searchCorpus: flags.searchCorpus !== undefined,
       });
       if (refusal) badInputs.push({ file: files[i], message: refusal.message, hint: refusal.hint });
     }

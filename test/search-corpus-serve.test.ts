@@ -289,7 +289,7 @@ describe("serveRequest: the interceptor's decision for one api.anthropic.com req
     mkdirSync(join(root, "outputs"));
     writeFileSync(join(root, "outputs", "r.md"), "Source: https://shared.example/x");
     const calls = joinCalls({ entries: c.registry.all(), pairings: [], dispatchAgents: new Map(), miss: "empty" }).calls;
-    const [r] = evaluate([{ search_corpus_nearby_citations: { path: "outputs/r.md" } }], {
+    const [r] = evaluate([{ search_corpus_nearby_citations: { artifact: "outputs/r.md" } }], {
       transcript: "",
       toolsCalled: new Set(),
       subagentTools: new Set(),

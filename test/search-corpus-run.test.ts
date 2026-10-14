@@ -487,7 +487,7 @@ describe("startRunSearchCorpus", () => {
       searchCorpus: sc.result(),
     };
     const [rate, cites] = evaluate(
-      [{ search_corpus_max_miss_rate: 0.5 }, { search_corpus_nearby_citations: { path: "outputs/r.md" } }],
+      [{ search_corpus_max_miss_rate: 0.5 }, { search_corpus_nearby_citations: { artifact: "outputs/r.md" } }],
       ctx,
     );
     expect(rate).toMatchObject({ pass: true, evidence: expect.stringMatching(/miss rate 0\.5 \(1 of 2\)/) });

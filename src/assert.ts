@@ -5144,27 +5144,38 @@ function notText(buf: Buffer): string | undefined {
 
 /** `search_corpus_nearby_citations`: the deliverable's cited URLs that were served only on nearby rounds. Both sides
  *  are keyed by the URL identity that keys served links. */
-function searchCorpusNearbyCitations(o: { path: string; max?: number }, ctx: AssertContext): KeyResult {
+function searchCorpusNearbyCitations(o: { artifact: string; max?: number }, ctx: AssertContext): KeyResult {
   const key = "search_corpus_nearby_citations";
   const max = o.max ?? 0;
   const sc = ctx.searchCorpus;
   if (!sc) return { pass: false, message: `${key}: ${NO_CORPUS}` };
-  const file = containedPath(ctx.workRoot, o.path);
-  if (!file) return { pass: false, message: `${key}: unsafe path "${o.path}" — must stay under the work root (no absolute paths or "..")` };
-  const real = containedRealPath(ctx.workRoot, file);
-  if (!real) return { pass: false, message: `${key}: unsafe path "${o.path}" — symlink target escapes the work root` };
-  if (!existsSync(real)) return { pass: false, message: `${key}: file not found: ${o.path} (under ${ctx.workRoot})` };
-  if (isSpecialFile(real)) return { pass: false, message: `${key}: ${o.path} is not a regular file` };
+  // The artifact is read under artifact_text's rules: the same gate, the same cap.
+  const gate = artifactBodyGate(ctx, o.artifact);
+  if (gate.kind === "unsafe")
+    return { pass: false, message: `unsafe ${key} path "${o.artifact}" — must stay under the work root (no absolute paths or "..")` };
+  if (gate.kind === "link")
+    return {
+      pass: false,
+      message: `evidence unavailable: "${o.artifact}" was a symlink/hardlink at record time — its content is not available`,
+    };
+  if (gate.kind === "escape") return { pass: false, message: `unsafe ${key} path "${o.artifact}" — symlink target escapes the work root` };
+  if (gate.kind === "not_found") return { pass: false, message: `${key}: file not found: ${o.artifact} (under ${ctx.workRoot})` };
+  if (gate.kind === "not_regular") return { pass: false, message: `${key}: ${o.artifact} is not a regular file` };
+  if (gate.kind === "body_less")
+    return {
+      pass: false,
+      message: `evidence unavailable: ${key} target "${o.artifact}" has no captured body (${gate.liveReadonly || gate.replayReason === "readonly" ? "a read-only connected-folder input — its content is never captured" : "an input, or an artifact larger than the body cap"}) — assert on a deliverable the skill writes`,
+    };
   let buf: Buffer;
   try {
-    const size = statSync(real).size;
-    if (size > 10 * 1024 * 1024) return { pass: false, message: `${key}: file too large to scan (${size} bytes, limit 10 MiB)` };
-    buf = readFileSync(real);
+    const body = readBodyCapped(gate.realFile);
+    if ("tooLarge" in body) return { pass: false, message: `${key}: file too large to scan (${body.tooLarge} bytes, limit 10 MiB)` };
+    buf = body.buf;
   } catch (e) {
-    return { pass: false, message: `${key}: ${o.path} could not be read: ${(e as Error).message}` };
+    return { pass: false, message: `${key}: ${o.artifact} could not be read: ${(e as Error).message}` };
   }
   const why = notText(buf);
-  if (why) return { pass: false, message: `${key}: ${o.path} is not text (${why}), so its citations cannot be read` };
+  if (why) return { pass: false, message: `${key}: ${o.artifact} is not text (${why}), so its citations cannot be read` };
   const exact = new Set<string>();
   const nearby = new Set<string>();
   for (const c of sc.calls) {
@@ -5178,7 +5189,7 @@ function searchCorpusNearbyCitations(o: { path: string; max?: number }, ctx: Ass
   if (![...cited].some((u) => served.has(u)))
     return {
       pass: false,
-      message: `${key}: ${o.path} cites none of the ${served.size} served URL(s), so nearby citations cannot be judged`,
+      message: `${key}: ${o.artifact} cites none of the ${served.size} served URL(s), so nearby citations cannot be judged`,
     };
   const only = [...cited].filter((u) => nearby.has(u) && !exact.has(u)).sort();
   // A citation that matches no served URL is not judged (a variant the URL identity does not fold counts low), so the

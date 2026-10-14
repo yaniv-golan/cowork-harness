@@ -976,7 +976,12 @@ export const Assertion = z.strictObject({
     ),
   search_corpus_nearby_citations: z
     .strictObject({
-      path: z.string().min(1).describe("the deliverable to read, relative to the work root (e.g. outputs/report.md)"),
+      artifact: z
+        .string()
+        .min(1)
+        .describe(
+          "relative path to the deliverable under the work root (e.g. outputs/report.md) — a literal path, not a glob, as in artifact_text",
+        ),
       max: z
         .number()
         .int()
@@ -986,7 +991,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "a `--search-corpus` run: the deliverable at `path` cites at most `max` distinct URLs that were served only on `nearby` rounds (a recorded search for a different query); a URL also served on an exact round does not count. Fails by name when the run served a nearby round and the deliverable cites none of the served URLs (it cannot be judged), and when the deliverable is not text. Needs `--search-corpus`: refused at load without it. Live-only",
+      "a `--search-corpus` run: the deliverable at `artifact` cites at most `max` distinct URLs that were served only on `nearby` rounds (a recorded search for a different query); a URL also served on an exact round does not count. Fails by name when the run served a nearby round and the deliverable cites none of the served URLs (it cannot be judged), and when the deliverable is not text. Needs `--search-corpus`: refused at load without it. Live-only",
     ),
   max_peak_rss_bytes: z
     .number()

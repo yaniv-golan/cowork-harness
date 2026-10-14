@@ -25,7 +25,8 @@ export const SEARCH_POOL_USAGE =
   "       search-pool export <pool> --out <file> [--allow-in-repo]\n" +
   "       search-pool import <file> <pool> [--allow-in-repo]\n" +
   "       Builds a pool of the WebSearch results recorded in kept runs: one record per search (its query, links and the\n" +
-  "       search's prose summary) with the source run's skill and versions. Nothing serves a pool yet.\n" +
+  "       search's prose summary) with the source run's skill and versions. `run --search-corpus <pool>`\n" +
+  "       (and `skill`) serves a run's web searches from one.\n" +
   "       <pool> is a name under ~/.cowork-harness/search-pools/, or a path. Dirs are 0700, files 0600; a path inside a\n" +
   "       git work tree is refused unless --allow-in-repo (a pool holds web text and summaries that can quote an upload).\n" +
   "       build and import refuse a pool dir that already exists and is not empty.\n" +
