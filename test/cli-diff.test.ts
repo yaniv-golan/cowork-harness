@@ -68,7 +68,7 @@ describe.skipIf(!can)("cli: diff (baseline mode, E7)", () => {
 });
 
 describe.skipIf(!can)("cli: diff (cassette/run mode, E2)", () => {
-  it("a cassette self-diff is identical (the checkpoint, at the CLI layer)", () => {
+  it("a cassette self-diff is identical (at the CLI layer)", () => {
     const r = run(["diff", CASSETTE, CASSETTE]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("identical");

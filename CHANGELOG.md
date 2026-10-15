@@ -17,8 +17,8 @@ All notable changes to this project are documented here. The format is based on
   refuses, saying so; update Claude Desktop, or pass `--allow-missing-search-anchors`.
 - **`search-pool build` records `counts.crossRunDuplicates` in a pool's manifest**, so a pool rebuilt from the same
   runs has a new `contentSha256` (the hash it is served under is unchanged). `eval` and `hillclimb` need the count to
-  bound how a pool splits between the compared arms: a pool built or exported by an earlier version that would read
-  balanced is refused until it is rebuilt (`search-pool build`, no spend) or re-exported from a pool built by this
+  bound how a pool splits between the compared arms: a pool built or exported by an earlier version, with records
+  from both compared arms for a scenario, is refused until it is rebuilt (`search-pool build`, no spend) or re-exported from a pool built by this
   version, or run anyway with `--allow-confounded-pool`.
 
 ### Added
@@ -30,16 +30,17 @@ All notable changes to this project are documented here. The format is based on
   is for the steps around research, never research quality, and it cannot evaluate a change to what or when a skill
   searches (evaluate that live). Served searches are not billed. `--search-corpus-miss empty|error` sets what a query
   the pool cannot answer gets (default `empty`: "No links found."), and `--search-corpus-min-score <n>` (strictly
-  between 0 and 1) overrides the pool's relevance floor and changes the pool's hash; either one without
-  `--search-corpus` is a usage error (exit 2).
-  - **How it is interposed.** The agent runs at hostloop with `HTTPS_PROXY` pointed at a loopback interceptor, and
-    `NODE_EXTRA_CA_CERTS` at a CA minted for the run (an operator's own `NODE_EXTRA_CA_CERTS` is kept and appended;
+  between 0 and 1) overrides the pool's relevance floor and changes the pool's hash. Either one without `--search-corpus` is a usage
+  error (exit 2), as are `eval`'s and `hillclimb run`'s `--allow-confounded-pool` and `--allow-mixed-pool`.
+  - **How it is interposed.** The agent runs at hostloop with five keys added to its env: `HTTPS_PROXY` and
+    `https_proxy` pointed at a loopback interceptor, `NO_PROXY` and `no_proxy` set to loopback (so a local server is
+    never tunnelled), and `NODE_EXTRA_CA_CERTS` at a CA minted for the run (an operator's own `NODE_EXTRA_CA_CERTS` is kept and appended;
     one that cannot be read refuses the run). The interceptor terminates TLS only for the API host and tunnels every
     other host untouched. The credential must come from the environment (`CLAUDE_CODE_OAUTH_TOKEN` or
     `ANTHROPIC_API_KEY`, a `.env` or `--dotenv`), never the operator's own login, since the interceptor reads it in
     cleartext; it is never written anywhere.
-  - **Refused before the run dir exists, each by name:** every fidelity but hostloop (`cowork`, which resolves to it,
-    is accepted); `chat`, `record`, `critique` and `probe-dispatch`; `--resume` and `--session-id`; a multi-leg or
+  - **Refused before the run dir exists, each by name:** every fidelity but hostloop (`cowork` is accepted
+    where the baseline resolves it to hostloop, as every shipped baseline does); `chat`, `record`, `critique` and `probe-dispatch`; `--resume` and `--session-id`; a multi-leg or
     `device_bridge` scenario; the remote search route (`CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`, or a remote-session
     `CLAUDE_CODE_SESSION_ID`); an existing agent proxy; an `ANTHROPIC_BASE_URL` other than the API; a credential not
     in the environment; a baseline without the web-search anchors or their no-search templates; an agent whose
@@ -81,8 +82,9 @@ All notable changes to this project are documented here. The format is based on
   - **`stats` keeps frozen runs apart, per pool.** The index row carries `searchCorpus: {sha256, label, refused}`
     (`refused` always written, `0` included; `stats` names a frozen row without it as `searchRefusedUnrecorded`) and
     the summary `{sha256, label}`, keyed on the pool's full hash, so frozen never pools with live search nor two pools
-    with each other. A run whose corpus refused a search is left out of the `stats` and `--repeat` pass rate and
-    counted (`searchRefusedRuns`, `provenance.searchRefusedRuns`).
+    with each other. A run whose corpus refused a search is left out of the `stats` run count and pass rate (its
+    medians and spend still count it) and counted as `searchRefusedRuns`; the `--repeat` rollup reads `N/M scored
+    passed (…%), K excluded (refused search)` and carries `provenance.searchRefusedRuns`.
 - **Two assertion keys for a `--search-corpus` run.** `search_corpus_max_miss_rate: <0..1>` bounds misses over
   served plus missed requests; it fails by name when any search was refused, or when WebSearch calls were made but
   none reached the corpus, and a run that never searched passes. `search_corpus_nearby_citations: {artifact, max?}`
@@ -91,18 +93,20 @@ All notable changes to this project are documented here. The format is based on
   A self-titled markdown link or an emphasised URL is read as the URL, and a URL any served exact record carries
   counts as exact, even where a higher-ranked nearby round served it first. Both are refused before the run starts
   without `--search-corpus` (in any leg of a multi-leg scenario too, before the first leg), and
-  `search_corpus_nearby_citations` on a `lane: remote` scenario. `verify-run` and `regrade` refuse them on a run that
-  had no frozen corpus, or one recorded before it kept its tool-use counts; `record --dry-run` refuses them as the
-  run would, and `lint` notes them (INFO: lint cannot know the run's flags). Live-only.
+  `search_corpus_nearby_citations` on a `lane: remote` scenario. `run` and `skill` refuse with exit 2, and `record` and `record --dry-run`
+  with exit 1 (record's rule for a scenario that loaded). `verify-run` and `regrade` refuse them on a run that had no
+  frozen corpus, or one recorded before it kept its tool-use counts, and `lint` notes them (INFO: lint cannot know the run's flags). Live-only.
 - **`eval` and `hillclimb run` with a frozen search corpus.** To evaluate a change that also touches search, split
   it: a live eval of the search change, and a frozen eval of the steps after search, with a pool built evenly from
   both versions' live runs.
-  - **One private, pinned copy.** The pool is copied before the first run (into the eval dir; under the snapshot
-    root for hillclimb, never into the flow dir; a copy that cannot be made exits 3), its hash and miss mode are
+  - **One private, pinned copy.** The pool is copied before the first run (into the eval dir for `eval`, where a copy
+    that cannot be made exits 3; for `hillclimb run`, under the snapshot root at
+    `<flow hash>/search-pools/<pool hash>/`, never into the flow dir, where it exits 2; a hillclimb copy is verified
+    before reuse, shared by every pass of the flow, and never pruned), its hash and miss mode are
     pinned in the manifest (`pins.searchCorpus`, with `searchCorpusProvenance`), and every rep is served from the
     copy and checks it before it starts. A rep whose copy does not match or cannot be read is refused before it
-    spends; one that ran but was served from another pool or miss mode, or recorded no corpus (it searched live),
-    is caught after. Either lands in the bucket `search_pool_mismatch` (a hillclimb `errors.jsonl` class of the same
+    spends; one whose agent ran but was served from another pool or miss mode, or recorded no corpus (it
+    searched live), is caught after (one that stopped before its agent ran keeps its own bucket). Either lands in the bucket `search_pool_mismatch` (a hillclimb `errors.jsonl` class of the same
     name) and makes `eval` and `eval report` exit 1; the report names each rep with its cause, and
     `summary.searchPoolMismatch` carries the count and the list. An eval that pins a corpus writes manifest
     `schemaVersion: 1`, which an earlier version refuses to read.
@@ -128,7 +132,18 @@ All notable changes to this project are documented here. The format is based on
     frozen: N served, M miss, R refused`. `hillclimb check` reports rows from more than one pool, or frozen beside
     live (an error, or a warning when every frozen row was written under `--allow-mixed-search`), and pool
     mismatches (an error), and warns on a confounded pool, a judge on recorded searches and an asymmetric variant.
-  - `eval --dry-run` and `hillclimb --dry-run` pricing leave frozen-corpus runs out of the history they price from.
+  - **Dry runs.** `eval --dry-run` copies and verifies the pool into its temp dir, so it refuses where the real eval
+    would; `hillclimb run --dry-run` reads and verifies the pool but does not copy it. Both price from a history that
+    leaves frozen-corpus runs out.
+- **The companion skill covers the frozen search corpus.** Its task recipes gain "Serve a run's searches from a
+  pool" (what it is not for, the refusals, the miss modes, the frozen-promise failure, the two keys, and where `eval`
+  and `hillclimb` take it); its `eval` and `hillclimb` references gain the flags, the buckets and the exit codes; the
+  assertion catalog gains the two `search_corpus_*` rows and the lint rule `search-corpus-key-needs-flag`, and its
+  signal table grows from 27 to 30 codes; `debugging` names `RunResult.searchCorpus`; and the skill's
+  linter knows both keys (`assertion-keys.json`), treats them as live-only, and flags `search_corpus_nearby_citations`
+  on a remote-lane scenario with its remedy. The catalog's seven longest rows (`no_scratchpad_leak`, `gates_all_scripted`,
+  `hook_event_blocked`, `hook_decision`, `semantic_pairwise`, `artifact_json`, `tool_called`) are one line each, with
+  their full rules in docs/scenario.md by link.
 - **`sync --allow-missing-search-anchors`** (and the same flag on `npm run preflight`): see the Upgrade note.
 - **`agentBinary.searchAnchors` gains two optional fields:** `source` (`both`, `native` or `elf`: which staged agent
   the anchors came from) and `noRequest` (hashes of the agent-side WebSearch results that show no search was made).
