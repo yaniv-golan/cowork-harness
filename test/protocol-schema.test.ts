@@ -3,8 +3,7 @@
 // envelope, and the `answers` wire-shape). Deliberately NOT the Claude Agent SDK's own event stream
 // (assistant/result/tool_use) — that surface is Anthropic's and is out of scope (docs/protocol.md).
 //
-// Two conformance halves (plan §4/E9, item 2), both real-output-first (§9 lesson 1/2 — no hand-rolled
-// lookalike JSON):
+// Two conformance halves, both real-output-first (no hand-rolled lookalike JSON):
 //   (a) every controlOut line and every control_request event line in the COMMITTED cassettes
 //       (examples/replays/*.cassette.json) — the exact recordings the replay gate already trusts.
 //   (b) the ACTUAL output of the real envelope-builder functions in src/agent/session.ts

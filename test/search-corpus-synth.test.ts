@@ -21,7 +21,7 @@ function sse(body: string): Ev[] {
     });
 }
 
-/** The client's stream rules (design §4.2, re-read from the consumer): message_start first; every block event carries
+/** The client's stream rules (as the consumer reads them): message_start first; every block event carries
  *  an index; a block starts once, receives deltas only while open, and stops once; message_delta carries usage. */
 function assemble(evs: Ev[]): any[] {
   expect(evs[0]!.event).toBe("message_start");
@@ -75,7 +75,7 @@ function toToolResultText(query: string, content: any[]): string {
 
 const served: SynthOutcome = { kind: "served", rounds };
 
-describe("synthResponse (design §4.2)", () => {
+describe("synthResponse", () => {
   it("SSE: a valid stream whose tool_result renders the served records exactly", () => {
     const r = synthResponse({ model: "claude-sonnet-5", stream: true, outcome: served, seed });
     expect(r.status).toBe(200);

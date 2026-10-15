@@ -4,7 +4,7 @@ import type { MountedSkill } from "../src/run/skill-metadata.js";
 
 // Token-free, filesystem-free coverage for the `skills` sdk-MCP server (A2): tool-set gating across all
 // three suggestSkillsEnabled/proactiveSkillSuggestEnabled states, alwaysLoad, output envelope shape, and
-// the note-branch/cap fidelity bits called out in the confirmation spec §5/§6.
+// the note-branch and cap fidelity bits Desktop's handler has.
 
 const SKILL_A: MountedSkill = { name: "my-pdf-skill", description: "Extracts tables from PDFs", isUserCreated: true };
 const SKILL_B: MountedSkill = { name: "founder-skills:deck-review", description: "Reviews pitch decks", isUserCreated: false };

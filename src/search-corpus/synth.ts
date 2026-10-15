@@ -1,5 +1,5 @@
 /**
- * The local answer to an intercepted nested search, in the shape a live multi-search response has (design §4.2): per
+ * The local answer to an intercepted nested search, in the shape a live multi-search response has: per
  * served round a `server_tool_use` (with its query as an input delta), a `web_search_tool_result` with the round's
  * links, and a text block with the record's prose. A miss is one search with no results; `miss=error` and a refusal
  * are the API's error object. SSE when the request streamed, JSON otherwise, with the same content.

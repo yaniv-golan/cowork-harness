@@ -28,8 +28,8 @@ describe("golden — E7 changelog rendering (full output)", () => {
   });
 });
 
-// The E2 text renderer (renderDiffText) is private to cli.ts, so its golden runs through the real CLI —
-// which is also the stronger test (§9 lesson 2: real command output over synthetic fixtures). The
+// The diff text renderer (renderDiffText) is private to cli.ts, so its golden runs through the real CLI —
+// which is also the stronger test (real command output over synthetic fixtures). The
 // mutation is deterministic (rename one tool in a copy of the committed cassette), so stdout is stable.
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);

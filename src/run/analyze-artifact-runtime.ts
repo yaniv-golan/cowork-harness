@@ -5,9 +5,9 @@
  * Tier A (`analyze-artifact.ts`, static AST) is the always-on default; this module CONFIRMS a
  * Tier A suspicion (or independently flags dynamic construction / guard-falseness Tier A can't see) by
  * actually driving a materialized `.html` artifact under a headless DOM. It is a fast-follow confirmer,
- * never the primary signal, and (per §B4) does not gate on its own.
+ * never the primary signal, and does not gate on its own.
  *
- * THREAT MODEL (§B1(b) — READ BEFORE CALLING): this module executes the artifact's own `<script>`
+ * THREAT MODEL (READ BEFORE CALLING): this module executes the artifact's own `<script>`
  * content with `runScripts: "dangerously"` in the SAME Node process as the caller, with NO process/VM
  * isolation. That is acceptable ONLY under a TRUSTED-SOURCE scope — an author confirming their own
  * skill's own generated artifact. It is NOT a security boundary and MUST NOT be pointed at an
@@ -205,7 +205,7 @@ interface RunLog {
 const PAGE_URL = "https://artifacts.cowork.invalid/v1/view/artifact/index.html";
 
 // Kept short — these are minimal single-purpose fixture pages (no real debounce timers to wait out), and
-// the whole point of §B4 is that this stays a fast confirmer, not a slow one. `LOAD_SETTLE_MS` is the
+// the point is that this stays a fast confirmer, not a slow one. `LOAD_SETTLE_MS` is the
 // longest: constructing the JSDOM can execute page script asynchronously relative to the constructor call
 // returning (see the module header's hardening note), so this is also the window in which a delayed
 // uncaughtException gets captured before the interaction loop starts.

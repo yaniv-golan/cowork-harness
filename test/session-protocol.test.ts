@@ -72,7 +72,7 @@ describe("parseMessage — infra_error origin survives the replay boundary", () 
   });
 });
 
-describe("parseMessage — init event skills capture (§6.2, O1 fix)", () => {
+describe("parseMessage — init event skills capture", () => {
   it("a system/init message carrying a skills array maps onto the init AgentEvent's skills field verbatim (bare + <plugin>:<skill> ids)", () => {
     const ev = parseMessage({ type: "system", subtype: "init", tools: ["Skill"], mcp_servers: [], skills: ["a", "b:c"], cwd: "/tmp" });
     expect(ev).toEqual([{ type: "init", tools: ["Skill"], mcpServers: [], skills: ["a", "b:c"], cwd: "/tmp" }]);

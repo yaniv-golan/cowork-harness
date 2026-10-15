@@ -4,11 +4,10 @@ import type { MountedPlugin } from "../session.js";
 /**
  * The `plugins` sdk-MCP server, driver-side — models the Desktop-side plugin-discovery surface a real
  * cowork-lane session declares alongside `skills`/`workspace`/`cowork`: `list_plugins`, `search_plugins`,
- * `suggest_plugin_install`. Binary-verified (2026-07-24 confirmation pass, app.asar 1.24012.1 — see the
- * A2 confirmation doc's §4/§6): the tool inventory and all three inputSchemas, plus `list_plugins`'s
+ * `suggest_plugin_install`. Binary-verified (2026-07-24 confirmation pass, app.asar 1.24012.1): the tool inventory and all three inputSchemas, plus `list_plugins`'s
  * output envelope (`{contextLabel, plugins:[{pluginName, pluginId, description, skills}]}`), are pinned
  * to the extracted asar. `search_plugins`/`suggest_plugin_install`'s output envelopes were NOT captured
- * in the extraction (§8: "only if that server is brought into scope" — these two are advisory/adjacent
+ * in the extraction (these two are advisory, adjacent
  * to the pinned `list_plugins` shape) — the response shapes below are a harness-authored deterministic
  * stub modeled to mirror the `skills` server's own widget-render-acknowledgment pattern for internal
  * consistency, not a captured constant. Same caveat as `skills-handler.ts` for the tool DESCRIPTION
@@ -18,7 +17,7 @@ import type { MountedPlugin } from "../session.js";
  *
  * `list_plugins` is populated from the session's actually-mounted plugins (`mountedPluginsFromPlan`),
  * deterministic and run-derived. `search_plugins`/`suggest_plugin_install` never search or install
- * anything — the real add/install happens out of band (spec §6/§7); an empty-catalog `search_plugins`
+ * anything — the real add/install happens out of band, outside the session; an empty-catalog `search_plugins`
  * result is the faithful stub, matching `suggest_skills`'s same posture.
  */
 

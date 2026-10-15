@@ -15,111 +15,157 @@ All notable changes to this project are documented here. The format is based on
   below (the same flag downgrades it to a warning).
   An agent from 2.1.260 through 2.1.289 has an older budget message, so `sync` against a Desktop that stages one
   refuses, saying so; update Claude Desktop, or pass `--allow-missing-search-anchors`.
+- **`search-pool build` records `counts.crossRunDuplicates` in a pool's manifest**, so a pool rebuilt from the same
+  runs has a new `contentSha256` (the hash it is served under is unchanged). `eval` and `hillclimb` need the count to
+  bound how a pool splits between the compared arms: a pool built or exported by an earlier version, with records
+  from both compared arms for a scenario, is refused until it is rebuilt (`search-pool build`, no spend) or re-exported from a pool built by this
+  version, or run anyway with `--allow-confounded-pool`.
 
 ### Added
 
-- **`run --search-corpus <pool>` serves a hostloop run's web searches from a recorded pool** (also on `skill`). The
-  agent's WebSearch tool makes its own model request carrying the server search tool; the harness answers that request
-  locally with the best-matching recorded searches, their links and their prose, and forwards every other API request
-  unchanged. It is not live search, so it is for the steps around research, never research quality. Every result is
-  labelled `frozen search corpus <pool>@<hash8>` (`RunResult.searchCorpus`, with the counts served, missed and
-  refused; served searches are not billed). `--search-corpus-miss empty|error` sets what an unanswerable query gets,
-  and `--search-corpus-min-score` overrides the pool's floor. The run fails (`infraErrors` source `search-corpus`)
-  unless each agent's own count of its searches, sub-agents included, equals what the harness answered. Refused, by
-  name: fidelity `protocol`, `container` and `microvm`; `chat`, `record`, `critique` and `probe-dispatch`; `--resume`
-  and `--session-id`; a multi-leg or `device_bridge` scenario; the remote search route; an agent whose web-search anchors differ from the baseline's
-  (checked on the exact binary about to launch, before it starts); a baseline without the web-search anchors; a credential not in the environment; an agent
-  proxy; and a non-API `ANTHROPIC_BASE_URL`. The run dir gains `search-corpus.jsonl`, and `events.jsonl` one
-  `search_corpus_serve` line per answered request.
-
-- **The frozen-corpus label on every surface a verdict is read from:** `verify-run`'s text output, `status
-  --latest-for` (its text line and `searchCorpusLabel` in its JSON), the `--repeat` rollup (a `search:` line and
-  `provenance.searchCorpus`) and `trace --view subagent-research`. `stats` keeps a frozen-corpus run in its own group,
-  per pool: the index row carries `searchCorpus: {sha256, label, refused}` (`refused` written always, `0` included;
-  `stats` names a frozen row without it as `searchRefusedUnrecorded`) and the summary `{sha256, label}`, keyed on the
-  pool's full hash, so
-  frozen never pools with live search nor two pools with each other.
-- **A new warn signal, `search_corpus_semantic_judge`**, fires when a judge (`semantic_matches` or
-  `semantic_pairwise`) graded a deliverable of a `--search-corpus` run: its searches were recorded answers, so the
-  grade is not evidence of research quality. `regrade` of such a run warns too and carries it in `runs[].signals`. It
-  never changes the verdict.
+- **A frozen search corpus: `--search-corpus <pool>` serves a run's web searches from a recorded pool** (built with
+  `search-pool build`), on `run`, `skill`, `eval` and `hillclimb run`. The agent's WebSearch tool makes its own model
+  request carrying the server search tool; the harness answers that request locally with the best-matching recorded
+  searches, their links and their prose, and forwards every other API request unchanged. It holds search fixed, so it
+  is for the steps around research, never research quality, and it cannot evaluate a change to what or when a skill
+  searches (evaluate that live). Served searches are not billed. `--search-corpus-miss empty|error` sets what a query
+  the pool cannot answer gets (default `empty`: "No links found."), and `--search-corpus-min-score <n>` (strictly
+  between 0 and 1) overrides the pool's relevance floor and changes the pool's hash. Either one without `--search-corpus` is a usage
+  error (exit 2), as are `eval`'s and `hillclimb run`'s `--allow-confounded-pool` and `--allow-mixed-pool`.
+  - **How it is interposed.** The agent runs at hostloop with five keys added to its env: `HTTPS_PROXY` and
+    `https_proxy` pointed at a loopback interceptor, `NO_PROXY` and `no_proxy` set to loopback (so a local server is
+    never tunnelled), and `NODE_EXTRA_CA_CERTS` at a CA minted for the run (an operator's own `NODE_EXTRA_CA_CERTS` is kept and appended;
+    one that cannot be read refuses the run). The interceptor terminates TLS only for the API host and tunnels every
+    other host untouched. The credential must come from the environment (`CLAUDE_CODE_OAUTH_TOKEN` or
+    `ANTHROPIC_API_KEY`, a `.env` or `--dotenv`), never the operator's own login, since the interceptor reads it in
+    cleartext; it is never written anywhere.
+  - **Refused before the run dir exists, each by name:** every fidelity but hostloop (`cowork` is accepted
+    where the baseline resolves it to hostloop, as every shipped baseline does); `chat`, `record`, `critique` and `probe-dispatch`; `--resume` and `--session-id`; a multi-leg or
+    `device_bridge` scenario; the remote search route (`CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`, or a remote-session
+    `CLAUDE_CODE_SESSION_ID`); an existing agent proxy; an `ANTHROPIC_BASE_URL` other than the API; a credential not
+    in the environment; a baseline without the web-search anchors or their no-search templates; an agent whose
+    anchors differ from the baseline's (read from the exact binary about to launch); and a pool that cannot be read.
+    `eval` and `hillclimb run` make the same checks per scenario before the first run, and refuse the whole batch on
+    the first.
+  - **The frozen promise.** No request carrying the server search tool may reach the live API while a corpus is
+    active. The run fails (`infraErrors` source `search-corpus`) when a forwarded request carried one, when an agent's
+    own record of its searches (the main loop from `events.jsonl`, each sub-agent from its transcript, less the
+    results that show no search was made) differs from what the interceptor answered for it, when the sub-agents'
+    searches in the main stream outnumber those in their transcripts, when a record it needs cannot be read, or when
+    a request was still being classified at the end.
+  - **Labelled on every surface a verdict is read from:** `frozen search corpus <pool>@<hash8> — recorded results,
+    harness ranking, searches not billed; not live search; …`, on the run's footer line (with the counts served,
+    missed and refused, and any reassigned or unattributed), `verify-run`'s text output, `status --latest-for` (its
+    text line and `searchCorpusLabel` in its JSON), the `--repeat` rollup (a `search:` line and
+    `provenance.searchCorpus`) and `trace --view subagent-research`.
+  - **`RunResult.searchCorpus`** (absent on every other run) carries the pool (`poolId`, `sha256`, `label`, `miss`),
+    how it was interposed (`interposition`, `credentialSource`), `metrics` and `calls[]`. `metrics` counts the
+    logical requests (`requests`, `served`, `miss`, `refused`, `retriesFolded`, `unfinished`), the frozen-promise
+    sides (`passedThroughWithSearchTool`, `toolUses`, `noRequest`, `toolUsesExpected`, `byAgent`), forwarded requests
+    that carried the advisor server tool (`liveServerTools`), `meanTopScore`, and the pairing counts below
+    (`shapeUnfenced`, `unattributed`, `unattributedExpected`, `reassigned`, `attributionUncertain`). `calls[]` holds
+    one entry per search request: the WebSearch call it answered, the agent that made it (absent for the main loop),
+    its query and domain filters, verdict, served rounds, and `exactUrls` (every URL a served exact record carries).
+    A sub-agent's result is paired with its request after the run, from the dispatch result that names the
+    sub-agent; until then its entry is `provisional`, a result with no request is `unpaired`, a pairing moved between
+    two requests with the same served content counts as `reassigned`, and one that cannot be paired as
+    `unattributed`.
+  - **The run dir gains `search-corpus.jsonl`**, one line per request (scrubbed of secrets like `events.jsonl`, since
+    it holds the agent's queries), and `events.jsonl` one `search_corpus_serve` line per intercepted search request,
+    plus one per result with no request.
+  - **Three warn signals, none of which changes the verdict:** `search_corpus_refused` when the corpus refused any
+    search request (answered "Web search error: unavailable", typically an agent newer than the baseline's anchors;
+    when every request was refused, the skill ran with no search evidence); `search_corpus_attribution_uncertain`
+    when a sub-agent's result could not be settled to the request it answered; and `search_corpus_semantic_judge`
+    when a judge (`semantic_matches` or `semantic_pairwise`) graded a deliverable of a frozen run, whose grade is then
+    not evidence of research quality. `regrade` raises the judge warning too and carries it in `runs[].signals`.
+  - **`stats` keeps frozen runs apart, per pool.** The index row carries `searchCorpus: {sha256, label, refused}`
+    (`refused` always written, `0` included; `stats` names a frozen row without it as `searchRefusedUnrecorded`) and
+    the summary `{sha256, label}`, keyed on the pool's full hash, so frozen never pools with live search nor two pools
+    with each other. A run whose corpus refused a search is left out of the `stats` run count and pass rate (its
+    medians and spend still count it) and counted as `searchRefusedRuns`; the `--repeat` rollup reads `N/M scored
+    passed (…%), K excluded (refused search)` and carries `provenance.searchRefusedRuns`.
 - **Two assertion keys for a `--search-corpus` run.** `search_corpus_max_miss_rate: <0..1>` bounds misses over
   served plus missed requests; it fails by name when any search was refused, or when WebSearch calls were made but
-  none reached the corpus, and a run that never searched passes. `search_corpus_nearby_citations: {artifact, max?}` counts
-  the URLs a text deliverable cites that were served only on nearby rounds (a recorded search for a different query),
-  and fails by name when the deliverable is not text or cites none of the served URLs after a nearby round. A
-  self-titled markdown link or an emphasised URL is read as the URL, and a URL any served exact record carries counts
-  as exact (`calls[].exactUrls`), even where a higher-ranked nearby round served it first. Both are
-  refused before the run starts without `--search-corpus` (in any leg of a multi-leg scenario too, before the first
-  leg), and `verify-run` and `regrade`
-  refuse them on a run that had no frozen corpus, or one recorded before it kept its tool-use counts. `record
-  --dry-run` refuses them as the run would, and `lint` notes them (INFO: lint cannot know the run's flags). Live-only.
-- **`RunResult.searchCorpus.calls[]` records each search request with the WebSearch call it answered**, the agent
-  that made it (absent for the main loop), its query, verdict and served rounds. A sub-agent's result is paired with
-  its request after the run, from the dispatch result that names the sub-agent; until then its serve frame is marked
-  `provisional`, and a result with no request gets an `unpaired` frame. A pairing moved between two requests with the
-  same served content is counted `reassigned`, and one that cannot be paired `unattributed`; the run line shows both
-  when non-zero. `searchCorpus.metrics` also gains `toolUses`, `noRequest`, `toolUsesExpected`, `byAgent`,
-  `liveServerTools`, `meanTopScore`, `shapeUnfenced`, `unattributedExpected` and `attributionUncertain`. A new warn
-  signal, `search_corpus_attribution_uncertain`, fires when a pairing could not be settled; it never changes the
-  verdict.
-- **`eval` and `hillclimb run` take `--search-corpus <pool>`** (with `--search-corpus-miss` and
-  `--search-corpus-min-score`). A frozen corpus holds search fixed, so it cannot evaluate a change to what or when a
-  skill searches: evaluate that live, or split it into a live eval of the search change and a frozen eval of the
-  steps after search, with a pool built evenly from both versions' live runs.
-  - **One private, pinned copy.** The pool is copied before the first run (into the eval dir; under the snapshot root
-    for hillclimb, never into the flow dir), its hash and miss mode are pinned, and every rep is served from the copy
-    and checks it before it starts. A rep whose copy does not match is refused before it spends, lands in a new
-    bucket `search_pool_mismatch` (a hillclimb `errors.jsonl` class of the same name), and makes `eval` and `eval
-    report` exit 1. The report names each such rep with its cause, and `summary.searchPoolMismatch` carries the count
-    and the list.
+  none reached the corpus, and a run that never searched passes. `search_corpus_nearby_citations: {artifact, max?}`
+  counts the URLs a text deliverable cites that were served only on nearby rounds (a recorded search for a different
+  query), and fails by name when the deliverable is not text or cites none of the served URLs after a nearby round.
+  A self-titled markdown link or an emphasised URL is read as the URL, and a URL any served exact record carries
+  counts as exact, even where a higher-ranked nearby round served it first. Both are refused before the run starts
+  without `--search-corpus` (in any leg of a multi-leg scenario too, before the first leg), and
+  `search_corpus_nearby_citations` on a `lane: remote` scenario. `run` and `skill` refuse with exit 2, and `record` and `record --dry-run`
+  with exit 1 (record's rule for a scenario that loaded). `verify-run` and `regrade` refuse them on a run that had no
+  frozen corpus, or one recorded before it kept its tool-use counts, and `lint` notes them (INFO: lint cannot know the run's flags). Live-only.
+- **`eval` and `hillclimb run` with a frozen search corpus.** To evaluate a change that also touches search, split
+  it: a live eval of the search change, and a frozen eval of the steps after search, with a pool built evenly from
+  both versions' live runs.
+  - **One private, pinned copy.** The pool is copied before the first run (into the eval dir for `eval`, where a copy
+    that cannot be made exits 3; for `hillclimb run`, under the snapshot root at
+    `<flow hash>/search-pools/<pool hash>/`, never into the flow dir, where it exits 2; a hillclimb copy is verified
+    before reuse, shared by every pass of the flow, and never pruned), its hash and miss mode are
+    pinned in the manifest (`pins.searchCorpus`, with `searchCorpusProvenance`), and every rep is served from the
+    copy and checks it before it starts. A rep whose copy does not match or cannot be read is refused before it
+    spends; one whose agent ran but was served from another pool or miss mode, or recorded no corpus (it
+    searched live), is caught after (one that stopped before its agent ran keeps its own bucket). Either lands in the bucket `search_pool_mismatch` (a hillclimb `errors.jsonl` class of the same
+    name) and makes `eval` and `eval report` exit 1; the report names each rep with its cause, and
+    `summary.searchPoolMismatch` carries the count and the list. An eval that pins a corpus writes manifest
+    `schemaVersion: 1`, which an earlier version refuses to read.
   - **Where the pool came from, before any spend.** The pool's records are matched to the compared arms (or
-    variants) by skill content signature, per scenario: `disjoint`, `balanced`, `one-sided` or `unknown`. A pool drawn
-    from one arm (or more than 60% of its records) is refused unless `--allow-confounded-pool`, which labels every
-    surface `CONFOUNDED: pool drawn from <arm>`; that includes a hillclimb pool built from the baseline's rounds judging
-    v1. A mixed pool needs `--allow-mixed-pool` and is never a hillclimb baseline's. A pool built or exported before
-    this release does not record its duplicate count, so one that would read balanced is refused: rebuild it, or
-    re-export it from a pool built by this harness.
+    variants) by skill content signature, per scenario: `disjoint`, `balanced`, `one-sided` or `unknown`. A pool
+    drawn from one arm, or with more than 60% of a scenario's compared-arm records from one arm (duplicates counted
+    the worst way), is refused (exit 2) unless `--allow-confounded-pool`, which labels every surface `CONFOUNDED:
+    pool drawn from <arm>`; that includes a hillclimb pool built from the baseline's rounds judging v1. A pool with
+    records of unknown origin or from another scenario runs, labelled `CONFOUNDED` (`summary.confounded`). A pool
+    built with `--mixed` needs `--allow-mixed-pool`, and is never a hillclimb baseline's.
   - **A refused search excludes the rep.** A rep with `searchCorpus.metrics.refused > 0` is never scored: `eval`
-    buckets it `search_refused` (it outranks the agent's own failure), hillclimb writes a `search_refused` error row,
-    and `stats` and the `--repeat` rollup leave it out of the pass rate and count it.
-  - **Both arms' search metrics side by side.** `eval report` prints each arm's served, missed and refused searches,
-    miss rate and mean top score, per scenario and in total (`searchCorpus` in the JSON envelope and `report.json`),
-    and an asymmetry marker that says CONFOUNDED when the same pool served the arms unequally. Its thresholds (a
-    miss-rate gap of 0.10, a top-score ratio of 0.8) are placeholders, and a cell with fewer than 11 searches on a
-    side is not judged. CONFOUNDED never changes the exit code (`summary.confounded`).
+    buckets it `search_refused` (it outranks the agent's own failure; an arm whose every rep is refused compared
+    nothing, so the eval exits 1), and hillclimb writes a `search_refused` error row.
+  - **Both arms' search metrics side by side.** `eval report` prints each arm's served and missed searches, miss
+    rate and mean top score over its scored reps, per scenario and in total, and how many reps were excluded for a
+    refused search (`searchCorpus` in the JSON envelope and `report.json`), with an asymmetry marker that says
+    CONFOUNDED when the same pool served the arms unequally. Its thresholds (a miss-rate gap of 0.10, a top-score
+    ratio of 0.8) are placeholders, and a cell with fewer than 11 searches on a side is not judged. CONFOUNDED never
+    changes the exit code (`summary.confounded`). The `search_corpus_semantic_judge` warning is counted per arm.
   - **hillclimb.** Every row carries `meta.search_corpus` (the pool, its provenance, the run's counts), and every
-    error row `meta.content_sig`. A pass beside rows served from another pool, or searched live, is refused unless
-    `--allow-mixed-search`. The cost line adds `search frozen: N served, M miss, R refused`. `hillclimb check` errors on
-    rows from more than one pool and on pool mismatches, and warns on a confounded pool, a judge on recorded searches
-    and an asymmetric variant.
-  - The `search_corpus_semantic_judge` warning is counted per arm in the eval report and in `hillclimb check`, and
-    `eval --dry-run` / `hillclimb --dry-run` pricing leaves frozen-corpus runs out of its history. An eval that pins a
-    corpus writes manifest `schemaVersion: 1`.
-- **`sync --allow-missing-search-anchors`** writes a baseline without web-search anchors when they cannot be confirmed
-  from the staged agent (with a warning), and `npm run preflight` accepts the same flag to downgrade its anchors check.
-- **`agentBinary.searchAnchors` gains two optional fields:** `source` (`both`, `native` or `elf`: which staged agent the
-  anchors came from) and `noRequest` (hashes of the agent-side WebSearch results that show no search was made).
+    error row `meta.content_sig`. A pass with a pool beside rows served from another pool or searched live, or a
+    live pass beside frozen rows, is refused (exit 2) unless `--allow-mixed-search`. The cost line adds `search
+    frozen: N served, M miss, R refused`. `hillclimb check` reports rows from more than one pool, or frozen beside
+    live (an error, or a warning when every frozen row was written under `--allow-mixed-search`), and pool
+    mismatches (an error), and warns on a confounded pool, a judge on recorded searches and an asymmetric variant.
+  - **Dry runs.** `eval --dry-run` copies and verifies the pool into its temp dir, so it refuses where the real eval
+    would; `hillclimb run --dry-run` reads and verifies the pool but does not copy it. Both price from a history that
+    leaves frozen-corpus runs out.
+- **The companion skill covers the frozen search corpus.** Its task recipes gain "Serve a run's searches from a
+  pool" (what it is not for, the refusals, the miss modes, the frozen-promise failure, the two keys, and where `eval`
+  and `hillclimb` take it); its `eval` and `hillclimb` references gain the flags, the buckets and the exit codes; the
+  assertion catalog gains the two `search_corpus_*` rows and the lint rule `search-corpus-key-needs-flag`, and its
+  signal table grows from 27 to 30 codes; `debugging` names `RunResult.searchCorpus`; and the skill's
+  linter knows both keys (`assertion-keys.json`), treats them as live-only, and flags `search_corpus_nearby_citations`
+  on a remote-lane scenario with its remedy. The catalog's seven longest rows (`no_scratchpad_leak`, `gates_all_scripted`,
+  `hook_event_blocked`, `hook_decision`, `semantic_pairwise`, `artifact_json`, `tool_called`) are one line each, with
+  their full rules in docs/scenario.md by link.
+- **`sync --allow-missing-search-anchors`** (and the same flag on `npm run preflight`): see the Upgrade note.
+- **`agentBinary.searchAnchors` gains two optional fields:** `source` (`both`, `native` or `elf`: which staged agent
+  the anchors came from) and `noRequest` (hashes of the agent-side WebSearch results that show no search was made).
 
 ### Changed
 
 - **`sync` decides the web-search anchors from the native agent, which hostloop runs, and refuses what it cannot
   confirm.** The VM agent corroborates the native on the same version and stands in only when no native is staged;
-  the block records which in a new optional `source` (`both`, `native` or `elf`). It also records, as hashes, the
-  agent-side WebSearch results that show no search was made (`noRequest`), so an agent from 2.1.260 through 2.1.289, whose
-  budget-cap text has another shape, refuses. `sync` refuses the write when the
-  native's anchors cannot be extracted or read, when the two builds disagree at the same version, or when no agent
-  is staged and the base's anchors cannot be carried. The new `--allow-missing-search-anchors` writes
-  without them, with a warning; `sync --diff` reports the refusal as `would refuse: …` and does not fail. A staged
-  VM agent that cannot be read is now reported instead of crashing `sync`.
-
+  the block records which in `source`. It also records, as hashes, the agent-side WebSearch results that show no
+  search was made (`noRequest`), so an agent from 2.1.260 through 2.1.289, whose budget-cap text has another shape,
+  refuses. `sync` refuses the write when the native's anchors cannot be extracted or read; when the VM agent's
+  cannot be extracted at the same version as a native that extracted, or when the two disagree at the same version;
+  when the VM agent's cannot be extracted and no native is staged; and when no agent is staged and the base's
+  anchors cannot be carried (another agent version, or no anchors to carry). `--allow-missing-search-anchors`
+  writes without them, with a warning; `sync --diff` reports the refusal as `would refuse: …` and does not fail. A
+  staged VM agent that cannot be read is now reported instead of crashing `sync`.
 - **For maintainers: the shipped `desktop-2.37337.1` baseline was re-synced** and carries
   `agentBinary.searchAnchors.source` (`both`) and `noRequest`, so `npm run preflight` accepts it as the newest
   baseline. Nothing else in it moved beyond provenance, so the committed cassettes stay current.
-
 - **`search-pool build` skips a run served from a frozen search corpus** (its result pins one, or its dir holds
   `search-corpus.jsonl`) and counts it in the summary, so a pool's own output is never harvested back in as sourced
-  records.
+  records. A pool whose files cannot be parsed is now refused by name.
 
 ## [4.9.1] — 2026-10-14
 

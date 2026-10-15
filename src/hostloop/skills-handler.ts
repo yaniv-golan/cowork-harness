@@ -5,12 +5,11 @@ import type { MountedSkill } from "../run/skill-metadata.js";
  * The `skills` sdk-MCP server, driver-side — models the Desktop-side skill-discovery surface a real
  * cowork-lane session (container/hostloop) declares alongside `workspace`/`cowork`: `list_skills`
  * (always) and `suggest_skills` (gated). Binary-verified (2026-07-24 confirmation pass, app.asar
- * 1.24012.1 — see the A2 confirmation doc's §4/§5/§6): the tool inventory, both inputSchemas, both gate
+ * 1.24012.1): the tool inventory, both inputSchemas, both gate
  * ids (`suggestSkillsEnabled:245679952`, `proactiveSkillSuggestEnabled:1598976391`) and their effect on
  * the tool set, and the output envelope's field set + branch structure (the `note` variants, the
  * `.slice(0,15)` cap on `suggest_skills.resolved_skills`) are ALL pinned to the extracted asar. One
- * exception: `list_skills.resolved_skills`'s PER-ITEM shape was opaque in the extraction (confirmation
- * doc §6) — we mirror `suggest_skills`'s confirmed `{name,description,skill_id,is_user_created}` item
+ * exception: `list_skills.resolved_skills`'s PER-ITEM shape was opaque in the extraction — we mirror `suggest_skills`'s confirmed `{name,description,skill_id,is_user_created}` item
  * shape here, so treat that per-item shape as inferred, not binary-verified. The tool
  * DESCRIPTION strings below are a faithful prose reconstruction assembled from the confirmed semantic
  * fragments the extraction recovered (the routing rule, the fallback clause, the base-vs-proactive
@@ -26,7 +25,7 @@ import type { MountedSkill } from "../run/skill-metadata.js";
  * no network, no side effect, matching the harness's token-free posture for every other SDK-MCP stub.
  * `suggest_skills`'s `resolved_skills` is a deliberate exception — it always returns empty, because the
  * *addable* (not-yet-installed) catalog is Anthropic's live skill library, which this harness does not
- * model; an empty catalog with an honest `note` is the faithful stub (spec §6/§7), not a bug.
+ * model; an empty catalog with an honest `note` is the faithful stub, not a bug.
  */
 
 /** The 5 skill/plugin-discovery SDK-MCP tool names — declared as `extraTools`/`extraAllowedTools` on
@@ -125,8 +124,8 @@ export interface MakeSkillsHandlerOptions {
 
 export function makeSkillsHandler(opts: MakeSkillsHandlerOptions): McpHandler {
   const { mountedSkills, mountedPluginNames, suggestSkillsEnabled, onCall } = opts;
-  // proactiveSkillSuggestEnabled is only ever consulted once suggestSkillsEnabled is true (spec §5: "only
-  // evaluated if the first is on") — guard here so a caller that sets the proactive knob without the base
+  // proactiveSkillSuggestEnabled is only ever consulted once suggestSkillsEnabled is true (Desktop evaluates it
+  // only when the first is on) — guard here so a caller that sets the proactive knob without the base
   // one can't accidentally light up `trigger` on a tool that doesn't exist.
   const proactive = suggestSkillsEnabled && opts.proactiveSkillSuggestEnabled;
 
@@ -160,7 +159,7 @@ export function makeSkillsHandler(opts: MakeSkillsHandlerOptions): McpHandler {
     const keywords = Array.isArray(args.keywords) ? args.keywords.filter((s): s is string => typeof s === "string") : undefined;
     const contextLabel = typeof args.context_label === "string" ? args.context_label : undefined;
 
-    // keywords is ignored when skill_names is set (spec §4).
+    // keywords is ignored when skill_names is set, as in Desktop.
     let resolved = mountedSkills;
     if (skillNames && skillNames.length) {
       const want = new Set(skillNames);

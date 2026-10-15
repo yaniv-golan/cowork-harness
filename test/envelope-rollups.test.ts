@@ -18,7 +18,7 @@ function rr(over: Partial<RunResult>): RunResult {
   };
 }
 
-describe("jsonEnvelope — E1's rollups/minPassRate additions (§8: ok redefined per mode, no shadow field)", () => {
+describe("jsonEnvelope — rollups/minPassRate (ok redefined per mode, no shadow field)", () => {
   it("without opts, ok is unchanged: derived from results.every(verdict.pass)", () => {
     const allPass = JSON.parse(jsonEnvelope("run", [rr({}), rr({})]));
     expect(allPass.ok).toBe(true);

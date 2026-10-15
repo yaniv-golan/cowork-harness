@@ -49,8 +49,7 @@ const MODULE_EXTS = new Set([".mjs"]);
 
 /** Directory names never descended into during source collection: `node_modules`/`.git`/`dist` (vendored
  *  or build-output trees, never a skill's own authored surface) plus any dot-prefixed directory. Mirrors
- *  `analyze-skill.ts`'s `DENYLISTED_WALK_DIR_NAMES`, extended with `dist` per §B2 ("Skip `node_modules`,
- *  `.git`, `dist`, `*.min.js`"). */
+ *  `analyze-skill.ts`'s `DENYLISTED_WALK_DIR_NAMES`, extended with `dist` (and `*.min.js` files are skipped too). */
 const DENYLISTED_DIR_NAMES = new Set(["node_modules", ".git", "dist"]);
 function isDenylistedDirName(name: string): boolean {
   return DENYLISTED_DIR_NAMES.has(name) || name.startsWith(".");
@@ -61,15 +60,14 @@ function isMinifiedJs(name: string): boolean {
 
 /** `.claude-plugin/plugin.json` OR bare `plugin.json` at `dir` — the plugin-root manifest test. A local
  *  copy of `analyze-skill.ts`'s `isPluginManifestDir` (not exported there, and this module deliberately
- *  does NOT reuse the markdown resolver — see the file-level doc comment and §B2's "NOT the markdown
- *  resolver" bullet). Semantics must stay identical to the markdown-side test. */
+ *  does NOT reuse the markdown resolver — see the file-level doc comment). Semantics must stay identical to the markdown-side test. */
 function isPluginManifestDir(dir: string): boolean {
   return existsSync(join(dir, ".claude-plugin", "plugin.json")) || existsSync(join(dir, "plugin.json"));
 }
 
 /** Non-recursive subdirectory NAMES directly inside `dir` (used to enumerate `skills/*` entries for a
  *  plugin-root target). Records a `select`-stage `AnalysisFailure` on a `readdirSync` failure instead of
- *  silently returning `[]` — mirrors §B2's "never a silent skip" for a selected/enumerated source. */
+ *  silently returning `[]`: a selected or enumerated source is never skipped silently. */
 function listSubdirNames(dir: string, failures: AnalysisFailure[]): string[] {
   if (!existsSync(dir)) return [];
   let entries;
@@ -103,7 +101,7 @@ function listSubdirNames(dir: string, failures: AnalysisFailure[]): string[] {
  *  Follows directory symlinks (loop-guarded via `visited`, a `Set` of realpaths threaded by reference
  *  through the recursion — the same technique `analyze-skill.ts`'s `walkMarkdownDeep` uses). A
  *  `realpathSync`/`readdirSync` failure on a directory pushes a `select`-stage `AnalysisFailure` and yields
- *  `[]` for that branch — NEVER a silent empty return, per §B2.
+ *  `[]` for that branch — NEVER a silent empty return.
  *
  *  CONTAINMENT: the FIRST call establishes `rootReal` (its own realpath); every descendant
  *  directory whose realpath resolves OUTSIDE that root is REJECTED with a `select`-stage failure and not
@@ -239,7 +237,7 @@ function expandSourceGlob(pattern: string): { files: string[]; failures: Analysi
 
 /** Resolve ONE target — an individual file, a standalone skill dir, a plugin root, a nested-plugin skill
  *  dir, or a `*`-bearing glob — to the union of `.html/.htm/.js/.mjs/.py` SOURCE files in
- *  scope, per §B2's source-collection contract. This is this module's OWN collection primitive — it does
+ *  scope. This is this module's OWN collection primitive — it does
  *  NOT reuse `analyze-skill.ts`'s `resolveSkillTarget` (that walker is markdown-only and deliberately
  *  never reaches `scripts/*.py`); it reuses only the SHAPE of the sibling-exclusion boundary
  *  (a plugin's other skills stay out of scope for a single skill-dir target), reimplemented locally
@@ -345,7 +343,7 @@ export function collectArtifactSources(target: string): { files: string[]; failu
 const WRITE_BACK_PRIMITIVE_RE =
   /\bfetch\s*(\?\.\s*)?\(|XMLHttpRequest|sendBeacon\s*(\?\.\s*)?\(|\baxios\b|(\$|jQuery)\s*\.\s*(post|put|patch|delete|postForm|putForm|patchForm)\s*(\?\.\s*)?\(/;
 /** A native declarative write-back: `<form … method=post …>` (any attribute order, quote style,
- *  quoted OR unquoted `method` value). Its own primitive per §B2 — an HTML candidate needs no `<script>`
+ *  quoted OR unquoted `method` value). Its own primitive — an HTML candidate needs no `<script>`
  *  at all to qualify if this is present. */
 const FORM_POST_TAG_RE = /<form\b[^>]*\bmethod\s*=\s*["']?post\b/i;
 /** A submit control that overrides its form's method to POST via `formmethod=post` — a candidacy tell for
@@ -399,7 +397,7 @@ const BLOCK_WRITE_BACK_HINT_RE =
  *  browser artifact, not just any code that happens to also call `fetch`. */
 const BROWSER_MARKER_RE = /<script[\s>]|document\.|innerHTML|<!DOCTYPE\s+html|<html[\s>]/i;
 
-/** True iff `path`'s extension + `text`'s content make it a Tier A CANDIDATE per §B2:
+/** True iff `path`'s extension + `text`'s content make it a Tier A CANDIDATE:
  *   - `.html/.htm` → iff a write-back primitive is present (no browser-marker requirement — a
  *     declarative `<form method=post>` page IS the headline bug);
  *   - the code/generator extensions → iff BOTH a browser marker AND a write-back primitive are present.
@@ -414,7 +412,7 @@ function isCandidate(ext: string, text: string): boolean {
 // Resource caps
 // ------------------------------------------------------------------------------------------------- //
 
-/** Byte cap per §B2 ("Adopt an explicit byte cap … 3,000,000 bytes"). A SELECTED source at or under this
+/** An explicit byte cap (3,000,000 bytes). A SELECTED source at or under this
  *  size still goes through candidacy/analysis; over it, analysis is abandoned before candidacy is even
  *  judged (a byte-cap hit is `analysis-unavailable`, never "not a candidate"). */
 const BYTE_CAP = 3_000_000;
@@ -766,7 +764,7 @@ function buildConstsMap(ast: acorn.Node): ConstsMap {
 /** Constant-fold a string-valued expression: string literal, template literal WITHOUT unresolved
  *  identifiers, `+`-concatenation, `[...].join(sep)`, a one-hop identifier lookup via `consts`, or the
  *  `.slice(0)` copy idiom. Returns `null` when the value can't be determined statically — a DOCUMENTED
- *  Tier A false negative (§B2: "a generator whose … URLs are themselves computed is missed by Tier A"),
+ *  Tier A false negative (a generator whose URLs are themselves computed is missed by Tier A),
  *  never itself a failure. */
 function foldStr(node: acorn.Expression | acorn.Node | null | undefined, consts: ConstsMap, depth = 0): string | null {
   if (!node || depth > 6) return null;
@@ -1393,7 +1391,7 @@ export function analyzeArtifactFile(path: string, text: string): { findings: Ski
 
   // Declarative <form> write-backs — form ownership, submitter formaction/formmethod overrides, and
   // JS-handler awareness (findings 20/21/22). Evaluated independent of any <script> extraction, so a
-  // pure-declarative HTML page (no <script> at all) still produces a verdict (§B2/§B3 test (h)).
+  // pure-declarative HTML page (no <script> at all) still produces a verdict.
   const outcomes: Outcome[] = analyzeForms(text);
 
   let blocks = extractScriptBlocks(text);
