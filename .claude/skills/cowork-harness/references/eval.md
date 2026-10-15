@@ -92,7 +92,9 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
 - **Not for a change to what or when the skill searches**: a frozen corpus holds search fixed. Evaluate that live,
   or split it: a live eval of the search change, then a frozen eval with a pool built evenly from both versions' runs.
 - `--search-corpus <pool>` (hostloop; `--search-corpus-miss`, `--search-corpus-min-score` as on `run`): one pool for
-  both arms, copied into the eval dir and pinned by hash; every rep checks the copy before it spends.
+  both arms, copied into the eval dir and pinned by hash; every rep checks the copy before it spends. `--dry-run`
+  copies and verifies it too, so it refuses where the real eval would. An older harness refuses to read such an eval
+  dir.
 - Refused before spend: a pool whose records come from one arm (or >60% of them) — `--allow-confounded-pool` runs it,
   labelled CONFOUNDED; a mixed pool without `--allow-mixed-pool`; a pool built or exported before 4.10 that would
   read balanced (rebuild or re-export it).
