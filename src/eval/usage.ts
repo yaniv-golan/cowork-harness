@@ -89,7 +89,7 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
                              comparison CONFOUNDED when they were served unequally (placeholder thresholds)
   --search-corpus-miss empty|error, --search-corpus-min-score <n>   as on run
   --allow-confounded-pool    run a pool drawn from one arm (or whose split cannot be bounded); every surface says CONFOUNDED
-  --allow-mixed-pool         accept a pool built with --mixed (several skills)
+  --allow-mixed-pool         accept a mixed pool (one built from several skills)
   --output-format text|json  json: {tool,version,command,ok,evalDir,arms,pins,sections,summary,cost,stoppedEarly,searchCorpus?,error};
                              with --dry-run: {tool,version,command,ok,dryRun,plan,budget?,error}
   --quiet                    no per-job progress lines (a --dry-run's plan is its output, and still prints)
