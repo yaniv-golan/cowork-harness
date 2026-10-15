@@ -33,6 +33,7 @@ import {
   scenarioRows,
   semanticRefusalReason,
   thrownKind,
+  agentRan,
   type ClassifiableResult,
 } from "../eval/classify.js";
 import { SearchPoolPinError } from "../search-corpus/pool.js";
@@ -409,7 +410,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   const term = classifyTermination(evidence);
   if (sc) {
     const pinErr = a.thrown !== undefined && thrownKind(a.thrown) === "search_pool_pin";
-    const off = rsc === undefined ? r !== undefined && term.bucket !== "errored_infra" : rsc.sha256 !== sc.sha256 || rsc.miss !== sc.miss;
+    const off = rsc === undefined ? r !== undefined && agentRan(r) : rsc.sha256 !== sc.sha256 || rsc.miss !== sc.miss;
     if (pinErr || off) {
       const got =
         a.thrown instanceof SearchPoolPinError ? a.thrown.got : pinErr ? null : rsc ? { sha256: rsc.sha256, miss: rsc.miss } : null;

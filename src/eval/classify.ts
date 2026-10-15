@@ -362,7 +362,7 @@ export function classifyRep(ev: RepEvidence, expected: ArmExpectations): RepClas
   const termination = classifyTermination(ev);
   const r = ev.result;
   const bucket = ((): RepBucket => {
-    if (poolMismatch(ev, expected, termination)) return "search_pool_mismatch";
+    if (poolMismatch(ev, expected)) return "search_pool_mismatch";
     if (termination.bucket === "errored_infra") return "errored_infra";
     if ((r?.searchCorpus?.metrics.refused ?? 0) > 0) return "search_refused";
     if (termination.bucket === "errored_agent") return "errored_agent";
@@ -376,18 +376,24 @@ export function classifyRep(ev: RepEvidence, expected: ArmExpectations): RepClas
 }
 
 /** Positive evidence that the rep was not served from the pinned pool: the persisted refusal, the thrown pin error,
- *  a persisted corpus with another hash or miss mode, or a result with no corpus at all under a pin from a run that
- *  got past infrastructure (it ran live). A run that failed as infrastructure before its corpus started has no corpus
- *  for a reason of its own, so that absence is not evidence; a rep with no result and no such evidence keeps its
- *  termination bucket. */
-function poolMismatch(ev: RepEvidence, expected: ArmExpectations, termination: TerminationClassification): boolean {
+ *  a persisted corpus with another hash or miss mode, or a result with no corpus at all under a pin from a run whose
+ *  agent ran (it searched live, whatever failed after). A run that stopped before its agent ran (a spawn failure, a
+ *  limit hit before any model answered) has no corpus for a reason of its own, so that absence is not evidence; a rep
+ *  with no result and no such evidence keeps its termination bucket. */
+function poolMismatch(ev: RepEvidence, expected: ArmExpectations): boolean {
   if (ev.searchPoolMismatch !== undefined) return true;
   if (ev.thrown !== undefined && thrownKind(ev.thrown) === "search_pool_pin") return true;
   const pin = expected.searchCorpus;
   if (pin === undefined || ev.result === undefined) return false;
   const sc = ev.result.searchCorpus;
-  if (sc === undefined) return termination.bucket !== "errored_infra";
+  if (sc === undefined) return agentRan(ev.result);
   return sc.sha256 !== pin.sha256 || sc.miss !== pin.miss;
+}
+
+/** The agent ran: a live model answered, or the run spent. The one predicate eval and hillclimb share for a pinned rep
+ *  that kept no frozen corpus. */
+export function agentRan(r: Pick<ClassifiableResult, "models" | "cost">): boolean {
+  return (r.models ?? []).some(isLiveModelId) || (r.cost?.usd ?? 0) > 0;
 }
 
 function invalidIndexes(r: ClassifiableResult | undefined): number[] {

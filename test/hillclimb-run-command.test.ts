@@ -2199,6 +2199,31 @@ describe("hillclimb run --search-corpus", () => {
     expect(checkFlowDir(join(cwd, "flow"), { profile: "harness" }).findings.filter((f) => /failure_class/.test(f.message))).toEqual([]);
   });
 
+  it("a pinned rep whose agent ran but kept no corpus is a search_pool_mismatch row; one that never ran is not", async () => {
+    const p = pool("pool", "third");
+    await approve("--search-corpus", p);
+    await runHillclimbCommand(args("--search-corpus", p), deps(frozen((_e, r) => ({ ...r, searchCorpus: undefined }) as RunResult)));
+    expect(errorsOf("baseline")[0]).toMatchObject({ failure_class: "search_pool_mismatch" });
+    rmSync(join(cwd, "flow", "baseline", "errors.jsonl"));
+    await runHillclimbCommand(
+      args("--search-corpus", p),
+      deps(
+        frozen(
+          (_e, r) =>
+            ({
+              ...r,
+              result: "error",
+              errorSource: "spawn",
+              models: [],
+              cost: { usd: 0 },
+              searchCorpus: undefined,
+            }) as unknown as RunResult,
+        ),
+      ),
+    );
+    expect(errorsOf("baseline")[0]).toMatchObject({ failure_class: "error" });
+  });
+
   it("a refused search makes the rep an error row, never scored", async () => {
     const p = pool("pool", "third");
     await approve("--search-corpus", p);

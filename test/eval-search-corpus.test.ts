@@ -308,24 +308,43 @@ describe("eval --search-corpus: the pin refusal survives runs.jsonl", () => {
   });
 });
 
-describe("eval --search-corpus: a rep that failed before its corpus started", () => {
-  it("a usage limit before the corpus started (no searchCorpus) stays errored_infra, never a pool mismatch", async () => {
+describe("eval --search-corpus: a pinned rep that kept no corpus", () => {
+  // A mismatch only when the rep shows its agent ran (a live model answered, or it spent): then it searched live.
+  const noCorpus = (over: Partial<RunResult>) => (s: EvalJobSpec, r: RunResult) =>
+    s.job.arm === "after" && s.job.rep === 1
+      ? ({ ...r, result: "error", errorSource: "result", resultErrorKind: "usage_limit", searchCorpus: undefined, ...over } as RunResult)
+      : r;
+
+  it("a limit hit before the agent ran (no live model, no spend) stays errored_infra, never a pool mismatch", async () => {
     const { scen, a, b } = setup();
     const out = await runEval(
       args(scen, a, b, ["--search-corpus", disjointPool()]),
-      deps(
-        fakeRunner((s, r) =>
-          s.job.arm === "after" && s.job.rep === 1
-            ? ({ ...r, result: "error", errorSource: "result", resultErrorKind: "usage_limit", searchCorpus: undefined } as RunResult)
-            : r,
-        ),
-      ),
+      deps(fakeRunner(noCorpus({ models: ["<synthetic>"], cost: { usd: 0 } } as Partial<RunResult>))),
     );
     expect(out.report.reps.find((x) => x.arm === "after" && x.rep === 1)).toMatchObject({
       bucket: "errored_infra",
       rule: "kind_usage_limit",
     });
     expect(out.report.summary.searchPoolMismatch!.reps).toBe(0);
+  });
+
+  it("a rep whose agent ran (a live model answered) is a pool mismatch even when it then failed as infrastructure", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b, ["--search-corpus", disjointPool()]), deps(fakeRunner(noCorpus({}))));
+    expect(out.report.reps.find((x) => x.arm === "after" && x.rep === 1)).toMatchObject({
+      bucket: "search_pool_mismatch",
+      rule: "kind_usage_limit",
+    });
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it("spend alone is evidence the agent ran", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(
+      args(scen, a, b, ["--search-corpus", disjointPool()]),
+      deps(fakeRunner(noCorpus({ models: [], cost: { usd: 0.01 } } as Partial<RunResult>))),
+    );
+    expect(out.report.reps.find((x) => x.arm === "after" && x.rep === 1)!.bucket).toBe("search_pool_mismatch");
   });
 });
 
