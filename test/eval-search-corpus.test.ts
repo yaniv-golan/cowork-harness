@@ -308,7 +308,28 @@ describe("eval --search-corpus: the pin refusal survives runs.jsonl", () => {
   });
 });
 
-describe("eval --search-corpus: a refused search excludes the rep (R10-4)", () => {
+describe("eval --search-corpus: a rep that failed before its corpus started", () => {
+  it("a usage limit before the corpus started (no searchCorpus) stays errored_infra, never a pool mismatch", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(
+      args(scen, a, b, ["--search-corpus", disjointPool()]),
+      deps(
+        fakeRunner((s, r) =>
+          s.job.arm === "after" && s.job.rep === 1
+            ? ({ ...r, result: "error", errorSource: "result", resultErrorKind: "usage_limit", searchCorpus: undefined } as RunResult)
+            : r,
+        ),
+      ),
+    );
+    expect(out.report.reps.find((x) => x.arm === "after" && x.rep === 1)).toMatchObject({
+      bucket: "errored_infra",
+      rule: "kind_usage_limit",
+    });
+    expect(out.report.summary.searchPoolMismatch!.reps).toBe(0);
+  });
+});
+
+describe("eval --search-corpus: a refused search excludes the rep", () => {
   it("search_refused outranks an agent error, joins the errored arms, and is excluded from every row", async () => {
     const { scen, a, b } = setup();
     const out = await runEval(
