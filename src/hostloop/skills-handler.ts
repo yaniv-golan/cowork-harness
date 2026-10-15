@@ -26,7 +26,7 @@ import type { MountedSkill } from "../run/skill-metadata.js";
  * no network, no side effect, matching the harness's token-free posture for every other SDK-MCP stub.
  * `suggest_skills`'s `resolved_skills` is a deliberate exception — it always returns empty, because the
  * *addable* (not-yet-installed) catalog is Anthropic's live skill library, which this harness does not
- * model; an empty catalog with an honest `note` is the faithful stub (spec §6/§7), not a bug.
+ * model; an empty catalog with an honest `note` is the faithful stub, not a bug.
  */
 
 /** The 5 skill/plugin-discovery SDK-MCP tool names — declared as `extraTools`/`extraAllowedTools` on
@@ -125,8 +125,8 @@ export interface MakeSkillsHandlerOptions {
 
 export function makeSkillsHandler(opts: MakeSkillsHandlerOptions): McpHandler {
   const { mountedSkills, mountedPluginNames, suggestSkillsEnabled, onCall } = opts;
-  // proactiveSkillSuggestEnabled is only ever consulted once suggestSkillsEnabled is true (spec §5: "only
-  // evaluated if the first is on") — guard here so a caller that sets the proactive knob without the base
+  // proactiveSkillSuggestEnabled is only ever consulted once suggestSkillsEnabled is true (Desktop evaluates it
+  // only when the first is on) — guard here so a caller that sets the proactive knob without the base
   // one can't accidentally light up `trigger` on a tool that doesn't exist.
   const proactive = suggestSkillsEnabled && opts.proactiveSkillSuggestEnabled;
 
@@ -160,7 +160,7 @@ export function makeSkillsHandler(opts: MakeSkillsHandlerOptions): McpHandler {
     const keywords = Array.isArray(args.keywords) ? args.keywords.filter((s): s is string => typeof s === "string") : undefined;
     const contextLabel = typeof args.context_label === "string" ? args.context_label : undefined;
 
-    // keywords is ignored when skill_names is set (spec §4).
+    // keywords is ignored when skill_names is set, as in Desktop.
     let resolved = mountedSkills;
     if (skillNames && skillNames.length) {
       const want = new Set(skillNames);

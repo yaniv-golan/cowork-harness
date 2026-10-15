@@ -65,7 +65,7 @@ export type SkillAnalysisRuleId =
   | "sessions-path-to-file-tool"
   | "sessions-find-into-file-read"
   | "unclosed-ignore-fence"
-  // Item 1 (interactive-artifact write-back) findings — see analyze-artifact.ts + the plan §B2/§B3.
+  // Interactive-artifact write-back findings — see analyze-artifact.ts.
   | "artifact-write-back-lost"
   | "artifact-write-back-suspect";
 
@@ -1386,7 +1386,7 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
     }
   }
 
-  // Exit precedence (plan §B3): a strict `error` finding wins exit 1; else any could-not-verify failure
+  // Exit precedence: a strict `error` finding wins exit 1; else any could-not-verify failure
   // is exit 3; else advisory/clean exit 0. `analysisFailures` gate REGARDLESS of --strict (no-false-green:
   // a candidate that couldn't be analyzed must never pass silently). `ok` mirrors the exit code.
   const strictErrorFinding = strict && allFindings.some((f) => f.severity === "error");

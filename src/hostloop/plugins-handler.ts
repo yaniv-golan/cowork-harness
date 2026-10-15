@@ -18,7 +18,7 @@ import type { MountedPlugin } from "../session.js";
  *
  * `list_plugins` is populated from the session's actually-mounted plugins (`mountedPluginsFromPlan`),
  * deterministic and run-derived. `search_plugins`/`suggest_plugin_install` never search or install
- * anything — the real add/install happens out of band (spec §6/§7); an empty-catalog `search_plugins`
+ * anything — the real add/install happens out of band, outside the session; an empty-catalog `search_plugins`
  * result is the faithful stub, matching `suggest_skills`'s same posture.
  */
 

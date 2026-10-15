@@ -390,7 +390,7 @@ function spawnHostLoopTracked(
     disallowed: ["Bash", "WebFetch", "NotebookEdit", ...(permission?.disallowed ?? [])],
     ...(permission ? { extraArgs: permission.extraArgs } : {}),
     // The 5 skills/plugins discovery tools declare + pre-approve on the SAME cowork lane as workspace's
-    // own bash/web_fetch (spec §3: `isEnabled` = `sessionType==="cowork"`, which hostloop satisfies).
+    // own bash/web_fetch (their `isEnabled` is `sessionType==="cowork"`, which hostloop satisfies).
     // bash + web_fetch are both REGISTERED regardless of the webFetchViaApi gate; the 5 discovery tools
     // are unconditional. `present_files` joins them unconditionally too — real Cowork registers it
     // `alwaysLoad` with no session-type/connected-folder gate (F2 in the closure plan) — and it MUST also

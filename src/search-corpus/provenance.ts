@@ -19,7 +19,7 @@ import type { PoolRecord } from "./harvest.js";
 
 export type ProvenanceClass = "disjoint" | "balanced" | "one-sided" | "unknown";
 
-/** No compared variant may contribute more than this share of the compared-variant records (design §6). */
+/** No compared variant may contribute more than this share of the compared-variant records, per scenario. */
 export const ONE_SIDED_SHARE = 0.6;
 
 export interface ComparedArm {

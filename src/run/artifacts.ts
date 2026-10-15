@@ -702,8 +702,8 @@ export interface CaptureAuthoredFilesOpts {
  *
  *  `scratchpadRoot` (the session root, i.e. the PARENT of the `mnt` workspace) closes a real coin-flip: at
  *  container/hostloop fidelity the agent's cwd is the session root, NOT `mnt`, so a relative `Write
- *  outputs/x` lands in the scratchpad — outside `workRoot`/`userVisibleRoots` and thus previously uncaptured
- *  (SPEC/plan §R2 H2). When provided, we also capture non-dotfile deliverables directly under it. The
+ *  outputs/x` lands in the scratchpad — outside `workRoot`/`userVisibleRoots` and thus previously uncaptured.
+ *  When provided, we also capture non-dotfile deliverables directly under it. The
  *  scratchpad is staged empty except `mnt/`, so a non-dot file there was authored this run; dot-prefixed
  *  entries (`.claude`, `.cache`, XDG state — the agent's $HOME runtime noise) and the `mnt` subtree
  *  (already captured above) are excluded. Everything is scrubbed downstream before it reaches a judge.
