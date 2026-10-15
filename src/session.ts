@@ -593,8 +593,7 @@ export interface MountedPlugin {
  *  legacy `.local-plugins/cache/<mkt>/<name>/<version>` for a `marketplace-plugin` mount) and falls back
  *  to a synthetic qualifier for the shapes that carry none (a bare `local_plugins` mount under the legacy
  *  cache path, or a `remote_plugins` mount). This is advisory text in a deterministic stub response, not
- *  a production lookup key — plugin install/search itself happens out of band (§6/§7 of the confirmation
- *  spec). */
+ *  a production lookup key — plugin install/search itself happens out of band, outside the session. */
 function guessMarketplaceQualifier(mount: Mount): string {
   const segs = mount.mountPath.split("/");
   if (segs[0] === ".local-plugins" && segs[1] === "marketplaces" && segs.length >= 3) return segs[2]; // <mkt>/<name>

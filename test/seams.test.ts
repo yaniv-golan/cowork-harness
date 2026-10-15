@@ -354,7 +354,7 @@ describe("parseMessage — result event cost/turns (Wave 0 seam)", () => {
     expect((ev[0] as any).numTurns).toBeUndefined();
   });
 
-  it("extracts modelUsage from the SDK result message (§4.7, M3 — a top-level sibling of usage, not nested inside it)", () => {
+  it("extracts modelUsage from the SDK result message (a top-level sibling of usage, not nested inside it)", () => {
     const ev = parseMessage({
       type: "result",
       is_error: false,
@@ -405,7 +405,7 @@ describe("Run — turn loop + record", () => {
     expect(rec.context).toEqual({ tools: ["Read", "Bash"], mcpServers: [{ name: "my-server", status: "connected" }], availableSkills: [] });
   });
 
-  it("seeds rec.context.availableSkills as an id-only list from the init event's skills array (§O1 fix — the authoritative spine, incl. plugin ids)", async () => {
+  it("seeds rec.context.availableSkills as an id-only list from the init event's skills array (the authoritative spine, incl. plugin ids)", async () => {
     const ev: AgentEvent[] = [
       { type: "init", tools: ["Skill"], mcpServers: [], skills: ["a", "b:c"], cwd: "/tmp" },
       { type: "result", isError: false },

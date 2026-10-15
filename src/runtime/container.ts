@@ -181,8 +181,8 @@ export function spawnContainer(
     // the run (confirmed live against a real container spawn before this was added). extraAllowedTools
     // is stated explicitly (no hidden extraTools→allowedTools coupling), keeping this tier's
     // CURRENT pre-approval set unchanged.
-    // The 5 skills/plugins discovery tools are declared on the SAME cowork lane as present_files (spec
-    // §3: `isEnabled` = `sessionType==="cowork"`, which container satisfies) — pre-approved for the same
+    // The 5 skills/plugins discovery tools are declared on the SAME cowork lane as present_files (their
+    // `isEnabled` is `sessionType==="cowork"`, which container satisfies) — pre-approved for the same
     // off-registry-auto-allow reason present_files is.
     disallowed: webFetchDisallowed,
     extraTools: toolLists.extraTools,

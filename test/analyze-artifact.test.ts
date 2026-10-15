@@ -43,7 +43,7 @@ function makeTmpDir(): string {
 }
 
 // ================================================================================================= //
-// §B2/§B3 outcome matrix (a)-(j) — analyzeArtifactFile / analyzeArtifacts
+// Outcome matrix (a)-(j) — analyzeArtifactFile / analyzeArtifacts
 // ================================================================================================= //
 
 describe("analyzeArtifactFile — outcome matrix", () => {
@@ -615,7 +615,7 @@ describe("analyzeArtifacts — (j) precedence / aggregation across files", () =>
 });
 
 // ================================================================================================= //
-// Source-collection tests — the §B2 collection contract itself
+// Source-collection tests — the collection contract itself
 // ================================================================================================= //
 
 describe("collectArtifactSources — target shapes", () => {

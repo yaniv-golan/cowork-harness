@@ -5,12 +5,11 @@ import type { MountedSkill } from "../run/skill-metadata.js";
  * The `skills` sdk-MCP server, driver-side — models the Desktop-side skill-discovery surface a real
  * cowork-lane session (container/hostloop) declares alongside `workspace`/`cowork`: `list_skills`
  * (always) and `suggest_skills` (gated). Binary-verified (2026-07-24 confirmation pass, app.asar
- * 1.24012.1 — see the A2 confirmation doc's §4/§5/§6): the tool inventory, both inputSchemas, both gate
+ * 1.24012.1): the tool inventory, both inputSchemas, both gate
  * ids (`suggestSkillsEnabled:245679952`, `proactiveSkillSuggestEnabled:1598976391`) and their effect on
  * the tool set, and the output envelope's field set + branch structure (the `note` variants, the
  * `.slice(0,15)` cap on `suggest_skills.resolved_skills`) are ALL pinned to the extracted asar. One
- * exception: `list_skills.resolved_skills`'s PER-ITEM shape was opaque in the extraction (confirmation
- * doc §6) — we mirror `suggest_skills`'s confirmed `{name,description,skill_id,is_user_created}` item
+ * exception: `list_skills.resolved_skills`'s PER-ITEM shape was opaque in the extraction — we mirror `suggest_skills`'s confirmed `{name,description,skill_id,is_user_created}` item
  * shape here, so treat that per-item shape as inferred, not binary-verified. The tool
  * DESCRIPTION strings below are a faithful prose reconstruction assembled from the confirmed semantic
  * fragments the extraction recovered (the routing rule, the fallback clause, the base-vs-proactive

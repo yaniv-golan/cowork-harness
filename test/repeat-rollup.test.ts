@@ -87,7 +87,7 @@ describe("buildRepeatRollup — cost/tokens/non-determinism", () => {
   });
 });
 
-describe("rollupPasses — the batch verdict formula (§8: ok redefined directly, no shadow field)", () => {
+describe("rollupPasses — the batch verdict formula (ok redefined directly, no shadow field)", () => {
   it("passes when passRate meets the threshold", () => {
     const rollup = buildRepeatRollup("t", 4, [rr({}), rr({}), rr({}), rr({ result: "error" })]); // 3/4 = 0.75
     expect(rollupPasses(rollup, 0.75)).toBe(true);

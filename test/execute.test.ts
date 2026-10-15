@@ -775,7 +775,7 @@ describe("collectArtifacts skips symlinks (lstat, no out-of-root follow, cycle-s
   });
 });
 
-// Working folder panel's file model (§6.3, M6): classify + fingerprint every file under the
+// Working folder panel's file model: classify + fingerprint every file under the
 // user-visible roots. Reuses collectArtifacts's walk (tested above); these tests cover only the
 // classification + hashing this function adds on top.
 describe("classifyWorkspaceFiles", () => {

@@ -139,7 +139,7 @@ describe("readonlyFolderRootsFromPlan (T3 — mode:r inputs get a body-less cass
   });
 });
 
-describe("pluginSkillRootsFromPlan (§6.2, O1 fix — whenToUse enrichment source roots)", () => {
+describe("pluginSkillRootsFromPlan (whenToUse enrichment source roots)", () => {
   it("a local-plugin mount with a `.claude-plugin/plugin.json` {name, skills} reads the manifest's name + skills subdir", () => {
     const { plan: p } = plan({ plugins: { local_plugins: ["./examples/skills/my-pdf-skill"] } });
     const roots = pluginSkillRootsFromPlan(p);

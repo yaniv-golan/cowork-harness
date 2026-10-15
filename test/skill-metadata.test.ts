@@ -19,7 +19,7 @@ function stagePluginSkill(pluginRoot: string, skillsSubdir: string, name: string
   writeFileSync(join(dir, "SKILL.md"), frontmatter);
 }
 
-describe("resolveAvailableSkills (§6.2, O1 fix — ids are the authoritative spine, disk only enriches whenToUse)", () => {
+describe("resolveAvailableSkills (ids are the authoritative spine, disk only enriches whenToUse)", () => {
   it("enriches a local skills.local id with whenToUse read from <configDir>/skills/<id>/SKILL.md", () => {
     const configDir = mkdtempSync(join(tmpdir(), "cwh-skillmeta-"));
     stageLocalSkill(configDir, "my-skill", "---\nname: my-skill\ndescription: Use this when doing X.\n---\n\n# My Skill\n");

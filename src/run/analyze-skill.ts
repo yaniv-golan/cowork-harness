@@ -1328,9 +1328,9 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
     perFile.push({ file, findings, suppressed });
   }
 
-  // Item 1 (Tier A): the artifact write-back findings (computed up-front) join `files[]`; they are never
-  // touched by the `analyze-skill: ignore` marker above (§B3: artifact rules are not silenceable by the
-  // blanket marker, since they run on a separate source set). `analysisFailures` is a SEPARATE top-level
+  // Tier A: the artifact write-back findings (computed up-front) join `files[]`; they are never
+  // touched by the `analyze-skill: ignore` marker above: artifact rules are not silenceable by the
+  // blanket marker, since they run on a separate source set. `analysisFailures` is a SEPARATE top-level
   // could-not-verify channel.
   const artifactByFile = new Map<string, SkillFinding[]>();
   for (const f of artifact.findings) {
@@ -1358,7 +1358,7 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
   // drive it in a headless DOM and OBSERVE whether a relative write-back fires and is lost — enriching the
   // static verdict with observed evidence (and catching guard-falseness / dynamic URLs Tier A can't).
   // jsdom is an OPTIONAL, dynamically-imported dependency; if absent, this reports it once. Tier B ENRICHES
-  // only — it NEVER changes the exit code (§B4: only a Tier-A `error` finding under --strict gates); a
+  // only — it NEVER changes the exit code (only a Tier-A `error` finding under --strict gates); a
   // `low`/`inconclusive`/`unavailable` runtime verdict never gates on its own. Trusted-source scope only.
   type RuntimeConfirmation = { path: string } & RuntimeVerdict;
   const runtimeConfirmations: RuntimeConfirmation[] = [];

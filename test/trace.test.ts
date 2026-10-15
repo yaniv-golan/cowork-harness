@@ -333,7 +333,7 @@ describe("trace — thinking rows", () => {
   });
 });
 
-// modelUsage cache-read-ratio footer (§4.7, M3) — formatTrace takes an OPTIONAL second param so every
+// modelUsage cache-read-ratio footer — formatTrace takes an OPTIONAL second param so every
 // existing one-argument call site (src/cli.ts, and the formatTrace(rows) calls above) keeps compiling.
 describe("formatTrace — cache-read-ratio footer", () => {
   const rows = [{ kind: "tool" as const, name: "Bash", detail: "ls" }];

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { eventsFromLines } from "../src/run/trace-view.js";
 import { canonicalizeInput, diffToolSequence, type NormalizedToolRow } from "../src/run/diff.js";
 
-// §9 lesson 1: self-diff the real committed cassette FIRST, before building the full command/rendering
+// Self-diff the real committed cassette FIRST, before building the full command/rendering
 // machinery — an early correctness signal, not a final regression test. If this isn't identical, the
 // normalization design is wrong before any more code gets built on top of it.
 function toolRowsFromEvents(lines: string[]): NormalizedToolRow[] {
@@ -13,7 +13,7 @@ function toolRowsFromEvents(lines: string[]): NormalizedToolRow[] {
     .map((e: any) => ({ name: e.name, canon: canonicalizeInput(e.input) }));
 }
 
-describe("§9 lesson 1 checkpoint: self-diff the real committed cassette", () => {
+describe("checkpoint: self-diff the real committed cassette", () => {
   it("example-pdf-skill.cassette.json diffed against itself is identical (every op is 'same')", () => {
     const cassette = JSON.parse(readFileSync("examples/replays/example-pdf-skill.cassette.json", "utf8"));
     const rows = toolRowsFromEvents(cassette.events);
