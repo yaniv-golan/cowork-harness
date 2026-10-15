@@ -6,8 +6,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.10.0] — 2026-10-15
+
 ### Upgrade notes
 
+- **Cassettes: no re-record needed.** Outside comments and newly exported helpers, the runtime, hostloop and session
+  code changed only in what `run --search-corpus` hands the spawn (the agent binary it already checked, and the proxy
+  env keys), and `record` refuses that flag. The `desktop-2.37337.1` re-sync adds web-search anchors and refreshes
+  provenance, and `verify-cassettes` reports the committed cassettes clean against it.
 - **`sync` now refuses a baseline whose web-search anchors cannot be confirmed (exit 1).** Before, it warned and
   wrote the baseline without them. Open Cowork once so the agent is staged, then re-run `sync`; to write without
   anchors anyway, pass `--allow-missing-search-anchors`. `--allow-empty` does not cover this refusal, and
