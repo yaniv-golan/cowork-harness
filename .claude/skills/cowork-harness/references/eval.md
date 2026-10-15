@@ -87,6 +87,20 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
   one `local_plugins` entry). Workaround: eval a copy of the session that declares the same directory under
   `local_plugins`, and check the `remote_plugins` path handling with an ordinary `run`.
 
+## Frozen search corpus (`--search-corpus`)
+
+- **Not for a change to what or when the skill searches**: a frozen corpus holds search fixed. Evaluate that live,
+  or split it: a live eval of the search change, then a frozen eval with a pool built evenly from both versions' runs.
+- `--search-corpus <pool>` (hostloop; `--search-corpus-miss`, `--search-corpus-min-score` as on `run`): one pool for
+  both arms, copied into the eval dir and pinned by hash; every rep checks the copy before it spends.
+- Refused before spend: a pool whose records come from one arm (or >60% of them) — `--allow-confounded-pool` runs it,
+  labelled CONFOUNDED; a mixed pool without `--allow-mixed-pool`; a pool built or exported before 4.10 that would
+  read balanced (rebuild or re-export it).
+- Buckets: `search_pool_mismatch` (not served from the pinned pool; any one exits 1) and `search_refused` (a search
+  was refused; never scored). Either filling an arm makes that scenario compare nothing.
+- The report prints both arms' served/miss/refused and mean top score, and marks asymmetric service CONFOUNDED
+  (placeholder thresholds; under 11 searches a side, not judged). CONFOUNDED never changes the exit code.
+
 ## Metric rows
 
 - One row per (scenario, declared metric). The test is exact two-sided Wilcoxon–Mann–Whitney, so ties and skewed
@@ -115,8 +129,8 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
 
 `0` completed — no drop fails the eval unless you pass `--fail-on`. `1` a drop or a worse metric at the `--fail-on`
 level, every row `insufficient`, a scenario that compared nothing, a metric row `not compared`, or the judge model
-differed across reps (an A/A run under `--fail-on possible`
-can exit 1 on noise). `2` usage or a refusal. `3` an arm snapshot could not be copied or staged.
+differed across reps, or a rep was not served from the pinned pool (an A/A run under `--fail-on possible`
+can exit 1 on noise). `2` usage or a refusal. `3` an arm snapshot or the pool copy could not be made or staged.
 
 ## Files
 

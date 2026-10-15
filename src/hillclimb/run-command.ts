@@ -52,6 +52,14 @@ import { makeHillclimbJobRunner } from "./job.js";
 import { incomparableMetricWarnings, scorerRobustnessWarnings } from "./check.js";
 import { existingFlowSnapshot, readVariantFileIfPresent, runHillclimb, termSafe, type RunOutcome } from "./runner.js";
 import { trackedSkill } from "./skill.js";
+import { effectivePool, PoolBuildError, resolvePoolDir } from "../search-corpus/pool.js";
+import { copyPinnedPool } from "../search-corpus/pool-copy.js";
+import { classifyProvenance, provenanceLine, provenanceRefusal, worseClass, type PoolProvenance } from "../search-corpus/provenance.js";
+import { searchCorpusLabel } from "../search-corpus/label.js";
+import type { SearchCorpusOption } from "../search-corpus/run.js";
+import { searchCorpusPreflight } from "../run/execute.js";
+import { loadBaseline } from "../baseline.js";
+import { flowRows, mixedRowsRefusal, otherVariantArms } from "./search-corpus.js";
 import { SNAPSHOT_ROOT_ENV, variantSnapshot } from "./snapshot.js";
 
 /** Where variant snapshots live: outside every git work tree, or the stager would mount them empty. */
@@ -110,6 +118,9 @@ export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolea
   runsRoot?: string;
   /** The run index the dry run prices from (this machine's `runs/index.jsonl`). */
   indexRows?: () => RunIndexRow[];
+  /** The frozen corpus's per-run refusals for a case, before any spend (default: `searchCorpusPreflight`, which reads
+   *  the credential and the agent binary). Returns the refusal, or null. */
+  searchCorpusPreflight?: (a: { scenario: Scenario; session: SessionConfig; fidelity: string }) => string | null;
 }
 
 const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -241,12 +252,14 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   // The plugin the variant runs. A variant with rows keeps the snapshot of its first run.
   // A dry run makes the same checks read-only, and takes no snapshot.
   let pluginDir = live;
+  let snapRootHandle: NoFollowRoot | undefined;
   {
     const variantRan = ["results.jsonl", "errors.jsonl"].some((f) => slotsIn(readVariantFileIfPresent(flowArg, v, f, deps.cwd)).size > 0);
     // A live runner of this variant may be mounting its snapshot: never re-take it under that runner.
     const holder = liveLockHolder(flowArg, v, deps.cwd);
     if (holder !== undefined) throw new UsageError(lockHeldMessage(holder, join(flowArg, v, ".lock")));
-    if (!args.dryRun) NoFollowRoot.open(snapshotRoot); // created no-follow: a planted link on its path is refused
+    // Created no-follow, and the handle kept: the pool copy is written through it, so a planted link is refused.
+    if (!args.dryRun) snapRootHandle = NoFollowRoot.open(snapshotRoot);
     const snap = variantSnapshot(live, { snapshotRoot, flowHash, variant: v, variantRan, checkOnly: args.dryRun });
     pluginDir = snap.dir;
     if (snap.created) say(`[${v}] plugin snapshot: ${tildeify(live)} → ${tildeify(snap.dir)}`);
@@ -414,6 +427,27 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   const skillName = tracked.name;
   say(tracked.name === undefined ? `[${v}] ${tracked.note}` : `[${v}] skill_invoked tracks ${tracked.id}`);
 
+  const corpus = args.searchCorpus
+    ? prepareSearchCorpus({
+        args,
+        deps,
+        say,
+        cases,
+        selected,
+        sessions,
+        sigs,
+        baselineOf: (c) => prep.baseline(c),
+        flowArg,
+        root: snapRootHandle,
+        dest: (identity) => join(snapshotRoot, flowHash, "search-pools", identity),
+      })
+    : undefined;
+  if (!args.searchCorpus && existing) {
+    // A live pass beside frozen rows is the same mix the other way round.
+    const mixed = mixedRowsRefusal(flowRows(existing), null);
+    if (mixed && !args.allowMixedSearch) throw new UsageError(mixed);
+  }
+
   const job = makeHillclimbJobRunner({
     runScenario: deps.runScenario,
     flags: deps.flags,
@@ -423,6 +457,8 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       session: sessions.get(spec.c.id)!,
       ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
       ...(flowPairwise ? { pairwise: pairwiseFor(spec.c) } : {}),
+      // The pinned copy, never the source: each rep refuses before it runs if the copy is not the pinned pool.
+      ...(corpus ? { searchCorpus: corpus.option } : {}),
     }),
     ...(deps.now ? { now: deps.now } : {}),
   });
@@ -544,9 +580,123 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       : {}),
     authHint: (c) => authFailureHint(c.scenario.fidelity, deps.tokenCheck(c.scenario.fidelity), deps.env),
     expectedContentSig: (c) => sigs.get(c.id),
+    ...(corpus ? { searchCorpus: corpus.meta } : {}),
     ...(tracked.name !== undefined ? { skillTracked: tracked.id } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),
   };
   return { runner, price, skill: args.skill !== undefined ? tracked.name : undefined };
+}
+
+/** `hillclimb run --search-corpus` before any spend: the pool loads and hashes; a mixed pool is never the baseline's
+ *  and otherwise needs --allow-mixed-pool; every selected case passes the run's own corpus refusals; the pool's
+ *  provenance against this variant and every variant with rows (a one-sided pool, a baseline-built pool judging v1
+ *  included, needs --allow-confounded-pool); the flow's rows must have been served from this same pool unless
+ *  --allow-mixed-search. A real pass then copies the pool under the snapshot root (content-addressed by the pool's
+ *  identity, shared by concurrent passes, verified before reuse); a dry run verifies the source and copies nothing. */
+function prepareSearchCorpus<F extends { label?: string; ablateSkill?: boolean }>(o: {
+  args: HillclimbRunArgs;
+  deps: RunCommandDeps<F>;
+  say: (l: string) => void;
+  cases: readonly HillclimbCase[];
+  selected: readonly HillclimbCase[];
+  sessions: Map<string, SessionConfig>;
+  sigs: Map<string, string>;
+  baselineOf: (c: HillclimbCase) => ReturnType<typeof loadBaseline>;
+  flowArg: string;
+  root: NoFollowRoot | undefined;
+  dest: (identity: string) => string;
+}): { option: SearchCorpusOption; meta: NonNullable<Parameters<typeof runHillclimb>[1]["searchCorpus"]> } {
+  const { args, deps, say } = o;
+  const v = args.variant;
+  const opt = args.searchCorpus!;
+  const src = resolvePoolDir(opt.pool);
+  let pool: ReturnType<typeof effectivePool>;
+  try {
+    pool = effectivePool(src, opt.minScore);
+  } catch (e) {
+    if (e instanceof PoolBuildError || (e as NodeJS.ErrnoException)?.code)
+      throw new UsageError(`--search-corpus ${opt.pool}: the pool cannot be read: ${message(e)}`);
+    throw e;
+  }
+  if (pool.manifest.mixed && v === BASELINE_REF)
+    throw new UsageError(
+      `--search-corpus ${opt.pool} is a mixed pool (${pool.manifest.skills.join(", ")}): a mixed pool is a measured variant, never the baseline`,
+    );
+  if (pool.manifest.mixed && !args.allowMixedPool)
+    throw new UsageError(
+      `--search-corpus ${opt.pool} is a mixed pool (${pool.manifest.skills.join(", ")}): pass --allow-mixed-pool to use it`,
+    );
+  const check =
+    deps.searchCorpusPreflight ??
+    ((a: { scenario: Scenario; session: SessionConfig; fidelity: string }) => {
+      const r = searchCorpusPreflight({
+        scenario: a.scenario,
+        session: a.session as Parameters<typeof searchCorpusPreflight>[0]["session"],
+        baseline: loadBaseline(a.scenario.baseline),
+        effectiveFidelity: a.fidelity,
+      });
+      return "refusal" in r ? r.refusal : null;
+    });
+  for (const c of o.selected) {
+    const why = check({
+      scenario: c.scenario,
+      session: o.sessions.get(c.id)!,
+      fidelity: effectiveTier(c.scenario.fidelity, o.baselineOf(c)),
+    });
+    if (why) throw new UsageError(`case ${c.id}: ${why}`);
+  }
+  // Provenance: this variant against every variant with rows, by scenario name.
+  const names = [...new Set(o.cases.map((c) => c.scenario.name))];
+  const scenarioOf = (caseId: string) => o.cases.find((c) => c.id === caseId)?.scenario.name;
+  const mine = {
+    label: v,
+    sigs: Object.fromEntries(o.cases.flatMap((c) => (o.sigs.has(c.id) ? [[c.scenario.name, o.sigs.get(c.id)!]] : []))),
+  };
+  const snap = existingFlowSnapshot(o.flowArg, deps.cwd);
+  const rows = snap ? flowRows(snap) : [];
+  const others = otherVariantArms(rows, v, scenarioOf);
+  let provenance: PoolProvenance | undefined;
+  for (const pair of others.length ? others.map((b) => [mine, b]) : [[mine]]) {
+    const p = classifyProvenance(pool.manifest, pool.records, names, pair);
+    provenance = provenance === undefined || worseClass(provenance.class, p.class) === p.class ? p : provenance;
+  }
+  const refusal = provenanceRefusal(provenance!);
+  if (refusal && !args.allowConfoundedPool) throw new UsageError(`--search-corpus ${opt.pool}: ${refusal}`);
+  if (refusal) provenance!.allowConfoundedPool = true;
+  const mixed = mixedRowsRefusal(rows, pool.sha256);
+  if (mixed && !args.allowMixedSearch) throw new UsageError(mixed);
+  const label = searchCorpusLabel(pool.manifest.poolId, pool.sha256);
+  say(`[${v}] [${label}]`);
+  say(`[${v}] ${provenanceLine(provenance!)}`);
+  let dir = src;
+  if (o.root) {
+    try {
+      dir = copyPinnedPool(o.root, src, o.dest(pool.manifest.sha256), opt.minScore).dir;
+    } catch (e) {
+      if (e instanceof InterruptedError) throw e;
+      throw new UsageError(`--search-corpus ${opt.pool}: the pool could not be copied under the snapshot root: ${message(e)}`);
+    }
+    say(`[${v}] search pool copy: ${tildeify(dir)}`);
+  } else
+    say(
+      `[${v}] dry run: the pool was read and verified, not copied (a copy that cannot be written is the one refusal a dry run cannot predict)`,
+    );
+  const cls = provenance!.class;
+  return {
+    option: {
+      pool: dir,
+      miss: opt.miss,
+      ...(opt.minScore !== undefined ? { minScore: opt.minScore } : {}),
+      expect: { sha256: pool.sha256, miss: opt.miss },
+    },
+    meta: {
+      sha256: pool.sha256,
+      miss: opt.miss,
+      label,
+      provenance: cls,
+      ...(cls === "one-sided" || cls === "unknown" ? { confounded: true as const } : {}),
+      ...(args.allowMixedSearch ? { allowMixedSearch: true as const } : {}),
+    },
+  };
 }

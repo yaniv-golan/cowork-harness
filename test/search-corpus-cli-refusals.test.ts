@@ -3,6 +3,7 @@ import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
 import { CLI, POSIX, exited, makeStubFixture, spawnCli, type StubFixture } from "./helpers/stub-agent.js";
+import { poolRecord, writeFixturePool } from "./search-corpus-fixture-pool.js";
 
 // `--search-corpus` refusals, end to end through the CLI. Each test asserts the reason, never only the exit code:
 // an unknown-flag guard would also exit non-zero. All are $0: every refusal fires before an agent is spawned.
@@ -68,11 +69,26 @@ describe.runIf(can)("--search-corpus refusals (CLI, $0)", () => {
     // An agent binary with no search anchors at all: the check reads the exact file the spawn would launch.
     const agent = join(f.root, "other-agent");
     writeFileSync(agent, "not an agent");
-    const r = await cli(f, ["run", scenario(f, "d.yaml", ["fidelity: hostloop"]), "--model", "claude-sonnet-5", "--search-corpus", "p"], {
+    // A readable pool, so the check reaches the binary (an unreadable pool is refused first, below).
+    const pool = join(f.root, "pool");
+    writeFixturePool(pool, [poolRecord({ scenario: "sc", variantHash: "x" })], { dups: 0 });
+    const r = await cli(f, ["run", scenario(f, "d.yaml", ["fidelity: hostloop"]), "--model", "claude-sonnet-5", "--search-corpus", pool], {
       COWORK_HOST_AGENT_BINARY: agent,
     });
     expect(r.code).not.toBe(0);
     expect(r.text).toMatch(/web-search anchors could not be read from it, the agent this run would launch/);
+    expect(readdirSync(f.runsDir)).toEqual([]);
+  });
+
+  it("refuses a pool that cannot be read, by name, with exit 2 and no run dir", async () => {
+    const f = fixture();
+    const pool = join(f.root, "torn-pool");
+    writeFixturePool(pool, [poolRecord({ scenario: "sc", variantHash: "x" })], { dups: 0 });
+    writeFileSync(join(pool, "pool.json"), "{ torn");
+    const r = await cli(f, ["run", scenario(f, "t.yaml", ["fidelity: hostloop"]), "--model", "claude-sonnet-5", "--search-corpus", pool]);
+    expect(r.code).toBe(2);
+    expect(r.text).toMatch(/the pool cannot be read: .*pool\.json is not JSON/);
+    expect(r.text).not.toMatch(/internal/i);
     expect(readdirSync(f.runsDir)).toEqual([]);
   });
 

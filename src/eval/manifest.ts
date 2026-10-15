@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Assertion, ScenarioMetric } from "../types.js";
 import type { Correction } from "./stats.js";
 import type { AgentPin, JudgePins } from "./pins.js";
+import type { PoolProvenance } from "../search-corpus/provenance.js";
 
 export const MANIFEST_FILE = "manifest.json";
 
@@ -46,7 +47,8 @@ export interface ManifestScenario {
 }
 
 export interface EvalManifest {
-  schemaVersion: 0;
+  /** 1 when the eval pins a frozen search corpus, so an older reader refuses it rather than report it unlabelled. */
+  schemaVersion: 0 | 1;
   evalId: string;
   startedAt: string;
   harnessVersion: string;
@@ -68,7 +70,15 @@ export interface EvalManifest {
      *  Absent in a manifest written before metrics were graded. */
     metricCorrection?: { rule: Correction; split: boolean };
   };
-  pins: { agent: AgentPin[]; judge: JudgePins };
+  pins: {
+    agent: AgentPin[];
+    judge: JudgePins;
+    /** The frozen search corpus every rep is served from: its effective hash, floor override and miss mode, and the
+     *  copy (relative to the eval dir) the reps read. */
+    searchCorpus?: { poolId: string; sha256: string; minScore?: number; miss: "empty" | "error"; copy: string };
+  };
+  /** Where the pool's records came from, relative to the two arms, decided before any spend. */
+  searchCorpusProvenance?: PoolProvenance;
   /** The skill whose invocation each rep records, or null when there is no single skill to check. */
   skill: string | null;
   answerKeyGuard: { evalFiles: number; findings: 0 };
@@ -76,6 +86,11 @@ export interface EvalManifest {
 
 export function readManifest(evalDir: string): EvalManifest {
   const m = JSON.parse(readFileSync(join(evalDir, MANIFEST_FILE), "utf8")) as EvalManifest;
-  if (m.schemaVersion !== 0) throw new Error(`${join(evalDir, MANIFEST_FILE)}: unsupported schemaVersion ${String(m.schemaVersion)}`);
+  if (m.schemaVersion !== 0 && m.schemaVersion !== 1)
+    throw new Error(`${join(evalDir, MANIFEST_FILE)}: unsupported schemaVersion ${String(m.schemaVersion)}`);
+  // Structurally inconsistent: a frozen-corpus manifest without its pin, or a pin without the version that guards it.
+  const pin = m.pins?.searchCorpus;
+  if ((m.schemaVersion === 1) !== (pin !== undefined) || (pin !== undefined && !/^[0-9a-f]{64}$/.test(pin.sha256)))
+    throw new Error(`${join(evalDir, MANIFEST_FILE)}: the frozen search corpus pin is inconsistent with schemaVersion ${m.schemaVersion}`);
   return m;
 }

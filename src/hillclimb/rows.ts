@@ -4,7 +4,9 @@
 //
 // Where an attempt goes, in order:
 //   1. the runner's own wall-clock ceiling fired           → errors, `timeout`
+//   1b. not served from the pass's pinned pool (refused before it ran, or another pool) → errors, `search_pool_mismatch`
 //   2. infrastructure (classifyTermination errored_infra)   → errors, `error` (rule in meta)
+//   2b. a search the frozen corpus refused (the run worked from different evidence)   → errors, `search_refused`
 //   3. positive served-model mismatch (runner-scaffold.mjs l.476-494)         → errors, `serving_substitution`
 //   3b. a main-loop message sent with another effort, an invalid one, or none → errors, `serving_substitution` (effort_not_sent)
 //   4. the agent's own failure (errored_agent)              → SCORED: every graded key 0, reason in meta
@@ -30,8 +32,11 @@ import {
   repRowValues,
   scenarioRows,
   semanticRefusalReason,
+  thrownKind,
+  agentRan,
   type ClassifiableResult,
 } from "../eval/classify.js";
+import { SearchPoolPinError } from "../search-corpus/pool.js";
 import { combineJudges } from "./judge-rollup.js";
 import { assertSig, caseKeyDecls, refusableAssertion, type MetricDecl, type PairwiseDecls } from "./grade-keys.js";
 import { metricEntries, metricSigs } from "./metric-keys.js";
@@ -94,6 +99,16 @@ export interface AttemptContext {
     skillTracked?: string;
     ablated?: boolean;
     nonDeterministic?: boolean;
+    /** The pass's frozen search corpus: what every rep must have been served from, and how its records relate to the
+     *  variants the flow compares. */
+    searchCorpus?: {
+      sha256: string;
+      miss: "empty" | "error";
+      label: string;
+      provenance: string;
+      confounded?: true;
+      allowMixedSearch?: true;
+    };
   };
 }
 
@@ -326,6 +341,32 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
     ...(sent.values.length === 1 && sent.invalid === 0 && sent.unsent === 0 ? { effort_sent: sent.values[0] } : {}),
   };
+  // The pass's corpus and this run's counts, on every row of a frozen pass (counts absent when the run kept none).
+  const sc = ctx.meta.searchCorpus;
+  const rsc = r?.searchCorpus;
+  const scMeta = sc
+    ? {
+        search_corpus: {
+          sha256: rsc?.sha256 ?? sc.sha256,
+          label: sc.label,
+          provenance: sc.provenance,
+          ...(sc.confounded ? { confounded: true } : {}),
+          ...(rsc
+            ? {
+                served: rsc.metrics.served,
+                miss: rsc.metrics.miss,
+                refused: rsc.metrics.refused,
+                ...(rsc.metrics.meanTopScore !== undefined ? { mean_top_score: rsc.metrics.meanTopScore } : {}),
+              }
+            : {}),
+          ...(() => {
+            const codes = (r?.verdict?.signals ?? []).map((x) => x.code).filter((c) => c.startsWith("search_corpus_"));
+            return codes.length ? { signals: codes } : {};
+          })(),
+          ...(sc.allowMixedSearch ? { allow_mixed_search: true } : {}),
+        },
+      }
+    : {};
   const errorRow = (failure_class: string, error: string, metaExtra: Record<string, unknown>): RowOut => ({
     dest: "errors",
     row: {
@@ -352,6 +393,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
         ...(Object.keys(models).length ? { models } : {}),
         ...(retriesUnrecorded ? { retries_unrecorded: true } : {}),
         ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
+        // The variant's snapshot signature, so a variant whose every row errored still names what it was.
+        ...(ctx.meta.contentSig !== undefined ? { content_sig: ctx.meta.contentSig } : {}),
+        ...scMeta,
         ...metaExtra,
       },
     },
@@ -360,13 +404,47 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
   // 1. The runner's ceiling.
   if (ctx.runnerTimeout) return errorRow("timeout", `exceeded the runner's wall-clock ceiling after ${ctx.attemptS}s`, {});
 
-  // 2. Infrastructure, from the shared termination table.
+  // 1b. Not served from the pinned pool: positive evidence only, ahead of the termination table (a usage limit beside it
+  // keeps its rule). The live error is the same object the job threw, so it is tested by class here.
   const evidence = { result: r as ClassifiableResult | undefined, thrown: a.thrown };
   const term = classifyTermination(evidence);
+  if (sc) {
+    const pinErr = a.thrown !== undefined && thrownKind(a.thrown) === "search_pool_pin";
+    const off = rsc === undefined ? r !== undefined && agentRan(r) : rsc.sha256 !== sc.sha256 || rsc.miss !== sc.miss;
+    if (pinErr || off) {
+      const got =
+        a.thrown instanceof SearchPoolPinError ? a.thrown.got : pinErr ? null : rsc ? { sha256: rsc.sha256, miss: rsc.miss } : null;
+      return errorRow(
+        "search_pool_mismatch",
+        pinErr
+          ? message(a.thrown)
+          : rsc
+            ? `served from another pool (${rsc.sha256.slice(0, 8)}, miss ${rsc.miss})`
+            : "the run kept no frozen search corpus",
+        {
+          failure_rule: term.rule,
+          search_corpus: {
+            sha256: sc.sha256,
+            label: sc.label,
+            provenance: sc.provenance,
+            pool_mismatch: { expected: { sha256: sc.sha256, miss: sc.miss }, got },
+          },
+        },
+      );
+    }
+  }
+
+  // 2. Infrastructure, from the shared termination table.
   if (term.bucket === "errored_infra") {
     const text = a.thrown !== undefined ? message(a.thrown) : `run ended ${r?.result ?? "without a result"} (${term.rule})`;
     return errorRow("error", text, { failure_rule: term.rule, ...(term.unclassified ? { unclassified: true } : {}) });
   }
+
+  // 2b. A search the frozen corpus refused: that rep worked from different evidence, so it is never scored.
+  if ((rsc?.metrics.refused ?? 0) > 0)
+    return errorRow("search_refused", `${rsc!.metrics.refused} search(es) refused by the frozen corpus; the rep is not scored`, {
+      failure_rule: "search_refused",
+    });
 
   // 3. Positive served-model evidence.
   const substituted = servedModelMismatch(ctx.pin, mains);
@@ -484,6 +562,8 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       env: { ...ctx.meta.env, ...(ev.agentVersion !== undefined ? { agentVersion: ev.agentVersion } : {}) },
       flow_hash: ctx.meta.flowHash,
       ...(ctx.meta.contentSig !== undefined ? { content_sig: ctx.meta.contentSig } : {}),
+      // The pool the row was served from: its own meta key, keyed by the mixed-row refusal, never in metric_sigs.
+      ...scMeta,
       ...(ctx.meta.skillHash !== undefined ? { skill_hash: ctx.meta.skillHash } : {}),
       ...(ctx.meta.skillTracked !== undefined ? { skill_tracked: ctx.meta.skillTracked } : {}),
       ...requested,

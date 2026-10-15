@@ -133,7 +133,7 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   answer; such a run is labelled `[headless, no answer channel — not Cowork]`, and `stats` lists it as its own row
   under every `--group-by`), `searchCorpus` (present when `--search-corpus` served the run's web searches from a pool:
   the pool, its hash, the `frozen search corpus …` label and the counts served, missed and refused; `stats` groups such
-  runs per pool, never with live ones),
+  runs per pool, never with live ones, and leaves a run with a refused search out of its pass rate, as `--repeat` does),
   `scratchpadEvidenceComplete` (did a COMPLETE scratchpad
   walk observe this run — what distinguishes "nothing was left undelivered" from "cannot tell"), `cost` (`cost.usd` = the SDK's
   `total_cost_usd` for the run — the authoritative single-run spend of the agent session, which leaves out the `semantic_matches` judge and the LLM decider calls; NOT the same source as summing

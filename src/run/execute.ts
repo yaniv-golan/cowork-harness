@@ -1,5 +1,6 @@
 import { warn, writeTextAtomic } from "../io.js";
 import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
+import { effectivePool, PoolBuildError, resolvePoolDir } from "../search-corpus/pool.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
 import {
@@ -319,6 +320,49 @@ export interface ExecuteOptions {
  *  (128 + 1 + 8) and prevents names that share a 128-char prefix from colliding in the filesystem.
  *  Format: <up-to-128-char-prefix>-<8-hex-chars>
  */
+/** `--search-corpus`: everything refused before the run dir exists when the frozen promise cannot hold for this run,
+ *  judged over the env the agent will actually get at hostloop (the operator layer, the baseline's spawn env and the
+ *  session's knobs, built the way the spawn builds it; paths are placeholders, only the key values matter), and the
+ *  binary the spawn will launch, whose search anchors must be the baseline's or every search would be refused. A run
+ *  calls it once and spawns exactly the binary it checked; eval and hillclimb call it per (variant, scenario) before
+ *  any spend, so a refusal stops the batch instead of failing every rep. */
+export function searchCorpusPreflight(o: {
+  scenario: Scenario;
+  session: ReturnType<typeof loadSession>;
+  baseline: PlatformBaseline;
+  effectiveFidelity: string;
+  resume?: boolean;
+  /** Checked after the tier and environment refusals and before the agent binary: the pool reads and verifies. */
+  pool?: { pool: string; minScore?: number };
+}): { refusal: string } | { agentEnv: NodeJS.ProcessEnv; agentBinary: string } {
+  const agentEnv = buildHostLoopNativeEnv(o.baseline, {
+    configDir: "/search-corpus-refusal-check",
+    folderHostPaths: [],
+    extra: runtimeAuthEnv(),
+    agentEnv: agentEnvOverrides(o.session.agent_env),
+  });
+  const why = searchCorpusRefusal({
+    fidelity: o.effectiveFidelity,
+    deviceBridge: o.scenario.device_bridge === true,
+    baseline: o.baseline,
+    authEnv: runtimeAuthEnv(),
+    agentEnv,
+    resume: o.resume === true,
+  });
+  if (why) return { refusal: why };
+  if (o.pool)
+    try {
+      effectivePool(resolvePoolDir(o.pool.pool), o.pool.minScore);
+    } catch (e) {
+      if (!(e instanceof PoolBuildError) && !(e as NodeJS.ErrnoException)?.code) throw e;
+      return { refusal: `--search-corpus ${o.pool.pool}: the pool cannot be read: ${(e as Error).message}` };
+    }
+  const agentBinary = resolveHostAgentBinary(o.baseline);
+  const drift = agentAnchorsRefusal(agentBinary, o.baseline.agentBinary!.searchAnchors!);
+  if (drift) return { refusal: drift };
+  return { agentEnv, agentBinary };
+}
+
 export function slugForPath(name: string): string {
   const full =
     name
@@ -919,37 +963,25 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // `--search-corpus`: refused before the run dir exists when the frozen promise cannot hold for this run. Judged over
   // the env the agent will actually get at hostloop: the operator layer, the baseline's spawn env and the session's
   // knobs, built the way the spawn builds it (paths are placeholders; only the key values matter here).
-  const searchCorpusAgentEnv = opts.searchCorpus
-    ? buildHostLoopNativeEnv(baseline, {
-        configDir: "/search-corpus-refusal-check",
-        folderHostPaths: [],
-        extra: runtimeAuthEnv(),
-        agentEnv: agentEnvOverrides(session.agent_env),
+  const preflight = opts.searchCorpus
+    ? searchCorpusPreflight({
+        scenario,
+        session,
+        baseline,
+        effectiveFidelity,
+        resume: !!opts.resume || opts.sessionId !== undefined,
+        // A plain run's pool must read before the run dir exists (exit 2). Under a pin (eval, hillclimb) the pool is a
+        // private copy, and one that will not read is that rep's pool mismatch, which startRunSearchCorpus raises.
+        ...(opts.searchCorpus.expect ? {} : { pool: opts.searchCorpus }),
       })
     : undefined;
-  if (opts.searchCorpus) {
-    const why = searchCorpusRefusal({
-      fidelity: effectiveFidelity,
-      deviceBridge: scenario.device_bridge === true,
-      baseline,
-      authEnv: runtimeAuthEnv(),
-      agentEnv: searchCorpusAgentEnv!,
-      resume: !!opts.resume || opts.sessionId !== undefined,
-    });
-    if (why) throw new UsageError(why);
-  }
+  if (preflight && "refusal" in preflight) throw new UsageError(preflight.refusal);
+  const searchCorpusAgentEnv = preflight?.agentEnv;
+  const searchCorpusAgentBinary = preflight?.agentBinary;
   // A `search_corpus_*` key reads the frozen corpus's record: without one the run could only fail it, so it is refused
   // before any spend.
   const scKeyRefusal = opts.searchCorpus ? undefined : searchCorpusAssertRefusal(scenario.assert);
   if (scKeyRefusal) throw new UsageError(scKeyRefusal);
-  // `--search-corpus`: the binary the spawn will launch, resolved once here so it is checked before the run dir exists
-  // and the spawn runs exactly what was checked. Its search anchors must be the baseline's, or every search would be
-  // refused.
-  const searchCorpusAgentBinary = opts.searchCorpus ? resolveHostAgentBinary(baseline) : undefined;
-  if (searchCorpusAgentBinary) {
-    const drift = agentAnchorsRefusal(searchCorpusAgentBinary, baseline.agentBinary!.searchAnchors!);
-    if (drift) throw new UsageError(drift);
-  }
 
   // `answer_channel: none` and `agent_env.artifacts_root`: refused before the run dir exists, like the checks above.
   // Only what the USER chose counts as a decider here (`onUnansweredFlag`, not a caller's resolved `onUnanswered`).

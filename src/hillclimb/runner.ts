@@ -95,6 +95,8 @@ export interface RunnerDeps {
   lever?: string;
   /** The variant snapshot's content signature for a case (each scenario's session fingerprints apart). */
   expectedContentSig?: (c: HillclimbCase) => string | undefined;
+  /** The pass's frozen search corpus, recorded on every row (`meta.search_corpus`). */
+  searchCorpus?: NonNullable<AttemptContext["meta"]["searchCorpus"]>;
   /** The registered skill id this pass's `skill_invoked` is measured against (`<plugin>:<name>`), recorded on every
    *  scored row as `meta.skill_tracked`; absent when the column is omitted. */
   skillTracked?: string;
@@ -500,6 +502,7 @@ async function run(
           ...(deps.skillTracked !== undefined ? { skillTracked: deps.skillTracked } : {}),
           ...(args.ablate ? { ablated: true } : {}),
           ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
+          ...(deps.searchCorpus ? { searchCorpus: deps.searchCorpus } : {}),
         },
       };
       let out: ReturnType<typeof attemptRow>;

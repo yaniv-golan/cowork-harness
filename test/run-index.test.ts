@@ -1238,7 +1238,8 @@ describe("a frozen search corpus in the index and stats", () => {
   const B = "a".repeat(8) + "b".repeat(56); // the same 8-hex display prefix, a different pool
   it("the row carries the pool's full hash and label, and omits it for a live run", () => {
     const r = indexRowFromResult(rr({ searchCorpus: corpus(A) }), { command: "run", partial: false });
-    expect(r.searchCorpus).toEqual({ sha256: A, label: corpus(A).label });
+    // `refused` is written always, 0 included: absent means a row written before it was recorded.
+    expect(r.searchCorpus).toEqual({ sha256: A, label: corpus(A).label, refused: 0 });
     expect("searchCorpus" in indexRowFromResult(rr({}), { command: "run", partial: false })).toBe(false);
   });
   it.each(["scenario", "fidelity", "label", "skill-hash"] as const)(
@@ -1273,5 +1274,32 @@ describe("a frozen search corpus in the index and stats", () => {
     const rows = muteStderr() && readIndex(dir);
     expect(rows.map((r) => r.scenario)).toEqual(["a"]);
     expect(rows[0]!.searchCorpus?.sha256).toBe(A);
+  });
+
+  it("a negative or fractional refused count is quarantined; absent and 0 are kept", () => {
+    const dir = mkdtempSync(join(tmpdir(), "run-index-"));
+    const base = indexRowFromResult(rr({ scenario: "a", searchCorpus: corpus(A) }), { command: "run", partial: false });
+    const lines = [
+      { ...base, scenario: "zero", searchCorpus: { sha256: A, label: "l", refused: 0 } },
+      { ...base, scenario: "absent", searchCorpus: { sha256: A, label: "l" } },
+      { ...base, scenario: "neg", searchCorpus: { sha256: A, label: "l", refused: -1 } },
+      { ...base, scenario: "frac", searchCorpus: { sha256: A, label: "l", refused: 0.5 } },
+    ];
+    writeFileSync(join(dir, "index.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    expect((muteStderr() && readIndex(dir)).map((r) => r.scenario)).toEqual(["zero", "absent"]);
+  });
+
+  it("a run with a refused search leaves stats' pass rate and run count, and is counted apart; an older row is named", () => {
+    const rows = [
+      row({ scenario: "a", pass: true, searchCorpus: { sha256: A, label: "l", refused: 0 } }),
+      row({ scenario: "a", pass: false, searchCorpus: { sha256: A, label: "l", refused: 0 } }),
+      row({ scenario: "a", pass: true, searchCorpus: { sha256: A, label: "l", refused: 3 } }),
+      row({ scenario: "a", pass: true, searchCorpus: { sha256: A, label: "l" } }),
+    ];
+    const [s] = buildStats(rows, {}).summaries;
+    expect(s).toMatchObject({ runs: 3, searchRefusedRuns: 1, searchRefusedUnrecorded: 1 });
+    expect(s!.passRate).toBeCloseTo(2 / 3);
+    expect(s!.searchCorpus).toEqual({ sha256: A, label: "l" });
+    expect(formatStatsLine(s!)).toMatch(/1 run\(s\) with refused searches excluded.*1 frozen run\(s\) predate the refused count/);
   });
 });

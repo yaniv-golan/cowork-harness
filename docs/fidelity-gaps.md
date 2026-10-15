@@ -1409,6 +1409,11 @@ searches (evaluate that live). Every surface labels such a run `frozen search co
   stdio MCP servers and other child processes inherit the proxy and are tunnelled through it.
 - **Not at every tier.** `protocol`, `container`, `microvm` and `chat` are refused; so are `record` and a multi-leg or
   `device_bridge` scenario.
+- **In `eval` and `hillclimb`, the pool decides the comparison.** Both arms (or every variant) see the same recorded
+  results, so the web's variance drops out, but a pool drawn from one arm's own runs can favour it. Both commands
+  check where a pool's records came from before any spend and refuse a one-sided pool unless told to run it as
+  CONFOUNDED; `eval` also marks arms the same pool served unequally. Neither can tell whether the edit would have
+  searched differently live: that is what a frozen corpus holds fixed.
 
 ## `answer_channel: none` has no Cowork counterpart
 

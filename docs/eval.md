@@ -182,9 +182,15 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is
 - `--target-effect <pp>` — with `--dry-run`, the change to size N for, in percentage points.
 - `--max-budget-usd <x>` — refuse before any run when history says the eval would cost more than x; see
   [`--max-budget-usd`](#--max-budget-usd).
+- `--search-corpus <pool>` — serve both arms' web searches from one recorded pool, hostloop only; see
+  [A frozen search corpus](#a-frozen-search-corpus---search-corpus). `--search-corpus-miss empty|error` and
+  `--search-corpus-min-score <n>` work as on `run`.
+- `--allow-confounded-pool` — run a pool whose records come from one arm (or whose split cannot be bounded); every
+  surface then says CONFOUNDED.
+- `--allow-mixed-pool` — accept a pool built with `search-pool build --mixed` (several skills).
 - `--output-format json` — the envelope
-  `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`,
-  with `ok` true exactly when the exit code is 0.
+  `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`
+  (plus `searchCorpus` with `--search-corpus`), with `ok` true exactly when the exit code is 0.
 
 ## How to read the report
 
@@ -242,6 +248,8 @@ it landed in.
 | a stalled question in a scenario that asserts `allow_stall: true` | counted as a run that completed (rule `stall_allowed`): its assertions are graded, and the pin and judge rows still apply |
 | the agent's own failure: a timeout, `error_max_turns`, a stalled or unanswered question, a crash | **fails every row** (it still counts) |
 | the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
+| with `--search-corpus`: not served from the pinned pool — refused before it ran because the eval's copy changed, served from another pool or miss mode, or (under the pin) with no frozen corpus although its agent ran (a live model answered, or it spent) — one that stopped before its agent ran stays infrastructure | excluded as infrastructure, counted and named (`search_pool_mismatch`); any such rep makes the eval exit 1. It outranks every other bucket, but keeps its termination rule (a usage limit beside it still shows as one) |
+| with `--search-corpus`: a search the corpus refused (`searchCorpus.metrics.refused > 0`) | excluded as infrastructure, counted and named (`search_refused`): that arm worked from different evidence. It outranks the agent's own failure, because a refused search hands the agent an error |
 | one assertion's judge output was invalid | only that assertion's rows lose the rep |
 | one `semantic_matches` assertion refused for unavailable evidence (its `semanticEvidence` reason is not `graded`) | only that assertion's rows lose the rep — the roll-up and every claim — and it is counted per arm, by reason |
 
@@ -308,7 +316,7 @@ estimates from an offline table (n = 4 to 6 only).
 | `missing_artifact`, `missing_path`, `not_json`, `not_a_number`, `pre_run` (the skill did not produce the number) | **worst rank** |
 | `size`, `readonly`, `remote`, and a command metric's `command_failed`, `command_timeout`, `command_output`, `nondeterministic` and `no_events` — the scorer, the capture or a cap, not the skill | **excluded**, counted per arm, and guarded (below) |
 | `pruned`, `no_manifest`, a completed rep with no entry for the id (`metric_unrecorded`), and a command metric's `command_changed` (the rep was scored by another script than the one the manifest froze), `command_missing` and `command_not_allowed` — the comparison itself is broken | the row is **`not compared`**: out of the family, never gates, and the eval exits 1 |
-| infrastructure, drift, pin and judge-prompt mismatches | excluded, as on every row |
+| infrastructure, drift, pin and judge-prompt mismatches, a refused search, a frozen-pool mismatch | excluded, as on every row |
 
 A worst-ranked rep ranks strictly below every measured value, including a value at a bounded metric's own worst
 bound, and ties only with other worst-ranked reps: "did not produce the number" is not "produced the worst number".
@@ -395,7 +403,62 @@ grades none, and its exit code is unchanged. Re-run the eval to grade them.
   other tier gives the agent a managed config dir, and there it is refused. The check cannot see a token that is present but expired — a rep
   that then fails to authenticate is excluded as infrastructure (above).
 
+- **A frozen search corpus** (`--search-corpus`): the pool must load and verify; a mixed pool needs
+  `--allow-mixed-pool`; each arm × scenario must pass the checks a `run --search-corpus` makes (hostloop, the
+  credential from the environment, the agent's search anchors); and a pool whose records come from one arm is
+  refused unless `--allow-confounded-pool` ([below](#a-frozen-search-corpus---search-corpus)).
+
 A refused eval leaves nothing in its eval dir.
+
+## A frozen search corpus (`--search-corpus`)
+
+`--search-corpus <pool>` serves every web search of both arms from one pool built with `search-pool build`,
+instead of searching live. Both arms then see the same recorded results, so the web's day-to-day variance drops
+out of the comparison.
+
+**It holds search fixed, so it cannot evaluate a change to what or when the skill searches.** A new query gets a
+miss or a nearby record, and a pool built from the old version makes any rewording read as a regression. Evaluate a
+search change live (no corpus, more reps). If you also want a frozen eval of the steps after search, split it: a
+live eval of the search change, then a frozen eval with a pool built evenly from both versions' live runs.
+
+- **The pool is pinned and copied.** Before the first run the pool is copied into `<eval-dir>/search-pool/`, and its
+  hash (with `--search-corpus-min-score`, if given) and miss mode are pinned in the manifest. Every rep is served
+  from the copy and checks it against the pin before it starts; a rep whose copy does not match is refused before
+  it spends, and lands in `search_pool_mismatch` (above). Any such rep makes the eval exit 1. `report.md` names each one (arm, scenario, rep, and the cause: the copy
+  could not be read, or the expected and found hashes), and `summary.searchPoolMismatch` carries the count, the count per arm and the list
+  (`list[]`: `{arm, scenario, rep, runDir, detail}`, `runDir` `~`-relative or null when the rep made none).
+- **Where the pool's records came from** is checked before any spend, per scenario, against the two arms' skill
+  content signatures (the value each run's `fingerprint.contentSig` records):
+  - `disjoint` — no record from either arm (a third version's runs);
+  - `balanced` — records from both arms, neither holding more than 60% of them;
+  - `one-sided` — records from one arm only, or one holding more than 60% — **refused** unless
+    `--allow-confounded-pool`, and then labelled `CONFOUNDED: pool drawn from <arm>` on every surface;
+  - `unknown` — some records name no signature, or come from a scenario the eval does not compare (a signature
+    folds in the scenario's skills scope and session, so another scenario's hash proves nothing): labelled
+    CONFOUNDED, not refused. One unknown record never turns a one-sided pool into a runnable one.
+
+  A record several runs produced is kept once, under its first run, so the pool records how many duplicates it
+  dropped and the 60% test takes the worst case. A pool built or exported before 4.10 does not record that count:
+  one that would read `balanced` is refused, because its split cannot be bounded. Rebuild it with
+  `search-pool build`, or re-export it from a pool built by this harness; `--allow-confounded-pool` runs it as
+  CONFOUNDED. Matching is by skill content as hashed under the scenario's session: build pools from runs of the
+  same scenario and session, or a pool from your own arm can read as a third version.
+- **Both arms' search metrics side by side.** The report prints, per arm and per scenario, the searches served and
+  missed, the miss rate and the mean top score over each arm's scored reps, and how many reps a refused search
+  excluded.
+- **The asymmetry marker** says the two arms were served unequally by the same pool: a miss-rate gap above 0.10 or
+  a mean-top-score ratio below 0.8 marks the comparison CONFOUNDED even for a `disjoint` or `balanced` pool. Both
+  thresholds are **placeholders**: the kept runs could not separate a provenance bias from noise, so no value was
+  derived from them. Below 11 served plus missed searches on either side the cell is "not judged" (one search would
+  move the rate past the gap). At the default floor (0.40), with single-rep arms of at least 11 searches, it fired on
+  0 of 7 same-version comparisons (1 of 7 at 0.45), served mostly from pools of 6 to 17 runs; its false-alarm rate at
+  a real eval's operating point (several reps summed per arm) is unmeasured. Treat it as a rough guard. CONFOUNDED
+  never changes the exit code; it is `summary.confounded` in `report.json`.
+- **A judge on recorded searches.** Each arm's count of reps whose verdict carried `search_corpus_semantic_judge`
+  (a `semantic_matches` or `semantic_pairwise` grade of a frozen run) is printed: a grade there is not evidence of
+  research quality.
+- `eval --dry-run` copies and verifies the pool too (into its temp dir), so it refuses where the real eval would.
+  Its cost and pass-rate history leaves frozen-corpus runs out: their searches were not billed and not live.
 
 ## Exit codes
 
@@ -406,9 +469,11 @@ A refused eval leaves nothing in its eval dir.
   metric row that is `possible worse`, `confirmed worse` or `insufficient_unmeasured`; with `--fail-on confirmed`, a
   `confirmed` drop or a `confirmed worse` metric only. Also, with or without it: every row `insufficient`, metric rows
   included (`insufficient_refusals` / `insufficient_unmeasured` rows do not count toward this), a scenario that
-  compared nothing (below), a metric row `not compared`, or the judge model differed across reps. An A/A run under `--fail-on possible` can exit 1 on noise alone.
-- `2` — usage, or any refusal before the first run (the `--max-budget-usd` refusal included).
-- `3` — an arm snapshot could not be copied, or failed its staging preflight.
+  compared nothing (below), a metric row `not compared`, the judge model differed across reps, or (with
+  `--search-corpus`) any rep was not served from the pinned pool. An A/A run under `--fail-on possible` can exit 1 on noise alone.
+- `2` — usage, or any refusal before the first run (the `--max-budget-usd` refusal included; with `--search-corpus`, a
+  one-sided, mixed or unbounded pool, a pool that cannot be read, or a corpus check a run would fail).
+- `3` — an arm snapshot or the pool copy could not be made, or failed its staging preflight.
 
 Under `--dry-run`: `0` the plan was printed; `2` any refusal the real eval would make before its first run;
 `3` as above, or the dry run's temp dir is inside a git work tree, or git cannot tell whether it is (set
@@ -421,7 +486,11 @@ Judged per scenario, for each arm:
 
 - **Every rep of both arms errored** (infrastructure or the agent's own failure, in any mix): 0 against 0
   is not a comparison. The scenario's rows get no reps, so they are `insufficient`, and the eval exits 1.
-- **Every rep of one arm is infrastructure**: that arm never ran the skill. Same outcome.
+- **Every rep of one arm is infrastructure** — counting a refused search and a frozen-pool mismatch, in any mix:
+  that arm never ran the skill on the evidence. Same outcome. The other exclusions (drift, pin, judge prompt) keep
+  their rows `insufficient` without this exit. An arm that mixes the agent's own failures with pool mismatches,
+  against an arm with valid reps, is still scored: the agent's reps fail every row and the mismatched ones are left
+  out, as with today's mix of the agent's failures and infrastructure.
 - **Every rep of one arm is the agent's own failure, and the other arm has valid reps**: a skill that
   crashes every time is exactly the regression an eval should show, so the reps are scored (each fails
   every row) and the rows show the drop. The header still names the arm and its error. It exits 0 unless
@@ -488,7 +557,10 @@ session hashes, each scenario's assertions and metric declarations, pins, settin
 correction), `arms/`, `runs.jsonl` (one line per finished job, with every field the report reads — each rep's
 metric values included — and a `semantic_pairwise` grade's per-order outcomes under `order: both`, for reading position bias), `report.json` (`schemaVersion: 0`; each section's `metricRows`, `metricFamily` and `families`, and
 `summary.metricLabels`, `metricsRecorded`, `families`, `confirmReach` and `notCompared`) and `report.md` (host paths
-outside `$HOME` redacted, the count in the header).
+outside `$HOME` redacted, the count in the header). With `--search-corpus`, also `search-pool/` (the pinned copy every
+rep was served from), the manifest's `pins.searchCorpus` and `searchCorpusProvenance` (`schemaVersion: 1`, so an
+older harness refuses the dir rather than report it without its label), each `runs.jsonl` line's `searchCorpus`
+counts, and `report.json`'s `searchCorpus` and `summary.searchPoolMismatch` / `summary.confounded`.
 
 The runs themselves are ordinary run dirs under the runs root, labelled `eval:<eval-id>:<arm>`, so
 `prune`'s `--keep-last` applies to them: at the defaults an eval leaves 10 runs per scenario and a bare

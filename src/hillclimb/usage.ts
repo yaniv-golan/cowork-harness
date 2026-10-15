@@ -2,7 +2,15 @@
 // usage-guard registry in src/run/cassette.ts imports these, so this module must not import anything that
 // imports cassette.ts.
 
-export const HILLCLIMB_RUN_BOOLEAN_FLAGS = ["--approve-harness", "--ablate", "--dry-run", "--no-copy-inputs"] as const;
+export const HILLCLIMB_RUN_BOOLEAN_FLAGS = [
+  "--approve-harness",
+  "--ablate",
+  "--dry-run",
+  "--no-copy-inputs",
+  "--allow-confounded-pool",
+  "--allow-mixed-pool",
+  "--allow-mixed-search",
+] as const;
 export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--flow",
   "--variant",
@@ -18,6 +26,9 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--output-format",
   "--dotenv",
   "--run-dir",
+  "--search-corpus",
+  "--search-corpus-miss",
+  "--search-corpus-min-score",
 ] as const;
 export const HILLCLIMB_RUN_REPEATED_FLAGS = ["--case"] as const;
 /** `hillclimb regrade`'s own booleans (its value flags are a subset of run's). */
@@ -76,7 +87,9 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
        [--concurrency N] [--timeout-s N (0 = no ceiling)] [--approve-harness] [flags]
        The runner for /claude-api hillclimb: runs every scenario --reps times into <flow>/<variant>/ with the
        runner-scaffold contract (results.jsonl, errors.jsonl, traces/, progress.txt, summary.json). Exit 0 all
-       attempts ok, 1 any failed attempt or a mid-run stop, 2 refused before spending. See docs/cli.md.
+       attempts ok, 1 any failed attempt (search_pool_mismatch and search_refused rows included) or a mid-run stop,
+       2 refused before spending (with --search-corpus: a one-sided, mixed or unreadable pool, rows served from another
+       pool, or a pool copy that cannot be written). See docs/cli.md.
   --flow DIR              flow directory (default .claude/hillclimb/flow)
   --variant ID            'baseline' or 'v<N>' (default baseline)
   --model ID              concrete model id the agent must be served by; an alias is refused
@@ -100,6 +113,13 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
                           several skills. It joins the harness sha, so changing it needs
                           --approve-harness; pass the same --skill on every pass
   --no-copy-inputs        do not copy session uploads into <flow>/inputs/
+  --search-corpus POOL    serve every rep's web searches from a recorded pool, copied under the snapshot root and
+                          pinned by hash (hostloop only); --search-corpus-miss and --search-corpus-min-score as on run.
+                          It holds search fixed, so it cannot climb a change to what or when the skill searches. Refused
+                          before spend when the pool's records come from one variant the flow compares (a pool from the
+                          baseline's own rounds judging v1 included) unless --allow-confounded-pool; a mixed pool is
+                          never the baseline's and otherwise needs --allow-mixed-pool
+  --allow-mixed-search    run beside rows served from another pool, or searched live (recorded on every row)
   --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)
   --output-format text|json   json: one envelope on stdout at exit
   --dotenv FILE  --run-dir DIR   as on every command`;

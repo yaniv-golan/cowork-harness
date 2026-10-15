@@ -99,7 +99,8 @@ const TURN_KEYS = new Set(["role", "content", "name", "thinking", "attachments"]
 /** SCHEMA.md l.172-173. */
 const ATTACHMENT_KINDS = new Set(["image", "svg", "html", "pdf", "json", "text", "code", "file", "url"]);
 /** runner-scaffold.mjs failure classes (l.291, 318, 491, 555). Others are allowed but noted. */
-const KNOWN_FAILURE_CLASSES = new Set(["error", "serving_substitution", "timeout"]);
+// Plus the harness's two frozen-search-corpus classes: a rep served off the pinned pool, and one whose search was refused.
+const KNOWN_FAILURE_CLASSES = new Set(["error", "serving_substitution", "timeout", "search_pool_mismatch", "search_refused"]);
 /** runner-scaffold.mjs l.551-564: every key an errors.jsonl line may carry. `meta` is ours. */
 const ERROR_ROW_KEYS = new Set([
   "prompt_id",

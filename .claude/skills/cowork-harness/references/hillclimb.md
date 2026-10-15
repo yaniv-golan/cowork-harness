@@ -79,6 +79,14 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
 `--case ID`, `--skill NAME`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--decider-cmd CMD` or
 `--decider-dir DIR`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
+- **`--search-corpus POOL`** (with `--search-corpus-miss`, `--search-corpus-min-score`; hostloop) serves every rep's
+  searches from a pool copied under the snapshot root and pinned by hash. Not for climbing a change to what or when
+  the skill searches (eval reference, frozen corpus). Refused: a pool from one variant the flow compares (a pool of
+  the baseline's rounds judging v1 included) without `--allow-confounded-pool`; a mixed pool on the baseline, or
+  without `--allow-mixed-pool`; rows already served from another pool or live without `--allow-mixed-search`.
+  Rows carry `meta.search_corpus`; error rows `search_pool_mismatch` / `search_refused` are never scored; the cost
+  line adds `search frozen: … refused`; `check` errors on mixed pools and mismatches, warns on CONFOUNDED.
+
 - **Resume is by slot.** A re-run of the same variant runs only the (case, rep) slots with no row in
   `results.jsonl`. A slot with only an `errors.jsonl` row re-runs on every pass, so a permanent fault re-runs
   forever; the scope line names those slots. Raising `--reps` adds reps.
@@ -425,7 +433,8 @@ the session's `outputs/` before turn 1, so the prompt asks for the late step alo
 - `run`: `0` every attempted (case, rep) was scored; `1` an attempt failed (an `errors.jsonl` row, or a scored
   row whose trace or copies could not be written), the pass stopped mid-run (rows already written are kept),
   a baseline pass could not freeze a pairwise case's reference, or `summary.json` could not be written; `2`
-  refused before spending. `--dry-run` exits `0` unless a refusal fires. The `done - N ok, M failed` line and
+  refused before spending (a frozen-corpus refusal or a pool copy that cannot be written included). `--dry-run`
+  exits `0` unless a refusal fires; it verifies a `--search-corpus` pool but never copies it. The `done - N ok, M failed` line and
   the envelope's `failed` count (case, rep) slots; a reference freeze reports on its own line
   (`reference freeze: skipped — …` when the case has no good row to freeze from, `failed — …` otherwise).
 - `check`: `0` clean, `1` an error finding, `2` usage.

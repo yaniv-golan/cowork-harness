@@ -1,6 +1,7 @@
 // `hillclimb` command family: `run`, `check`, `state-template`. The scenario runner comes from src/cli.ts (its
 // per-scenario runner and decider channel live there); everything else is composed here.
 
+import { searchCorpusFindings } from "./search-corpus.js";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
@@ -221,7 +222,11 @@ export function checkReport(
   if (!lexists(flowAbs)) throw new UsageError(`no flow dir at ${flowArg}`);
   const base = checkFlowDir(flowAbs, { profile: "harness" });
   const snap = loadFlowSnapshot(flowAbs);
-  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap), ...metricSigFindings(snap)];
+  const corpus = searchCorpusFindings(snap);
+  const corpusErrors = corpus
+    .filter((f) => f.severity === "error")
+    .map((f) => ({ level: "error" as const, rule: f.rule, file: "results.jsonl", message: f.message }));
+  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap), ...metricSigFindings(snap), ...corpusErrors];
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
   const flowShown = normalizeRootArg(flowArg);
   const sig = assertSigScenarios(snap, cwd, flowShown, target);
@@ -237,6 +242,7 @@ export function checkReport(
       ...sig.notes,
       ...pairwiseHints(snap, flowShown, sig.target),
       ...otherModelShareNotes(snap),
+      ...corpus.filter((f) => f.severity === "warning").map((f) => `${f.rule}: ${f.message}`),
     ],
     exitCode: report.errors ? 1 : 0,
   };

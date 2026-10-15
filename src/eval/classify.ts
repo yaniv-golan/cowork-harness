@@ -14,6 +14,7 @@ import { VERDICT_MODIFIER_KEYS, isLiveModelId } from "../types.js";
 import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.js";
 import { firstAssertionKey } from "../run/repeat.js";
 import { matchesTerminalUsageLimitText } from "../usage-limit.js";
+import { PoolBuildError, SearchPoolPinError } from "../search-corpus/pool.js";
 
 type ErrorSource = NonNullable<RunResult["errorSource"]>;
 type ResultErrorKind = NonNullable<RunResult["resultErrorKind"]>;
@@ -69,6 +70,8 @@ export type ClassifiableResult = Partial<
     | "metrics"
   >
 > & {
+  /** A frozen-corpus rep's pool, miss mode, counts and its `search_corpus_*` verdict signal codes. */
+  searchCorpus?: SearchCorpusExcerpt;
   result: RunResult["result"];
   fingerprint?: { contentSig?: string };
   cost?: { usd?: number };
@@ -85,11 +88,29 @@ export type ClassifiableResult = Partial<
   >;
 };
 
+/** What eval and hillclimb read of `RunResult.searchCorpus` (plus the run's `search_corpus_*` signal codes). */
+export interface SearchCorpusExcerpt {
+  sha256: string;
+  miss: "empty" | "error";
+  metrics: { served: number; miss: number; refused: number; toolUses?: number; noRequest?: number; meanTopScore?: number };
+  signals?: string[];
+}
+
+/** A rep refused before it ran because its pool copy was not the pinned one (`SearchPoolPinError`), as persisted. */
+export interface SearchPoolMismatchRecord {
+  expected: { sha256: string; miss: string };
+  /** Null when the copy could not be read at all. */
+  got: { sha256: string; miss: string } | null;
+  message: string;
+}
+
 export interface RepEvidence {
   /** The rep's result.json, including a salvaged partial. Absent when the job produced none. */
   result?: ClassifiableResult;
   /** What the rep's job threw, if anything (the runner catches it and passes it here). */
   thrown?: unknown;
+  /** The persisted pin refusal (eval's runs.jsonl); positive evidence of a pool mismatch. */
+  searchPoolMismatch?: SearchPoolMismatchRecord;
 }
 
 export interface TerminationClassification {
@@ -145,8 +166,11 @@ function noModelAnswered(r: ClassifiableResult): boolean {
  *  reads it (any graded assertion carrying the modifier, alone or beside another key). */
 const stallAllowed = (r: ClassifiableResult): boolean => (r.assertions ?? []).some((a) => a.assertion.allow_stall === true);
 
-type ThrownKind = "decider_timeout" | "boundary" | "unanswered" | "other";
-function thrownKind(e: unknown): ThrownKind {
+/** The one classification of a thrown error, shared by the classifier and the runs.jsonl writer (which persists it). */
+export type ThrownKind = "search_pool_pin" | "decider_timeout" | "boundary" | "unanswered" | "other";
+export function thrownKind(e: unknown): ThrownKind {
+  // First: a pool copy that was not the pinned one, or could not be read, refused the rep before it ran.
+  if (e instanceof SearchPoolPinError || e instanceof PoolBuildError) return "search_pool_pin";
   // Subclass first: a DeciderTimeoutError IS an UnansweredError, and it is the answerer's failure, not the skill's.
   if (e instanceof DeciderTimeoutError) return "decider_timeout";
   if (e instanceof BoundaryError) return "boundary";
@@ -159,6 +183,7 @@ function thrownKind(e: unknown): ThrownKind {
  *
  *  | evidence                                                              | bucket                            |
  *  |-----------------------------------------------------------------------|-----------------------------------|
+ *  | thrown SearchPoolPinError / PoolBuildError (refused before it ran)    | errored_infra (classified)        |
  *  | thrown DeciderTimeoutError                                            | errored_infra                     |
  *  | thrown BoundaryError                                                  | errored_infra                     |
  *  | thrown UnansweredError                                                | errored_agent                     |
@@ -198,6 +223,8 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
 
   if (ev.thrown !== undefined) {
     switch (thrownKind(ev.thrown)) {
+      case "search_pool_pin":
+        return out("errored_infra", "thrown_search_pool_pin");
       case "decider_timeout":
         return out("errored_infra", "thrown_decider_timeout");
       case "boundary":
@@ -267,7 +294,18 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
 }
 
 export type RepBucket =
-  "valid" | "errored_infra" | "arm_source_drift" | "model_mismatch" | "judge_prompt_mismatch" | "errored_agent" | "judge_invalid";
+  | "valid"
+  | "search_pool_mismatch"
+  | "errored_infra"
+  | "search_refused"
+  | "arm_source_drift"
+  | "model_mismatch"
+  | "judge_prompt_mismatch"
+  | "errored_agent"
+  | "judge_invalid";
+
+/** Buckets that exclude a rep as infrastructure: an (arm, scenario) whose every rep sits here compared nothing. */
+export const INFRA_EXCLUDED: ReadonlySet<RepBucket> = new Set(["errored_infra", "search_refused", "search_pool_mismatch"]);
 
 /** What one arm's reps must match. An unset field skips that check. */
 export interface ArmExpectations {
@@ -275,6 +313,8 @@ export interface ArmExpectations {
   contentSig?: string;
   /** The grading-prompt identity every graded assertion must carry (`JUDGE_PROMPT_HASH`). */
   judgePromptHash?: string;
+  /** The pinned frozen search corpus (`pins.searchCorpus`): its effective hash and miss mode. */
+  searchCorpus?: { sha256: string; miss: string };
 }
 
 export interface RepClassification {
@@ -300,7 +340,13 @@ function promptMismatch(r: ClassifiableResult | undefined, expected: string): bo
 }
 
 /** One bucket per rep, in fixed precedence:
- *  errored_infra > errored_agent > arm_source_drift > judge_prompt_mismatch > model_mismatch > judge_invalid > valid.
+ *  search_pool_mismatch > errored_infra > search_refused > errored_agent > arm_source_drift > judge_prompt_mismatch >
+ *  model_mismatch > judge_invalid > valid.
+ *
+ *  `search_pool_mismatch` comes first, on positive evidence only: the rep's evidence was not the pinned pool's, so
+ *  whatever else failed it is excluded and named (a usage limit beside it keeps its termination rule). `search_refused`
+ *  (`searchCorpus.metrics.refused > 0` on the persisted result) outranks an agent error: a refused search hands the
+ *  agent an error result, so a failure after it is the harness's, not the skill's.
  *
  *  Only POSITIVE evidence excludes a rep. An agent error ranks above every exclusion, so a skill change that
  *  crashes on the first turn (no model evidence, no grades) is scored 0 on every row rather than silently
@@ -316,7 +362,9 @@ export function classifyRep(ev: RepEvidence, expected: ArmExpectations): RepClas
   const termination = classifyTermination(ev);
   const r = ev.result;
   const bucket = ((): RepBucket => {
+    if (poolMismatch(ev, expected)) return "search_pool_mismatch";
     if (termination.bucket === "errored_infra") return "errored_infra";
+    if ((r?.searchCorpus?.metrics.refused ?? 0) > 0) return "search_refused";
     if (termination.bucket === "errored_agent") return "errored_agent";
     const observedSig = r?.fingerprint?.contentSig;
     if (expected.contentSig !== undefined && observedSig !== undefined && observedSig !== expected.contentSig) return "arm_source_drift";
@@ -325,6 +373,27 @@ export function classifyRep(ev: RepEvidence, expected: ArmExpectations): RepClas
     return invalidIndexes(r).length > 0 ? "judge_invalid" : "valid";
   })();
   return { bucket, termination, judgeInvalidAssertions: bucket === "judge_invalid" ? invalidIndexes(r) : [] };
+}
+
+/** Positive evidence that the rep was not served from the pinned pool: the persisted refusal, the thrown pin error,
+ *  a persisted corpus with another hash or miss mode, or a result with no corpus at all under a pin from a run whose
+ *  agent ran (it searched live, whatever failed after). A run that stopped before its agent ran (a spawn failure, a
+ *  limit hit before any model answered) has no corpus for a reason of its own, so that absence is not evidence; a rep
+ *  with no result and no such evidence keeps its termination bucket. */
+function poolMismatch(ev: RepEvidence, expected: ArmExpectations): boolean {
+  if (ev.searchPoolMismatch !== undefined) return true;
+  if (ev.thrown !== undefined && thrownKind(ev.thrown) === "search_pool_pin") return true;
+  const pin = expected.searchCorpus;
+  if (pin === undefined || ev.result === undefined) return false;
+  const sc = ev.result.searchCorpus;
+  if (sc === undefined) return agentRan(ev.result);
+  return sc.sha256 !== pin.sha256 || sc.miss !== pin.miss;
+}
+
+/** The agent ran: a live model answered, or the run spent. The one predicate eval and hillclimb share for a pinned rep
+ *  that kept no frozen corpus. */
+export function agentRan(r: Pick<ClassifiableResult, "models" | "cost">): boolean {
+  return (r.models ?? []).some(isLiveModelId) || (r.cost?.usd ?? 0) > 0;
 }
 
 function invalidIndexes(r: ClassifiableResult | undefined): number[] {

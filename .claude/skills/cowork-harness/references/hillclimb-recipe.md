@@ -132,6 +132,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
 
 ## Step 2 — stopping condition and budget
 
+- **Frozen search** (`run --search-corpus`): read each row's `meta.search_corpus` beside its score, and never
+  climb a search change on it (hillclimb reference).
 - **If the goal is cost** (the guide's cost search): run each model × effort cell as its own variant with
   `--model <id> --effort <level>`, one setting per variant. Prompt caching is the agent's, not the skill's: read
   `usage.cache_read_input_tokens` on the rows after each round, and treat a drop as the skill's content breaking the

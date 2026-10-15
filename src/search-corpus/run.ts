@@ -19,9 +19,10 @@ import { extractSearchAnchors } from "../sync/search-anchors.js";
 import { registerCleanup } from "../egress/sidecar.js";
 import { UsageError } from "../errors.js";
 import { ServeFrames } from "./frames.js";
+import { searchCorpusLabel } from "./label.js";
 import { startInterceptor, type Interceptor, type Upstream } from "./interceptor.js";
 import { noRequestKind } from "./no-request.js";
-import { poolHash, readPool, resolvePoolDir } from "./pool.js";
+import { effectivePool, PoolBuildError, resolvePoolDir, SearchPoolPinError } from "./pool.js";
 import { SearchRegistry } from "./registry.js";
 import { buildIndex } from "./retrieval.js";
 import { dispatchAgentIds, joinCalls, type JoinResult } from "./join.js";
@@ -33,14 +34,14 @@ export interface SearchCorpusOption {
   miss: "empty" | "error";
   /** Overrides the pool's floor; it changes the pool hash, since it changes what is served. */
   minScore?: number;
+  /** Set by eval and hillclimb, which serve every rep from a private copy of the pinned pool: the copy's effective
+   *  hash and the miss mode must equal these, checked before anything is written or started. */
+  expect?: { sha256: string; miss: "empty" | "error" };
 }
 
 export const SEARCH_CORPUS_MISS_MODES = ["empty", "error"] as const;
 
-/** The label every verdict surface prints for a run served from a pool. */
-export function searchCorpusLabel(poolId: string, sha256: string): string {
-  return `frozen search corpus ${poolId}@${sha256.slice(0, 8)} — recorded results, harness ranking, searches not billed; not live search; for steps around research, not a research-quality signal`;
-}
+export { searchCorpusLabel };
 
 const PROXY_KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
 const ENV_RECIPE =
@@ -140,6 +141,28 @@ export interface RunSearchCorpus {
   finish(outDir: string, configDir?: string): Promise<string | null>;
 }
 
+/** Read the pool a run is served from, and refuse it before anything is written or started when the run carries a pin
+ *  it does not match. A copy that cannot be read is the same event as a changed one: the pool changed under the eval. */
+function loadPinned(option: SearchCorpusOption): ReturnType<typeof effectivePool> {
+  const dir = resolvePoolDir(option.pool);
+  if (!option.expect) return effectivePool(dir, option.minScore);
+  const expected = option.expect;
+  let p: ReturnType<typeof effectivePool>;
+  try {
+    p = effectivePool(dir, option.minScore);
+  } catch (e) {
+    if (!(e instanceof PoolBuildError) && !(e as NodeJS.ErrnoException)?.code) throw e;
+    throw new SearchPoolPinError(expected, null, `the pinned search pool copy at ${dir} could not be read: ${(e as Error).message}`);
+  }
+  if (p.sha256 !== expected.sha256 || option.miss !== expected.miss)
+    throw new SearchPoolPinError(
+      expected,
+      { sha256: p.sha256, miss: option.miss },
+      `the search pool copy at ${dir} is not the pinned one (pinned ${expected.sha256.slice(0, 8)}, miss ${expected.miss}; found ${p.sha256.slice(0, 8)}, miss ${option.miss})`,
+    );
+  return p;
+}
+
 export async function startRunSearchCorpus(o: {
   option: SearchCorpusOption;
   baseline: PlatformBaseline;
@@ -148,9 +171,7 @@ export async function startRunSearchCorpus(o: {
   agentEnv: NodeJS.ProcessEnv;
   upstream?: Upstream;
 }): Promise<RunSearchCorpus> {
-  const { manifest, records } = readPool(resolvePoolDir(o.option.pool));
-  const params = o.option.minScore === undefined ? manifest.retrieval : { ...manifest.retrieval, minScore: o.option.minScore };
-  const sha256 = o.option.minScore === undefined ? manifest.sha256 : poolHash(records, params);
+  const { manifest, records, params, sha256 } = loadPinned(o.option);
   const anchors = o.baseline.agentBinary?.searchAnchors;
   const registry = new SearchRegistry();
   const logPath = join(o.outDir, "search-corpus.jsonl");

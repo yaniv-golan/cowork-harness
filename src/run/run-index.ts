@@ -63,7 +63,7 @@ export interface RunIndexRow {
    *  (for display). Absent = live search, which is also what every row written before the field means; a row written
    *  by an older build is rebuilt from result.json by `stats --reindex`. `stats` never pools frozen with live, nor two
    *  pools. */
-  searchCorpus?: { sha256: string; label: string };
+  searchCorpus?: { sha256: string; label: string; refused?: number };
   /** Set on the ONE row a multi-leg (`legs:`) scenario run gets: its scenario verdict, from scenario-result.json.
    *  The legs get no rows of their own, so a two-leg pass counts once. */
   multiLeg?: true;
@@ -175,7 +175,16 @@ export function indexRowFromResult(
     turn: result.turn,
     critiqueRole: critiqueRoleFor(runId, result.turn),
     ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
-    ...(result.searchCorpus ? { searchCorpus: { sha256: result.searchCorpus.sha256, label: result.searchCorpus.label } } : {}),
+    // `refused` is written always, 0 included, so a row without it is one written before it was recorded.
+    ...(result.searchCorpus
+      ? {
+          searchCorpus: {
+            sha256: result.searchCorpus.sha256,
+            label: result.searchCorpus.label,
+            refused: result.searchCorpus.metrics.refused ?? 0,
+          },
+        }
+      : {}),
     signals: verdict.signals.map((s) => s.code),
     costUsd: budget.costUsd,
     tokens: budget.tokensTotal,
@@ -251,13 +260,14 @@ function isValidRunIndexRow(x: unknown): x is RunIndexRow {
   if (r.answerChannel !== undefined && r.answerChannel !== "none") return false;
   // Consumed by the stats group key, like the two above.
   if (r.searchCorpus !== undefined) {
-    const c = r.searchCorpus as { sha256?: unknown; label?: unknown } | null;
+    const c = r.searchCorpus as { sha256?: unknown; label?: unknown; refused?: unknown } | null;
     if (
       typeof c !== "object" ||
       c === null ||
       typeof c.sha256 !== "string" ||
       !/^[0-9a-f]{64}$/.test(c.sha256) ||
-      typeof c.label !== "string"
+      typeof c.label !== "string" ||
+      (c.refused !== undefined && (typeof c.refused !== "number" || !Number.isInteger(c.refused) || c.refused < 0))
     )
       return false;
   }
@@ -752,6 +762,11 @@ export interface StatsSummary {
   answerChannel?: "none";
   /** The frozen search corpus the group's runs were served from — always its own group, per pool (see resolveGroups). */
   searchCorpus?: { sha256: string; label: string };
+  /** Frozen-corpus runs with a refused search: out of `runs` and `passRate` (they worked from different evidence),
+   *  counted here. */
+  searchRefusedRuns?: number;
+  /** Frozen-corpus rows written before the refused count was recorded: they cannot be told apart, so they stay in. */
+  searchRefusedUnrecorded?: number;
   /** Set only when grouping by that field — the group's identity, NOT folded into `scenario` (which
    *  stays exactly what it always was, so a consumer matching on it keeps working). */
   skillHash?: string;
@@ -986,7 +1001,7 @@ function resolveGroups(rows: RunIndexRow[], filters: StatsFilters): { groups: Ma
         ...(groupBy === "label" ? { runLabel: identity } : {}),
         ...(groupBy === "fidelity" ? { fidelity: identity } : {}),
         ...(r.answerChannel === "none" ? { answerChannel: "none" as const } : {}),
-        ...(r.searchCorpus ? { searchCorpus: r.searchCorpus } : {}),
+        ...(r.searchCorpus ? { searchCorpus: { sha256: r.searchCorpus.sha256, label: r.searchCorpus.label } } : {}),
         rows: [],
         spend: [],
       };
@@ -1048,6 +1063,9 @@ export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsRes
     const turns = numbers((r) => r.turns);
     const cacheReadTokensArr = numbers((r) => r.cacheReadTokens);
     const modelCostArr = numbers((r) => r.modelCostUsd);
+    const refusedRuns = group.filter((r) => (r.searchCorpus?.refused ?? 0) > 0).length;
+    const unrecordedRefused = group.filter((r) => r.searchCorpus !== undefined && r.searchCorpus.refused === undefined).length;
+    const scored = group.filter((r) => !((r.searchCorpus?.refused ?? 0) > 0));
     const greens = group.filter((r) => r.pass).sort((a, b) => (a.ts < b.ts ? 1 : -1));
     const tiers = [...new Set(group.map(tierOf))].sort();
     summaries.push({
@@ -1058,8 +1076,11 @@ export function buildStats(rows: RunIndexRow[], filters: StatsFilters): StatsRes
       // undefined-valued keys are dropped by JSON.stringify, so these appear only when grouped on.
       ...(skillHash !== undefined ? { skillHash } : {}),
       ...(runLabel !== undefined ? { runLabel } : {}),
-      runs: group.length,
-      passRate: group.filter((r) => r.pass).length / group.length,
+      // A frozen-corpus run with a refused search worked from different evidence: counted apart, never scored.
+      ...(refusedRuns ? { searchRefusedRuns: refusedRuns } : {}),
+      ...(unrecordedRefused ? { searchRefusedUnrecorded: unrecordedRefused } : {}),
+      runs: scored.length,
+      passRate: scored.length ? scored.filter((r) => r.pass).length / scored.length : 0,
       // Counted over the POST-window rows — the same set every other number here is computed from, so
       // the warning can never disagree with the aggregate it annotates.
       distinctSkillHashes: new Set(group.map((r) => r.skillHash).filter((h): h is string => h !== undefined)).size,

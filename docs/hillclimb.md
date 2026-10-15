@@ -204,7 +204,9 @@ Three things live outside the flow dir, and the loop needs all three for the who
   the runs of every flow under the runs root, a running climb included, can lose the ones a later re-grade or
   reference freeze needs.
 - **The per-variant snapshots** in `~/.cowork-harness/hillclimb-snapshots` (`COWORK_HARNESS_HILLCLIMB_SNAPSHOTS`
-  moves them). A resumed or appended rep runs its variant's snapshot. They are keyed by the flow dir's real path,
+  moves them). With `--search-corpus`, the pinned pool copies live beside them, at
+  `<snapshot root>/<flow hash>/search-pools/<pool hash>/`: one per pool per flow, typically 50 to 200 KB, at most a
+  few MB. Nothing prunes them; delete the directory to reclaim the space. A resumed or appended rep runs its variant's snapshot. They are keyed by the flow dir's real path,
   so moving, renaming or copying the flow dir orphans them: on the copy, a pass of a variant that already has rows
   is refused (it would measure the live plugin), and so is a `--dry-run --approve-harness` through that variant.
   Approve and run through a new variant instead (`--dry-run --approve-harness --variant v<N>`).
@@ -256,8 +258,11 @@ Three things live outside the flow dir, and the loop needs all three for the who
   `meta.failure_rule`: `timeout` (the runner's bound), `error` (infrastructure; also a run whose content differs
   from the variant's snapshot, or a grade that does not line up with the scenario), `serving_substitution` (another
   model served the run, or no evidence of the pinned one, or the agent sent another effort than requested or none:
-  `meta.failure_rule: "effort_not_sent"`) and `judge_invalid`. When several apply, a timeout wins,
-  then an infrastructure error, then a served-model mismatch. An error row does not fill its slot, so the next pass
+  `meta.failure_rule: "effort_not_sent"`) and `judge_invalid`; with `--search-corpus`, also `search_pool_mismatch`
+  (the rep was refused before it ran because the pool copy changed, or was served from another pool) and
+  `search_refused` (a search the frozen corpus refused: the rep worked from different evidence, so it is never
+  scored). When several apply, a timeout wins, then a pool mismatch, then an infrastructure error, then a refused
+  search, then a served-model mismatch. Every error row carries `meta.content_sig`, the variant's snapshot signature. An error row does not fill its slot, so the next pass
   runs it again; a permanent fault runs again on every pass, and the scope line names it.
 - **Perf fields:** `cost_usd`, `latency_s`, `tool_calls`, `web_searches`, `in_tokens`, `out_tokens` (and
   `skill_invoked` when tracked). `in_tokens` counts the main model's input, cache-read and cache-creation tokens.
@@ -683,6 +688,39 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   Two flows whose directories share a name share a label. These runs are left out of the cost history that
   `--dry-run` and `eval --dry-run` price from.
 
+## A frozen search corpus (`--search-corpus`)
+
+`hillclimb run --search-corpus <pool>` serves every rep's web searches from a pool built with `search-pool build`,
+so the rounds are compared on the same recorded results (hostloop only; `--search-corpus-miss` and
+`--search-corpus-min-score` as on `run`). It holds search fixed: **it cannot climb a change to what or when the
+skill searches**. A new query gets a miss or a nearby record, and a pool built from an earlier round makes any
+rewording read as a regression. Climb a search change live; see
+[eval's frozen corpus](./eval.md#a-frozen-search-corpus---search-corpus) for the split that freezes only the steps
+after search.
+
+- **Pinned and copied, outside the flow dir.** A pass copies the pool under the snapshot root (above) and serves
+  every rep from that copy, each rep checking it against the pinned hash before it starts. A rep whose copy does
+  not match is a `search_pool_mismatch` error row, with no spend. Passes running at once share one copy. A
+  `--dry-run` reads and verifies the pool but copies nothing, so the one refusal it cannot predict is a copy that
+  cannot be written.
+- **Where the pool's records came from**, checked before spend against this pass's variant and every variant that
+  already has rows, by each case's skill content signature (`meta.content_sig`). A pool whose records come from one
+  of them is refused unless `--allow-confounded-pool`. That includes the usual case of a pool built from the
+  baseline's rounds judging v1, and a first pass on a pool of its own rounds. The rules, an older pool's refusal and
+  the `unknown` class are eval's ([eval.md](./eval.md#a-frozen-search-corpus---search-corpus)). A mixed pool is never
+  the baseline's, and otherwise needs `--allow-mixed-pool`.
+- **One pool per flow.** A pass is refused when the flow already holds rows served from another pool, or searched
+  live (and a live pass beside frozen rows), unless `--allow-mixed-search`, which every row then records.
+- **On every row**, `meta.search_corpus`: the pool's hash and label, its provenance class (and `confounded`), the
+  run's served, missed and refused counts and mean top score, and any `search_corpus_*` warning the run raised.
+  It is its own meta key, not a scorer signature: a pool change is not a changed metric.
+- **The cost line** adds `search frozen: N served, M miss, R refused over K row(s)` over every row with a corpus,
+  error rows included.
+- **`hillclimb check`** makes it an error when rows were served from more than one pool, or frozen beside live,
+  unless every frozen row was written under `--allow-mixed-search` (then a warning), and when any attempt was not
+  served from its pinned pool. It warns on a confounded pool, on rows graded by a judge on recorded searches, and
+  when a variant's search service differs from the baseline's by eval's asymmetry rule (placeholder thresholds).
+
 ## What a round can and cannot see
 
 - **An artifact metric is read from a file the run writes,** so the skill under test writes it, and an edit can move
@@ -725,9 +763,23 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
 - Comparing session-level settings other than model and effort (for example `agent_env.subagent_model` or
   `extended_thinking`) within one flow: those are gated and shared by every variant. Vary a sub-agent's model and
   effort through the plugin's `agents/*.md` instead (see [Model and effort per variant](#model-and-effort-per-variant)).
-- Cases that read live web content or a connected folder that changes between rounds.
+- Cases that read live web content or a connected folder that changes between rounds (a frozen search corpus
+  fixes the web searches, not the web pages a skill fetches; above).
+- Climbing a change to what or when a skill searches with a frozen search corpus.
 - A score the skill computes about itself.
 - A significance claim to publish: use `eval`.
+
+## Exit codes
+
+`hillclimb run`, in short (the full list of refusals is in [SPEC.md](../SPEC.md) §11 and [cli.md](./cli.md)):
+
+| Code | When |
+|---|---|
+| `0` | every attempted (case, rep) was scored |
+| `1` | any attempt failed (an `errors.jsonl` row, `search_pool_mismatch` and `search_refused` included), the pass stopped mid-run, a reference freeze failed, or `summary.json` could not be written |
+| `2` | refused before spending: usage, the harness gate, a credential, and with `--search-corpus` a one-sided, mixed or unbounded pool, rows served from another pool, a pool that cannot be read, or a pool copy that cannot be written |
+
+`hillclimb check` exits `1` on any error finding, the frozen-corpus ones included.
 
 ## Troubleshooting
 
