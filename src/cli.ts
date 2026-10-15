@@ -1571,11 +1571,17 @@ async function runOneScenario(p: {
 export function formatRepeatRollup(r: RepeatRollup, minPassRate: number, allowBudgetStop: boolean): string {
   const lines: string[] = [];
   const verdict = rollupPasses(r, minPassRate, allowBudgetStop) ? "PASS" : "FAIL";
+  const refusedRuns = r.provenance.searchRefusedRuns ?? 0;
   const stopNote = r.stoppedEarly ? ` (stopped early: ${r.stoppedEarly}, ${r.completed}/${r.requested} completed)` : "";
   // The ARM rides on the verdict itself, not as a trailing note: this is the line a batch's reader
   // stops at, and "5/5 passed" with no arm named is what read as a completed A/B.
   lines.push(
-    `repeat "${r.scenario}": ${verdict}${armLabel(r)} — ${r.passes}/${r.completed} passed (${(r.passRate * 100).toFixed(0)}%)${stopNote}`,
+    // A run with a refused search is completed but never scored: the fraction is over the scored runs, and says so.
+    `repeat "${r.scenario}": ${verdict}${armLabel(r)} — ${
+      refusedRuns
+        ? `${r.passes}/${r.completed - refusedRuns} scored passed (${(r.passRate * 100).toFixed(0)}%), ${refusedRuns} excluded (refused search)`
+        : `${r.passes}/${r.completed} passed (${(r.passRate * 100).toFixed(0)}%)`
+    }${stopNote}`,
   );
   // Which experiment this BATCH ran — the aggregate form of the per-run [provenance] footer line. A
   // batch is exactly where the per-run banner scrolls past: the rollup is the line people read.

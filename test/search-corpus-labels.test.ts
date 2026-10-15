@@ -122,6 +122,7 @@ describe("the frozen-corpus label on the reading surfaces", () => {
     expect(r.passRate).toBe(1);
     expect(r.provenance.searchRefusedRuns).toBe(1);
     expect(formatRepeatRollup(r, 1, false)).toMatch(/1 run\(s\) with refused searches excluded from the pass rate/);
+    expect(formatRepeatRollup(r, 1, false)).toContain("2/2 scored passed (100%), 1 excluded (refused search)");
   });
 
   const CLI = resolve("dist/cli.js");

@@ -1,4 +1,4 @@
-// A synthetic search pool for the slice-4 tests: every record invented, hashed with the pool's own functions.
+// A synthetic search pool for the frozen-corpus tests: every record invented, hashed with the pool's own functions.
 import { createHash } from "node:crypto";
 import { recordId, type PoolRecord } from "../src/search-corpus/harvest.js";
 import { contentHash, poolHash, writePool, type PoolManifest } from "../src/search-corpus/pool.js";

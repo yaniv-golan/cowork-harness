@@ -90,6 +90,28 @@ describe("provenance: unknown evidence", () => {
   });
 });
 
+describe("provenance: both arms present with no record of this scenario", () => {
+  it("is balanced over the known records, then unknown (CONFOUNDED, not refused): the 0/0 share is never computed", () => {
+    const records = [
+      poolRecord({ scenario: "elsewhere", variantHash: "sigA" }),
+      poolRecord({ scenario: "elsewhere", variantHash: "sigB" }),
+    ];
+    const p = classifyProvenance(poolManifest(records, { dups: 0 }), records, [S], ARMS);
+    expect(p.class).toBe("unknown");
+    expect(p.perScenario[S]).toMatchObject({ n: { before: 0, after: 0 }, nUnknown: 2 });
+    expect(provenanceRefusal(p)).toBeNull();
+  });
+
+  it("a recorded duplicate count keeps the --allow-confounded-pool hint on the worst-case refusal", () => {
+    const records = recs([
+      [55, { scenario: S, variantHash: "sigA" }],
+      [45, { scenario: S, variantHash: "sigB" }],
+    ]);
+    const p = classifyProvenance(poolManifest(records, { dups: 20 }), records, [S], ARMS);
+    expect(provenanceRefusal(p)).toMatch(/20 duplicate result\(s\).*--allow-confounded-pool/);
+  });
+});
+
 describe("provenance: duplicate results bound the shares", () => {
   it("a pool built before the duplicate count was recorded cannot be bounded: a 50/50 split is refused, by name", () => {
     const p = classify(

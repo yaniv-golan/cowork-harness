@@ -16,6 +16,7 @@ import { buildEvalReport } from "../src/eval/report.js";
 import { readRunsLines } from "../src/eval/runs.js";
 import { evalJobExecuteOptions } from "../src/eval/job-runner.js";
 import { SearchPoolPinError, PoolBuildError } from "../src/search-corpus/pool.js";
+import { UsageError } from "../src/errors.js";
 import { poolRecord, writeFixturePool } from "./search-corpus-fixture-pool.js";
 
 const FX = join(import.meta.dirname, "fixtures", "eval-classify");
@@ -49,7 +50,7 @@ function writePlugin(dir: string, body: string): void {
   writeFileSync(join(dir, "skills", "csv-metrics", "SKILL.md"), `---\nname: csv-metrics\ndescription: d\n---\n${body}\n`);
 }
 
-function setup() {
+function setup(o: { second?: boolean } = {}) {
   const scen = join(root, "scenarios");
   mkdirSync(scen, { recursive: true });
   writePlugin(join(root, "declared", "csv-metrics"), "declared");
@@ -60,6 +61,11 @@ function setup() {
     join(scen, "csv-metrics.yaml"),
     `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: analyze\n${CSV_ASSERTS}`,
   );
+  if (o.second)
+    writeFileSync(
+      join(scen, "csv-second.yaml"),
+      `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: again\n${CSV_ASSERTS}`,
+    );
   return { scen, a: join(root, "a", "csv-metrics"), b: join(root, "b", "csv-metrics") };
 }
 
@@ -154,7 +160,7 @@ describe("eval --search-corpus: the pin and the copy", () => {
       });
     }
     expect(out.report.summary.exitCode).toBe(0);
-    expect(out.report.summary.searchPoolMismatch).toEqual({ reps: 0, byArm: { before: 0, after: 0 } });
+    expect(out.report.summary.searchPoolMismatch).toEqual({ reps: 0, byArm: { before: 0, after: 0 }, list: [] });
   });
 
   it("the eval's own start lines name the corpus and its provenance", async () => {
@@ -247,7 +253,7 @@ describe("eval --search-corpus: the pin refusal survives runs.jsonl", () => {
     const r = rep.reps.find((x) => x.arm === "after" && x.rep === 2)!;
     expect(r).toMatchObject({ bucket: "search_pool_mismatch", rule: "thrown_search_pool_pin", unclassified: false });
     expect(rep.arms[1].errorSources["thrown:search_pool_pin"]).toBe(1);
-    expect(rep.summary.searchPoolMismatch).toEqual({ reps: 1, byArm: { before: 0, after: 1 } });
+    expect(rep.summary.searchPoolMismatch).toMatchObject({ reps: 1, byArm: { before: 0, after: 1 }, list: [{ arm: "after", rep: 2 }] });
     // exit 1 from the single-rep term, not from comparedNothing: the arm's other reps compared
     expect(rep.summary.erroredArms).toEqual([]);
     expect(rep.summary.exitCode).toBe(1);
@@ -443,5 +449,78 @@ describe("the pin evidence channels, each on its own", () => {
     const ev = repEvidenceOf(line);
     expect(ev.searchPoolMismatch).toEqual(line.searchPoolMismatch);
     expect(classifyRep(ev, {}).bucket).toBe("search_pool_mismatch");
+  });
+});
+
+describe("eval --search-corpus: review-round cases", () => {
+  it("a source pool that is not JSON is refused before any run, by name (exit 2 path, never a stack)", async () => {
+    const { scen, a, b } = setup();
+    const dir = disjointPool();
+    writeFileSync(join(dir, "pool.json"), "{ torn");
+    const calls: EvalJobSpec[] = [];
+    const err = await runEval(args(scen, a, b, ["--search-corpus", dir]), deps(fakeRunner(undefined, calls))).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UsageError);
+    expect((err as Error).message).toMatch(/the pool cannot be read: .*pool\.json is not JSON/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("an arm that mixes refused searches and pool mismatches compared nothing", async () => {
+    const { scen, a, b } = setup();
+    const runner = fakeRunner((s, r) => (s.job.arm === "after" ? refusedSearch(r) : r));
+    const out = await runEval(
+      args(scen, a, b, ["--search-corpus", disjointPool()]),
+      deps(async (s) => {
+        if (s.job.arm === "after" && s.job.rep <= 2) throw new SearchPoolPinError(s.searchCorpus!.expect!, null, "unreadable copy");
+        return runner(s);
+      }),
+    );
+    expect(out.report.arms[1].buckets).toEqual({ search_pool_mismatch: 2, search_refused: 3 });
+    expect(out.report.summary.erroredArms).toMatchObject([{ arm: "after", rowsInsufficient: true }]);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it("with two scenarios, comparedNothing names the one whose arm was all infrastructure, and the other compares", async () => {
+    const { scen, a, b } = setup({ second: true });
+    const runner = fakeRunner();
+    const out = await runEval(
+      args(scen, a, b, ["--search-corpus", disjointPool()]),
+      deps(async (s) => {
+        if (s.job.arm === "after" && s.scenario.name === "csv-second") throw new SearchPoolPinError(s.searchCorpus!.expect!, null, "x");
+        return runner(s);
+      }),
+    );
+    expect(out.report.summary.erroredArms.map((e) => [e.arm, e.scenario, e.rowsInsufficient])).toEqual([["after", "csv-second", true]]);
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    expect(md).toMatch(/Every rep of arm after in csv-second errored/);
+    expect(md).not.toMatch(/Every rep of arm after in csv-metrics errored/);
+  });
+
+  it("report.md names each mismatched rep with its cause", async () => {
+    const { scen, a, b } = setup();
+    const runner = fakeRunner((s, r) =>
+      s.job.arm === "before" && s.job.rep === 3 ? ({ ...r, searchCorpus: { ...r.searchCorpus!, sha256: "d".repeat(64) } } as RunResult) : r,
+    );
+    const out = await runEval(
+      args(scen, a, b, ["--search-corpus", disjointPool()]),
+      deps(async (s) => {
+        if (s.job.arm === "after" && s.job.rep === 2) throw new SearchPoolPinError(s.searchCorpus!.expect!, null, "the copy is torn");
+        return runner(s);
+      }),
+    );
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    expect(md).toMatch(/- after · csv-metrics · rep 2: the pool copy could not be read: the copy is torn/);
+    const pin = out.manifest.pins.searchCorpus!.sha256.slice(0, 8);
+    expect(md).toContain(
+      `- before · csv-metrics · rep 3: served from another pool: expected ${pin} (miss empty), got dddddddd (miss empty)`,
+    );
+    expect(out.report.summary.searchPoolMismatch!.list).toHaveLength(2);
+  });
+
+  it("the per-arm search line breaks down by scenario when there are several", async () => {
+    const { scen, a, b } = setup({ second: true });
+    const out = await runEval(args(scen, a, b, ["--search-corpus", disjointPool()]), deps(fakeRunner()));
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    expect(md).toMatch(/ {4}- csv-metrics: 60 served, 0 miss/);
+    expect(md).toMatch(/ {4}- csv-second: 60 served, 0 miss/);
   });
 });

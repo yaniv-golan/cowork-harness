@@ -2162,11 +2162,12 @@ describe("hillclimb run --search-corpus", () => {
   it("serves every rep from a copy under the snapshot root, pinned, and records the pool on each row", async () => {
     const p = pool("pool", "third");
     expect((await approve("--search-corpus", p)).exitCode).toBe(0);
-    // the dry run verified the source and copied nothing
-    expect(existsSync(join(snaps, readdirSync(snaps)[0] ?? "x", "search-pools"))).toBe(false);
+    // the dry run verified the source and copied nothing: no entry anywhere under the snapshot root
+    expect(readdirSync(snaps, { recursive: true })).toEqual([]);
     expect((await runHillclimbCommand(args("--search-corpus", p), deps(frozen()))).exitCode).toBe(0);
     const sc = calls[calls.length - 1].extra.searchCorpus as { pool: string; expect: { sha256: string } };
-    expect(sc.pool).toMatch(new RegExp(`^${snaps}/[0-9a-f]{16}/search-pools/[0-9a-f]{64}$`));
+    expect(sc.pool.startsWith(snaps + "/")).toBe(true);
+    expect(sc.pool.slice(snaps.length)).toMatch(/^\/[0-9a-f]{16}\/search-pools\/[0-9a-f]{64}$/);
     expect(sc.expect.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(rows()[0].meta).toMatchObject({
       search_corpus: { sha256: sc.expect.sha256, provenance: "disjoint", served: 3, miss: 0, refused: 0 },
@@ -2262,6 +2263,16 @@ describe("hillclimb run --search-corpus", () => {
     // a live pass beside frozen rows is the same mix
     const live = await runHillclimbCommand(args("--reps", "2"), deps(frozen()));
     expect(live.exitCode).toBe(2);
+  });
+
+  it("a source pool that is not JSON exits 2 by name, before any spend", async () => {
+    const p = pool("pool", "third");
+    writeFileSync(join(p, "records.jsonl"), "{ torn\n");
+    await approve();
+    const r = await runHillclimbCommand(args("--search-corpus", p), deps(frozen()));
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/the pool cannot be read: .*records\.jsonl line 1 is not JSON/);
+    expect(calls).toEqual([]);
   });
 
   it("a mixed pool is never the baseline's", async () => {

@@ -422,11 +422,20 @@ function verifyPool(where: string, manifest: unknown, records: unknown): { manif
 
 /** Read a pool dir and verify it. */
 export function readPool(dir: string): { manifest: PoolManifest; records: PoolRecord[] } {
-  const manifest: unknown = JSON.parse(readFileSync(join(dir, "pool.json"), "utf8"));
+  // A torn or edited file is the pool changing, never a bare parse error: every caller refuses a PoolBuildError by name.
+  const parse = (text: string, what: string): unknown => {
+    try {
+      return JSON.parse(text) as unknown;
+    } catch (e) {
+      if (e instanceof SyntaxError) throw new PoolBuildError(`${dir}: ${what} is not JSON (the pool was edited or torn)`);
+      throw e;
+    }
+  };
+  const manifest = parse(readFileSync(join(dir, "pool.json"), "utf8"), "pool.json");
   const records = readFileSync(join(dir, "records.jsonl"), "utf8")
     .split("\n")
     .filter(Boolean)
-    .map((l) => JSON.parse(l) as unknown);
+    .map((l, i) => parse(l, `records.jsonl line ${i + 1}`));
   return verifyPool(dir, manifest, records);
 }
 

@@ -233,7 +233,12 @@ export interface EvalReport {
     tornFinalLine: boolean;
     /** Reps whose evidence was not the pinned pool's (refused before they ran, or served off another pool). Any
      *  makes the eval exit 1. Absent without a pinned corpus. */
-    searchPoolMismatch?: { reps: number; byArm: Record<string, number> };
+    searchPoolMismatch?: {
+      reps: number;
+      byArm: Record<string, number>;
+      /** Each mismatched rep, named: where it ran and what was wrong with its pool. */
+      list: Array<{ arm: string; scenario: string; rep: number; runDir: string | null; detail: string }>;
+    };
     /** The comparison is CONFOUNDED: the pool was drawn from one arm (or from unknown sources), or the arms were served
      *  asymmetrically. Never changes the exit code. Absent when neither applies. */
     confounded?: { provenance?: string; asymmetry?: true };
@@ -916,6 +921,13 @@ export function buildEvalReport(evalDir: string): EvalReport {
     ? {
         reps: mismatched.length,
         byArm: Object.fromEntries(m.arms.map((a) => [a.label, mismatched.filter((x) => x.line.arm === a.label).length])),
+        list: mismatched.map((x) => ({
+          arm: x.line.arm,
+          scenario: x.line.scenario,
+          rep: x.line.rep,
+          runDir: x.line.runDir,
+          detail: mismatchDetail(x.line, m.pins.searchCorpus!),
+        })),
       }
     : undefined;
   const confoundedBy = searchCorpus
@@ -986,6 +998,19 @@ export function buildEvalReport(evalDir: string): EvalReport {
     redactedHostPaths: 0,
     ...(searchCorpus ? { searchCorpus } : {}),
   };
+}
+
+/** What was wrong with one mismatched rep's pool, from its persisted line: the pin refusal (the copy unreadable, or
+ *  another hash or miss mode), or the corpus its result recorded (another one, or none although its agent ran). */
+function mismatchDetail(line: RunsLine, pin: NonNullable<EvalManifest["pins"]["searchCorpus"]>): string {
+  const pair = (e: { sha256: string; miss: string }, g: { sha256: string; miss: string }) =>
+    `expected ${e.sha256.slice(0, 8)} (miss ${e.miss}), got ${g.sha256.slice(0, 8)} (miss ${g.miss})`;
+  const rec = line.searchPoolMismatch;
+  if (rec)
+    return rec.got === null ? `the pool copy could not be read: ${rec.message}` : `refused before it ran: ${pair(rec.expected, rec.got)}`;
+  const sc = line.result?.searchCorpus;
+  if (sc) return `served from another pool: ${pair(pin, { sha256: sc.sha256, miss: sc.miss })}`;
+  return "no frozen corpus recorded although its agent ran (it searched live)";
 }
 
 /** Per arm, per scenario and in total, over the arm's SCORED reps; plus the asymmetry marker between the two arms. */
@@ -1293,10 +1318,12 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
       );
     const sca = rep.searchCorpus?.arms[a.label];
     if (sca) {
-      const t = sca.total;
-      L.push(
-        `  - search (scored reps): ${t.served} served, ${t.miss} miss, miss rate ${t.missRate === undefined ? "—" : t.missRate.toFixed(2)}, mean top score ${t.meanTopScore === undefined ? "—" : t.meanTopScore.toFixed(2)}; ${sca.refusedReps} rep(s) excluded for a refused search`,
-      );
+      const counts = (t: CorpusSideMetrics) =>
+        `${t.served} served, ${t.miss} miss, miss rate ${t.missRate === undefined ? "—" : t.missRate.toFixed(2)}, mean top score ${t.meanTopScore === undefined ? "—" : t.meanTopScore.toFixed(2)}`;
+      L.push(`  - search (scored reps): ${counts(sca.total)}; ${sca.refusedReps} rep(s) excluded for a refused search`);
+      // Per scenario too, so a difference one scenario carries is not averaged away in the total.
+      if (Object.keys(sca.perScenario).length > 1)
+        for (const [name, t] of Object.entries(sca.perScenario)) L.push(`    - ${name}: ${counts(t)}`);
       if (sca.judgeWarned > 0)
         L.push(
           `  - ⚠ ${sca.judgeWarned} rep(s) graded by a judge on recorded searches: a grade there is not evidence of research quality.`,
@@ -1326,6 +1353,7 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
         .map(([k, v]) => `${k} ${v}`)
         .join(", ")}): each was refused before it ran, or its evidence came from another pool. They are excluded and the eval exits 1. ` +
         erroredHint({ bucket: "search_pool_mismatch", rule: "" }),
+      ...pm.list.map((x) => `- ${x.arm} · ${x.scenario} · rep ${x.rep}: ${x.detail}${x.runDir ? ` (${x.runDir})` : ""}`),
       "",
     );
   for (const r of rep.summary.refusalImbalances) {

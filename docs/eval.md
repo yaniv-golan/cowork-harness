@@ -487,7 +487,9 @@ Judged per scenario, for each arm:
   is not a comparison. The scenario's rows get no reps, so they are `insufficient`, and the eval exits 1.
 - **Every rep of one arm is infrastructure** — counting a refused search and a frozen-pool mismatch, in any mix:
   that arm never ran the skill on the evidence. Same outcome. The other exclusions (drift, pin, judge prompt) keep
-  their rows `insufficient` without this exit.
+  their rows `insufficient` without this exit. An arm that mixes the agent's own failures with pool mismatches,
+  against an arm with valid reps, is still scored: the agent's reps fail every row and the mismatched ones are left
+  out, as with today's mix of the agent's failures and infrastructure.
 - **Every rep of one arm is the agent's own failure, and the other arm has valid reps**: a skill that
   crashes every time is exactly the regression an eval should show, so the reps are scored (each fails
   every row) and the rows show the drop. The header still names the arm and its error. It exits 0 unless

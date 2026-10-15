@@ -122,7 +122,9 @@ export function classifyProvenance(
                 nUnknown,
                 drawnFrom: major,
                 ...(d > 0
-                  ? { reason: `${d} duplicate result(s) could belong to either arm; the worst case is ${(share * 100).toFixed(0)}%` }
+                  ? {
+                      reason: `${d} duplicate result(s) could belong to either arm; the worst case is ${(share * 100).toFixed(0)}% from ${major} — pass --allow-confounded-pool to run anyway, and every surface will say CONFOUNDED`,
+                    }
                   : {}),
               }
             : { class: "balanced", n, nOther, nUnknown };

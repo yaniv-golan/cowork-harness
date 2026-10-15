@@ -106,6 +106,21 @@ describe("the per-rep pin check, before anything is written or started", () => {
     expect(err).toBeInstanceOf(SearchPoolPinError);
   });
 
+  it.each(["pool.json", "records.jsonl"])("a torn %s in the copy is a pin refusal naming it, never a bare parse error", async (file) => {
+    const copy = join(root, "torn");
+    writeFixturePool(copy, [poolRecord({ scenario: "s", variantHash: "x" })], { dups: 0 });
+    writeFileSync(join(copy, file), readFileSync(join(copy, file), "utf8").slice(0, 20));
+    const err = await startRunSearchCorpus({
+      option: { pool: copy, miss: "empty", expect: { sha256: "a".repeat(64), miss: "empty" } },
+      baseline,
+      outDir: outDir(),
+      agentEnv: {},
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SearchPoolPinError);
+    expect((err as SearchPoolPinError).got).toBeNull();
+    expect((err as Error).message).toMatch(new RegExp(`${file.replace(".", "\\.")}( line 1)? is not JSON`));
+  });
+
   it("a copy that cannot be read is a pin refusal with nothing observed", async () => {
     const err = await startRunSearchCorpus({
       option: { pool: join(root, "gone"), miss: "empty", expect: { sha256: "a".repeat(64), miss: "empty" } },
