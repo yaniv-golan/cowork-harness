@@ -424,8 +424,8 @@ live eval of the search change, then a frozen eval with a pool built evenly from
 - **The pool is pinned and copied.** Before the first run the pool is copied into `<eval-dir>/search-pool/`, and its
   hash (with `--search-corpus-min-score`, if given) and miss mode are pinned in the manifest. Every rep is served
   from the copy and checks it against the pin before it starts; a rep whose copy does not match is refused before
-  it spends, and lands in `search_pool_mismatch` (above). Any such rep makes the eval exit 1, with the count in
-  `summary.searchPoolMismatch`.
+  it spends, and lands in `search_pool_mismatch` (above). Any such rep makes the eval exit 1. `report.md` names each one (arm, scenario, rep, and the cause: the copy
+  could not be read, or the expected and found hashes), and `summary.searchPoolMismatch` carries the count and the list.
 - **Where the pool's records came from** is checked before any spend, per scenario, against the two arms' skill
   content signatures (the value each run's `fingerprint.contentSig` records):
   - `disjoint` — no record from either arm (a third version's runs);
