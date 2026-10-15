@@ -95,9 +95,10 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
   both arms, copied into the eval dir and pinned by hash; every rep checks the copy before it spends. `--dry-run`
   copies and verifies it too, so it refuses where the real eval would. An older harness refuses to read such an eval
   dir.
-- Refused before spend: a pool whose records come from one arm (or >60% of them) — `--allow-confounded-pool` runs it,
-  labelled CONFOUNDED; a mixed pool without `--allow-mixed-pool`; a pool built or exported before 4.10 that would
-  read balanced (rebuild or re-export it).
+- Refused before spend: a pool drawn from one arm, or with more than 60% of a scenario's compared-arm records from one
+  arm (duplicates counted the worst way) — `--allow-confounded-pool` runs it, labelled CONFOUNDED; a mixed pool
+  without `--allow-mixed-pool`; a pool built or exported before 4.10 that would read balanced (rebuild or re-export
+  it).
 - Buckets: `search_pool_mismatch` (not served from the pinned pool; any one exits 1) and `search_refused` (a search
   was refused; never scored). Either filling an arm makes that scenario compare nothing.
 - The report prints both arms' served/miss/refused and mean top score, and marks asymmetric service CONFOUNDED

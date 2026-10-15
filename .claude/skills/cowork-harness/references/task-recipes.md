@@ -528,8 +528,8 @@ cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy  
 - **Review before you share.** The build refuses a record holding a known secret and lists records that name or quote
   an upload; drop them with `--exclude <id>`. Pools live under `~/.cowork-harness/search-pools/`, and a path inside a
   git work tree is refused unless `--allow-in-repo`.
-- **Runs served from a pool are skipped** (counted in the summary), so a pool never harvests its own output. A pool
-  whose files cannot be parsed is refused.
+- **Runs served from a pool are skipped** (counted in the summary), so a pool never harvests its own output. Every
+  `search-pool` command refuses a pool whose files cannot be parsed.
 - **`--min-score <n>`** sets the relevance floor a query must clear to be served (default `0.4`). It is part of the pool
   hash, so two pools with different floors are different pools.
 

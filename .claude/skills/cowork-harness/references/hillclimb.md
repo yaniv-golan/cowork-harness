@@ -81,12 +81,14 @@ firing first is a scored `errored_agent` row), `--model ID` and `--judge-model I
 
 - **`--search-corpus POOL`** (with `--search-corpus-miss`, `--search-corpus-min-score`; hostloop) serves every rep's
   searches from a pool copied under the snapshot root and pinned by hash. Not for climbing a change to what or when
-  the skill searches (eval reference, frozen corpus). Refused (exit 2): a pool from one variant the flow compares, or over 60% of a scenario's
-  records from one (a pool of the baseline's rounds judging v1 included), without `--allow-confounded-pool`; a mixed
-  pool on the baseline, or without `--allow-mixed-pool`; a pass served differently from the flow's rows (another
-  pool, or frozen and live either way round) without `--allow-mixed-search`.
-  Rows carry `meta.search_corpus`; error rows `search_pool_mismatch` / `search_refused` are never scored; the cost
-  line adds `search frozen: … refused`; `check` errors on mixed pools, frozen beside live and mismatches, warns on CONFOUNDED.
+  the skill searches (eval reference, frozen corpus). Refused (exit 2): a pool from one variant the flow compares, or
+  with more than 60% of a scenario's compared-variant records from one (duplicates counted the worst way; a pool of
+  the baseline's rounds judging v1 included), without `--allow-confounded-pool`; a mixed pool on the baseline, or
+  without `--allow-mixed-pool`; a pass served differently from the flow's rows (another pool, or frozen and live
+  either way round) without `--allow-mixed-search`. Rows carry `meta.search_corpus`; error rows `search_pool_mismatch`
+  / `search_refused` are never scored; the cost line adds `search frozen: … refused`; `check` errors on mismatches,
+  and on mixed pools or frozen beside live (only a warning when every frozen row was written under
+  `--allow-mixed-search`); warns on CONFOUNDED.
 
 - **Resume is by slot.** A re-run of the same variant runs only the (case, rep) slots with no row in
   `results.jsonl`. A slot with only an `errors.jsonl` row re-runs on every pass, so a permanent fault re-runs
