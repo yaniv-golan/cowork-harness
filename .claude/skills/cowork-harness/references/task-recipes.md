@@ -557,6 +557,7 @@ cowork-harness --dotenv .env run market-sizing.yaml --search-corpus market-sizin
   [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md#serving-a-runs-searches-from-a-pool---search-corpus).
 - **Assert on it** with `search_corpus_max_miss_rate` and `search_corpus_nearby_citations` (live-only; refused
   without `--search-corpus`). A judged assertion on such a run warns `search_corpus_semantic_judge`.
+- **`eval` and `hillclimb run` take it too**, pinned and copied, with a provenance refusal (eval reference).
 
 ## Recipe 10 — A skill that parks and resumes in a later session (`legs:`)
 
