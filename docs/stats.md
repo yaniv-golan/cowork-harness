@@ -143,7 +143,8 @@ A frozen run with a refused search worked from different evidence, so it is left
 `passRate` and counted apart (`searchRefusedRuns`; the text line says how many). The row's `searchCorpus.refused` is
 written always, `0` included. A frozen row without it was written before the count was recorded, and is counted as
 `searchRefusedUnrecorded` ("predate the refused count"); `stats --reindex` rebuilds it from `result.json` while the run
-dir exists, and keeps the old row by design when the dir is gone.
+dir exists, and keeps the old row by design when the dir is gone. Only `runs` and `passRate` leave a refused run
+out: the cost and duration medians, the group's spend and its last green run still include it, since it ran and spent.
 
 `--metric` is a text-mode-only view narrower — `--output-format json` always returns every field for every
 scenario regardless of `--metric`, the same convention `--quiet`/`--verbose` already follow elsewhere in

@@ -1,5 +1,6 @@
 import { warn, writeTextAtomic } from "../io.js";
 import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
+import { effectivePool, PoolBuildError, resolvePoolDir } from "../search-corpus/pool.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
 import {
@@ -331,6 +332,8 @@ export function searchCorpusPreflight(o: {
   baseline: PlatformBaseline;
   effectiveFidelity: string;
   resume?: boolean;
+  /** Checked after the tier and environment refusals and before the agent binary: the pool reads and verifies. */
+  pool?: { pool: string; minScore?: number };
 }): { refusal: string } | { agentEnv: NodeJS.ProcessEnv; agentBinary: string } {
   const agentEnv = buildHostLoopNativeEnv(o.baseline, {
     configDir: "/search-corpus-refusal-check",
@@ -347,6 +350,13 @@ export function searchCorpusPreflight(o: {
     resume: o.resume === true,
   });
   if (why) return { refusal: why };
+  if (o.pool)
+    try {
+      effectivePool(resolvePoolDir(o.pool.pool), o.pool.minScore);
+    } catch (e) {
+      if (!(e instanceof PoolBuildError) && !(e as NodeJS.ErrnoException)?.code) throw e;
+      return { refusal: `--search-corpus ${o.pool.pool}: the pool cannot be read: ${(e as Error).message}` };
+    }
   const agentBinary = resolveHostAgentBinary(o.baseline);
   const drift = agentAnchorsRefusal(agentBinary, o.baseline.agentBinary!.searchAnchors!);
   if (drift) return { refusal: drift };
@@ -960,6 +970,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         baseline,
         effectiveFidelity,
         resume: !!opts.resume || opts.sessionId !== undefined,
+        // A plain run's pool must read before the run dir exists (exit 2). Under a pin (eval, hillclimb) the pool is a
+        // private copy, and one that will not read is that rep's pool mismatch, which startRunSearchCorpus raises.
+        ...(opts.searchCorpus.expect ? {} : { pool: opts.searchCorpus }),
       })
     : undefined;
   if (preflight && "refusal" in preflight) throw new UsageError(preflight.refusal);

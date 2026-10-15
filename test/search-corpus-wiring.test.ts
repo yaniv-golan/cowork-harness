@@ -32,6 +32,12 @@ describe("--search-corpus wiring (source text)", () => {
     expect(execute).toMatch(/startRunSearchCorpus\(\{[^}]*agentEnv: searchCorpusAgentEnv!/);
   });
 
+  it("a plain run's pool is read in the preflight; a pinned rep's is left to startRunSearchCorpus (its mismatch)", () => {
+    // Under a pin the copy is checked by startRunSearchCorpus, which raises SearchPoolPinError: a UsageError here would
+    // make an unreadable copy an unclassified infra error instead of a pool mismatch.
+    expect(execute).toMatch(/\.\.\.\(opts\.searchCorpus\.expect \? \{\} : \{ pool: opts\.searchCorpus \}\)/);
+  });
+
   it("execute starts the corpus before the hostloop spawn and hands it the interceptor env", () => {
     const start = execute.indexOf("searchCorpus = await startRunSearchCorpus(");
     const spawn = execute.indexOf("const hl = spawnHostLoop(");

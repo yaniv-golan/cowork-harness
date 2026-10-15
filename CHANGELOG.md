@@ -35,7 +35,9 @@ All notable changes to this project are documented here. The format is based on
 - **The frozen-corpus label on every surface a verdict is read from:** `verify-run`'s text output, `status
   --latest-for` (its text line and `searchCorpusLabel` in its JSON), the `--repeat` rollup (a `search:` line and
   `provenance.searchCorpus`) and `trace --view subagent-research`. `stats` keeps a frozen-corpus run in its own group,
-  per pool: the index row and the summary carry `searchCorpus: {sha256, label}`, keyed on the pool's full hash, so
+  per pool: the index row carries `searchCorpus: {sha256, label, refused}` (`refused` written always, `0` included;
+  `stats` names a frozen row without it as `searchRefusedUnrecorded`) and the summary `{sha256, label}`, keyed on the
+  pool's full hash, so
   frozen never pools with live search nor two pools with each other.
 - **A new warn signal, `search_corpus_semantic_judge`**, fires when a judge (`semantic_matches` or
   `semantic_pairwise`) graded a deliverable of a `--search-corpus` run: its searches were recorded answers, so the
@@ -69,7 +71,8 @@ All notable changes to this project are documented here. The format is based on
     for hillclimb, never into the flow dir), its hash and miss mode are pinned, and every rep is served from the copy
     and checks it before it starts. A rep whose copy does not match is refused before it spends, lands in a new
     bucket `search_pool_mismatch` (a hillclimb `errors.jsonl` class of the same name), and makes `eval` and `eval
-    report` exit 1, with the count in `summary.searchPoolMismatch`.
+    report` exit 1. The report names each such rep with its cause, and `summary.searchPoolMismatch` carries the count
+    and the list.
   - **Where the pool came from, before any spend.** The pool's records are matched to the compared arms (or
     variants) by skill content signature, per scenario: `disjoint`, `balanced`, `one-sided` or `unknown`. A pool drawn
     from one arm (or more than 60% of its records) is refused unless `--allow-confounded-pool`, which labels every
@@ -93,8 +96,6 @@ All notable changes to this project are documented here. The format is based on
   - The `search_corpus_semantic_judge` warning is counted per arm in the eval report and in `hillclimb check`, and
     `eval --dry-run` / `hillclimb --dry-run` pricing leaves frozen-corpus runs out of its history. An eval that pins a
     corpus writes manifest `schemaVersion: 1`.
-- **The `stats` index row's `searchCorpus` gains `refused`**, written always (`0` included); `stats` names frozen rows
-  written before it as `searchRefusedUnrecorded`.
 - **`sync --allow-missing-search-anchors`** writes a baseline without web-search anchors when they cannot be confirmed
   from the staged agent (with a warning), and `npm run preflight` accepts the same flag to downgrade its anchors check.
 - **`agentBinary.searchAnchors` gains two optional fields:** `source` (`both`, `native` or `elf`: which staged agent the
