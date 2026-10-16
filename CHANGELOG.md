@@ -161,7 +161,8 @@ All notable changes to this project are documented here. The format is based on
   - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.37337.1 → 2.42304.0
     since record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it;
     a re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded
-    on 2.1.299. The bundled cassettes are re-stamped to `2.42304.0`.
+    on 2.1.299. The bundled cassettes are re-stamped to `2.42304.0`; the three bundled `container` and `hostloop`
+    ones were recorded on agent 2.1.286 and have now been re-stamped across two agent bumps without a re-record.
 - **`sync` decides the web-search anchors from the native agent, which hostloop runs, and refuses what it cannot
   confirm.** The VM agent corroborates the native on the same version and stands in only when no native is staged;
   the block records which in `source`. It also records, as hashes, the agent-side WebSearch results that show no

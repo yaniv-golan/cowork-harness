@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { beforeAll, describe, it, expect } from "vitest";
 import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,26 +53,38 @@ describe("agentAnchorsRefusal: the binary hostloop will spawn against the baseli
   });
 });
 
-// Local only: the real native agent against the anchors sync extracts from the VM agent of the same version.
-const NATIVE = join(homedir(), "cowork-agent-backup/2.1.295/claude.app/Contents/MacOS/claude");
-const ELF = join(homedir(), "cowork-agent-backup/vm-elf/2.1.295/claude");
-const OLDER = join(homedir(), "cowork-agent-backup/vm-elf/2.1.293/claude");
-describe.skipIf(!existsSync(NATIVE) || !existsSync(ELF))("agentAnchorsRefusal on the real agents (local only)", () => {
-  it("the native 2.1.295 agent passes against 2.1.295's anchors, and against 2.1.293's (a version change alone never refuses)", () => {
-    expect(agentAnchorsRefusal(NATIVE, anchorsOf(readFileSync(ELF)))).toBeNull();
-    if (existsSync(OLDER)) expect(agentAnchorsRefusal(NATIVE, anchorsOf(readFileSync(OLDER)))).toBeNull();
+// Local only: the backed-up agents. The newest baseline is loaded inside these suites, so a failure to load it fails
+// them and not the synthetic suite above.
+const backup = (v: string) => ({
+  native: join(homedir(), `cowork-agent-backup/${v}/claude.app/Contents/MacOS/claude`),
+  elf: join(homedir(), `cowork-agent-backup/vm-elf/${v}/claude`),
+});
+
+describe("agentAnchorsRefusal against the newest baseline's agent (local only)", () => {
+  let latest: ReturnType<typeof loadBaseline>;
+  let at: ReturnType<typeof backup>;
+  beforeAll(() => {
+    latest = loadBaseline("latest");
+    at = backup(latest.agentVersion);
+  });
+  it("its native agent passes against the anchors sync extracts from its VM agent, and against the baseline's block", (ctx) => {
+    if (!existsSync(at.native) || !existsSync(at.elf)) ctx.skip();
+    expect(agentAnchorsRefusal(at.native, anchorsOf(readFileSync(at.elf)))).toBeNull();
+    expect(agentAnchorsRefusal(at.native, latest.agentBinary!.searchAnchors!)).toBeNull();
+  });
+  it("the native 2.1.295 agent is refused against the baseline's block (2.1.299 reworded the system sentence)", (ctx) => {
+    const old = backup("2.1.295").native;
+    if (!existsSync(old) || latest.agentVersion === "2.1.295") ctx.skip();
+    expect(agentAnchorsRefusal(old, latest.agentBinary!.searchAnchors!)).toMatch(/different web-search anchors/);
   });
 });
 
-// The newest committed baseline's block, the object a real run passes, against the backed-up native agent of that
-// baseline's own version. 2.1.299 rewords the search request's system sentence, so 2.1.295 against it must refuse.
-const latest = loadBaseline("latest");
-const LATEST_NATIVE = join(homedir(), `cowork-agent-backup/${latest.agentVersion}/claude.app/Contents/MacOS/claude`);
-describe.skipIf(!existsSync(LATEST_NATIVE))("agentAnchorsRefusal against the newest baseline (local only)", () => {
-  it("the newest baseline's own native agent passes against its block", () => {
-    expect(agentAnchorsRefusal(LATEST_NATIVE, latest.agentBinary!.searchAnchors!)).toBeNull();
-  });
-  it.skipIf(!existsSync(NATIVE) || latest.agentVersion === "2.1.295")("the native 2.1.295 agent is refused against it", () => {
-    expect(agentAnchorsRefusal(NATIVE, latest.agentBinary!.searchAnchors!)).toMatch(/different web-search anchors/);
-  });
-});
+// Pinned on purpose: 2.1.293 and 2.1.295 are two versions measured to give the same anchors.
+describe.skipIf(!existsSync(backup("2.1.295").native) || !existsSync(backup("2.1.293").elf))(
+  "agentAnchorsRefusal across a version change (local only)",
+  () => {
+    it("the native 2.1.295 agent passes against 2.1.293's anchors: a version change alone never refuses", () => {
+      expect(agentAnchorsRefusal(backup("2.1.295").native, anchorsOf(readFileSync(backup("2.1.293").elf)))).toBeNull();
+    });
+  },
+);

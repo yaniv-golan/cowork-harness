@@ -13,6 +13,7 @@ import { buildIndex, DEFAULT_RETRIEVAL } from "../src/search-corpus/retrieval.js
 import { recordId, type PoolRecord } from "../src/search-corpus/harvest.js";
 import { renderWebSearchResult, resultShape, type ResultShape } from "../src/search-corpus/render.js";
 import type { SearchAnchors } from "../src/types.js";
+import { loadBaseline } from "../src/baseline.js";
 import { dispatchAgentIds, joinCalls } from "../src/search-corpus/join.js";
 import { extractSearchAnchors } from "../src/sync/search-anchors.js";
 import { ServeFrames } from "../src/search-corpus/frames.js";
@@ -22,11 +23,13 @@ import { classifyRequest } from "../src/search-corpus/predicate.js";
 import type { SynthHttp } from "../src/search-corpus/synth.js";
 import type { ServeContext } from "../src/search-corpus/serve.js";
 
-// The interceptor against the REAL agent, $0. The native 2.1.295 agent runs with HTTPS_PROXY at the interceptor and only
+// The interceptor against the REAL agent, $0. The native agent of the newest baseline's version runs with HTTPS_PROXY at the interceptor and only
 // NODE_EXTRA_CA_CERTS trusting the run's CA; the interceptor's upstream is a local stub that scripts the main loop
 // (one WebSearch, then end_turn). No request leaves the machine: every other host's CONNECT is refused, and the
 // credential is a dummy. Local only: skipped unless COWORK_SEARCH_CORPUS_AGENT=1 and the backed-up agent exists.
-const AGENT = process.env.COWORK_SEARCH_CORPUS_AGENT_BIN ?? join(homedir(), "cowork-agent-backup/2.1.295/claude.app/Contents/MacOS/claude");
+const AGENT =
+  process.env.COWORK_SEARCH_CORPUS_AGENT_BIN ??
+  join(homedir(), `cowork-agent-backup/${loadBaseline("latest").agentVersion}/claude.app/Contents/MacOS/claude`);
 const run = process.env.COWORK_SEARCH_CORPUS_AGENT === "1" && existsSync(AGENT);
 
 const QUERY = "electric vehicle market size europe";
