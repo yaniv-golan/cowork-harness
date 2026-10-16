@@ -469,8 +469,10 @@ const atLeast = (v: string, min: string) => {
   return true;
 };
 describe.skipIf(!existsSync(VM_ELFS))("extractSearchAnchors over the backed-up agents (local only)", () => {
-  it("extracts from every backed-up ELF from 2.1.293, and the anchors have not moved; older ones refuse on the budget template only", () => {
+  // 2.1.299 rewords the search request's system sentence; every other anchor has not moved since 2.1.293.
+  it("extracts from every backed-up ELF from 2.1.293, and only the system sentence has moved, once, at 2.1.299; older ones refuse on the budget template only", () => {
     const seen = new Set<string>();
+    const sentences = { before: new Set<string>(), from299: new Set<string>() };
     let older = 0;
     for (const v of readdirSync(VM_ELFS)) {
       const p = join(VM_ELFS, v, "claude");
@@ -478,13 +480,20 @@ describe.skipIf(!existsSync(VM_ELFS))("extractSearchAnchors over the backed-up a
       const r = extractSearchAnchors(readFileSync(p));
       if (atLeast(v, "2.1.293")) {
         expect(r.ok ? [] : r.defects, v).toEqual([]);
-        if (r.ok) seen.add(JSON.stringify(r.anchors));
+        if (r.ok) {
+          const { systemSentence, ...rest } = r.anchors;
+          seen.add(JSON.stringify(rest));
+          sentences[atLeast(v, "2.1.299") ? "from299" : "before"].add(JSON.stringify(systemSentence));
+        }
       } else {
         older++;
         expect(r.ok ? [] : r.defects, v).toEqual([expect.stringMatching(/^noRequest\.budget: .*turn\|session/)]);
       }
     }
     expect(seen.size).toBe(1);
+    expect(sentences.before.size).toBe(1);
+    expect(sentences.from299.size).toBeLessThanOrEqual(1);
+    for (const s of sentences.from299) expect(sentences.before.has(s)).toBe(false);
     expect(older).toBeGreaterThan(0);
   });
 });
