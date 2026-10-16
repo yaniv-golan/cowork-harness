@@ -6,8 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.10.0] — 2026-10-16
+
 ### Upgrade notes
 
+- **Cassettes: re-stamp or re-record one recorded through `baseline: latest`.** `latest` moves to `desktop-2.42304.0`
+  (agent 2.1.299; see Changed), so such a cassette reports `[stale] baseline moved 2.37337.1 → 2.42304.0 since record
+  — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it; a re-stamped
+  `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded on 2.1.299. The
+  bundled `container` and `hostloop` cassettes are re-recorded on 2.1.299, and the `protocol` one is re-stamped to
+  `2.42304.0`. Outside comments and newly exported helpers, the runtime, hostloop and session code changed only in
+  what `run --search-corpus` hands the spawn (the agent binary it already checked, and the proxy env keys), and
+  `record` refuses that flag.
 - **`sync` now refuses a baseline whose web-search anchors cannot be confirmed (exit 1).** Before, it warned and
   wrote the baseline without them. Open Cowork once so the agent is staged, then re-run `sync`; to write without
   anchors anyway, pass `--allow-missing-search-anchors`. `--allow-empty` does not cover this refusal, and
@@ -151,18 +161,15 @@ All notable changes to this project are documented here. The format is based on
 ### Changed
 
 - **`latest` moves to `desktop-2.42304.0`** (agent **2.1.299**, was 2.1.295). The Cowork system prompt, the egress
-  allowlist, the first-party spawn env and the tool lists a session receives are unchanged from `desktop-2.37337.1`.
+  allowlist, the first-party spawn env (as observed in one Cowork session on this Desktop) and the tool lists a session
+  receives are unchanged from `desktop-2.37337.1`.
   The CI recipe's agent pin (`V=`) moves to 2.1.299.
   - **Frozen search corpus:** agent 2.1.299 rewords the system sentence of its nested web-search request, so the
     baseline's `searchAnchors.systemSentence` changes; every other anchor is unchanged. A `--search-corpus` run
     against this baseline needs agent 2.1.299, and one that would launch an older agent is refused before any spend.
   - Two descriptions of the cloud tool `device_commit_files` now give a larger per-file limit; the harness does not
     serve that tool.
-  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.37337.1 → 2.42304.0
-    since record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it;
-    a re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded
-    on 2.1.299. The bundled `container` and `hostloop` cassettes are re-recorded on 2.1.299, and the `protocol` one is
-    re-stamped to `2.42304.0`.
+  - **Cassettes:** see the Upgrade note.
 - **`sync` decides the web-search anchors from the native agent, which hostloop runs, and refuses what it cannot
   confirm.** The VM agent corroborates the native on the same version and stands in only when no native is staged;
   the block records which in `source`. It also records, as hashes, the agent-side WebSearch results that show no
@@ -174,8 +181,7 @@ All notable changes to this project are documented here. The format is based on
   writes without them, with a warning; `sync --diff` reports the refusal as `would refuse: …` and does not fail. A
   staged VM agent that cannot be read is now reported instead of crashing `sync`.
 - **For maintainers: the shipped `desktop-2.37337.1` baseline was re-synced** and carries
-  `agentBinary.searchAnchors.source` (`both`) and `noRequest`, so `npm run preflight` accepts it as the newest
-  baseline. Nothing else in it moved beyond provenance, so the committed cassettes stay current.
+  `agentBinary.searchAnchors.source` (`both`) and `noRequest`; nothing else in it moved beyond provenance.
 - **`search-pool build` skips a run served from a frozen search corpus** (its result pins one, or its dir holds
   `search-corpus.jsonl`) and counts it in the summary, so a pool's own output is never harvested back in as sourced
   records. A pool whose files cannot be parsed is now refused by name.

@@ -1,6 +1,6 @@
 # Authoring a scenario
 
-Tracks `cowork-harness 4.9.1` (baseline `desktop-2.42304.0`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
+Tracks `cowork-harness 4.10.0` (baseline `desktop-2.42304.0`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
 
 ## Part I — AUTHOR a scenario
 
@@ -327,7 +327,7 @@ cowork-harness lint scenarios/*.yaml
 | `workspace-fixture-invalid` | ERROR | the run refuses the scenario's `workspace_fixture` directory — missing, a symlink, a hard link, agent-config paths, untracked files in git mode, empty, over a size cap, a binary file holding a session-path token, or session-path tokens at `fidelity: protocol` (via `cowork-harness lint` only) |
 | `workspace-fixture-not-relative` | WARN | `workspace_fixture` is an absolute or `~/` path rather than one relative to the scenario file — it names a directory on one machine; when it does not exist where lint runs it is not checked (via `cowork-harness lint` only) |
 | `workspace-fixture-vacuous-assert` | ERROR | a `file_exists` / `user_visible_artifact` / `artifact_text` / `artifact_json` names a file (or directory) the `workspace_fixture` provides without stating `authored:` — it would pass on the fixture alone (via `cowork-harness lint` only) |
-| `search-corpus-key-needs-flag` | INFO | a `search_corpus_*` assertion: `run`/`record` refuse it without `--search-corpus` |
+| `search-corpus-key-needs-flag` | INFO | a `search_corpus_*` assertion: `run`/`skill` refuse it without `--search-corpus` (exit 2); `record` refuses the key (exit 1), and the flag itself (exit 2) |
 | `lint-loader-internal` | ERROR | the wrapper could not run its loader check on a file — a harness bug; it never falls back to a lint that skipped the loader |
 
 `scaffold` auto-upgrades the tier if you ask for egress on `protocol`, so it never emits a scenario `lint`

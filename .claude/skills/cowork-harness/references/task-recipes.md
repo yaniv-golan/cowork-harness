@@ -2,7 +2,7 @@
 
 Each recipe composes facts that live scattered across SKILL.md and the other references into one
 decision path. Every one answers a question a real fleet owner had to work out the hard way.
-Tracks `cowork-harness 4.9.1` (baseline `desktop-2.42304.0`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
+Tracks `cowork-harness 4.10.0` (baseline `desktop-2.42304.0`), same as SKILL.md's front-matter. Recipe 2's `resolved-tier`/`unverifiable-tier` staleness classes and
 Recipe 3's `init-redact` shipped in 0.24.0 and are part of the current feature set — no version gate
 needed if your CLI meets SKILL.md's version floor.
 
@@ -528,6 +528,8 @@ cowork-harness search-pool import ~/market-sizing-pool.json market-sizing-copy  
 - **Review before you share.** The build refuses a record holding a known secret and lists records that name or quote
   an upload; drop them with `--exclude <id>`. Pools live under `~/.cowork-harness/search-pools/`, and a path inside a
   git work tree is refused unless `--allow-in-repo`.
+- **Runs served from a pool are skipped** (counted in the summary), so a pool never harvests its own output. Every
+  `search-pool` command refuses a pool whose files cannot be parsed.
 - **`--min-score <n>`** sets the relevance floor a query must clear to be served (default `0.4`). It is part of the pool
   hash, so two pools with different floors are different pools.
 
@@ -546,9 +548,11 @@ cowork-harness --dotenv .env run market-sizing.yaml --search-corpus market-sizin
 ```
 
 - **Hostloop only**, with the agent's credential from the environment or a `.env` (never your own login). Refused by
-  name: `protocol`, `container`, `microvm`, `chat`, `record`, `critique`, `probe-dispatch`, `--resume`/`--session-id`,
-  `legs:`, `device_bridge`, `CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`, a baseline without web-search anchors (re-run
-  `sync`), `HTTPS_PROXY` and a non-API `ANTHROPIC_BASE_URL`.
+  name before the run dir exists (exit 2): `protocol`, `container`, `microvm`, `chat`, `record`, `critique`,
+  `probe-dispatch`, `--resume`/`--session-id`, `legs:`, `device_bridge`, `CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY` or a
+  remote-session `CLAUDE_CODE_SESSION_ID`, `HTTPS_PROXY`, a non-API `ANTHROPIC_BASE_URL`, a pool that cannot be read,
+  a baseline without web-search anchors, and an agent whose anchors differ from the baseline's. For the last two, use
+  the newest baseline, or open Cowork once so the agent is staged and re-run `sync`.
 - **A query the pool cannot answer** gets "No links found." by default, or `--search-corpus-miss error` for the
   agent's "Web search error: unavailable". `--search-corpus-min-score <n>` overrides the pool's floor for the run (and
   changes the hash the result records).
@@ -556,7 +560,8 @@ cowork-harness --dotenv .env run market-sizing.yaml --search-corpus market-sizin
   the counts in `searchCorpus.metrics` and the per-search log are in
   [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md#serving-a-runs-searches-from-a-pool---search-corpus).
 - **Assert on it** with `search_corpus_max_miss_rate` and `search_corpus_nearby_citations` (live-only; refused
-  without `--search-corpus`). A judged assertion on such a run warns `search_corpus_semantic_judge`.
+  without `--search-corpus`, the second on `lane: remote` too; `verify-run`/`regrade` refuse them on a run with no
+  corpus). A judged assertion on such a run warns `search_corpus_semantic_judge`.
 - **`eval` and `hillclimb run` take it too**, pinned and copied, with a provenance refusal (eval reference).
 
 ## Recipe 10 — A skill that parks and resumes in a later session (`legs:`)
