@@ -56,8 +56,8 @@ const CCR = {
   workerPath: { needle: "/worker/${", value: "/worker/" },
   searchRoute: { needles: ['"web-search"', "`web-search`"], value: "web-search" },
 } as const;
-/** The sessions base the worker route is appended to. Many routes share it (45 copies in 2.1.295), so it is located
- *  only in the window just before the one worker POST (~140 bytes in 2.1.295). */
+/** The sessions base the worker route is appended to. Many routes share it (45 copies in 2.1.295 and 2.1.299), so it
+ *  is located only in the window just before the one worker POST (174 bytes before it in both). */
 const CCR_SESSIONS = { needle: "/v1/code/sessions/${", value: "/v1/code/sessions/", windowBefore: 800 } as const;
 
 export type SearchAnchorResult = { ok: true; anchors: SearchAnchors } | { ok: false; defects: string[] };

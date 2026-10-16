@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { loadBaseline } from "../src/baseline.js";
 import { extractSearchAnchors, SEARCH_ANCHOR_CALL_SITE } from "../src/sync/search-anchors.js";
 import { noRequestKind } from "../src/search-corpus/no-request.js";
 import { renderWebSearchResult } from "../src/search-corpus/render.js";
@@ -110,8 +111,9 @@ describe("noRequestKind: a WebSearch tool_result that shows no request was made"
 
 // Local only: the real agent's own literals, read from the binary at test time (never committed), built into the
 // result shapes the agent emits, recognised with the anchors `sync` extracts from the same binary.
-const AGENT = join(homedir(), "cowork-agent-backup/vm-elf/2.1.295/claude");
-describe.skipIf(!existsSync(AGENT))("noRequestKind against the real 2.1.295 literals (local only)", () => {
+const AGENT_VERSION = loadBaseline("latest").agentVersion;
+const AGENT = join(homedir(), `cowork-agent-backup/vm-elf/${AGENT_VERSION}/claude`);
+describe.skipIf(!existsSync(AGENT))(`noRequestKind against the real ${AGENT_VERSION} literals (local only)`, () => {
   it("recognises the agent's own validation messages and budget text with the anchors sync extracts", () => {
     const buf = readFileSync(AGENT);
     const r = extractSearchAnchors(buf);
