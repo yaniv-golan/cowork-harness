@@ -150,6 +150,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **`latest` moves to `desktop-2.42304.0`** (agent **2.1.299**, was 2.1.295). The Cowork system prompt, the egress
+  allowlist, the first-party spawn env and the tool lists a session receives are unchanged from `desktop-2.37337.1`.
+  The CI recipe's agent pin (`V=`) moves to 2.1.299.
+  - **Frozen search corpus:** agent 2.1.299 rewords the system sentence of its nested web-search request, so the
+    baseline's `searchAnchors.systemSentence` changes; every other anchor is unchanged. A `--search-corpus` run
+    against this baseline needs agent 2.1.299, and one that would launch an older agent is refused before any spend.
+  - Two descriptions of the cloud tool `device_commit_files` now give a larger per-file limit; the harness does not
+    serve that tool.
+  - **Cassettes:** one recorded through `baseline: latest` reports `[stale] baseline moved 2.37337.1 → 2.42304.0
+    since record — re-record`. Because the spawn contract is unchanged, re-stamping `fingerprint.baseline` clears it;
+    a re-stamped `container`, `microvm` or `hostloop` cassette keeps an `agent-version:` note until it is re-recorded
+    on 2.1.299. The bundled cassettes are re-stamped to `2.42304.0`.
 - **`sync` decides the web-search anchors from the native agent, which hostloop runs, and refuses what it cannot
   confirm.** The VM agent corroborates the native on the same version and stands in only when no native is staged;
   the block records which in `source`. It also records, as hashes, the agent-side WebSearch results that show no
