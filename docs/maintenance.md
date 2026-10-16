@@ -127,7 +127,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.295   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.299   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 # The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
 # from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
 # `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
@@ -490,6 +490,8 @@ committed baseline and say why in that baseline's `$comment`.
      baseline without a schema-valid block that carries `noRequest`; its `--allow-missing-search-anchors` downgrades that to a warning for an
      emergency release.
    - **Measured.** Every backed-up agent from 2.1.293 through 2.1.295 gives the same anchors, native and VM alike.
+     2.1.299 rewrites the search request's system sentence, so that one anchor changes; every other anchor, and the
+     shape each is found by, is unchanged.
      2.1.260 through 2.1.289 carry an older, session-only budget template, so a sync against one of them refuses,
      naming the remedy. 2.1.290 through 2.1.292 were not measured (no backed-up copy).
 

@@ -458,8 +458,8 @@ describe("agentBinary.searchAnchors schema", () => {
   });
 });
 
-// Local only: every backed-up agent ELF. Measured 2026-10-13: 2.1.293 and 2.1.295 give the same anchors. 2.1.260
-// through 2.1.289 carry an older, session-only budget template with no turn|session choice, so they refuse with that
+// Local only: every backed-up agent ELF. Measured 2026-10-16: 2.1.293 through 2.1.299 give the same anchors except
+// the system sentence, which 2.1.299 rewords. 2.1.260 through 2.1.289 carry an older, session-only budget template with no turn|session choice, so they refuse with that
 // one defect (their other anchors are unchanged); no shipped baseline pins one of them with anchors.
 const VM_ELFS = join(homedir(), "cowork-agent-backup/vm-elf");
 const atLeast = (v: string, min: string) => {
@@ -469,8 +469,11 @@ const atLeast = (v: string, min: string) => {
   return true;
 };
 describe.skipIf(!existsSync(VM_ELFS))("extractSearchAnchors over the backed-up agents (local only)", () => {
-  it("extracts from every backed-up ELF from 2.1.293, and the anchors have not moved; older ones refuse on the budget template only", () => {
+  it("every backed-up ELF from 2.1.293 extracts with one set of anchors besides the system sentence, whose hash is the pre-2.1.299 one before 2.1.299 and the newest baseline's from it; older ones refuse on the budget template only", () => {
+    const newest = loadBaseline("latest").agentBinary!.searchAnchors!.systemSentence;
     const seen = new Set<string>();
+    const before = new Set<string>();
+    const from299: string[] = [];
     let older = 0;
     for (const v of readdirSync(VM_ELFS)) {
       const p = join(VM_ELFS, v, "claude");
@@ -478,19 +481,31 @@ describe.skipIf(!existsSync(VM_ELFS))("extractSearchAnchors over the backed-up a
       const r = extractSearchAnchors(readFileSync(p));
       if (atLeast(v, "2.1.293")) {
         expect(r.ok ? [] : r.defects, v).toEqual([]);
-        if (r.ok) seen.add(JSON.stringify(r.anchors));
+        if (!r.ok) continue;
+        const { systemSentence, ...rest } = r.anchors;
+        seen.add(JSON.stringify(rest));
+        if (atLeast(v, "2.1.299")) {
+          expect(systemSentence, `${v}: the system sentence is not the newest baseline's`).toEqual(newest);
+          from299.push(v);
+        } else before.add(JSON.stringify(systemSentence));
       } else {
         older++;
         expect(r.ok ? [] : r.defects, v).toEqual([expect.stringMatching(/^noRequest\.budget: .*turn\|session/)]);
       }
     }
     expect(seen.size).toBe(1);
+    // A machine with the backup dir must hold 2.1.299 or later: otherwise nothing above checked the new sentence.
+    expect(from299.length, "no backed-up ELF at 2.1.299 or later").toBeGreaterThan(0);
+    expect(before.size).toBe(1);
+    expect([...before][0]).not.toBe(JSON.stringify(newest));
     expect(older).toBeGreaterThan(0);
   });
 });
 
-// Local only: the real staged agent. Skips when the binary is absent (CI). Prints nothing from the binary.
-const ELF = process.env.COWORK_SEARCH_ANCHOR_ELF ?? join(homedir(), "cowork-agent-backup/vm-elf/2.1.295/claude");
+// Local only: the backed-up VM agent of the newest baseline's version. Skips when the binary is absent (CI). Prints
+// nothing from the binary.
+const ELF =
+  process.env.COWORK_SEARCH_ANCHOR_ELF ?? join(homedir(), `cowork-agent-backup/vm-elf/${loadBaseline("latest").agentVersion}/claude`);
 describe.skipIf(!existsSync(ELF))("extractSearchAnchors on the real agent", () => {
   it("finds every anchor exactly once", () => {
     const r = extractSearchAnchors(readFileSync(ELF));

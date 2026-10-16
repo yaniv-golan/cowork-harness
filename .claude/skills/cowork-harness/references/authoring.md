@@ -1,6 +1,6 @@
 # Authoring a scenario
 
-Tracks `cowork-harness 4.10.0` (baseline `desktop-2.37337.1`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
+Tracks `cowork-harness 4.10.0` (baseline `desktop-2.42304.0`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
 
 ## Part I — AUTHOR a scenario
 
