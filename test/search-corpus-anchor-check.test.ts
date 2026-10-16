@@ -62,7 +62,17 @@ describe.skipIf(!existsSync(NATIVE) || !existsSync(ELF))("agentAnchorsRefusal on
     expect(agentAnchorsRefusal(NATIVE, anchorsOf(readFileSync(ELF)))).toBeNull();
     if (existsSync(OLDER)) expect(agentAnchorsRefusal(NATIVE, anchorsOf(readFileSync(OLDER)))).toBeNull();
   });
-  it("the native 2.1.295 agent passes against the newest committed baseline's block, the object a real run passes", () => {
-    expect(agentAnchorsRefusal(NATIVE, loadBaseline("latest").agentBinary!.searchAnchors!)).toBeNull();
+});
+
+// The newest committed baseline's block, the object a real run passes, against the backed-up native agent of that
+// baseline's own version. 2.1.299 rewords the search request's system sentence, so 2.1.295 against it must refuse.
+const latest = loadBaseline("latest");
+const LATEST_NATIVE = join(homedir(), `cowork-agent-backup/${latest.agentVersion}/claude.app/Contents/MacOS/claude`);
+describe.skipIf(!existsSync(LATEST_NATIVE))("agentAnchorsRefusal against the newest baseline (local only)", () => {
+  it("the newest baseline's own native agent passes against its block", () => {
+    expect(agentAnchorsRefusal(LATEST_NATIVE, latest.agentBinary!.searchAnchors!)).toBeNull();
+  });
+  it.skipIf(!existsSync(NATIVE) || latest.agentVersion === "2.1.295")("the native 2.1.295 agent is refused against it", () => {
+    expect(agentAnchorsRefusal(NATIVE, latest.agentBinary!.searchAnchors!)).toMatch(/different web-search anchors/);
   });
 });
