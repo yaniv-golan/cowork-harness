@@ -1,7 +1,7 @@
 // Under `device_bridge: true` the agent's container holds no connected folder, so the local-lane prompt's claims that
 // a folder is mounted in the agent's own tree are false there. Those claims give way to a harness note, in the main
 // append and the VM sub-agent append, and the note is hashed into the prompt-asset fingerprint of a bridge run only.
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadBaseline } from "../src/baseline.js";
 import { renderPrompts, DEVICE_BRIDGE_PROMPT_NOTE, DEVICE_BRIDGE_SUBAGENT_NOTE } from "../src/prompt.js";
 import { hashBaselinePromptAssets, promptAssetStaleness } from "../src/run/cassette.js";
@@ -13,9 +13,33 @@ const baseline = loadBaseline("latest") as never;
 const render = (deviceBridge?: boolean) =>
   renderPrompts(baseline, {} as never, "abc", "proj", { effectiveFidelity: "container", ...(deviceBridge ? { deviceBridge } : {}) });
 
+// The prompt embeds the wall-clock minute, so every render here runs under one frozen clock.
+const FROZEN = new Date("2026-03-04T05:06:00Z");
+
 describe("device_bridge prompt note", () => {
-  const plain = render();
-  const bridged = render(true);
+  let plain: ReturnType<typeof render>;
+  let bridged: ReturnType<typeof render>;
+  beforeAll(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(FROZEN);
+    plain = render();
+    bridged = render(true);
+  });
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+
+  it("renders under the frozen clock: another system time changes the date line", () => {
+    const dateLine = (r: ReturnType<typeof render>) => r.systemPromptAppend?.match(/^Today's date: .*$/m)?.[0];
+    expect(dateLine(plain)).toBeDefined();
+    vi.setSystemTime(new Date(FROZEN.getTime() + 86_400_000));
+    try {
+      expect(dateLine(render())).not.toBe(dateLine(plain));
+    } finally {
+      vi.setSystemTime(FROZEN);
+    }
+    expect(dateLine(render())).toBe(dateLine(plain));
+  });
 
   it("the main append carries the note and no longer says a folder is mounted in the agent's tree", () => {
     const a = bridged.systemPromptAppend!;
