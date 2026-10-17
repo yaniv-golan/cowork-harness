@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **`tool_called` with `count: {max: 0}` now means never called.** Search your scenarios AND committed cassettes for
+  `max: 0` under `tool_called`, and confirm "never called" is what each one meant. Such a row used to require at least
+  one call and so could never pass. It is now a negative check, graded exactly as `tool_not_called` with the same fields:
+  that key's tier refusal (a literal `Bash` at `hostloop` is refused at load) and its redaction rules apply, and a
+  committed cassette's verdict for it can change from FAIL to PASS on replay.
+- **`semantic_matches` with a `min_pass` above the number of rubric claims now fails to load** (exit 2 on `run`,
+  `record <file>`, `eval`, `hillclimb run`, `verify-run` and `regrade`; a broken file on `record <dir/>`, exit 1;
+  a `lint` ERROR). It could never pass,
+  and spent a judge call first.
+- `schema/scenario.schema.json`'s validation rules are unchanged; description text is updated.
+
+### Changed
+
+- **`tool_called` `count: {max: 0}` with no `min` sets the floor to 0**, as `hook_event_blocked` reads
+  `{event, max: 0}`. Any other lone `max` still requires at least one call. The row is a negative check everywhere
+  `tool_not_called` is: its evidence direction (a redacted field is evidence-unavailable, never a pass), the tier
+  refusal, `record`'s redaction explanation, and the exemption from `answer_channel: none`'s refusal of an
+  AskUserQuestion check.
+- **`semantic_matches` with a `min_pass` above the number of rubric claims is refused at load and by `lint`.** The
+  judge pre-pass refuses it too, so a copy re-run from a cassette (`--rerecord-stale --from-embedded`) calls no judge.
+  An older cassette carrying one, or a `tool_called` `count.min` above `count.max`, replays with a warning and grades
+  that row FAIL instead of being refused.
+
+### Added
+
+- **`lint` rules `count-bound-unsatisfiable` (ERROR) and `tool-called-max-zero` (INFO).** The first reports a
+  `tool_called` `count.min` above `count.max` and a `min_pass` above the rubric, also on a direct `scenario.py lint`;
+  the second points a `count: {max: 0}` row at `tool_not_called`. `tool-not-called-tier-vacuous` and
+  `tool-input-regex-redactable` also cover the `count: {max: 0}` spelling.
+
 ## [4.10.0] — 2026-10-16
 
 ### Upgrade notes

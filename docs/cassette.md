@@ -856,6 +856,14 @@ a tool inventory five tools short). Cassettes recorded earlier keep replaying co
 asserting `tool_available: "mcp__skills__.*"` will fail against them, correctly, because that recording
 genuinely had no such tool. Re-record those.
 
+An older cassette whose frozen `assert:` carries an assertion no run can meet (a `tool_called` `count.min` above
+`count.max`, or a `semantic_matches` `min_pass` above its rubric; both refused at load since 4.11.0) is not refused:
+it replays with a `::warning::` and that row grades FAIL (`semantic_matches` stays skipped on replay as before).
+Since 4.11.0, `tool_called` with `count: {max: 0}` means never called and is graded as `tool_not_called`; before, it
+could never pass, so a cassette carrying one can flip from FAIL to PASS on replay. No cassette-version bump: an older
+harness reads the same row under its old rule and fails it, never passes it. `regrade` re-grades only judged
+asserts, so a run dir kept before 4.11.0 keeps that row's old verdict there, while `verify-run` re-derives it.
+
 ```bash
 cowork-harness record scenarios/ --dry-run          # preview + REAL loader check (schema errors surface here), write nothing
                                                     # ALSO refuses what the real record would: on_unanswered: prompt,
