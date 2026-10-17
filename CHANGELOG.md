@@ -8,7 +8,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Upgrade notes
 
-- **`tool_called` with `count: {max: 0}` now means never called.** Search your scenarios AND committed cassettes for
+- **`tool_called` with `count: {max: 0}` (or `{min: 0, max: 0}`) now means never called.** Search your scenarios AND committed cassettes for
   `max: 0` under `tool_called`, and confirm "never called" is what each one meant. Such a row used to require at least
   one call and so could never pass. It is now a negative check, graded exactly as `tool_not_called` with the same fields:
   that key's tier refusal (a literal `Bash` at `hostloop` is refused at load) and its redaction rules apply, and a
@@ -21,14 +21,15 @@ All notable changes to this project are documented here. The format is based on
 ### Changed
 
 - **`tool_called` `count: {max: 0}` with no `min` sets the floor to 0**, as `hook_event_blocked` reads
-  `{event, max: 0}`. Any other lone `max` still requires at least one call. The row is a negative check everywhere
+  `{event, max: 0}`; it and `{min: 0, max: 0}` are the same negative check. Any other lone `max` still requires at least one call. The row is a negative check everywhere
   `tool_not_called` is: its evidence direction (a redacted field is evidence-unavailable, never a pass), the tier
   refusal, `record`'s redaction explanation, and the exemption from `answer_channel: none`'s refusal of an
   AskUserQuestion check.
 - **`semantic_matches` with a `min_pass` above the number of rubric claims is refused at load and by `lint`.** The
   judge pre-pass refuses it too, so a copy re-run from a cassette (`--rerecord-stale --from-embedded`) calls no judge.
-  An older cassette carrying one, or a `tool_called` `count.min` above `count.max`, replays with a warning and grades
-  that row FAIL instead of being refused.
+  An older cassette carrying one, or a `tool_called` `count.min` above `count.max`, replays with a warning instead of
+  being refused: the `tool_called` row grades FAIL, and the `semantic_matches` row stays skipped on replay (live-only)
+  as before.
 
 ### Added
 

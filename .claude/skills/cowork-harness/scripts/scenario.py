@@ -2305,7 +2305,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 # finding; a glob cannot fail to compile, so there is nothing to guard against here.
                 if isinstance(tc, dict):
                     _cnt = tc.get("count")
-                    # The D1 floor: `{max: 0}` alone is min 0 (a negative), so it is no gate companion.
+                    # `{max: 0}` alone has a floor of 0 (never called, a negative), so it is no gate companion.
                     _min = _tool_called_effective_min(_cnt)
                     _tl = tc.get("tool")
                     _tl = [_tl] if isinstance(_tl, str) else _tl

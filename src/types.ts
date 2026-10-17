@@ -688,7 +688,7 @@ export const ToolCalledObject = z
       })
       .optional()
       .describe(
-        "how many calls must satisfy every predicate; default `{min: 1}`. `{max: 0}` alone means never called (min 0) and is graded as `tool_not_called`, including its tier refusal and redaction rules; any other lone `max` still needs at least one call",
+        "how many calls must satisfy every predicate; default `{min: 1}`. `{max: 0}` alone means never called (min 0); it and `{min: 0, max: 0}` are graded as `tool_not_called`, including its tier refusal and redaction rules; any other lone `max` still needs at least one call",
       ),
   })
   .refine(subagentTypeNeedsSubagentScope, subagentTypeScopeMessage);
@@ -784,7 +784,7 @@ export const Assertion = z.strictObject({
     .union([toolGlob, ToolCalledObject])
     .optional()
     .describe(
-      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way. OBJECT form `{tool, input, input_any, result, scope, subagent_type, count}` asserts what the call carried, where it ran and what its paired result said — use it, not transcript_*, to check a command that RAN. `count: {max: 0}` alone means never called and is graded as tool_not_called (its tier refusal and redaction rules apply)",
+      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way. OBJECT form `{tool, input, input_any, result, scope, subagent_type, count}` asserts what the call carried, where it ran and what its paired result said — use it, not transcript_*, to check a command that RAN. `count: {max: 0}` alone (or `{min: 0, max: 0}`) means never called and is graded as tool_not_called (its tier refusal and redaction rules apply)",
     ),
   tool_not_called: z
     .union([toolGlob, ToolNotCalledObject])

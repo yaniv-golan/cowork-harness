@@ -4314,7 +4314,10 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
     if (r.error.issues.every(isCountBoundIssue)) {
       // The bound's own message already names the key (`tool_called: count.min …`), so it is not prefixed by its path.
       const bounds = r.error.issues.map((iss) => iss.message).join("; ");
-      warn(`::warning:: [cassette] scenario.assert[${i}]: ${bounds} — this assertion can never pass; it grades FAIL\n`);
+      // A live-only key (semantic_matches) is skipped on replay, as before; only a replay-graded one grades FAIL here.
+      const liveOnly = r.error.issues.every((iss) => iss.path[0] === "semantic_matches");
+      const outcome = liveOnly ? "it stays skipped on replay (live-only)" : "it grades FAIL";
+      warn(`::warning:: [cassette] scenario.assert[${i}]: ${bounds} — this assertion can never pass; ${outcome}\n`);
       return;
     }
     if (isFutureCassette)

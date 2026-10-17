@@ -157,7 +157,7 @@ describe("count-bound keys: one table, the real schema", () => {
   });
 });
 
-describe("D1: tool_called {count: {max: 0}} means never called", () => {
+describe("tool_called {count: {max: 0}} means never called (min 0)", () => {
   it("the floor: 0 only for a lone max of 0", () => {
     expect(toolCalledEffectiveMin({ max: 0 })).toBe(0);
     expect(toolCalledEffectiveMin({ max: 3 })).toBe(1);
@@ -199,7 +199,7 @@ describe("D1: tool_called {count: {max: 0}} means never called", () => {
     expect(r.message).toMatch(/evidence unavailable/);
   });
 
-  it("2a stays rejected: a lone max above 0 still needs a call", () => {
+  it("a lone max above 0 still needs a call (min stays 1)", () => {
     const r = one({ tool_called: { tool: "Bash", count: { max: 3 } } }, ctx({ toolCalls: [] }));
     expect(r.pass).toBe(false);
     expect(r.message).toMatch(/tool not called/);
@@ -267,7 +267,7 @@ describe("cassettes: a frozen record carrying a count bound", () => {
     const err = mute();
     const r = read(withAsserts([{ semantic_matches: { rubric: ["a"], min_pass: 3 } }]));
     expect("cassette" in r).toBe(true);
-    expect(err.join("")).toMatch(/::warning::.*min_pass 3 is more than the rubric/);
+    expect(err.join("")).toMatch(/::warning::.*min_pass 3 is more than the rubric.*stays skipped on replay \(live-only\)/);
   });
 
   it("{max: 0} grades as never called: PASS over a tool that never ran, FAIL over one that did", async () => {
@@ -484,7 +484,7 @@ describe.skipIf(!havePython)("count-bound: TS refine ↔ Python lint rule agree 
     ["min > max", { tool_called: { tool: "Bash", count: { min: 3, max: 1 } } }, true],
     ["min 1, max 0", { tool_called: { tool: "Bash", count: { min: 1, max: 0 } } }, true],
     ["min_pass above the rubric", { semantic_matches: { rubric: ["a"], min_pass: 3 } }, true],
-    ["max 0 alone (D1: satisfiable)", { tool_called: { tool: "Bash", count: { max: 0 } } }, false],
+    ["max 0 alone (min 0: satisfiable)", { tool_called: { tool: "Bash", count: { max: 0 } } }, false],
     ["min == max", { tool_called: { tool: "Bash", count: { min: 2, max: 2 } } }, false],
     ["min_pass at the rubric", { semantic_matches: { rubric: ["a"], min_pass: 1 } }, false],
     ["a numeric-string max", { tool_called: { tool: "Bash", count: { min: 2, max: "1" } } }, false],
