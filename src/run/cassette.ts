@@ -3294,7 +3294,7 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
   const after = frozenToolUses(redacted.events);
   baseAsserts.forEach((a, i) => {
     // Both spellings of a negative object-form check: `tool_not_called`, and `tool_called` with `count: {max: 0}`.
-    const key = (["tool_not_called", "tool_called"] as const).find((k) => negativeToolCall(k, a?.[k]));
+    const key = (["tool_not_called", "tool_called"] as const).find((k) => a?.[k] !== undefined && negativeToolCall(k, a[k]));
     if (key === undefined) return;
     const v = a[key];
     if (!v || typeof v !== "object") return;

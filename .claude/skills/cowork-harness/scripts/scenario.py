@@ -671,10 +671,17 @@ def _numeric(v):
 
 
 def _real_int(v):
-    """A real number the schema reads as a count: an int or float, never a bool or a numeric STRING. Unlike `_numeric`,
-    a string such as `"0"` is not a count here; the loader refuses it (`scenario-invalid`), so a rule built on a
-    string reading would report a defect the file does not have."""
-    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    """A whole number the schema reads as a count (`z.number().int()`): an int, or a float with no fraction (`1.0`),
+    never a bool, a fraction or a numeric STRING. Unlike `_numeric`, `"0"` and `1.5` are not counts here: the loader
+    refuses them (`scenario-invalid`) for their type, so a count-bound rule built on them would report a defect the
+    file does not have."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return None
 
 
 def _tool_called_effective_min(cnt):

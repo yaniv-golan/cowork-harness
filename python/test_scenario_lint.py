@@ -2227,6 +2227,83 @@ def test_count_min_zero_without_max_is_flagged_as_always_passing(tmp_path):
     body = "assert:\n  - tool_called: { tool: Bash, count: { min: 0 } }\n"
     assert "tool-called-always-passes" in _rules(body, tmp_path)
     assert "tool-called-always-passes" not in _rules("assert:\n  - tool_called: { tool: Bash, count: { min: 0, max: 2 } }\n", tmp_path)
+    # The remedy names `count: {max: 0}` as "never"; since 4.11.0 that is what it means (min 0), so the text is true.
+    f = _one("tool-called-always-passes", body, tmp_path)
+    assert '`count: {max: 0}` means "never"' in f.fix
+
+
+# --- count bounds: an assertion whose own bounds no count meets, and the negative `tool_called` spelling ----------
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "tool_called: { tool: Bash, count: { min: 3, max: 1 } }",
+        "tool_called: { tool: Bash, count: { min: 1, max: 0 } }",
+        "semantic_matches: { rubric: [a], min_pass: 3 }",
+    ],
+)
+def test_count_bound_unsatisfiable_is_an_error_with_a_remedy(item, tmp_path):
+    f = _one("count-bound-unsatisfiable", f"assert:\n  - {item}\n", tmp_path)
+    assert f is not None and f.severity == "ERROR"
+    assert "Lower `" in f.fix
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        "tool_called: { tool: Bash, count: { max: 0 } }",
+        "tool_called: { tool: Bash, count: { min: 2, max: 2 } }",
+        "semantic_matches: { rubric: [a], min_pass: 1 }",
+        "semantic_matches: { rubric: [a], min_pass: all }",
+        # Numeric strings are the loader's refusal (scenario-invalid), not a count bound: real numbers only.
+        "tool_called: { tool: Bash, count: { min: 2, max: '1' } }",
+        "tool_called: { tool: Bash, count: { min: true, max: 0 } }",
+    ],
+)
+def test_count_bound_unsatisfiable_stays_quiet_on_satisfiable_or_non_numeric(item, tmp_path):
+    assert "count-bound-unsatisfiable" not in _rules(f"assert:\n  - {item}\n", tmp_path)
+
+
+def test_tool_called_max_zero_is_an_info_pointing_at_tool_not_called(tmp_path):
+    f = _one("tool-called-max-zero", "assert:\n  - tool_called: { tool: Bash, count: { max: 0 } }\n", tmp_path)
+    assert f is not None and f.severity == "INFO"
+    assert "tool_not_called" in f.fix
+    for other in ("{ max: 1 }", "{ min: 0 }", "{ min: 1, max: 0 }"):
+        assert "tool-called-max-zero" not in _rules(f"assert:\n  - tool_called: {{ tool: Bash, count: {other} }}\n", tmp_path)
+
+
+def test_negative_tool_called_is_tier_vacuous_like_tool_not_called(tmp_path):
+    f = tmp_path / "sc.yaml"
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\nfidelity: hostloop\nprompt: hi\n"
+        "assert:\n  - tool_called: { tool: Bash, count: { max: 0 } }\n",
+        encoding="utf-8",
+    )
+    found = [x for x in scenario.lint_file(str(f)) if x.rule == "tool-not-called-tier-vacuous"]
+    assert found and "tool_called: {tool: Bash, count: {max: 0}}" in found[0].message
+    assert "tool_called: {tool: mcp__workspace__bash, count: {max: 0}}" in found[0].fix
+    # A positive tool_called is never tier-vacuous: it fails normally.
+    f.write_text(
+        "name: t\nbaseline: latest\nsession: (inline)\nfidelity: hostloop\nprompt: hi\n"
+        "assert:\n  - tool_called: { tool: Bash, count: { max: 2 } }\n",
+        encoding="utf-8",
+    )
+    assert "tool-not-called-tier-vacuous" not in {x.rule for x in scenario.lint_file(str(f))}
+
+
+def test_negative_tool_called_input_regex_redaction_rule_fires(tmp_path):
+    body = "assert:\n  - tool_called: { tool: Bash, input: { command: '/Users/acme/x' }, count: { max: 0 } }\n"
+    f = _one(RED_RULE, body, tmp_path)
+    assert f is not None and "tool_called (count.max 0).input.command" in f.message
+    assert RED_RULE not in _rules("assert:\n  - tool_called: { tool: Bash, input: { command: '/Users/acme/x' } }\n", tmp_path)
+
+
+def test_ask_user_question_with_max_zero_is_not_a_gate_companion(tmp_path):
+    body = "assert:\n  - gate_answers_delivered: true\n  - tool_called: { tool: AskUserQuestion, count: { max: 0 } }\n"
+    assert "vacuous-gate-assert" in _rules(body, tmp_path)
+    body = "assert:\n  - gate_answers_delivered: true\n  - tool_called: { tool: AskUserQuestion, count: { max: 2 } }\n"
+    assert "vacuous-gate-assert" not in _rules(body, tmp_path)
 
 
 # --------------------------------------------------------------------------- #
