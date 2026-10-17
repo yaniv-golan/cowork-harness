@@ -521,7 +521,8 @@ Defenses:
 - **Background dispatch is stripped in Cowork.** `run_in_background` defaults ON in the underlying
   agent, but Cowork sets an environment flag that strips `run_in_background` from the tool's schema
   entirely, so Cowork's Task children are foreground one-shots (a second flag disables the separate
-  "agents fleet" surface too). A cross-session continuation mechanism exists for agent-type sessions,
+  "agents fleet" surface too). The harness sets the same flag on every tier, `protocol` included (4.11.0 and
+  later). A cross-session continuation mechanism exists for agent-type sessions,
   but it is not sub-agent resume — don't conflate the two.
 - **Nesting depth is capped at 5; fan-out per call is not capped.** Exceeding the depth cap throws
   hard. There is no limit on how many `Task` calls one turn can make — only the generic tool-scheduler

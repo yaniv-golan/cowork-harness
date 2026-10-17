@@ -21,9 +21,22 @@ All notable changes to this project are documented here. The format is based on
   (agent 2.1.308; see Changed), so such a cassette reports `[stale] baseline moved 2.42304.0 → 3.1623.4 since record
   — re-record`. Re-stamping `fingerprint.baseline` clears it. A re-stamped `container`, `microvm` or `hostloop`
   cassette keeps an `agent-version:` note until it is re-recorded on 2.1.308. The bundled cassettes are re-stamped.
+- **A `protocol` scenario that relies on a background shell (Bash `run_in_background`) now fails, as it would in
+  Cowork.** `protocol` now sets Cowork's background-tasks switch (see Changed), so the agent offers no
+  `run_in_background` and runs no background task. Run the work in the foreground. Cassettes: no re-record needed.
+  A cassette's fingerprint does not cover the spawn env, so the bundled `protocol` cassette does not go stale; it was
+  recorded before this change, and its frozen tool inventory does not show the parameter either way.
 
 ### Changed
 
+- **`protocol` sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` from the baseline's `spawn.env`**, as `container`, `microvm`
+  and `hostloop` already did and as Cowork does: the agent removes `run_in_background` from Bash and Task and starts
+  no background task. Before, a protocol run could start a background shell that outlived its `result`, woke the
+  agent after the harness had closed its input (its permission requests then failed "Stream closed"), and kept the
+  run open until the shell ended. Task's `run_in_background` is now stripped on every tier, so the harness's
+  PreToolUse block on it no longer fires anywhere; it stays installed. On `protocol` and `hostloop`, an export of the
+  key in your shell no longer reaches the agent; on a baseline that pins no value (`desktop-1.11847.5`) no tier sets
+  it.
 - **`tool_called` `count: {max: 0}` with no `min` sets the floor to 0**, as `hook_event_blocked` reads
   `{event, max: 0}`; it and `{min: 0, max: 0}` are the same negative check. Any other lone `max` still requires at least one call. The row is a negative check everywhere
   `tool_not_called` is: its evidence direction (a redacted field is evidence-unavailable, never a pass), the tier
