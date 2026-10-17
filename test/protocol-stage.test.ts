@@ -201,3 +201,22 @@ describe("spawnProtocol — answer_channel: none and agent_env.artifacts_root", 
     expect(env.COWORK_ARTIFACTS_ROOT).toBeUndefined();
   });
 });
+
+// Cowork's background-tasks switch reaches the spawned agent at L0, from the baseline's spawn.env, and an operator
+// export does not replace it. Asserted at the spawn call, so a regression between buildProtocolEnv and spawn is red.
+describe("spawnProtocol — CLAUDE_CODE_DISABLE_BACKGROUND_TASKS reaches the spawn", () => {
+  beforeEach(() => spawnMock.mockClear());
+  const envFor = (baseline: PlatformBaseline, baseEnv: NodeJS.ProcessEnv) => {
+    spawnProtocol(SCENARIO, baseline, minimalPlan([], { baseEnv }), join(mkdtempSync(join(tmpdir(), "proto-bg-")), "out"));
+    return (spawnMock.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv }])[2].env;
+  };
+  const PINNED = { spawn: { env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" } } } as unknown as PlatformBaseline;
+  it("the baseline's pinned value, over an operator export", () => {
+    const env = envFor(PINNED, { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "0", PATH: "/usr/bin" });
+    expect(env.PATH).toBe("/usr/bin"); // the operator layer reached the spawn
+    expect(env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBe("1");
+  });
+  it("a baseline that pins none: no key, the operator's export dropped too", () => {
+    expect(envFor(BASELINE, { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "0" }).CLAUDE_CODE_DISABLE_BACKGROUND_TASKS).toBeUndefined();
+  });
+});

@@ -226,6 +226,20 @@ export function proxyEnvVars(proxyHost: string): Record<string, string> {
   };
 }
 
+/** The background-tasks switch Desktop pins in every Cowork spawn env. With it the agent offers no `run_in_background`
+ *  (Bash or Task) and runs no background task, so it never wakes itself after its `result` or holds stdout open for a
+ *  background shell. */
+export const BACKGROUND_TASKS_ENV_KEY = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
+
+/** The background-tasks switch as the baseline pins it in `spawn.env`, for the one tier with no `spawn.env` overlay
+ *  (`protocol`); the other tiers already carry it through `baselineSpawnEnv`. Empty when the baseline pins none (a
+ *  baseline with no `spawn` block included), so `protocol` reads like `container` on every baseline. Not applied to
+ *  `spawnOnce` (judges, `--safe-mode`) or `chat --raw`, which are not tiers. */
+export function backgroundTasksEnv(baseline: PlatformBaseline): Record<string, string> {
+  const v = baseline.spawn?.env?.[BACKGROUND_TASKS_ENV_KEY];
+  return v === undefined ? {} : { [BACKGROUND_TASKS_ENV_KEY]: v };
+}
+
 /** The baseline's `spawn.env` (or the minimal cowork marker), minus the auto-memory key: that key is owned by
  *  `autoMemoryEnv`, so the recorded gate decides it even if a baseline ever carried it in `spawn.env`. */
 function baselineSpawnEnv(baseline: PlatformBaseline): Record<string, string> {
