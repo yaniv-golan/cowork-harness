@@ -88,6 +88,33 @@ describe("negative object form over a redacted cassette", () => {
   });
 });
 
+describe("the tool_called {count: {max: 0}} spelling is the same negative under redaction", () => {
+  const NEG_MAX0 = { tool_called: { tool: "Bash", input: { command: "rm\\s+-rf\\s+/Users/acme" }, count: { max: 0 } } };
+  const verdictOfMax0 = async (c: Cassette) => (await replayCassette(c, [])).assertions.find((a) => "tool_called" in a.assertion)!;
+
+  it("a redacted candidate field is evidence-unavailable on replay, never a pass", async () => {
+    const red = redactCassette(cassette([NEG_MAX0]), POLICY);
+    const v = await verdictOfMax0(red);
+    expect(v.pass).toBe(false);
+    expect(v.message).toMatch(/evidence unavailable/);
+  });
+
+  it("record's redaction explainer names it by its spelling", () => {
+    const base = cassette([NEG_MAX0]);
+    const findings = redactionRewroteNegativeToolInputs(base, redactCassette(base, POLICY));
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings.join("\n")).toMatch(/tool_called \(count\.max 0\)/);
+    // One assert item carrying both spellings: each is explained.
+    const both = cassette([{ ...NEG, ...NEG_MAX0 }]);
+    const out = redactionRewroteNegativeToolInputs(both, redactCassette(both, POLICY)).join("\n");
+    expect(out).toMatch(/tool_not_called\.input\.command/);
+    expect(out).toMatch(/tool_called \(count\.max 0\)/);
+    // A positive tool_called is not a negative check and is not explained here.
+    const pos = cassette([{ tool_called: { tool: "Bash", input: { command: "rm\\s+-rf\\s+/Users/acme" } } }]);
+    expect(redactionRewroteNegativeToolInputs(pos, redactCassette(pos, POLICY))).toEqual([]);
+  });
+});
+
 describe("record-time warning (the exact guard)", () => {
   it("names the assertion whose pre-redaction match redaction rewrote, and the regex the policy rewrote", () => {
     const base = cassette([NEG]);

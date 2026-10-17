@@ -47,6 +47,9 @@ import {
   type PlatformBaseline,
   type DeviceBridgeRecord,
   Assertion as AssertionSchema,
+  COUNT_BOUND_PARAMS,
+  negativeToolCall,
+  toolCallLabel,
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
   FIDELITY_TIERS,
@@ -3289,18 +3292,21 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
   const redAsserts = (redacted.scenario?.assert ?? []) as Array<Record<string, unknown>>;
   const before = frozenToolUses(base.events);
   const after = frozenToolUses(redacted.events);
-  baseAsserts.forEach((a, i) => {
-    const v = a?.tool_not_called;
+  // Both spellings of a negative object-form check, `tool_not_called` and `tool_called` with `count: {max: 0}`, each
+  // explained on its own: one assert item may carry both.
+  const explain = (a: Record<string, unknown>, i: number, key: "tool_not_called" | "tool_called") => {
+    const v = a[key];
     if (!v || typeof v !== "object") return;
     const o = v as ToolNotCalledObject;
-    const redO = redAsserts[i]?.tool_not_called as ToolNotCalledObject | undefined;
+    const label = toolCallLabel(key, v);
+    const redO = redAsserts[i]?.[key] as ToolNotCalledObject | undefined;
     const inputRegexes = toolCallObjectRegexes(o).filter((r) => r.where.startsWith("input"));
     const redRegexes = redO && typeof redO === "object" ? toolCallObjectRegexes(redO) : [];
     for (const r of inputRegexes) {
       const redSrc = redRegexes.find((x) => x.where === r.where)?.source;
       if (redSrc !== undefined && hasRedactionToken(redSrc) && !hasRedactionToken(r.source))
         findings.push(
-          `assert[${i}] tool_not_called.${r.where} "${r.source}" was itself rewritten by the redaction policy — the committed cassette no longer carries the pattern you wrote, so replay reports it evidence-unavailable`,
+          `assert[${i}] ${label}.${r.where} "${r.source}" was itself rewritten by the redaction policy — the committed cassette no longer carries the pattern you wrote, so replay reports it evidence-unavailable`,
         );
     }
     const globs = Array.isArray(o.tool) ? o.tool : [o.tool];
@@ -3332,7 +3338,7 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
     }
     if (tokened.size)
       findings.push(
-        `assert[${i}] tool_not_called on ${globs.join(" | ")}: ` +
+        `assert[${i}] ${label} on ${globs.join(" | ")}: ` +
           [...tokened]
             .map(
               ([where, n]) =>
@@ -3355,11 +3361,15 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
           const post = after[k].input[f]?.text;
           if (pre !== undefined && c.re.test(pre) && (post === undefined || !c.re.test(post)))
             findings.push(
-              `assert[${i}] tool_not_called.${r.where} "${r.source}" matched ${b.name} ${b.id ?? `#${k}`} field \`${f}\` before redaction and no longer matches it after — on the committed cassette this check cannot see what it is looking for`,
+              `assert[${i}] ${label}.${r.where} "${r.source}" matched ${b.name} ${b.id ?? `#${k}`} field \`${f}\` before redaction and no longer matches it after — on the committed cassette this check cannot see what it is looking for`,
             );
         }
       }
     }
+  };
+  baseAsserts.forEach((a, i) => {
+    for (const key of ["tool_not_called", "tool_called"] as const)
+      if (a?.[key] !== undefined && negativeToolCall(key, a[key])) explain(a, i, key);
   });
   return findings;
 }
@@ -4297,6 +4307,19 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
     const r = AssertionSchema.safeParse(a);
     if (r.success) return;
     const detail = `scenario.assert[${i}]: ${r.error.issues.map((iss) => `${iss.path.join(".") || "<root>"}: ${iss.message}`).join("; ")}`;
+    // A recognised assertion whose ONLY defect is a count bound no run can meet (refused at load since 4.11.0) drops
+    // nothing from replay: it reaches the evaluator, which names the bound in a FAIL. Tolerated with a warning so a
+    // frozen record keeps replaying, verifying and rehashing as before. Every other issue (another `custom` refine
+    // such as the regex-shaped tool glob, or a union that failed on a sibling field) is still refused.
+    if (r.error.issues.every(isCountBoundIssue)) {
+      // The bound's own message already names the key (`tool_called: count.min …`), so it is not prefixed by its path.
+      const bounds = r.error.issues.map((iss) => iss.message).join("; ");
+      // A live-only key (semantic_matches) is skipped on replay, as before; only a replay-graded one grades FAIL here.
+      const liveOnly = r.error.issues.every((iss) => iss.path[0] === "semantic_matches");
+      const outcome = liveOnly ? "it stays skipped on replay (live-only)" : "it grades FAIL";
+      warn(`::warning:: [cassette] scenario.assert[${i}]: ${bounds} — this assertion can never pass; ${outcome}\n`);
+      return;
+    }
     if (isFutureCassette)
       warn(
         `::warning:: [cassette] unrecognized assertion (tolerated — cassette v${recordedVersion} is newer than v${CASSETTE_VERSION}): ${detail}\n`,
@@ -4310,6 +4333,11 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
         `${assertErrors.join("; ")}. Fix the assertion, or re-record.`,
     };
   return { cassette };
+}
+
+/** A schema issue raised by a count-bound refine (`COUNT_BOUND_PARAMS`), not by any other check. */
+function isCountBoundIssue(iss: { code: string; params?: unknown }): boolean {
+  return iss.code === "custom" && (iss.params as { kind?: unknown } | undefined)?.kind === COUNT_BOUND_PARAMS.kind;
 }
 
 /** The committed cassettes under `dir` whose fingerprint has drifted (baseline/skill) — the re-record

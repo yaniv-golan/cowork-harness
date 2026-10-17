@@ -89,7 +89,14 @@ describe("the refusal message", () => {
     expect(m).toMatch(/can never be violated at fidelity `hostloop`/);
     expect(m).toMatch(/passes vacuously and verifies nothing/);
     expect(m).toMatch(/tool_not_called: "mcp__workspace__bash"/); // the remedy, spelled out
-    expect(m).toMatch(/tool_called: "Bash"` fails normally/); // the sibling that behaves differently
+    expect(m).toMatch(/tool_called: "Bash"` \(at least one call\) fails normally/); // the sibling that behaves differently
+  });
+
+  it("spells the negative tool_called form with its count, so it does not read as the positive check", () => {
+    const m = tierVacuousMessage(tierVacuousTool("Bash", "hostloop", GATE_ON)!, "tool_called", "s");
+    expect(m).toContain('`tool_called: {tool: "Bash", count: {max: 0}}` can never be violated');
+    expect(m).toContain('Assert `tool_called: {tool: "mcp__workspace__bash", count: {max: 0}}` instead');
+    expect(m).toContain('`tool_called: "Bash"` (at least one call) fails normally');
   });
 
   it("echoes the sub-agent key back when that is what was written", () => {

@@ -576,6 +576,52 @@ export function hookCountBoundError(key: string, v: { min?: number; max?: number
     return `${key}: \`min\` (${v.min}) is greater than \`max\` (${v.max}), so no count satisfies it`;
   return undefined;
 }
+/** `tool_called`'s floor: `min` when set; otherwise 1, except that `{max: 0}` alone means "never called" (min 0),
+ *  as the hook keys read `{event, max: 0}`. A lone `max` above 0 keeps the floor of 1. */
+export function toolCalledEffectiveMin(count: { min?: number; max?: number } | undefined): number {
+  return count?.min ?? (count?.max === 0 ? 0 : 1);
+}
+
+/** Whether an object-form tool check is a NEGATIVE: `tool_not_called`, or a `tool_called` whose range is exactly
+ *  0..0. Every guard the negative direction needs (evidence direction, tier vacuity, redaction) keys on this, never
+ *  on the key name, so the two spellings cannot drift. */
+export function negativeToolCall(key: string, o: unknown): boolean {
+  if (key === "tool_not_called") return true;
+  if (key !== "tool_called" || typeof o !== "object" || o === null) return false;
+  const count = (o as { count?: { min?: number; max?: number } }).count;
+  return count?.max === 0 && toolCalledEffectiveMin(count) === 0;
+}
+
+/** The text a refusal or verdict names the check by: `tool_called (count.max 0)` for the negative spelling. */
+export function toolCallLabel(key: string, o: unknown): string {
+  return key === "tool_called" && negativeToolCall(key, o) ? "tool_called (count.max 0)" : key;
+}
+
+/** The tag on a count-bound issue: an assertion whose own bounds no count satisfies. `readCassette` tolerates exactly
+ *  this tag on a frozen record (it grades FAIL with a warning) and refuses every other schema issue. */
+export const COUNT_BOUND_PARAMS = { kind: "count-bound" } as const;
+export const TOOL_CALL_COUNT_BOUND_FIX =
+  'Lower `count.min` or raise `count.max`; for "never called" use `count: {max: 0}` or `tool_not_called`.';
+
+export const MIN_PASS_BOUND_FIX = "Lower `min_pass` to at most the number of rubric claims, or use `all`.";
+
+/** Why a `semantic_matches.min_pass` can never be met: it asks for more passing claims than the rubric has. Shared
+ *  by the load-time refine and the judge pre-pass (`semanticRefusal`), which a tolerated cassette row reaches. */
+export function minPassBoundError(v: { rubric?: unknown; min_pass?: unknown }): string | undefined {
+  if (typeof v.min_pass !== "number" || !Array.isArray(v.rubric) || v.min_pass <= v.rubric.length) return undefined;
+  return `semantic_matches: min_pass ${v.min_pass} is more than the rubric's ${v.rubric.length} claim(s), so it can never pass`;
+}
+
+/** Why a `tool_called` count range is empty, or undefined. Shared by the load-time refine and the evaluator,
+ *  which a tolerated cassette row reaches unparsed. */
+export function toolCallCountBoundError(count: { min?: number; max?: number } | undefined): string | undefined {
+  // A negative bound is the schema's own refusal (`nonnegative()`), not a count bound: skipped, so it is not tagged
+  // (and tolerated on a cassette) as one.
+  if (count?.min !== undefined && count.max !== undefined && count.min >= 0 && count.max >= 0 && count.min > count.max)
+    return `tool_called: count.min ${count.min} is greater than count.max ${count.max}, so no number of calls satisfies it`;
+  return undefined;
+}
+
 const hookCountObject = <T extends z.core.$ZodLooseShape>(key: string, shape: T) =>
   z
     .strictObject({
@@ -631,14 +677,19 @@ export const ToolCalledObject = z
     ...toolCallObjectFields,
     count: z
       .strictObject({
-        min: z.number().int().nonnegative().optional().describe("minimum satisfying calls (default 1)"),
+        min: z.number().int().nonnegative().optional().describe("minimum satisfying calls (default 1, or 0 when `max` is 0)"),
         max: z.number().int().nonnegative().optional().describe("maximum satisfying calls"),
       })
-      .refine((c) => c.min === undefined || c.max === undefined || c.min <= c.max, {
-        message: "count.min is greater than count.max — no number of calls can satisfy it",
+      // superRefine, not .refine: `addIssue` keeps `fix` (lint's remedy channel) and `params` (the tag readCassette
+      // tolerates on a frozen record).
+      .superRefine((c, ctx) => {
+        const message = toolCallCountBoundError(c);
+        if (message !== undefined) ctx.addIssue({ code: "custom", message, fix: TOOL_CALL_COUNT_BOUND_FIX, params: COUNT_BOUND_PARAMS });
       })
       .optional()
-      .describe("how many calls must satisfy every predicate; default `{min: 1}`"),
+      .describe(
+        "how many calls must satisfy every predicate; default `{min: 1}`. `{max: 0}` alone means never called (min 0); it and `{min: 0, max: 0}` are graded as `tool_not_called`, including its tier refusal and redaction rules; any other lone `max` still needs at least one call",
+      ),
   })
   .refine(subagentTypeNeedsSubagentScope, subagentTypeScopeMessage);
 export type ToolCalledObject = z.infer<typeof ToolCalledObject>;
@@ -733,7 +784,7 @@ export const Assertion = z.strictObject({
     .union([toolGlob, ToolCalledObject])
     .optional()
     .describe(
-      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way. OBJECT form `{tool, input, input_any, result, scope, subagent_type, count}` asserts what the call carried, where it ran and what its paired result said — use it, not transcript_*, to check a command that RAN",
+      "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way. OBJECT form `{tool, input, input_any, result, scope, subagent_type, count}` asserts what the call carried, where it ran and what its paired result said — use it, not transcript_*, to check a command that RAN. `count: {max: 0}` alone (or `{min: 0, max: 0}`) means never called and is graded as tool_not_called (its tier refusal and redaction rules apply)",
     ),
   tool_not_called: z
     .union([toolGlob, ToolNotCalledObject])
@@ -1435,7 +1486,9 @@ export const Assertion = z.strictObject({
       min_pass: z
         .union([z.literal("all"), z.number().int().positive()])
         .optional()
-        .describe("how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario)"),
+        .describe(
+          "how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario). Above the number of rubric claims it can never pass, and is refused at load",
+        ),
       judge_model: z.string().optional().describe("override the run-level pinned judge model for this assert"),
       evidence_files: z
         .array(z.string().min(1))
@@ -1471,6 +1524,11 @@ export const Assertion = z.strictObject({
         .describe(
           "default false: also send the result of every top-level `Skill` call to the judge, joined to its call by toolUseId — the only channel that carries a FOREGROUND `context: fork` skill's own answer (a fork is not a dispatch, so it has no subagents[] entry and include_subagent_text cannot see it). Each result is headed `Fork skill result: <skill>` when it carries the agent's `completed (forked execution)` marker, else `Skill result: <skill>` (an inline skill's result is only its launch line). A top-level Skill result is captured up to 32,768 characters (every other tool result keeps 10,240); one cut at that cap fails the assert evidence-unavailable (`fork_result_truncated`), as does a Skill call with no paired result (`fork_result_unpaired`), a fork launched in the BACKGROUND, whose result is only its launch line (`fork_result_background`), or a lane with no tool-call record (`fork_calls_unrecorded`) — never a grade over a partial answer or a launch line. Opt-in because it enlarges the judged document, which can re-grade an existing rubric",
         ),
+    })
+    .superRefine((v, ctx) => {
+      const message = minPassBoundError(v);
+      if (message !== undefined)
+        ctx.addIssue({ code: "custom", path: ["min_pass"], message, fix: MIN_PASS_BOUND_FIX, params: COUNT_BOUND_PARAMS });
     })
     .optional()
     .describe(

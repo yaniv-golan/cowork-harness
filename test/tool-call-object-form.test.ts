@@ -417,5 +417,7 @@ describe("count: min > max is refused at load", () => {
   it("rejects min > max, accepts min == max", () => {
     expect(AssertionSchema.safeParse({ tool_called: { tool: "Bash", count: { min: 3, max: 1 } } }).success).toBe(false);
     expect(AssertionSchema.safeParse({ tool_called: { tool: "Bash", count: { min: 2, max: 2 } } }).success).toBe(true);
+    // A lone max of 0 is not min 1 > max 0: it means never called (min 0). See count-bounds.test.ts.
+    expect(AssertionSchema.safeParse({ tool_called: { tool: "Bash", count: { max: 0 } } }).success).toBe(true);
   });
 });

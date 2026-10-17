@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import type { Assertion, PlatformBaseline, Scenario } from "./types.js";
-import { GATE_ASSERT_KEYS } from "./types.js";
+import { GATE_ASSERT_KEYS, negativeToolCall } from "./types.js";
 import { anyGlobMatches } from "./glob.js";
 
 /**
@@ -159,10 +159,12 @@ export function answerChannelRefusal(args: {
 
 /** `tool_called` naming AskUserQuestion, in the string or the object form (`tool:`, a glob or a glob list). A glob
  *  counts when it matches the name and starts with a literal (`AskUser*`); a bare catch-all (`*`, `?*`) says "some tool
- *  ran", not "the agent asked". Only `tool_called` is refused: `tool_not_called: AskUserQuestion` grades the same under
- *  every outcome of the flag. */
+ *  ran", not "the agent asked". Only a `tool_called` that needs a call is refused: `tool_not_called: AskUserQuestion`,
+ *  and its other spelling `tool_called: {tool: AskUserQuestion, count: {max: 0}}`, grade the same under every outcome
+ *  of the flag. */
 function namesAskUserQuestion(a: Assertion): boolean {
   const v = (a as Record<string, unknown>).tool_called;
+  if (negativeToolCall("tool_called", v)) return false;
   const raw = typeof v === "string" ? [v] : v && typeof v === "object" ? [(v as Record<string, unknown>).tool].flat() : [];
   return raw.some((g) => typeof g === "string" && /^[^*?]/.test(g) && anyGlobMatches([g], "AskUserQuestion"));
 }

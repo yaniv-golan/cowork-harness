@@ -168,6 +168,13 @@ describe("answerChannelRefusal", () => {
   });
   it("keeps tool_not_called: AskUserQuestion", () => {
     expect(refuse({ scenario: { assert: [parkedAssert, { tool_not_called: "AskUserQuestion" }] } })).toBeUndefined();
+    // Its other spelling, `count: {max: 0}`, is the same negative and is kept too; a lone max above 0 still needs a call.
+    expect(
+      refuse({ scenario: { assert: [parkedAssert, { tool_called: { tool: "AskUserQuestion", count: { max: 0 } } }] } }),
+    ).toBeUndefined();
+    expect(refuse({ scenario: { assert: [parkedAssert, { tool_called: { tool: "AskUserQuestion", count: { max: 2 } } }] } })).toMatch(
+      /AskUserQuestion/,
+    );
   });
 
   it("requires a file assertion", () => {

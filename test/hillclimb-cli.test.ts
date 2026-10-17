@@ -358,6 +358,21 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     expect(out.error.message).toContain("cowork-harness doctor --tier");
   });
 
+  it("run --dry-run: a scenario with an empty count bound is refused at load (exit 2), naming the bound", () => {
+    setup();
+    writeFileSync(
+      join(cwd, "evals", "a.yaml"),
+      "name: a\nbaseline: latest\nsession: ./_session.yaml\nfidelity: container\nprompt: p\nassert:\n  - semantic_matches: {rubric: [x], min_pass: 3}\n",
+    );
+    const r = spawnSync("node", [CLI, "hillclimb", "run", "evals", "--flow", "flow", "--dry-run", "--output-format", "json"], {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, COWORK_HARNESS_RUNS_DIR: join(cwd, "runs"), CLAUDE_CODE_OAUTH_TOKEN: "test-not-a-real-token" },
+    });
+    expect(r.status, r.stderr).toBe(2);
+    expect(r.stdout + r.stderr).toMatch(/min_pass 3 is more than the rubric's 1 claim/);
+  });
+
   it("run --dry-run --output-format json: the envelope's ok is the verdict, and the cost object is present", () => {
     setup();
     const r = spawnSync("node", [CLI, "hillclimb", "run", "evals", "--flow", "flow", "--dry-run", "--output-format", "json"], {

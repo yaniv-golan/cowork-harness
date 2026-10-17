@@ -390,7 +390,7 @@ grades none, and its exit code is unchanged. Re-run the eval to grade them.
   name, a symlink included), any `evals.json`, or any symlink that resolves outside the snapshot is
   refused: the agent could read the answers.
 - **The scenarios' inputs**, as a run checks them, over each arm's snapshot: every input path, and a
-  `tool_not_called` the scenario's tier can never violate.
+  `tool_not_called` (or `tool_called` with `count: {max: 0}`) the scenario's tier can never violate.
 - **The plugin under test** must be the session's one `plugins.local_plugins` entry; a session that
   declares it only under `remote_plugins` is refused (see [Lane note](#lane-note)).
 - **`--fail-on confirmed`** when no row could reach `confirmed` at this `--reps` and correction.

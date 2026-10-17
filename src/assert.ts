@@ -23,6 +23,7 @@ import {
   VERDICT_MODIFIER_KEYS,
   hookCountBoundError,
   questionOptionCountBoundError,
+  minPassBoundError,
 } from "./types.js";
 import { REDACTION_TOKEN_RE, hasRedactionToken } from "./redactable-literal.js";
 import { compileUserRegex } from "./regex.js";
@@ -422,7 +423,8 @@ export type SemanticEvidence = NonNullable<RunResult["assertions"][number]["sema
 /** Why a `semantic_matches` assert's verdict is evidence-unavailable — the typed reason plus the message the
  *  check surfaces. Produced only by `semanticRefusal`. */
 export interface SemanticRefusal {
-  semanticEvidence: SemanticEvidence;
+  /** Absent for a refusal decided from the assertion alone (an unmeetable `min_pass`): no evidence was composed. */
+  semanticEvidence?: SemanticEvidence;
   message: string;
 }
 
@@ -987,6 +989,10 @@ export function semanticRefusal(
 ): SemanticRefusal | undefined {
   const o = judgedOpts(a);
   if (o === undefined) return undefined;
+  // An unmeetable `min_pass` is refused at load; a frozen cassette copy re-run live (`--from-embedded`) reaches
+  // here unparsed, and no grade could pass it, so the judge is not called.
+  const bound = a.semantic_matches !== undefined ? minPassBoundError(a.semantic_matches) : undefined;
+  if (bound !== undefined) return { message: bound };
   // FIRST, so every lane that can compute it reports the same reason: it reads only the persisted call/result
   // record, which verify-run carries too (see `check`, which falls back to it when the pre-pass never ran).
   const fromRecord = forkRecordRefusal(a, ctx);

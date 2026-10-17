@@ -60,10 +60,10 @@ Each of these is a load error, raised before anything is staged or spent, and re
 | `web_fetch.approved_domains` | approving a domain answers a prompt this run cannot show |
 | `question_asked`, `question_options`, `question_context`, `question_option_count`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted` | each grades a gate the harness answered |
 | `questions_count_max` | it counts the questions that reach the harness, and none do, so it would always pass |
-| `tool_called` naming `AskUserQuestion` (or a glob such as `AskUser*`) | the flag removes the tool, so it can never be called; assert the status file instead |
+| `tool_called` naming `AskUserQuestion` (or a glob such as `AskUser*`), unless it is the negative `count: {max: 0}` | the flag removes the tool, so it can never be called; assert the status file instead |
 | an agent that does not accept `--permission-prompts none` | the pinned agent's support is recorded by `sync` in the baseline (`agentBinary.cliCapabilities`); a baseline synced before that field existed is refused with a re-sync hint. At `protocol`, the `claude` on your `PATH` is checked with `--help` instead. Every agent measured so far has the option, so the refusal for one that lacks it is tested on synthetic samples only |
 
-`tool_not_called: AskUserQuestion` is accepted, though with the tool removed it always passes. `chat` and
+`tool_not_called: AskUserQuestion` (and `tool_called: {tool: AskUserQuestion, count: {max: 0}}`) is accepted, though with the tool removed it always passes. `chat` and
 `skill` build their own session from flags, so they cannot declare the key.
 
 The assertion rules above also apply when a run with no answer channel is graded against a new `assert:`
