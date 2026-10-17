@@ -30,6 +30,13 @@ const TOKEN =
   process.env.CLAUDE_CODE_OAUTH_TOKEN ||
   (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "");
 const CAN = dockerOk && imageOk && !!AGENT && existsSync(AGENT) && !!TOKEN;
+
+// A silent skip is the failure mode this lane is prone to — say so on stderr.
+if (!CAN)
+  process.stderr.write(
+    `::warning:: live-resume-continuity SKIPPED — NOT live-validated (docker=${dockerOk} image=${imageOk} agent=${!!AGENT && existsSync(AGENT)} token=${!!TOKEN})\n`,
+  );
+
 const CLI = resolve("dist/cli.js");
 
 function runSkill(
