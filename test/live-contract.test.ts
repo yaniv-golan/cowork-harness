@@ -51,6 +51,16 @@ const TOKEN =
   tokenFromDotenv();
 const CAN = dockerOk && imageOk && binOk;
 
+// A silent skip is the failure mode this lane is prone to — say so on stderr.
+if (!CAN)
+  process.stderr.write(
+    `::warning:: live-contract "live contract (Docker + staged binary)" SKIPPED — NOT live-validated (docker=${dockerOk} image=${imageOk} binary=${binOk} token=${!!TOKEN})\n`,
+  );
+if (!CAN || !TOKEN)
+  process.stderr.write(
+    `::warning:: live-contract "live contract — full turn (needs token)" SKIPPED — NOT live-validated (docker=${dockerOk} image=${imageOk} binary=${binOk} token=${!!TOKEN})\n`,
+  );
+
 interface AgentRun {
   init?: any;
   toolUses: string[];
@@ -260,6 +270,12 @@ try {
 }
 const nativeOk = !!NATIVE_AGENT && existsSync(NATIVE_AGENT);
 const PROBE_CAN = dockerOk && imageOk && binOk && nativeOk && !!TOKEN; // hostloop needs BOTH agents + image + token
+
+// A silent skip is the failure mode this lane is prone to — say so on stderr.
+if (!PROBE_CAN)
+  process.stderr.write(
+    `::warning:: live-contract hostloop suites "live: sub-agent relative-Write acceptance probes (hostloop)", "live: resume-continuity proof at hostloop (native binary) — critique's pin", "live: critique runs at hostloop (the unpinned tier)", "live: hostloop uploads are Read-able at the advertised path", "live: sub-agent WebSearch is captured as subagents[].webSearches", "live: the skills/plugins discovery servers are declared on both cowork-lane tiers" SKIPPED — NOT live-validated (docker=${dockerOk} image=${imageOk} binary=${binOk} native=${nativeOk} token=${!!TOKEN})\n`,
+  );
 
 // Two eras of the same sub-agent relative Write. Before Desktop 2.7032.0 the host-loop agent ran at the
 // outputs dir and the write landed there (pinned to 2.2553.1 — its native agent is resolved like any
