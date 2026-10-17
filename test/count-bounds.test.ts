@@ -256,6 +256,7 @@ describe("cassettes: a frozen record carrying a count bound", () => {
     const r = read(withAsserts([{ tool_called: { tool: "Write", count: { min: 3, max: 1 } } }]));
     expect("cassette" in r).toBe(true);
     expect(err.join("")).toMatch(/::warning:: \[cassette\].*count\.min 3 is greater than count\.max 1.*can never pass/);
+    expect(err.join("")).not.toMatch(/tool_called\.count: tool_called/); // the key is named once
     const res = await replayCassette((r as { cassette: Cassette }).cassette, []);
     const row = res.assertions.find((a) => JSON.stringify(a.assertion).includes('"min":3'))!;
     expect(row.pass).toBe(false);
@@ -490,6 +491,7 @@ describe.skipIf(!havePython)("count-bound: TS refine ↔ Python lint rule agree 
     ["a fractional min", { tool_called: { tool: "Bash", count: { min: 1.5, max: 0 } } }, false],
     ["a boolean min", { tool_called: { tool: "Bash", count: { min: true, max: 0 } } }, false],
     ["a numeric-string max of 0", { tool_called: { tool: "Bash", count: { max: "0" } } }, false],
+    ["a negative max", { tool_called: { tool: "Bash", count: { min: 0, max: -1 } } }, false],
   ];
   it.each(rows)("%s", (_name, a, expected) => {
     expect(countBoundIssue(a) !== undefined, "TypeScript").toBe(expected);

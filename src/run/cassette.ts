@@ -3292,10 +3292,9 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
   const redAsserts = (redacted.scenario?.assert ?? []) as Array<Record<string, unknown>>;
   const before = frozenToolUses(base.events);
   const after = frozenToolUses(redacted.events);
-  baseAsserts.forEach((a, i) => {
-    // Both spellings of a negative object-form check: `tool_not_called`, and `tool_called` with `count: {max: 0}`.
-    const key = (["tool_not_called", "tool_called"] as const).find((k) => a?.[k] !== undefined && negativeToolCall(k, a[k]));
-    if (key === undefined) return;
+  // Both spellings of a negative object-form check, `tool_not_called` and `tool_called` with `count: {max: 0}`, each
+  // explained on its own: one assert item may carry both.
+  const explain = (a: Record<string, unknown>, i: number, key: "tool_not_called" | "tool_called") => {
     const v = a[key];
     if (!v || typeof v !== "object") return;
     const o = v as ToolNotCalledObject;
@@ -3367,6 +3366,10 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
         }
       }
     }
+  };
+  baseAsserts.forEach((a, i) => {
+    for (const key of ["tool_not_called", "tool_called"] as const)
+      if (a?.[key] !== undefined && negativeToolCall(key, a[key])) explain(a, i, key);
   });
   return findings;
 }
@@ -4309,7 +4312,9 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
     // frozen record keeps replaying, verifying and rehashing as before. Every other issue (another `custom` refine
     // such as the regex-shaped tool glob, or a union that failed on a sibling field) is still refused.
     if (r.error.issues.every(isCountBoundIssue)) {
-      warn(`::warning:: [cassette] ${detail} — this assertion can never pass; it grades FAIL\n`);
+      // The bound's own message already names the key (`tool_called: count.min …`), so it is not prefixed by its path.
+      const bounds = r.error.issues.map((iss) => iss.message).join("; ");
+      warn(`::warning:: [cassette] scenario.assert[${i}]: ${bounds} — this assertion can never pass; it grades FAIL\n`);
       return;
     }
     if (isFutureCassette)

@@ -615,7 +615,9 @@ export function minPassBoundError(v: { rubric?: unknown; min_pass?: unknown }): 
 /** Why a `tool_called` count range is empty, or undefined. Shared by the load-time refine and the evaluator,
  *  which a tolerated cassette row reaches unparsed. */
 export function toolCallCountBoundError(count: { min?: number; max?: number } | undefined): string | undefined {
-  if (count?.min !== undefined && count.max !== undefined && count.min > count.max)
+  // A negative bound is the schema's own refusal (`nonnegative()`), not a count bound: skipped, so it is not tagged
+  // (and tolerated on a cassette) as one.
+  if (count?.min !== undefined && count.max !== undefined && count.min >= 0 && count.max >= 0 && count.min > count.max)
     return `tool_called: count.min ${count.min} is greater than count.max ${count.max}, so no number of calls satisfies it`;
   return undefined;
 }

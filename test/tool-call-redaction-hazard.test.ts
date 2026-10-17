@@ -104,6 +104,11 @@ describe("the tool_called {count: {max: 0}} spelling is the same negative under 
     const findings = redactionRewroteNegativeToolInputs(base, redactCassette(base, POLICY));
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.join("\n")).toMatch(/tool_called \(count\.max 0\)/);
+    // One assert item carrying both spellings: each is explained.
+    const both = cassette([{ ...NEG, ...NEG_MAX0 }]);
+    const out = redactionRewroteNegativeToolInputs(both, redactCassette(both, POLICY)).join("\n");
+    expect(out).toMatch(/tool_not_called\.input\.command/);
+    expect(out).toMatch(/tool_called \(count\.max 0\)/);
     // A positive tool_called is not a negative check and is not explained here.
     const pos = cassette([{ tool_called: { tool: "Bash", input: { command: "rm\\s+-rf\\s+/Users/acme" } } }]);
     expect(redactionRewroteNegativeToolInputs(pos, redactCassette(pos, POLICY))).toEqual([]);

@@ -15,8 +15,7 @@ All notable changes to this project are documented here. The format is based on
   committed cassette's verdict for it can change from FAIL to PASS on replay.
 - **`semantic_matches` with a `min_pass` above the number of rubric claims now fails to load** (exit 2 on `run`,
   `record <file>`, `eval`, `hillclimb run`, `verify-run` and `regrade`; a broken file on `record <dir/>`, exit 1;
-  a `lint` ERROR). It could never pass,
-  and spent a judge call first.
+  a `lint` ERROR). It could never pass, and spent a judge call first.
 - `schema/scenario.schema.json`'s validation rules are unchanged; description text is updated.
 
 ### Changed
