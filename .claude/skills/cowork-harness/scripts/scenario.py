@@ -39,6 +39,8 @@ lint flags (see references/scenario-schema.md for the why of each):
                                                        no_hook_event_blocked / hook_event_blocked {max: 0}
                                                        vs hook_event_blocked / hook_decision deny,
                                                        no_path_denied vs path_denied/vm_path_denied)
+  E  `count-bound-unsatisfiable` a `tool_called` count with min > max, or `semantic_matches` min_pass above
+                               the number of rubric claims (the loader refuses both)
   E  `artifact-json-match`     an `artifact_json` glob (`*`/`?`) with no `match`, one ending in `/`,
                                or a literal path with `match`
   W  `unpaired-gates-all-scripted` `gates_all_scripted` with neither `gate_answer_count_min` nor
@@ -666,6 +668,38 @@ def _numeric(v):
         except ValueError:
             return None
     return None
+
+
+def _real_int(v):
+    """A real number the schema reads as a count: an int or float, never a bool or a numeric STRING. Unlike `_numeric`,
+    a string such as `"0"` is not a count here; the loader refuses it (`scenario-invalid`), so a rule built on a
+    string reading would report a defect the file does not have."""
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _tool_called_effective_min(cnt):
+    """`tool_called`'s floor (mirrors toolCalledEffectiveMin, src/types.ts): `min` when set; otherwise 1, except that
+    `{max: 0}` alone means "never called" (min 0). None when `min` is set but is not a real number."""
+    cnt = cnt if isinstance(cnt, dict) else {}
+    if "min" in cnt:
+        return _real_int(cnt["min"])
+    return 0 if _real_int(cnt.get("max")) == 0 else 1
+
+
+def _negative_tool_call(key, v):
+    """Whether an object-form tool check is a NEGATIVE (mirrors negativeToolCall, src/types.ts): `tool_not_called`, or
+    a `tool_called` whose count range is exactly 0..0. Every negative-direction rule keys on this, not the key name."""
+    if key == "tool_not_called":
+        return True
+    if key != "tool_called" or not isinstance(v, dict) or not isinstance(v.get("count"), dict):
+        return False
+    cnt = v["count"]
+    return _real_int(cnt.get("max")) == 0 and _tool_called_effective_min(cnt) == 0
+
+
+def _tool_call_label(key, v):
+    """How a message names the check: `tool_called (count.max 0)` for the negative spelling, else the key."""
+    return "tool_called (count.max 0)" if key == "tool_called" and _negative_tool_call(key, v) else key
 
 
 def _tool_glob_matches(pattern, name):
@@ -1375,6 +1409,46 @@ def _redaction_policy_patterns(path):
     return pats, bad
 
 
+def _lint_count_bounds(items, path):
+    """E `count-bound-unsatisfiable`: an assertion whose own bounds no count meets. Mirrors the loader's count-bound
+    refines (src/types.ts: toolCallCountBoundError, minPassBoundError), which `cowork-harness lint` also reports as
+    `scenario-invalid`; this rule is the coverage on a direct `scenario.py lint`. Real numbers only (`_real_int`):
+    a numeric string is the loader's refusal, not this one."""
+    out = []
+    for v in _assert_values(items, "tool_called"):
+        cnt = v.get("count") if isinstance(v, dict) else None
+        if not isinstance(cnt, dict):
+            continue
+        mn, mx = _real_int(cnt.get("min")), _real_int(cnt.get("max"))
+        if mn is not None and mx is not None and mn > mx:
+            out.append(
+                Finding(
+                    "ERROR",
+                    "count-bound-unsatisfiable",
+                    f"`tool_called` count.min {mn:g} is greater than count.max {mx:g}, so no number of calls satisfies it "
+                    "(run/record refuse it at load).",
+                    'Lower `count.min` or raise `count.max`; for "never called" use `count: {max: 0}` or `tool_not_called`.',
+                    path,
+                )
+            )
+    for v in _assert_values(items, "semantic_matches"):
+        if not isinstance(v, dict) or not isinstance(v.get("rubric"), list):
+            continue
+        mp = _real_int(v.get("min_pass"))
+        if mp is not None and mp > len(v["rubric"]):
+            out.append(
+                Finding(
+                    "ERROR",
+                    "count-bound-unsatisfiable",
+                    f"`semantic_matches` min_pass {mp:g} is more than the rubric's {len(v['rubric'])} claim(s), so it can "
+                    "never pass (run/record refuse it at load).",
+                    "Lower `min_pass` to at most the number of rubric claims, or use `all`.",
+                    path,
+                )
+            )
+    return out
+
+
 def _lint_tool_call_object_form(items, fidelity, path):
     out = []
     policy = None
@@ -1388,7 +1462,8 @@ def _lint_tool_call_object_form(items, fidelity, path):
                 regexes.append(("input_any", v["input_any"]))
             # W: the negative form is the dangerous direction under redaction — the committed cassette's
             # inputs are rewritten, so a regex naming a rewritten literal finds nothing and PASSES on replay.
-            if key == "tool_not_called" and regexes:
+            _label = _tool_call_label(key, v)
+            if _negative_tool_call(key, v) and regexes:
                 if policy is None:
                     policy, uncheckable = _redaction_policy_patterns(path)
                     if uncheckable:
@@ -1412,7 +1487,7 @@ def _lint_tool_call_object_form(items, fidelity, path):
                             Finding(
                                 "WARN",
                                 "tool-input-regex-redactable",
-                                f"`tool_not_called.{where}: {src!r}` names a literal the cassette's redaction "
+                                f"`{_label}.{where}: {src!r}` names a literal the cassette's redaction "
                                 "policy rewrites. On a committed (redacted) cassette the recorded input no "
                                 "longer carries it, so this negative check cannot see what it looks for — "
                                 "replay reports it evidence-unavailable and `record` refuses the write.",
@@ -1431,6 +1506,19 @@ def _lint_tool_call_object_form(items, fidelity, path):
                         "`tool_called` with `count: {min: 0}` and no `max` is satisfied by any number of calls, "
                         "including none — it asserts nothing.",
                         "Add a `max` (e.g. `count: {max: 0}` means \"never\"), raise `min`, or drop the assertion.",
+                        path,
+                    )
+                )
+            # I: `count: {max: 0}` is the negative spelling of `tool_not_called`, graded the same way.
+            if key == "tool_called" and _negative_tool_call(key, v):
+                out.append(
+                    Finding(
+                        "INFO",
+                        "tool-called-max-zero",
+                        "`tool_called` with `count: {max: 0}` is a negative check: it passes only when no call satisfies "
+                        "every predicate, and is graded as `tool_not_called` (its tier refusal and redaction rules apply). "
+                        "On a run with a tool-call record the two are equivalent.",
+                        "`tool_not_called` with the same fields (no `count`) says it directly.",
                         path,
                     )
                 )
@@ -1790,13 +1878,19 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
 
     # BOTH negative tool keys: `subagent_tool_absent` is judged against the tools sub-agents actually
     # USED, not a per-dispatch declared list, so a tool the tier never serves makes it equally vacuous.
-    for _key in ("tool_not_called", "subagent_tool_absent"):
+    # And `tool_called` in its negative spelling (`count: {max: 0}`), the same claim as `tool_not_called`.
+    def _spell(key, tool):
+        return f"tool_called: {{tool: {tool}, count: {{max: 0}}}}" if key == "tool_called" else f"{key}: {tool}"
+
+    for _key in ("tool_not_called", "subagent_tool_absent", "tool_called"):
         for _raw in _assert_values(items, _key):
+            if _key == "tool_called" and not _negative_tool_call(_key, _raw):
+                continue
             # The object form of tool_not_called (`{tool: X | [X, Y], input: ...}`) is vacuous only when
             # EVERY listed tool is unserved — `[Bash, mcp__workspace__bash]` is the portable spelling. An
             # input/result predicate cannot rescue a tool the tier never serves. Mirrors
             # objectFormTierVacuous (src/run/tier-vacuous-tools.ts); the harness refuses these at load.
-            if isinstance(_raw, dict) and _key == "tool_not_called":
+            if isinstance(_raw, dict) and _key in ("tool_not_called", "tool_called"):
                 _tools = _raw.get("tool")
                 _tools = [_tools] if isinstance(_tools, str) else _tools
                 if not isinstance(_tools, list) or not _tools or not all(isinstance(t, str) for t in _tools):
@@ -1816,7 +1910,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                     Finding(
                         "WARN",
                         "tool-not-called-tier-vacuous",
-                        f"`{_key}: {_v}` can never be violated — the harness never serves the `visualize` server "
+                        f"`{_spell(_key, _v)}` can never be violated — the harness never serves the `visualize` server "
                         "(production's skill-argument form tools), so this verifies nothing.",
                         "Drop this assertion.",
                         path,
@@ -1829,7 +1923,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                     Finding(
                         "WARN",
                         "tool-not-called-tier-vacuous",
-                        f"`{_key}: {_v}` can never be violated — "
+                        f"`{_spell(_key, _v)}` can never be violated — "
                         + (
                             "the harness serves it only with `device_bridge: true`, so without it this verifies nothing."
                             if _dv == "off"
@@ -1850,10 +1944,10 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 Finding(
                     "WARN",
                     "tool-not-called-tier-vacuous",
-                    f"`{_key}: {_v}` on `fidelity: {fidelity}` — that tier does not serve "
+                    f"`{_spell(_key, _v)}` on `fidelity: {fidelity}` — that tier does not serve "
                     f"`{_v}` at all, so this can never be violated and verifies nothing.",
                     (
-                        f"Assert `{_key}: {_instead}` instead — that is what the tier serves in its place."
+                        f"Assert `{_spell(_key, _instead)}` instead — that is what the tier serves in its place."
                         if _instead
                         else f"The {fidelity} tier removes `{_v}` outright; drop this assertion."
                     ),
@@ -1862,6 +1956,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
             )
 
     # linter stays offline — the message carries the gate fact instead of reading a baseline).
+    findings.extend(_lint_count_bounds(items, path))
     findings.extend(_lint_tool_call_object_form(items, fidelity, path))
     findings.extend(_lint_transcript_command_shaped(items, path))
     # W: a `/<skill>` prompt never produces the `Skill` fork tool result — see _lint_slash_prompt_forked_anchor.
@@ -2205,7 +2300,8 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 # finding; a glob cannot fail to compile, so there is nothing to guard against here.
                 if isinstance(tc, dict):
                     _cnt = tc.get("count")
-                    _min = _numeric(_cnt.get("min")) if isinstance(_cnt, dict) and "min" in _cnt else 1.0
+                    # The D1 floor: `{max: 0}` alone is min 0 (a negative), so it is no gate companion.
+                    _min = _tool_called_effective_min(_cnt)
                     _tl = tc.get("tool")
                     _tl = [_tl] if isinstance(_tl, str) else _tl
                     if (
@@ -2729,6 +2825,7 @@ LINT_RULES = {
     "capabilities-on-protocol": "ERROR",
     "cassette-evidence-skipped": "INFO",
     "container-only-key-off-container": "ERROR",
+    "count-bound-unsatisfiable": "ERROR",
     "device-bridge-misplaced": "ERROR",
     "egress-on-protocol": "ERROR",
     "enum-value-invalid": "ERROR",
@@ -2756,6 +2853,7 @@ LINT_RULES = {
     "slash-prompt-forked-result-anchor": "WARN",
     "slash-skill-name-differs-from-plugin": "WARN",
     "tool-called-always-passes": "INFO",
+    "tool-called-max-zero": "INFO",
     "tool-input-regex-redactable": "WARN",
     "tool-input-shell-tier": "INFO",
     "tool-not-called-tier-vacuous": "WARN",

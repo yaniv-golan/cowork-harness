@@ -48,6 +48,8 @@ import {
   type DeviceBridgeRecord,
   Assertion as AssertionSchema,
   COUNT_BOUND_PARAMS,
+  negativeToolCall,
+  toolCallLabel,
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
   FIDELITY_TIERS,
@@ -3291,17 +3293,21 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
   const before = frozenToolUses(base.events);
   const after = frozenToolUses(redacted.events);
   baseAsserts.forEach((a, i) => {
-    const v = a?.tool_not_called;
+    // Both spellings of a negative object-form check: `tool_not_called`, and `tool_called` with `count: {max: 0}`.
+    const key = (["tool_not_called", "tool_called"] as const).find((k) => negativeToolCall(k, a?.[k]));
+    if (key === undefined) return;
+    const v = a[key];
     if (!v || typeof v !== "object") return;
     const o = v as ToolNotCalledObject;
-    const redO = redAsserts[i]?.tool_not_called as ToolNotCalledObject | undefined;
+    const label = toolCallLabel(key, v);
+    const redO = redAsserts[i]?.[key] as ToolNotCalledObject | undefined;
     const inputRegexes = toolCallObjectRegexes(o).filter((r) => r.where.startsWith("input"));
     const redRegexes = redO && typeof redO === "object" ? toolCallObjectRegexes(redO) : [];
     for (const r of inputRegexes) {
       const redSrc = redRegexes.find((x) => x.where === r.where)?.source;
       if (redSrc !== undefined && hasRedactionToken(redSrc) && !hasRedactionToken(r.source))
         findings.push(
-          `assert[${i}] tool_not_called.${r.where} "${r.source}" was itself rewritten by the redaction policy — the committed cassette no longer carries the pattern you wrote, so replay reports it evidence-unavailable`,
+          `assert[${i}] ${label}.${r.where} "${r.source}" was itself rewritten by the redaction policy — the committed cassette no longer carries the pattern you wrote, so replay reports it evidence-unavailable`,
         );
     }
     const globs = Array.isArray(o.tool) ? o.tool : [o.tool];
@@ -3333,7 +3339,7 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
     }
     if (tokened.size)
       findings.push(
-        `assert[${i}] tool_not_called on ${globs.join(" | ")}: ` +
+        `assert[${i}] ${label} on ${globs.join(" | ")}: ` +
           [...tokened]
             .map(
               ([where, n]) =>
@@ -3356,7 +3362,7 @@ export function redactionRewroteNegativeToolInputs(base: Cassette, redacted: Cas
           const post = after[k].input[f]?.text;
           if (pre !== undefined && c.re.test(pre) && (post === undefined || !c.re.test(post)))
             findings.push(
-              `assert[${i}] tool_not_called.${r.where} "${r.source}" matched ${b.name} ${b.id ?? `#${k}`} field \`${f}\` before redaction and no longer matches it after — on the committed cassette this check cannot see what it is looking for`,
+              `assert[${i}] ${label}.${r.where} "${r.source}" matched ${b.name} ${b.id ?? `#${k}`} field \`${f}\` before redaction and no longer matches it after — on the committed cassette this check cannot see what it is looking for`,
             );
         }
       }

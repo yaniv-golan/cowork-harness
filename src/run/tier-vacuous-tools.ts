@@ -150,36 +150,43 @@ export function objectFormTierVacuous(
  *  `subagents[].declaredTools`, so there is no second inventory and no category error. Corroborated by
  *  the run population: sub-agent `Bash` calls appear 20 times, all at `container`, never at `hostloop`.
  *  Excluding it left the harness refusing `tool_not_called: "Bash"` at hostloop while silently greening
- *  `subagent_tool_absent: "Bash"` — teaching an author that this class is caught, then not catching it. */
-export type TierVacuousKey = "tool_not_called" | "subagent_tool_absent";
+ *  `subagent_tool_absent: "Bash"` — teaching an author that this class is caught, then not catching it.
+ *
+ *  `tool_called` belongs here only in its negative spelling, `count: {max: 0}` (`negativeToolCall`): that is the
+ *  same claim as `tool_not_called` and passes vacuously in the same way. A `tool_called` that needs a call is never
+ *  refused. */
+export type TierVacuousKey = "tool_not_called" | "subagent_tool_absent" | "tool_called";
 
 /** The load-time refusal text. Names what is wrong, why it can never hold, what to write instead, and —
  *  because an author will meet it — that `tool_called` behaves differently. */
 export function tierVacuousMessage(f: TierVacuousFinding, key: TierVacuousKey, context: string): string {
+  // How the assertion is written, for the tool named: the negative `tool_called` spelling carries its count, or it
+  // would read as the positive check.
+  const as = (tool: string): string => (key === "tool_called" ? `tool_called: {tool: "${tool}", count: {max: 0}}` : `${key}: "${tool}"`);
+  const sibling = `\nThe positive sibling is NOT refused: \`tool_called: "${f.tool}"\` (at least one call) fails normally`;
   if (f.reason === "visualize-unserved")
     return (
-      `${context}: \`${key}: "${f.tool}"\` can never be violated — the harness never serves the \`visualize\` server ` +
+      `${context}: \`${as(f.tool)}\` can never be violated — the harness never serves the \`visualize\` server ` +
       `(production's skill-argument form tools), so the assertion passes vacuously. Drop it.` +
-      `\nThe positive sibling is NOT refused: \`tool_called: "${f.tool}"\` fails normally.`
+      `${sibling}.`
     );
   if (f.reason !== undefined)
     return (
-      `${context}: \`${key}: "${f.tool}"\` can never be violated — ` +
+      `${context}: \`${as(f.tool)}\` can never be violated — ` +
       (f.reason === "device-bridge-off"
         ? `the harness serves \`${f.tool}\` only when the scenario sets \`device_bridge: true\` (with \`lane: remote\` and ` +
           `\`fidelity: container\`), so without it the assertion passes vacuously. Set device_bridge, or drop this assertion.`
         : `the harness serves no such device tool (\`device_bridge: true\` serves device_bash, get_device_info and device_request_delete_permission only), so ` +
           `the assertion passes vacuously. Drop it.`) +
-      `\nThe positive sibling is NOT refused: \`tool_called: "${f.tool}"\` fails normally.`
+      `${sibling}.`
     );
   const remedy =
     f.instead === null
       ? `The \`${f.tier}\` tier removes \`${f.tool}\` outright, so there is no replacement to assert — drop this assertion.`
-      : `Assert \`${key}: "${f.instead}"\` instead: that is the tool \`${f.tier}\` actually serves in its place.`;
+      : `Assert \`${as(f.instead)}\` instead: that is the tool \`${f.tier}\` actually serves in its place.`;
   return (
-    `${context}: \`${key}: "${f.tool}"\` can never be violated at fidelity \`${f.tier}\` — that tier does not ` +
-    `serve \`${f.tool}\` at all, so the assertion passes vacuously and verifies nothing. ${remedy}\n` +
-    `The positive sibling is NOT refused: \`tool_called: "${f.tool}"\` fails normally, which is a legible red ` +
-    `rather than a false green.`
+    `${context}: \`${as(f.tool)}\` can never be violated at fidelity \`${f.tier}\` — that tier does not ` +
+    `serve \`${f.tool}\` at all, so the assertion passes vacuously and verifies nothing. ${remedy}` +
+    `${sibling}, which is a legible red rather than a false green.`
   );
 }

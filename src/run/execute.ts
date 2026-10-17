@@ -44,7 +44,7 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { MultiLegScenario, REFUSED_TOP_LEVEL, hostActionAsserts, promptLegAsserts, type Leg } from "./multi-leg-scenario.js";
-import { Scenario } from "../types.js";
+import { Scenario, negativeToolCall } from "../types.js";
 import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline, DeviceBridgeRecord } from "../types.js";
 import {
   deviceBridgeFolderAssertRefusal,
@@ -3271,9 +3271,11 @@ export function tierVacuityRefusal(scenario: Scenario, baseline: PlatformBaselin
     // (assert.ts's `ctx.subagentTools`), not a per-dispatch declared list, so the same tier table applies
     // — covering one and not the other would refuse `tool_not_called: "Bash"` at hostloop while silently
     // greening the sub-agent form of the identical claim.
-    for (const key of ["tool_not_called", "subagent_tool_absent"] as const) {
+    // And `tool_called` in its negative spelling (`count: {max: 0}`), the same claim as `tool_not_called`.
+    for (const key of ["tool_not_called", "subagent_tool_absent", "tool_called"] as const) {
       const pattern = a[key];
       if (pattern === undefined) continue;
+      if (key === "tool_called" && !negativeToolCall(key, pattern)) continue;
       // The object form of tool_not_called is refused only when EVERY listed tool is unserved.
       const bridge = scenario.device_bridge === true;
       const finding =

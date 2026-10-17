@@ -308,15 +308,17 @@ cowork-harness lint scenarios/*.yaml
 | `positional-choose-order` | INFO | an answer rule with a positional `choose` (first / index), which option re-ordering can move |
 | `present-files-key-off-tier` | ERROR | `present_files_called` on `protocol` / `microvm` (served only at `container` / `hostloop`) |
 | `prompt-slash-not-leading` | WARN | a `prompt:` that names `/<skill>` without starting with it, so it is never expanded |
+| `count-bound-unsatisfiable` | ERROR | an assertion whose own bounds no count meets: `tool_called` `count.min` above `count.max`, or `semantic_matches` `min_pass` above the number of rubric claims (the loader refuses both) |
 | `reference-access-contradiction` | ERROR | one reference under both `reference_read` and `no_observed_reference_access` |
 | `regex-double-quoted` | WARN | a double-quoted regex with an unescaped backslash (YAML strips it) |
 | `replay-noop` | WARN | every assertion is live-only or a verdict modifier, so a replay gate verifies nothing |
 | `slash-prompt-forked-result-anchor` | WARN | a `prompt:` starting with `/<skill>` plus a `tool_result_*` anchored on `forked execution` — a slash-invoked skill makes no `Skill` call, so that tool result never exists; assert `skill_triggered` instead |
 | `slash-skill-name-differs-from-plugin` | WARN | a `prompt:` starting with a bare `/<skill>` that names a skill of a plugin the scenario's session stages, where the plugin's name differs — the agent expands it, but real Cowork's app has refused that typed form; pick it from the slash menu or name the skill like its plugin (`/<plugin>:<skill>` was not measured with a single copy installed). Names follow the agent: `.claude-plugin/plugin.json` `name`/`skills`, else the dir name; a skill's sanitized directory name. Reads the `session:` file and its `local_plugins`/`remote_plugins`; silent for an inline `session:`, for marketplace-delivered plugins, and when the files are not on this machine |
 | `tool-called-always-passes` | INFO | `tool_called` with `count: {min: 0}` and no `max` — it asserts nothing |
-| `tool-input-regex-redactable` | WARN | a `tool_not_called` input literal the redaction policy rewrites in the committed cassette (or a policy pattern it cannot check offline) |
+| `tool-called-max-zero` | INFO | `tool_called` with `count: {max: 0}` — a negative check, graded as `tool_not_called` with the same fields (its tier and redaction rules apply) |
+| `tool-input-regex-redactable` | WARN | a negative tool check's input literal (`tool_not_called`, or `tool_called` with `count: {max: 0}`) the redaction policy rewrites in the committed cassette (or a policy pattern it cannot check offline) |
 | `tool-input-shell-tier` | INFO | the object form with `tool: Bash` and a `command` on `hostloop` / `cowork`, where shell runs as `mcp__workspace__bash` — list both |
-| `tool-not-called-tier-vacuous` | WARN | `tool_not_called` / `subagent_tool_absent` naming a tool the tier never serves |
+| `tool-not-called-tier-vacuous` | WARN | `tool_not_called`, `subagent_tool_absent` or `tool_called` with `count: {max: 0}` naming a tool the tier never serves |
 | `transcript-command-shaped` | WARN | a `transcript_*` value shaped like a shell command — those keys read prose only, never a tool call |
 | `unknown-assert-key` | WARN | an assertion key not in the catalog (the loader rejects it) |
 | `unknown-top-key` | WARN | a scenario key not in the schema |
